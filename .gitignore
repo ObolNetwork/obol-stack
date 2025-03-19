@@ -1,0 +1,41 @@
+# Kubernetes & Helm
+.helm/
+*.tgz
+charts/*/charts
+charts/*/Chart.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build & logs
+*.log
+logs/
+dist/
+build/
+.cache/
+
+# Dependencies
+/node_modules/
+/vendor/
+
+# Environment variables
+.env
+*.env
+.env.*
+!.env.example
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+.tmp/

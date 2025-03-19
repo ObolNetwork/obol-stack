@@ -1,0 +1,11 @@
+{{- if .Values.helios.config.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "helios.fullname" . }}-config
+  labels:
+    {{- include "helios.labels" . | nindent 4 }}
+data:
+  helios.toml: |-
+    {{- .Values.helios.config.content | nindent 4 }}
+{{- end }}

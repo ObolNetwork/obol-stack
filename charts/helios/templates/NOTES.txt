@@ -1,0 +1,35 @@
+1. Get the Helios RPC endpoint by running these commands:
+{{- if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "helios.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+        You can watch the status of by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "helios.fullname" . }}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "helios.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.service.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "helios.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME {{ .Values.service.port }}:$CONTAINER_PORT
+  echo "Helios RPC is available at http://127.0.0.1:{{ .Values.service.port }}"
+{{- end }}
+
+2. Use the Helios RPC endpoint with any Ethereum client or web3 library:
+   - For example, with curl:
+     curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://127.0.0.1:{{ .Values.service.port }}
+
+3. Configuration Information:
+   - Network: {{ .Values.helios.network }}
+   - RPC Port: {{ .Values.helios.rpcPort }}
+   {{- if .Values.helios.executionRpc }}
+   - Execution RPC: {{ .Values.helios.executionRpc }}
+   {{- else }}
+   WARNING: No Execution RPC endpoint configured. Please set .Values.helios.executionRpc to a valid Ethereum RPC endpoint that supports eth_getProof.
+   {{- end }}
+   {{- if .Values.helios.checkpoint }}
+   - Checkpoint: {{ .Values.helios.checkpoint }}
+   {{- end }}
+
+To view logs:
+kubectl logs --namespace {{ .Release.Namespace }} $POD_NAME

@@ -1,0 +1,8 @@
+# OWNERS file for the Helios chart
+# See https://github.com/kubernetes/community/blob/master/contributors/devel/owners.md for details
+
+approvers:
+- obol-tech
+
+reviewers:
+- obol-tech

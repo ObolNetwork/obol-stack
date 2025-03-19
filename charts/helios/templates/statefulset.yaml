@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "helios.fullname" . }}
+  labels:
+    {{- include "helios.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "helios.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "helios.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helios.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "helios.serviceAccountName" . }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "helios.fullname" . }}-pvc
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      containers:
+        - name: helios
+          image: "silversurfer972/helios:latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          args:
+            - "ethereum"
+            {{- if .Values.helios.network }}
+            - "--network"
+            - "{{ .Values.helios.network }}"
+            {{- end }} 
+            {{- if .Values.helios.executionRpc }}
+            - "--execution-rpc"
+            - "{{ .Values.helios.executionRpc }}"
+            {{- end }}
+            {{- if and .Values.helios.consensusRpc (not (eq .Values.helios.consensusRpc "")) }}
+            - "--consensus-rpc"
+            - "{{ .Values.helios.consensusRpc }}"
+            {{- end }}
+            {{- if and .Values.helios.checkpoint (not (eq .Values.helios.checkpoint "")) }}
+            - "--checkpoint"
+            - "{{ .Values.helios.checkpoint }}"
+            {{- end }}
+            {{- if .Values.helios.rpcPort }}
+            - "--rpc-port"
+            - "{{ .Values.helios.rpcPort }}"
+            {{- else }}
+            - "--rpc-port"
+            - "{{ .Values.service.port }}"
+            {{- end }}
+            {{- if .Values.helios.rpcBindIp }}
+            - "--rpc-bind-ip"
+            - "{{ .Values.helios.rpcBindIp }}"
+            {{- end }}
+            {{- if .Values.helios.dataDir }}
+            - "--data-dir"
+            - "{{ .Values.helios.dataDir }}"
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - >
+                  /usr/bin/curl -s -X POST -H "Content-Type: application/json" 
+                  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 
+                  http://127.0.0.1:{{ .Values.service.port }} | grep -q "result"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - >
+                  /usr/bin/curl -s -X POST -H "Content-Type: application/json" 
+                  --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 
+                  http://127.0.0.1:{{ .Values.service.port }} | grep -q "result"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: {{ default "/data" .Values.helios.dataDir }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}
