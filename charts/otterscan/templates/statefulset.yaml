@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "otterscan.fullname" . }}
+  labels:
+    {{- include "otterscan.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "otterscan.fullname" . }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "otterscan.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "otterscan.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "otterscan.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: ERIGON_URL
+              value: "{{ .Values.otterscan.ethereumRpcUrl }}"
+            - name: HOST
+              value: "{{ .Values.otterscan.host }}"
+            - name: PORT
+              value: "{{ .Values.otterscan.port }}"
+            - name: MIN_CONFIRMATIONS
+              value: "{{ .Values.otterscan.minConfirmations }}"
+            - name: ENABLE_INDEXER
+              value: "{{ .Values.otterscan.enableIndexer }}"
+            - name: DEBUG
+              value: "{{ .Values.otterscan.debug }}"
+            - name: BASE_PATH
+              value: "{{ .Values.otterscan.basePath }}"
+            - name: TRACER_TIMEOUT
+              value: "{{ .Values.otterscan.tracerTimeout }}"
+            - name: MAX_BLOCKS_TO_SEARCH_TXS
+              value: "{{ .Values.otterscan.maxBlocksToSearchTransactions }}"
+            - name: MAX_BLOCKS_TO_SEARCH_INTERNAL_TXS
+              value: "{{ .Values.otterscan.maxBlocksToSearchInternalTransactions }}"
+            - name: MAX_BLOCKS_TO_SEARCH_CONTRACTS
+              value: "{{ .Values.otterscan.maxBlocksToSearchContracts }}"
+            - name: USE_ERIGON_V2
+              value: "{{ .Values.otterscan.useErigonV2 }}"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if and .Values.persistence.enabled .Values.persistence.useVolumeClaimTemplates }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "{{ .Values.persistence.accessMode }}" ]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

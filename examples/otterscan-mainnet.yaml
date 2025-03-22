@@ -1,0 +1,33 @@
+# Example values for deploying Otterscan connected to Helios
+replicaCount: 1
+
+image:
+  repository: otterscan/otterscan
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 3000
+
+persistence:
+  enabled: true
+  useVolumeClaimTemplates: true
+  size: 10Gi
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+otterscan:
+  # Connect to the Helios service in the same cluster
+  ethereumRpcUrl: "http://helios:8545"
+  host: "0.0.0.0"
+  port: 3000
+  # Disable indexer since Helios doesn't support the required APIs
+  enableIndexer: false
+  minConfirmations: 10
+  debug: false
