@@ -200,10 +200,15 @@ EOF
     #kubectl apply -f https://stack.obol.org/base.yaml || log_error "Failed to apply base resources."
 
     # Add the appropriate Helm repos (ethpandaops and Obol)
-    ensure obol repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts
-    ensure obol repo add obol https://obolnetwork.github.io/helm-charts/
+    log_info "Adding default Obol Stack app stores..."
+    #ensure obol repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts
+    #ensure obol repo add obol https://obolnetwork.github.io/helm-charts/
+    obol repo update
     
-    #ensure obol install ethereum/full-node
+    log_info "Configuring the Obol Stack Ethereum client..."
+    #ensure obol install obol/helios
+    #ensure obol install ethereum/erpc --values ./values/erpc.yaml
+    ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
 
     # Check stack health
     log_info "Checking stack health..."
@@ -213,7 +218,7 @@ EOF
 
     # Launch status page
     log_info "Launching status page at http://localhost:$STATUS_PORT..."
-    kubectl port-forward -n obol-system svc/obol-status $STATUS_PORT:80 &
+    #kubectl port-forward -n default svc/erpc $STATUS_PORT:4001 &
     xdg-open "http://localhost:$STATUS_PORT" 2>/dev/null || open "http://localhost:$STATUS_PORT" 2>/dev/null || log_warn "Could not open browser automatically."
 }
 
