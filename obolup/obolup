@@ -141,6 +141,40 @@ install_kubectl() {
     fi
 }
 
+# Install or update Helm
+install_helm() {
+    log_info "Checking helm..."
+
+    # Fetch and extract the latest helm release version
+    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+    # Output the latest release
+    log_info "Latest helm version available: $LATEST_RELEASE"
+
+    # Check if kubectl is already installed
+    if command_exists helm; then
+        log_info "helm is already installed. Version installed: $(helm version --short)"
+    else
+        log_info "helm in not installed."
+        log_info "Installing helm..."
+        # Download the latest release
+        ensure curl -sSLo helm.tar.gz "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
+
+        # Validate the binary (optional)
+        ensure curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum"
+        echo "$(cat helm.tar.gz.sha256sum)  helm.tar.gz" | sha256sum --check || log_error "helm checksum validation failed. helm installation failed."
+
+        # Proceed to install
+        tar -xzf helm.tar.gz
+        chmod +x helm
+        sudo mv helm /usr/local/bin/
+        rm helm.tar.gz helm.tar.gz.sha256sum
+
+        log_info "helm installed successfully."
+    fi
+
+}
+
 # Install or update Kind
 install_kind() {
     log_info "Checking Kind..."
@@ -183,7 +217,7 @@ check_obolup_update() {
 
 # Launch or update the Obol Stack
 launch_stack() {
-    log_info "Checking Obol Stack..."
+    log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
         log_info "Creating Kind cluster for Obol Stack..."
         kind create cluster --name "$STACK_NAME" --config <(cat <<EOF
@@ -196,14 +230,25 @@ EOF
     fi
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
-    log_info "Applying Obol Stack base resources..."
+    #log_info "Applying Obol Stack base resources..."
     #kubectl apply -f https://stack.obol.org/base.yaml || log_error "Failed to apply base resources."
 
-    # Add the appropriate Helm repos (ethpandaops and Obol)
-    ensure obol repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts
-    ensure obol repo add obol https://obolnetwork.github.io/helm-charts/
-    
-    #ensure obol install ethereum/full-node
+    # Add the appropriate Helm repos (ethpandaops, Obol, kubernetes-dashboard)
+    log_info "Adding default Obol Stack app stores..."
+    ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts
+    ensure helm repo add obol https://obolnetwork.github.io/helm-charts/
+    #ensure helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
+
+    # Update helm repos
+    obol repo update
+
+    # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
+    #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
+
+    log_info "Configuring the Obol Stack Ethereum client..."
+    ensure helm upgrade --install helios obol/helios
+    ensure helm upgrade --install erpc ethereum/erpc --values ./values/erpc.yaml
+    # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
 
     # Check stack health
     log_info "Checking stack health..."
@@ -212,9 +257,9 @@ EOF
     # fi
 
     # Launch status page
-    log_info "Launching status page at http://localhost:$STATUS_PORT..."
-    kubectl port-forward -n obol-system svc/obol-status $STATUS_PORT:80 &
-    xdg-open "http://localhost:$STATUS_PORT" 2>/dev/null || open "http://localhost:$STATUS_PORT" 2>/dev/null || log_warn "Could not open browser automatically."
+    log_info "Launching Obol Stack Dashboard at http://localhost:$STATUS_PORT..."
+    #kubectl -n kubernetes-dashboard port-forward svc/kubernetes-dashboard-kong-proxy $STATUS_PORT:443 &
+    #xdg-open "https://localhost:$STATUS_PORT" 2>/dev/null || open "http://localhost:$STATUS_PORT" 2>/dev/null || log_warn "Could not open browser automatically."
 }
 
 # Main logic
@@ -227,6 +272,7 @@ main() {
     start_docker
     install_kubectl
     install_kind
+    install_helm
     #install_obol_cli
     #check_obolup_update
     launch_stack
