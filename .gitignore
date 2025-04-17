@@ -39,3 +39,7 @@ build/
 tmp/
 temp/
 .tmp/
+__pycache__/
+
+docs/
+adk-samples/
