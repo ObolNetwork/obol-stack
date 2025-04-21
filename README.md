@@ -81,7 +81,7 @@ obol install <app-store-name>/<chart-name> --values custom-values.yaml
 
 The `obol` CLI is intended to be a simple command-line user interface to simplify the use of the Obol Stack for non-developers, it is a work in progress, and does not cover many advanced use cases that Kubernetes and Helm can offer. If you are an experienced Kubernetes user, `obolup` also installs [`kubectl`](https://kubernetes.io/docs/reference/kubectl/) and [`helm`](https://helm.sh/docs/helm/helm/), such that you can manage your stack with the tooling you are used to.
 
-If you encounter node management requirements that an end-user might need but cannot achieve with the Obol CLI, instead needing to use `kubectl` or `helm`, considering opening a feature request issue on the [obol-cli](https://github.com/ObolNetwork/obol-cli/issues) repo.
+If you encounter node management requirements that an end-user might need but cannot achieve with the Obol CLI, instead needing to use `kubectl` or `helm`, consider opening a feature request issue on the [obol-cli](https://github.com/ObolNetwork/obol-cli/issues) repo.
 
 ## Project Status
 
