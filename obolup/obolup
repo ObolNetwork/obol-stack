@@ -158,11 +158,11 @@ install_helm() {
         log_info "helm in not installed."
         log_info "Installing helm..."
         # Download the latest release
-        ensure curl -sSLo helm.tar.gz "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
+        ensure curl -sSL "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
 
         # Validate the binary (optional)
         ensure curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum"
-        echo "$(cat helm.tar.gz.sha256sum)  helm.tar.gz" | sha256sum --check || log_error "helm checksum validation failed. helm installation failed."
+        echo "$(cat helm.tar.gz.sha256sum)  helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz" | sha256sum --check --status || log_error "helm checksum validation failed. helm installation failed."
 
         # Proceed to install
         tar -xzf helm.tar.gz
