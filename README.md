@@ -1,17 +1,16 @@
-# Obol Stack
-
-A framework for distributing and running decentralised applications, powered by Kubernetes and Helm.
+![Obol Logo](https://obol.tech/obolnetwork.png)
+<h1 align="center">The Obol Stack: Decentralised Applications For Ethereum</h1>
 
 ## Overview
 
-The Obol Stack is a framework to make it easier to distribute dApps, and easier to install them. The stack is built on Kubernetes, with Helm as a package management system.
+The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
 
 ## Getting Started
 
 > [!IMPORTANT]
-> This repo is alpha software. It is not complete, and it may not be working smoothly. If you encounter an issue that is not documented, please open a [github issue](http://github.com/obolNetwork/obol-stack/issues) if an appropriate one is not already present.
-
-Currently the stack aims to test with and support MacOS and Ubuntu, with a more comprehensive overview of architectures supported to come.
+> The Obol Stack is alpha software. It is not complete, and it may not be working smoothly. If you encounter an issue that does not appear to be documented, please open a [github issue](http://github.com/obolNetwork/obol-stack/issues) if an appropriate one is not already present.
+>
+> See [here](./obolup/README.md#supported-architectures) for the latest on OS and architectures supported.
 
 ### Pre-requisites
 
