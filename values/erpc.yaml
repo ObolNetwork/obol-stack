@@ -39,7 +39,7 @@ config: |
     projects:
       - id: helios
         upstreams:
-          - endpoint: http://helios.default.svc.cluster.local
+          - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
 
 # -- Secret env variables injected via a created secret
 # These env variables can be used to populate the erpc config file with sensitive data such as RPC API keys
@@ -47,7 +47,7 @@ secretEnv:
   ALCHEMY_API_KEY: XXXXXXXXXX
 
 # - HTTP port for erpc
-httpPort: 4000
+httpPort: 80
 
 # - Metrics port for erpc
 metricsPort: 4001

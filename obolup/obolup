@@ -246,8 +246,14 @@ EOF
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
     log_info "Configuring the Obol Stack Ethereum client..."
-    ensure helm upgrade --install helios obol/helios
-    ensure helm upgrade --install erpc ethereum/erpc --values ./values/erpc.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --install l1-light-client obol/helios
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ./values/erpc.yaml
+
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ./values/erigon.yaml
+
+    # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
+    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
+    # Todo(Oisin): Blockscout segfaulting, unclear why
     # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
 
     # Check stack health
@@ -275,13 +281,12 @@ main() {
     install_helm
     #install_obol_cli
     #check_obolup_update
-    launch_stack
-
-    if [[ "$1" == "update" ]]; then
-        log_info "Updating Obol Stack..."
+    if [[ "$1" == "clean" ]]; then
+        log_info "Clean command specified, deleting and recreating Obol Stack resources..."
         kind delete cluster --name "$STACK_NAME"
-        launch_stack
     fi
+
+    launch_stack
 
     log_info "Obol Stack is up and running!"
 }

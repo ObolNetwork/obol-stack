@@ -33,7 +33,7 @@ config:
   SECRET_KEY_BASE: RMgI4C1HSkxsEjdhtGMfwAHfyT6CKWXOgzCboJflfSm4jeAlic52io05KB6mqzc5
   ECTO_USE_SSL: "false"
   ETHEREUM_JSONRPC_VARIANT: geth
-  ETHEREUM_JSONRPC_HTTP_URL: http://erpc.default.svc.cluster.local:4000
+  ETHEREUM_JSONRPC_HTTP_URL: http://l1-rpc-erpc.l1.svc.cluster.local
   #ETHEREUM_JSONRPC_WS_URL: ws://geth:8546
   #ETHEREUM_JSONRPC_TRACE_URL: http://geth:8545
   NETWORK: Ethereum
