@@ -158,17 +158,18 @@ install_helm() {
         log_info "helm in not installed."
         log_info "Installing helm..."
         # Download the latest release
-        ensure curl -sSLo helm.tar.gz "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
+        ensure curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
 
         # Validate the binary (optional)
         ensure curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum"
-        echo "$(cat helm.tar.gz.sha256sum)  helm.tar.gz" | sha256sum --check || log_error "helm checksum validation failed. helm installation failed."
+        echo "$(cat helm.tar.gz.sha256sum)" | sha256sum --check --status || log_error "helm checksum validation failed. helm installation failed."
 
         # Proceed to install
-        tar -xzf helm.tar.gz
-        chmod +x helm
-        sudo mv helm /usr/local/bin/
-        rm helm.tar.gz helm.tar.gz.sha256sum
+        ensure tar -xzf helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz
+        ensure chmod +x ./$PLATFORM-$ARCHITECTURE/helm
+        ensure sudo mv ./$PLATFORM-$ARCHITECTURE/helm /usr/local/bin/
+        rm helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz helm.tar.gz.sha256sum
+        rm -r ./$PLATFORM-$ARCHITECTURE
 
         log_info "helm installed successfully."
     fi
@@ -240,14 +241,20 @@ EOF
     #ensure helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
 
     # Update helm repos
-    obol repo update
+    helm repo update
 
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
     log_info "Configuring the Obol Stack Ethereum client..."
-    ensure helm upgrade --install helios obol/helios
-    ensure helm upgrade --install erpc ethereum/erpc --values ./values/erpc.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --install l1-light-client obol/helios
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ./values/erpc.yaml
+
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ./values/erigon.yaml
+
+    # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
+    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
+    # Todo(Oisin): Blockscout segfaulting, unclear why
     # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
 
     # Check stack health
@@ -275,13 +282,12 @@ main() {
     install_helm
     #install_obol_cli
     #check_obolup_update
-    launch_stack
-
-    if [[ "$1" == "update" ]]; then
-        log_info "Updating Obol Stack..."
+    if [[ "$1" == "clean" ]]; then
+        log_info "Clean command specified, deleting and recreating Obol Stack resources..."
         kind delete cluster --name "$STACK_NAME"
-        launch_stack
     fi
+
+    launch_stack
 
     log_info "Obol Stack is up and running!"
 }

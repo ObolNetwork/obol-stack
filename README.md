@@ -1,16 +1,29 @@
-# Obol Stack
-
-A repository for distributing and running decentralised applications, powered by Kubernetes and Helm.
+![Obol Logo](https://obol.tech/obolnetwork.png)
+<h1 align="center">The Obol Stack: Decentralised Applications For Ethereum</h1>
 
 ## Overview
 
-The Obol Stack is a framework to make it easier to distribute dApps, and easier to install them. The stack is built on Kubernetes, with Helm as a package management system.
+The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
 
 ## Getting Started
 
-The easiest way to get started is to use download the `obolup` installer. `obolup` keeps your stack running the latest versions of its software.
+> [!IMPORTANT]
+> The Obol Stack is alpha software. It is not complete, and it may not be working smoothly. If you encounter an issue that does not appear to be documented, please open a [github issue](http://github.com/obolNetwork/obol-stack/issues) if an appropriate one is not already present.
+>
+> See [here](./obolup/README.md#supported-architectures) for the latest on OS and architectures supported.
+
+### Pre-requisites
+
+Running the Obol Stack locally requires a [Docker](https://www.docker.com/) engine. Install Docker for Linux using one of the options [here](https://docs.docker.com/engine/install/). Install Docker Desktop for Other Operating Systems [here](https://docs.docker.com/desktop/).
+
+> [!TIP]
+> If you use Docker Desktop, be sure to go to the settings section, resources tab, and allocate most or all of your CPUs and most of your disk space. The stack won't sync a local L1 node if there is not enough available disk space.
+
+Once you have Docker installed, the easiest way to bootstrap the stack is to use the `obolup` installer. `obolup` keeps your stack running the latest versions of its software.
 
 ```sh
+# This mode of installation is not yet live, please use the repo clone approach until this message is removed
+
 # Add the `obolup` program to your path
 curl -L https://stack.obol.org | sudo bash
 
@@ -24,6 +37,16 @@ git clone git@github.com:ObolNetwork/obol-stack.git
 cd obol-stack
 sudo chmod u+x ./obolup/obolup
 ./obolup/obolup
+```
+
+More advanced usage of `obolup` will be documented [here](./obolup/README.md).
+
+## Stack Overview
+
+The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and also attempts to sync an L1 full node ([Erigon](https://github.com/erigontech/erigon)). Both sit behind a specialised load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
+```bash
+# Obol Stack L1 JSON-RPC API
+http://l1-rpc-erpc.l1.cluster.svc.local
 ```
 
 ### Installing an Obol App (Helm Chart)
@@ -53,11 +76,17 @@ Each Obol App has a `values.yaml` file with default values. You can customize th
 obol install <app-store-name>/<chart-name> --values custom-values.yaml
 ```
 
+### Using advanced tooling
+
+The `obol` CLI is intended to be a simple command-line user interface to simplify the use of the Obol Stack for non-developers, it is a work in progress, and does not cover many advanced use cases that Kubernetes and Helm can offer. If you are an experienced Kubernetes user, `obolup` also installs [`kubectl`](https://kubernetes.io/docs/reference/kubectl/) and [`helm`](https://helm.sh/docs/helm/helm/), such that you can manage your stack with the tooling you are used to.
+
+If you encounter node management requirements that an end-user might need but cannot achieve with the Obol CLI, instead needing to use `kubectl` or `helm`, consider opening a feature request issue on the [obol-cli](https://github.com/ObolNetwork/obol-cli/issues) repo.
+
 ## Project Status
 
 This project is currently in alpha, and should not be used in production.
 
-The stack aims to support all popular Kubernetes backends, with a developer experience designed to be useful for local app development, through to production deployment and management.
+The stack aims to support all popular Kubernetes backends and all Ethereum client types, with a developer experience designed to be useful for local app development, through to production deployment and management.
 
 ## Contributing
 
