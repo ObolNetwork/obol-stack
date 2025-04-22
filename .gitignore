@@ -41,6 +41,5 @@ temp/
 .tmp/
 __pycache__/
 
-docs/
 adk-samples/
-adk-samples/
+obol_agent/docs/*
