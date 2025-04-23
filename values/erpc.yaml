@@ -2,7 +2,7 @@
 nameOverride: ""
 
 # -- Overrides the chart's computed fullname
-fullnameOverride: ""
+fullnameOverride: "rpc"
 
 # -- Number of replicas
 replicas: 1
@@ -11,7 +11,7 @@ image:
   # -- erpc container image repository
   repository: ghcr.io/erpc/erpc
   # -- erpc container image tag
-  tag: 0.0.26
+  tag: 0.0.43
   # -- erpc container pull policy
   pullPolicy: IfNotPresent
 
@@ -22,7 +22,17 @@ config: |
 
     database:
       evmJsonRpcCache:
-        driver: memory
+        connectors:
+          - id: memory-cache
+            driver: memory
+            memory:
+              maxItems: 10000
+        policies:
+          - network: "*"
+            method: "*"
+            finality: unfinalized
+            connector: memory-cache
+            ttl: 10s
 
     server:
       httpHostV4: "0.0.0.0"

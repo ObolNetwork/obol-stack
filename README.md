@@ -46,7 +46,7 @@ More advanced usage of `obolup` will be documented [here](./obolup/README.md).
 The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and also attempts to sync an L1 full node ([Erigon](https://github.com/erigontech/erigon)). Both sit behind a specialised load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
 ```bash
 # Obol Stack L1 JSON-RPC API
-http://l1-rpc-erpc.l1.cluster.svc.local
+http://rpc.l1.cluster.svc.local
 ```
 
 ### Installing an Obol App (Helm Chart)

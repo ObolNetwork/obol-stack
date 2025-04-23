@@ -134,7 +134,7 @@ http:
   corsDomain: "*"
   # API's offered over the HTTP-RPC interface: eth,erigon,web3,net,debug,trace,txpool,db.
   # Supported methods: https://github.com/ledgerwatch/erigon/tree/devel/cmd/rpcdaemon
-  api: "eth,erigon,web3,net,txpool,engine"
+  api: "eth,erigon,web3,net,txpool,engine,trace"
 
 # Manually specify TerminalTotalDifficulty, overriding the bundled setting
 terminalTotalDifficulty: ""
