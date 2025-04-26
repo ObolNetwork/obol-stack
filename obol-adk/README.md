@@ -1,7 +1,6 @@
 # Obol ADK Agents
 
-This directory contains examples of integrating Google's Agent Development Kit (ADK) with various Model Context Protocol (MCP) servers related to Obol, Kubernetes, Foundry, and local filesystems.
-
+This directory contains examples of integrating Google's Agent Development Kit (ADK) with various Model Context Protocol (MCP) servers related to Obol Stack
 ## Prerequisites
 
 1.  **Python Environment:** Ensure you have a Python 3.10+ environment set up. It's recommended to use a virtual environment:
