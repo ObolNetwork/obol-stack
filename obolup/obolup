@@ -248,14 +248,14 @@ EOF
 
     log_info "Configuring the Obol Stack Ethereum client..."
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --install l1-light-client obol/helios
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ./values/erpc.yaml
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ../values/erpc.yaml
 
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ./values/erigon.yaml
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ../values/erigon.yaml
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
     # Todo(Oisin): Blockscout segfaulting, unclear why
-    # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
+    # ensure obol install ethereum/blockscout --values ../values/blockscout.yaml
 
     # Check stack health
     log_info "Checking stack health..."

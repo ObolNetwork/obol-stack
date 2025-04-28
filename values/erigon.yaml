@@ -271,27 +271,13 @@ resources: {}
 ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 ## NB! readinessProbe and livenessProbe must be disabled before fully synced
 ##
+# Probes are disabled due to Helm chart merging bug that causes invalid pod spec (multiple handler types).
+# See: https://github.com/ObolNetwork/obol-stack/issues/NNN (replace with actual issue link when filed)
 livenessProbe:
-  initialDelaySeconds: 900
-  timeoutSeconds: 3
-  periodSeconds: 30
-  failureThreshold: 3
-  successThreshold: 1
-  httpGet:
-    path: /eth1/liveness
-    port: sidecar
-    scheme: HTTP
-
+  enabled: false
 readinessProbe:
-  initialDelaySeconds: 30
-  timeoutSeconds: 3
-  periodSeconds: 30
-  failureThreshold: 30
-  successThreshold: 1
-  httpGet:
-    path: /eth1/readiness
-    port: sidecar
-    scheme: HTTP
+  enabled: false
+
 
 ## Node labels for pod assignment
 ## ref: https://kubernetes.io/docs/user-guide/node-selection/
