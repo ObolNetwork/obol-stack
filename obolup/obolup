@@ -221,6 +221,7 @@ launch_stack() {
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
         log_info "Creating Kind cluster for Obol Stack..."
+        export KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS="--memory=35g"
         kind create cluster --name "$STACK_NAME" --config <(cat <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -228,6 +229,7 @@ nodes:
 - role: control-plane
 EOF
         )
+        unset KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS
     fi
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
@@ -250,7 +252,8 @@ EOF
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --install l1-light-client obol/helios
     ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ../values/erpc.yaml
 
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ../values/erigon.yaml
+    ## Ensure Erigon later
+    # ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ../values/erigon.yaml
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
