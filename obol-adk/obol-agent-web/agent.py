@@ -54,8 +54,14 @@ async def create_agent():
         print("Connecting to Kubernetes MCP server...")
         k8s_tools, k8s_exit_stack = await MCPToolset.from_server(
             connection_params=StdioServerParameters(
-                command="/Users/bussyjd/Development/kubernetes-mcp-server/kubernetes-mcp-server",
-                args=[]
+                command="npx",
+                args=[
+                    ## https://github.com/manusa/kubernetes-mcp-server/releases/tag/v0.0.31
+                    #command="/Users/bussyjd/Development/kubernetes-mcp-server/kubernetes-mcp-server",
+                    #args=[]
+                    # Use the latest version of the Kubernetes MCP server for now
+                    "mcp-server-kubernetes@latest"
+                ]
             )
         )
         all_tools.extend(k8s_tools)

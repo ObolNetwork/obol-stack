@@ -10,10 +10,7 @@ This directory contains examples of integrating Google's Agent Development Kit (
     ```
 2.  **Dependencies:** Install the required Python packages. Assuming the main `requirements.txt` is in the `obol-adk` root or relevant subdirectories:
     ```bash
-    pip install -r requirements.txt
-    # Or install specific requirements if separated, e.g.:
-    # pip install -r obol-agent/requirements.txt
-    # pip install -r obol-agent-web/requirements.txt
+    pip install google-adk
     ```
 3.  **Environment Variables:** Create `.env` files in the respective agent directories (`obol-agent/` and `obol-agent-web/`) and populate them with necessary API keys or configurations (e.g., `GOOGLE_API_KEY`). Refer to the agent scripts for required variables. Example `.env` content:
     ```
@@ -59,3 +56,8 @@ This agent is designed to be run using the ADK Web UI. It connects to Filesystem
 4.  Open your web browser and navigate to the URL provided (usually `http://localhost:8000`).
 5.  Select the `obol-agent-web` application from the dropdown list in the ADK Web UI.
 6.  Interact with the agent through the chat interface.
+
+
+## Improvements
+
+- Awaiting MCP public package for Foundry MCP server https://github.com/PraneshASP/foundry-mcp-server?tab=readme-ov-file#setup-using-npm-package

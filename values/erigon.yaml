@@ -255,7 +255,13 @@ p2pNodePort:
   #  "0": 32345
   #  "3": 32348
 
-resources: {}
+resources:
+  limits:
+    cpu: 4
+    memory: 16Gi
+  requests:
+    cpu: 2
+    memory: 8Gi
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
   # resources, such as Minikube. If you do want to specify resources, uncomment the following
@@ -272,7 +278,7 @@ resources: {}
 ## NB! readinessProbe and livenessProbe must be disabled before fully synced
 ##
 # Probes are disabled due to Helm chart merging bug that causes invalid pod spec (multiple handler types).
-# See: https://github.com/ObolNetwork/obol-stack/issues/NNN (replace with actual issue link when filed)
+# See: https://github.com/ObolNetwork/obol-stack/issues/9 (replace with actual issue link when filed)
 livenessProbe:
   enabled: false
 readinessProbe:
