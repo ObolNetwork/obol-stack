@@ -21,6 +21,9 @@ Running the Obol Stack locally requires a [Docker](https://www.docker.com/) engi
 
 Once you have Docker installed, the easiest way to bootstrap the stack is to use the `obolup` installer. `obolup` keeps your stack running the latest versions of its software.
 
+> [!IMPORTANT]
+> This first method of installation is not yet live, for now you must clone the repo and run `obolup` locally, as described in the second installation option.
+
 ```sh
 # This mode of installation is not yet live, please use the repo clone approach until this message is removed
 
@@ -34,9 +37,9 @@ obolup
 You can also clone this repo locally and run:
 ```sh
 git clone git@github.com:ObolNetwork/obol-stack.git
-cd obol-stack
-sudo chmod u+x ./obolup/obolup
-./obolup/obolup
+cd obol-stack/obolup
+sudo chmod u+x ./obolup
+./obolup
 ```
 
 More advanced usage of `obolup` will be documented [here](./obolup/README.md).
