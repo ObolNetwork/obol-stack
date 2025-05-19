@@ -1,4 +1,4 @@
-# Obol ADK Agents
+# Obol Agents
 
 This directory contains examples of integrating Google's Agent Development Kit (ADK) with various Model Context Protocol (MCP) servers related to Obol Stack
 ## Prerequisites
