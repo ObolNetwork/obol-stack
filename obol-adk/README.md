@@ -61,3 +61,17 @@ This agent is designed to be run using the ADK Web UI. It connects to Filesystem
 ## Improvements
 
 - Awaiting MCP public package for Foundry MCP server https://github.com/PraneshASP/foundry-mcp-server?tab=readme-ov-file#setup-using-npm-package
+## Docker Images for MCP Servers
+
+Dockerfiles that package the MCP servers used by `obol-agent-web` are located in the `dockerfiles/` directory:
+
+- **Dockerfile.filesystem** – packages the Filesystem MCP server.
+- **Dockerfile.obol** – packages the Obol MCP server.
+- **Dockerfile.kubernetes** – packages the Kubernetes MCP server.
+- **Dockerfile.foundry** – packages the Foundry MCP server.
+
+These images can be built and pushed to your own registry, for example:
+
+```bash
+docker build -f dockerfiles/Dockerfile.obol -t <registry>/obol-mcp:latest .
+```

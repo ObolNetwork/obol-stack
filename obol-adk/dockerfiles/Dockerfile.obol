@@ -1,0 +1,14 @@
+# Dockerfile to run the Obol MCP server
+FROM python:3.11-slim
+
+WORKDIR /server
+
+# Install uv runner
+RUN pip install --no-cache-dir uvicorn uv
+
+# Copy server implementation (expected to be present at build time)
+COPY ../obol-mcp /server
+
+EXPOSE 8080
+
+CMD ["uv", "run", "/server/server.py"]

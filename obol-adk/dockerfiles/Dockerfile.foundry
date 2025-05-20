@@ -1,0 +1,12 @@
+# Dockerfile to run the Foundry MCP server
+FROM node:lts-slim
+
+WORKDIR /app
+
+# Install the Foundry MCP server when it becomes publicly available
+# This package may still be under development
+RUN npm install -g foundry-mcp-server
+
+EXPOSE 8080
+
+CMD ["node", "/usr/local/lib/node_modules/foundry-mcp-server/dist/index.js"]
