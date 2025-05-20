@@ -216,6 +216,47 @@ check_obolup_update() {
     fi
 }
 
+# Ensure GOOGLE_API_KEY is available and stored in the cluster
+setup_google_api_key_secret() {
+    if [ -z "$GOOGLE_API_KEY" ]; then
+        log_info "No GOOGLE_API_KEY detected."
+        echo "Please open https://aistudio.google.com/apikey and copy your key."
+        read -rp "Paste Google API key: " GOOGLE_API_KEY
+    fi
+
+    if kubectl get secret google-api-key >/dev/null 2>&1; then
+        kubectl delete secret google-api-key >/dev/null 2>&1 || true
+    fi
+
+    kubectl create secret generic google-api-key --from-literal=GOOGLE_API_KEY="$GOOGLE_API_KEY" >/dev/null 2>&1
+    log_info "Google API key secret configured."
+}
+
+# Build the obol-adk Docker image and deploy it to the Kind cluster
+build_and_deploy_obol_agent() {
+    log_info "Building obol-agent Docker image..."
+    ensure docker build -t obol-agent:latest ./obol-adk
+
+    log_info "Loading image into Kind cluster..."
+    ensure kind load docker-image obol-agent:latest --name "$STACK_NAME"
+
+    log_info "Deploying obol-agent to cluster..."
+    if kubectl get deployment obol-agent >/dev/null 2>&1; then
+        kubectl set image deployment/obol-agent obol-agent=obol-agent:latest >/dev/null
+    else
+        kubectl create deployment obol-agent --image=obol-agent:latest --port=8000 >/dev/null
+    fi
+
+    kubectl expose deployment obol-agent --name=obol-agent --port=8000 --type=ClusterIP --overwrite >/dev/null 2>&1 || true
+}
+
+# Port-forward and open the obol-agent interface
+open_obol_agent_interface() {
+    log_info "Opening obol-agent interface at http://localhost:8000..."
+    kubectl port-forward svc/obol-agent 8000:8000 >/dev/null 2>&1 &
+    xdg-open "http://localhost:8000" 2>/dev/null || open "http://localhost:8000" 2>/dev/null || log_warn "Could not open browser automatically."
+}
+
 # Launch or update the Obol Stack
 launch_stack() {
     log_info "Launching core Obol Stack services..."
@@ -231,6 +272,9 @@ EOF
         )
         unset KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS
     fi
+
+    # Ensure the Google API key is available inside the cluster
+    setup_google_api_key_secret
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
     #log_info "Applying Obol Stack base resources..."
@@ -259,6 +303,9 @@ EOF
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
     # Todo(Oisin): Blockscout segfaulting, unclear why
     # ensure obol install ethereum/blockscout --values ../values/blockscout.yaml
+
+    # Build and deploy obol-agent
+    build_and_deploy_obol_agent
 
     # Check stack health
     log_info "Checking stack health..."
@@ -293,6 +340,9 @@ main() {
     launch_stack
 
     log_info "Obol Stack is up and running!"
+
+    # Open the obol-agent interface
+    open_obol_agent_interface
 }
 
 
