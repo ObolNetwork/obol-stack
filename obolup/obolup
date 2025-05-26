@@ -1,11 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # modified from https://github.com/foundry-rs/foundry/blob/master/foundryup/foundryup
 
 # obolup - Obol Stack Updater and Launcher
-# Usage: obolup [update]
 
-set -eo pipefail
+set -Eeuo pipefail
 
 
 # Constants
@@ -15,6 +14,16 @@ OBOLUP_URL="https://stack.obol.org/obolup"
 STACK_NAME="obol-stack"
 STATUS_PORT=8080
 ARCHITECTURE=unset
+# Network name to chain ID mapping
+declare -A -r SUPPORTED_NETWORKS=(
+	["hoodi"]="560048"
+    ["mainnet"]="1"
+)
+# Supported sync types
+declare -a -r SUPPORTED_MODES=(
+	"light"
+    "full"
+)
 
 BASE_DIR=${XDG_CONFIG_HOME:-$HOME}
 
@@ -45,6 +54,21 @@ download() {
       wget --show-progress -qO- "$1"
     fi
   fi
+}
+
+# Validate the network
+validate_network() {
+	declare -n __network="$1"
+
+	if [[ -z "$__network" ]]; then
+		log_info "Network name is empty. Defaulting to mainnet"
+        __network="mainnet"
+	fi
+
+	if [[ -z "${SUPPORTED_NETWORKS[$__network]:-}" ]]; then
+		log_error "Unrecognised network name: \"${__network}\". Supported networks: $SUPPORTED_NETWORKS\n"
+		help 1
+	fi
 }
 
 
@@ -271,10 +295,44 @@ EOF
 
 # Main logic
 main() {
+    # Instantiate
+    local network=""
+	local mode=""
+    declare -i clean=0
+
+	# Parse the CLI flags
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help) help 0 ;;
+		--network)
+			network="$2"
+			shift 2
+			;;
+        --mode)
+			mode="$2"
+			shift 2
+			;;
+        --clean)
+			clean=1
+			shift 1
+			;;
+        *)
+			echo "Unknown option: $1" >&2
+			help
+			;;
+		esac
+	done
+
+    # Parse network and sync mode
+    validate_network network
+	#validate_mode "$mode"
+
     banner
     log_info "Starting obolup..."
     log_info "Detected platform: $PLATFORM"
     log_info "Detected architecture: $ARCHITECTURE"
+    log_info "Selected network: $network"
+    log_info "Selected node type: $mode"
     # start_docker
     start_docker
     install_kubectl
@@ -282,7 +340,7 @@ main() {
     install_helm
     #install_obol_cli
     #check_obolup_update
-    if [[ "$1" == "clean" ]]; then
+    if [[ "$clean" -ne 0 ]]; then
         log_info "Clean command specified, deleting and recreating Obol Stack resources..."
         kind delete cluster --name "$STACK_NAME"
     fi
@@ -290,6 +348,7 @@ main() {
     launch_stack
 
     log_info "Obol Stack is up and running!"
+    exit 0
 }
 
 
@@ -312,6 +371,20 @@ Docs       : https://docs.obol.org/
 .oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo
 
 '
+}
+
+# Displays help text
+help() {
+	cat <<EOF
+Usage: $0 [--help] [--network <network>] [--mode <mode>] [--clean]
+
+Options:
+  --help                            Display this help message
+  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
+  --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
+  --clean                           Deletes and recreates the Obol Stack
+EOF
+	exit "${1:-1}"
 }
 
 # Run main
