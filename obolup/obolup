@@ -8,33 +8,75 @@ set -Eeuo pipefail
 
 
 # Constants
-OBOL_CLI_REPO="https://github.com/obolnetwork/obol-cli"
-KIND_VERSION="v0.27.0"
-OBOLUP_URL="https://stack.obol.org/obolup"
-STACK_NAME="obol-stack"
-STATUS_PORT=8080
-ARCHITECTURE=unset
+readonly OBOL_CLI_REPO="https://github.com/obolnetwork/obol-cli"
+readonly KIND_VERSION="v0.27.0"
+readonly OBOLUP_URL="https://stack.obol.org/obolup"
+readonly STACK_NAME="obol-stack"
+readonly STATUS_PORT=8080
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly NC='\033[0m' # No Color
+
 # Network name to chain ID mapping
 declare -A -r SUPPORTED_NETWORKS=(
 	["hoodi"]="560048"
     ["mainnet"]="1"
 )
 # Supported sync types
-declare -a -r SUPPORTED_MODES=(
-	"light"
-    "full"
+declare -A -r SUPPORTED_MODES=(
+	["light"]=1
+    ["full"]=2
 )
 
-BASE_DIR=${XDG_CONFIG_HOME:-$HOME}
+readonly BASE_DIR=${XDG_CONFIG_HOME:-$HOME}
+
+
+tolower() {
+  echo "$1" | awk '{print tolower($0)}'
+}
+
+# Get platform + architecture
+readonly uname_s=$(uname -s)
+PLATFORM=$(tolower "${OBOLUP_PLATFORM:-$uname_s}")
+ARCHITECTURE=unset
+EXT="tar.gz"
+case $PLATFORM in
+    linux) ;;
+    darwin|mac*)
+    PLATFORM="darwin"
+    ;;
+    mingw*|win*)
+    EXT="zip"
+    PLATFORM="win32"
+    ;;
+    *)
+    err "unsupported platform: $PLATFORM"
+    ;;
+esac
+
+readonly uname_m=$(uname -m)
+ARCHITECTURE=$(tolower "${OBOLUP_ARCH:-$uname_m}")
+if [ "${ARCHITECTURE}" = "x86_64" ]; then
+    # Redirect stderr to /dev/null to avoid printing errors if non Rosetta.
+    if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
+    ARCHITECTURE="arm64" # Rosetta.
+    else
+    ARCHITECTURE="amd64" # Intel.
+    fi
+elif [ "${ARCHITECTURE}" = "arm64" ] ||[ "${ARCHITECTURE}" = "aarch64" ] ; then
+    ARCHITECTURE="arm64" # Arm.
+else
+    ARCHITECTURE="amd64" # Amd.
+fi
+
 
 # Run a command that should never fail. If the command fails execution
 # will immediately terminate with an error showing the failing command.
 ensure() {
   if ! "$@"; then err "command failed: $*"; fi
-}
-
-tolower() {
-  echo "$1" | awk '{print tolower($0)}'
 }
 
 # Downloads $1 into $2 or stdout
@@ -66,17 +108,25 @@ validate_network() {
 	fi
 
 	if [[ -z "${SUPPORTED_NETWORKS[$__network]:-}" ]]; then
-		log_error "Unrecognised network name: \"${__network}\". Supported networks: $SUPPORTED_NETWORKS\n"
+		log_warn "Unrecognised network name: \"${__network}\".\n"
 		help 1
 	fi
 }
 
+# Validate the sync mode
+validate_sync_mode() {
+	declare -n __mode="$1"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+	if [[ -z "$__mode" ]]; then
+		log_info "Sync mode is empty. Defaulting to light node sync mode."
+        __mode="light"
+	fi
+
+	if [[ -z "${SUPPORTED_MODES[$__mode]:-}" ]]; then
+		log_warn "Unrecognised sync mode: \"${__mode}\".\n"
+		help 1
+	fi
+}
 
 # Log functions
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -87,39 +137,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
-
-# Get platform + architecture
-uname_s=$(uname -s)
-PLATFORM=$(tolower "${OBOLUP_PLATFORM:-$uname_s}")
-EXT="tar.gz"
-case $PLATFORM in
-    linux) ;;
-    darwin|mac*)
-    PLATFORM="darwin"
-    ;;
-    mingw*|win*)
-    EXT="zip"
-    PLATFORM="win32"
-    ;;
-    *)
-    err "unsupported platform: $PLATFORM"
-    ;;
-esac
-
-uname_m=$(uname -m)
-ARCHITECTURE=$(tolower "${OBOLUP_ARCH:-$uname_m}")
-if [ "${ARCHITECTURE}" = "x86_64" ]; then
-    # Redirect stderr to /dev/null to avoid printing errors if non Rosetta.
-    if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
-    ARCHITECTURE="arm64" # Rosetta.
-    else
-    ARCHITECTURE="amd64" # Intel.
-    fi
-elif [ "${ARCHITECTURE}" = "arm64" ] ||[ "${ARCHITECTURE}" = "aarch64" ] ; then
-    ARCHITECTURE="arm64" # Arm.
-else
-    ARCHITECTURE="amd64" # Amd.
-fi
 
 # Ensure Docker is running
 start_docker() {
@@ -323,11 +340,12 @@ main() {
 		esac
 	done
 
+    banner
+
     # Parse network and sync mode
     validate_network network
-	#validate_mode "$mode"
+	validate_sync_mode mode
 
-    banner
     log_info "Starting obolup..."
     log_info "Detected platform: $PLATFORM"
     log_info "Detected architecture: $ARCHITECTURE"
