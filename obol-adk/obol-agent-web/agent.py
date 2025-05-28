@@ -12,39 +12,49 @@ root_agent = LlmAgent(
         'Kubernetes clusters, and Foundry projects. Use the appropriate tool based on the user query.'
     ),
     tools=[
+        # Filesystem MCP via Docker
         MCPToolset(
             connection_params=StdioServerParameters(
-                command='npx',
+                command='docker',
                 args=[
-                    "-y",
-                    "@modelcontextprotocol/server-filesystem",
-                    "/Users/bussyjd/Development/Obol_Workbench/obol-stack/obol-adk/docs/",
+                    "run", "--rm", "-i",
+                    "-v", "/Users/bussyjd/Development/Obol_Workbench/obol-stack/obol-adk/docs/:/data",  # Adjust as needed
+                    "filesystem-mcp:latest"
                 ],
             ),
         ),
+        # Obol MCP via Docker
         MCPToolset(
             connection_params=StdioServerParameters(
-                command="uv",
+                command="docker",
                 args=[
-                    "run",
-                    "/Users/bussyjd/Development/Obol_Workbench/obol-mcp/server.py",
-                ],
-                cwd="/Users/bussyjd/Development/Obol_Workbench/obol-mcp",
-            ),
-        ),
-        MCPToolset(
-            connection_params=StdioServerParameters(
-                command="npx",
-                args=[
-                    "mcp-server-kubernetes@latest",
+                    "run", "--rm", "-i",
+                    "-v", "/Users/bussyjd/Development/Obol_Workbench/obol-mcp:/app",  # Adjust as needed
+                    "obol-mcp:latest"
                 ],
             ),
         ),
+        # Kubernetes MCP via Docker
         MCPToolset(
             connection_params=StdioServerParameters(
-                command="node",
-                args=["/Users/bussyjd/Development/foundry-mcp-server/dist/index.js"],
+                command="docker",
+                args=[
+                    "run", "--rm", "-i",
+                    # Add any required mounts or envs for k8s-mcp
+                    "kubernetes-mcp:latest"
+                ],
             ),
         ),
+        # # Foundry MCP via Docker
+        # MCPToolset(
+        #     connection_params=StdioServerParameters(
+        #         command="docker",
+        #         args=[
+        #             "run", "--rm", "-i",
+        #             # Add any required mounts or envs for foundry-mcp
+        #             "foundry-mcp:latest"
+        #         ],
+        #     ),
+        # ),
     ],
 )

@@ -1,12 +1,27 @@
-# Dockerfile to run the Foundry MCP server
-FROM node:lts-slim
+FROM node:lts-alpine3.20
+
+RUN apk update && \
+    apk add --no-cache curl git ca-certificates bash openssl build-base && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install the Foundry MCP server when it becomes publicly available
-# This package may still be under development
-RUN npm install -g foundry-mcp-server
+SHELL ["/bin/bash", "-c"]
+
+RUN curl -L https://foundry.paradigm.xyz | bash || true
+ENV PATH="/root/.foundry/bin:${PATH}"
+RUN foundryup
+RUN foundryup # run again to ensure binaries are downloaded
+
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN git clone https://github.com/PraneshASP/foundry-mcp-server.git .
+
+SHELL ["/bin/sh", "-c"]
+
+RUN bun i && bun build ./src/index.ts --outdir ./dist --target node
 
 EXPOSE 8080
 
-CMD ["node", "/usr/local/lib/node_modules/foundry-mcp-server/dist/index.js"]
+CMD ["node", "./dist/index.js"]
