@@ -6,8 +6,11 @@ WORKDIR /server
 # Install uv runner
 RUN pip install --no-cache-dir uvicorn uv
 
-# Copy server implementation (expected to be present at build time)
-COPY ../obol-mcp /server
+# Copy server implementation from the local obol-mcp directory
+COPY obol-mcp/ /server/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r /server/requirements.txt
 
 EXPOSE 8080
 
