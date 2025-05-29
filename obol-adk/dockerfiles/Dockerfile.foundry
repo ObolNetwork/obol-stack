@@ -1,27 +1,23 @@
-FROM node:lts-alpine3.20
+FROM ghcr.io/foundry-rs/foundry:latest
 
-RUN apk update && \
-    apk add --no-cache curl git ca-certificates bash openssl build-base && \
-    rm -rf /var/lib/apt/lists/*
+# Switch to root to install packages
+USER root
 
-WORKDIR /app
+# Install Node.js, git, and other dependencies
+RUN apk add --no-cache nodejs npm git curl bash
 
-SHELL ["/bin/bash", "-c"]
-
-RUN curl -L https://foundry.paradigm.xyz | bash || true
-ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
-RUN foundryup # run again to ensure binaries are downloaded
-
+# Install Bun
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 
+WORKDIR /app
+
+# Clone and build the foundry-mcp-server
 RUN git clone https://github.com/PraneshASP/foundry-mcp-server.git .
-
-SHELL ["/bin/sh", "-c"]
-
 RUN bun i && bun build ./src/index.ts --outdir ./dist --target node
 
+# Expose port if needed (not required for stdio)
 EXPOSE 8080
 
+# Run as root since the MCP server needs access to foundry binaries
 CMD ["node", "./dist/index.js"]
