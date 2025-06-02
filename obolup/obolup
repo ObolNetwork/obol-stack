@@ -259,6 +259,9 @@ check_obolup_update() {
 
 # Launch or update the Obol Stack
 launch_stack() {
+    declare -n __network="$1"
+    declare -n __mode="$2"
+
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
         log_info "Creating Kind cluster for Obol Stack..."
@@ -277,8 +280,8 @@ EOF
 
     # Add the appropriate Helm repos (ethpandaops, Obol, kubernetes-dashboard)
     log_info "Adding default Obol Stack app stores..."
-    ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts
-    ensure helm repo add obol https://obolnetwork.github.io/helm-charts/
+    ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts --force-update
+    ensure helm repo add obol https://obolnetwork.github.io/helm-charts/ --force-update
     #ensure helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
 
     # Update helm repos
@@ -287,11 +290,17 @@ EOF
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Configuring the Obol Stack Ethereum client..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --install l1-light-client obol/helios
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc --values ./values/erpc.yaml
+    log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon --values ./values/erigon.yaml
+    # If mode="full", also sync an Erigon full node
+    if [["$__mode" = "full"]]; then
+        log_info "Installing an Ethereum Erigon full node client..."
+        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$__network/erigon.yaml
+    fi
+
+    log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
+    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc -f ../values/erpc.yaml
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
@@ -363,7 +372,7 @@ main() {
         kind delete cluster --name "$STACK_NAME"
     fi
 
-    launch_stack
+    launch_stack network mode
 
     log_info "Obol Stack is up and running!"
     exit 0
