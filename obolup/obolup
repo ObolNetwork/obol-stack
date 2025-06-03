@@ -300,7 +300,7 @@ EOF
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
-    ensure helm upgrade --namespace l1 --create-namespace --install l1-rpc ethereum/erpc -f ../values/erpc.yaml
+    ensure helm upgrade --namespace l1 --create-namespace --force --install l1-rpc ethereum/erpc -f ../values/erpc.yaml
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 

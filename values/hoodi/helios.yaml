@@ -8,14 +8,16 @@ helios:
   
   # REQUIRED: Add your execution RPC endpoint (must support eth_getProof)
   # Example using AllthatNode (replace with your provider)
-  executionRpc: "https://hoodi.drpc.org"
+  executionRpc: "wss://hoodi.drpc.org"
   
-  # Use Nimbus public consensus client for Holesky
   consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
   
   # Example checkpoint from Holesky
   # Get the latest checkpoint using: ./scripts/get-latest-checkpoint.sh holesky
   checkpoint: "0x2714f702cefb29ddeb4d1836a9a6b1846c23427756ff2b5da4a6b2efab269ff2"
+
+  # Trusted URL to retrieve a checkpoint sync to begin the light client from
+  fallback: "https://checkpoint-sync.hoodi.ethpandaops.io"
   
   # Bind to 0.0.0.0 to allow connections from outside the pod
   rpcBindIp: "0.0.0.0"

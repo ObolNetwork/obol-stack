@@ -18,6 +18,13 @@ helios:
   # Data directory for cached checkpoints
   dataDir: "/data"
 
+image:
+  repository: obolnetwork/helios
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "96f51e7"
+
 # Configure service to be accessible
 service:
   type: ClusterIP
