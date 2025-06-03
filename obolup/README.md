@@ -2,6 +2,26 @@
 
 `obolup` is a script for launching (and updating) the Obol Stack. It is in early Alpha, and subject to breaking changes. It is not yet recommended as a production runtime. 
 
+## Usage
+
+To start a light-client, mainnet node, simply run `./obolup` from this directory.
+
+To start a Hoodi testnet instance of the Obol Stack, run `./obolup --network hoodi`.
+
+```text
+Usage: ./obolup [--help] [--network <network>] [--mode <mode>] [--clean]
+
+Options:
+  --help                            Display this help message
+  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
+  --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
+  --clean                           Deletes and recreates the Obol Stack
+```
+
+### Troubleshooting
+
+Adding the `--clean` flag will start your cluster fresh, and may fix issues during alpha usage or version upgrades. This will clear the stored data of your stack.
+
 ## Supported Architectures
 
 | Operating System | Architecture | Supported |
