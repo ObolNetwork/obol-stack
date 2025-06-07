@@ -4,7 +4,9 @@ FROM ghcr.io/foundry-rs/foundry:latest
 USER root
 
 # Install Node.js, git, and other dependencies
-RUN apk add --no-cache nodejs npm git curl bash
+RUN apt-get update && \
+    apt-get install -y nodejs npm git curl bash unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Bun
 RUN curl -fsSL https://bun.sh/install | bash

@@ -4,8 +4,8 @@ FROM node:lts-slim
 WORKDIR /app
 
 # Install the Kubernetes MCP server package
-RUN npm install -g mcp-server-kubernetes@latest
+RUN npm install -g kubernetes-mcp-server@latest
 
 EXPOSE 8080
 
-CMD ["mcp-server-kubernetes"]
+CMD ["kubernetes-mcp-server"]
