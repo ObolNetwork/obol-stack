@@ -1,0 +1,54 @@
+# Example values file for deploying Helios on Holesky Testnet
+# Replace the execution RPC placeholder with your actual endpoint
+
+# Helios specific configuration
+helios:
+  # Network to sync to
+  network: "hoodi"
+  
+  # REQUIRED: Add your execution RPC endpoint (must support eth_getProof)
+  # Example using AllthatNode (replace with your provider)
+  executionRpc: "wss://hoodi.drpc.org"
+  
+  consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
+  
+  # Example checkpoint from Holesky
+  # Get the latest checkpoint using: ./scripts/get-latest-checkpoint.sh holesky
+  checkpoint: "0x2714f702cefb29ddeb4d1836a9a6b1846c23427756ff2b5da4a6b2efab269ff2"
+  strictCheckpointAge: true
+
+  # Trusted URL to retrieve a checkpoint sync to begin the light client from
+  fallback: "https://checkpoint-sync.hoodi.ethpandaops.io"
+  loadExternalFallback: true
+  
+  # Bind to 0.0.0.0 to allow connections from outside the pod
+  rpcBindIp: "0.0.0.0"
+  
+  # Data directory for cached checkpoints
+  dataDir: "/data"
+
+image:
+  repository: obolnetwork/helios
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "96f51e7"
+
+# Configure service to be accessible
+service:
+  type: ClusterIP
+  port: 8545
+
+# Resource allocation - lower for testnet
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Enable persistent storage for checkpoint data
+persistence:
+  enabled: true
+  size: 500Mi
