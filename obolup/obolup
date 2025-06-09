@@ -21,15 +21,30 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 # Network name to chain ID mapping
-declare -A -r SUPPORTED_NETWORKS=(
-	["hoodi"]="560048"
-    ["mainnet"]="1"
-)
-# Supported sync types
-declare -A -r SUPPORTED_MODES=(
-	["light"]=1
-    ["full"]=2
-)
+# Using functions instead of associative arrays for bash 3.2 compatibility
+get_chain_id() {
+    case "$1" in
+        "hoodi")   echo "560048" ;;
+        "mainnet") echo "1" ;;
+        *)         echo "" ;;
+    esac
+}
+
+# Check if network is supported
+is_supported_network() {
+    case "$1" in
+        "hoodi"|"mainnet") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Check if sync mode is supported
+is_supported_mode() {
+    case "$1" in
+        "light"|"full") return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 readonly BASE_DIR=${XDG_CONFIG_HOME:-$HOME}
 
@@ -73,6 +88,17 @@ else
 fi
 
 
+# Print an error message and exit
+err() {
+  echo -e "${RED}[ERROR]${NC} $1" >&2
+  exit 1
+}
+
+# Check if a command exists
+check_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 # Run a command that should never fail. If the command fails execution
 # will immediately terminate with an error showing the failing command.
 ensure() {
@@ -100,32 +126,38 @@ download() {
 
 # Validate the network
 validate_network() {
-	declare -n __network="$1"
+	local network="$1"
 
-	if [[ -z "$__network" ]]; then
+	if [[ -z "$network" ]]; then
 		log_info "Network name is empty. Defaulting to mainnet"
-        __network="mainnet"
+		network="mainnet"
 	fi
 
-	if [[ -z "${SUPPORTED_NETWORKS[$__network]:-}" ]]; then
-		log_warn "Unrecognised network name: \"${__network}\".\n"
+	if ! is_supported_network "$network"; then
+		log_warn "Unrecognised network name: \"${network}\".\n"
 		help 1
 	fi
+	
+	# Return the validated network
+	echo "$network"
 }
 
 # Validate the sync mode
 validate_sync_mode() {
-	declare -n __mode="$1"
+	local mode="$1"
 
-	if [[ -z "$__mode" ]]; then
+	if [[ -z "$mode" ]]; then
 		log_info "Sync mode is empty. Defaulting to light node sync mode."
-        __mode="light"
+		mode="light"
 	fi
 
-	if [[ -z "${SUPPORTED_MODES[$__mode]:-}" ]]; then
-		log_warn "Unrecognised sync mode: \"${__mode}\".\n"
+	if ! is_supported_mode "$mode"; then
+		log_warn "Unrecognised sync mode: \"${mode}\".\n"
 		help 1
 	fi
+	
+	# Return the validated mode
+	echo "$mode"
 }
 
 # Log functions
@@ -300,8 +332,8 @@ open_obol_agent_interface() {
 
 # Launch or update the Obol Stack
 launch_stack() {
-    declare -n __network="$1"
-    declare -n __mode="$2"
+    local network="$1"
+    local mode="$2"
 
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
@@ -336,13 +368,13 @@ EOF
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
+    log_info "Installing the Obol Stack Ethereum light client configured for $network..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$network/helios.yaml
 
     # If mode="full", also sync an Erigon full node
-    if [["$__mode" = "full"]]; then
+    if [[ "$mode" = "full" ]]; then
         log_info "Installing an Ethereum Erigon full node client..."
-        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$__network/erigon.yaml
+        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$network/erigon.yaml
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
@@ -401,8 +433,8 @@ main() {
     banner
 
     # Parse network and sync mode
-    validate_network network
-	validate_sync_mode mode
+    network=$(validate_network "$network")
+	mode=$(validate_sync_mode "$mode")
 
     log_info "Starting obolup..."
     log_info "Detected platform: $PLATFORM"
@@ -421,7 +453,7 @@ main() {
         kind delete cluster --name "$STACK_NAME"
     fi
 
-    launch_stack network mode
+    launch_stack "$network" "$mode"
 
     log_info "Obol Stack is up and running!"
     exit 0
