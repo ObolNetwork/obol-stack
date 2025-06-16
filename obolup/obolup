@@ -291,24 +291,33 @@ check_obolup_update() {
 
 # Ensure GOOGLE_API_KEY is available and stored in the cluster
 setup_google_api_key_secret() {
-    if [ -z "$GOOGLE_API_KEY" ]; then
+    local env_file="$HOME/.obol-stack/.env"
+    if [ -f "$env_file" ]; then
+        # shellcheck source=/dev/null
+        source "$env_file"
+    fi
+
+    if [ -z "${GOOGLE_API_KEY:-}" ]; then
         log_info "No GOOGLE_API_KEY detected."
         echo "Please open https://aistudio.google.com/apikey and copy your key."
         read -rp "Paste Google API key: " GOOGLE_API_KEY
+        mkdir -p "$(dirname "$env_file")"
+        echo "GOOGLE_API_KEY=$GOOGLE_API_KEY" > "$env_file"
+        log_info "GOOGLE_API_KEY stored in $env_file"
     fi
 
-    if kubectl get secret google-api-key >/dev/null 2>&1; then
-        kubectl delete secret google-api-key >/dev/null 2>&1 || true
-    fi
-
-    kubectl create secret generic google-api-key --from-literal=GOOGLE_API_KEY="$GOOGLE_API_KEY" >/dev/null 2>&1
-    log_info "Google API key secret configured."
+    ## TODO: Adjust namespace
+    log_info "Creating secret for GOOGLE_API_KEY..."
+    ensure kubectl create secret generic google-api-key \
+        --namespace default \
+        --from-literal=key="$GOOGLE_API_KEY" \
+        --dry-run=client -o yaml | kubectl apply -f -
 }
 
 # Build the obol-adk Docker image and deploy it to the Kind cluster
 build_and_deploy_obol_agent() {
     log_info "Building obol-agent Docker image..."
-    ensure docker build -t obol-agent:latest ./obol-adk
+    ensure docker build -t obol-agent:latest ../obol-adk
 
     log_info "Loading image into Kind cluster..."
     ensure kind load docker-image obol-agent:latest --name "$STACK_NAME"
@@ -374,7 +383,7 @@ EOF
     # If mode="full", also sync an Erigon full node
     if [[ "$mode" = "full" ]]; then
         log_info "Installing an Ethereum Erigon full node client..."
-        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$network/erigon.yaml
+        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/mainnet/erigon.yaml -f ../values/$network/erigon.yaml
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."

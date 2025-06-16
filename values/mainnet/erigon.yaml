@@ -1,203 +1,242 @@
-# Default values for erigon.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
-global:
-  replicaCount: 1
-
-  ## Eth2 network ID
-  ##
-  network: mainnet
-
-  ## JSON Web Token (JWT) authentication is used to secure the communication
-  ## between the beacon node and execution client. You can generate a JWT using
-  ## a command line tool, for example:
-  ## openssl rand -hex 32 > token.txt
-  ##
-  JWTSecret: ""
-
-  ## If you would like the JSON Web Token (JWT) to be managed by a secret outside
-  ## of this chart, an existing secret name can be passed here. If specified, JWTSecret should not be set.
-  ## jwtsecret should be the key of the token in the secret.
-  ##
-  secretNameOverride: ""
-
-  ## Credentials to fetch images from private registry
-  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
-  ##
-  imagePullSecrets: []
-
-  ## Service account
-  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
-  ## Additional settings could be made in non-global section.
-  ##
-  serviceAccount:
-    # Specifies whether a service account should be created
-    create: true
-
-  ## RBAC configuration.
-  ## ref: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
-  ## Additional settings could be made in non-global section.
-  ##
-  rbac:
-    ## Specifies whether RBAC resources are to be created
-    ##
-    create: true
-
-  ## Monitoring
-  ## Additional settings could be made in non-global section.
-  ##
-  metrics:
-    ## Whether to enable metrics collection or not
-    ##
-    enabled: true
-
-    ## Prometheus Service Monitor
-    ## ref: https://github.com/coreos/prometheus-operator
-    ##      https://github.com/coreos/prometheus-operator/blob/master/Documentation/api.md#endpoint
-    ##
-    serviceMonitor:
-      ## Create ServiceMonitor resource(s) for scraping metrics using PrometheusOperator
-      ##
-      enabled: false
-
-    ## Custom PrometheusRule to be defined
-    ## ref: https://github.com/coreos/prometheus-operator#customresourcedefinitions
-    ##
-    prometheusRule:
-      ## Create a custom prometheusRule Resource for scraping metrics using PrometheusOperator
-      ##
-      enabled: false
-
-  ## Configure liveness and readiness probes
-  ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
-  ## NB! readinessProbe and livenessProbe must be disabled before fully synced
-  ## Additional settings could be made in non-global section.
-  ##
-  livenessProbe:
-    enabled: true
-
-  readinessProbe:
-    enabled: true
-
-## Init image is used to chown data volume, initialise genesis, etc.
-##
-initImage:
-  registry: "docker.io"
-  repository: "bitnami/kubectl"
-  tag: "1.24"
-  pullPolicy: IfNotPresent
-
-## Sidecar image is used to perform Liveness/Readiness probes.
-##
-sidecar:
-  registry: "europe-west4-docker.pkg.dev"
-  repository: "stakewiselabs/public/ethnode-sidecar"
-  tag: "v1.0.6"
-  pullPolicy: IfNotPresent
-  bindAddr: "0.0.0.0"
-  bindPort: 3000
-
-image:
-  registry: "docker.io"
-  repository: erigontech/erigon
-  pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "v3.0.3"
-
-## Credentials to fetch images from private registry
-## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
-##
-imagePullSecrets: []
+# -- Overrides the chart's name
 nameOverride: ""
+
+# -- Overrides the chart's computed fullname
 fullnameOverride: ""
 
-## Erigon configuration
-##
+# -- Number of replicas
+replicas: 1
 
-# private api network address, for example: 127.0.0.1:9090,
-# empty string means not to start the listener.
-# Do not expose to public network.
-# Serves remote database interface (default: "127.0.0.1:9090")
-privateApiAddr: "127.0.0.1:9090"
+image:
+  # -- erigon container image repository
+  repository: erigontech/erigon
+  # -- erigon container image tag
+  tag: v3.0.5
+  # -- erigon container pull policy
+  pullPolicy: IfNotPresent
 
-# http rpc endpoint settings
-http:
-  enabled: true
-  port: "8545"
-  # HTTP-RPC server listening interface
-  addr: "0.0.0.0"
-  # Comma separated list of virtual hostnames from which to accept requests (server enforced).
-  # Accepts '*' wildcard
-  vhosts: "*"
-  # Comma separated list of domains from which to accept cross origin requests (browser enforced)
-  corsDomain: "*"
-  # API's offered over the HTTP-RPC interface: eth,erigon,web3,net,debug,trace,txpool,db.
-  # Supported methods: https://github.com/ledgerwatch/erigon/tree/devel/cmd/rpcdaemon
-  api: "eth,erigon,web3,net,txpool,engine,trace"
+# -- Extra args for the erigon container
+extraArgs: []
+  #- --holesky
 
-# Manually specify TerminalTotalDifficulty, overriding the bundled setting
-terminalTotalDifficulty: ""
+# -- JWT secret used by client as a secret. Change this value.
+jwt: ecb22bc24e7d4061f7ed690ccd5846d7d73f5d2b9733267e12f56790398d908a
 
-grpcPort: "9090"
+# -- Extra args for the rpcdaemon container
+extraArgsRPCDaemon: []
+  #- --http.corsdomain=yourdomain.tld
+  #- --http.api=eth,erigon,web3,net,debug,trace,txpool,db
 
-## AuthRPC configuration.
-##
-authRpc:
-  port: "8551"
-  vhosts: "*"
-  addr: "0.0.0.0"
+# -- Template used for the default command
+# @default -- See `values.yaml`
+defaultCommandTemplate: |
+  - sh
+  - -ac
+  - >
+  {{- if .Values.p2pNodePort.enabled }}
+    . /env/init-nodeport;
+  {{- end }}
+    exec erigon
+    --datadir=/data
+  {{- if .Values.p2pNodePort.enabled }}
+    {{- if not (contains "--nat=" (.Values.extraArgs | join ",")) }}
+    --nat=extip:$EXTERNAL_IP
+    {{- end }}
+    {{- if not (contains "--port=" (.Values.extraArgs | join ",")) }}
+    --port=$EXTERNAL_PORT
+    {{- end }}
+  {{- else }}
+    {{- if not (contains "--nat=" (.Values.extraArgs | join ",")) }}
+    --nat=extip:$(POD_IP)
+    {{- end }}
+    {{- if not (contains "--port=" (.Values.extraArgs | join ",")) }}
+    --port={{ include "erigon.p2pPort" . }}
+    {{- end }}
+  {{- end }}
+    --http=false
+    --private.api.addr=127.0.0.1:9090
+    --authrpc.jwtsecret=/data/jwt.hex
+    --authrpc.addr=0.0.0.0
+    --authrpc.port={{ .Values.authPort }}
+    --authrpc.vhosts=*
+    --ws
+    --metrics
+    --metrics.addr=0.0.0.0
+    --metrics.port={{ .Values.metricsPort }}
+  {{- range .Values.extraArgs }}
+    {{ tpl . $ }}
+  {{- end }}
 
-## Extra flags for mainnet network
-##
-extraFlags:
-  - "--prune.r.before=11184524"
-  - "--prune.mode=minimal"
+# -- Template used for the default command
+# @default -- See `values.yaml`
+defaultCommandRPCDaemonTemplate: |
+  - sh
+  - -ac
+  - >
+    until timeout 1 bash -c ">/dev/tcp/127.0.0.1/9090" 2>/dev/null; do echo "Waiting for erigon..."; sleep 1; done;
+    exec rpcdaemon
+    --datadir=/data
+    --private.api.addr=127.0.0.1:9090
+    --txpool.api.addr=127.0.0.1:9090
+    --http.addr=0.0.0.0
+    --http.port={{ .Values.httpPort }}
+    --http.vhosts=*
+    --ws
+    --metrics
+    --metrics.addr=0.0.0.0
+    --metrics.port={{ .Values.metricsPortRPCDaemon }}
+  {{- range .Values.extraArgsRPCDaemon }}
+    {{ tpl . $ }}
+  {{- end }}
 
-## Extra annotations for StatefulSet pods
+# -- Legacy way of overwriting the default command. You may prefer to change defaultCommandTemplate instead.
+customCommand: []
+
+# -- Legacy way of overwriting the default command. You may prefer to change defaultCommandRPCDaemonTemplate instead.
+customCommandRPCDaemon: [] # Only change this if you need to change the default command
+
+# When p2pNodePort is enabled, your P2P port will be exposed via service type NodePort.
+# This is useful if you want to expose and announce your node to the Internet.
+# Limitation: You can only one have one replica when exposing via NodePort.
+#             Check the chart README.md for more details
+p2pNodePort:
+  # -- Expose P2P port via NodePort
+  enabled: false
+  # -- NodePort to be used
+  port: 31000
+  initContainer:
+    image:
+      # -- Container image to fetch nodeport information
+      repository: lachlanevenson/k8s-kubectl
+      # -- Container tag
+      tag: v1.25.4
+      # -- Container pull policy
+      pullPolicy: IfNotPresent
+  portForwardContainer:
+    image:
+      # -- Container image for the port forwarder
+      repository: alpine/socat
+      # -- Container tag
+      tag: latest
+      # -- Container pull policy
+      pullPolicy: IfNotPresent
+
+ingress:
+  # -- Ingress resource for the HTTP API
+  enabled: false
+  # -- Annotations for Ingress
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  # -- Ingress host
+  hosts:
+    - host: chart-example.local
+      paths: []
+  # -- Ingress TLS
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+# -- Affinity configuration for pods
+affinity: {}
+
+# -- Image pull secrets for Docker images
+imagePullSecrets: []
+
+# -- Annotations for the StatefulSet
+annotations: {}
+
+# -- Liveness probe
+# @default -- See `values.yaml`
+livenessProbe:
+  tcpSocket:
+    port: metrics
+  initialDelaySeconds: 60
+  periodSeconds: 120
+
+# -- Readiness probe
+# @default -- See `values.yaml`
+readinessProbe:
+  tcpSocket:
+    port: metrics
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+# -- Liveness probe
+# @default -- See `values.yaml`
+livenessProbeRPCDaemon:
+  tcpSocket:
+    port: http-rpc
+  initialDelaySeconds: 60
+  periodSeconds: 120
+
+# -- Readiness probe
+# @default -- See `values.yaml`
+readinessProbeRPCDaemon:
+  tcpSocket:
+    port: http-rpc
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+# -- P2P Port
+p2pPort: 30303
+
+# -- HTTP Port
+httpPort: 8545
+
+# -- Engine Port (Auth Port)
+authPort: 8551
+
+# -- Metrics Port
+metricsPort: 6060
+
+# -- RPC Daemon Port
+metricsPortRPCDaemon: 6061
+
+# -- Node selector for pods
+nodeSelector: {}
+
+persistence:
+  # -- Uses an EmptyDir when not enabled
+  enabled: false
+  # -- Use an existing PVC when persistence.enabled
+  existingClaim: null
+  # -- Access mode for the volume claim template
+  accessModes:
+  - ReadWriteOnce
+  # -- Requested size for volume claim template
+  size: 20Gi
+  # -- Use a specific storage class
+  # E.g 'local-path' for local storage to achieve best performance
+  # Read more (https://github.com/rancher/local-path-provisioner)
+  storageClassName: null
+  # -- Annotations for volume claim template
+  annotations: {}
+  # -- Selector for volume claim template
+  selector: {}
+  #   matchLabels:
+  #     app.kubernetes.io/name: something
+
+# -- Pod labels
+podLabels: {}
+
+# -- Pod annotations
 podAnnotations: {}
 
-serviceAccount:
-  # Annotations to add to the service account
-  annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
-  name: ""
+# -- Pod management policy
+podManagementPolicy: OrderedReady
 
-## Additional labels for all resources
-##
-additionalLabels:
-  client-type: "execution"
+# -- Pod priority class
+priorityClassName: null
 
-## Termination Grace Period
-## ref: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#delete-pods
-##
-terminationGracePeriodSeconds: 300
-
-podSecurityContext:
-  fsGroup: 1001
-  runAsUser: 1001
-
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
-
-## RBAC configuration.
-## ref: https://kubernetes.io/docs/reference/access-authn-authz/rbac/
-##
 rbac:
-  # The name of the cluster role to use.
-  # If not set and create is true, a name is generated using the fullname template
-  name: ""
-  ## Required ClusterRole rules
-  ##
+  # -- Specifies whether RBAC resources are to be created
+  create: true
+  # -- Required ClusterRole rules
+  # @default -- See `values.yaml`
   clusterRules:
-    ## Required to obtain the nodes external IP
-    ##
+     # Required to obtain the nodes external IP
     - apiGroups: [""]
       resources:
       - "nodes"
@@ -205,11 +244,10 @@ rbac:
       - "get"
       - "list"
       - "watch"
-  ## Required Role rules
-  ##
+  # -- Required ClusterRole rules
+  # @default -- See `values.yaml`
   rules:
-    ## Required to get information about the serices nodePort.
-    ##
+    # Required to get information about the services nodePort.
     - apiGroups: [""]
       resources:
       - "services"
@@ -218,169 +256,139 @@ rbac:
       - "list"
       - "watch"
 
-## Defines whether the service must be headless
-##
-svcHeadless: true
+# -- Resource requests and limits for the erigon container
+resources: {}
+# limits:
+#   cpu: 500m
+#   memory: 2Gi
+# requests:
+#   cpu: 300m
+#   memory: 1Gi
 
-## Configure session affinity for validator clients to hit the same beacon node
-## for the period specified in `timeoutSeconds`
-## ref: https://kubernetes.io/docs/concepts/services-networking/service/#proxy-mode-userspace
-##
-sessionAffinity:
-  # Whether to enable session affinity or not
-  enabled: false
-  # The session duration in seconds
-  timeoutSeconds: 86400
+# -- Resource requests and limits for the RPC daemon container
+resourcesRPCDaemon: {}
+# limits:
+#   cpu: 500m
+#   memory: 2Gi
+# requests:
+#   cpu: 300m
+#   memory: 1Gi
 
-## When p2pNodePort is enabled, your P2P port will be exposed via service type NodePort.
-## This will generate a service for each replica, with a port binding via NodePort.
-## This is useful if you want to expose and announce your node to the Internet.
-##
-p2pNodePort:
-  ## @param p2pNodePort.enabled Expose P2P port via NodePort
-  ##
-  enabled: false
-  ## @param p2pNodePort.annotations
-  ##
+# -- The security context for pods
+# @default -- See `values.yaml`
+securityContext:
+  fsGroup: 10001
+  runAsGroup: 10001
+  runAsNonRoot: true
+  runAsUser: 10001
+
+# -- The security context for containers
+# @default -- See `values.yaml`
+containerSecurityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- Annotations to add to the service account
   annotations: {}
-  ## @param p2pNodePort.type
-  ## Options: NodePort, LoadBalancer
-  type: NodePort
-  ## @param p2pNodePort.startAt The ports allocation will start from this value
-  ##
-  startAt: 31000
-  ## @param p2pNodePort.replicaToNodePort Overwrite a port for specific replicas
-  ## @default -- See `values.yaml` for example
-  replicaToNodePort: {}
-  #  "0": 32345
-  #  "3": 32348
+  # -- The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
 
-resources:
-  limits:
-    cpu: 4
-    memory: 30Gi
-  requests:
-    cpu: 2
-    memory: 6Gi
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+# -- How long to wait until the pod is forcefully terminated
+terminationGracePeriodSeconds: 300
 
-## Configure liveness and readiness probes
-## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
-## NB! readinessProbe and livenessProbe must be disabled before fully synced
-##
-# Probes are disabled due to Helm chart merging bug that causes invalid pod spec (multiple handler types).
-# See: https://github.com/ObolNetwork/obol-stack/issues/9 (replace with actual issue link when filed)
-livenessProbe:
-  enabled: false
-readinessProbe:
-  enabled: false
-
-
-## Node labels for pod assignment
-## ref: https://kubernetes.io/docs/user-guide/node-selection/
-##
-nodeSelector: {}
-
-## Tolerations for pod assignment
+# -- Tolerations for pods
 ## ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
-##
 tolerations: []
 
-## Affinity for pod assignment
-## ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
-##
-## Example:
-## affinity:
-##   podAntiAffinity:
-##     requiredDuringSchedulingIgnoredDuringExecution:
-##     - labelSelector:
-##         matchExpressions:
-##         - key: app.kubernetes.io/name
-##           operator: In
-##           values:
-##           - erigon
-##       topologyKey: kubernetes.io/hostname
-##
-affinity: {}
+# -- Topology Spread Constraints for pods
+## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+topologySpreadConstraints: []
 
-## Used to assign priority to pods
-## ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
-##
-priorityClassName: ""
+# -- Define the PodDisruptionBudget spec
+# If not set then a PodDisruptionBudget will not be created
+podDisruptionBudget: {}
+# minAvailable: 1
+# maxUnavailable: 1
 
-## If false, data ownership will not be reset at startup
-## This allows the geth node to be run with an arbitrary user
-##
-initChownData: 
+# -- Update strategy for the Statefulset
+updateStrategy:
+  # -- Update strategy type
+  type: RollingUpdate
+
+# -- Additional init containers
+initContainers: []
+# - name: my-init-container
+#   image: busybox:latest
+#   command: ['sh', '-c', 'echo hello']
+
+# -- Additional containers
+extraContainers: []
+
+# -- Additional volumes
+extraVolumes: []
+
+# -- Additional volume mounts
+extraVolumeMounts: []
+
+# -- Additional ports. Useful when using extraContainers
+extraPorts: []
+
+# -- Additional env variables for erigon container
+extraEnv: []
+
+# -- Additional env variables for RPCDaemon container
+extraEnvRPCDaemon: []
+
+# -- Additional env variables injected via a created secret
+secretEnv: {}
+# MY_PASSWORD: supersecret
+
+initChownData:
+  # -- Init container to set the correct permissions to access data directories
   enabled: true
+  image:
+    # -- Container repository
+    repository: busybox
+    # -- Container tag
+    tag: "1.34.0"
+    # -- Container pull policy
+    pullPolicy: IfNotPresent
+  # -- Resource requests and limits
+  resources: {}
+  #  limits:
+  #    cpu: 100m
+  #    memory: 128Mi
+  #  requests:
+  #    cpu: 100m
+  #    memory: 128Mi
 
-## Whether or not to allocate persistent volume disk for the data directory.
-## In case of node failure, the node data directory will still persist.
-##
-persistence:
-  enabled: true
-  storageClassName: ""
-  accessModes:
-    - ReadWriteOnce
-  size: 350Gi
+serviceMonitor:
+  # -- If true, a ServiceMonitor CRD is created for a prometheus operator
+  # https://github.com/coreos/prometheus-operator
+  enabled: false
+  # -- Path to scrape
+  path: /debug/metrics/prometheus
+  # -- Alternative namespace for ServiceMonitor
+  namespace: null
+  # -- Additional ServiceMonitor labels
+  labels: {}
+  # -- Additional ServiceMonitor annotations
   annotations: {}
-
-## Monitoring
-##
-metrics:
-  # Enable stand-alone metrics HTTP server listening interface
-  addr: "0.0.0.0"
-  # Metrics HTTP server listening port
-  port: "6060"
-
-  ## Prometheus Service Monitor
-  ## ref: https://github.com/coreos/prometheus-operator
-  ##      https://github.com/coreos/prometheus-operator/blob/master/Documentation/api.md#endpoint
-  ##
-  serviceMonitor:
-    ## The namespace in which the ServiceMonitor will be created
-    ##
-    namespace: ""
-    ## The interval at which metrics should be scraped
-    ##
-    interval: 30s
-    ## The timeout after which the scrape is ended
-    ##
-    scrapeTimeout: ""
-    ## Metrics RelabelConfigs to apply to samples before scraping.
-    ##
-    relabellings: []
-    ## Metrics RelabelConfigs to apply to samples before ingestion.
-    ##
-    metricRelabelings: []
-    ## Specify honorLabels parameter to add the scrape endpoint
-    ##
-    honorLabels: false
-    ## Additional labels that can be used so ServiceMonitor resource(s) can be discovered by Prometheus
-    ##
-    additionalLabels: {}
-  ## Custom PrometheusRule to be defined
-  ## ref: https://github.com/coreos/prometheus-operator#customresourcedefinitions
-  ##
-  prometheusRule:
-    ## Create a default set of Alerts
-    ##
-    default: true
-    ## The namespace in which the prometheusRule will be created
-    ##
-    namespace: ""
-    ## Additional labels for the prometheusRule
-    ##
-    additionalLabels: {}
-    ## Custom Prometheus rules
-    ##
-    rules: []
+  # -- ServiceMonitor scrape interval
+  interval: 1m
+  # -- ServiceMonitor scheme
+  scheme: http
+  # -- ServiceMonitor TLS configuration
+  tlsConfig: {}
+  # -- ServiceMonitor scrape timeout
+  scrapeTimeout: 30s
+  # -- ServiceMonitor relabelings
+  relabelings: []
