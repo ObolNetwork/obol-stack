@@ -288,7 +288,7 @@ launch_stack() {
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
     # If mode="full", also sync an Erigon full node
-    if [["$__mode" = "full"]]; then
+    if [[ "$__mode" = "full" ]]; then
         log_info "Installing an Ethereum Erigon full node client..."
         ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$__network/erigon.yaml
     fi
@@ -310,22 +310,18 @@ launch_stack() {
     # Expose the RPC to the host
     # TODO: Put this behind an opt-in flag
     log_info "Routing http://obol.stack traffic to the L1 RPC, this may take some time..."
-    while true; do
+
+    local READY="false"
+    while [[ "$READY" != "true" ]]; do
+        sleep 10
         # Get the Ready condition status of the ingress controller pod
         READY=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-
-        if [[ "$READY" == "true" ]]; then
-            log_info "Obol Stack ingress controller is ready, setting up stack web pages..."
-            break
-        fi
-
         log_info "Waiting for the controller to become ready..."
-        sleep 10
     done
-
-    kubectl apply -q -f ./manifests/expose-erpc.yaml 2>/dev/null
-    kubectl apply -q -f ./manifests/hello-world-server.yaml 2>/dev/null
+    log_info "Obol Stack ingress controller is ready, setting up stack web pages..."
+    kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
+    kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
 
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
