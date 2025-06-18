@@ -18,7 +18,7 @@ image:
 # -- Config file
 # @default -- See `values.yaml`
 config: |
-    logLevel: debug
+    logLevel: info
 
     database:
       evmJsonRpcCache:
@@ -47,7 +47,7 @@ config: |
       port: {{ .Values.metricsPort }}
 
     projects:
-      - id: helios
+      - id: main
         upstreams:
           - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
 

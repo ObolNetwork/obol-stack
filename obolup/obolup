@@ -265,13 +265,7 @@ launch_stack() {
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
         log_info "Creating Kind cluster for Obol Stack..."
-        kind create cluster --name "$STACK_NAME" --config <(cat <<EOF
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-EOF
-        )
+        kind create cluster --name "$STACK_NAME" --config ./manifests/kind.yaml
     fi
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
@@ -282,7 +276,7 @@ EOF
     log_info "Adding default Obol Stack app stores..."
     ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts --force-update
     ensure helm repo add obol https://obolnetwork.github.io/helm-charts/ --force-update
-    #ensure helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
+    ensure helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 
     # Update helm repos
     helm repo update
@@ -301,6 +295,22 @@ EOF
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
     ensure helm upgrade --namespace l1 --create-namespace --force --install l1-rpc ethereum/erpc -f ../values/erpc.yaml
+
+    log_info "Installing the Obol Stack browser traffic load balancer..."
+    ensure helm upgrade --namespace ingress --create-namespace  --hide-notes --install ingress-nginx ingress-nginx/ingress-nginx -f ../values/ingress-nginx.yaml
+
+    # Set a local DNS name
+    if grep -q "^127.0.0.1[[:space:]].*obol.stack" /etc/hosts; then
+        log_info "http://obol.stack local DNS name already set..."
+    else
+        log_info "Setting the http://obol.stack local DNS name, you may be asked for your password..."
+        echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts > /dev/null
+    fi
+
+    # Expose the RPC to the host
+    # TODO: Put this behind an opt-in flag
+    log_info "Routing http://obol.stack traffic to the L1 RPC, this may take some time..."
+    kubectl apply -f ./manifests/expose-erpc.yaml --timeout=120s
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
