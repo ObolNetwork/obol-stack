@@ -310,7 +310,23 @@ launch_stack() {
     # Expose the RPC to the host
     # TODO: Put this behind an opt-in flag
     log_info "Routing http://obol.stack traffic to the L1 RPC, this may take some time..."
-    kubectl apply -f ./manifests/expose-erpc.yaml --timeout=120s
+    while true; do
+        # Get the Ready condition status of the ingress controller pod
+        READY=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+
+        if [[ "$READY" == "true" ]]; then
+            log_info "Obol Stack ingress controller is ready, setting up stack web pages..."
+            break
+        fi
+
+        log_info "Waiting for the controller to become ready..."
+        sleep 10
+    done
+
+    kubectl apply -q -f ./manifests/expose-erpc.yaml 2>/dev/null
+    kubectl apply -q -f ./manifests/hello-world-server.yaml 2>/dev/null
+
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
@@ -324,9 +340,8 @@ launch_stack() {
     # fi
 
     # Launch status page
-    log_info "Launching Obol Stack Dashboard at http://localhost:$STATUS_PORT..."
-    #kubectl -n kubernetes-dashboard port-forward svc/kubernetes-dashboard-kong-proxy $STATUS_PORT:443 &
-    #xdg-open "https://localhost:$STATUS_PORT" 2>/dev/null || open "http://localhost:$STATUS_PORT" 2>/dev/null || log_warn "Could not open browser automatically."
+    log_info "Launching the Obol Stack..."
+    xdg-open "https://obol.stack" 2>/dev/null || open "http://obol.stack" 2>/dev/null || log_warn "Could not open browser automatically, navigate to http://obol.stack in your browser..."
 }
 
 # Main logic

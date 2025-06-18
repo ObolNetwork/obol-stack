@@ -9,10 +9,10 @@ spec:
     - host: obol.stack
       http:
         paths:
-          - pathType: Prefix
+          - path: /rpc
+            pathType: Prefix
             backend:
               service:
                 name: rpc
                 port:
                   number: 80
-            path: /
