@@ -12,7 +12,6 @@ readonly OBOL_CLI_REPO="https://github.com/obolnetwork/obol-cli"
 readonly KIND_VERSION="v0.27.0"
 readonly OBOLUP_URL="https://stack.obol.org/obolup"
 readonly STACK_NAME="obol-stack"
-readonly STATUS_PORT=8080
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -32,7 +31,6 @@ declare -A -r SUPPORTED_MODES=(
 )
 
 readonly BASE_DIR=${XDG_CONFIG_HOME:-$HOME}
-
 
 tolower() {
   echo "$1" | awk '{print tolower($0)}'
@@ -261,11 +259,18 @@ check_obolup_update() {
 launch_stack() {
     declare -n __network="$1"
     declare -n __mode="$2"
+    declare -n __host="$3"
 
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
-        log_info "Creating Kind cluster for Obol Stack..."
-        kind create cluster --name "$STACK_NAME" --config ./manifests/kind.yaml
+        # If host=1, map host port 80 and 443 into the cluster and enable an ingress-controller and some default routes
+        if [[ "$__host" -ne 0 ]]; then
+            log_info "Creating Kind cluster for Obol Stack in host mode..."
+            kind create cluster --name "$STACK_NAME" --config ./manifests/kind_host.yaml
+        else
+            log_info "Creating Kind cluster for Obol Stack..."
+            kind create cluster --name "$STACK_NAME" --config ./manifests/kind_no_host.yaml
+        fi
     fi
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
@@ -276,7 +281,6 @@ launch_stack() {
     log_info "Adding default Obol Stack app stores..."
     ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts --force-update
     ensure helm repo add obol https://obolnetwork.github.io/helm-charts/ --force-update
-    ensure helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 
     # Update helm repos
     helm repo update
@@ -296,33 +300,39 @@ launch_stack() {
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
     ensure helm upgrade --namespace l1 --create-namespace --force --install l1-rpc ethereum/erpc -f ../values/erpc.yaml
 
-    log_info "Installing the Obol Stack browser traffic load balancer..."
-    ensure helm upgrade --namespace ingress --create-namespace  --hide-notes --install ingress-nginx ingress-nginx/ingress-nginx -f ../values/ingress-nginx.yaml
+    # If host mode is enabled, add an ingress-controller, wait for it to be healthy, then install ingress routes.
+    # Also set a local DNS override for http://obol.stack -> 127.0.0.1
+    if [[ "$__host" -ne 0 ]]; then
+            log_info "Preparing host mode for the Obol Stack..."
+            ensure helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
+            
+            log_info "Installing the Obol Stack web browser traffic load balancer..."
+            ensure helm upgrade --namespace ingress --create-namespace  --hide-notes --install ingress-nginx ingress-nginx/ingress-nginx -f ../values/ingress-nginx.yaml
 
-    # Set a local DNS name
-    if grep -q "^127.0.0.1[[:space:]].*obol.stack" /etc/hosts; then
-        log_info "http://obol.stack local DNS name already set..."
-    else
-        log_info "Setting the http://obol.stack local DNS name, you may be asked for your password..."
-        echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts > /dev/null
+            # Set a local DNS name
+            if grep -q "^127.0.0.1[[:space:]].*obol.stack" /etc/hosts; then
+                log_info "http://obol.stack local DNS name already set..."
+            else
+                log_info "Setting the http://obol.stack local DNS name, you may be asked for your password..."
+                echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts > /dev/null
+            fi
+
+            # Expose the RPC to the host
+            # TODO: Put this behind an opt-in flag
+            log_info "Preparing to route http://obol.stack traffic to the stack, this may take some time..."
+
+            local READY="false"
+            while [[ "$READY" != "true" ]]; do
+                sleep 10
+                # Get the Ready condition status of the ingress controller pod
+                READY=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller \
+                    -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+                log_info "Waiting for the ingress controller to become ready..."
+            done
+            log_info "Obol Stack ingress controller is ready, setting up the website and exposing the RPC..."
+            kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
+            kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
     fi
-
-    # Expose the RPC to the host
-    # TODO: Put this behind an opt-in flag
-    log_info "Routing http://obol.stack traffic to the L1 RPC, this may take some time..."
-
-    local READY="false"
-    while [[ "$READY" != "true" ]]; do
-        sleep 10
-        # Get the Ready condition status of the ingress controller pod
-        READY=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller \
-            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-        log_info "Waiting for the controller to become ready..."
-    done
-    log_info "Obol Stack ingress controller is ready, setting up stack web pages..."
-    kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
-    kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
-
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
     #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
@@ -345,6 +355,7 @@ main() {
     # Instantiate
     local network=""
 	local mode=""
+    declare -i host=0
     declare -i clean=0
 
 	# Parse the CLI flags
@@ -358,6 +369,10 @@ main() {
         --mode)
 			mode="$2"
 			shift 2
+			;;
+        --host)
+			host=1
+			shift 1
 			;;
         --clean)
 			clean=1
@@ -393,7 +408,7 @@ main() {
         kind delete cluster --name "$STACK_NAME"
     fi
 
-    launch_stack network mode
+    launch_stack network mode host
 
     log_info "Obol Stack is up and running!"
     exit 0
@@ -424,12 +439,13 @@ Docs       : https://docs.obol.org/
 # Displays help text
 help() {
 	cat <<EOF
-Usage: $0 [--help] [--network <network>] [--mode <mode>] [--clean]
+Usage: $0 [--help] [--network <network>] [--mode <mode>] [--host] [--clean]
 
 Options:
   --help                            Display this help message
   --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
+  --host                            Exposes the stack to the host operating system's web browser
   --clean                           Deletes and recreates the Obol Stack
 EOF
 	exit "${1:-1}"

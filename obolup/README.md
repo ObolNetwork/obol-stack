@@ -8,13 +8,16 @@ To start a light-client, mainnet node, simply run `./obolup` from this directory
 
 To start a Hoodi testnet instance of the Obol Stack, run `./obolup --network hoodi`.
 
+To start the Obol Stack in a mode accessible to your web browser run `./obolup --host`. 
+
 ```text
-Usage: ./obolup [--help] [--network <network>] [--mode <mode>] [--clean]
+Usage: ./obolup [--help] [--network <network>] [--mode <mode>] [--host] [--clean]
 
 Options:
   --help                            Display this help message
   --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
+  --host                            Exposes the stack to the host operating system's web browser
   --clean                           Deletes and recreates the Obol Stack
 ```
 
