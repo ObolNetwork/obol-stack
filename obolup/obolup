@@ -165,17 +165,17 @@ install_kubectl() {
         log_info "Installing kubectl..."
         # Download the latest release
         ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl"
-        
+
         # Validate the binary (optional)
         ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl.sha256"
         echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check || log_warn "kubectl checksum validation failed. Continuing anyway..."
-        
+
         # Install kubectl
         ensure sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-        
+
         # Clean up
         rm -f kubectl kubectl.sha256
-        
+
         log_info "kubectl installed successfully."
     fi
 }
@@ -304,8 +304,11 @@ launch_stack() {
     # Also set a local DNS override for http://obol.stack -> 127.0.0.1
     if [[ "$__host" -ne 0 ]]; then
             log_info "Preparing host mode for the Obol Stack..."
+
+            # Add the ingress-controller chart repository
             ensure helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
-            
+
+            # Install nginx as an ingress-controller for the cluster
             log_info "Installing the Obol Stack web browser traffic load balancer..."
             ensure helm upgrade --namespace ingress --create-namespace  --hide-notes --install ingress-nginx ingress-nginx/ingress-nginx -f ../values/ingress-nginx.yaml
 
@@ -317,10 +320,8 @@ launch_stack() {
                 echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts > /dev/null
             fi
 
-            # Expose the RPC to the host
-            # TODO: Put this behind an opt-in flag
+            # Set up ingress routes when the controller is ready
             log_info "Preparing to route http://obol.stack traffic to the stack, this may take some time..."
-
             local READY="false"
             while [[ "$READY" != "true" ]]; do
                 sleep 10
@@ -330,25 +331,24 @@ launch_stack() {
                 log_info "Waiting for the ingress controller to become ready..."
             done
             log_info "Obol Stack ingress controller is ready, setting up the website and exposing the RPC..."
+
+            # Route the eRPC pod to `http://obol.stack/rpc`
             kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
+
+            # Route a minimal static website to http://obol.stack/
             kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
+
+            # Launch home page
+            log_info "Launching the Obol Stack..."
+            xdg-open "https://obol.stack" 2>/dev/null || open "http://obol.stack" 2>/dev/null || log_warn "Could not open browser automatically, navigate to http://obol.stack in your browser..."
     fi
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
-    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node 
+    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node
     # Todo(Oisin): Blockscout segfaulting, unclear why
     # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
 
-    # Check stack health
-    log_info "Checking stack health..."
-    # if ! kubectl get pods -n obol-system -o jsonpath='{.items[*].status.phase}' | grep -q "Running"; then
-    #     log_error "Obol Stack is not healthy. Check logs with: kubectl logs -n obol-system"
-    # fi
-
-    # Launch status page
-    log_info "Launching the Obol Stack..."
-    xdg-open "https://obol.stack" 2>/dev/null || open "http://obol.stack" 2>/dev/null || log_warn "Could not open browser automatically, navigate to http://obol.stack in your browser..."
-}
+   }
 
 # Main logic
 main() {
@@ -420,12 +420,12 @@ banner() {
   printf '
 
 .oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo
-  ___  ____   ___  _     
- / _ \| __ ) / _ \| |                A Kubernetes-based Stack for 
-| | | |  _ \| | | | |               deploying Ethereum based dApps 
+  ___  ____   ___  _
+ / _ \| __ ) / _ \| |                A Kubernetes-based Stack for
+| | | |  _ \| | | | |               deploying Ethereum based dApps
 | |_| | |_) | |_| | |___                      using Helm
  \___/|____/ \___/|_____|
- 
+
 .oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo
 
 Repo       : https://github.com/ObolNetwork/obol-stack
