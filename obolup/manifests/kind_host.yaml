@@ -10,3 +10,7 @@ nodes:
       - containerPort: 443
         hostPort: 443
         protocol: TCP
+      # For aztec testing
+      - containerPort: 40400
+        hostPort: 40400
+        protocol: TCP

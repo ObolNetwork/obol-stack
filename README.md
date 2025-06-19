@@ -84,6 +84,9 @@ The Obol Stack is built on Helm, so you can add your own Helm Chart repository e
 obol repo add ithaca https://github.com/ithacaxyz/obol-charts
 # Install a chart from the new 'App Store'
 obol install ithaca/op-reth
+
+helm upgrade --install aztec ../charts/aztec-node -f ../values/hoodi/aztec-node.yaml --namespace aztec --create-namespace
+
 ```
 
 ### Custom deployments

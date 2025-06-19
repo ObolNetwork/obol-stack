@@ -77,6 +77,19 @@ config: |
               hedge:
                 delay: 500ms
                 maxCount: 1
+          - architecture: evm
+            evm:
+              chainId: 11155111
+            alias: sepolia
+            failsafe:
+              timeout:
+                duration: 30s
+              retry:
+                maxAttempts: 3
+                delay: 0ms
+              hedge:
+                delay: 500ms
+                maxCount: 1
         upstreams:
           - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
           - endpoint: https://ethereum-rpc.publicnode.com
@@ -85,6 +98,9 @@ config: |
           - endpoint: https://ethereum-hoodi-rpc.publicnode.com
             evm:
               chainId: 560048
+          - endpoint: https://ethereum-sepolia-rpc.publicnode.com
+            evm:
+              chainId: 11155111
 
 # -- Secret env variables injected via a created secret
 # These env variables can be used to populate the erpc config file with sensitive data such as RPC API keys
