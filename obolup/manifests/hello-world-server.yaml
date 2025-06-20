@@ -54,6 +54,55 @@ data:
     </code></pre>
 
     Try adding them to your metamask.
+    
+    <div style="margin: 1em 0;">
+      <button id="add-mainnet" style="background: #037DD6; color: white; padding: 0.5em 1em; border: none; border-radius: 4px; cursor: pointer; margin-right: 1em;">Add Mainnet to MetaMask</button>
+      <button id="add-hoodi" style="background: #037DD6; color: white; padding: 0.5em 1em; border: none; border-radius: 4px; cursor: pointer;">Add Hoodi to MetaMask</button>
+    </div>
+    
+    <script>
+      document.getElementById('add-mainnet').addEventListener('click', async () => {
+        if (typeof window.ethereum !== 'undefined') {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x1',
+                chainName: 'Ethereum Mainnet (Obol Stack)',
+                nativeCurrency: {
+                  name: 'Ether',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
+                rpcUrls: ['http://obol.stack/rpc/mainnet'],
+                blockExplorerUrls: ['https://etherscan.io']
+              }]
+            });
+          } catch (error) {}
+        }
+      });
+      
+      document.getElementById('add-hoodi').addEventListener('click', async () => {
+        if (typeof window.ethereum !== 'undefined') {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x44787',
+                chainName: 'Hoodi Testnet (Obol Stack)',
+                nativeCurrency: {
+                  name: 'Hoodi Ether',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
+                rpcUrls: ['http://obol.stack/rpc/hoodi'],
+                blockExplorerUrls: ['https://hoodi.etherscan.io']
+              }]
+            });
+          } catch (error) {}
+        }
+      });
+    </script>
 
     <h3>Installing an Obol App (Helm Chart)</h3>
     <p>Here's an example of adding on a popular Ethereum sidecar called contributoor, built by the EthPandaOps team, which streams data from your full node to their backend for analysis and visualisation.</p>
