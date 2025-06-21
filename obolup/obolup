@@ -255,6 +255,18 @@ check_obolup_update() {
     fi
 }
 
+# Check if cluster has required port mappings for host mode
+check_cluster_port_mappings() {
+    local cluster_name="$1"
+    # Check if the cluster has port 80 and 443 mapped
+    local port_mappings=$(docker inspect "${cluster_name}-control-plane" 2>/dev/null | grep -E '"HostPort": "(80|443)"' | wc -l)
+    if [[ "$port_mappings" -ge 2 ]]; then
+        return 0  # Has port mappings
+    else
+        return 1  # No port mappings
+    fi
+}
+
 # Launch or update the Obol Stack
 launch_stack() {
     declare -n __network="$1"
@@ -270,6 +282,14 @@ launch_stack() {
         else
             log_info "Creating Kind cluster for Obol Stack..."
             kind create cluster --name "$STACK_NAME" --config ./manifests/kind_no_host.yaml
+        fi
+    else
+        # Cluster exists, check if we need host mode but don't have port mappings
+        if [[ "$__host" -ne 0 ]] && ! check_cluster_port_mappings "$STACK_NAME"; then
+            log_warn "Existing cluster doesn't have required port mappings for --host mode."
+            log_warn "The cluster needs to be recreated with port mappings to use --host mode."
+            log_info "Please run: ./obolup --clean --host"
+            log_error "Cannot proceed without proper port mappings. Exiting."
         fi
     fi
 
