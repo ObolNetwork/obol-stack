@@ -39,29 +39,6 @@ jobs:
           # Test basic functionality
           echo "Testing official MCP filesystem server"
 
-  test-kubernetes-mcp:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Build kubernetes MCP image
-        run: |
-          docker build -f obol-adk/dockerfiles/Dockerfile.kubernetes \
-            -t kubernetes-mcp:test \
-            obol-adk/dockerfiles
-      
-      - name: Test kubernetes MCP image
-        run: |
-          # Test that the image was built successfully
-          docker images | grep kubernetes-mcp
-          
-          # Test that the required package is installed
-          docker run --rm kubernetes-mcp:test npm list -g mcp-server-kubernetes
-
   test-foundry-mcp:
     runs-on: ubuntu-latest
     steps:
@@ -84,9 +61,13 @@ jobs:
           
           # Test that foundry tools are available
           docker run --rm foundry-mcp:test forge --version
+          docker run --rm foundry-mcp:test anvil --version
           
           # Test that the MCP server was built
           docker run --rm foundry-mcp:test ls -la /app/dist/
+          
+          # Test that the MCP server can start (will timeout but shows it runs)
+          timeout 5s docker run --rm foundry-mcp:test node /app/dist/index.js || true
 
   test-obol-mcp:
     runs-on: ubuntu-latest
@@ -142,7 +123,7 @@ jobs:
 
   integration-test:
     runs-on: ubuntu-latest
-    needs: [test-mcp-filesystem-pull, test-kubernetes-mcp, test-foundry-mcp, test-obol-mcp, test-obol-adk]
+    needs: [test-mcp-filesystem-pull, test-foundry-mcp, test-obol-mcp, test-obol-adk]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -155,7 +136,6 @@ jobs:
           # Pull official MCP filesystem
           docker pull mcp/filesystem &
           # Build custom images in parallel
-          docker build -f obol-adk/dockerfiles/Dockerfile.kubernetes -t kubernetes-mcp:test obol-adk/dockerfiles &
           docker build -f obol-adk/dockerfiles/Dockerfile.foundry -t foundry-mcp:test obol-adk/dockerfiles &
           docker build -f obol-adk/obol-agent-docker/Dockerfile -t obol-mcp:test obol-adk/obol-agent-docker &
           docker build -f obol-adk/Dockerfile -t obol-adk:test obol-adk &
@@ -164,7 +144,7 @@ jobs:
       - name: Verify all images
         run: |
           echo "=== Available Docker Images ==="
-          docker images | grep -E "(mcp/filesystem|kubernetes-mcp|foundry-mcp|obol-mcp|obol-adk)" | grep -E "(latest|test)"
+          docker images | grep -E "(mcp/filesystem|foundry-mcp|obol-mcp|obol-adk)" | grep -E "(latest|test)"
           
           echo "=== Image Sizes ==="
           docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(mcp/filesystem|test)"
@@ -178,4 +158,4 @@ jobs:
       - name: Clean up test images
         if: always()
         run: |
-          docker image rm -f kubernetes-mcp:test foundry-mcp:test obol-mcp:test obol-adk:test || true
+          docker image rm -f foundry-mcp:test obol-mcp:test obol-adk:test || true

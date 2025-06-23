@@ -1,7 +1,9 @@
 # Enhanced Obol Agent for ADK Web with comprehensive MCP toolsets
 import os
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
+from google.adk.tools.mcp_tool import StdioConnectionParams
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
+from mcp import StdioServerParameters
 
 # Configuration - Environment variables for flexibility
 WORKSPACE_PATH = os.getenv("OBOL_WORKSPACE_PATH", "/Users/bussyjd/Development/Obol_Workbench/obol-stack")
@@ -29,55 +31,69 @@ root_agent = LlmAgent(
     tools=[
         # Filesystem MCP - File operations and project management (Official MCP Community)
         MCPToolset(
-            connection_params=StdioServerParameters(
-                command='docker',
-                args=[
-                    "run", "-i", "--rm",
-                    "--mount", f"type=bind,src={WORKSPACE_PATH},dst=/projects/workspace",
-                    "mcp/filesystem",
-                    "/projects"
-                ],
-            ),
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command='docker',
+                    args=[
+                        "run", "-i", "--rm",
+                        "--mount", f"type=bind,src={WORKSPACE_PATH},dst=/projects/workspace",
+                        "mcp/filesystem",
+                        "/projects"
+                    ],
+                ),
+                timeout=10
+            )
         ),
         
         # Enhanced Obol MCP - Obol API and cluster management
         MCPToolset(
-            connection_params=StdioServerParameters(
-                command="docker",
-                args=[
-                    "run", "--rm", "-i",
-                    "-e", f"LOG_LEVEL={os.getenv('OBOL_MCP_LOG_LEVEL', 'INFO')}",
-                    "-e", f"OBOL_CACHE_TTL={os.getenv('OBOL_CACHE_TTL', '300')}",
-                    "obol-mcp:enhanced"
-                ],
-            ),
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command="docker",
+                    args=[
+                        "run", "--rm", "-i",
+                    "obol-mcp:latest"
+                    ],
+                ),
+                timeout=10
+            )
         ),
         
         # Kubernetes MCP - Container orchestration and cluster management
+        # Current: https://github.com/manusa/kubernetes-mcp-server
+        # Alternatives: https://github.com/Flux159/mcp-server-kubernetes
         MCPToolset(
-            connection_params=StdioServerParameters(
-                command="docker",
-                args=[
-                    "run", "--rm", "-i",
-                    "-v", f"{KUBECONFIG_PATH}:/home/appuser/.kube/config:ro",
-                    "-e", "KUBECONFIG=/home/appuser/.kube/config",
-                    "mcp/kubernetes:latest"
-                ],
-            ),
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command="docker",
+                    args=[
+                        "run", "--rm", "-i",
+                        "--network", "host",
+                        "-v", f"{KUBECONFIG_PATH}:/home/appuser/.kube/config",
+                        "-e", "K8S_NAMESPACE=l1",
+                        "flux159/mcp-server-kubernetes:latest"
+                    ],
+                ),
+                timeout=60,
+                # Optional: Filter which tools from the MCP server are exposed
+                tool_filter=['kubectl_delete']
+            )
         ),
         
-        # # Foundry MCP - Smart contract development and testing
-        # MCPToolset(
-        #     connection_params=StdioServerParameters(
-        #         command="docker",
-        #         args=[
-        #             "run", "--rm", "-i",
-        #             "-v", f"{WORKSPACE_PATH}:/workspace",
-        #             "-w", "/workspace",
-        #             "foundry-mcp:latest"
-        #         ],
-        #     ),
-        # ),
+        # Foundry MCP - Smart contract development and testing
+        MCPToolset(
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command="docker",
+                    args=[
+                        "run", "--rm", "-i",
+                        "--network", "host",
+                        "foundry-mcp-server:latest"
+                    ],
+                ),
+                timeout=20
+            ),
+        ),
     ],
 )
 
