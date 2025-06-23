@@ -1,0 +1,207 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simple-html
+  namespace: web
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <title>Obol Stack</title>
+      <style>
+        body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; line-height: 1.6; padding: 0 1rem; }
+        h1, h2, h3 { color: #222; }
+        code, pre { background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
+        pre { padding: 1em; overflow-x: auto; }
+        blockquote { background: #e9f5ff; padding: 0.5em 1em; border-left: 5px solid #007acc; margin: 1em 0; }
+        img { max-width: 150px; display: block; margin: 1rem auto; }
+        hr { margin: 2em 0; }
+      </style>
+    </head>
+    <body>
+
+    <img src="https://obol.tech/obolnetwork.png" alt="Obol Logo" style="width: 100%; height: auto; max-width: none;">
+    <h1 align="center">The Obol Stack: Decentralised Applications For Ethereum</h1>
+
+    <h2>Overview</h2>
+    <p>The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on <a href="https://kubernetes.io">Kubernetes</a>, with <a href="https://helm.sh/">Helm</a> as a package management system.</p>
+
+    <h2>Getting Started</h2>
+    <blockquote>
+      <strong>IMPORTANT:</strong> The Obol Stack is alpha software. It is not complete, and it may not be working smoothly. If you encounter an issue that does not appear to be documented, please open a <a href="http://github.com/obolNetwork/obol-stack/issues">GitHub issue</a> if an appropriate one is not already present.<br>
+      See <a href="https://github.com/ObolNetwork/obol-stack/tree/main/obolup/README.md#supported-architectures">here</a> for the latest on OS and architectures supported.
+    </blockquote>
+
+    <p>The default installation of the Stack configures Ethereum L1 RPCs. The default addresses for these RPCs are:</p>
+
+    <pre><code># Mainnet
+    http://obol.stack/rpc/mainnet
+
+    # Hoodi
+    http://obol.stack/rpc/hoodi
+
+    # Test they are working with
+    curl -s -X POST http://obol.stack/rpc/mainnet -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+    curl -s -X POST http://obol.stack/rpc/hoodi -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+    </code></pre>
+
+    Try adding them to your metamask.
+    
+    <div style="margin: 1em 0;">
+      <button id="add-mainnet" style="background: #037DD6; color: white; padding: 0.5em 1em; border: none; border-radius: 4px; cursor: pointer; margin-right: 1em;">Add Mainnet to MetaMask</button>
+      <button id="add-hoodi" style="background: #037DD6; color: white; padding: 0.5em 1em; border: none; border-radius: 4px; cursor: pointer;">Add Hoodi to MetaMask</button>
+    </div>
+    
+    <script>
+      document.getElementById('add-mainnet').addEventListener('click', async () => {
+        if (typeof window.ethereum !== 'undefined') {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x1',
+                chainName: 'Ethereum Mainnet (Obol Stack)',
+                nativeCurrency: {
+                  name: 'Ether',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
+                rpcUrls: ['http://obol.stack/rpc/mainnet'],
+                blockExplorerUrls: ['https://etherscan.io']
+              }]
+            });
+          } catch (error) {}
+        }
+      });
+      
+      document.getElementById('add-hoodi').addEventListener('click', async () => {
+        if (typeof window.ethereum !== 'undefined') {
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: '0x44787',
+                chainName: 'Hoodi Testnet (Obol Stack)',
+                nativeCurrency: {
+                  name: 'Hoodi Ether',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
+                rpcUrls: ['http://obol.stack/rpc/hoodi'],
+                blockExplorerUrls: ['https://hoodi.etherscan.io']
+              }]
+            });
+          } catch (error) {}
+        }
+      });
+    </script>
+
+    <h3>Installing an Obol App (Helm Chart)</h3>
+    <p>Here's an example of adding on a popular Ethereum sidecar called contributoor, built by the EthPandaOps team, which streams data from your full node to their backend for analysis and visualisation.</p>
+
+    <pre><code>obol install ethereum/contributooor
+    </code></pre>
+
+    <h3>Adding another Obol App Store</h3>
+    <p>The Obol Stack is built on Helm, you can add your own Helm Chart repository easily.</p>
+
+    <pre><code># Add a repository of Helm Charts
+    obol repo add ithaca https://github.com/ithacaxyz/obol-charts
+
+    # Install a chart from the new 'App Store'
+    obol install ithaca/op-reth
+    </code></pre>
+
+    <h3>Custom deployments</h3>
+    <p>Each Obol App has a <code>values.yaml</code> file with default values. You can customize these values by creating your own values file and passing it to the install command:</p>
+
+    <pre><code>obol install &lt;app-store-name&gt;/&lt;chart-name&gt; --values custom-values.yaml
+    </code></pre>
+
+    <h3>Using advanced tooling</h3>
+    <p>The <code>obol</code> CLI is intended to be a simple command-line user interface to simplify the use of the Obol Stack for non-developers. It is a work in progress, and does not cover many advanced use cases that Kubernetes and Helm can offer. If you are an experienced Kubernetes user, <code>obolup</code> also installs <a href="https://kubernetes.io/docs/reference/kubectl/">kubectl</a> and <a href="https://helm.sh/docs/helm/helm/">helm</a>, such that you can manage your stack with the tooling you are used to.</p>
+
+    <p>If you encounter node management requirements that an end-user might need but cannot achieve with the Obol CLI, instead needing to use <code>kubectl</code> or <code>helm</code>, consider opening a feature request issue on the <a href="https://github.com/ObolNetwork/obol-cli/issues">obol-cli</a> repo.</p>
+
+    <h2>Project Status</h2>
+    <p>This project is currently in alpha, and should not be used in production.</p>
+    <p>The stack aims to support all popular Kubernetes backends and all Ethereum client types, with a developer experience designed to be useful for local app development, through to production deployment and management.</p>
+
+    <h2>Contributing</h2>
+    <p>Please see <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> for details.</p>
+
+    <h2>License</h2>
+    <p>This project is licensed under the <a href="LICENSE">Apache License 2.0</a>.</p>
+
+    </body>
+    </html>
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: html-server
+  namespace: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: html-server
+  template:
+    metadata:
+      labels:
+        app: html-server
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: html
+          configMap:
+            name: simple-html
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: html-service
+  namespace: web
+spec:
+  selector:
+    app: html-server
+  ports:
+    - port: 80
+      targetPort: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: html-ingress
+  namespace: web
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: obol.stack
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: html-service
+                port:
+                  number: 80

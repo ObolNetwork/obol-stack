@@ -17,7 +17,7 @@ The Obol Stack is a framework to make it easier to distribute decentralised appl
 Running the Obol Stack locally requires a [Docker](https://www.docker.com/) engine. Install Docker for Linux using one of the options [here](https://docs.docker.com/engine/install/). Install Docker Desktop for Other Operating Systems [here](https://docs.docker.com/desktop/).
 
 > [!TIP]
-> If you use Docker Desktop, be sure to go to the settings section, resources tab, and allocate most or all of your CPUs and most of your disk space. The stack won't sync a local L1 node if there is not enough available disk space.
+> If you use Docker Desktop, be sure to go to the settings section, resources tab, and allocate most or all of your CPUs and most of your disk space. The stack won't succeed in syncing a local L1 node if there is not enough available disk space.
 
 Once you have Docker installed, the easiest way to bootstrap the stack is to use the `obolup` installer. `obolup` keeps your stack running the latest versions of its software.
 
@@ -39,18 +39,40 @@ You can also clone this repo locally and run:
 git clone git@github.com:ObolNetwork/obol-stack.git
 cd obol-stack/obolup
 sudo chmod u+x ./obolup
+<<<<<<< HEAD
 ./obolup
+=======
+
+# Launch the stack in light client mode
+./obolup
+
+# Launch the stack in light client mode with host OS access
+./obolup --host
+>>>>>>> main
 ```
 
-More advanced usage of `obolup` will be documented [here](./obolup/README.md).
+The complete usage of `obolup` is documented [here](./obolup/README.md).
 
 ## Stack Overview
 
-The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and also attempts to sync an L1 full node ([Erigon](https://github.com/erigontech/erigon)). Both sit behind a specialised load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
+The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and when `--mode=full` is passed, the stack syncs an L1 full node ([Erigon](https://github.com/erigontech/erigon)). Both sit behind a specialised Ethereum load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
 ```bash
-# Obol Stack L1 JSON-RPC API
-http://rpc.l1.cluster.svc.local
+# Obol Stack L1 JSON-RPC for Obol Apps running within the stack
+http://rpc.l1.cluster.svc.local/rpc/mainnet
+http://rpc.l1.cluster.svc.local/rpc/hoodi
+
+# Obol Stack L1 JSON-RPC accessible by the host OS when --host flag is passed to `obolup`
+http://obol.stack/rpc/mainnnet
+http://obol.stack/rpc/hoodi
 ```
+
+### `host` mode
+
+To access your Obol Stack dApps in your web browser, such as local-RPCs and local dApps, you need to enable `--host` mode. 
+Supplying the `--host` flag to `obolup` will make the Obol Stack accessible on http://obol.stack. 
+
+> [!INFO]
+> Obol Stack host-mode may cause your browser to warn you about self-signed HTTPS certificates when accessing the stack. This is unavoidable when using custom local web domains. You should click "Accept the risk and continue" to access the stack web page.
 
 ### Installing an Obol App (Helm Chart)
 
@@ -62,7 +84,7 @@ obol install ethereum/contributooor
 
 ### Adding another Obol App Store
 
-The Obol Stack is built on Helm, you can add your own Helm Chart repository easily.
+The Obol Stack is built on Helm, so you can add your own Helm Chart repository easily.
 
 ```bash
 # Add a repository of Helm Charts
