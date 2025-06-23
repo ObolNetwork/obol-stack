@@ -355,6 +355,9 @@ launch_stack() {
 
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
+        # Set memory limit for Kind container
+        export KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS="--memory=35g"
+        
         # If host=1, map host port 80 and 443 into the cluster and enable an ingress-controller and some default routes
         if [[ "$__host" -ne 0 ]]; then
             log_info "Creating Kind cluster for Obol Stack in host mode..."
@@ -363,6 +366,9 @@ launch_stack() {
             log_info "Creating Kind cluster for Obol Stack..."
             kind create cluster --name "$STACK_NAME" --config ./manifests/kind_no_host.yaml
         fi
+        
+        # Unset the memory limit after cluster creation
+        unset KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS
     else
         # Cluster exists, check if we need host mode but don't have port mappings
         if [[ "$__host" -ne 0 ]] && ! check_cluster_port_mappings "$STACK_NAME"; then
