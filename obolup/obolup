@@ -127,12 +127,12 @@ validate_network() {
 	local network="$1"
 
 	if [[ -z "$network" ]]; then
-		log_info "Network name is empty. Defaulting to mainnet"
+		log_info "Network name is empty. Defaulting to mainnet" >&2
 		network="mainnet"
 	fi
 
 	if ! is_supported_network "$network"; then
-		log_warn "Unrecognised network name: \"${network}\".\n"
+		log_warn "Unrecognised network name: \"${network}\".\n" >&2
 		help 1
 	fi
 	
@@ -145,12 +145,12 @@ validate_sync_mode() {
 	local mode="$1"
 
 	if [[ -z "$mode" ]]; then
-		log_info "Sync mode is empty. Defaulting to light node sync mode."
+		log_info "Sync mode is empty. Defaulting to light node sync mode." >&2
 		mode="light"
 	fi
 
 	if ! is_supported_mode "$mode"; then
-		log_warn "Unrecognised sync mode: \"${mode}\".\n"
+		log_warn "Unrecognised sync mode: \"${mode}\".\n" >&2
 		help 1
 	fi
 	
@@ -448,6 +448,9 @@ launch_stack() {
 
             # Route a minimal static website to http://obol.stack/
             kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
+
+            # Route the obol-agent to http://obol.stack/agent
+            kubectl apply -f ./manifests/expose-agent.yaml 2>/dev/null
 
             # Launch home page
             log_info "Launching the Obol Stack..."

@@ -1,3 +1,4 @@
 fastmcp>=0.2.0
 httpx>=0.24.0
 uvicorn>=0.23.0
+google-adk
