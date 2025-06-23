@@ -335,6 +335,8 @@ open_obol_agent_interface() {
     log_info "Opening obol-agent interface at http://localhost:8000..."
     kubectl port-forward svc/obol-agent 8000:8000 >/dev/null 2>&1 &
     xdg-open "http://localhost:8000" 2>/dev/null || open "http://localhost:8000" 2>/dev/null || log_warn "Could not open browser automatically."
+}
+
 # Check if cluster has required port mappings for host mode
 check_cluster_port_mappings() {
     local cluster_name="$1"
@@ -349,9 +351,9 @@ check_cluster_port_mappings() {
 
 # Launch or update the Obol Stack
 launch_stack() {
-    declare -n __network="$1"
-    declare -n __mode="$2"
-    declare -n __host="$3"
+    local __network="$1"
+    local __mode="$2"
+    local __host="$3"
 
     log_info "Launching core Obol Stack services..."
     if ! kind get clusters | grep -q "$STACK_NAME"; then
@@ -397,17 +399,13 @@ launch_stack() {
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Installing the Obol Stack Ethereum light client configured for $network..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$network/helios.yaml
+    log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
     # If mode="full", also sync an Erigon full node
-<<<<<<< HEAD
-    if [[ "$mode" = "full" ]]; then
-=======
     if [[ "$__mode" = "full" ]]; then
->>>>>>> main
         log_info "Installing an Ethereum Erigon full node client..."
-        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/mainnet/erigon.yaml -f ../values/$network/erigon.yaml
+        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/mainnet/erigon.yaml -f ../values/$__network/erigon.yaml
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
@@ -524,11 +522,7 @@ main() {
         kind delete cluster --name "$STACK_NAME"
     fi
 
-<<<<<<< HEAD
-    launch_stack "$network" "$mode"
-=======
-    launch_stack network mode host
->>>>>>> main
+    launch_stack "$network" "$mode" "$host"
 
     log_info "Obol Stack is up and running!"
     exit 0
