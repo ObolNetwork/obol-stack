@@ -277,10 +277,11 @@ launch_stack() {
     #log_info "Applying Obol Stack base resources..."
     #kubectl apply -f https://stack.obol.org/base.yaml || log_error "Failed to apply base resources."
 
-    # Add the appropriate Helm repos (ethpandaops, Obol, kubernetes-dashboard)
+    # Add the appropriate Helm repos (ethpandaops, Obol, monitoring...)
     log_info "Adding default Obol Stack app stores..."
     ensure helm repo add ethereum https://ethpandaops.github.io/ethereum-helm-charts --force-update
     ensure helm repo add obol https://obolnetwork.github.io/helm-charts/ --force-update
+    ensure helm repo add prometheus-community https://prometheus-community.github.io/helm-charts/
 
     # Update helm repos
     helm repo update
@@ -338,9 +339,19 @@ launch_stack() {
             # Route a minimal static website to http://obol.stack/
             kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
 
+            # Lazy way to let nginx become healthy before loading the landing page
+            sleep 3
+
             # Launch home page
             log_info "Launching the Obol Stack..."
             xdg-open "https://obol.stack" 2>/dev/null || open "http://obol.stack" 2>/dev/null || log_warn "Could not open browser automatically, navigate to http://obol.stack in your browser..."
+    fi
+
+    # Install kube-prometheus-stack (Prometheus + Grafana + Alertmanager)
+    log_info "Installing the Obol monitoring stack..."
+    ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml --set grafana.ingress.enabled=$host --set alertmanager.ingress.enabled=$host
+    if [[ "$__host" -ne 0 ]]; then
+        log_info "Obol monitoring stack installed. Access the Grafana UI at: http://obol.stack/monitoring. Username: obol Password: obolstack "
     fi
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
