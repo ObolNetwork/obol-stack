@@ -79,12 +79,31 @@ config: |
                 maxCount: 1
         upstreams:
           - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
-          - endpoint: https://ethereum-rpc.publicnode.com
-            evm:
-              chainId: 1
           - endpoint: https://ethereum-hoodi-rpc.publicnode.com
             evm:
               chainId: 560048
+        cors:
+          # List of allowed origins.
+          # This allows any dApp in your browser to call the RPC.
+          allowedOrigins:
+            - "*"
+          # HTTP methods allowed for CORS requests
+          allowedMethods:
+            - "GET"
+            - "POST"
+            - "PUT"
+            - "DELETE"
+            - "OPTIONS"
+          # Headers allowed in actual requests
+          allowedHeaders:
+            - "*"
+          # Headers exposed to the browser
+          exposedHeaders:
+            - "X-Request-ID"
+          # Whether the browser should include credentials with requests
+          allowCredentials: true
+          # How long (in seconds) browsers should cache preflight request results
+          maxAge: 3600
 
 # -- Secret env variables injected via a created secret
 # These env variables can be used to populate the erpc config file with sensitive data such as RPC API keys
