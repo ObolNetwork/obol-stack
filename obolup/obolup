@@ -349,9 +349,12 @@ launch_stack() {
 
     # Install kube-prometheus-stack (Prometheus + Grafana + Alertmanager)
     log_info "Installing the Obol monitoring stack..."
-    ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml --set grafana.ingress.enabled=$host --set alertmanager.ingress.enabled=$host
-    if [[ "$__host" -ne 0 ]]; then
+    if [[ "$__headless" -eq 0 ]]; then
+        ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml
         log_info "Obol monitoring stack installed. Access the Grafana UI at: http://obol.stack/monitoring. Username: obol Password: obolstack "
+    else
+        # Disable the ingresses if --headless mode is supplied
+        ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml --set grafana.ingress.enabled=false --set alertmanager.ingress.enabled=false
     fi
 
     # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
