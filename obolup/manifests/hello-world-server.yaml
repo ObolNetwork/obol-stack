@@ -74,7 +74,7 @@ data:
                   symbol: 'ETH',
                   decimals: 18
                 },
-                rpcUrls: ['http://obol.stack/rpc/mainnet'],
+                rpcUrls: ['https://obol.stack/rpc/mainnet'],
                 blockExplorerUrls: ['https://etherscan.io']
               }]
             });
@@ -95,7 +95,7 @@ data:
                   symbol: 'ETH',
                   decimals: 18
                 },
-                rpcUrls: ['http://obol.stack/rpc/hoodi'],
+                rpcUrls: ['https://obol.stack/rpc/hoodi'],
                 blockExplorerUrls: ['https://hoodi.etherscan.io']
               }]
             });
