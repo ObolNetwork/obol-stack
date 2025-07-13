@@ -4,12 +4,17 @@
 helios:
   # Network to sync to
   network: "mainnet"
+
+  # Trusted URL to retrieve a checkpoint sync to begin the light client from
+  #fallback: "https://mainnet.checkpoint.sigp.io"
+  loadExternalFallback: true
+  strictCheckpointAge: true
   
   # REQUIRED: Execution RPC endpoint (must support eth_getProof)
-  executionRpc: "wss://eth.drpc.org"
-  
+  executionRpc: "https://eth.drpc.org"
+
   # No need for consensus RPC or checkpoint when using drpc
-  consensusRpc: ""
+  #consensusRpc: "https://ethereum-beacon-api.publicnode.com"
   checkpoint: ""
   
   # Bind to 0.0.0.0 to allow connections from outside the pod
@@ -23,7 +28,7 @@ image:
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "96f51e7"
+  #tag: "e10e753"
 
 # Configure service to be accessible
 service:

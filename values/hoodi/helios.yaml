@@ -8,9 +8,9 @@ helios:
   
   # REQUIRED: Add your execution RPC endpoint (must support eth_getProof)
   # Example using AllthatNode (replace with your provider)
-  executionRpc: "wss://hoodi.drpc.org"
+  executionRpc: "https://hoodi.drpc.org"
   
-  consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
+  #consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
   
   # Example checkpoint from Holesky
   # Get the latest checkpoint using: ./scripts/get-latest-checkpoint.sh holesky
@@ -32,7 +32,7 @@ image:
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "96f51e7"
+  #tag: "e10e753"
 
 # Configure service to be accessible
 service:

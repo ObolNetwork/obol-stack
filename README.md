@@ -39,9 +39,6 @@ sudo chmod u+x ./obolup
 
 # Launch the stack in light client mode
 ./obolup
-
-# Launch the stack in light client mode with host OS access
-./obolup --host
 ```
 
 The complete usage of `obolup` is documented [here](./obolup/README.md).
@@ -54,18 +51,18 @@ The default installation of the Stack configures an Ethereum L1 light client (us
 http://rpc.l1.cluster.svc.local/rpc/mainnet
 http://rpc.l1.cluster.svc.local/rpc/hoodi
 
-# Obol Stack L1 JSON-RPC accessible by the host OS when --host flag is passed to `obolup`
+# Obol Stack L1 JSON-RPC accessible by the host OS
 http://obol.stack/rpc/mainnnet
 http://obol.stack/rpc/hoodi
 ```
 
 ### `host` mode
 
-To access your Obol Stack dApps in your web browser, such as local-RPCs and local dApps, you need to enable `--host` mode. 
-Supplying the `--host` flag to `obolup` will make the Obol Stack accessible on http://obol.stack. 
+By default, the Obol Stack configures itself to be accessible to dApps in your web browser, such as wallets and dApps. The stack configures itself on custom domain; https://obol.stack/
+This behaviour can be disabled by running the stack in `--headless` mode. 
 
 > [!INFO]
-> Obol Stack host-mode may cause your browser to warn you about self-signed HTTPS certificates when accessing the stack. This is unavoidable when using custom local web domains. You should click "Accept the risk and continue" to access the stack web page.
+> When accessing the Obol Stack from your host OS, your browser may warn you about self-signed HTTPS certificates. This is unavoidable when using custom local web domains. You should click "Accept the risk and continue" to access the stack web page.
 
 ### Installing an Obol App (Helm Chart)
 
