@@ -71,7 +71,7 @@ root_agent = LlmAgent(
                         "--network", "host",
                         "-v", f"{KUBECONFIG_PATH}:/home/appuser/.kube/config",
                         "-e", "K8S_NAMESPACE=l1",
-                        "flux159/mcp-server-kubernetes:latest"
+                        "flux159/mcp-server-kubernetes:2.4.2"
                     ],
                 ),
                 timeout=60,
