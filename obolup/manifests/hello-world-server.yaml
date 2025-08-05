@@ -89,7 +89,7 @@ data:
             await window.ethereum.request({
               method: 'wallet_addEthereumChain',
               params: [{
-                chainId: '0x44787',
+                chainId: '0x88bb0',
                 chainName: 'Hoodi Testnet (Obol Stack)',
                 nativeCurrency: {
                   name: 'Hoodi Ether',

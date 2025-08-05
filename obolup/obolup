@@ -312,10 +312,10 @@ launch_stack() {
     log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
-    # If mode="full", also sync an Erigon full node
+    # If mode="full", also sync a full node
     if [[ "$__mode" = "full" ]]; then
-        log_info "Installing an Ethereum Erigon full node client..."
-        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/$__network/erigon.yaml
+        log_info "Installing an Ethereum full node client synced to $__network..."
+        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
@@ -377,10 +377,6 @@ launch_stack() {
         ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml --set grafana.ingress.enabled=false --set alertmanager.ingress.enabled=false
     fi
 
-    # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
-    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node
-    # Todo(Oisin): Blockscout segfaulting, unclear why
-    # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
    }
 
 # Main logic
@@ -434,6 +430,7 @@ main() {
     install_kubectl
     install_kind
     install_helm
+    log_info "Helm finished"
     #install_obol_cli
     #check_obolup_update
     if [[ "$clean" -ne 0 ]]; then
