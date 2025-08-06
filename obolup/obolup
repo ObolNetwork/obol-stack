@@ -185,16 +185,26 @@ install_helm() {
     log_info "Checking helm..."
 
     # Fetch and extract the latest helm release version
-    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
-    # Output the latest release
+    # Check if we got a version (network connectivity)
+    if [[ -z "$LATEST_RELEASE" ]]; then
+        log_warn "Unable to fetch latest helm version. Network may be unavailable."
+        if command_exists helm; then
+            log_info "helm is already installed. Skipping update check. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
+            return
+        else
+            log_error "helm is not installed and unable to fetch latest version. Please check your internet connection."
+        fi
+    fi
+
     log_info "Latest helm version available: $LATEST_RELEASE"
 
-    # Check if kubectl is already installed
+    # Check if helm is already installed
     if command_exists helm; then
-        log_info "helm is already installed. Version installed: $(helm version --short)"
+        log_info "helm is already installed. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
     else
-        log_info "helm in not installed."
+        log_info "helm is not installed."
         log_info "Installing helm..."
         # Download the latest release
         ensure curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
@@ -212,7 +222,6 @@ install_helm() {
 
         log_info "helm installed successfully."
     fi
-
 }
 
 # Install or update Kind
@@ -225,6 +234,54 @@ install_kind() {
         sudo mv ./kind /usr/local/bin/kind
     fi
     log_info "Kind $KIND_VERSION is installed."
+}
+
+# Install or update k9s
+install_k9s() {
+    log_info "Checking k9s..."
+
+    # Fetch and extract the latest k9s release version
+    LATEST_K9S_VERSION=$(curl -s "https://api.github.com/repos/derailed/k9s/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+    # Check if we got a version (network connectivity)
+    if [[ -z "$LATEST_K9S_VERSION" ]]; then
+        log_warn "Unable to fetch latest k9s version. Network may be unavailable."
+        if command_exists k9s; then
+            log_info "k9s is already installed. Skipping update check."
+            return
+        else
+            log_error "k9s is not installed and unable to fetch latest version. Please check your internet connection."
+        fi
+    fi
+
+    log_info "Latest k9s version available: $LATEST_K9S_VERSION"
+
+    # Check if k9s is already installed
+    if command_exists k9s; then
+        INSTALLED_VERSION=$(k9s version --short 2>/dev/null | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n1)
+        log_info "k9s is already installed. Version installed: $INSTALLED_VERSION"
+        if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
+            log_info "k9s is up to date."
+            return
+        fi
+    fi
+
+    log_info "Installing k9s $LATEST_K9S_VERSION..."
+
+    # Download the latest release
+    # k9s uses capital case for platform names
+    K9S_PLATFORM=$(echo "$PLATFORM" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+    ensure curl -sSL -O "https://github.com/derailed/k9s/releases/download/$LATEST_K9S_VERSION/k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz"
+
+    # Extract and install
+    ensure tar -xzf k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz
+    ensure chmod +x k9s
+    ensure sudo mv k9s /usr/local/bin/
+
+    # Clean up
+    rm -f k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz README.md LICENSE
+
+    log_info "k9s $LATEST_K9S_VERSION installed successfully."
 }
 
 # Install or update obol CLI
@@ -430,7 +487,8 @@ main() {
     install_kubectl
     install_kind
     install_helm
-    log_info "Helm finished"
+    install_k9s
+
     #install_obol_cli
     #check_obolup_update
     if [[ "$clean" -ne 0 ]]; then
