@@ -51,7 +51,7 @@ case $PLATFORM in
     PLATFORM="win32"
     ;;
     *)
-    err "unsupported platform: $PLATFORM"
+    log_error "unsupported platform: $PLATFORM"
     ;;
 esac
 
@@ -74,21 +74,21 @@ fi
 # Run a command that should never fail. If the command fails execution
 # will immediately terminate with an error showing the failing command.
 ensure() {
-  if ! "$@"; then err "command failed: $*"; fi
+  if ! "$@"; then log_error "command failed: $*"; fi
 }
 
 # Downloads $1 into $2 or stdout
 download() {
   if [ -n "$2" ]; then
     # output into $2
-    if check_cmd curl; then
+    if command_exists curl; then
       curl -#o "$2" -L "$1"
     else
       wget --show-progress -qO "$2" "$1"
     fi
   else
     # output to stdout
-    if check_cmd curl; then
+    if command_exists curl; then
       curl -#L "$1"
     else
       wget --show-progress -qO- "$1"
@@ -241,6 +241,7 @@ install_k9s() {
     log_info "Checking k9s..."
 
     # Fetch and extract the latest k9s release version
+    log_info "Fetching latest k9s version from GitHub API..."
     LATEST_K9S_VERSION=$(curl -s "https://api.github.com/repos/derailed/k9s/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
     # Check if we got a version (network connectivity)
@@ -258,28 +259,65 @@ install_k9s() {
 
     # Check if k9s is already installed
     if command_exists k9s; then
-        INSTALLED_VERSION=$(k9s version --short 2>/dev/null | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n1)
-        log_info "k9s is already installed. Version installed: $INSTALLED_VERSION"
-        if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
-            log_info "k9s is up to date."
-            return
+        # Extract version number (k9s doesn't use 'v' prefix in version output)
+        INSTALLED_VERSION=$(k9s version --short 2>/dev/null | head -n1 | awk '{print $2}')
+        if [[ -n "$INSTALLED_VERSION" ]]; then
+            # Add 'v' prefix to match release format
+            INSTALLED_VERSION="v$INSTALLED_VERSION"
+            log_info "k9s is already installed. Version installed: $INSTALLED_VERSION"
+            if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
+                log_info "k9s is up to date."
+                return
+            else
+                # Check if the k9s version is installed as we expect
+                local k9s_path=$(which k9s)
+                if [[ "$k9s_path" != "/usr/local/bin/k9s" ]]; then
+                
+                    log_info "k9s is installed at $k9s_path (managed by a package manager)"
+                    log_info "If you want the latest version, consider updating through your package manager"
+                    return
+                fi
+            fi
+        else
+            log_warn "k9s is installed but version could not be determined."
         fi
     fi
 
     log_info "Installing k9s $LATEST_K9S_VERSION..."
 
     # Download the latest release
-    # k9s uses capital case for platform names
-    K9S_PLATFORM=$(echo "$PLATFORM" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-    ensure curl -sSL -O "https://github.com/derailed/k9s/releases/download/$LATEST_K9S_VERSION/k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz"
+    # k9s uses capital case for platform names (Linux, Darwin)
+    if [[ "$PLATFORM" == "linux" ]]; then
+        K9S_PLATFORM="Linux"
+    elif [[ "$PLATFORM" == "darwin" ]]; then
+        K9S_PLATFORM="Darwin"
+    else
+        log_error "Unsupported platform for k9s: $PLATFORM"
+    fi
+
+    K9S_FILENAME="k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz"
+    K9S_URL="https://github.com/derailed/k9s/releases/download/$LATEST_K9S_VERSION/$K9S_FILENAME"
+
+    log_info "Downloading k9s from: $K9S_URL"
+    if ! curl -sSL -O "$K9S_URL"; then
+        log_error "Failed to download k9s from $K9S_URL. Please check the URL and your internet connection."
+    fi
 
     # Extract and install
-    ensure tar -xzf k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz
+    log_info "Extracting and installing k9s..."
+    if ! tar -xzf "$K9S_FILENAME" 2>/dev/null; then
+        log_error "Failed to extract $K9S_FILENAME. The download may be corrupted."
+    fi
+
+    if [[ ! -f "k9s" ]]; then
+        log_error "k9s binary not found after extraction. Archive contents may be unexpected."
+    fi
+
     ensure chmod +x k9s
     ensure sudo mv k9s /usr/local/bin/
 
     # Clean up
-    rm -f k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz README.md LICENSE
+    rm -f "$K9S_FILENAME" README.md LICENSE
 
     log_info "k9s $LATEST_K9S_VERSION installed successfully."
 }
