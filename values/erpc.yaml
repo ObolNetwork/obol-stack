@@ -78,10 +78,13 @@ config: |
                 delay: 500ms
                 maxCount: 1
         upstreams:
-          - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
-          - endpoint: https://ethereum-hoodi-rpc.publicnode.com
+          - endpoint: http://l1-light-client-helios-mainnet.l1.svc.cluster.local:8545
+            evm:
+              chainId: 1
+          - endpoint: http://l1-light-client-helios-hoodi.l1.svc.cluster.local:8545
             evm:
               chainId: 560048
+          - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
         cors:
           # List of allowed origins.
           # This allows any dApp in your browser to call the RPC.
