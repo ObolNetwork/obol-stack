@@ -122,7 +122,7 @@ export default function ObolStackDashboard() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-colors-bg03 rounded-lg">
-                    <StatusIcon status={mockNodeData.executionClient.status as any} />
+                    <StatusIcon status={mockNodeData.executionClient.status as 'synced' | 'syncing' | 'error'} />
                     <span className="text-obol-green text-sm font-medium">Online</span>
                   </div>
                 </div>
@@ -155,7 +155,7 @@ export default function ObolStackDashboard() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <StatusIcon status={mockNodeData.executionClient.status as any} />
+                    <StatusIcon status={mockNodeData.executionClient.status as 'synced' | 'syncing' | 'error'} />
                     <span className="text-sm text-obol-green capitalize font-medium">
                       {mockNodeData.executionClient.status}
                     </span>
@@ -182,7 +182,7 @@ export default function ObolStackDashboard() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <StatusIcon status={mockNodeData.consensusClient.status as any} />
+                    <StatusIcon status={mockNodeData.consensusClient.status as 'synced' | 'syncing' | 'error'} />
                     <span className="text-sm text-obol-green capitalize font-medium">
                       {mockNodeData.consensusClient.status}
                     </span>
