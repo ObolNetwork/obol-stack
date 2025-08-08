@@ -264,7 +264,7 @@ install_k9s() {
         if [[ -n "$INSTALLED_VERSION" ]]; then
             # Add 'v' prefix to match release format
             INSTALLED_VERSION="v$INSTALLED_VERSION"
-            log_info "k9s is already installed. Version installed: $INSTALLED_VERSION"
+            log_info "k9s is already installed. Version installed: $INSTALLED_VERSION."
             if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
                 log_info "k9s is up to date."
                 return
@@ -273,8 +273,8 @@ install_k9s() {
                 local k9s_path=$(which k9s)
                 if [[ "$k9s_path" != "/usr/local/bin/k9s" ]]; then
                 
-                    log_info "k9s is installed at $k9s_path (managed by a package manager)"
-                    log_info "If you want the latest version, consider updating through your package manager"
+                    log_info "k9s is installed at $k9s_path meaning it is managed by a package manager."
+                    log_info "If you want the latest version, consider updating k9s through your package manager."
                     return
                 fi
             fi
