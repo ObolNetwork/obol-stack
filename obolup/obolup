@@ -66,7 +66,7 @@ case $PLATFORM in
     PLATFORM="win32"
     ;;
     *)
-    err "unsupported platform: $PLATFORM"
+    log_error "unsupported platform: $PLATFORM"
     ;;
 esac
 
@@ -100,21 +100,21 @@ check_cmd() {
 # Run a command that should never fail. If the command fails execution
 # will immediately terminate with an error showing the failing command.
 ensure() {
-  if ! "$@"; then err "command failed: $*"; fi
+  if ! "$@"; then log_error "command failed: $*"; fi
 }
 
 # Downloads $1 into $2 or stdout
 download() {
   if [ -n "$2" ]; then
     # output into $2
-    if check_cmd curl; then
+    if command_exists curl; then
       curl -#o "$2" -L "$1"
     else
       wget --show-progress -qO "$2" "$1"
     fi
   else
     # output to stdout
-    if check_cmd curl; then
+    if command_exists curl; then
       curl -#L "$1"
     else
       wget --show-progress -qO- "$1"
@@ -217,16 +217,26 @@ install_helm() {
     log_info "Checking helm..."
 
     # Fetch and extract the latest helm release version
-    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
-    # Output the latest release
+    # Check if we got a version (network connectivity)
+    if [[ -z "$LATEST_RELEASE" ]]; then
+        log_warn "Unable to fetch latest helm version. Network may be unavailable."
+        if command_exists helm; then
+            log_info "helm is already installed. Skipping update check. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
+            return
+        else
+            log_error "helm is not installed and unable to fetch latest version. Please check your internet connection."
+        fi
+    fi
+
     log_info "Latest helm version available: $LATEST_RELEASE"
 
-    # Check if kubectl is already installed
+    # Check if helm is already installed
     if command_exists helm; then
-        log_info "helm is already installed. Version installed: $(helm version --short)"
+        log_info "helm is already installed. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
     else
-        log_info "helm in not installed."
+        log_info "helm is not installed."
         log_info "Installing helm..."
         # Download the latest release
         ensure curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
@@ -244,7 +254,6 @@ install_helm() {
 
         log_info "helm installed successfully."
     fi
-
 }
 
 # Install or update Kind
@@ -257,6 +266,92 @@ install_kind() {
         sudo mv ./kind /usr/local/bin/kind
     fi
     log_info "Kind $KIND_VERSION is installed."
+}
+
+# Install or update k9s
+install_k9s() {
+    log_info "Checking k9s..."
+
+    # Fetch and extract the latest k9s release version
+    log_info "Fetching latest k9s version from GitHub API..."
+    LATEST_K9S_VERSION=$(curl -s "https://api.github.com/repos/derailed/k9s/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+    # Check if we got a version (network connectivity)
+    if [[ -z "$LATEST_K9S_VERSION" ]]; then
+        log_warn "Unable to fetch latest k9s version. Network may be unavailable."
+        if command_exists k9s; then
+            log_info "k9s is already installed. Skipping update check."
+            return
+        else
+            log_error "k9s is not installed and unable to fetch latest version. Please check your internet connection."
+        fi
+    fi
+
+    log_info "Latest k9s version available: $LATEST_K9S_VERSION"
+
+    # Check if k9s is already installed
+    if command_exists k9s; then
+        # Extract version number (k9s doesn't use 'v' prefix in version output)
+        INSTALLED_VERSION=$(k9s version --short 2>/dev/null | head -n1 | awk '{print $2}')
+        if [[ -n "$INSTALLED_VERSION" ]]; then
+            # Add 'v' prefix to match release format
+            INSTALLED_VERSION="v$INSTALLED_VERSION"
+            log_info "k9s is already installed. Version installed: $INSTALLED_VERSION."
+            if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
+                log_info "k9s is up to date."
+                return
+            else
+                # Check if the k9s version is installed as we expect
+                local k9s_path=$(which k9s)
+                if [[ "$k9s_path" != "/usr/local/bin/k9s" ]]; then
+                
+                    log_info "k9s is installed at $k9s_path meaning it is managed by a package manager."
+                    log_info "If you want the latest version, consider updating k9s through your package manager."
+                    return
+                fi
+            fi
+        else
+            log_warn "k9s is installed but version could not be determined."
+        fi
+    fi
+
+    log_info "Installing k9s $LATEST_K9S_VERSION..."
+
+    # Download the latest release
+    # k9s uses capital case for platform names (Linux, Darwin)
+    if [[ "$PLATFORM" == "linux" ]]; then
+        K9S_PLATFORM="Linux"
+    elif [[ "$PLATFORM" == "darwin" ]]; then
+        K9S_PLATFORM="Darwin"
+    else
+        log_error "Unsupported platform for k9s: $PLATFORM"
+    fi
+
+    K9S_FILENAME="k9s_${K9S_PLATFORM}_${ARCHITECTURE}.tar.gz"
+    K9S_URL="https://github.com/derailed/k9s/releases/download/$LATEST_K9S_VERSION/$K9S_FILENAME"
+
+    log_info "Downloading k9s from: $K9S_URL"
+    if ! curl -sSL -O "$K9S_URL"; then
+        log_error "Failed to download k9s from $K9S_URL. Please check the URL and your internet connection."
+    fi
+
+    # Extract and install
+    log_info "Extracting and installing k9s..."
+    if ! tar -xzf "$K9S_FILENAME" 2>/dev/null; then
+        log_error "Failed to extract $K9S_FILENAME. The download may be corrupted."
+    fi
+
+    if [[ ! -f "k9s" ]]; then
+        log_error "k9s binary not found after extraction. Archive contents may be unexpected."
+    fi
+
+    ensure chmod +x k9s
+    ensure sudo mv k9s /usr/local/bin/
+
+    # Clean up
+    rm -f "$K9S_FILENAME" README.md LICENSE
+
+    log_info "k9s $LATEST_K9S_VERSION installed successfully."
 }
 
 # Install or update obol CLI
@@ -402,10 +497,10 @@ launch_stack() {
     log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
-    # If mode="full", also sync an Erigon full node
+    # If mode="full", also sync a full node
     if [[ "$__mode" = "full" ]]; then
-        log_info "Installing an Ethereum Erigon full node client..."
-        ensure helm upgrade --namespace l1 --create-namespace --install l1-erigon ethereum/erigon -f ../values/mainnet/erigon.yaml -f ../values/$__network/erigon.yaml
+        log_info "Installing an Ethereum full node client synced to $__network..."
+        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
@@ -467,10 +562,6 @@ launch_stack() {
         ensure helm upgrade --hide-notes --namespace monitoring --create-namespace --install monitoring prometheus-community/kube-prometheus-stack -f ../values/kube-prometheus-stack.yaml --set grafana.ingress.enabled=false --set alertmanager.ingress.enabled=false
     fi
 
-    # Todo(Oisin): EthpandaOps/ethereum-node not flexible enough just yet, installing clients directly with their dedicated chart
-    #ensure helm upgrade --namespace l1 --create-namespace --install --set erigon.enabled=true l1-erigon ethereum/ethereum-node
-    # Todo(Oisin): Blockscout segfaulting, unclear why
-    # ensure obol install ethereum/blockscout --values ./values/blockscout.yaml
    }
 
 # Main logic
@@ -524,6 +615,8 @@ main() {
     install_kubectl
     install_kind
     install_helm
+    install_k9s
+
     #install_obol_cli
     #check_obolup_update
     if [[ "$clean" -ne 0 ]]; then
