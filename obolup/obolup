@@ -451,10 +451,16 @@ launch_stack() {
             # Route the eRPC pod to `http://obol.stack/rpc`
             kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
 
-            # Route a minimal static website to http://obol.stack/
-            kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
+            # Route a minimal website to http://obol.stack/
+            # Hosts the front end site in a node.js server using obol-app. Needs better than docker:latest tags for reliable updates.
+            ensure helm upgrade --install obol-frontend obol/obol-app \
+                --namespace frontend \
+                --create-namespace \
+                --set image.repository=obolnetwork/obol-stack-front-end \
+                --set ingress.enabled=true \
+                --set service.port=3000
 
-            # Lazy way to let nginx become healthy before loading the landing page
+            # Lazy way to let nginx become healthy before loading the landing page. Needs a fix.
             sleep 3
 
             # Launch home page
