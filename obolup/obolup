@@ -458,6 +458,7 @@ launch_stack() {
                 --create-namespace \
                 --set image.repository=obolnetwork/obol-stack-front-end \
                 --set ingress.enabled=true \
+                --set-string ingress.hosts[0].paths[0].path="/" \
                 --set service.port=3000
 
             # Lazy way to let nginx become healthy before loading the landing page. Needs a fix.
