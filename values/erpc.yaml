@@ -87,7 +87,7 @@ config: |
             evm:
               chainId: 560048
           - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
-            id: fullnode-local
+            id: l1-full-node
         cors:
           # List of allowed origins.
           # This allows any dApp in your browser to call the RPC.
