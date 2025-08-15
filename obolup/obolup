@@ -262,8 +262,6 @@ install_k9s() {
         # Extract version number (k9s doesn't use 'v' prefix in version output)
         INSTALLED_VERSION=$(k9s version --short 2>/dev/null | head -n1 | awk '{print $2}')
         if [[ -n "$INSTALLED_VERSION" ]]; then
-            # Add 'v' prefix to match release format
-            INSTALLED_VERSION="v$INSTALLED_VERSION"
             log_info "k9s is already installed. Version installed: $INSTALLED_VERSION."
             if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
                 log_info "k9s is up to date."
