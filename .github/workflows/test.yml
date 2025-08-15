@@ -39,6 +39,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1
 
       - name: Build Docker image (test)
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -48,10 +50,30 @@ jobs:
           tags: obol-stack-front-end:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: true  # Ensure image is loaded into local Docker daemon
 
+      - name: Verify Docker image exists
+        run: |
+          echo "Checking if Docker image was built successfully..."
+          docker images | grep obol-stack-front-end || (echo "Docker image not found!" && exit 1)
+          
       - name: Test Docker image
         run: |
+          echo "Starting Docker container..."
           docker run --rm -d --name test-container -p 3000:3000 obol-stack-front-end:test
-          sleep 10
-          curl -f http://localhost:3000 || exit 1
+          
+          echo "Waiting for container to be ready..."
+          for i in {1..30}; do
+            if curl -f http://localhost:3000 >/dev/null 2>&1; then
+              echo "Container is responding!"
+              break
+            fi
+            echo "Attempt $i: Container not ready yet, waiting..."
+            sleep 2
+          done
+          
+          echo "Final health check..."
+          curl -f http://localhost:3000 || (echo "Health check failed!" && docker logs test-container && exit 1)
+          
+          echo "Stopping container..."
           docker stop test-container

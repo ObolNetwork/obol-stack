@@ -30,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${dmSans.variable} font-sans antialiased`}
+        className={`${dmSans.variable} font-sans antialiased bg-[radial-gradient(ellipse_at_top_left,rgba(47,228,171,0.08)_0%,transparent_60%)] text-zinc-200`}
       >
         {children}
       </body>
