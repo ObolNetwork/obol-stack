@@ -3,9 +3,7 @@
 import React, { useState } from 'react';
 import { Header } from '../components/layout/Header';
 import { NetworkStatus } from '../components/metrics/NetworkStatus';
-import { ClientStatus } from '../components/metrics/ClientStatus';
 import { NodeOverview } from '../components/metrics/NodeOverview';
-import { PortStatus } from '../components/monitoring/PortStatus';
 import { FooterBar } from '../components/layout/FooterBar';
 import { TimingProvider } from '../components/shared/TimingContext';
 import { mockDashboardData } from '../data/mockData';
@@ -25,16 +23,11 @@ export default function ObolStackDashboard() {
 
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 mt-6">
             <section className="xl:col-span-8 space-y-6">
-              <NetworkStatus data={dashboardData.ethereum} />
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <ClientStatus client="nethermind" data={dashboardData.clients.nethermind} />
-                <ClientStatus client="nimbus" data={dashboardData.clients.nimbus} />
-              </div>
+              <NetworkStatus data={dashboardData.ethereum} clients={dashboardData.clients} />
             </section>
 
             <aside className="xl:col-span-4 space-y-6">
-              <NodeOverview data={dashboardData.nodeOverview} />
-              <PortStatus data={dashboardData.ports} />
+              <NodeOverview data={dashboardData.nodeOverview} ports={dashboardData.ports} />
             </aside>
           </div>
 

@@ -39,7 +39,10 @@ export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
           varianceScale: 0.15
         };
         
-        return randomWalkStep(prev, config);
+        const newValue = randomWalkStep(prev, config);
+        
+        // Additional safety check to prevent any possibility of exceeding 100%
+        return Math.min(100.0, Math.max(94.5, newValue));
       });
     } else {
       // Fallback to individual intervals for custom timing
@@ -55,7 +58,10 @@ export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
             varianceScale: 0.15
           };
           
-          return randomWalkStep(prev, config);
+          const newValue = randomWalkStep(prev, config);
+          
+          // Additional safety check to prevent any possibility of exceeding 100%
+          return Math.min(100.0, Math.max(94.5, newValue));
         });
       }, updateInterval);
 
@@ -71,11 +77,14 @@ export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
     return 'text-[var(--obol-green)]'; // Green for healthy participation
   };
 
+  // Force 100% cap on display value to prevent any display issues
+  const displayValue = Math.min(100.0, currentValue);
+
   return (
-    <div className={`${getValueStyle(currentValue)} ${className}`}>
+    <div className={`${getValueStyle(displayValue)} ${className}`}>
       <AnimatedNumber 
-        value={currentValue}
-        animateLastDigit={animateLastDigit}
+        value={displayValue}
+        animateLastDigit={false} // DISABLE to prevent AnimatedNumber from adding blockTick
       />
       <span>%</span>
     </div>
