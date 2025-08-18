@@ -8,7 +8,7 @@ The Obol Stack is a framework to make it easier to distribute decentralised appl
 
 <div style="max-width: 100%; text-align: center;">
   <video
-    src="./assets/frontenddemo.mp4"
+    src="https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/assets/frontenddemo.mp4"
     autoplay
     loop
     muted
