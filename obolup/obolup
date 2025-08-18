@@ -543,7 +543,7 @@ launch_stack() {
 
             # Route a minimal website to http://obol.stack/
             # Hosts the front end site in a node.js server using obol-app. Needs better than docker:latest tags for reliable updates.
-            ensure helm upgrade --install obol-frontend ../../helm-charts/charts/obol-app \
+            ensure helm upgrade --install obol-frontend obol/obol-app \
                 --namespace frontend --create-namespace -f ../values/obol-frontend.yaml
 
             # Wait for the route to be available before launching browser
