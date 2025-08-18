@@ -270,7 +270,7 @@ install_k9s() {
                 # Check if the k9s version is installed as we expect
                 local k9s_path=$(which k9s)
                 if [[ "$k9s_path" != "/usr/local/bin/k9s" ]]; then
-                
+
                     log_info "k9s is installed at $k9s_path meaning it is managed by a package manager."
                     log_info "If you want the latest version, consider updating k9s through your package manager."
                     return
@@ -358,6 +358,98 @@ check_cluster_port_mappings() {
     else
         return 1  # No port mappings
     fi
+}
+
+# Wait for ingress route to be available and responsive
+wait_for_route() {
+    local host="$1"
+    local max_wait_time="${2:-120}"  # Default 2 minutes timeout
+    local check_interval="${3:-5}"   # Default 5 seconds between checks
+    local protocol="${4:-http}"      # Default to http
+
+    log_info "Waiting for ingress route $protocol://$host to become available..."
+
+    local start_time=$(date +%s)
+    local end_time=$((start_time + max_wait_time))
+
+    # First, ensure nginx ingress controller is ready and has an external IP
+    log_info "Checking the ingress controller is ready..."
+    while true; do
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for ingress controller after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Check if nginx controller service has an external IP (LoadBalancer)
+        local controller_ip=$(kubectl get service -n ingress ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+        if [[ -z "$controller_ip" ]]; then
+            controller_ip=$(kubectl get service -n ingress ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+        fi
+
+        # For local development (kind/minikube), external IP might not be available
+        # Check if service exists and controller pods are ready
+        local controller_ready=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+
+        if [[ "$controller_ready" == "True" ]]; then
+            if [[ -n "$controller_ip" ]]; then
+                log_info "Ingress controller is ready with an external IP of: $controller_ip."
+            else
+                log_info "Ingress controller is ready."
+            fi
+            break
+        fi
+
+        log_info "Waiting for ingress controller to become ready..."
+        sleep "$check_interval"
+    done
+
+    # Check that required ingress resources exist
+    log_info "Verifying ingress resources are created..."
+    local ingress_count=0
+    while [[ $ingress_count -lt 2 ]]; do  # We expect at least 2 ingresses (frontend + erpc)
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for ingress resources to be created after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Count ingresses that should route to our host
+        ingress_count=$(kubectl get ingress --all-namespaces -o jsonpath='{.items[*].spec.rules[*].host}' 2>/dev/null | tr ' ' '\n' | grep -c "^$host$" || echo "0")
+
+        if [[ $ingress_count -ge 2 ]]; then
+            log_info "Found $ingress_count ingress resources for $host"
+            break
+        fi
+
+        log_info "Waiting for ingress resources to be created... (found: $ingress_count, expected: ≥2)"
+        sleep "$check_interval"
+    done
+
+    # Now wait for the route to respond with a successful HTTP status
+    log_info "Testing route health at $protocol://$host..."
+    while true; do
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for $protocol://$host to respond after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Try to connect to the route and check for successful response
+        local http_status
+        http_status=$(curl -s -w '%{http_code}' -o /dev/null --max-time 10 --connect-timeout 5 "$protocol://$host" 2>/dev/null)
+
+        if [[ "$http_status" =~ ^[23] ]]; then  # 2xx or 3xx status codes indicate success
+            log_info "Route $protocol://$host is responding successfully (HTTP $http_status)"
+            return 0
+        elif [[ -n "$http_status" ]]; then
+            log_info "Route responded with HTTP $http_status, waiting for successful response..."
+        else
+            log_info "Route not yet ready, retrying in $check_interval seconds..."
+        fi
+
+        sleep "$check_interval"
+    done
 }
 
 # Launch or update the Obol Stack
@@ -453,8 +545,9 @@ launch_stack() {
             # Hosts the front end site in a node.js server using obol-app. Needs better than docker:latest tags for reliable updates.
             ensure helm upgrade --install obol-frontend ../../helm-charts/charts/obol-app \
                 --namespace frontend --create-namespace -f ../values/obol-frontend.yaml
-            # Lazy way to let nginx become healthy before loading the landing page. Needs a fix.
-            sleep 3
+
+            # Wait for the route to be available before launching browser
+            wait_for_route "obol.stack" 120 5 "http"
 
             # Launch home page
             log_info "Launching the Obol Stack..."
