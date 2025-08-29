@@ -79,12 +79,15 @@ config: |
                 maxCount: 1
         upstreams:
           - endpoint: http://l1-light-client-helios-mainnet.l1.svc.cluster.local:8545
+            id: helios-mainnet
             evm:
               chainId: 1
           - endpoint: http://l1-light-client-helios-hoodi.l1.svc.cluster.local:8545
+            id: helios-hoodi
             evm:
               chainId: 560048
           - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
+            id: l1-full-node
         cors:
           # List of allowed origins.
           # This allows any dApp in your browser to call the RPC.
