@@ -86,6 +86,10 @@ config: |
             id: helios-hoodi
             evm:
               chainId: 560048
+          - endpoint: http://l1-light-client-helios-sepolia.l1.svc.cluster.local:8545
+            id: helios-sepolia
+            evm:
+              chainId: 11155111
           - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
             id: l1-full-node
         cors:
@@ -137,7 +141,7 @@ ingress:
     # kubernetes.io/tls-acme: "true"
   # -- Ingress host
   hosts:
-    - host: erpc.local
+    - host: obol.stack
       paths: []
   # -- Ingress TLS
   tls: []

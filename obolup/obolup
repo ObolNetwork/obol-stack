@@ -23,6 +23,7 @@ readonly NC='\033[0m' # No Color
 declare -A -r SUPPORTED_NETWORKS=(
 	["hoodi"]="560048"
     ["mainnet"]="1"
+    ["sepolia"]="11155111"
 )
 # Supported sync types
 declare -A -r SUPPORTED_MODES=(
@@ -277,7 +278,8 @@ install_k9s() {
                 fi
             fi
         else
-            log_warn "k9s is installed but version could not be determined."
+            log_warn "k9s is installed but version could not be determined. Not reinstalling it."
+            return
         fi
     fi
 
@@ -494,8 +496,10 @@ launch_stack() {
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
+    log_info "Installing the Obol Stack Ethereum light clients..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-mainnet obol/helios -f ../values/mainnet/helios.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-hoodi obol/helios -f ../values/hoodi/helios.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-sepolia obol/helios -f ../values/sepolia/helios.yaml
 
     # If mode="full", also sync a full node
     if [[ "$__mode" = "full" ]]; then
@@ -661,7 +665,7 @@ Usage: $0 [--help] [--network <network>] [--mode <mode>] [--headless] [--clean]
 
 Options:
   --help                            Display this help message
-  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
+  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi, sepolia]
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
   --headless                        Skips exposing the stack to the host operating system
   --clean                           Deletes and recreates the Obol Stack
