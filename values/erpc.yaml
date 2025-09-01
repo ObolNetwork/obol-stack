@@ -11,7 +11,7 @@ image:
   # -- erpc container image repository
   repository: ghcr.io/erpc/erpc
   # -- erpc container image tag
-  tag: 0.0.50
+  tag: 0.0.54
   # -- erpc container pull policy
   pullPolicy: IfNotPresent
 
@@ -68,6 +68,19 @@ config: |
             evm:
               chainId: 560048
             alias: hoodi
+            failsafe:
+              timeout:
+                duration: 30s
+              retry:
+                maxAttempts: 3
+                delay: 0ms
+              hedge:
+                delay: 500ms
+                maxCount: 1
+          - architecture: evm
+            evm:
+              chainId: 11155111
+            alias: sepolia
             failsafe:
               timeout:
                 duration: 30s

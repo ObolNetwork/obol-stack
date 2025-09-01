@@ -10,10 +10,10 @@ helios:
   # Example using AllthatNode (replace with your provider)
   executionRpc: "https://sepolia.drpc.org"
   
-  #consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
+  consensusRpc: "https://ethereum-sepolia-beacon-api.publicnode.com"
   
   # Example checkpoint
-  checkpoint: "0x2714f702cefb29ddeb4d1836a9a6b1846c23427756ff2b5da4a6b2efab269ff2"
+  checkpoint: ""
   strictCheckpointAge: true
 
   # Trusted URL to retrieve a checkpoint sync to begin the light client from

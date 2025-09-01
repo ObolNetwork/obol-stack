@@ -1,23 +1,17 @@
-![Obol Logo](https://obol.tech/obolnetwork.png)
+<div align="center">
+  <img src="https://obol.org/obolnetwork.png" alt="Obol banner" />
 
-<h1 align="center">The Obol Stack: Decentralised Applications For Ethereum</h1>
+&nbsp;
+
+  <h1>The Obol Stack: Decentralised Applications For Ethereum</h1>
+
+</div>
 
 ## Overview
 
 The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
 
-<div style="max-width: 100%; text-align: center;">
-  <video
-    src="https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/assets/frontenddemo.mp4"
-    autoplay
-    loop
-    muted
-    playsinline
-    style="max-width:100%; height:auto; display:inline-block;"
-  >
-    Obol Stack Web Interface
-  </video>
-</div>
+![Demo of the Stack Front End](./assets/frontend.gif)
 
 ## Getting Started
 
