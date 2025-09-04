@@ -1,50 +1,89 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 :root {
   --background: #091011;
   --foreground: #ffffff;
-  
+
   /* Exact Launchpad Colors */
-  --obol-green: #2FE4AB;
-  --obol-blue: #162A40;
-  --obol-light-green: #A7E2D0;
-  --obol-acid-green: #B6EA5C;
-  --obol-purple: #9167E4;
-  --obol-orange: #FABA5A;
-  --obol-light-blue: #3CD2DD;
-  --obol-light-gray: #E1E9EB;
-  
-  /* Launchpad Background System */
+  --obol-green: #2fe4ab;
+  --obol-blue: #162a40;
+  --obol-light-green: #a7e2d0;
+  --obol-acid-green: #b6ea5c;
+  --obol-purple: #9167e4;
+  --obol-orange: #faba5a;
+  --obol-light-blue: #3cd2dd;
+  --obol-light-gray: #e1e9eb;
+
+  /* Earlier Design Colors (Compact Design) */
+  --colors-bg: #0c1311;
+  --colors-card: #111a17;
+  --colors-muted: #0f1714;
+  --colors-stroke: #20332c;
+  --colors-accent: #2be39a;
+  --colors-accent-weak: #8bf2c8;
+  --colors-warning: #f5a623;
+
+  /* Launchpad Background System (Legacy) */
   --colors-bg01: #091011;
-  --colors-bg02: #111F22;
-  --colors-bg03: #182D32;
-  --colors-cardBackgroundDark: #25383C;
+  --colors-bg02: #111f22;
+  --colors-bg03: #182d32;
+  --colors-cardBackgroundDark: #25383c;
   --colors-cardBackgroundLight: rgba(37, 56, 60, 0.6);
-  
+
+  /* Compact Typography */
+  --font-size-num-lg: 28px;
+  --line-height-num-lg: 34px;
+  --font-size-num-md: 20px;
+  --line-height-num-md: 28px;
+  --font-size-meta: 11px;
+  --line-height-meta: 16px;
+
+  /* Enhanced Shadows */
+  --shadow-soft:
+    0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+
   /* Legacy mappings */
   --obol-bg-01: var(--colors-bg01);
   --obol-bg-02: var(--colors-bg02);
   --obol-bg-03: var(--colors-bg03);
   --obol-bg-04: var(--colors-cardBackgroundDark);
-  --obol-bg-05: #2D4D53;
-  
+  --obol-bg-05: #2d4d53;
+
   /* Text colors */
-  --obol-text-muted: #97B2B8;
-  --obol-text-soft: #667A80;
-  
+  --obol-text-muted: #97b2b8;
+  --obol-text-soft: #667a80;
+
   /* Additional utility colors */
-  --obol-success: #2FE4AB;
-  --obol-warning: #FABA5A;
-  --obol-error: #FF6B6B;
-  --obol-info: #3CD2DD;
+  --obol-success: #2fe4ab;
+  --obol-warning: #faba5a;
+  --obol-error: #ff6b6b;
+  --obol-info: #3cd2dd;
 }
 
 @theme inline {
-  --color-background: var(--colors-bg01);
+  --color-background: var(--colors-bg);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-dm-sans), system-ui, sans-serif;
-  
-  /* Launchpad Color System */
+
+  /* Container configuration */
+  --container-center: true;
+  --container-padding: 1rem;
+  --container-2xl: 1440px;
+
+  /* Enhanced Radius System */
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  /* Compact Color System */
+  --color-bg: var(--colors-bg);
+  --color-card: var(--colors-card);
+  --color-muted: var(--colors-muted);
+  --color-stroke: var(--colors-stroke);
+  --color-accent: var(--colors-accent);
+  --color-accent-weak: var(--colors-accent-weak);
+  --color-warning: var(--colors-warning);
+
+  /* Launchpad Color System (Legacy) */
   --color-obol-green: var(--obol-green);
   --color-obol-blue: var(--obol-blue);
   --color-obol-light-green: var(--obol-light-green);
@@ -53,32 +92,32 @@
   --color-obol-orange: var(--obol-orange);
   --color-obol-light-blue: var(--obol-light-blue);
   --color-obol-light-gray: var(--obol-light-gray);
-  
-  /* Launchpad Background Colors */
+
+  /* Launchpad Background Colors (Legacy) */
   --color-colors-bg01: var(--colors-bg01);
   --color-colors-bg02: var(--colors-bg02);
   --color-colors-bg03: var(--colors-bg03);
   --color-colors-cardBackgroundDark: var(--colors-cardBackgroundDark);
   --color-colors-cardBackgroundLight: var(--colors-cardBackgroundLight);
-  
+
   /* Gradient utilities */
   --gradient-radial: radial-gradient(var(--tw-gradient-stops));
-  
+
   /* Legacy mappings */
   --color-obol-bg-01: var(--colors-bg01);
   --color-obol-bg-02: var(--colors-bg02);
   --color-obol-bg-03: var(--colors-bg03);
   --color-obol-bg-04: var(--colors-cardBackgroundDark);
   --color-obol-bg-05: var(--obol-bg-05);
-  
+
   /* Text Colors */
   --color-obol-text-muted: var(--obol-text-muted);
   --color-obol-text-soft: var(--obol-text-soft);
 }
 
 body {
-  background: var(--colors-bg01);
-  background-image: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxyYWRpYWxHcmFkaWVudCBpZD0iZ3JhZGllbnQiIGN4PSIwJSIgY3k9IjAlIiByPSI1MCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9InJnYmEoNDcsIDIyOCwgMTcxLCAwLjA1KSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0idHJhbnNwYXJlbnQiLz48L3JhZGlhbEdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyYWRpZW50KSIvPjwvc3ZnPg==');
+  background: var(--colors-bg);
+  background-image: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxyYWRpYWxHcmFkaWVudCBpZD0iZ3JhZGllbnQiIGN4PSIwJSIgY3k9IjAlIiByPSI1MCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9InJnYmEoNDMsIDIyNywgMTU0LCAwLjA0KSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0idHJhbnNwYXJlbnQiLz48L3JhZGlhbEdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyYWRpZW50KSIvPjwvc3ZnPg==');
   background-position: left top;
   background-repeat: no-repeat;
   background-size: 50% 50%;
@@ -89,7 +128,8 @@ body {
 
 /* Custom animations for enhanced visual feedback */
 @keyframes pulse-glow {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
     box-shadow: 0 0 5px rgba(47, 228, 171, 0.3);
   }
@@ -100,9 +140,15 @@ body {
 }
 
 @keyframes gradient-shift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
 
 .animate-pulse-glow {
@@ -136,4 +182,225 @@ body {
 /* Custom background gradient utilities */
 .bg-gradient-radial {
   background-image: radial-gradient(var(--tw-gradient-stops));
+}
+
+/* Spinning digit animation for animated counters */
+@keyframes spin-digit {
+  0% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: rotateX(90deg);
+    opacity: 0.3;
+  }
+  100% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+}
+
+.animate-spin-digit {
+  animation: spin-digit 0.6s ease-in-out;
+  transform-style: preserve-3d;
+  /* Ensure proper alignment with baseline */
+  vertical-align: baseline;
+  /* Prevent layout shift during animation */
+  display: inline-block;
+}
+
+/* Progress fill animation - fills left to right over 12 seconds */
+/* Firefox-compatible version with explicit browser prefixes */
+@-webkit-keyframes progress-fill {
+  0% {
+    width: 0.1%;
+    opacity: 0.8;
+    -webkit-transform: scaleX(0);
+    transform: scaleX(0);
+  }
+  1% {
+    width: 0.1%;
+    opacity: 1;
+    -webkit-transform: scaleX(0.001);
+    transform: scaleX(0.001);
+  }
+  99% {
+    width: 99.9%;
+    opacity: 1;
+    -webkit-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.8;
+    -webkit-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+}
+
+@-moz-keyframes progress-fill {
+  0% {
+    width: 0.1%;
+    opacity: 0.8;
+    -moz-transform: scaleX(0);
+    transform: scaleX(0);
+  }
+  1% {
+    width: 0.1%;
+    opacity: 1;
+    -moz-transform: scaleX(0.001);
+    transform: scaleX(0.001);
+  }
+  99% {
+    width: 99.9%;
+    opacity: 1;
+    -moz-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.8;
+    -moz-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+}
+
+@keyframes progress-fill {
+  0% {
+    width: 0.1%; /* Firefox doesn't like starting at exactly 0% */
+    opacity: 0.8;
+    transform: scaleX(0);
+  }
+  1% {
+    width: 0.1%;
+    opacity: 1;
+    transform: scaleX(0.001);
+  }
+  99% {
+    width: 99.9%;
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.8;
+    transform: scaleX(1);
+  }
+}
+
+@-webkit-keyframes progress-glow {
+  0% {
+    width: 0.1%;
+    opacity: 0.6;
+    -webkit-transform: scaleX(0);
+    transform: scaleX(0);
+  }
+  2% {
+    width: 0.2%;
+    opacity: 0.8;
+    -webkit-transform: scaleX(0.002);
+    transform: scaleX(0.002);
+  }
+  98% {
+    width: 99.8%;
+    opacity: 0.8;
+    -webkit-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.6;
+    -webkit-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+}
+
+@-moz-keyframes progress-glow {
+  0% {
+    width: 0.1%;
+    opacity: 0.6;
+    -moz-transform: scaleX(0);
+    transform: scaleX(0);
+  }
+  2% {
+    width: 0.2%;
+    opacity: 0.8;
+    -moz-transform: scaleX(0.002);
+    transform: scaleX(0.002);
+  }
+  98% {
+    width: 99.8%;
+    opacity: 0.8;
+    -moz-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.6;
+    -moz-transform: scaleX(1);
+    transform: scaleX(1);
+  }
+}
+
+@keyframes progress-glow {
+  0% {
+    width: 0.1%;
+    opacity: 0.6;
+    transform: scaleX(0);
+  }
+  2% {
+    width: 0.2%;
+    opacity: 0.8;
+    transform: scaleX(0.002);
+  }
+  98% {
+    width: 99.8%;
+    opacity: 0.8;
+    transform: scaleX(1);
+  }
+  100% {
+    width: 100%;
+    opacity: 0.6;
+    transform: scaleX(1);
+  }
+}
+
+.progress-fill {
+  /* Fallback for browsers without animation support */
+  width: 100%;
+  opacity: 0.9;
+
+  /* Modern browsers with animation support */
+  animation: progress-fill linear infinite;
+  -webkit-animation: progress-fill linear infinite;
+  -moz-animation: progress-fill linear infinite;
+  will-change: width, opacity, transform;
+
+  /* Ensure proper rendering across browsers */
+  transform-origin: left center;
+  -webkit-transform-origin: left center;
+  -moz-transform-origin: left center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  -moz-backface-visibility: hidden;
+}
+
+.progress-glow {
+  /* Fallback for browsers without animation support */
+  width: 100%;
+  opacity: 0.7;
+
+  /* Modern browsers with animation support */
+  animation: progress-glow linear infinite;
+  -webkit-animation: progress-glow linear infinite;
+  -moz-animation: progress-glow linear infinite;
+  will-change: width, opacity, transform;
+
+  /* Ensure proper rendering across browsers */
+  transform-origin: left center;
+  -webkit-transform-origin: left center;
+  -moz-transform-origin: left center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  -moz-backface-visibility: hidden;
 }
