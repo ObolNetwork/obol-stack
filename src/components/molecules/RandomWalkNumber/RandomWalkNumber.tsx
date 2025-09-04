@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AnimatedNumber } from './AnimatedNumber';
-import { useTiming } from './TimingContext';
-import { randomWalkStep, RandomWalkConfig } from './randomWalkUtils';
+import { Box } from '@obolnetwork/obol-ui';
+import { AnimatedNumber } from '../AnimatedNumber';
+import { useTiming } from '../../shared/TimingContext';
+import { randomWalkStep, RandomWalkConfig } from '../../../lib/randomWalkUtils';
 
-interface RandomWalkNumberProps {
+export interface RandomWalkNumberProps {
   initialValue: number;
   target: number; // Target mean value (e.g., 72)
   standardDeviation: number; // Standard deviation (e.g., 10)
@@ -76,10 +77,11 @@ export const RandomWalkNumber: React.FC<RandomWalkNumberProps> = ({
   ]);
 
   return (
-    <AnimatedNumber
-      value={currentValue}
-      className={className}
-      animateLastDigit={animateLastDigit}
-    />
+    <Box as="span" className={className}>
+      <AnimatedNumber
+        value={currentValue}
+        animateLastDigit={animateLastDigit}
+      />
+    </Box>
   );
 };

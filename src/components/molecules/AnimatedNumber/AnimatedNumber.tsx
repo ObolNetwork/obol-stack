@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useTiming } from './TimingContext';
+import { Box, styled, keyframes } from '@obolnetwork/obol-ui';
+import { useTiming } from '../../shared/TimingContext';
 
-interface AnimatedNumberProps {
+export interface AnimatedNumberProps {
   value: number;
   className?: string;
   animateLastDigit?: boolean;
@@ -13,6 +14,57 @@ interface AnimatedNumberProps {
 interface SpinningDigitProps {
   digit: number;
 }
+
+// Define the spin animation using Obol UI keyframes
+const spinDigitAnimation = keyframes({
+  '0%': {
+    transform: 'rotateX(0deg)',
+    opacity: 1,
+  },
+  '25%': {
+    transform: 'rotateX(90deg)',
+    opacity: 0.3,
+  },
+  '50%': {
+    transform: 'rotateX(180deg)',
+    opacity: 0.1,
+  },
+  '75%': {
+    transform: 'rotateX(270deg)',
+    opacity: 0.3,
+  },
+  '100%': {
+    transform: 'rotateX(360deg)',
+    opacity: 1,
+  },
+});
+
+const DigitContainer = styled(Box, {
+  display: 'inline-block',
+  verticalAlign: 'baseline',
+  minWidth: '1ch',
+  textAlign: 'center',
+  transformStyle: 'preserve-3d',
+  backfaceVisibility: 'hidden',
+  willChange: 'transform, opacity',
+
+  variants: {
+    isAnimating: {
+      true: {
+        animation: `${spinDigitAnimation} 600ms ease-in-out`,
+      },
+    },
+  },
+});
+
+const NumberContainer = styled(Box, {
+  display: 'inline-flex',
+  alignItems: 'baseline',
+});
+
+const StaticPart = styled(Box, {
+  display: 'inline-block',
+});
 
 const SpinningDigit: React.FC<SpinningDigitProps> = ({ digit }) => {
   const [isAnimating, setIsAnimating] = useState(false);
@@ -32,18 +84,7 @@ const SpinningDigit: React.FC<SpinningDigitProps> = ({ digit }) => {
   }, [digit, displayDigit]);
 
   return (
-    <span
-      className={`
-        inline-block align-baseline
-        ${isAnimating ? 'animate-spin-digit' : ''}
-      `}
-      style={{
-        minWidth: '1ch',
-        textAlign: 'center',
-      }}
-    >
-      {displayDigit}
-    </span>
+    <DigitContainer isAnimating={isAnimating}>{displayDigit}</DigitContainer>
   );
 };
 
@@ -70,7 +111,11 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   const formattedNumber = currentValue.toLocaleString();
 
   if (!animateLastDigit) {
-    return <span className={className}>{formattedNumber}</span>;
+    return (
+      <Box as="span" className={className}>
+        {formattedNumber}
+      </Box>
+    );
   }
 
   // Split the number into all digits except the last one, and the last digit
@@ -80,9 +125,9 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   const beforeLastDigit = formattedNumber.slice(0, -1);
 
   return (
-    <span className={`${className} inline-flex items-baseline`}>
-      <span className="inline-block">{beforeLastDigit}</span>
+    <NumberContainer className={className} as="span">
+      <StaticPart>{beforeLastDigit}</StaticPart>
       <SpinningDigit digit={lastDigit} />
-    </span>
+    </NumberContainer>
   );
 };

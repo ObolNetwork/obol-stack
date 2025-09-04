@@ -1,16 +1,75 @@
 import React, { useState, useEffect } from 'react';
-import { Card } from '../shared/Card';
-import { Badge } from '../shared/Badge';
-import { ProgressBar } from '../shared/ProgressBar';
-import { useUptime } from '../shared/useUptime';
-import { randomWalkStep, RandomWalkConfig } from '../shared/randomWalkUtils';
-import { useTiming } from '../shared/TimingContext';
-import { DashboardData } from '../../types/dashboard';
+import { Box, Text, Flex, styled } from '@obolnetwork/obol-ui';
+import { Card } from '../../atoms/Card';
+import { Badge } from '../../atoms/Badge';
+import { ProgressBar } from '../../molecules/ProgressBar';
+import { useUptime } from '../../shared/useUptime';
+import { randomWalkStep, RandomWalkConfig } from '../../../lib/randomWalkUtils';
+import { useTiming } from '../../shared/TimingContext';
+import { DashboardData } from '../../../types/dashboard';
 
-interface NodeOverviewProps {
+export interface NodeOverviewProps {
   data: DashboardData['nodeOverview'];
   ports: DashboardData['ports'];
 }
+
+const SectionContainer = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$md',
+});
+
+const Divider = styled(Box, {
+  marginTop: '$lg',
+  paddingTop: '$lg',
+  borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+});
+
+const PortsList = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  '& > *:not(:last-child)': {
+    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+  },
+});
+
+const PortItem = styled(Flex, {
+  width: '100%',
+  paddingTop: '$md',
+  paddingBottom: '$md',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+});
+
+const PortInfo = styled(Flex, {
+  width: 'auto',
+  alignItems: 'center',
+  gap: '$xs',
+});
+
+const PortNumber = styled(Text, {
+  fontSize: '$3',
+  fontFamily: 'monospace',
+  color: '$muted',
+});
+
+const UptimeContainer = styled(Flex, {
+  alignItems: 'center',
+  justifyContent: 'space-between',
+});
+
+const UptimeLabel = styled(Text, {
+  fontSize: '$2',
+  letterSpacing: '$wide',
+  color: '$muted',
+  textTransform: 'uppercase',
+});
+
+const UptimeValue = styled(Text, {
+  fontSize: '$3',
+  color: '$light',
+  fontFamily: 'monospace',
+});
 
 export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
   // Use live uptime counter starting at 69d 4h 20m
@@ -82,9 +141,15 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
   ];
 
   return (
-    <Card title="Node Overview">
+    <Card
+      title="Node Overview"
+      css={{
+        padding: '$lg',
+        '@md': { padding: '$xl' },
+      }}
+    >
       {/* System Resources Section */}
-      <div className="space-y-4">
+      <SectionContainer>
         <ProgressBar
           label="Disk"
           value={diskPercentage}
@@ -109,45 +174,41 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           compact
         />
 
-        <div className="flex items-center justify-between">
-          <span className="text-xs tracking-wide text-zinc-400 uppercase">
-            Uptime
-          </span>
-          <span className="text-sm text-zinc-200 font-mono">
-            {uptime.formatted}
-          </span>
-        </div>
-      </div>
+        <UptimeContainer>
+          <UptimeLabel>Uptime</UptimeLabel>
+          <UptimeValue>{uptime.formatted}</UptimeValue>
+        </UptimeContainer>
+      </SectionContainer>
 
       {/* Ports Section */}
-      <div className="mt-6 pt-6 border-t border-white/5">
-        <h3 className="text-sm font-medium text-zinc-100 mb-4">
-          Network Ports
-        </h3>
-        <div className="divide-y divide-white/5">
+      <Divider>
+        <Text variant="h5">Network Ports</Text>
+        <PortsList>
           {portList.map(port => (
-            <div
-              key={port.key}
-              className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
-            >
-              <span className="text-sm font-medium text-zinc-100">
+            <PortItem key={port.key}>
+              <Text
+                css={{
+                  fontSize: '$3',
+                  fontWeight: '$medium',
+                  color: '$light',
+                }}
+              >
                 {port.name}
-              </span>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-mono text-zinc-400">
-                  {port.port}
-                </span>
+              </Text>
+
+              <PortInfo>
+                <PortNumber>{port.port}</PortNumber>
                 <Badge
                   variant={port.status === 'open' ? 'success' : 'error'}
                   size="sm"
                 >
                   {port.status === 'open' ? 'Open' : 'Closed'}
                 </Badge>
-              </div>
-            </div>
+              </PortInfo>
+            </PortItem>
           ))}
-        </div>
-      </div>
+        </PortsList>
+      </Divider>
     </Card>
   );
 };

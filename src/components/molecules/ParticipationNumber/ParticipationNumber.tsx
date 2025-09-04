@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AnimatedNumber } from './AnimatedNumber';
-import { useTiming } from './TimingContext';
-import { randomWalkStep, RandomWalkConfig } from './randomWalkUtils';
+import { Box, styled } from '@obolnetwork/obol-ui';
+import { AnimatedNumber } from '../AnimatedNumber';
+import { useTiming } from '../../shared/TimingContext';
+import { randomWalkStep, RandomWalkConfig } from '../../../lib/randomWalkUtils';
 
-interface ParticipationNumberProps {
+export interface ParticipationNumberProps {
   initialValue: number;
   target?: number; // Target mean value (default: 97.5)
   standardDeviation?: number; // Standard deviation (default: 1)
@@ -13,6 +14,35 @@ interface ParticipationNumberProps {
   className?: string;
   animateLastDigit?: boolean;
 }
+
+const ParticipationContainer = styled(Box, {
+  display: 'inline-flex',
+  alignItems: 'baseline',
+  gap: '$1',
+
+  variants: {
+    status: {
+      healthy: {
+        color: '$obolGreen',
+      },
+      warning: {
+        color: '#F59E0B', // Yellow warning color
+      },
+      normal: {
+        color: 'inherit',
+      },
+    },
+  },
+
+  defaultVariants: {
+    status: 'normal',
+  },
+});
+
+const PercentageSymbol = styled(Box, {
+  fontSize: 'inherit',
+  fontWeight: 'inherit',
+});
 
 export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
   initialValue,
@@ -69,24 +99,25 @@ export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
     }
   }, [target, standardDeviation, updateInterval, peerTick, isActive]);
 
-  // Determine styling based on value
-  const getValueStyle = (value: number) => {
+  // Determine status based on value
+  const getStatus = (value: number): 'healthy' | 'warning' | 'normal' => {
     if (value < 96.5) {
-      return 'text-yellow-400'; // Yellow warning for low participation
+      return 'warning'; // Yellow warning for low participation
     }
-    return 'text-[var(--obol-green)]'; // Green for healthy participation
+    return 'healthy'; // Green for healthy participation
   };
 
   // Force 100% cap on display value to prevent any display issues
   const displayValue = Math.min(100.0, currentValue);
+  const status = getStatus(displayValue);
 
   return (
-    <div className={`${getValueStyle(displayValue)} ${className}`}>
+    <ParticipationContainer className={className} status={status} as="span">
       <AnimatedNumber
         value={displayValue}
         animateLastDigit={false} // DISABLE to prevent AnimatedNumber from adding blockTick
       />
-      <span>%</span>
-    </div>
+      <PercentageSymbol as="span">%</PercentageSymbol>
+    </ParticipationContainer>
   );
 };
