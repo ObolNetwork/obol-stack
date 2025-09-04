@@ -1,16 +1,18 @@
 # Obol Stack Front End
 
-A modern monitoring dashboard for Obol Stack and Ethereum node status, built with Next.js and styled to match the Obol Launchpad design system.
+A modern monitoring dashboard for Obol Stack and Ethereum node status, built with Next.js and the official Obol UI Design System.
 
 ![Dashboard Preview](https://via.placeholder.com/800x400?text=Obol+Stack+Dashboard+Preview)
 
 ## Features
 
-- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients
+- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients (Geth, Prysm)
 - 📊 **System Metrics**: Monitor disk usage, memory, CPU load, and uptime
-- 🌐 **Chain Status**: View network participation and finalization status
+- 🌐 **Chain Status**: View network participation, finalization status, and sync progress
 - 🔧 **Port Status**: Monitor P2P, JSON-RPC, Prometheus, and Beacon API ports
-- 🎨 **Authentic Styling**: Matches Obol Launchpad design system
+- 🎨 **Obol UI**: Built with official Obol Design System components
+- 🧩 **Component Architecture**: Atomic design pattern for scalable development
+- ♿ **Accessibility**: Radix UI primitives ensure WCAG compliance
 - 🐳 **Docker Ready**: Containerized for easy deployment
 - 🔒 **Security Hardened**: Production-ready with security best practices
 
@@ -61,12 +63,12 @@ npm run start
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NODE_ENV` | `development` | Application environment |
-| `PORT` | `3000` | Port to serve the application |
-| `HOSTNAME` | `0.0.0.0` | Hostname to bind to |
-| `NEXT_TELEMETRY_DISABLED` | `1` | Disable Next.js telemetry |
+| Variable                  | Default       | Description                   |
+| ------------------------- | ------------- | ----------------------------- |
+| `NODE_ENV`                | `development` | Application environment       |
+| `PORT`                    | `3000`        | Port to serve the application |
+| `HOSTNAME`                | `0.0.0.0`     | Hostname to bind to           |
+| `NEXT_TELEMETRY_DISABLED` | `1`           | Disable Next.js telemetry     |
 
 ## Deployment
 
@@ -82,20 +84,24 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 ### Tech Stack
 
 - **Framework**: Next.js 15.4.5 with React 19
-- **Styling**: Tailwind CSS v4 with custom Obol color system
+- **Styling**: Obol UI Design System (@obolnetwork/obol-ui)
+- **Components**: Radix UI primitives for accessibility
 - **TypeScript**: Full type safety
-- **Icons**: Lucide React
+- **Architecture**: Atomic Design Pattern
 - **Font**: DM Sans (Obol brand font)
 
 ### Available Scripts
 
 ```bash
-npm run dev          # Development server
+npm run dev          # Development server with Turbopack
 npm run dev:local    # Development server (localhost)
 npm run build        # Production build
 npm run start        # Production server
 npm run start:local  # Production server (localhost)
 npm run lint         # ESLint
+npm run lint:fix     # ESLint with auto-fix
+npm run format       # Prettier formatting
+npm run format:check # Check Prettier formatting
 ```
 
 ### Project Structure
@@ -103,11 +109,23 @@ npm run lint         # ESLint
 ```
 src/
 ├── app/
-│   ├── globals.css      # Tailwind CSS and custom styles
+│   ├── globals.css      # Global styles and resets
 │   ├── layout.tsx       # Root layout with DM Sans font
-│   └── page.tsx         # Main dashboard component
-├── components/          # Reusable components (future)
-└── lib/                 # Utilities and helpers (future)
+│   └── page.tsx         # Main dashboard page
+├── components/
+│   ├── atoms/           # Basic building blocks
+│   │   └── Accordion/   # Custom accordion component
+│   ├── molecules/       # Simple combinations of atoms
+│   ├── organisms/       # Complex UI components
+│   │   ├── DashboardHeader/     # Header with logo
+│   │   ├── DashboardContent/    # Main content area
+│   │   └── NetworkStatus/       # Node monitoring component
+│   ├── pages/           # Page-level components
+│   │   └── DashboardPage/       # Main dashboard page
+│   ├── templates/       # Page layout templates
+│   │   └── DashboardTemplate/   # Dashboard layout
+│   └── index.ts         # Component exports
+└── lib/                 # Utilities and helpers
 ```
 
 ## Contributing
@@ -124,7 +142,9 @@ We welcome contributions! Please see our contributing guidelines and:
 
 - Follow existing code style and patterns
 - Use TypeScript for all new code
-- Follow Obol design system conventions
+- Follow Obol UI Design System conventions
+- Use atomic design pattern for component organization
+- Ensure accessibility with Radix UI primitives
 - Include tests for new functionality
 - Update documentation as needed
 
@@ -132,12 +152,13 @@ We welcome contributions! Please see our contributing guidelines and:
 
 ### Design System
 
-The dashboard uses authentic Obol branding:
+The dashboard uses the official Obol UI Design System:
 
-- **Colors**: Extracted from `blog.obol.org/branding`
-- **Typography**: DM Sans font family
-- **Styling**: Based on Obol Launchpad patterns
-- **Components**: Tailwind CSS with custom Obol color system
+- **Components**: @obolnetwork/obol-ui package
+- **Typography**: DM Sans font family (Obol brand standard)
+- **Styling**: Stitches-based styling system with Obol tokens
+- **Accessibility**: Radix UI primitives for WCAG compliance
+- **Architecture**: Atomic design pattern (atoms → molecules → organisms → templates → pages)
 
 ### Data Flow
 
