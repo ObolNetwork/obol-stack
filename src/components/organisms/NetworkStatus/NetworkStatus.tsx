@@ -5,7 +5,7 @@ import { Badge } from '../../atoms/Badge';
 import { AnimatedNumber } from '../../molecules/AnimatedNumber';
 import { ProgressSweep } from '../../molecules/ProgressSweep';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
-import { RandomWalkNumber } from '../../molecules/RandomWalkNumber';
+import { ClientCard, ClientConfig } from '../../molecules/ClientCard';
 import { DashboardData } from '../../../types/dashboard';
 
 export interface NetworkStatusProps {
@@ -76,62 +76,6 @@ const ClientsGrid = styled(Box, {
   },
 });
 
-const ClientCard = styled(Box, {
-  backgroundColor: 'rgba(255, 255, 255, 0.05)',
-  borderRadius: '$3',
-  padding: '$md',
-});
-
-const ClientHeader = styled(Flex, {
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  marginBottom: '$md',
-});
-
-const ClientInfo = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-});
-
-const ClientAvatar = styled(Box, {
-  width: '$xl',
-  height: '$xl',
-  borderRadius: '$3',
-  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-});
-
-const ClientDetails = styled(Box, {});
-
-const ClientName = styled(Text, {
-  fontWeight: '$semibold',
-  color: '$light',
-});
-
-const ClientRole = styled(Text, {
-  fontSize: '$3',
-  color: '$muted',
-});
-
-const ClientMetrics = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$2',
-});
-
-const ClientMetricRow = styled(Flex, {
-  justifyContent: 'space-between',
-  fontSize: '$3',
-});
-
-const ClientMetricLabel = styled(Text, {
-  color: '$muted',
-});
-
-const ClientMetricValue = styled(Text, {
-  color: '$light',
-  fontFamily: 'monospace',
-});
-
 const ProgressContainer = styled(Box, {
   position: 'absolute',
   bottom: 0,
@@ -144,18 +88,16 @@ const ProgressContainer = styled(Box, {
 
 export function NetworkStatus({ data, clients }: NetworkStatusProps) {
   // Client configurations
-  const clientConfig = {
+  const clientConfigs: Record<string, ClientConfig> = {
     nethermind: {
       name: 'Nethermind',
       role: 'Execution',
       icon: '/nethermind-icon.png',
-      avatarBg: 'bg-blue-600',
     },
     nimbus: {
       name: 'Nimbus',
       role: 'Consensus',
       icon: '/nimbus-icon.png',
-      avatarBg: 'bg-orange-600',
     },
   };
 
@@ -217,89 +159,22 @@ export function NetworkStatus({ data, clients }: NetworkStatusProps) {
       {/* Embedded Client Components */}
       <ClientsSection>
         <ClientsGrid>
-          {/* Nethermind Client */}
-          <ClientCard>
-            <ClientHeader>
-              <ClientInfo>
-                <ClientAvatar
-                  css={{
-                    backgroundImage: `url(${clientConfig.nethermind.icon})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'no-repeat',
-                  }}
-                />
-                <ClientDetails>
-                  <ClientName>{clientConfig.nethermind.name}</ClientName>
-                  <ClientRole>{clientConfig.nethermind.role}</ClientRole>
-                </ClientDetails>
-              </ClientInfo>
-              <Badge variant="success" size="sm">
-                Synced
-              </Badge>
-            </ClientHeader>
-            <ClientMetrics>
-              <ClientMetricRow>
-                <ClientMetricLabel>Version</ClientMetricLabel>
-                <ClientMetricValue>
-                  {clients.nethermind.version}
-                </ClientMetricValue>
-              </ClientMetricRow>
-              <ClientMetricRow>
-                <ClientMetricLabel>Peers</ClientMetricLabel>
-                <ClientMetricValue>
-                  <RandomWalkNumber
-                    initialValue={clients.nethermind.peers}
-                    target={72}
-                    standardDeviation={10}
-                    updateInterval={4000}
-                    animateLastDigit={true}
-                  />
-                </ClientMetricValue>
-              </ClientMetricRow>
-            </ClientMetrics>
-          </ClientCard>
-
-          {/* Nimbus Client */}
-          <ClientCard>
-            <ClientHeader>
-              <ClientInfo>
-                <ClientAvatar
-                  css={{
-                    backgroundImage: `url(${clientConfig.nimbus.icon})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'no-repeat',
-                  }}
-                />
-                <ClientDetails>
-                  <ClientName>{clientConfig.nimbus.name}</ClientName>
-                  <ClientRole>{clientConfig.nimbus.role}</ClientRole>
-                </ClientDetails>
-              </ClientInfo>
-              <Badge variant="success" size="sm">
-                Synced
-              </Badge>
-            </ClientHeader>
-            <ClientMetrics>
-              <ClientMetricRow>
-                <ClientMetricLabel>Version</ClientMetricLabel>
-                <ClientMetricValue>{clients.nimbus.version}</ClientMetricValue>
-              </ClientMetricRow>
-              <ClientMetricRow>
-                <ClientMetricLabel>Peers</ClientMetricLabel>
-                <ClientMetricValue>
-                  <RandomWalkNumber
-                    initialValue={clients.nimbus.peers}
-                    target={72}
-                    standardDeviation={10}
-                    updateInterval={4000}
-                    animateLastDigit={true}
-                  />
-                </ClientMetricValue>
-              </ClientMetricRow>
-            </ClientMetrics>
-          </ClientCard>
+          <ClientCard
+            config={clientConfigs.nethermind}
+            data={clients.nethermind}
+            status="synced"
+            peersTarget={72}
+            peersStandardDeviation={10}
+            updateInterval={4000}
+          />
+          <ClientCard
+            config={clientConfigs.nimbus}
+            data={clients.nimbus}
+            status="synced"
+            peersTarget={72}
+            peersStandardDeviation={10}
+            updateInterval={4000}
+          />
         </ClientsGrid>
       </ClientsSection>
 

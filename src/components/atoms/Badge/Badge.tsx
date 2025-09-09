@@ -29,6 +29,11 @@ const StyledBadge = styled(Box, {
         color: '$obolGreen',
         borderColor: '$obolGreen',
       },
+      error: {
+        backgroundColor: 'rgba(255, 87, 87, 0.2)',
+        color: '#ff5757',
+        borderColor: '#ff5757',
+      },
     },
     size: {
       sm: {
@@ -52,7 +57,17 @@ const StatusIndicator = styled(Box, {
   width: '$xxs',
   height: '$xxs',
   borderRadius: '$pill',
-  backgroundColor: '$obolGreen',
+
+  variants: {
+    variant: {
+      success: {
+        backgroundColor: '$obolGreen',
+      },
+      error: {
+        backgroundColor: '#ff5757',
+      },
+    },
+  },
 });
 
 export function Badge({
@@ -61,9 +76,11 @@ export function Badge({
   size = 'md',
   className,
 }: BadgeProps) {
+  const showIndicator = variant === 'success' || variant === 'error';
+
   return (
     <StyledBadge variant={variant} size={size} className={className}>
-      {variant === 'success' && <StatusIndicator />}
+      {showIndicator && <StatusIndicator variant={variant} />}
       {children}
     </StyledBadge>
   );
