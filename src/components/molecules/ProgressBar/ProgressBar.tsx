@@ -1,171 +1,61 @@
 import React from 'react';
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Box, styled } from '@obolnetwork/obol-ui';
 
 export interface ProgressBarProps {
   value: number; // 0-100
-  label?: string;
-  valueText?: string;
-  variant?: 'success' | 'warning' | 'error';
-  showPercentage?: boolean;
-  compact?: boolean;
+  variant?: 'critical' | 'warning' | 'caution' | 'good' | 'excellent';
 }
 
-const ProgressContainer = styled(Box, {
-  width: '100%',
-
-  variants: {
-    compact: {
-      false: {},
-      true: {},
-    },
-  },
-});
-
-const CompactContainer = styled(Flex, {
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '$xs',
-});
-
-const LabelContainer = styled(Flex, {
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  marginBottom: '$xxs',
-
-  variants: {
-    compact: {
-      false: {
-        marginBottom: '$xs',
-      },
-      true: {
-        marginBottom: '$xxs',
-      },
-    },
-  },
-});
-
-const Label = styled(Text, {
-  fontSize: '$2',
-  letterSpacing: '$wide',
-  color: '$muted',
-  textTransform: 'uppercase',
-});
-
-const ValueText = styled(Text, {
-  fontSize: '$3',
-  color: '$light',
-});
-
-const ProgressTrack = styled(Box, {
-  height: '$2',
-  borderRadius: '$pill',
-  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  overflow: 'hidden',
-});
-
 const ProgressFill = styled(Box, {
-  height: '$2',
-  borderRadius: '$pill',
+  height: '2px',
+  borderRadius: '80px',
   transition: 'width 500ms ease',
 
   variants: {
     variant: {
-      success: {
-        backgroundColor: '$obolGreen',
+      critical: {
+        backgroundColor: '#CC3333', // 0%-8%
       },
       warning: {
-        backgroundColor: '#F59E0B', // Amber-500
+        backgroundColor: '#DD603C', // 9%-17%
       },
-      error: {
-        backgroundColor: '#EF4444', // Red-500
+      caution: {
+        backgroundColor: '#E89E30', // 18%-21%
+      },
+      good: {
+        backgroundColor: '#B6EA5C', // 22%-31%
+      },
+      excellent: {
+        backgroundColor: '#2FE4AB', // 32%-100% - Obol Green
       },
     },
   },
 
   defaultVariants: {
-    variant: 'success',
+    variant: 'excellent',
   },
 });
 
-const PercentageBadge = styled(Box, {
-  borderRadius: '$pill',
-  padding: '$xxxs',
-  fontSize: '$2',
-  backgroundColor: 'rgba(34, 197, 94, 0.1)', // Emerald-500/10
-  color: '#6EE7B7', // Emerald-300
-  border: '1px solid rgba(52, 211, 153, 0.2)', // Emerald-400/20
-  marginLeft: 'auto',
-});
-
-const PercentageText = styled(Text, {
-  fontSize: '$2',
-  color: '$muted',
-  marginTop: '$1',
-  textAlign: 'right',
-});
-
-const FlexOne = styled(Box, {
-  flex: 1,
-});
-
-export const ProgressBar: React.FC<ProgressBarProps> = ({
-  value,
-  label,
-  valueText,
-  variant,
-  showPercentage = false,
-  compact = false,
-}) => {
+export const ProgressBar: React.FC<ProgressBarProps> = ({ value, variant }) => {
   // Auto-determine variant based on value if not provided
-  const getVariant = (val: number): 'success' | 'warning' | 'error' => {
+  const getVariant = (
+    val: number
+  ): 'critical' | 'warning' | 'caution' | 'good' | 'excellent' => {
     if (variant) return variant;
-    if (val >= 90) return 'error';
-    if (val >= 75) return 'warning';
-    return 'success';
+    if (val >= 0 && val <= 8) return 'critical';
+    if (val >= 9 && val <= 17) return 'warning';
+    if (val >= 18 && val <= 21) return 'caution';
+    if (val >= 22 && val <= 31) return 'good';
+    return 'excellent'; // 32% till 100%
   };
 
   const currentVariant = getVariant(value);
   const clampedValue = Math.min(Math.max(value, 0), 100);
 
-  if (compact) {
-    return (
-      <CompactContainer>
-        <FlexOne>
-          {label && (
-            <LabelContainer compact={true}>
-              <Label>{label}</Label>
-              {valueText && <ValueText>{valueText}</ValueText>}
-            </LabelContainer>
-          )}
-          <ProgressTrack>
-            <ProgressFill
-              variant={currentVariant}
-              css={{ width: `${clampedValue}%` }}
-            />
-          </ProgressTrack>
-        </FlexOne>
-        {showPercentage && (
-          <PercentageBadge as="span">{Math.round(value)}%</PercentageBadge>
-        )}
-      </CompactContainer>
-    );
-  }
-
   return (
-    <ProgressContainer>
-      {label && (
-        <LabelContainer compact={false}>
-          <Label>{label}</Label>
-          {valueText && <ValueText>{valueText}</ValueText>}
-        </LabelContainer>
-      )}
-      <ProgressTrack>
-        <ProgressFill
-          variant={currentVariant}
-          css={{ width: `${clampedValue}%` }}
-        />
-      </ProgressTrack>
-      {showPercentage && <PercentageText>{value.toFixed(1)}%</PercentageText>}
-    </ProgressContainer>
+    <ProgressFill
+      variant={currentVariant}
+      css={{ width: `${clampedValue}%` }}
+    />
   );
 };

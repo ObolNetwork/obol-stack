@@ -11,6 +11,14 @@ export interface DashboardData {
     clients: number;
     distance: number; // Distance to justified
   };
+  aztec: {
+    status: 'synced' | 'syncing' | 'error';
+    blocks: number;
+    finalized: number;
+    participation: number;
+    clients: number;
+    distance: number; // Distance to justified
+  };
   nodeOverview: {
     diskUsage: {
       value: number;

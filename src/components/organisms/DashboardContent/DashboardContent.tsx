@@ -1,6 +1,7 @@
 import { Box, styled } from '@obolnetwork/obol-ui';
 import { NetworkStatus } from '../NetworkStatus';
 import { NodeOverview } from '../NodeOverview';
+import { ChainIcon } from '../../atoms/ChainIcon';
 import { DashboardData } from '../../../types/dashboard';
 
 interface DashboardContentProps {
@@ -8,26 +9,23 @@ interface DashboardContentProps {
 }
 
 const GridContainer = styled(Box, {
-  display: 'grid',
-  gridTemplateColumns: '1fr',
-  gap: '$lg',
+  // display: 'grid',
+  // gridTemplateColumns: '1fr',
+  // gap: '$lg',
   marginTop: '$lg',
 
-  '@bp2': {
-    gridTemplateColumns: 'repeat(12, 1fr)',
-  },
+  // '@bp2': {
+  //   gridTemplateColumns: 'repeat(12, 1fr)',
+  // },
 });
 
 const MainSection = styled(Box, {
-  '@bp2': {
-    gridColumn: 'span 8',
-  },
-});
-
-const Sidebar = styled(Box, {
-  '@bp2': {
-    gridColumn: 'span 4',
-  },
+  maxWidth: '1200px',
+  margin: '0 auto',
+  width: '100%',
+  // '@bp2': {
+  //   gridColumn: 'span 8',
+  // },
 });
 
 const SectionContainer = styled(Box, {
@@ -41,15 +39,20 @@ export function DashboardContent({ data }: DashboardContentProps) {
     <GridContainer>
       <MainSection as="section">
         <SectionContainer>
-          <NetworkStatus data={data.ethereum} clients={data.clients} />
-        </SectionContainer>
-      </MainSection>
-
-      <Sidebar as="aside">
-        <SectionContainer>
+          <NetworkStatus
+            data={data.ethereum}
+            clients={data.clients}
+            networkName="Ethereum"
+            networkIcon={<ChainIcon chain="ethereum" size={24} />}
+          />
+          <NetworkStatus
+            data={data.aztec}
+            networkName="Aztec"
+            networkIcon={<ChainIcon chain="aztec" size={24} />}
+          />
           <NodeOverview data={data.nodeOverview} ports={data.ports} />
         </SectionContainer>
-      </Sidebar>
+      </MainSection>
     </GridContainer>
   );
 }
