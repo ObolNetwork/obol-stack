@@ -20,6 +20,7 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 # Network name to chain ID mapping
+<<<<<<< HEAD
 # Using functions instead of associative arrays for bash 3.2 compatibility
 get_chain_id() {
     case "$1" in
@@ -39,6 +40,20 @@ is_supported_network() {
 
 # Check if sync mode is supported
 is_supported_mode() {
+=======
+# Using case statements instead of associative arrays for bash 3.x compatibility
+get_chain_id() {
+    case "$1" in
+        "hoodi") echo "560048" ;;
+        "mainnet") echo "1" ;;
+        "sepolia") echo "11155111";;
+        *) echo "" ;;
+    esac
+}
+
+# Supported sync types
+is_valid_mode() {
+>>>>>>> main
     case "$1" in
         "light"|"full") return 0 ;;
         *) return 1 ;;
@@ -127,6 +142,7 @@ validate_network() {
 	local network="$1"
 
 	if [[ -z "$network" ]]; then
+<<<<<<< HEAD
 		log_info "Network name is empty. Defaulting to mainnet" >&2
 		network="mainnet"
 	fi
@@ -137,6 +153,18 @@ validate_network() {
 	fi
 	
 	# Return the validated network
+=======
+		log_info "Network name is empty. Defaulting to mainnet"
+        echo "mainnet"
+        return
+	fi
+
+	local chain_id=$(get_chain_id "$network")
+	if [[ -z "$chain_id" ]]; then
+		log_warn "Unrecognised network name: \"${network}\".\n"
+		help 1
+	fi
+>>>>>>> main
 	echo "$network"
 }
 
@@ -145,6 +173,7 @@ validate_sync_mode() {
 	local mode="$1"
 
 	if [[ -z "$mode" ]]; then
+<<<<<<< HEAD
 		log_info "Sync mode is empty. Defaulting to light node sync mode." >&2
 		mode="light"
 	fi
@@ -155,13 +184,24 @@ validate_sync_mode() {
 	fi
 	
 	# Return the validated mode
+=======
+		log_info "Sync mode is empty. Defaulting to light node sync mode."
+        echo "light"
+        return
+	fi
+
+	if ! is_valid_mode "$mode"; then
+		log_warn "Unrecognised sync mode: \"${mode}\".\n"
+		help 1
+	fi
+>>>>>>> main
 	echo "$mode"
 }
 
 # Log functions
-log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+log_info() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
 # Check if a command exists
 command_exists() {
@@ -294,8 +334,6 @@ install_k9s() {
         # Extract version number (k9s doesn't use 'v' prefix in version output)
         INSTALLED_VERSION=$(k9s version --short 2>/dev/null | head -n1 | awk '{print $2}')
         if [[ -n "$INSTALLED_VERSION" ]]; then
-            # Add 'v' prefix to match release format
-            INSTALLED_VERSION="v$INSTALLED_VERSION"
             log_info "k9s is already installed. Version installed: $INSTALLED_VERSION."
             if [[ "$INSTALLED_VERSION" == "$LATEST_K9S_VERSION" ]]; then
                 log_info "k9s is up to date."
@@ -304,14 +342,15 @@ install_k9s() {
                 # Check if the k9s version is installed as we expect
                 local k9s_path=$(which k9s)
                 if [[ "$k9s_path" != "/usr/local/bin/k9s" ]]; then
-                
+
                     log_info "k9s is installed at $k9s_path meaning it is managed by a package manager."
                     log_info "If you want the latest version, consider updating k9s through your package manager."
                     return
                 fi
             fi
         else
-            log_warn "k9s is installed but version could not be determined."
+            log_warn "k9s is installed but version could not be determined. Not reinstalling it."
+            return
         fi
     fi
 
@@ -444,6 +483,98 @@ check_cluster_port_mappings() {
     fi
 }
 
+# Wait for ingress route to be available and responsive
+wait_for_route() {
+    local host="$1"
+    local max_wait_time="${2:-120}"  # Default 2 minutes timeout
+    local check_interval="${3:-5}"   # Default 5 seconds between checks
+    local protocol="${4:-http}"      # Default to http
+
+    log_info "Waiting for ingress route $protocol://$host to become available..."
+
+    local start_time=$(date +%s)
+    local end_time=$((start_time + max_wait_time))
+
+    # First, ensure nginx ingress controller is ready and has an external IP
+    log_info "Checking the ingress controller is ready..."
+    while true; do
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for ingress controller after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Check if nginx controller service has an external IP (LoadBalancer)
+        local controller_ip=$(kubectl get service -n ingress ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+        if [[ -z "$controller_ip" ]]; then
+            controller_ip=$(kubectl get service -n ingress ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+        fi
+
+        # For local development (kind/minikube), external IP might not be available
+        # Check if service exists and controller pods are ready
+        local controller_ready=$(kubectl get pods -n ingress -l app.kubernetes.io/component=controller -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+
+        if [[ "$controller_ready" == "True" ]]; then
+            if [[ -n "$controller_ip" ]]; then
+                log_info "Ingress controller is ready with an external IP of: $controller_ip."
+            else
+                log_info "Ingress controller is ready."
+            fi
+            break
+        fi
+
+        log_info "Waiting for ingress controller to become ready..."
+        sleep "$check_interval"
+    done
+
+    # Check that required ingress resources exist
+    log_info "Verifying ingress resources are created..."
+    local ingress_count=0
+    while [[ $ingress_count -lt 2 ]]; do  # We expect at least 2 ingresses (frontend + erpc)
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for ingress resources to be created after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Count ingresses that should route to our host
+        ingress_count=$(kubectl get ingress --all-namespaces -o jsonpath='{.items[*].spec.rules[*].host}' 2>/dev/null | tr ' ' '\n' | grep -c "^$host$" || echo "0")
+
+        if [[ $ingress_count -ge 2 ]]; then
+            log_info "Found $ingress_count ingress resources for $host"
+            break
+        fi
+
+        log_info "Waiting for ingress resources to be created... (found: $ingress_count, expected: ≥2)"
+        sleep "$check_interval"
+    done
+
+    # Now wait for the route to respond with a successful HTTP status
+    log_info "Testing route health at $protocol://$host..."
+    while true; do
+        local current_time=$(date +%s)
+        if [[ $current_time -gt $end_time ]]; then
+            log_error "Timeout waiting for $protocol://$host to respond after ${max_wait_time} seconds"
+            return 1
+        fi
+
+        # Try to connect to the route and check for successful response
+        local http_status
+        http_status=$(curl -s -w '%{http_code}' -o /dev/null --max-time 10 --connect-timeout 5 "$protocol://$host" 2>/dev/null)
+
+        if [[ "$http_status" =~ ^[23] ]]; then  # 2xx or 3xx status codes indicate success
+            log_info "Route $protocol://$host is responding successfully (HTTP $http_status)"
+            return 0
+        elif [[ -n "$http_status" ]]; then
+            log_info "Route responded with HTTP $http_status, waiting for successful response..."
+        else
+            log_info "Route not yet ready, retrying in $check_interval seconds..."
+        fi
+
+        sleep "$check_interval"
+    done
+}
+
 # Launch or update the Obol Stack
 launch_stack() {
     local __network="$1"
@@ -494,12 +625,16 @@ launch_stack() {
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Installing the Obol Stack Ethereum light client configured for $__network..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
+    log_info "Installing the Obol Stack Ethereum light clients..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-mainnet obol/helios -f ../values/mainnet/helios.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-hoodi obol/helios -f ../values/hoodi/helios.yaml
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-sepolia obol/helios -f ../values/sepolia/helios.yaml
 
     # If mode="full", also sync a full node
     if [[ "$__mode" = "full" ]]; then
         log_info "Installing an Ethereum full node client synced to $__network..."
+        docker pull nethermind/nethermind:latest
+        docker pull statusim/nimbus-eth2:multiarch-latest
         ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
     fi
 
@@ -541,11 +676,13 @@ launch_stack() {
             # Route the eRPC pod to `http://obol.stack/rpc`
             kubectl apply -f ./manifests/expose-erpc.yaml 2>/dev/null
 
-            # Route a minimal static website to http://obol.stack/
-            kubectl apply -f ./manifests/hello-world-server.yaml 2>/dev/null
+            # Route a minimal website to http://obol.stack/
+            # Hosts the front end site in a node.js server using obol-app. Needs better than docker:latest tags for reliable updates.
+            ensure helm upgrade --install obol-frontend obol/obol-app \
+                --namespace frontend --create-namespace -f ../values/obol-frontend.yaml
 
-            # Lazy way to let nginx become healthy before loading the landing page
-            sleep 3
+            # Wait for the route to be available before launching browser
+            wait_for_route "obol.stack" 180 5 "http"
 
             # Launch home page
             log_info "Launching the Obol Stack..."
@@ -659,7 +796,7 @@ Usage: $0 [--help] [--network <network>] [--mode <mode>] [--headless] [--clean]
 
 Options:
   --help                            Display this help message
-  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
+  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi, sepolia]
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
   --headless                        Skips exposing the stack to the host operating system
   --clean                           Deletes and recreates the Obol Stack

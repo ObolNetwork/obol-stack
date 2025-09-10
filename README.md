@@ -1,9 +1,17 @@
-![Obol Logo](https://obol.tech/obolnetwork.png)
-<h1 align="center">The Obol Stack: Decentralised Applications For Ethereum</h1>
+<div align="center">
+  <img src="https://obol.org/obolnetwork.png" alt="Obol banner" />
+
+&nbsp;
+
+  <h1>The Obol Stack: Decentralised Applications For Ethereum</h1>
+
+</div>
 
 ## Overview
 
 The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
+
+![Demo of the Stack Front End](./assets/frontend.gif)
 
 ## Getting Started
 
@@ -35,8 +43,12 @@ obolup
 ```
 
 You can also clone this repo locally and run:
+
 ```sh
+# Clone this repo
 git clone git@github.com:ObolNetwork/obol-stack.git
+
+# Change to ./obolup subdirectory
 cd obol-stack/obolup
 sudo chmod u+x ./obolup
 
@@ -49,6 +61,7 @@ The complete usage of `obolup` is documented [here](./obolup/README.md).
 ## Stack Overview
 
 The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and when `--mode=full` is passed, the stack syncs an L1 full node. Both sit behind a specialised Ethereum load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
+
 ```bash
 # Obol Stack L1 JSON-RPC for Obol Apps running within the stack
 http://rpc.l1.cluster.svc.local/rpc/mainnet
@@ -65,7 +78,7 @@ http://obol.stack/rpc/hoodi
 ### `host` mode
 
 By default, the Obol Stack configures itself to be accessible to dApps in your web browser, such as wallets and dApps. The stack configures itself on custom domain; https://obol.stack/
-This behaviour can be disabled by running the stack in `--headless` mode. 
+This behaviour can be disabled by running the stack in `--headless` mode.
 
 > [!INFO]
 > When accessing the Obol Stack from your host OS, your browser may warn you about self-signed HTTPS certificates. This is unavoidable when using custom local web domains. You should click "Accept the risk and continue" to access the stack web page.
