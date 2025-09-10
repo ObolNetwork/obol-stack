@@ -39,17 +39,18 @@ export function DashboardContent({ data }: DashboardContentProps) {
     <GridContainer>
       <MainSection as="section">
         <SectionContainer>
-          <NetworkStatus
-            data={data.ethereum}
-            clients={data.clients}
-            networkName="Ethereum"
-            networkIcon={<ChainIcon chain="ethereum" size={24} />}
-          />
-          <NetworkStatus
-            data={data.aztec}
-            networkName="Aztec"
-            networkIcon={<ChainIcon chain="aztec" size={24} />}
-          />
+          {data.chains.map((chain, index) => (
+            <NetworkStatus
+              key={chain.chainName}
+              chainData={chain}
+              networkName={
+                chain.chainName.charAt(0).toUpperCase() +
+                chain.chainName.slice(1)
+              }
+              networkIcon={<ChainIcon chain={chain.chainName} size={24} />}
+              defaultExpanded={index === 0}
+            />
+          ))}
           <NodeOverview data={data.nodeOverview} ports={data.ports} />
         </SectionContainer>
       </MainSection>

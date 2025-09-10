@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { PrometheusClient } from '@/lib/services/prometheus';
 import { ERPCClient } from '@/lib/services/erpc';
 import { KubernetesAPIClient } from '@/lib/services/kubernetes-api';
+import { ClientMetricsService } from '@/lib/services/client-metrics';
 import { config } from '@/lib/config/environment';
-import { DashboardData } from '@/types/dashboard';
+import { DashboardData, ChainData, ClientInfo } from '@/types/dashboard';
+import { detectClient, parseVersion } from '@/lib/utils/client-detection';
 
 export async function GET() {
   try {
@@ -11,22 +13,23 @@ export async function GET() {
     const prometheus = new PrometheusClient(config.prometheusUrl);
     const erpc = new ERPCClient(config.erpcUrl);
     const k8s = new KubernetesAPIClient();
+    const clientMetrics = new ClientMetricsService();
 
     // Fetch all metrics in parallel
     const [
       systemMetrics,
-      ethereumMetrics,
+      // ethereumMetrics, // Commented out - eRPC doesn't recognize 'hoodi'
       clientVersions,
       podStatus,
       portStatus,
-      // erpcStatus,
+      clientMetricsData,
     ] = await Promise.allSettled([
       prometheus.getSystemMetrics(),
-      erpc.getNetworkMetrics('hoodi'),
+      // erpc.getNetworkMetrics('hoodi'), // We get this data from ClientMetricsService instead
       k8s.getClientVersions(),
       k8s.getPodsStatus('l1'),
       k8s.checkPorts(),
-      // erpc.getStatus(),
+      clientMetrics.getAllMetrics(),
     ]);
 
     // Process system metrics
@@ -68,50 +71,105 @@ export async function GET() {
       },
     };
 
-    // Process Ethereum metrics
-    const eth =
-      ethereumMetrics.status === 'fulfilled' ? ethereumMetrics.value : null;
-    const ethereum = {
-      status: (eth?.synced ? 'synced' : 'syncing') as
-        | 'synced'
-        | 'syncing'
-        | 'error',
-      blocks: eth?.blockHeight || 1183092,
-      finalized: eth ? Math.max(0, eth.blockHeight - 3) : 1183089,
-      participation: eth?.synced ? 97.6 : 85.2,
-      clients: 2,
-      distance: 0,
-    };
-
     // Process client information
     const versions =
       clientVersions.status === 'fulfilled'
         ? clientVersions.value
         : { execution: 'Unknown', consensus: 'Unknown' };
     const pods = podStatus.status === 'fulfilled' ? podStatus.value : {};
+    const metrics =
+      clientMetricsData.status === 'fulfilled'
+        ? clientMetricsData.value
+        : { execution: null, consensus: null };
 
-    const clients = {
-      nethermind: {
-        version: versions.execution.includes('Nethermind')
-          ? versions.execution
-          : 'Nethermind/v1.32.4',
-        peers: 25, // Would need to query Nethermind metrics endpoint
+    // Build clients array from detected versions
+    const ethereumClients: ClientInfo[] = [];
+
+    // Process execution client with real-time metrics
+    if (metrics.execution && metrics.execution.version !== 'Unknown') {
+      const executionClient = detectClient(metrics.execution.version);
+      ethereumClients.push({
+        name: executionClient.name,
+        version: parseVersion(metrics.execution.version),
+        peers: metrics.execution.peers || 0,
+        status: (!metrics.execution.syncing ? 'synced' : 'syncing') as
+          | 'synced'
+          | 'syncing'
+          | 'error',
+        role: executionClient.role,
+        icon: executionClient.iconUrl,
+      });
+    } else if (versions.execution && versions.execution !== 'Unknown') {
+      // Fallback to version-only data if metrics fetch failed
+      const executionClient = detectClient(versions.execution);
+      ethereumClients.push({
+        name: executionClient.name,
+        version: parseVersion(versions.execution),
+        peers: 0,
         status: (pods.execution?.ready ? 'synced' : 'syncing') as
           | 'synced'
           | 'syncing'
           | 'error',
-      },
-      nimbus: {
-        version: versions.consensus.includes('Nimbus')
-          ? versions.consensus
-          : 'Nimbus/v25.6.0',
-        peers: 39, // Would need to query Nimbus metrics endpoint
+        role: executionClient.role,
+        icon: executionClient.iconUrl,
+      });
+    }
+
+    // Process consensus client with real-time metrics
+    if (metrics.consensus && metrics.consensus.version !== 'Unknown') {
+      const consensusClient = detectClient(metrics.consensus.version);
+      ethereumClients.push({
+        name: consensusClient.name,
+        version: parseVersion(metrics.consensus.version),
+        peers: metrics.consensus.peers || 0,
+        status: (!metrics.consensus.syncing ? 'synced' : 'syncing') as
+          | 'synced'
+          | 'syncing'
+          | 'error',
+        role: consensusClient.role,
+        icon: consensusClient.iconUrl,
+      });
+    } else if (versions.consensus && versions.consensus !== 'Unknown') {
+      // Fallback to version-only data if metrics fetch failed
+      const consensusClient = detectClient(versions.consensus);
+      ethereumClients.push({
+        name: consensusClient.name,
+        version: parseVersion(versions.consensus),
+        peers: 0,
         status: (pods.beacon?.ready ? 'synced' : 'syncing') as
           | 'synced'
           | 'syncing'
           | 'error',
+        role: consensusClient.role,
+        icon: consensusClient.iconUrl,
+      });
+    }
+
+    // No default clients - only show real data
+
+    // Process Ethereum metrics - use real block data from execution client if available
+    const blockHeight = metrics.execution?.blockNumber || 0;
+    const finalizedEpoch = metrics.consensus?.finalizedEpoch || 0;
+
+    // Build chains array
+    const chains: ChainData[] = [
+      {
+        chainName: 'ethereum',
+        network: 'mainnet',
+        nodeMode: 'fullMode',
+        status: (metrics.execution && !metrics.execution.syncing
+          ? 'synced'
+          : metrics.consensus && !metrics.consensus.syncing
+            ? 'synced'
+            : 'syncing') as 'synced' | 'syncing' | 'error',
+        blocks: blockHeight,
+        finalized: finalizedEpoch,
+        participation: 0, // Will show as N/A if 0
+        clients: ethereumClients,
+        distance: 0,
       },
-    };
+      // Aztec chain removed - only show real data
+    ];
 
     // Process port status
     const ports = portStatus.status === 'fulfilled' ? portStatus.value : [];
@@ -142,26 +200,10 @@ export async function GET() {
       },
     };
 
-    // Mock Aztec data (not deployed)
-    const aztec = {
-      status: 'synced' as 'synced' | 'syncing' | 'error',
-      blocks: 245621,
-      finalized: 245618,
-      participation: 95.2,
-      clients: 28,
-      distance: 0,
-    };
-
     // Construct the dashboard response
     const dashboardData: DashboardData = {
-      header: {
-        network: 'testnet',
-        nodeStatus: 'online',
-      },
-      ethereum,
-      aztec,
+      chains,
       nodeOverview,
-      clients,
       ports: portInfo,
     };
 
@@ -169,69 +211,38 @@ export async function GET() {
   } catch (error) {
     console.error('Failed to fetch dashboard data:', error);
 
-    // Return complete mock data as fallback
-    const mockData: DashboardData = {
-      header: {
-        network: 'testnet',
-        nodeStatus: 'online',
-      },
-      ethereum: {
-        status: 'synced',
-        blocks: 18972341,
-        finalized: 254170,
-        participation: 97.6,
-        clients: 64,
-        distance: 0,
-      },
-      aztec: {
-        status: 'synced',
-        blocks: 245621,
-        finalized: 245618,
-        participation: 95.2,
-        clients: 28,
-        distance: 0,
-      },
+    // Return empty data structure - frontend will show N/A
+    const emptyData: DashboardData = {
+      chains: [],
       nodeOverview: {
         diskUsage: {
-          value: 1248,
-          total: 2000,
-          percentage: 62,
+          value: 0,
+          total: 0,
+          percentage: 0,
           unit: 'GB',
         },
         memoryUsage: {
-          value: 6,
-          total: 32,
-          percentage: 19,
+          value: 0,
+          total: 0,
+          percentage: 0,
           unit: 'GB',
         },
         cpuLoad: {
-          percentage: 19,
+          percentage: 0,
         },
         uptime: {
-          hours: 76,
-          status: 'online',
-        },
-      },
-      clients: {
-        nethermind: {
-          version: 'v1.32.4',
-          peers: 25,
-          status: 'synced',
-        },
-        nimbus: {
-          version: 'v25.6.0',
-          peers: 39,
-          status: 'synced',
+          hours: 0,
+          status: 'offline',
         },
       },
       ports: {
-        p2p: { port: 30303, status: 'open' as 'open' | 'closed' },
-        jsonRpc: { port: 8545, status: 'closed' as 'open' | 'closed' },
-        prometheus: { port: 9090, status: 'closed' as 'open' | 'closed' },
-        beaconApi: { port: 5052, status: 'open' as 'open' | 'closed' },
+        p2p: { port: 30303, status: 'closed' },
+        jsonRpc: { port: 8545, status: 'closed' },
+        prometheus: { port: 9090, status: 'closed' },
+        beaconApi: { port: 5052, status: 'closed' },
       },
     };
 
-    return NextResponse.json(mockData, { status: 503 });
+    return NextResponse.json(emptyData, { status: 503 });
   }
 }

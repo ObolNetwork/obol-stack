@@ -7,11 +7,10 @@ import { Accordion } from '../../molecules/Accordion';
 import { AnimatedNumber } from '../../molecules/AnimatedNumber';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard, ClientConfig } from '../../molecules/ClientCard';
-import { DashboardData } from '../../../types/dashboard';
+import { ChainData } from '../../../types/dashboard';
 
 export interface NetworkStatusProps {
-  data: DashboardData['ethereum'] | DashboardData['aztec'];
-  clients?: DashboardData['clients'];
+  chainData: ChainData;
   networkName: string;
   networkIcon: React.ReactNode;
   defaultExpanded?: boolean;
@@ -93,26 +92,11 @@ const ClientsContainer = styled(Box, {
 });
 
 export function NetworkStatus({
-  data,
-  clients,
+  chainData,
   networkName,
   networkIcon,
   defaultExpanded = true,
 }: NetworkStatusProps) {
-  // Client configurations
-  const clientConfigs: Record<string, ClientConfig> = {
-    nethermind: {
-      name: 'Nethermind',
-      role: 'Execution',
-      icon: '/nethermind-icon.png',
-    },
-    nimbus: {
-      name: 'Nimbus',
-      role: 'Consensus',
-      icon: '/nimbus-icon.png',
-    },
-  };
-
   const headerContent = (
     <NetworkHeader>
       <Flex
@@ -130,12 +114,25 @@ export function NetworkStatus({
 
           <CardTitle>{networkName}</CardTitle>
 
-          <ChainChip variant="mainnet" />
+          <ChainChip
+            variant={chainData.network === 'mainnet' ? 'mainnet' : 'testnet'}
+          />
 
-          <ChainChip variant="fullMode" />
+          <ChainChip
+            variant={
+              chainData.nodeMode === 'fullMode' ? 'fullMode' : 'lightMode'
+            }
+          />
         </Flex>
 
-        <StatusIndicator status="synced" size="md" />
+        <StatusIndicator
+          status={
+            chainData.status === 'syncing'
+              ? 'unsynced'
+              : (chainData.status as 'synced' | 'unsynced')
+          }
+          size="md"
+        />
       </Flex>
     </NetworkHeader>
   );
@@ -162,44 +159,56 @@ export function NetworkStatus({
             <MetricItem>
               <MetricLabel>BLOCK HEIGHT</MetricLabel>
               <MetricValue>
-                <AnimatedNumber
-                  value={data.blocks}
-                  animateLastDigit={true}
-                  incrementInterval={12000}
-                />
+                {chainData.blocks > 0 ? (
+                  <AnimatedNumber
+                    value={chainData.blocks}
+                    animateLastDigit={true}
+                    incrementInterval={12000}
+                  />
+                ) : (
+                  'N/A'
+                )}
               </MetricValue>
             </MetricItem>
             <MetricItem>
               <MetricLabel>FINALIZED EPOCH</MetricLabel>
               <MetricValue>
-                <AnimatedNumber
-                  value={Math.floor(data.blocks / 32) - 2}
-                  animateLastDigit={true}
-                  incrementInterval={384000}
-                />
+                {chainData.finalized > 0 ? (
+                  <AnimatedNumber
+                    value={chainData.finalized}
+                    animateLastDigit={true}
+                    incrementInterval={384000}
+                  />
+                ) : (
+                  'N/A'
+                )}
               </MetricValue>
             </MetricItem>
             <MetricItem>
               <MetricLabel>NODE MODE</MetricLabel>
               <MetricValue css={{ fontFamily: 'inherit' }}>
-                Full Node
+                {chainData.nodeMode === 'fullMode' ? 'Full Node' : 'Light Node'}
               </MetricValue>
             </MetricItem>
             <MetricItem>
               <MetricLabel>PARTICIPATION</MetricLabel>
               <MetricValue>
-                <ParticipationNumber
-                  initialValue={data.participation}
-                  target={97.5}
-                  standardDeviation={1}
-                  updateInterval={4000}
-                />
+                {chainData.participation > 0 ? (
+                  <ParticipationNumber
+                    initialValue={chainData.participation}
+                    target={chainData.participation}
+                    standardDeviation={1}
+                    updateInterval={4000}
+                  />
+                ) : (
+                  'N/A'
+                )}
               </MetricValue>
             </MetricItem>
           </MetricsGrid>
 
           {/* Embedded Client Components - only show for networks that have clients */}
-          {clients && (
+          {chainData.clients && chainData.clients.length > 0 && (
             <ClientsSection>
               <Text
                 css={{
@@ -216,22 +225,36 @@ export function NetworkStatus({
                 CLIENTS
               </Text>
               <ClientsContainer>
-                <ClientCard
-                  config={clientConfigs.nethermind}
-                  data={clients.nethermind}
-                  status="synced"
-                  peersTarget={72}
-                  peersStandardDeviation={10}
-                  updateInterval={4000}
-                />
-                <ClientCard
-                  config={clientConfigs.nimbus}
-                  data={clients.nimbus}
-                  status="synced"
-                  peersTarget={72}
-                  peersStandardDeviation={10}
-                  updateInterval={4000}
-                />
+                {chainData.clients.map(client => {
+                  // Map role to proper display name
+                  const roleDisplay =
+                    client.role === 'execution'
+                      ? 'Execution'
+                      : client.role === 'consensus'
+                        ? 'Consensus'
+                        : 'Validator';
+
+                  const config: ClientConfig = {
+                    name: client.name,
+                    role: roleDisplay,
+                    icon: client.icon || '/default-client-icon.png',
+                  };
+
+                  return (
+                    <ClientCard
+                      key={`${client.name}-${client.version}`}
+                      config={config}
+                      data={{
+                        version: client.version,
+                        peers: client.peers,
+                      }}
+                      status={client.status}
+                      peersTarget={client.peers}
+                      peersStandardDeviation={2}
+                      updateInterval={10000}
+                    />
+                  );
+                })}
               </ClientsContainer>
             </ClientsSection>
           )}

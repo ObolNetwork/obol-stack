@@ -17,7 +17,9 @@ interface PrometheusResponse {
 export class PrometheusClient {
   private baseUrl: string;
 
-  constructor(baseUrl: string = process.env.PROMETHEUS_URL || 'http://localhost:9090') {
+  constructor(
+    baseUrl: string = process.env.PROMETHEUS_URL || 'http://localhost:9090'
+  ) {
     this.baseUrl = baseUrl;
   }
 
@@ -27,10 +29,10 @@ export class PrometheusClient {
   async query(query: string): Promise<PrometheusResponse> {
     const url = `${this.baseUrl}/api/v1/query`;
     const params = new URLSearchParams({ query });
-    
+
     const response = await fetch(`${url}?${params}`, {
       headers: {
-        'Accept': 'application/json',
+        Accept: 'application/json',
       },
     });
 
@@ -44,7 +46,12 @@ export class PrometheusClient {
   /**
    * Execute a Prometheus range query
    */
-  async queryRange(query: string, start: Date, end: Date, step: string = '60s'): Promise<PrometheusResponse> {
+  async queryRange(
+    query: string,
+    start: Date,
+    end: Date,
+    step: string = '60s'
+  ): Promise<PrometheusResponse> {
     const url = `${this.baseUrl}/api/v1/query_range`;
     const params = new URLSearchParams({
       query,
@@ -52,10 +59,10 @@ export class PrometheusClient {
       end: Math.floor(end.getTime() / 1000).toString(),
       step,
     });
-    
+
     const response = await fetch(`${url}?${params}`, {
       headers: {
-        'Accept': 'application/json',
+        Accept: 'application/json',
       },
     });
 
@@ -74,27 +81,63 @@ export class PrometheusClient {
       // Get memory metrics
       const memTotal = await this.query('node_memory_MemTotal_bytes');
       const memAvailable = await this.query('node_memory_MemAvailable_bytes');
-      
+
       // Get CPU metrics (average CPU usage)
-      const cpuUsage = await this.query('avg(rate(node_cpu_seconds_total{mode!="idle"}[5m]))');
-      
-      // Get disk metrics
-      const diskTotal = await this.query('node_filesystem_size_bytes{mountpoint="/"}');
-      const diskAvailable = await this.query('node_filesystem_avail_bytes{mountpoint="/"}');
-      
+      const cpuUsage = await this.query(
+        'avg(rate(node_cpu_seconds_total{mode!="idle"}[5m]))'
+      );
+
+      // Get disk metrics - try multiple approaches
+      let diskTotal, diskAvailable;
+      try {
+        // Try with device filter first
+        diskTotal = await this.query(
+          'node_filesystem_size_bytes{device="/dev/vda1",fstype="ext4"}'
+        );
+        diskAvailable = await this.query(
+          'node_filesystem_avail_bytes{device="/dev/vda1",fstype="ext4"}'
+        );
+      } catch (e) {
+        console.warn(
+          'Device-specific disk query failed, trying generic query:',
+          e
+        );
+        try {
+          // Fallback to any ext4 filesystem
+          diskTotal = await this.query(
+            'node_filesystem_size_bytes{fstype="ext4"}'
+          );
+          diskAvailable = await this.query(
+            'node_filesystem_avail_bytes{fstype="ext4"}'
+          );
+        } catch (e2) {
+          console.warn('Generic disk query failed:', e2);
+          // Return dummy data for disk if both fail
+          diskTotal = { data: { result: [] } };
+          diskAvailable = { data: { result: [] } };
+        }
+      }
+
       // Get uptime
       const uptime = await this.query('node_boot_time_seconds');
 
-      const totalMemory = parseFloat(memTotal.data.result[0]?.value?.[1] || '0');
-      const availableMemory = parseFloat(memAvailable.data.result[0]?.value?.[1] || '0');
+      const totalMemory = parseFloat(
+        memTotal.data.result[0]?.value?.[1] || '0'
+      );
+      const availableMemory = parseFloat(
+        memAvailable.data.result[0]?.value?.[1] || '0'
+      );
       const usedMemory = totalMemory - availableMemory;
-      
+
       const totalDisk = parseFloat(diskTotal.data.result[0]?.value?.[1] || '0');
-      const availableDisk = parseFloat(diskAvailable.data.result[0]?.value?.[1] || '0');
+      const availableDisk = parseFloat(
+        diskAvailable.data.result[0]?.value?.[1] || '0'
+      );
       const usedDisk = totalDisk - availableDisk;
-      
-      const cpuPercent = parseFloat(cpuUsage.data.result[0]?.value?.[1] || '0') * 100;
-      
+
+      const cpuPercent =
+        parseFloat(cpuUsage.data.result[0]?.value?.[1] || '0') * 100;
+
       const bootTime = parseFloat(uptime.data.result[0]?.value?.[1] || '0');
       const uptimeSeconds = Date.now() / 1000 - bootTime;
 
@@ -103,7 +146,7 @@ export class PrometheusClient {
           total: totalMemory,
           used: usedMemory,
           available: availableMemory,
-          percentage: (usedMemory / totalMemory) * 100,
+          percentage: totalMemory > 0 ? (usedMemory / totalMemory) * 100 : 0,
         },
         cpu: {
           usage: cpuPercent,
@@ -112,7 +155,7 @@ export class PrometheusClient {
           total: totalDisk,
           used: usedDisk,
           available: availableDisk,
-          percentage: (usedDisk / totalDisk) * 100,
+          percentage: totalDisk > 0 ? (usedDisk / totalDisk) * 100 : 0,
         },
         uptime: uptimeSeconds,
       };
@@ -127,11 +170,13 @@ export class PrometheusClient {
    */
   async getPodMetrics(namespace?: string) {
     const namespaceFilter = namespace ? `{namespace="${namespace}"}` : '';
-    
+
     try {
-      const podStatus = await this.query(`kube_pod_status_phase${namespaceFilter}`);
+      const podStatus = await this.query(
+        `kube_pod_status_phase${namespaceFilter}`
+      );
       const podInfo = await this.query(`kube_pod_info${namespaceFilter}`);
-      
+
       return {
         pods: podStatus.data.result,
         info: podInfo.data.result,

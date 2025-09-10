@@ -1,4 +1,4 @@
-FROM node:lts-alpine AS base
+FROM node:22-alpine AS base
 
 # Enable corepack for pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
