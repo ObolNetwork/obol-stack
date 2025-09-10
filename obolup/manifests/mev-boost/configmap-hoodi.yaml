@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mev-boost-config
+  namespace: l1
+data:
+  network: "hoodi"
+  # No MEV relays available for hoodi testnet
+  # MEV-boost will not be deployed for this network
+  relays: ""

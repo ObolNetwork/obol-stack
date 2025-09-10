@@ -513,6 +513,19 @@ launch_stack() {
     if [[ "$__mode" = "full" ]]; then
         log_info "Installing an Ethereum full node client synced to $__network..."
         ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
+        
+        # Deploy MEV-boost for supported networks (not hoodi)
+        if [[ "$__network" != "hoodi" ]]; then
+            log_info "Installing MEV-boost sidecar for $__network network..."
+            # Apply the appropriate configmap based on network
+            kubectl apply -f ./manifests/mev-boost/configmap-$__network.yaml
+            # Apply the deployment and service
+            kubectl apply -f ./manifests/mev-boost/deployment.yaml
+            kubectl apply -f ./manifests/mev-boost/service.yaml
+            log_info "MEV-boost installed. Validators will now be able to access MEV rewards."
+        else
+            log_info "MEV-boost not available for hoodi testnet, skipping..."
+        fi
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
