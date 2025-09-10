@@ -28,17 +28,16 @@ The deployment is handled by the `obolup` script and includes:
 ### Mainnet
 - Flashbots: `boost-relay.flashbots.net`
 - Bloxroute Max Profit: `bloxroute.max-profit.blxrbdn.com`
-- Ultrasound: `relay.ultrasound.money`
-- Agnostic: `relay.agnostic.st`
-- Aestus: `mainnet.aestus.live`
+- Aestus: `aestus.live`
+- Agnostic Gnosis: `agnostic-relay.net`
+- Manifold: `mainnet-relay.securerpc.com`
 
 ### Sepolia
 - Flashbots Sepolia: `boost-relay-sepolia.flashbots.net`
 
 ### Holesky
-- Flashbots Holesky: `boost-relay-holesky.flashbots.net`
-- Ultrasound Holesky: `relay-holesky.ultrasound.money`
-- Bloxroute Holesky: `bloxroute.holesky.blxrbdn.com`
+- Aestus Holesky: `holesky.aestus.live`
+- Ultrasound Staging: `relay-stag.ultrasound.money`
 
 ### Hoodi
 - No MEV relays available (MEV-boost not deployed)
