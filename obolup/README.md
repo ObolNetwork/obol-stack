@@ -15,7 +15,7 @@ Usage: ./obolup [--help] [--network <network>] [--mode <mode>] [--headless] [--c
 
 Options:
   --help                            Display this help message
-  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi]
+  --network <network>               Specify the network (default: mainnet) [mainnet, hoodi, sepolia]
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
   --headless                        Skips exposing the stack to the host operating system
   --clean                           Deletes and recreates the Obol Stack

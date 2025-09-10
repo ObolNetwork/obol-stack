@@ -11,7 +11,7 @@ image:
   # -- erpc container image repository
   repository: ghcr.io/erpc/erpc
   # -- erpc container image tag
-  tag: 0.0.50
+  tag: 0.0.54
   # -- erpc container pull policy
   pullPolicy: IfNotPresent
 
@@ -72,22 +72,43 @@ config: |
               timeout:
                 duration: 30s
               retry:
-                maxAttempts: 3
-                delay: 0ms
+                maxAttempts: 2
+                delay: 100ms
+              hedge:
+                delay: 500ms
+                maxCount: 1
+          - architecture: evm
+            evm:
+              chainId: 11155111
+            alias: sepolia
+            failsafe:
+              timeout:
+                duration: 30s
+              retry:
+                maxAttempts: 2
+                delay: 100ms
               hedge:
                 delay: 500ms
                 maxCount: 1
         upstreams:
           - endpoint: http://l1-light-client-helios-mainnet.l1.svc.cluster.local:8545
             id: helios-mainnet
+            group: fallback
             evm:
               chainId: 1
           - endpoint: http://l1-light-client-helios-hoodi.l1.svc.cluster.local:8545
             id: helios-hoodi
+            group: fallback
             evm:
               chainId: 560048
+          - endpoint: http://l1-light-client-helios-sepolia.l1.svc.cluster.local:8545
+            id: helios-sepolia
+            group: fallback
+            evm:
+              chainId: 11155111
           - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
             id: l1-full-node
+            nodeType: full
         cors:
           # List of allowed origins.
           # This allows any dApp in your browser to call the RPC.
@@ -137,7 +158,7 @@ ingress:
     # kubernetes.io/tls-acme: "true"
   # -- Ingress host
   hosts:
-    - host: erpc.local
+    - host: obol.stack
       paths: []
   # -- Ingress TLS
   tls: []
