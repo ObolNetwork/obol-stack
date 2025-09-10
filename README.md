@@ -6,7 +6,7 @@ A modern monitoring dashboard for Obol Stack and Ethereum node status, built wit
 
 ## Features
 
-- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients (Geth, Prysm)
+- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients (Nethermind, Nimbus)
 - 📊 **System Metrics**: Monitor disk usage, memory, CPU load, and uptime
 - 🌐 **Chain Status**: View network participation, finalization status, and sync progress
 - 🔧 **Port Status**: Monitor P2P, JSON-RPC, Prometheus, and Beacon API ports
