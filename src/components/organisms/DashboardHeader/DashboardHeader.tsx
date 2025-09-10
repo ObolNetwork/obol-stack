@@ -1,9 +1,6 @@
 import { Box, Flex, Image } from '@obolnetwork/obol-ui';
 
-interface HeaderProps {
-  network: 'testnet' | 'mainnet';
-}
-export function DashboardHeader({ network }: HeaderProps) {
+export function DashboardHeader() {
   return (
     <Flex css={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <Box>

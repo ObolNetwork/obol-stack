@@ -50,7 +50,6 @@ export const ParticipationNumber: React.FC<ParticipationNumberProps> = ({
   standardDeviation = 1,
   updateInterval = 4000,
   className = '',
-  animateLastDigit = false,
 }) => {
   const [currentValue, setCurrentValue] = useState(initialValue);
   const { peerTick, isActive } = useTiming();
