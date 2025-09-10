@@ -508,10 +508,8 @@ launch_stack() {
     # Deploy a Helm Release named "kubernetes-dashboard" using the kubernetes-dashboard chart
     #helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
 
-    log_info "Installing the Obol Stack Ethereum light clients..."
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-mainnet obol/helios -f ../values/mainnet/helios.yaml
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-hoodi obol/helios -f ../values/hoodi/helios.yaml
-    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-sepolia obol/helios -f ../values/sepolia/helios.yaml
+    log_info "Installing the Obol Stack Ethereum light client for $__network..."
+    ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client obol/helios -f ../values/$__network/helios.yaml
 
     # If mode="full", also sync a full node
     if [[ "$__mode" = "full" ]]; then
