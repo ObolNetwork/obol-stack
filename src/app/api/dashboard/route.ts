@@ -30,83 +30,136 @@ export async function GET() {
     ]);
 
     // Process system metrics
-    const system = systemMetrics.status === 'fulfilled' ? systemMetrics.value : null;
+    const system =
+      systemMetrics.status === 'fulfilled' ? systemMetrics.value : null;
     const nodeOverview = {
-      diskUsage: system ? {
-        used: Math.round(system.disk.used / (1024 * 1024 * 1024)),
-        total: Math.round(system.disk.total / (1024 * 1024 * 1024)),
-        percentage: system.disk.percentage.toFixed(1),
-      } : {
-        used: 1248,
-        total: 2000,
-        percentage: '62.4',
+      diskUsage: system
+        ? {
+            value: Math.round(system.disk.used / (1024 * 1024 * 1024)),
+            total: Math.round(system.disk.total / (1024 * 1024 * 1024)),
+            percentage: Math.round(system.disk.percentage),
+            unit: 'GB',
+          }
+        : {
+            value: 1248,
+            total: 2000,
+            percentage: 62,
+            unit: 'GB',
+          },
+      memoryUsage: system
+        ? {
+            value: Math.round(system.memory.used / (1024 * 1024 * 1024)),
+            total: Math.round(system.memory.total / (1024 * 1024 * 1024)),
+            percentage: Math.round(system.memory.percentage),
+            unit: 'GB',
+          }
+        : {
+            value: 6,
+            total: 32,
+            percentage: 19,
+            unit: 'GB',
+          },
+      cpuLoad: {
+        percentage: system ? Math.round(system.cpu.usage) : 19,
       },
-      memoryUsage: system ? {
-        used: (system.memory.used / (1024 * 1024 * 1024)).toFixed(1),
-        total: Math.round(system.memory.total / (1024 * 1024 * 1024)),
-        percentage: system.memory.percentage.toFixed(1),
-      } : {
-        used: '6.2',
-        total: 32,
-        percentage: '19.4',
+      uptime: {
+        hours: system ? Math.floor(system.uptime / 3600) : 76,
+        status: 'online',
       },
-      cpuLoad: system ? system.cpu.usage.toFixed(1) : '18.5',
-      uptime: system ? Math.floor(system.uptime) : 273600,
     };
 
     // Process Ethereum metrics
-    const eth = ethereumMetrics.status === 'fulfilled' ? ethereumMetrics.value : null;
+    const eth =
+      ethereumMetrics.status === 'fulfilled' ? ethereumMetrics.value : null;
     const ethereum = {
-      status: eth?.synced ? 'synced' : 'syncing',
-      blockHeight: eth?.blockHeight || 1183092,
-      finalizedBlocks: eth ? Math.max(0, eth.blockHeight - 3) : 1183089,
-      participationRate: eth?.synced ? 97.6 : 85.2,
-      clientCount: 2,
-      distanceToJustified: 0,
+      status: (eth?.synced ? 'synced' : 'syncing') as
+        | 'synced'
+        | 'syncing'
+        | 'error',
+      blocks: eth?.blockHeight || 1183092,
+      finalized: eth ? Math.max(0, eth.blockHeight - 3) : 1183089,
+      participation: eth?.synced ? 97.6 : 85.2,
+      clients: 2,
+      distance: 0,
     };
 
     // Process client information
-    const versions = clientVersions.status === 'fulfilled' ? clientVersions.value : { execution: 'Unknown', consensus: 'Unknown' };
+    const versions =
+      clientVersions.status === 'fulfilled'
+        ? clientVersions.value
+        : { execution: 'Unknown', consensus: 'Unknown' };
     const pods = podStatus.status === 'fulfilled' ? podStatus.value : {};
-    
+
     const clients = {
       nethermind: {
-        name: 'Nethermind',
-        version: versions.execution.includes('Nethermind') ? versions.execution : 'Nethermind/v1.32.4',
+        version: versions.execution.includes('Nethermind')
+          ? versions.execution
+          : 'Nethermind/v1.32.4',
         peers: 25, // Would need to query Nethermind metrics endpoint
-        status: pods.execution?.ready ? 'synced' : 'syncing',
+        status: (pods.execution?.ready ? 'synced' : 'syncing') as
+          | 'synced'
+          | 'syncing'
+          | 'error',
       },
       nimbus: {
-        name: 'Nimbus',
-        version: versions.consensus.includes('Nimbus') ? versions.consensus : 'Nimbus/v25.6.0',
+        version: versions.consensus.includes('Nimbus')
+          ? versions.consensus
+          : 'Nimbus/v25.6.0',
         peers: 39, // Would need to query Nimbus metrics endpoint
-        status: pods.beacon?.ready ? 'synced' : 'syncing',
+        status: (pods.beacon?.ready ? 'synced' : 'syncing') as
+          | 'synced'
+          | 'syncing'
+          | 'error',
       },
     };
 
     // Process port status
     const ports = portStatus.status === 'fulfilled' ? portStatus.value : [];
     const portInfo = {
-      p2p: ports.find(p => p.port === 30303)?.open ? 'Open' : 'Closed',
-      jsonRpc: ports.find(p => p.port === 8545)?.open ? 'Open' : 'Closed',
-      prometheus: ports.find(p => p.port === 9090)?.open ? 'Open' : 'Closed',
-      beaconApi: ports.find(p => p.port === 5052)?.open ? 'Open' : 'Closed',
+      p2p: {
+        port: 30303,
+        status: (ports.find(p => p.port === 30303)?.open
+          ? 'open'
+          : 'closed') as 'open' | 'closed',
+      },
+      jsonRpc: {
+        port: 8545,
+        status: (ports.find(p => p.port === 8545)?.open ? 'open' : 'closed') as
+          | 'open'
+          | 'closed',
+      },
+      prometheus: {
+        port: 9090,
+        status: (ports.find(p => p.port === 9090)?.open ? 'open' : 'closed') as
+          | 'open'
+          | 'closed',
+      },
+      beaconApi: {
+        port: 5052,
+        status: (ports.find(p => p.port === 5052)?.open ? 'open' : 'closed') as
+          | 'open'
+          | 'closed',
+      },
     };
 
     // Mock Aztec data (not deployed)
-    const aztec = config.features.aztecMock ? {
-      status: 'synced',
-      blockHeight: 245621,
-      finalizedBlocks: 245618,
-      participationRate: 95.2,
-      clientCount: 28,
-      distanceToJustified: 0,
-    } : null;
+    const aztec = {
+      status: 'synced' as 'synced' | 'syncing' | 'error',
+      blocks: 245621,
+      finalized: 245618,
+      participation: 95.2,
+      clients: 28,
+      distance: 0,
+    };
 
     // Construct the dashboard response
     const dashboardData: DashboardData = {
+      header: {
+        network: 'testnet',
+        nodeStatus: 'online',
+      },
       ethereum,
-      ...(aztec && { aztec }),
+      aztec,
       nodeOverview,
       clients,
       ports: portInfo,
@@ -115,61 +168,70 @@ export async function GET() {
     return NextResponse.json(dashboardData);
   } catch (error) {
     console.error('Failed to fetch dashboard data:', error);
-    
+
     // Return complete mock data as fallback
     const mockData: DashboardData = {
+      header: {
+        network: 'testnet',
+        nodeStatus: 'online',
+      },
       ethereum: {
         status: 'synced',
-        blockHeight: 18972341,
-        finalizedBlocks: 254170,
-        participationRate: 97.6,
-        clientCount: 64,
-        distanceToJustified: 0,
+        blocks: 18972341,
+        finalized: 254170,
+        participation: 97.6,
+        clients: 64,
+        distance: 0,
       },
       aztec: {
         status: 'synced',
-        blockHeight: 245621,
-        finalizedBlocks: 245618,
-        participationRate: 95.2,
-        clientCount: 28,
-        distanceToJustified: 0,
+        blocks: 245621,
+        finalized: 245618,
+        participation: 95.2,
+        clients: 28,
+        distance: 0,
       },
       nodeOverview: {
         diskUsage: {
-          used: 1248,
+          value: 1248,
           total: 2000,
-          percentage: '62.4',
+          percentage: 62,
+          unit: 'GB',
         },
         memoryUsage: {
-          used: '6.2',
+          value: 6,
           total: 32,
-          percentage: '19.4',
+          percentage: 19,
+          unit: 'GB',
         },
-        cpuLoad: '18.5',
-        uptime: 273600,
+        cpuLoad: {
+          percentage: 19,
+        },
+        uptime: {
+          hours: 76,
+          status: 'online',
+        },
       },
       clients: {
         nethermind: {
-          name: 'Nethermind',
           version: 'v1.32.4',
           peers: 25,
           status: 'synced',
         },
         nimbus: {
-          name: 'Nimbus',
           version: 'v25.6.0',
           peers: 39,
           status: 'synced',
         },
       },
       ports: {
-        p2p: 'Open',
-        jsonRpc: 'Closed',
-        prometheus: 'Closed',
-        beaconApi: 'Open',
+        p2p: { port: 30303, status: 'open' as 'open' | 'closed' },
+        jsonRpc: { port: 8545, status: 'closed' as 'open' | 'closed' },
+        prometheus: { port: 9090, status: 'closed' as 'open' | 'closed' },
+        beaconApi: { port: 5052, status: 'open' as 'open' | 'closed' },
       },
     };
-    
+
     return NextResponse.json(mockData, { status: 503 });
   }
 }

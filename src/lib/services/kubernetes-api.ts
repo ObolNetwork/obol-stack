@@ -43,7 +43,14 @@ export class KubernetesAPIClient {
    * Get pod information by directly querying services
    * This is a simplified version that doesn't require Kubernetes API access
    */
-  async getPodsStatus(): Promise<Record<string, PodInfo>> {
+  async getPodsStatus(
+    _namespace: string = 'l1'
+  ): Promise<
+    Record<
+      string,
+      { name: string; status: string; ready: boolean; restarts: number }
+    >
+  > {
     // For now, we'll return mock data based on what we know is deployed
     // In production, this would query the actual Kubernetes API
     return {
