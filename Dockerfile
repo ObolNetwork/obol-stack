@@ -1,4 +1,7 @@
-FROM node:18-alpine AS base
+FROM node:lts-alpine AS base
+
+# Enable corepack for pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Build arguments
 ARG VERSION=unknown
@@ -12,8 +15,8 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Install dependencies based on the preferred package manager
-COPY package.json package-lock.json* ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -30,7 +33,7 @@ ENV NEXT_PUBLIC_BUILDTIME=$BUILDTIME
 ENV NEXT_PUBLIC_GITCOMMIT=$GITCOMMIT
 
 # Build the application
-RUN npm run build
+RUN pnpm run build
 
 # Production image, copy all the files and run next
 FROM base AS runner

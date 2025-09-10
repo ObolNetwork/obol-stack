@@ -13,7 +13,7 @@ export function DashboardPage() {
   return (
     <TimingProvider blockInterval={12000} peerInterval={4000}>
       <DashboardTemplate
-        header={<DashboardHeader network={dashboardData.header.network} />}
+        header={<DashboardHeader />}
         content={<DashboardContent data={dashboardData} />}
         footer={<FooterBar />}
       />
