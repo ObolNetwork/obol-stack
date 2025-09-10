@@ -1,24 +1,26 @@
+export interface ClientInfo {
+  name: string;
+  version: string;
+  peers: number;
+  status: 'synced' | 'syncing' | 'error';
+  role: 'execution' | 'consensus' | 'validator';
+  icon?: string; // URL to client icon
+}
+
+export interface ChainData {
+  chainName: 'ethereum' | 'aztec'; // Add more chains here as needed
+  network: 'mainnet' | 'testnet';
+  nodeMode: 'fullMode' | 'lightMode';
+  status: 'synced' | 'syncing' | 'error';
+  blocks: number;
+  finalized: number;
+  participation: number;
+  clients: ClientInfo[]; // Array of clients for this chain
+  distance: number; // Distance to justified
+}
+
 export interface DashboardData {
-  header: {
-    network: 'testnet' | 'mainnet';
-    nodeStatus: 'online' | 'offline' | 'syncing';
-  };
-  ethereum: {
-    status: 'synced' | 'syncing' | 'error';
-    blocks: number;
-    finalized: number;
-    participation: number;
-    clients: number;
-    distance: number; // Distance to justified
-  };
-  aztec: {
-    status: 'synced' | 'syncing' | 'error';
-    blocks: number;
-    finalized: number;
-    participation: number;
-    clients: number;
-    distance: number; // Distance to justified
-  };
+  chains: ChainData[];
   nodeOverview: {
     diskUsage: {
       value: number;
@@ -38,18 +40,6 @@ export interface DashboardData {
     uptime: {
       hours: number;
       status: string;
-    };
-  };
-  clients: {
-    nethermind: {
-      version: string;
-      peers: number;
-      status: 'synced' | 'syncing' | 'error';
-    };
-    nimbus: {
-      version: string;
-      peers: number;
-      status: 'synced' | 'syncing' | 'error';
     };
   };
   ports: {
