@@ -26,7 +26,8 @@ global:
           grandine: []
           lighthouse: []
           lodestar: []
-          nimbus: []
+          nimbus:
+            - --enr-auto-update=true
           prysm: []
           teku: []
       sepolia:
@@ -52,6 +53,7 @@ global:
             - --network=sepolia
           nimbus:
             - --network=sepolia
+            - --enr-auto-update=true
           prysm:
             - --sepolia
           teku:
@@ -106,6 +108,7 @@ global:
             - --network=hoodi
           nimbus:
             - --network=hoodi
+            - --enr-auto-update=true
           prysm:
             - --hoodi
           teku:
