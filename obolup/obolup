@@ -176,12 +176,24 @@ install_kubectl() {
         log_info "kubectl is already installed."
     else
         log_info "Installing kubectl..."
+        
+        # Get the latest stable version
+        KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt 2>/dev/null)
+        if [[ -z "$KUBECTL_VERSION" ]]; then
+            log_error "Failed to fetch kubectl version. Please check your internet connection."
+        fi
+        
         # Download the latest release
-        ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl"
+        if ! curl -sSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$ARCHITECTURE/kubectl" 2>/dev/null; then
+            log_error "Failed to download kubectl. Please check your internet connection."
+        fi
 
         # Validate the binary (optional)
-        ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl.sha256"
-        echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check || log_warn "kubectl checksum validation failed. Continuing anyway..."
+        if ! curl -sSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$ARCHITECTURE/kubectl.sha256" 2>/dev/null; then
+            log_warn "Failed to download kubectl checksum. Continuing without validation..."
+        else
+            echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check || log_warn "kubectl checksum validation failed. Continuing anyway..."
+        fi
 
         # Install kubectl
         ensure sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
@@ -220,11 +232,16 @@ install_helm() {
         log_info "helm is not installed."
         log_info "Installing helm..."
         # Download the latest release
-        ensure curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
+        if ! curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz" 2>/dev/null; then
+            log_error "Failed to download helm. Please check your internet connection."
+        fi
 
         # Validate the binary (optional)
-        ensure curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum"
-        echo "$(cat helm.tar.gz.sha256sum)" | sha256sum --check --status || log_error "helm checksum validation failed. helm installation failed."
+        if ! curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum" 2>/dev/null; then
+            log_warn "Failed to download helm checksum. Continuing without validation..."
+        else
+            echo "$(cat helm.tar.gz.sha256sum)" | sha256sum --check --status || log_error "helm checksum validation failed. helm installation failed."
+        fi
 
         # Proceed to install
         ensure tar -xzf helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz
@@ -242,7 +259,9 @@ install_kind() {
     log_info "Checking Kind..."
     if ! command_exists kind || [[ "$(kind version | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+')" != "$KIND_VERSION" ]]; then
         log_info "Installing Kind $KIND_VERSION..."
-        ensure curl -sSLo ./kind "https://kind.sigs.k8s.io/dl/$KIND_VERSION/kind-$PLATFORM-$ARCHITECTURE"
+        if ! curl -sSLo ./kind "https://kind.sigs.k8s.io/dl/$KIND_VERSION/kind-$PLATFORM-$ARCHITECTURE" 2>/dev/null; then
+            log_error "Failed to download Kind. Please check your internet connection."
+        fi
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
     fi
@@ -337,11 +356,22 @@ install_k9s() {
 # Install or update obol CLI
 install_obol_cli() {
     log_info "Checking obol CLI..."
-    LATEST_OBOL_VERSION=$(ensure curl -sS "$OBOL_CLI_REPO/releases/latest" | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+')
+    LATEST_OBOL_VERSION=$(curl -sS "$OBOL_CLI_REPO/releases/latest" 2>/dev/null | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+')
+    if [[ -z "$LATEST_OBOL_VERSION" ]]; then
+        log_warn "Unable to fetch latest Obol CLI version. Network may be unavailable."
+        if command_exists obol; then
+            log_info "obol CLI is already installed. Skipping update check."
+            return
+        else
+            log_error "obol CLI is not installed and unable to fetch latest version. Please check your internet connection."
+        fi
+    fi
     log_info "Latest Obol CLI version is $LATEST_OBOL_VERSION"
     if ! command_exists obol || [[ "$(obol --version >/dev/null 2>&1)" != *"$LATEST_OBOL_VERSION"* ]]; then
         log_info "Installing obol CLI $LATEST_OBOL_VERSION..."
-        ensure curl -sSLo obol.tar.gz "$OBOL_CLI_REPO/releases/download/$LATEST_OBOL_VERSION/obol-$PLATFORM-$ARCHITECTURE.tar.gz"
+        if ! curl -sSLo obol.tar.gz "$OBOL_CLI_REPO/releases/download/$LATEST_OBOL_VERSION/obol-$PLATFORM-$ARCHITECTURE.tar.gz" 2>/dev/null; then
+            log_error "Failed to download Obol CLI. Please check your internet connection."
+        fi
         tar -xzf obol.tar.gz
         chmod +x obol
         sudo mv obol /usr/local/bin/
@@ -350,10 +380,14 @@ install_obol_cli() {
     log_info "Obol CLI $LATEST_OBOL_VERSION is installed."
 }
 
-# Check for obolup updates (warn only, don’t update)
+# Check for obolup updates (warn only, don't update)
 check_obolup_update() {
     log_info "Checking for obolup updates..."
-    REMOTE_HASH=$(curl -s "$OBOLUP_URL" | sha256sum | awk '{print $1}')
+    REMOTE_HASH=$(curl -s "$OBOLUP_URL" 2>/dev/null | sha256sum | awk '{print $1}')
+    if [[ -z "$REMOTE_HASH" || "$REMOTE_HASH" == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]]; then
+        log_warn "Unable to check for obolup updates. Network may be unavailable."
+        return
+    fi
     LOCAL_HASH=$(sha256sum "$0" | awk '{print $1}')
     if [[ "$REMOTE_HASH" != "$LOCAL_HASH" ]]; then
         log_warn "A newer version of obolup is available. Run: sh <(curl https://stack.obol.org/sh)"
