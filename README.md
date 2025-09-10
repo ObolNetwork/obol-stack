@@ -35,10 +35,10 @@ docker-compose up -d
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Start development server
-npm run dev
+pnpm run dev
 
 # Access at http://localhost:3000
 ```
@@ -55,10 +55,10 @@ The dashboard is configured to serve on `http://obol.stack`:
 127.0.0.1 monitoring.obol.stack
 
 # Development with custom domain
-npm run dev
+pnpm run dev
 
 # Production
-npm run start
+pnpm run start
 ```
 
 ### Environment Variables
@@ -83,8 +83,8 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 
 ### Tech Stack
 
-- **Framework**: Next.js 15.4.5 with React 19
-- **Styling**: Obol UI Design System (@obolnetwork/obol-ui)
+- **Framework**: Next.js 15.5.2 with React 19
+- **Styling**: Tailwind CSS v4 with custom Obol color system
 - **Components**: Radix UI primitives for accessibility
 - **TypeScript**: Full type safety
 - **Architecture**: Atomic Design Pattern
@@ -93,15 +93,14 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 ### Available Scripts
 
 ```bash
-npm run dev          # Development server with Turbopack
-npm run dev:local    # Development server (localhost)
-npm run build        # Production build
-npm run start        # Production server
-npm run start:local  # Production server (localhost)
-npm run lint         # ESLint
-npm run lint:fix     # ESLint with auto-fix
-npm run format       # Prettier formatting
-npm run format:check # Check Prettier formatting
+pnpm run dev          # Development server
+pnpm run dev:local    # Development server (localhost)
+pnpm run build        # Production build
+pnpm run start        # Production server
+pnpm run start:local  # Production server (localhost)
+pnpm run lint         # ESLint
+pnpm run format       # Prettier formatting
+pnpm run format:check # Check Prettier formatting
 ```
 
 ### Project Structure

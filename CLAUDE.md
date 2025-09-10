@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Commands
 
-- `npm install` - Install dependencies
-- `npm run dev` - Start development server with Turbopack on custom domain
-- `npm run dev:local` - Start development server with Turbopack on localhost:3000
-- `npm run build` - Build for production (Next.js standalone output)
-- `npm run start` - Start production server on obol.stack domain
-- `npm run start:local` - Start production server on localhost:3000
-- `npm run lint` - Run ESLint with Next.js TypeScript config
+- `pnpm install` - Install dependencies
+- `pnpm run dev` - Start development server with Turbopack on custom domain
+- `pnpm run dev:local` - Start development server with Turbopack on localhost:3000
+- `pnpm run build` - Build for production (Next.js standalone output)
+- `pnpm run start` - Start production server on obol.stack domain
+- `pnpm run start:local` - Start production server on localhost:3000
+- `pnpm run lint` - Run ESLint with Next.js TypeScript config
 
 ### Docker Commands
 
@@ -33,7 +33,7 @@ The application is configured to run on `obol.stack` domain. Add to `/etc/hosts`
 
 ### Tech Stack
 
-- **Framework**: Next.js 15.4.5 with React 19
+- **Framework**: Next.js 15.5.2 with React 19
 - **Language**: TypeScript with strict mode
 - **Styling**: Tailwind CSS v4 with custom Obol design system
 - **UI Library**: @obolnetwork/obol-ui package
@@ -145,3 +145,11 @@ The codebase is prepared for real data integration with:
 - Consider Jest + React Testing Library for component testing
 - Docker health checks provide basic application health monitoring
 - Manual testing via development server or Docker container
+
+### Package Manager
+
+- **pnpm** is the package manager for this project
+- Faster installation and more efficient disk space usage than npm
+- Use `pnpm install` to install dependencies
+- Use `pnpm add <package>` to add new dependencies
+- pnpm-lock.yaml is the lockfile (do not commit package-lock.json)
