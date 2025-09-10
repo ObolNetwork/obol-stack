@@ -10,10 +10,15 @@ interface UptimeData {
   totalMinutes: number;
 }
 
-export const useUptime = (initialDays = 69, initialHours = 4, initialMinutes = 20): UptimeData => {
+export const useUptime = (
+  initialDays = 69,
+  initialHours = 4,
+  initialMinutes = 20
+): UptimeData => {
   // Calculate initial uptime in minutes
-  const initialTotalMinutes = (initialDays * 24 * 60) + (initialHours * 60) + initialMinutes;
-  
+  const initialTotalMinutes =
+    initialDays * 24 * 60 + initialHours * 60 + initialMinutes;
+
   const [startTime] = useState(() => Date.now());
   const [totalMinutes, setTotalMinutes] = useState(initialTotalMinutes);
 
@@ -22,7 +27,7 @@ export const useUptime = (initialDays = 69, initialHours = 4, initialMinutes = 2
       // Calculate elapsed time since component mounted
       const elapsedMs = Date.now() - startTime;
       const elapsedMinutes = Math.floor(elapsedMs / (1000 * 60));
-      
+
       // Update total uptime
       setTotalMinutes(initialTotalMinutes + elapsedMinutes);
     };
@@ -37,7 +42,7 @@ export const useUptime = (initialDays = 69, initialHours = 4, initialMinutes = 2
     const quickInterval = setInterval(() => {
       const elapsedMs = Date.now() - startTime;
       const elapsedMinutes = Math.floor(elapsedMs / (1000 * 60));
-      
+
       if (elapsedMinutes < 2) {
         updateUptime();
       } else {

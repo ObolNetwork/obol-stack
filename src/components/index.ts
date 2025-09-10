@@ -1,39 +1,31 @@
-// Layout components
-export { Header } from './layout/Header';
-export { Footer } from './layout/Footer';
-export { FooterBar } from './layout/FooterBar';
+// Atoms
+export { Card } from './atoms/Card';
+export { ChainChip } from './atoms/ChainChip';
+export { ChainIcon, EthereumIcon, AztecIcon } from './atoms/ChainIcon';
+export { PercentageChip } from './atoms/PercentageChip';
+export { StatusIndicator } from './atoms/StatusIndicator';
 
-// Metric components (Legacy)
-export { MetricCard } from './metrics/MetricCard';
-export { NetworkStatus } from './metrics/NetworkStatus';
-export { NodeOverview } from './metrics/NodeOverview';
-export { ClientStatus } from './metrics/ClientStatus';
+// Molecules
+export { Accordion } from './molecules/Accordion';
+export { AnimatedNumber } from './molecules/AnimatedNumber';
+export { ClientCard } from './molecules/ClientCard';
+export { ParticipationNumber } from './molecules/ParticipationNumber';
+export { ProgressBar } from './molecules/ProgressBar';
+export { ProgressSweep } from './molecules/ProgressSweep';
+export { RandomWalkNumber } from './molecules/RandomWalkNumber';
 
-// Metric components (Compact Design)
-export { EthereumSummaryCard } from './metrics/EthereumSummaryCard';
-export { ClientMiniCards } from './metrics/ClientMiniCards';
-export { NodeOverviewCompact } from './metrics/NodeOverviewCompact';
+// Templates
+export { DashboardTemplate } from './templates/DashboardTemplate';
 
-// Monitoring components
-export { PortStatus } from './monitoring/PortStatus';
-export { PortsList } from './monitoring/PortsList';
+// Organisms
+export { DashboardHeader } from './organisms/DashboardHeader';
+export { DashboardContent } from './organisms/DashboardContent';
+export { FooterBar } from './organisms/FooterBar';
+export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
+export { NodeOverview } from './organisms/NodeOverview';
 
-// Shared components (Legacy)
-export { StatusIndicator } from './shared/StatusIndicator';
-export { ProgressBar } from './shared/ProgressBar';
+// Pages
+export { DashboardPage } from './pages/DashboardPage';
 
-// Shared components (Compact Design)
-export { Card } from './shared/Card';
-export { Badge } from './shared/Badge';
-export { Pill } from './shared/Pill';
-export { ThinProgress } from './shared/ThinProgress';
-export { MetricItem, InlineMetaItem, InlineMetaSeparator } from './shared/MetricItem';
-export { AnimatedNumber } from './shared/AnimatedNumber';
-export { RandomWalkNumber } from './shared/RandomWalkNumber';
-export { ProgressSweep } from './shared/ProgressSweep';
-export { TimingProvider, useTiming } from './shared/TimingContext';
-export { useUptime } from './shared/useUptime';
-export { ParticipationNumber } from './shared/ParticipationNumber';
-
-// Shared utilities
-export { randomWalkStep, generateNormalRandom, type RandomWalkConfig } from './shared/randomWalkUtils';
+// Icons
+export * from './icons';

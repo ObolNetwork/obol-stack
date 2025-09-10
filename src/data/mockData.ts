@@ -13,6 +13,14 @@ export const mockDashboardData: DashboardData = {
     clients: 64,
     distance: 0, // Distance to justified epoch
   },
+  aztec: {
+    status: 'synced',
+    blocks: 245621,
+    finalized: 245618,
+    participation: 95.2,
+    clients: 28,
+    distance: 0, // Distance to justified epoch
+  },
   nodeOverview: {
     diskUsage: {
       value: 1247.8,

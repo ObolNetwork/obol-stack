@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 
 interface TimingContextValue {
   blockTick: number; // 12-second intervals
-  peerTick: number;  // 4-second intervals
+  peerTick: number; // 4-second intervals
   isActive: boolean; // Timing system active state
 }
 
@@ -23,7 +23,7 @@ const TimingContext = createContext<TimingContextValue>({
 export const TimingProvider: React.FC<TimingProviderProps> = ({
   children,
   blockInterval = 12000, // 12 seconds for block counter
-  peerInterval = 4000,   // 4 seconds for peer counter
+  peerInterval = 4000, // 4 seconds for peer counter
 }) => {
   const [blockTick, setBlockTick] = useState(0);
   const [peerTick, setPeerTick] = useState(0);
@@ -55,7 +55,8 @@ export const TimingProvider: React.FC<TimingProviderProps> = ({
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    return () =>
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
   const value: TimingContextValue = {
@@ -65,9 +66,7 @@ export const TimingProvider: React.FC<TimingProviderProps> = ({
   };
 
   return (
-    <TimingContext.Provider value={value}>
-      {children}
-    </TimingContext.Provider>
+    <TimingContext.Provider value={value}>{children}</TimingContext.Provider>
   );
 };
 
