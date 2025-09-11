@@ -8,25 +8,25 @@ export interface ProgressBarProps {
 
 const ProgressFill = styled(Box, {
   height: '2px',
-  borderRadius: '80px',
+  borderRadius: '$pill',
   transition: 'width 500ms ease',
 
   variants: {
     variant: {
       critical: {
-        backgroundColor: '#CC3333', // 0%-8%
+        backgroundColor: '$test', // 0%-8% - Red for critical
       },
       warning: {
-        backgroundColor: '#DD603C', // 9%-17%
+        backgroundColor: '$testHover', // 9%-17% - Orange for warning
       },
       caution: {
-        backgroundColor: '#E89E30', // 18%-21%
+        backgroundColor: '$obolGold', // 18%-21% - Gold for caution
       },
       good: {
-        backgroundColor: '#B6EA5C', // 22%-31%
+        backgroundColor: '$obolGreenLight', // 22%-31% - Light green for good
       },
       excellent: {
-        backgroundColor: '#2FE4AB', // 32%-100% - Obol Green
+        backgroundColor: '$obolGreen', // 32%-100% - Obol Green for excellent
       },
     },
   },

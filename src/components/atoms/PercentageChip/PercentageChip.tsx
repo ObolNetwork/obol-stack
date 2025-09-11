@@ -9,29 +9,29 @@ export interface PercentageChipProps {
 const getPercentageStyles = (percentage: number) => {
   if (percentage >= 0 && percentage <= 8) {
     return {
-      background: 'rgba(204, 51, 51, 0.20)',
-      color: '#CC3333',
+      background: 'rgba(221, 96, 60, 0.20)', // $test with 20% opacity
+      color: '$test',
     };
   } else if (percentage >= 9 && percentage <= 17) {
     return {
-      background: 'rgba(221, 96, 60, 0.20)',
-      color: '#DD603C',
+      background: 'rgba(232, 156, 135, 0.20)', // $testHover with 20% opacity
+      color: '$testHover',
     };
   } else if (percentage >= 18 && percentage <= 21) {
     return {
-      background: 'rgba(232, 158, 48, 0.20)',
-      color: '#E89E30',
+      background: 'rgba(232, 158, 48, 0.20)', // $obolGold with 20% opacity
+      color: '$obolGold',
     };
   } else if (percentage >= 22 && percentage <= 31) {
     return {
-      background: 'rgba(182, 234, 92, 0.20)',
-      color: '#B6EA5C',
+      background: 'rgba(182, 234, 92, 0.20)', // $obolGreenLight with 20% opacity
+      color: '$obolGreenLight',
     };
   } else {
     // 32% till 100%
     return {
-      background: 'rgba(47, 228, 171, 0.20)',
-      color: '#2FE4AB', // Primary - Obol Green/Mid
+      background: 'rgba(47, 228, 171, 0.20)', // $obolGreen with 20% opacity
+      color: '$obolGreen',
     };
   }
 };
@@ -39,17 +39,17 @@ const getPercentageStyles = (percentage: number) => {
 const StyledPercentageChip = styled(Box, {
   display: 'flex',
   width: '40px',
-  height: '24px',
-  padding: '4px 12px',
+  height: '$lg',
+  padding: '$1 $xs',
   justifyContent: 'center',
   alignItems: 'center',
-  gap: '8px',
+  gap: '$xxs',
   flexShrink: 0,
-  borderRadius: '8px',
+  borderRadius: '$3',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '600',
+  fontWeight: '$semibold',
   lineHeight: 'normal',
 });
 

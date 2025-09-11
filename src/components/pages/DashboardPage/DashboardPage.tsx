@@ -2,47 +2,42 @@ import { DashboardTemplate } from '../../templates/DashboardTemplate';
 import { DashboardHeader } from '../../organisms/DashboardHeader';
 import { DashboardContent } from '../../organisms/DashboardContent';
 import { FooterBar } from '../../organisms/FooterBar';
-import { TimingProvider } from '../../shared/TimingContext';
-import { useState, useEffect } from 'react';
-import { DashboardData } from '../../../types/dashboard';
+import { LoadingState } from '../../molecules/LoadingState';
+import { ErrorState } from '../../molecules/ErrorState';
+import { useDashboardData } from '../../../hooks/useDashboardData';
 import { mockDashboardData } from '../../../data/mockData';
+import { Box } from '@obolnetwork/obol-ui';
 
 export function DashboardPage() {
-  const [dashboardData, setDashboardData] =
-    useState<DashboardData>(mockDashboardData);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, error, refetch } = useDashboardData(12000); // Refresh every 12 seconds
 
-  useEffect(() => {
-    // Fetch initial data
-    const fetchData = async () => {
-      try {
-        const response = await fetch('/api/dashboard');
-        if (response.ok) {
-          const data = await response.json();
-          setDashboardData(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch dashboard data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-
-    // Set up polling for real-time updates
-    const interval = setInterval(fetchData, 10000); // Update every 10 seconds
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <TimingProvider blockInterval={12000} peerInterval={4000}>
+  // Show loading state
+  if (loading && !data) {
+    return (
       <DashboardTemplate
         header={<DashboardHeader />}
-        content={<DashboardContent data={dashboardData} />}
+        content={<LoadingState message="Loading dashboard data..." />}
         footer={<FooterBar />}
       />
-    </TimingProvider>
+    );
+  }
+
+  return (
+    <DashboardTemplate
+      header={<DashboardHeader />}
+      content={
+        <Box>
+          {error && (
+            <ErrorState
+              message={`API connection failed. Using cached data. Error: ${error}`}
+              onRetry={refetch}
+              variant="banner"
+            />
+          )}
+          {data && <DashboardContent data={data} />}
+        </Box>
+      }
+      footer={<FooterBar />}
+    />
   );
 }

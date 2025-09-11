@@ -4,15 +4,14 @@ import { Card } from '../../atoms/Card';
 import { ChainChip } from '../../atoms/ChainChip';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
 import { Accordion } from '../../molecules/Accordion';
-import { AnimatedNumber } from '../../molecules/AnimatedNumber';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
-import { ClientCard, ClientConfig } from '../../molecules/ClientCard';
+import { ClientCard } from '../../molecules/ClientCard';
 import { ChainData } from '../../../types/dashboard';
+import { ChainIcon } from '../../atoms/ChainIcon';
+import { getClientIcon } from '../../../lib/utils/clientIcons';
 
 export interface NetworkStatusProps {
   chainData: ChainData;
-  networkName: string;
-  networkIcon: React.ReactNode;
   defaultExpanded?: boolean;
 }
 
@@ -93,8 +92,6 @@ const ClientsContainer = styled(Box, {
 
 export function NetworkStatus({
   chainData,
-  networkName,
-  networkIcon,
   defaultExpanded = true,
 }: NetworkStatusProps) {
   const headerContent = (
@@ -110,9 +107,12 @@ export function NetworkStatus({
       >
         <Flex css={{ alignItems: 'center', gap: '$md' }}>
           {/* Network Icon */}
-          {networkIcon}
+          {<ChainIcon chain={chainData.chainName} size={24} />}
 
-          <CardTitle>{networkName}</CardTitle>
+          <CardTitle>
+            {chainData.chainName.charAt(0).toUpperCase() +
+              chainData.chainName.slice(1)}
+          </CardTitle>
 
           <ChainChip
             variant={chainData.network === 'mainnet' ? 'mainnet' : 'testnet'}
@@ -158,31 +158,11 @@ export function NetworkStatus({
           <MetricsGrid>
             <MetricItem>
               <MetricLabel>BLOCK HEIGHT</MetricLabel>
-              <MetricValue>
-                {chainData.blocks > 0 ? (
-                  <AnimatedNumber
-                    value={chainData.blocks}
-                    animateLastDigit={true}
-                    incrementInterval={12000}
-                  />
-                ) : (
-                  'N/A'
-                )}
-              </MetricValue>
+              <MetricValue>{chainData.blocks.toLocaleString()}</MetricValue>
             </MetricItem>
             <MetricItem>
               <MetricLabel>FINALIZED EPOCH</MetricLabel>
-              <MetricValue>
-                {chainData.finalized > 0 ? (
-                  <AnimatedNumber
-                    value={chainData.finalized}
-                    animateLastDigit={true}
-                    incrementInterval={384000}
-                  />
-                ) : (
-                  'N/A'
-                )}
-              </MetricValue>
+              <MetricValue>{chainData.finalized.toLocaleString()}</MetricValue>
             </MetricItem>
             <MetricItem>
               <MetricLabel>NODE MODE</MetricLabel>
@@ -193,16 +173,7 @@ export function NetworkStatus({
             <MetricItem>
               <MetricLabel>PARTICIPATION</MetricLabel>
               <MetricValue>
-                {chainData.participation > 0 ? (
-                  <ParticipationNumber
-                    initialValue={chainData.participation}
-                    target={chainData.participation}
-                    standardDeviation={1}
-                    updateInterval={4000}
-                  />
-                ) : (
-                  'N/A'
-                )}
+                <ParticipationNumber value={chainData.participation} />
               </MetricValue>
             </MetricItem>
           </MetricsGrid>
@@ -225,36 +196,16 @@ export function NetworkStatus({
                 CLIENTS
               </Text>
               <ClientsContainer>
-                {chainData.clients.map(client => {
-                  // Map role to proper display name
-                  const roleDisplay =
-                    client.role === 'execution'
-                      ? 'Execution'
-                      : client.role === 'consensus'
-                        ? 'Consensus'
-                        : 'Validator';
-
-                  const config: ClientConfig = {
-                    name: client.name,
-                    role: roleDisplay,
-                    icon: client.icon || '/default-client-icon.png',
-                  };
-
-                  return (
-                    <ClientCard
-                      key={`${client.name}-${client.version}`}
-                      config={config}
-                      data={{
-                        version: client.version,
-                        peers: client.peers,
-                      }}
-                      status={client.status}
-                      peersTarget={client.peers}
-                      peersStandardDeviation={2}
-                      updateInterval={10000}
-                    />
-                  );
-                })}
+                {chainData.clients.map(client => (
+                  <ClientCard
+                    key={client.name}
+                    name={client.name}
+                    version={client.version}
+                    peers={client.peers}
+                    status={client.status}
+                    icon={getClientIcon(client.name)}
+                  />
+                ))}
               </ClientsContainer>
             </ClientsSection>
           )}

@@ -4,7 +4,7 @@ import {
   DownloadIcon,
   FileTextIcon,
   GitHubLogoIcon,
-  ChatBubbleIcon,
+  DiscordLogoIcon,
 } from '@radix-ui/react-icons';
 
 export interface FooterBarProps {
@@ -16,7 +16,7 @@ const StyledFooter = styled(Box, {
   alignItems: 'center',
   justifyContent: 'space-between',
   fontSize: '$3',
-  color: '$muted',
+  color: '$body',
 });
 
 const StyledButton = styled('button', {
@@ -67,20 +67,22 @@ const IconWrapper = styled(Box, {
 });
 
 export function FooterBar({ className }: FooterBarProps) {
-  const handleExportDiagnostics = () => {
-    // TODO: Implement diagnostics export
-    console.log('Export diagnostics clicked');
-  };
+  // TODO: Implement diagnostics export
+  // const handleExportDiagnostics = () => {
+  //
+  //   console.log('Export diagnostics clicked');
+  // };
 
-  const handleViewLogs = () => {
-    // TODO: Implement view logs
-    console.log('View logs clicked');
-  };
+  // TODO: Implement view logs
+  // const handleViewLogs = () => {
+  //
+  //   console.log('View logs clicked');
+  // };
 
   return (
     <StyledFooter className={className} as="footer">
       <Flex css={{ alignItems: 'center', gap: '$sm', width: 'fit-content' }}>
-        <StyledButton onClick={handleExportDiagnostics}>
+        {/* <StyledButton onClick={handleExportDiagnostics}>
           <IconWrapper>
             <DownloadIcon />
           </IconWrapper>
@@ -91,12 +93,12 @@ export function FooterBar({ className }: FooterBarProps) {
             <FileTextIcon />
           </IconWrapper>
           View Logs
-        </StyledButton>
+        </StyledButton> */}
       </Flex>
 
       <Flex css={{ alignItems: 'center', gap: '$sm', width: 'fit-content' }}>
         <StyledLink
-          href="https://github.com/ObolNetwork"
+          href="https://github.com/obolnetwork"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -106,14 +108,24 @@ export function FooterBar({ className }: FooterBarProps) {
           GitHub
         </StyledLink>
         <StyledLink
-          href="https://discord.gg/obol"
+          href="https://discord.com/invite/n6ebKsX46w"
           target="_blank"
           rel="noopener noreferrer"
         >
           <IconWrapper>
-            <ChatBubbleIcon />
+            <DiscordLogoIcon />
           </IconWrapper>
           Discord
+        </StyledLink>
+        <StyledLink
+          href="https://docs.obol.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <IconWrapper>
+            <FileTextIcon />
+          </IconWrapper>
+          Docs
         </StyledLink>
       </Flex>
     </StyledFooter>

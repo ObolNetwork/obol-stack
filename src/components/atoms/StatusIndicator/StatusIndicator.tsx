@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
+import { Tooltip } from '../Tooltip';
 
 export interface StatusIndicatorProps {
   status?: 'synced' | 'unsynced';
@@ -59,30 +60,33 @@ export function StatusIndicator({
 }: StatusIndicatorProps) {
   const color = getStatusColors(status);
   const sizeValues = getSizeValues(size);
+  const tooltipText = status === 'synced' ? 'Synced' : 'Unsynced';
 
   return (
-    <StatusContainer size={size} className={className}>
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width={sizeValues.width}
-        height={sizeValues.height}
-        viewBox={`0 0 ${sizeValues.width} ${sizeValues.height}`}
-        fill="none"
-      >
-        <circle
-          opacity="0.3"
-          cx={sizeValues.outerRadius}
-          cy={sizeValues.outerRadius}
-          r={sizeValues.outerRadius}
-          fill={color}
-        />
-        <circle
-          cx={sizeValues.outerRadius}
-          cy={sizeValues.outerRadius}
-          r={sizeValues.innerRadius}
-          fill={color}
-        />
-      </svg>
-    </StatusContainer>
+    <Tooltip content={tooltipText} side="bottom">
+      <StatusContainer size={size} className={className}>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width={sizeValues.width}
+          height={sizeValues.height}
+          viewBox={`0 0 ${sizeValues.width} ${sizeValues.height}`}
+          fill="none"
+        >
+          <circle
+            opacity="0.3"
+            cx={sizeValues.outerRadius}
+            cy={sizeValues.outerRadius}
+            r={sizeValues.outerRadius}
+            fill={color}
+          />
+          <circle
+            cx={sizeValues.outerRadius}
+            cy={sizeValues.outerRadius}
+            r={sizeValues.innerRadius}
+            fill={color}
+          />
+        </svg>
+      </StatusContainer>
+    </Tooltip>
   );
 }

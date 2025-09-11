@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Text, Flex, styled } from '@obolnetwork/obol-ui';
+import { Box, Text, Flex, styled, theme } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { PercentageChip } from '../../atoms/PercentageChip';
@@ -10,9 +10,6 @@ import {
   CpuIcon,
   UptimeIcon,
 } from '../../icons/hardware';
-import { useUptime } from '../../shared/useUptime';
-import { randomWalkStep, RandomWalkConfig } from '../../../lib/randomWalkUtils';
-import { useTiming } from '../../shared/TimingContext';
 import { DashboardData } from '../../../types/dashboard';
 
 export interface NodeOverviewProps {
@@ -67,7 +64,7 @@ const MetricCardContainer = styled(Box, {
   alignItems: 'flex-start',
   flex: '1 0 0',
   borderRadius: '8px',
-  background: '#182D32', // var(--Backgrounds-03, #182D32)
+  background: '$bg03',
   gap: '$sm',
 });
 
@@ -93,9 +90,9 @@ const MetricIconContainer = styled(Box, {
 });
 
 const MetricLabel = styled(Text, {
-  color: '#97B2B8', // var(--Text-Body, #97B2B8)
+  color: '$body',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
   lineHeight: 'normal',
@@ -103,9 +100,9 @@ const MetricLabel = styled(Text, {
 });
 
 const MetricValue = styled(Text, {
-  color: '#FFF',
+  color: '$white',
   fontFamily: '"DM Sans"',
-  fontSize: '16px',
+  fontSize: '$4',
   fontStyle: 'normal',
   fontWeight: '600',
   lineHeight: '24px' /* 150% */,
@@ -113,9 +110,9 @@ const MetricValue = styled(Text, {
 });
 
 const MetricSubtext = styled(Text, {
-  color: '#97B2B8', // var(--Text-Body, #97B2B8)
+  color: '$body',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
   lineHeight: '18px' /* 150% */,
@@ -169,9 +166,9 @@ const SectionContainer = styled(Box, {
 });
 
 const SectionTitle = styled(Text, {
-  color: '#97B2B8', // var(--Text-Body, #97B2B8)
+  color: '$body',
   fontFamily: '"DM Sans"',
-  fontSize: '10px',
+  fontSize: '$1',
   fontStyle: 'normal',
   fontWeight: '600',
   lineHeight: '28px' /* 280% */,
@@ -193,7 +190,7 @@ const PortItem = styled(Flex, {
   alignItems: 'center',
   justifyContent: 'space-between',
   borderRadius: '8px',
-  background: '#182D32', // var(--Backgrounds-03, #182D32)
+  background: '$bg03',
 });
 
 const PortNameAndNumber = styled(Flex, {
@@ -203,9 +200,9 @@ const PortNameAndNumber = styled(Flex, {
 });
 
 const PortName = styled(Text, {
-  color: '#97B2B8', // var(--Text-Body, #97B2B8)
+  color: '$body',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
   lineHeight: 'normal',
@@ -213,9 +210,9 @@ const PortName = styled(Text, {
 });
 
 const PortNumber = styled(Text, {
-  color: '#E1E9EB', // var(--Text-Light, #E1E9EB)
+  color: '$light',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
   lineHeight: '18px' /* 150% */,
@@ -223,7 +220,7 @@ const PortNumber = styled(Text, {
 
 const PortStatus = styled(Text, {
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
   lineHeight: '18px' /* 150% */,
@@ -233,61 +230,34 @@ const PortStatus = styled(Text, {
   variants: {
     status: {
       open: {
-        color: '#2FE4AB',
+        color: '$obolGreen',
       },
       closed: {
-        color: '#FF5757',
+        color: '$test',
       },
     },
   },
 });
 
+// Helper function to format uptime hours into readable format
+const formatUptime = (hours: number): string => {
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+
+  if (days > 0) {
+    return `${days}d ${remainingHours}h`;
+  }
+  return `${remainingHours}h`;
+};
+
 export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  // Use live uptime counter starting at 69d 4h 20m
-  const uptime = useUptime(69, 4, 20);
 
-  // Random walk states for memory and CPU
-  const [memoryValue, setMemoryValue] = useState(6.2); // 6.2GB ± 0.1GB
-  const [cpuPercentage, setCpuPercentage] = useState(19); // 19% ± 2%
-
-  const { peerTick, isActive } = useTiming();
-
-  useEffect(() => {
-    if (isActive) {
-      // Update memory usage (6.2GB ± 0.1GB)
-      setMemoryValue(prev => {
-        const config: RandomWalkConfig = {
-          target: 6.2,
-          standardDeviation: 0.1,
-          minValue: 5.8, // Reasonable lower bound
-          maxValue: 6.6, // Reasonable upper bound
-          precision: 1, // 1 decimal place for GB
-          meanReversionStrength: 0.25,
-          varianceScale: 0.15,
-        };
-        return randomWalkStep(prev, config);
-      });
-
-      // Update CPU percentage (19% ± 2%)
-      setCpuPercentage(prev => {
-        const config: RandomWalkConfig = {
-          target: 19,
-          standardDeviation: 2,
-          minValue: 12, // Reasonable lower bound
-          maxValue: 26, // Reasonable upper bound
-          precision: 1, // 1 decimal place for percentage
-          meanReversionStrength: 0.25,
-          varianceScale: 0.15,
-        };
-        return randomWalkStep(prev, config);
-      });
-    }
-  }, [peerTick, isActive]);
-
-  // Calculate dynamic percentages
-  const memoryPercentage = (memoryValue / data.memoryUsage.total) * 100;
-  const diskPercentage = data.diskUsage.percentage; // Keep disk static
+  // Use real API data directly
+  const diskPercentage = data.diskUsage.percentage;
+  const memoryPercentage = data.memoryUsage.percentage;
+  const cpuPercentage = data.cpuLoad.percentage;
+  const formattedUptime = formatUptime(data.uptime.hours);
 
   // Port data for the ports section
   const portList = [
@@ -317,7 +287,9 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
       <CardTitle>Node Overview</CardTitle>
       <MetricsGrid>
         <MetricCard
-          icon={<DiskIcon width={20} height={20} fill="#E1E9EB" />}
+          icon={
+            <DiskIcon width={20} height={20} fill={theme.colors.light.value} />
+          }
           label="DISK"
           percentage={diskPercentage}
           value={`${data.diskUsage.value} GB`}
@@ -326,16 +298,24 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
         />
 
         <MetricCard
-          icon={<MemoryIcon width={20} height={20} fill="#E1E9EB" />}
+          icon={
+            <MemoryIcon
+              width={20}
+              height={20}
+              fill={theme.colors.light.value}
+            />
+          }
           label="MEMORY"
           percentage={memoryPercentage}
-          value={`${memoryValue} GB`}
+          value={`${data.memoryUsage.value} GB`}
           subtext={`of ${data.memoryUsage.total}GB`}
           isExpanded={isExpanded}
         />
 
         <MetricCard
-          icon={<CpuIcon width={20} height={20} fill="#E1E9EB" />}
+          icon={
+            <CpuIcon width={20} height={20} fill={theme.colors.light.value} />
+          }
           label="CPU"
           percentage={cpuPercentage}
           value={`${cpuPercentage}%`}
@@ -344,10 +324,16 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
         />
 
         <MetricCard
-          icon={<UptimeIcon width={20} height={20} fill="#E1E9EB" />}
+          icon={
+            <UptimeIcon
+              width={20}
+              height={20}
+              fill={theme.colors.light.value}
+            />
+          }
           label="UPTIME"
           percentage={8}
-          value={uptime.formatted}
+          value={formattedUptime}
           subtext="continuous operation"
           isExpanded={isExpanded}
         />

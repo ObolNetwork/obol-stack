@@ -1,37 +1,24 @@
 import React from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
-import { RandomWalkNumber } from '../RandomWalkNumber';
-
-export interface ClientConfig {
-  name: string;
-  role: string;
-  icon: string;
-}
-
-export interface ClientData {
-  version: string;
-  peers: number;
-}
 
 export interface ClientCardProps {
-  config: ClientConfig;
-  data: ClientData;
+  name: string;
+  version: string;
+  peers: number;
   status?: 'synced' | 'syncing' | 'error';
-  peersTarget?: number;
-  peersStandardDeviation?: number;
-  updateInterval?: number;
+  icon?: string;
 }
 
 const Card = styled(Box, {
   display: 'flex',
   width: '218px',
-  padding: '16px',
+  padding: '$sm',
   flexDirection: 'column',
   alignItems: 'flex-start',
-  gap: '8px',
-  borderRadius: '8px',
-  background: '#182D32', // var(--Backgrounds-03, #182D32)
+  gap: '$xxs',
+  borderRadius: '$3',
+  background: '$bg03',
 });
 
 const ClientHeader = styled(Flex, {
@@ -49,27 +36,27 @@ const ClientAvatar = styled(Box, {
   width: '$xl',
   height: '$xl',
   borderRadius: '$3',
-  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  backgroundColor: '$secondaryBgDefault',
 });
 
 const ClientDetails = styled(Box, {});
 
 const ClientName = styled(Text, {
-  color: '#FFF',
+  color: '$white',
   fontFamily: '"DM Sans"',
-  fontSize: '16px',
+  fontSize: '$4',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '24px',
+  fontWeight: '$semibold',
+  lineHeight: '$base',
 });
 
 const ClientVersion = styled(Text, {
-  color: '#97B2B8',
+  color: '$body',
   fontFamily: '"DM Sans"',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '500',
-  lineHeight: '18px',
+  fontWeight: '$medium',
+  lineHeight: '$short',
 });
 
 const ClientMetrics = styled(Box, {
@@ -95,12 +82,11 @@ const ClientMetricValue = styled(Text, {
 });
 
 export function ClientCard({
-  config,
-  data,
+  name,
+  version,
+  peers,
   status = 'synced',
-  peersTarget = 72,
-  peersStandardDeviation = 10,
-  updateInterval = 4000,
+  icon,
 }: ClientCardProps) {
   const getStatusIndicatorStatus = () => {
     switch (status) {
@@ -119,17 +105,19 @@ export function ClientCard({
     <Card>
       <ClientHeader>
         <ClientInfo>
-          <ClientAvatar
-            css={{
-              backgroundImage: `url(${config.icon})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              backgroundRepeat: 'no-repeat',
-            }}
-          />
+          {icon && (
+            <ClientAvatar
+              css={{
+                backgroundImage: `url(${icon})`,
+                backgroundSize: 'contain',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+              }}
+            />
+          )}
           <ClientDetails>
-            <ClientName>{config.name}</ClientName>
-            <ClientVersion>{data.version}</ClientVersion>
+            <ClientName>{name}</ClientName>
+            <ClientVersion>{version}</ClientVersion>
           </ClientDetails>
         </ClientInfo>
         <StatusIndicator status={getStatusIndicatorStatus()} size="sm" />
@@ -137,15 +125,7 @@ export function ClientCard({
       <ClientMetrics>
         <ClientMetricRow>
           <ClientMetricLabel>Peers</ClientMetricLabel>
-          <ClientMetricValue>
-            <RandomWalkNumber
-              initialValue={data.peers}
-              target={peersTarget}
-              standardDeviation={peersStandardDeviation}
-              updateInterval={updateInterval}
-              animateLastDigit={true}
-            />
-          </ClientMetricValue>
+          <ClientMetricValue>{peers}</ClientMetricValue>
         </ClientMetricRow>
       </ClientMetrics>
     </Card>
