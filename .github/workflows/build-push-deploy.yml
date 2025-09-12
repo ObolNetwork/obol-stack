@@ -110,11 +110,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+      packages: read  # Permission to read packages from ghcr.io
     steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:next
+          image-ref: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@${{ needs.build-push.outputs.image-digest }}
           format: 'sarif'
           output: 'trivy-results.sarif'
 
