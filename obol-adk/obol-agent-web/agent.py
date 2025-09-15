@@ -1,9 +1,16 @@
 # Enhanced Obol Agent for ADK Web with comprehensive MCP toolsets
 import os
+import logging
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.tools.mcp_tool import StdioConnectionParams
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 from mcp import StdioServerParameters
+
+# Configure logging to suppress repetitive authentication warnings
+logging.getLogger('google.adk.tools.base_authenticated_tool').setLevel(logging.ERROR)
+logging.getLogger('google.adk.tools.mcp_tool.mcp_tool').addFilter(
+    lambda record: 'EXPERIMENTAL' not in record.getMessage()
+)
 
 # Configuration - Environment variables for flexibility
 WORKSPACE_PATH = os.getenv("OBOL_WORKSPACE_PATH", "/Users/bussyjd/Development/Obol_Workbench/obol-stack")
@@ -12,7 +19,7 @@ KUBECONFIG_PATH = os.getenv("KUBECONFIG", os.path.expanduser("~/.kube/config"))
 
 # Agent definition for ADK web with comprehensive MCP toolsets
 root_agent = LlmAgent(
-    model=os.getenv("OBOL_AGENT_MODEL", "gemini-2.5-flash-preview-05-20"),
+    model=os.getenv("OBOL_AGENT_MODEL", "gemini-2.5-flash"),
     name='obol_agent',
     instruction=(
         'You are Obol Agent, a comprehensive assistant specialized in distributed validator technology. '
@@ -71,7 +78,7 @@ root_agent = LlmAgent(
                         "--network", "host",
                         "-v", f"{KUBECONFIG_PATH}:/home/appuser/.kube/config",
                         "-e", "K8S_NAMESPACE=l1",
-                        "flux159/mcp-server-kubernetes:2.4.2"
+                        "flux159/mcp-server-kubernetes:latest"
                     ],
                 ),
                 timeout=60,
