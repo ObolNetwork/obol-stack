@@ -20,27 +20,6 @@ readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m' # No Color
 
 # Network name to chain ID mapping
-<<<<<<< HEAD
-# Using functions instead of associative arrays for bash 3.2 compatibility
-get_chain_id() {
-    case "$1" in
-        "hoodi")   echo "560048" ;;
-        "mainnet") echo "1" ;;
-        *)         echo "" ;;
-    esac
-}
-
-# Check if network is supported
-is_supported_network() {
-    case "$1" in
-        "hoodi"|"mainnet") return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# Check if sync mode is supported
-is_supported_mode() {
-=======
 # Using case statements instead of associative arrays for bash 3.x compatibility
 get_chain_id() {
     case "$1" in
@@ -53,7 +32,6 @@ get_chain_id() {
 
 # Supported sync types
 is_valid_mode() {
->>>>>>> main
     case "$1" in
         "light"|"full") return 0 ;;
         *) return 1 ;;
@@ -101,17 +79,6 @@ else
 fi
 
 
-# Print an error message and exit
-err() {
-  echo -e "${RED}[ERROR]${NC} $1" >&2
-  exit 1
-}
-
-# Check if a command exists
-check_cmd() {
-  command -v "$1" >/dev/null 2>&1
-}
-
 # Run a command that should never fail. If the command fails execution
 # will immediately terminate with an error showing the failing command.
 ensure() {
@@ -142,18 +109,6 @@ validate_network() {
 	local network="$1"
 
 	if [[ -z "$network" ]]; then
-<<<<<<< HEAD
-		log_info "Network name is empty. Defaulting to mainnet" >&2
-		network="mainnet"
-	fi
-
-	if ! is_supported_network "$network"; then
-		log_warn "Unrecognised network name: \"${network}\".\n" >&2
-		help 1
-	fi
-	
-	# Return the validated network
-=======
 		log_info "Network name is empty. Defaulting to mainnet"
         echo "mainnet"
         return
@@ -164,7 +119,6 @@ validate_network() {
 		log_warn "Unrecognised network name: \"${network}\".\n"
 		help 1
 	fi
->>>>>>> main
 	echo "$network"
 }
 
@@ -173,18 +127,6 @@ validate_sync_mode() {
 	local mode="$1"
 
 	if [[ -z "$mode" ]]; then
-<<<<<<< HEAD
-		log_info "Sync mode is empty. Defaulting to light node sync mode." >&2
-		mode="light"
-	fi
-
-	if ! is_supported_mode "$mode"; then
-		log_warn "Unrecognised sync mode: \"${mode}\".\n" >&2
-		help 1
-	fi
-	
-	# Return the validated mode
-=======
 		log_info "Sync mode is empty. Defaulting to light node sync mode."
         echo "light"
         return
@@ -194,7 +136,6 @@ validate_sync_mode() {
 		log_warn "Unrecognised sync mode: \"${mode}\".\n"
 		help 1
 	fi
->>>>>>> main
 	echo "$mode"
 }
 
@@ -421,56 +362,6 @@ check_obolup_update() {
     fi
 }
 
-# Ensure GOOGLE_API_KEY is available and stored in the cluster
-setup_google_api_key_secret() {
-    local env_file="$HOME/.obol-stack/.env"
-    if [ -f "$env_file" ]; then
-        # shellcheck source=/dev/null
-        source "$env_file"
-    fi
-
-    if [ -z "${GOOGLE_API_KEY:-}" ]; then
-        log_info "No GOOGLE_API_KEY detected."
-        echo "Please open https://aistudio.google.com/apikey and copy your key."
-        read -rp "Paste Google API key: " GOOGLE_API_KEY
-        mkdir -p "$(dirname "$env_file")"
-        echo "GOOGLE_API_KEY=$GOOGLE_API_KEY" > "$env_file"
-        log_info "GOOGLE_API_KEY stored in $env_file"
-    fi
-
-    ## TODO: Adjust namespace
-    log_info "Creating secret for GOOGLE_API_KEY..."
-    ensure kubectl create secret generic google-api-key \
-        --namespace default \
-        --from-literal=key="$GOOGLE_API_KEY" \
-        --dry-run=client -o yaml | kubectl apply -f -
-}
-
-# Build the obol-adk Docker image and deploy it to the Kind cluster
-build_and_deploy_obol_agent() {
-    log_info "Building obol-agent Docker image..."
-    ensure docker build -t obol-agent:latest ../obol-adk
-
-    log_info "Loading image into Kind cluster..."
-    ensure kind load docker-image obol-agent:latest --name "$STACK_NAME"
-
-    log_info "Deploying obol-agent to cluster..."
-    if kubectl get deployment obol-agent >/dev/null 2>&1; then
-        kubectl set image deployment/obol-agent obol-agent=obol-agent:latest >/dev/null
-    else
-        kubectl create deployment obol-agent --image=obol-agent:latest --port=8000 >/dev/null
-    fi
-
-    kubectl expose deployment obol-agent --name=obol-agent --port=8000 --type=ClusterIP --overwrite >/dev/null 2>&1 || true
-}
-
-# Port-forward and open the obol-agent interface
-open_obol_agent_interface() {
-    log_info "Opening obol-agent interface at http://localhost:8000..."
-    kubectl port-forward svc/obol-agent 8000:8000 >/dev/null 2>&1 &
-    xdg-open "http://localhost:8000" 2>/dev/null || open "http://localhost:8000" 2>/dev/null || log_warn "Could not open browser automatically."
-}
-
 # Check if cluster has required port mappings to run exposed services, or whether it was first created in --headless mode
 check_cluster_port_mappings() {
     local cluster_name="$1"
@@ -582,8 +473,6 @@ launch_stack() {
     local __headless="$3"
 
     log_info "Launching core Obol Stack services..."
-    # Set memory limit for Kind container
-    export KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS="--memory=35g"
     if ! kind get clusters | grep -q "$STACK_NAME"; then
         # If headless=1, map host port 80 and 443 into the cluster and enable an ingress-controller and some default routes
         if [[ "$__headless" -ne 0 ]]; then
@@ -593,9 +482,6 @@ launch_stack() {
             log_info "Creating Kind cluster for Obol Stack..."
             kind create cluster --name "$STACK_NAME" --config ./manifests/kind_host.yaml
         fi
-        
-        # Unset the memory limit after cluster creation
-        unset KIND_EXPERIMENTAL_DOCKER_CONTAINER_EXTRA_ARGS
     else
         # Cluster exists, check if we need host mode but don't have port mappings
         if [[ "$__headless" -eq 0 ]] && ! check_cluster_port_mappings "$STACK_NAME"; then
@@ -605,9 +491,6 @@ launch_stack() {
             log_error "Cannot proceed without proper port mappings. Exiting."
         fi
     fi
-
-    # Ensure the Google API key is available inside the cluster
-    setup_google_api_key_secret
 
     # Apply base Obol Stack resources (e.g., namespaces, monitoring)
     #log_info "Applying Obol Stack base resources..."
