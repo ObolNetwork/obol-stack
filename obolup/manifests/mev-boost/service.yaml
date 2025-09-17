@@ -12,9 +12,5 @@ spec:
     targetPort: 18550
     protocol: TCP
     name: mev-boost
-  - port: 9090
-    targetPort: 9090
-    protocol: TCP
-    name: metrics
   selector:
     app: mev-boost

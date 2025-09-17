@@ -49,18 +49,6 @@ The consensus clients are automatically configured with MEV-boost when deployed:
 - **Prysm**: `--http-mev-relay=<mev-boost-url>`
 - **Lodestar**: `--builder=true --builder.urls=<mev-boost-url>`
 
-### MEV-boost Parameters
-
-- **Relay Check**: Enabled (validates relay connectivity on startup)
-- **Metrics**: Exposed on port 9090
-
-## Monitoring
-
-MEV-boost exposes Prometheus metrics on port 9090 at `/metrics` endpoint, including:
-- Relay connectivity status
-- Block submission statistics
-- Bid values and builder performance
-
 ## Health Checks
 
 The deployment includes liveness and readiness probes:

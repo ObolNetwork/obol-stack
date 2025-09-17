@@ -22,8 +22,6 @@ spec:
         ports:
         - containerPort: 18550
           name: mev-boost
-        - containerPort: 9090
-          name: metrics
         env:
         - name: NETWORK
           valueFrom:
@@ -44,9 +42,6 @@ spec:
         - -relay-check
         - -relays
         - "$(RELAYS)"
-        - -metrics
-        - -metrics-addr
-        - "0.0.0.0:9090"
         livenessProbe:
           httpGet:
             path: /eth/v1/builder/status
