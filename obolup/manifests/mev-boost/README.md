@@ -26,16 +26,17 @@ The deployment is handled by the `obolup` script and includes:
 ## Supported Networks and Relays
 
 ### Mainnet
-- Flashbots: `boost-relay.flashbots.net`
-- Bloxroute Max Profit: `bloxroute.max-profit.blxrbdn.com`
-- Titan Relay: `titanrelay.xyz`
+- Flashbots: [`boost-relay.flashbots.net`](https://boost-relay.flashbots.net)
+- Bloxroute Max Profit: [`bloxroute.max-profit.blxrbdn.com`](https://bloxroute.max-profit.blxrbdn.com)
+- Titan Relay: [`titanrelay.xyz`](https://titanrelay.xyz)
+- Ultrasound: [`relay.ultrasound.money`](https://relay.ultrasound.money)
 
 ### Sepolia
-- Flashbots Sepolia: `boost-relay-sepolia.flashbots.net`
+- Flashbots Sepolia: [`boost-relay-sepolia.flashbots.net`](https://boost-relay-sepolia.flashbots.net)
 
 ### Hoodi
-- Flashbots: `boost-relay-hoodi.flashbots.net`
-- Titan Relay: `hoodi.titanrelay.xyz`
+- Flashbots: [`boost-relay-hoodi.flashbots.net`](https://boost-relay-hoodi.flashbots.net)
+- Titan Relay: [`hoodi.titanrelay.xyz`](https://hoodi.titanrelay.xyz)
 
 ## Configuration
 
