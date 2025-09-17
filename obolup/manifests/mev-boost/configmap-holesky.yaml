@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: mev-boost-config
-  namespace: l1
-data:
-  network: "holesky"
-  relays: |
-    https://0xab78bf8c781c58078c3beb5710c57940874dd96aef2835e7742c866b4c7c0406754376c2c8285a36c630346aa5c5f833@holesky.aestus.live,https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-stag.ultrasound.money

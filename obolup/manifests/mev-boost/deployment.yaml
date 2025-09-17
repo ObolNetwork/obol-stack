@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: mev-boost
-        image: flashbots/mev-boost:latest
+        image: flashbots/mev-boost:1.10a3
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 18550
@@ -38,15 +38,12 @@ spec:
         command:
         - /app/mev-boost
         args:
+        - -$(NETWORK)
         - -addr
         - "0.0.0.0:18550"
         - -relay-check
         - -relays
         - "$(RELAYS)"
-        - -min-bid
-        - "0.05"
-        - -request-timeout
-        - "12s"
         - -metrics
         - -metrics-addr
         - "0.0.0.0:9090"

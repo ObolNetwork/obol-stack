@@ -16,10 +16,10 @@ Validator → Consensus Client → MEV-boost → Block Builders (via Relays)
 
 MEV-boost is automatically deployed when:
 1. Running in `--mode full` (full node mode)
-2. Using a supported network (mainnet, sepolia, holesky)
+2. Using a supported network (mainnet, sepolia, hoodi)
 
 The deployment is handled by the `obolup` script and includes:
-- MEV-boost deployment (flashbots/mev-boost:latest)
+- MEV-boost deployment (`flashbots/mev-boost:1.10a3`)
 - Service exposing port 18550 for builder API
 - Network-specific relay configurations
 
@@ -28,19 +28,14 @@ The deployment is handled by the `obolup` script and includes:
 ### Mainnet
 - Flashbots: `boost-relay.flashbots.net`
 - Bloxroute Max Profit: `bloxroute.max-profit.blxrbdn.com`
-- Aestus: `aestus.live`
-- Agnostic Gnosis: `agnostic-relay.net`
-- Manifold: `mainnet-relay.securerpc.com`
+- Titan Relay: `titanrelay.xyz`
 
 ### Sepolia
 - Flashbots Sepolia: `boost-relay-sepolia.flashbots.net`
 
-### Holesky
-- Aestus Holesky: `holesky.aestus.live`
-- Ultrasound Staging: `relay-stag.ultrasound.money`
-
 ### Hoodi
-- No MEV relays available (MEV-boost not deployed)
+- Flashbots: `boost-relay-hoodi.flashbots.net`
+- Titan Relay: `hoodi.titanrelay.xyz`
 
 ## Configuration
 
@@ -56,8 +51,6 @@ The consensus clients are automatically configured with MEV-boost when deployed:
 
 ### MEV-boost Parameters
 
-- **Min Bid**: 0.05 ETH (minimum bid value to accept from builders)
-- **Request Timeout**: 12 seconds
 - **Relay Check**: Enabled (validates relay connectivity on startup)
 - **Metrics**: Exposed on port 9090
 
@@ -79,13 +72,15 @@ The deployment includes liveness and readiness probes:
 If you need to deploy MEV-boost manually:
 
 ```bash
-# Apply the network-specific configmap
+# Apply the network-specific configmap (change `mainet` to the network you need)
 kubectl apply -f manifests/mev-boost/configmap-mainnet.yaml
 
 # Deploy MEV-boost
 kubectl apply -f manifests/mev-boost/deployment.yaml
 kubectl apply -f manifests/mev-boost/service.yaml
 ```
+
+Then set your full node to point at the mev-boost service at: `http://mev-boost.l1.svc.cluster.local:18550/`
 
 ## Troubleshooting
 
