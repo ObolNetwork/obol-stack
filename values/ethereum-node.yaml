@@ -5,6 +5,8 @@ global:
     rpcEndpoint: http://{{ .Release.Name }}-execution:8545
     wsEndpoint: ws://{{ .Release.Name }}-execution:8546
     beaconEndpoint: http://{{ .Release.Name }}-beacon:5052
+    # MEV-boost endpoint for builder API
+    mevBoostEndpoint: http://mev-boost.l1.svc.cluster.local:18550
   checkpointSync:
     enabled: true
     addresses:
@@ -263,6 +265,7 @@ lighthouse:
   extraArgs:
     - >-
       --execution-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      --builder={{ tpl .Values.global.main.mevBoostEndpoint . }}
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
         {{- range .consensus.lighthouse }}
         {{ . }}
@@ -280,6 +283,8 @@ teku:
   extraArgs:
     - >-
       --ee-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      --builder-endpoint={{ tpl .Values.global.main.mevBoostEndpoint . }}
+      --validators-builder-registration-default-enabled=true
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
         {{- range .consensus.teku }}
         {{ . }}
@@ -297,6 +302,8 @@ lodestar:
   extraArgs:
     - >-
       --execution.urls={{ tpl .Values.global.main.engineEndpoint . }}
+      --builder=true
+      --builder.urls={{ tpl .Values.global.main.mevBoostEndpoint . }}
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
         {{- range .consensus.lodestar }}
         {{ . }}
@@ -314,6 +321,7 @@ prysm:
   extraArgs:
     - >-
       --execution-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      --http-mev-relay={{ tpl .Values.global.main.mevBoostEndpoint . }}
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
         {{- range .consensus.prysm }}
         {{ . }}
@@ -332,6 +340,8 @@ nimbus:
   extraArgs:
     - >-
       --web3-url={{ tpl .Values.global.main.engineEndpoint . }}
+      --payload-builder=true
+      --payload-builder-url={{ tpl .Values.global.main.mevBoostEndpoint . }}
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
         {{- range .consensus.nimbus }}
         {{ . }}

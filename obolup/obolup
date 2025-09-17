@@ -513,12 +513,21 @@ launch_stack() {
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-hoodi obol/helios -f ../values/hoodi/helios.yaml
     ensure helm upgrade  --namespace l1 --create-namespace --hide-notes --force --install l1-light-client-sepolia obol/helios -f ../values/sepolia/helios.yaml
 
-    # If mode="full", also sync a full node
+    # If mode="full", also sync a full node (and mev-boost, may feature flag this off by default in future)
     if [[ "$__mode" = "full" ]]; then
         log_info "Installing an Ethereum full node client synced to $__network..."
         docker pull nethermind/nethermind:latest
         docker pull statusim/nimbus-eth2:multiarch-latest
         ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
+        
+        # Deploy MEV-boost for supported networks (not hoodi)
+        log_info "Installing MEV-boost sidecar for $__network network..."
+        # Apply the appropriate configmap based on network
+        kubectl apply -f ./manifests/mev-boost/configmap-$__network.yaml
+        # Apply the deployment and service
+        kubectl apply -f ./manifests/mev-boost/deployment.yaml
+        kubectl apply -f ./manifests/mev-boost/service.yaml
+        log_info "MEV-boost installed. Validators will now be able to access MEV rewards."
     fi
 
     log_info "Installing the Obol Stack Ethereum eRPC load balancer..."
