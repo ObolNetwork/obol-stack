@@ -3,6 +3,16 @@
  * Uses the Kubernetes API directly via service account token
  */
 
+import {
+  CHAINS,
+  ClientInfo,
+  NETWORKS,
+  NetworkType,
+  NODE_MODES,
+  NodeModeType,
+} from '../../types/dashboard';
+import { detectClient, parseVersion } from '../utils/client-detection';
+
 export interface PodInfo {
   name: string;
   namespace: string;
@@ -26,6 +36,11 @@ export interface ServiceInfo {
   }>;
 }
 
+export interface ServiceModeInfo {
+  url: string;
+  type: NodeModeType;
+}
+
 export class KubernetesAPIClient {
   private baseUrl: string;
   private token?: string;
@@ -37,42 +52,6 @@ export class KubernetesAPIClient {
 
     // In production, read the service account token
     // For now, we'll use a simpler approach with direct service URLs
-  }
-
-  /**
-   * Get pod information by directly querying services
-   * This is a simplified version that doesn't require Kubernetes API access
-   */
-  async getPodsStatus(
-    _namespace: string = 'l1'
-  ): Promise<
-    Record<
-      string,
-      { name: string; status: string; ready: boolean; restarts: number }
-    >
-  > {
-    // For now, we'll return mock data based on what we know is deployed
-    // In production, this would query the actual Kubernetes API
-    return {
-      execution: {
-        name: 'l1-full-node-execution-0',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-      beacon: {
-        name: 'l1-full-node-beacon-0',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-      rpc: {
-        name: 'rpc',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-    };
   }
 
   /**
@@ -90,19 +69,100 @@ export class KubernetesAPIClient {
     }
   }
 
+  async getAvailableModes(): Promise<ServiceModeInfo[]> {
+    const modes = [
+      {
+        url: 'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+        type: NODE_MODES.FULL_MODE,
+      },
+      {
+        url: 'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+        type: NODE_MODES.LIGHT_MODE,
+      },
+    ];
+
+    // Check all modes in parallel
+    const results = await Promise.allSettled(
+      modes.map(service => this.checkServiceHealth(service.url))
+    );
+
+    // Return only the modes that are available
+    const availableModes = modes.filter((service, index) => {
+      const result = results[index];
+      const isAvailable =
+        result.status === 'fulfilled' && result.value === true;
+      return isAvailable;
+    });
+
+    return availableModes;
+  }
+
   /**
    * Get client versions by querying the actual services
+   * Supports both full mode (Nethermind + Nimbus) and light mode (Helios)
    */
-  async getClientVersions() {
-    const versions = {
-      execution: 'Unknown',
-      consensus: 'Unknown',
-    };
+  async getClients(mode: NodeModeType): Promise<ClientInfo[]> {
+    const clients: ClientInfo[] = [];
 
-    try {
-      // Try to get Nethermind version via JSON-RPC
-      const execResponse = await fetch(
-        'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+    if (mode === NODE_MODES.FULL_MODE) {
+      // Full mode: check both Nethermind and Nimbus
+      const [nethermind, nimbus] = await Promise.allSettled([
+        // Nethermind
+        fetch('http://l1-full-node-execution.l1.svc.cluster.local:8545', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'web3_clientVersion',
+            params: [],
+            id: 1,
+          }),
+          signal: AbortSignal.timeout(5000),
+        }),
+
+        // Nimbus
+        fetch(
+          'http://l1-full-node-beacon.l1.svc.cluster.local:5052/eth/v1/node/version',
+          {
+            headers: { Accept: 'application/json' },
+            signal: AbortSignal.timeout(5000),
+          }
+        ),
+      ]);
+
+      // Process Nethermind result
+      if (nethermind.status === 'fulfilled' && nethermind.value.ok) {
+        const data = await nethermind.value.json();
+        if (data.result) {
+          const client = detectClient(data.result);
+          clients.push({
+            name: client.name,
+            version: parseVersion(data.result),
+            peers: 0, // TODO: Get actual peer count
+            status: 'synced', // TODO: Get actual sync status
+            icon: client.iconUrl,
+          });
+        }
+      }
+
+      // Process Nimbus result
+      if (nimbus.status === 'fulfilled' && nimbus.value.ok) {
+        const data = await nimbus.value.json();
+        if (data.data?.version) {
+          const client = detectClient(data.data.version);
+          clients.push({
+            name: client.name,
+            version: parseVersion(data.data.version),
+            peers: 0, // TODO: Get actual peer count
+            status: 'synced', // TODO: Get actual sync status
+            icon: client.iconUrl,
+          });
+        }
+      }
+    } else if (mode === NODE_MODES.LIGHT_MODE) {
+      // Light mode: check Helios using the service URL
+      const helios = await fetch(
+        'http://l1-light-client-helios.l1.svc.cluster.local:8545',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -116,37 +176,22 @@ export class KubernetesAPIClient {
         }
       );
 
-      if (execResponse.ok) {
-        const data = await execResponse.json();
+      if (helios.ok) {
+        const data = await helios.json();
         if (data.result) {
-          versions.execution = data.result;
+          const client = detectClient(data.result);
+          clients.push({
+            name: client.name,
+            version: parseVersion(data.result),
+            peers: 0, // TODO: Get actual peer count
+            status: 'synced', // TODO: Get actual sync status
+            icon: client.iconUrl,
+          });
         }
       }
-    } catch (error) {
-      console.error('Failed to get execution client version:', error);
     }
 
-    try {
-      // Try to get Nimbus version via Beacon API
-      const beaconResponse = await fetch(
-        'http://l1-full-node-beacon.l1.svc.cluster.local:5052/eth/v1/node/version',
-        {
-          headers: { Accept: 'application/json' },
-          signal: AbortSignal.timeout(5000),
-        }
-      );
-
-      if (beaconResponse.ok) {
-        const data = await beaconResponse.json();
-        if (data.data?.version) {
-          versions.consensus = data.data.version;
-        }
-      }
-    } catch (error) {
-      console.error('Failed to get consensus client version:', error);
-    }
-
-    return versions;
+    return clients;
   }
 
   /**

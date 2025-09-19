@@ -8,9 +8,6 @@ export async function GET() {
     const k8s = new KubernetesAPIClient();
     const erpc = new ERPCClient(config.erpcUrl);
 
-    // Get client versions from the actual services
-    const versions = await k8s.getClientVersions();
-
     // Get pod status
     const podStatus = await k8s.getPodsStatus();
 

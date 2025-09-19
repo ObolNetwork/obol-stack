@@ -1,17 +1,60 @@
+// Enums and Constants
+export const CHAINS = {
+  ETHEREUM: 'ethereum',
+  AZTEC: 'aztec',
+  SEPOLIA: 'sepolia',
+  HOODI: 'hoodi',
+} as const;
+
+export const NETWORKS = {
+  MAINNET: 'mainnet',
+  TESTNET: 'testnet',
+} as const;
+
+export const NODE_MODES = {
+  FULL_MODE: 'fullMode',
+  LIGHT_MODE: 'lightMode',
+} as const;
+
+export const CLIENT_STATUS = {
+  SYNCED: 'synced',
+  SYNCING: 'syncing',
+  ERROR: 'error',
+} as const;
+
+export const CLIENT_ROLES = {
+  EXECUTION: 'execution',
+  CONSENSUS: 'consensus',
+  VALIDATOR: 'validator',
+} as const;
+
+export const PORT_STATUS = {
+  OPEN: 'open',
+  CLOSED: 'closed',
+} as const;
+
+// Type definitions from constants
+export type ChainType = (typeof CHAINS)[keyof typeof CHAINS];
+export type NetworkType = (typeof NETWORKS)[keyof typeof NETWORKS];
+export type NodeModeType = (typeof NODE_MODES)[keyof typeof NODE_MODES];
+export type ClientStatusType =
+  (typeof CLIENT_STATUS)[keyof typeof CLIENT_STATUS];
+export type ClientRoleType = (typeof CLIENT_ROLES)[keyof typeof CLIENT_ROLES];
+export type PortStatusType = (typeof PORT_STATUS)[keyof typeof PORT_STATUS];
+
 export interface ClientInfo {
   name: string;
   version: string;
   peers: number;
-  status: 'synced' | 'syncing' | 'error';
-  role: 'execution' | 'consensus' | 'validator';
+  status: ClientStatusType;
   icon?: string; // URL to client icon
 }
 
 export interface ChainData {
-  chainName: 'ethereum' | 'aztec'; // Add more chains here as needed
-  network: 'mainnet' | 'testnet';
-  nodeMode: 'fullMode' | 'lightMode';
-  status: 'synced' | 'syncing' | 'error';
+  chainName: ChainType;
+  network: NetworkType;
+  nodeMode: NodeModeType;
+  status: ClientStatusType;
   blocks: number;
   finalized: number;
   participation: number;
@@ -43,10 +86,10 @@ export interface DashboardData {
     };
   };
   ports: {
-    p2p: { port: number; status: 'open' | 'closed' };
-    jsonRpc: { port: number; status: 'open' | 'closed' };
-    prometheus: { port: number; status: 'open' | 'closed' };
-    beaconApi: { port: number; status: 'open' | 'closed' };
+    p2p: { port: number; status: PortStatusType };
+    jsonRpc: { port: number; status: PortStatusType };
+    prometheus: { port: number; status: PortStatusType };
+    beaconApi: { port: number; status: PortStatusType };
   };
 }
 

@@ -132,9 +132,7 @@ export class ERPCClient {
   /**
    * Get sync status for a network
    */
-  async getSyncStatus(
-    network: string = 'hoodi'
-  ): Promise<{
+  async getSyncStatus(network: string = 'hoodi'): Promise<{
     synced: boolean;
     currentBlock?: number;
     highestBlock?: number;
@@ -208,13 +206,51 @@ export class ERPCClient {
   }
 
   /**
+   * Get chain ID from the connected RPC endpoint
+   */
+  async getChainId(): Promise<number> {
+    try {
+      // Use the base URL directly for chain ID - no need to specify network
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_chainId',
+          params: [],
+          id: 1,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`RPC call failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+
+      // Convert hex to number
+      return parseInt(data.result as string, 16);
+    } catch (error) {
+      console.error('Failed to fetch chain ID:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get aggregated network metrics
    */
   async getNetworkMetrics(network: string = 'hoodi') {
     try {
-      const [blockNumber, syncStatus, status] = await Promise.all([
+      const [blockNumber, syncStatus, chainId, status] = await Promise.all([
         this.getBlockNumber(network).catch(() => 0),
         this.getSyncStatus(network).catch(() => ({ synced: false })),
+        this.getChainId().catch(() => 0),
         this.getStatus().catch(() => null),
       ]);
 
@@ -227,6 +263,7 @@ export class ERPCClient {
 
       return {
         blockHeight: blockNumber,
+        chainId: chainId,
         synced: syncStatus.synced,
         syncProgress: syncStatus.synced
           ? 100
