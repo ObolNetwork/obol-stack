@@ -1,1 +1,1 @@
-export { ChainIcon, EthereumIcon, AztecIcon } from './ChainIcon';
+export { ChainIcon } from './ChainIcon';

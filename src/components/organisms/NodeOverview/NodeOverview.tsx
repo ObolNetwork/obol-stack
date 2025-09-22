@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Box, Text, Flex, styled, theme } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
