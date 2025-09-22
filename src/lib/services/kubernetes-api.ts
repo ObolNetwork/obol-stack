@@ -3,15 +3,7 @@
  * Uses the Kubernetes API directly via service account token
  */
 
-import {
-  CHAINS,
-  ClientInfo,
-  NETWORKS,
-  NetworkType,
-  NODE_MODES,
-  NodeModeType,
-} from '../../types/dashboard';
-import { detectClient, parseVersion } from '../utils/client-detection';
+import { NODE_MODES, NodeModeType } from '../../types/dashboard';
 
 export interface PodInfo {
   name: string;
@@ -59,8 +51,16 @@ export class KubernetesAPIClient {
    */
   async checkServiceHealth(serviceUrl: string): Promise<boolean> {
     try {
+      // Use POST for JSON-RPC endpoints
       const response = await fetch(serviceUrl, {
-        method: 'GET',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'web3_clientVersion',
+          params: [],
+          id: 1,
+        }),
         signal: AbortSignal.timeout(5000), // 5 second timeout
       });
       return response.ok;
@@ -94,104 +94,9 @@ export class KubernetesAPIClient {
       return isAvailable;
     });
 
+    console.log('availableModes', availableModes);
+
     return availableModes;
-  }
-
-  /**
-   * Get client versions by querying the actual services
-   * Supports both full mode (Nethermind + Nimbus) and light mode (Helios)
-   */
-  async getClients(mode: NodeModeType): Promise<ClientInfo[]> {
-    const clients: ClientInfo[] = [];
-
-    if (mode === NODE_MODES.FULL_MODE) {
-      // Full mode: check both Nethermind and Nimbus
-      const [nethermind, nimbus] = await Promise.allSettled([
-        // Nethermind
-        fetch('http://l1-full-node-execution.l1.svc.cluster.local:8545', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'web3_clientVersion',
-            params: [],
-            id: 1,
-          }),
-          signal: AbortSignal.timeout(5000),
-        }),
-
-        // Nimbus
-        fetch(
-          'http://l1-full-node-beacon.l1.svc.cluster.local:5052/eth/v1/node/version',
-          {
-            headers: { Accept: 'application/json' },
-            signal: AbortSignal.timeout(5000),
-          }
-        ),
-      ]);
-
-      // Process Nethermind result
-      if (nethermind.status === 'fulfilled' && nethermind.value.ok) {
-        const data = await nethermind.value.json();
-        if (data.result) {
-          const client = detectClient(data.result);
-          clients.push({
-            name: client.name,
-            version: parseVersion(data.result),
-            peers: 0, // TODO: Get actual peer count
-            status: 'synced', // TODO: Get actual sync status
-            icon: client.iconUrl,
-          });
-        }
-      }
-
-      // Process Nimbus result
-      if (nimbus.status === 'fulfilled' && nimbus.value.ok) {
-        const data = await nimbus.value.json();
-        if (data.data?.version) {
-          const client = detectClient(data.data.version);
-          clients.push({
-            name: client.name,
-            version: parseVersion(data.data.version),
-            peers: 0, // TODO: Get actual peer count
-            status: 'synced', // TODO: Get actual sync status
-            icon: client.iconUrl,
-          });
-        }
-      }
-    } else if (mode === NODE_MODES.LIGHT_MODE) {
-      // Light mode: check Helios using the service URL
-      const helios = await fetch(
-        'http://l1-light-client-helios.l1.svc.cluster.local:8545',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'web3_clientVersion',
-            params: [],
-            id: 1,
-          }),
-          signal: AbortSignal.timeout(5000),
-        }
-      );
-
-      if (helios.ok) {
-        const data = await helios.json();
-        if (data.result) {
-          const client = detectClient(data.result);
-          clients.push({
-            name: client.name,
-            version: parseVersion(data.result),
-            peers: 0, // TODO: Get actual peer count
-            status: 'synced', // TODO: Get actual sync status
-            icon: client.iconUrl,
-          });
-        }
-      }
-    }
-
-    return clients;
   }
 
   /**

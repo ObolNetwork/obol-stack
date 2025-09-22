@@ -1,7 +1,8 @@
 import React from 'react';
+import { ChainType } from '../../../types/dashboard';
 
 export interface ChainIconProps {
-  chain: 'ethereum' | 'aztec';
+  chain: ChainType;
   size?: number;
   className?: string;
 }
@@ -71,18 +72,15 @@ const AztecIcon = ({ size = 32 }: { size: number }) => (
   </svg>
 );
 
-const chainIcons = {
+const chainIcons: Record<ChainType, React.ComponentType<{ size: number }>> = {
   ethereum: EthereumIcon,
   aztec: AztecIcon,
+  sepolia: EthereumIcon, // Use Ethereum icon for Sepolia
+  hoodi: EthereumIcon, // Use Ethereum icon for Hoodi
 };
 
 export function ChainIcon({ chain, size = 32, className }: ChainIconProps) {
-  const IconComponent = chainIcons[chain];
-
-  if (!IconComponent) {
-    console.warn(`Chain icon for "${chain}" not found`);
-    return null;
-  }
+  const IconComponent = chainIcons[chain] || EthereumIcon; // Fallback to Ethereum icon
 
   return (
     <div

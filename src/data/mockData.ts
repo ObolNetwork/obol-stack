@@ -16,7 +16,6 @@ export const mockDashboardData: DashboardData = {
           version: 'v1.32.4',
           peers: 25,
           status: 'synced',
-          role: 'execution',
           icon: 'https://raw.githubusercontent.com/NethermindEth/nethermind/master/nethermind.png',
         },
         {
@@ -24,7 +23,6 @@ export const mockDashboardData: DashboardData = {
           version: 'v25.6.0',
           peers: 39,
           status: 'synced',
-          role: 'consensus',
           icon: 'https://nimbus.team/img/nimbus-logo.svg',
         },
       ],
@@ -44,7 +42,6 @@ export const mockDashboardData: DashboardData = {
           version: 'v0.24.0',
           peers: 28,
           status: 'synced',
-          role: 'execution',
           icon: 'https://aztec.network/img/aztec-logo.png',
         },
       ],

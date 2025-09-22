@@ -89,11 +89,11 @@ export async function GET() {
           chainName: CHAINS.ETHEREUM,
           network: NETWORKS.MAINNET,
         };
-        const chainClients = await getClients(mode.type);
+        const chainClients = getClients(mode.type);
 
         const clients: ClientInfo[] = [];
 
-        chainClients.forEach(async client => {
+        for (const client of chainClients) {
           const result = await clientMetrics.getMetrics(
             client.type,
             client.endpoint
@@ -108,7 +108,7 @@ export async function GET() {
             finalizedEpoch =
               (result as ConsensusClientMetrics).finalizedEpoch || 0;
           }
-
+          console.log('result', result);
           clients.push({
             name: client.name,
             version: parseVersion(result.version),
@@ -118,8 +118,8 @@ export async function GET() {
               : CLIENT_STATUS.SYNCING,
             icon: client.icon,
           });
-        });
-
+        }
+        console.log('clients', clients);
         chains.push({
           chainName: chainInfo.chainName,
           network: chainInfo.network,

@@ -8,7 +8,6 @@ import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
 import { ChainData } from '../../../types/dashboard';
 import { ChainIcon } from '../../atoms/ChainIcon';
-import { getClientIcon } from '../../../lib/utils/clientIcons';
 
 export interface NetworkStatusProps {
   chainData: ChainData;
@@ -203,7 +202,7 @@ export function NetworkStatus({
                     version={client.version}
                     peers={client.peers}
                     status={client.status}
-                    icon={getClientIcon(client.name)}
+                    icon={client.icon}
                   />
                 ))}
               </ClientsContainer>
