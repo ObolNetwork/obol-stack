@@ -5,29 +5,6 @@
 
 import { NODE_MODES, NodeModeType } from '../../types/dashboard';
 
-export interface PodInfo {
-  name: string;
-  namespace: string;
-  status: string;
-  ready: boolean;
-  restarts: number;
-  createdAt: string;
-  ip?: string;
-  node?: string;
-}
-
-export interface ServiceInfo {
-  name: string;
-  namespace: string;
-  type: string;
-  clusterIP: string;
-  ports: Array<{
-    port: number;
-    targetPort: number;
-    protocol: string;
-  }>;
-}
-
 export interface ServiceModeInfo {
   url: string;
   type: NodeModeType;

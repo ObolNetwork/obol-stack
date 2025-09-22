@@ -7,7 +7,6 @@ export const config = {
   prometheusUrl:
     process.env.PROMETHEUS_URL ||
     'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
-  erpcUrl: process.env.ERPC_URL || 'http://rpc.l1.svc.cluster.local',
   grafanaUrl:
     process.env.GRAFANA_URL ||
     'http://monitoring-grafana.monitoring.svc.cluster.local',
@@ -50,9 +49,6 @@ export const config = {
   // API Routes
   api: {
     dashboard: '/api/dashboard',
-    system: '/api/metrics/system',
-    ethereum: '/api/metrics/ethereum',
-    ports: '/api/health/ports',
   },
 };
 

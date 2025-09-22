@@ -164,26 +164,4 @@ export class PrometheusClient {
       throw error;
     }
   }
-
-  /**
-   * Get Kubernetes pod metrics
-   */
-  async getPodMetrics(namespace?: string) {
-    const namespaceFilter = namespace ? `{namespace="${namespace}"}` : '';
-
-    try {
-      const podStatus = await this.query(
-        `kube_pod_status_phase${namespaceFilter}`
-      );
-      const podInfo = await this.query(`kube_pod_info${namespaceFilter}`);
-
-      return {
-        pods: podStatus.data.result,
-        info: podInfo.data.result,
-      };
-    } catch (error) {
-      console.error('Failed to fetch pod metrics:', error);
-      throw error;
-    }
-  }
 }

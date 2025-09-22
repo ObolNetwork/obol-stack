@@ -4,10 +4,10 @@ metadata:
   name: obol-frontend-dev
 build:
   artifacts:
-  - image: obol-frontend
-    context: .
-    docker:
-      dockerfile: Dockerfile
+    - image: obol-frontend
+      context: .
+      docker:
+        dockerfile: Dockerfile
   tagPolicy:
     gitCommit: {}
   local:
@@ -18,10 +18,10 @@ deploy:
   kubectl: {}
 manifests:
   rawYaml:
-  - k8s/dev-deployment-skaffold.yaml
+    - k8s/dev-deployment-skaffold.yaml
 portForward:
-- resourceType: service
-  resourceName: obol-frontend-obol-app
-  namespace: frontend
-  port: 3000
-  localPort: 3000
+  - resourceType: service
+    resourceName: obol-frontend-obol-app
+    namespace: frontend
+    port: 3000
+    localPort: 3000
