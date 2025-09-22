@@ -144,14 +144,7 @@ export function NetworkStatus({
         padding: '0',
       }}
     >
-      <Accordion
-        header={headerContent}
-        defaultExpanded={defaultExpanded}
-        onToggle={isExpanded => {
-          // You can add any additional logic here when accordion toggles
-          console.log('Accordion toggled:', isExpanded);
-        }}
-      >
+      <Accordion header={headerContent} defaultExpanded={defaultExpanded}>
         <NetworkContent>
           {/* Metrics grid - Clean 2x2 layout */}
           <MetricsGrid>

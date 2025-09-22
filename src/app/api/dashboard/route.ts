@@ -96,7 +96,8 @@ export async function GET() {
         for (const client of chainClients) {
           const result = await clientMetrics.getMetrics(
             client.type,
-            client.endpoint
+            client.endpoint,
+            client.beaconUrl
           );
 
           if (client.type === 'execution') {
@@ -108,7 +109,6 @@ export async function GET() {
             finalizedEpoch =
               (result as ConsensusClientMetrics).finalizedEpoch || 0;
           }
-          console.log('result', result);
           clients.push({
             name: client.name,
             version: parseVersion(result.version),
@@ -119,7 +119,6 @@ export async function GET() {
             icon: client.icon,
           });
         }
-        console.log('clients', clients);
         chains.push({
           chainName: chainInfo.chainName,
           network: chainInfo.network,

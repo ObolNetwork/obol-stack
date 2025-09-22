@@ -16,6 +16,15 @@ export const config = {
   executionRpcUrl:
     process.env.EXECUTION_RPC_URL ||
     'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+  heliosClientUrl:
+    process.env.HELIOS_CLIENT_URL ||
+    'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+  fullNodeExecutionUrl:
+    process.env.FULL_NODE_EXECUTION_URL ||
+    'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+  fullNodeBeaconUrl:
+    process.env.FULL_NODE_BEACON_URL ||
+    'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
 
   // Network Configuration
   defaultNetwork: process.env.DEFAULT_NETWORK || 'hoodi',

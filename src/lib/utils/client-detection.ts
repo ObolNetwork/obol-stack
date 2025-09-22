@@ -3,6 +3,8 @@
  */
 
 import { NODE_MODES, NodeModeType } from '../../types/dashboard';
+import { ClientType } from '../services/client-metrics';
+import { config } from '../config/environment';
 
 /**
  * Parse version string to extract version number
@@ -31,8 +33,9 @@ export function parseVersion(versionString: string): string {
 export interface ClientConfig {
   name: string;
   endpoint: string;
-  type: 'execution' | 'consensus';
+  type: ClientType;
   icon: string;
+  beaconUrl: string;
 }
 
 /**
@@ -45,24 +48,27 @@ export function getClients(mode: NodeModeType): ClientConfig[] {
     return [
       {
         name: 'Nethermind',
-        endpoint: 'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+        endpoint: config.fullNodeExecutionUrl,
         type: 'execution',
         icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
+        beaconUrl: config.fullNodeBeaconUrl,
       },
       {
         name: 'Nimbus',
-        endpoint: 'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
+        endpoint: config.fullNodeBeaconUrl,
         type: 'consensus',
         icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
+        beaconUrl: config.fullNodeBeaconUrl,
       },
     ];
   } else if (mode === NODE_MODES.LIGHT_MODE) {
     return [
       {
         name: 'Helios',
-        endpoint: 'http://l1-light-client-helios.l1.svc.cluster.local:8545',
-        type: 'execution',
+        endpoint: config.heliosClientUrl,
+        type: 'helios',
         icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
+        beaconUrl: config.fullNodeBeaconUrl,
       },
     ];
   }

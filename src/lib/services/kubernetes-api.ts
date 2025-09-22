@@ -4,6 +4,7 @@
  */
 
 import { NODE_MODES, NodeModeType } from '../../types/dashboard';
+import { config } from '../config/environment';
 
 export interface ServiceModeInfo {
   url: string;
@@ -49,11 +50,11 @@ export class KubernetesAPIClient {
   async getAvailableModes(): Promise<ServiceModeInfo[]> {
     const modes = [
       {
-        url: 'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+        url: config.fullNodeExecutionUrl,
         type: NODE_MODES.FULL_MODE,
       },
       {
-        url: 'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+        url: config.heliosClientUrl,
         type: NODE_MODES.LIGHT_MODE,
       },
     ];
