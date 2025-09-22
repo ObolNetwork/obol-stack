@@ -68,7 +68,7 @@ export function getClients(mode: NodeModeType): ClientConfig[] {
         endpoint: config.heliosClientUrl,
         type: 'helios',
         icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
-        beaconUrl: config.fullNodeBeaconUrl,
+        beaconUrl: config.heliosBeaconUrl,
       },
     ];
   }

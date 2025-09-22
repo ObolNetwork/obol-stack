@@ -5,6 +5,7 @@ import {
   ClientMetricsService,
   ConsensusClientMetrics,
   ExecutionClientMetrics,
+  HeliosClientMetrics,
 } from '@/lib/services/client-metrics';
 import { config } from '@/lib/config/environment';
 import {
@@ -89,6 +90,7 @@ export async function GET() {
           chainName: CHAINS.ETHEREUM,
           network: NETWORKS.MAINNET,
         };
+        let participation = 0;
         const chainClients = getClients(mode.type);
 
         const clients: ClientInfo[] = [];
@@ -105,9 +107,19 @@ export async function GET() {
             chainInfo = getChainInfoFromId(
               (result as ExecutionClientMetrics).chainId
             );
-          } else {
+          } else if (client.type === 'helios') {
+            blockHeight = (result as HeliosClientMetrics).blockNumber || 0;
+            chainInfo = getChainInfoFromId(
+              (result as HeliosClientMetrics).chainId
+            );
+            finalizedEpoch =
+              (result as HeliosClientMetrics).finalizedEpoch || 0;
+            participation = (result as HeliosClientMetrics).participation || 0;
+          } else if (client.type === 'consensus') {
             finalizedEpoch =
               (result as ConsensusClientMetrics).finalizedEpoch || 0;
+            participation =
+              (result as ConsensusClientMetrics).participation || 0;
           }
           clients.push({
             name: client.name,
@@ -126,7 +138,7 @@ export async function GET() {
           status: CLIENT_STATUS.SYNCED,
           blocks: blockHeight,
           finalized: finalizedEpoch,
-          participation: 0,
+          participation: participation,
           clients: clients,
           distance: 0,
         });

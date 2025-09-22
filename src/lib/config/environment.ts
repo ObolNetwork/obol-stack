@@ -19,6 +19,9 @@ export const config = {
   heliosClientUrl:
     process.env.HELIOS_CLIENT_URL ||
     'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+  heliosBeaconUrl:
+    process.env.HELIOS_BEACON_URL ||
+    'http://l1-light-client-beacon.l1.svc.cluster.local:5052',
   fullNodeExecutionUrl:
     process.env.FULL_NODE_EXECUTION_URL ||
     'http://l1-full-node-execution.l1.svc.cluster.local:8545',
