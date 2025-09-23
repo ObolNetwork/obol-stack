@@ -1,7 +1,6 @@
 import React from 'react';
 import { Box, Flex, styled } from '@obolnetwork/obol-ui';
 import {
-  DownloadIcon,
   FileTextIcon,
   GitHubLogoIcon,
   DiscordLogoIcon,
@@ -17,28 +16,6 @@ const StyledFooter = styled(Box, {
   justifyContent: 'space-between',
   fontSize: '$3',
   color: '$body',
-});
-
-const StyledButton = styled('button', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '$xxs',
-  background: 'none',
-  border: 'none',
-  color: 'inherit',
-  cursor: 'pointer',
-  borderRadius: '$2',
-  padding: '$xxxs',
-  transition: 'color 200ms ease',
-
-  '&:hover': {
-    color: '$light',
-  },
-
-  '&:focus': {
-    outline: 'none',
-    boxShadow: '0 0 0 2px $obolGreen',
-  },
 });
 
 const StyledLink = styled('a', {

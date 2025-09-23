@@ -2,112 +2,9 @@
  * Utility functions for detecting and mapping Ethereum clients
  */
 
-export interface ClientMapping {
-  name: string;
-  role: 'execution' | 'consensus' | 'validator';
-  iconUrl: string;
-}
-
-// Map of known client patterns to their metadata
-const CLIENT_MAPPINGS: Record<string, ClientMapping> = {
-  // Execution clients
-  nethermind: {
-    name: 'Nethermind',
-    role: 'execution',
-    iconUrl:
-      'https://raw.githubusercontent.com/NethermindEth/nethermind/master/nethermind.png',
-  },
-  geth: {
-    name: 'Geth',
-    role: 'execution',
-    iconUrl: 'https://geth.ethereum.org/img/geth-logo.png',
-  },
-  besu: {
-    name: 'Besu',
-    role: 'execution',
-    iconUrl:
-      'https://raw.githubusercontent.com/hyperledger/besu-docs/main/static/img/logo.svg',
-  },
-  erigon: {
-    name: 'Erigon',
-    role: 'execution',
-    iconUrl:
-      'https://raw.githubusercontent.com/ledgerwatch/erigon/main/docs/logo.png',
-  },
-
-  // Consensus clients
-  nimbus: {
-    name: 'Nimbus',
-    role: 'consensus',
-    iconUrl: 'https://nimbus.team/img/nimbus-logo.svg',
-  },
-  lighthouse: {
-    name: 'Lighthouse',
-    role: 'consensus',
-    iconUrl:
-      'https://raw.githubusercontent.com/sigp/lighthouse/stable/book/src/imgs/lighthouse-logo.png',
-  },
-  prysm: {
-    name: 'Prysm',
-    role: 'consensus',
-    iconUrl: 'https://docs.prylabs.network/img/prysm-logo.png',
-  },
-  teku: {
-    name: 'Teku',
-    role: 'consensus',
-    iconUrl: 'https://docs.teku.consensys.net/img/logo.svg',
-  },
-  lodestar: {
-    name: 'Lodestar',
-    role: 'consensus',
-    iconUrl:
-      'https://raw.githubusercontent.com/ChainSafe/lodestar/stable/assets/lodestar-icon.png',
-  },
-};
-
-/**
- * Detect client type from version string
- * @param versionString The version string returned by the client
- * @returns ClientMapping with name, role, and icon URL
- */
-export function detectClient(versionString: string): ClientMapping {
-  const lowerVersion = versionString.toLowerCase();
-
-  // Check each known client pattern
-  for (const [pattern, mapping] of Object.entries(CLIENT_MAPPINGS)) {
-    if (lowerVersion.includes(pattern)) {
-      return mapping;
-    }
-  }
-
-  // Fallback for unknown clients
-  // Try to guess role based on common patterns
-  if (lowerVersion.includes('execution') || lowerVersion.includes('evm')) {
-    return {
-      name: versionString.split('/')[0] || 'Unknown',
-      role: 'execution',
-      iconUrl:
-        'https://ethereum.org/static/a183661dd70e0e5c70689a0ec95ef0ba/31987/eth-diamond-purple.png',
-    };
-  }
-
-  if (lowerVersion.includes('beacon') || lowerVersion.includes('consensus')) {
-    return {
-      name: versionString.split('/')[0] || 'Unknown',
-      role: 'consensus',
-      iconUrl:
-        'https://ethereum.org/static/a183661dd70e0e5c70689a0ec95ef0ba/31987/eth-diamond-purple.png',
-    };
-  }
-
-  // Default fallback
-  return {
-    name: versionString.split('/')[0] || 'Unknown',
-    role: 'execution',
-    iconUrl:
-      'https://ethereum.org/static/a183661dd70e0e5c70689a0ec95ef0ba/31987/eth-diamond-purple.png',
-  };
-}
+import { NODE_MODES, NodeModeType } from '../../types/dashboard';
+import { ClientType } from '../services/client-metrics';
+import { config } from '../config/environment';
 
 /**
  * Parse version string to extract version number
@@ -128,4 +25,50 @@ export function parseVersion(versionString: string): string {
   }
 
   return versionString;
+}
+
+/**
+ * Client configuration interface
+ */
+export interface ClientConfig {
+  name: string;
+  endpoint: string;
+  type: ClientType;
+  icon: string;
+  beaconUrl?: string;
+}
+
+/**
+ * Get available clients by mode
+ * @param mode - The node mode NodeModeType
+ * @returns Array of client configurations with name and endpoint
+ */
+export function getClients(mode: NodeModeType): ClientConfig[] {
+  if (mode === NODE_MODES.FULL_MODE) {
+    return [
+      {
+        name: 'Nethermind',
+        endpoint: config.fullNodeExecutionUrl,
+        type: 'execution',
+        icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
+      },
+      {
+        name: 'Nimbus',
+        endpoint: config.fullNodeBeaconUrl,
+        type: 'consensus',
+        icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
+      },
+    ];
+  } else if (mode === NODE_MODES.LIGHT_MODE) {
+    return [
+      {
+        name: 'Helios',
+        endpoint: config.heliosClientUrl,
+        type: 'helios',
+        icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
+      },
+    ];
+  }
+
+  return [];
 }

@@ -2,163 +2,141 @@
  * Service for fetching real-time metrics from Ethereum clients
  */
 
-interface ExecutionClientMetrics {
+export type ClientType = 'execution' | 'consensus' | 'helios';
+
+export interface ExecutionClientMetrics {
   peers: number;
   version: string;
   syncing: boolean;
   blockNumber: number;
+  chainId: number;
+  finalizedEpoch?: number; // Helios enrichment
+  participation?: number; // Helios enrichment
 }
 
-interface ConsensusClientMetrics {
+export interface HeliosClientMetrics {
+  peers: number; // Helios doesn't expose peers, usually 0
+  version: string;
+  syncing: boolean; // computed from beacon data
+  blockNumber: number;
+  chainId: number;
+  finalizedEpoch: number;
+  participation: number;
+}
+
+export interface ConsensusClientMetrics {
   peers: number;
   version: string;
   syncing: boolean;
   headSlot: number;
   finalizedEpoch: number;
+  participation?: number; // Nimbus-specific enrichment
 }
 
 export class ClientMetricsService {
-  private executionUrl: string;
-  private consensusUrl: string;
+  constructor() {}
 
-  constructor(executionUrl?: string, consensusUrl?: string) {
-    // Use internal Kubernetes DNS names when running in cluster
-    this.executionUrl =
-      executionUrl || 'http://l1-full-node-execution.l1.svc.cluster.local:8545';
-    this.consensusUrl =
-      consensusUrl || 'http://l1-full-node-beacon.l1.svc.cluster.local:5052';
+  /**
+   * Unified method to fetch client metrics
+   * @param type - 'execution' | 'consensus' | 'helios'
+   * @param url - The client endpoint URL
+   */
+  async getMetrics(
+    type: ClientType,
+    url: string
+  ): Promise<
+    ExecutionClientMetrics | ConsensusClientMetrics | HeliosClientMetrics
+  > {
+    switch (type) {
+      case 'execution':
+        return this.getExecutionMetrics(url);
+      case 'helios':
+        return this.getHeliosMetrics(url);
+      case 'consensus':
+        return this.getConsensusMetrics(url);
+      default:
+        throw new Error(`Unknown client type: ${type}`);
+    }
   }
 
   /**
-   * Fetch metrics from Nethermind execution client
+   * Fetch metrics from full EL clients (Nethermind, Geth, etc.)
    */
-  async getExecutionMetrics(): Promise<ExecutionClientMetrics> {
+  private async getExecutionMetrics(
+    executionUrl: string
+  ): Promise<ExecutionClientMetrics> {
     try {
-      // Get peer count from admin_peers or net_peerCount
-      const peerResponse = await fetch(this.executionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'net_peerCount',
-          params: [],
-          id: 1,
-        }),
-      });
+      const version = await this.fetchWeb3ClientVersion(executionUrl);
+      const peerCount = await this.fetchNetPeerCount(executionUrl);
+      const blockNumber = await this.fetchBlockNumber(executionUrl);
+      const chainId = await this.fetchChainId(executionUrl);
+      const syncing = await this.fetchIsSyncing(executionUrl);
 
-      const peerData = await peerResponse.json();
-      const peerCount = peerData.result ? parseInt(peerData.result, 16) : 0;
-
-      // Get version
-      const versionResponse = await fetch(this.executionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'web3_clientVersion',
-          params: [],
-          id: 1,
-        }),
-      });
-
-      const versionData = await versionResponse.json();
-      const version = versionData.result || 'Unknown';
-
-      // Get sync status
-      const syncResponse = await fetch(this.executionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_syncing',
-          params: [],
-          id: 1,
-        }),
-      });
-
-      const syncData = await syncResponse.json();
-      const syncing = syncData.result !== false;
-
-      // Get current block number
-      const blockResponse = await fetch(this.executionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_blockNumber',
-          params: [],
-          id: 1,
-        }),
-      });
-
-      const blockData = await blockResponse.json();
-      const blockNumber = blockData.result ? parseInt(blockData.result, 16) : 0;
-
-      return {
-        peers: peerCount,
-        version,
-        syncing,
-        blockNumber,
-      };
-    } catch (error) {
-      console.error('Failed to fetch execution metrics:', error);
-      // Return defaults if fetch fails
+      return { peers: peerCount, version, syncing, blockNumber, chainId };
+    } catch (err) {
+      console.error('Failed to fetch execution metrics:', err);
       return {
         peers: 0,
         version: 'Unknown',
         syncing: false,
         blockNumber: 0,
+        chainId: 1,
       };
     }
   }
 
   /**
-   * Fetch metrics from Nimbus consensus client
+   * Fetch metrics from Helios light execution client
    */
-  async getConsensusMetrics(): Promise<ConsensusClientMetrics> {
+  private async getHeliosMetrics(
+    executionUrl: string
+  ): Promise<HeliosClientMetrics> {
     try {
-      // Get node version
-      const versionResponse = await fetch(
-        `${this.consensusUrl}/eth/v1/node/version`
-      );
-      const versionData = await versionResponse.json();
-      const version = versionData.data?.version || 'Unknown';
+      const version = await this.fetchWeb3ClientVersion(executionUrl);
+      const blockNumber = await this.fetchBlockNumber(executionUrl);
+      const chainId = await this.fetchChainId(executionUrl);
 
-      // Get peer count
-      const peersResponse = await fetch(
-        `${this.consensusUrl}/eth/v1/node/peer_count`
-      );
-      const peersData = await peersResponse.json();
-      // Parse connected peers as integer if it's a string
-      const peers =
-        typeof peersData.data?.connected === 'string'
-          ? parseInt(peersData.data.connected, 10)
-          : peersData.data?.connected || 0;
+      // For Helios, we consider syncing false (or you could compute based on blockNumber vs beacon head)
+      const syncing = false;
 
-      // Get sync status
-      const syncResponse = await fetch(
-        `${this.consensusUrl}/eth/v1/node/syncing`
-      );
-      const syncData = await syncResponse.json();
-      const syncing = syncData.data?.is_syncing || false;
+      return {
+        peers: 0,
+        version,
+        syncing,
+        blockNumber,
+        chainId,
+        finalizedEpoch: 0,
+        participation: 0,
+      };
+    } catch (err) {
+      console.error('Failed to fetch Helios metrics:', err);
+      return {
+        peers: 0,
+        version: 'Unknown',
+        syncing: false,
+        blockNumber: 0,
+        chainId: 1,
+        finalizedEpoch: 0,
+        participation: 0,
+      };
+    }
+  }
 
-      // Get head slot
-      const headResponse = await fetch(
-        `${this.consensusUrl}/eth/v1/beacon/headers/head`
-      );
-      const headData = await headResponse.json();
-      const headSlot = headData.data?.header?.message?.slot
-        ? parseInt(headData.data.header.message.slot)
-        : 0;
-
-      // Get finalized checkpoint
-      const finalityResponse = await fetch(
-        `${this.consensusUrl}/eth/v1/beacon/states/head/finality_checkpoints`
-      );
-      const finalityData = await finalityResponse.json();
-      const finalizedEpoch = finalityData.data?.finalized?.epoch
-        ? parseInt(finalityData.data.finalized.epoch)
-        : 0;
+  /**
+   * Fetch metrics from Nimbus or other consensus clients
+   */
+  private async getConsensusMetrics(
+    consensusUrl: string
+  ): Promise<ConsensusClientMetrics> {
+    try {
+      const version = await this.fetchConsensusVersion(consensusUrl);
+      const peers = await this.fetchConsensusPeers(consensusUrl);
+      const syncing = await this.fetchConsensusSyncing(consensusUrl);
+      const headSlot = await this.fetchConsensusHeadSlot(consensusUrl);
+      const finalizedEpoch =
+        await this.fetchFinalizedEpochFromBeacon(consensusUrl);
+      const participation =
+        await this.fetchParticipationFromBeacon(consensusUrl);
 
       return {
         peers,
@@ -166,10 +144,10 @@ export class ClientMetricsService {
         syncing,
         headSlot,
         finalizedEpoch,
+        participation,
       };
-    } catch (error) {
-      console.error('Failed to fetch consensus metrics:', error);
-      // Return defaults if fetch fails
+    } catch (err) {
+      console.error('Failed to fetch consensus metrics:', err);
       return {
         peers: 0,
         version: 'Unknown',
@@ -180,18 +158,136 @@ export class ClientMetricsService {
     }
   }
 
-  /**
-   * Fetch all client metrics
-   */
-  async getAllMetrics() {
-    const [execution, consensus] = await Promise.allSettled([
-      this.getExecutionMetrics(),
-      this.getConsensusMetrics(),
-    ]);
+  /** ------------------- Helper methods ------------------- */
 
-    return {
-      execution: execution.status === 'fulfilled' ? execution.value : null,
-      consensus: consensus.status === 'fulfilled' ? consensus.value : null,
-    };
+  private async fetchWeb3ClientVersion(url: string): Promise<string> {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'web3_clientVersion',
+        params: [],
+        id: 1,
+      }),
+    });
+
+    const data = await resp.json();
+    return data.result || 'Unknown';
+  }
+
+  private async fetchNetPeerCount(url: string): Promise<number> {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'net_peerCount',
+        params: [],
+        id: 1,
+      }),
+    });
+    const data = await resp.json();
+    return data.result ? parseInt(data.result, 16) : 0;
+  }
+
+  private async fetchBlockNumber(url: string): Promise<number> {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_blockNumber',
+        params: [],
+        id: 1,
+      }),
+    });
+    const data = await resp.json();
+    return data.result ? parseInt(data.result, 16) : 0;
+  }
+
+  private async fetchChainId(url: string): Promise<number> {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_chainId',
+        params: [],
+        id: 1,
+      }),
+    });
+    const data = await resp.json();
+    return data.result ? parseInt(data.result, 16) : 0;
+  }
+
+  private async fetchIsSyncing(url: string): Promise<boolean> {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_syncing',
+        params: [],
+        id: 1,
+      }),
+    });
+    const data = await resp.json();
+    return data.result !== false;
+  }
+
+  private async fetchFinalizedEpochFromBeacon(
+    beaconUrl: string
+  ): Promise<number> {
+    const resp = await fetch(
+      `${beaconUrl}/eth/v1/beacon/states/head/finality_checkpoints`
+    );
+    const data = await resp.json();
+    return data.data?.finalized?.epoch
+      ? parseInt(data.data.finalized.epoch)
+      : 0;
+  }
+
+  private async fetchParticipationFromBeacon(
+    beaconUrl: string,
+    fallback = 0
+  ): Promise<number> {
+    try {
+      const resp = await fetch(`${beaconUrl}/eth/v1/validator/participation`);
+      const data = await resp.json();
+      console.log('data', data);
+      return data.data?.globalParticipationRate
+        ? parseFloat(data.data.globalParticipationRate)
+        : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private async fetchConsensusVersion(url: string): Promise<string> {
+    const resp = await fetch(`${url}/eth/v1/node/version`);
+    const data = await resp.json();
+    return data.data?.version || 'Unknown';
+  }
+
+  private async fetchConsensusPeers(url: string): Promise<number> {
+    const resp = await fetch(`${url}/eth/v1/node/peer_count`);
+    const data = await resp.json();
+    const val = data.data?.connected;
+    return typeof val === 'string' ? parseInt(val, 10) : val || 0;
+  }
+
+  private async fetchConsensusSyncing(url: string): Promise<boolean> {
+    const resp = await fetch(`${url}/eth/v1/node/syncing`);
+    const data = await resp.json();
+    return data.data?.is_syncing || false;
+  }
+
+  private async fetchConsensusHeadSlot(url: string): Promise<number> {
+    const resp = await fetch(`${url}/eth/v1/beacon/headers/head`);
+    const data = await resp.json();
+    return data.data?.header?.message?.slot
+      ? parseInt(data.data.header.message.slot)
+      : 0;
   }
 }

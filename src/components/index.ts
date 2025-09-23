@@ -1,7 +1,7 @@
 // Atoms
 export { Card } from './atoms/Card';
 export { ChainChip } from './atoms/ChainChip';
-export { ChainIcon, EthereumIcon, AztecIcon } from './atoms/ChainIcon';
+export { ChainIcon } from './atoms/ChainIcon';
 export { PercentageChip } from './atoms/PercentageChip';
 export { StatusIndicator } from './atoms/StatusIndicator';
 export { Tooltip } from './atoms/Tooltip';
@@ -13,7 +13,6 @@ export { ErrorState } from './molecules/ErrorState';
 export { LoadingState } from './molecules/LoadingState';
 export { ParticipationNumber } from './molecules/ParticipationNumber';
 export { ProgressBar } from './molecules/ProgressBar';
-export { ProgressSweep } from './molecules/ProgressSweep';
 
 // Templates
 export { DashboardTemplate } from './templates/DashboardTemplate';

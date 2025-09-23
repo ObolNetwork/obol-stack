@@ -4,12 +4,31 @@
 
 export const config = {
   // Service URLs - Using Kubernetes internal DNS when running in cluster
-  prometheusUrl: process.env.PROMETHEUS_URL || 'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
-  erpcUrl: process.env.ERPC_URL || 'http://rpc.l1.svc.cluster.local',
-  grafanaUrl: process.env.GRAFANA_URL || 'http://monitoring-grafana.monitoring.svc.cluster.local',
-  beaconApiUrl: process.env.BEACON_API_URL || 'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
-  executionRpcUrl: process.env.EXECUTION_RPC_URL || 'http://l1-full-node-execution.l1.svc.cluster.local:8545',
-  
+  prometheusUrl:
+    process.env.PROMETHEUS_URL ||
+    'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
+  grafanaUrl:
+    process.env.GRAFANA_URL ||
+    'http://monitoring-grafana.monitoring.svc.cluster.local',
+  beaconApiUrl:
+    process.env.BEACON_API_URL ||
+    'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
+  executionRpcUrl:
+    process.env.EXECUTION_RPC_URL ||
+    'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+  heliosClientUrl:
+    process.env.HELIOS_CLIENT_URL ||
+    'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+  heliosBeaconUrl:
+    process.env.HELIOS_BEACON_URL ||
+    'http://l1-light-client-beacon.l1.svc.cluster.local:5052',
+  fullNodeExecutionUrl:
+    process.env.FULL_NODE_EXECUTION_URL ||
+    'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+  fullNodeBeaconUrl:
+    process.env.FULL_NODE_BEACON_URL ||
+    'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
+
   // Network Configuration
   defaultNetwork: process.env.DEFAULT_NETWORK || 'hoodi',
   networks: {
@@ -24,28 +43,24 @@ export const config = {
       rpcPath: '/rpc/hoodi',
     },
   },
-  
+
   // Update Intervals
   intervals: {
     block: parseInt(process.env.BLOCK_UPDATE_INTERVAL || '12000'),
     metrics: parseInt(process.env.METRICS_UPDATE_INTERVAL || '5000'),
     system: parseInt(process.env.SYSTEM_UPDATE_INTERVAL || '10000'),
   },
-  
+
   // Feature Flags
   features: {
     realMetrics: process.env.ENABLE_REAL_METRICS === 'true',
     websocket: process.env.ENABLE_WEBSOCKET === 'true',
     aztecMock: process.env.ENABLE_AZTEC_MOCK !== 'false', // Default to true
   },
-  
+
   // API Routes
   api: {
     dashboard: '/api/dashboard',
-    system: '/api/metrics/system',
-    ethereum: '/api/metrics/ethereum',
-    clients: '/api/metrics/clients',
-    ports: '/api/health/ports',
   },
 };
 

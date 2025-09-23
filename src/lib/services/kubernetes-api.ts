@@ -3,27 +3,12 @@
  * Uses the Kubernetes API directly via service account token
  */
 
-export interface PodInfo {
-  name: string;
-  namespace: string;
-  status: string;
-  ready: boolean;
-  restarts: number;
-  createdAt: string;
-  ip?: string;
-  node?: string;
-}
+import { NODE_MODES, NodeModeType } from '../../types/dashboard';
+import { config } from '../config/environment';
 
-export interface ServiceInfo {
-  name: string;
-  namespace: string;
-  type: string;
-  clusterIP: string;
-  ports: Array<{
-    port: number;
-    targetPort: number;
-    protocol: string;
-  }>;
+export interface ServiceModeInfo {
+  url: string;
+  type: NodeModeType;
 }
 
 export class KubernetesAPIClient {
@@ -40,48 +25,20 @@ export class KubernetesAPIClient {
   }
 
   /**
-   * Get pod information by directly querying services
-   * This is a simplified version that doesn't require Kubernetes API access
-   */
-  async getPodsStatus(
-    _namespace: string = 'l1'
-  ): Promise<
-    Record<
-      string,
-      { name: string; status: string; ready: boolean; restarts: number }
-    >
-  > {
-    // For now, we'll return mock data based on what we know is deployed
-    // In production, this would query the actual Kubernetes API
-    return {
-      execution: {
-        name: 'l1-full-node-execution-0',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-      beacon: {
-        name: 'l1-full-node-beacon-0',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-      rpc: {
-        name: 'rpc',
-        status: 'Running',
-        ready: true,
-        restarts: 0,
-      },
-    };
-  }
-
-  /**
    * Check service health by attempting to connect to them
    */
   async checkServiceHealth(serviceUrl: string): Promise<boolean> {
     try {
+      // Use POST for JSON-RPC endpoints
       const response = await fetch(serviceUrl, {
-        method: 'GET',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'web3_clientVersion',
+          params: [],
+          id: 1,
+        }),
         signal: AbortSignal.timeout(5000), // 5 second timeout
       });
       return response.ok;
@@ -90,63 +47,32 @@ export class KubernetesAPIClient {
     }
   }
 
-  /**
-   * Get client versions by querying the actual services
-   */
-  async getClientVersions() {
-    const versions = {
-      execution: 'Unknown',
-      consensus: 'Unknown',
-    };
+  async getAvailableModes(): Promise<ServiceModeInfo[]> {
+    const modes = [
+      {
+        url: config.fullNodeExecutionUrl,
+        type: NODE_MODES.FULL_MODE,
+      },
+      {
+        url: config.heliosClientUrl,
+        type: NODE_MODES.LIGHT_MODE,
+      },
+    ];
 
-    try {
-      // Try to get Nethermind version via JSON-RPC
-      const execResponse = await fetch(
-        'http://l1-full-node-execution.l1.svc.cluster.local:8545',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'web3_clientVersion',
-            params: [],
-            id: 1,
-          }),
-          signal: AbortSignal.timeout(5000),
-        }
-      );
+    // Check all modes in parallel
+    const results = await Promise.allSettled(
+      modes.map(service => this.checkServiceHealth(service.url))
+    );
 
-      if (execResponse.ok) {
-        const data = await execResponse.json();
-        if (data.result) {
-          versions.execution = data.result;
-        }
-      }
-    } catch (error) {
-      console.error('Failed to get execution client version:', error);
-    }
+    // Return only the modes that are available
+    const availableModes = modes.filter((service, index) => {
+      const result = results[index];
+      const isAvailable =
+        result.status === 'fulfilled' && result.value === true;
+      return isAvailable;
+    });
 
-    try {
-      // Try to get Nimbus version via Beacon API
-      const beaconResponse = await fetch(
-        'http://l1-full-node-beacon.l1.svc.cluster.local:5052/eth/v1/node/version',
-        {
-          headers: { Accept: 'application/json' },
-          signal: AbortSignal.timeout(5000),
-        }
-      );
-
-      if (beaconResponse.ok) {
-        const data = await beaconResponse.json();
-        if (data.data?.version) {
-          versions.consensus = data.data.version;
-        }
-      }
-    } catch (error) {
-      console.error('Failed to get consensus client version:', error);
-    }
-
-    return versions;
+    return availableModes;
   }
 
   /**

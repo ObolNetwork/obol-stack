@@ -5,7 +5,6 @@ import { FooterBar } from '../../organisms/FooterBar';
 import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
 import { useDashboardData } from '../../../hooks/useDashboardData';
-import { mockDashboardData } from '../../../data/mockData';
 import { Box } from '@obolnetwork/obol-ui';
 
 export function DashboardPage() {

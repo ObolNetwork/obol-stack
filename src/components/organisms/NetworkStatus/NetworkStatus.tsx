@@ -8,7 +8,6 @@ import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
 import { ChainData } from '../../../types/dashboard';
 import { ChainIcon } from '../../atoms/ChainIcon';
-import { getClientIcon } from '../../../lib/utils/clientIcons';
 
 export interface NetworkStatusProps {
   chainData: ChainData;
@@ -145,14 +144,7 @@ export function NetworkStatus({
         padding: '0',
       }}
     >
-      <Accordion
-        header={headerContent}
-        defaultExpanded={defaultExpanded}
-        onToggle={isExpanded => {
-          // You can add any additional logic here when accordion toggles
-          console.log('Accordion toggled:', isExpanded);
-        }}
-      >
+      <Accordion header={headerContent} defaultExpanded={defaultExpanded}>
         <NetworkContent>
           {/* Metrics grid - Clean 2x2 layout */}
           <MetricsGrid>
@@ -203,7 +195,7 @@ export function NetworkStatus({
                     version={client.version}
                     peers={client.peers}
                     status={client.status}
-                    icon={getClientIcon(client.name)}
+                    icon={client.icon}
                   />
                 ))}
               </ClientsContainer>
