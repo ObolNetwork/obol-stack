@@ -72,8 +72,6 @@ export class KubernetesAPIClient {
       return isAvailable;
     });
 
-    console.log('availableModes', availableModes);
-
     return availableModes;
   }
 

@@ -40,12 +40,10 @@ export class ClientMetricsService {
    * Unified method to fetch client metrics
    * @param type - 'execution' | 'consensus' | 'helios'
    * @param url - The client endpoint URL
-   * @param beaconUrl - Required for Helios
    */
   async getMetrics(
     type: ClientType,
-    url: string,
-    beaconUrl: string
+    url: string
   ): Promise<
     ExecutionClientMetrics | ConsensusClientMetrics | HeliosClientMetrics
   > {
@@ -53,9 +51,9 @@ export class ClientMetricsService {
       case 'execution':
         return this.getExecutionMetrics(url);
       case 'helios':
-        return this.getHeliosMetrics(url, beaconUrl);
+        return this.getHeliosMetrics(url);
       case 'consensus':
-        return this.getConsensusMetrics(beaconUrl);
+        return this.getConsensusMetrics(url);
       default:
         throw new Error(`Unknown client type: ${type}`);
     }
@@ -91,20 +89,13 @@ export class ClientMetricsService {
    * Fetch metrics from Helios light execution client
    */
   private async getHeliosMetrics(
-    executionUrl: string,
-    beaconUrl: string
+    executionUrl: string
   ): Promise<HeliosClientMetrics> {
     try {
       const version = await this.fetchWeb3ClientVersion(executionUrl);
       const blockNumber = await this.fetchBlockNumber(executionUrl);
       const chainId = await this.fetchChainId(executionUrl);
 
-      // Enrich with beacon data
-      //       const finalizedEpoch =
-      //         await this.fetchFinalizedEpochFromBeacon(beaconUrl);
-      //       const participation = await this.fetchParticipationFromBeacon(beaconUrl);
-      // console.log('finalizedEpoch', finalizedEpoch);
-      // console.log('participation', participation);
       // For Helios, we consider syncing false (or you could compute based on blockNumber vs beacon head)
       const syncing = false;
 
@@ -264,6 +255,7 @@ export class ClientMetricsService {
     try {
       const resp = await fetch(`${beaconUrl}/eth/v1/validator/participation`);
       const data = await resp.json();
+      console.log('data', data);
       return data.data?.globalParticipationRate
         ? parseFloat(data.data.globalParticipationRate)
         : fallback;

@@ -35,7 +35,7 @@ export interface ClientConfig {
   endpoint: string;
   type: ClientType;
   icon: string;
-  beaconUrl: string;
+  beaconUrl?: string;
 }
 
 /**
@@ -51,14 +51,12 @@ export function getClients(mode: NodeModeType): ClientConfig[] {
         endpoint: config.fullNodeExecutionUrl,
         type: 'execution',
         icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
-        beaconUrl: config.fullNodeBeaconUrl,
       },
       {
         name: 'Nimbus',
         endpoint: config.fullNodeBeaconUrl,
         type: 'consensus',
         icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
-        beaconUrl: config.fullNodeBeaconUrl,
       },
     ];
   } else if (mode === NODE_MODES.LIGHT_MODE) {
@@ -68,7 +66,6 @@ export function getClients(mode: NodeModeType): ClientConfig[] {
         endpoint: config.heliosClientUrl,
         type: 'helios',
         icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
-        beaconUrl: config.heliosBeaconUrl,
       },
     ];
   }

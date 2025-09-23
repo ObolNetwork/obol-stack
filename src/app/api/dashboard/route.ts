@@ -98,8 +98,7 @@ export async function GET() {
         for (const client of chainClients) {
           const result = await clientMetrics.getMetrics(
             client.type,
-            client.endpoint,
-            client.beaconUrl
+            client.endpoint
           );
 
           if (client.type === 'execution') {
