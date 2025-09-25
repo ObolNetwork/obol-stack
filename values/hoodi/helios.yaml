@@ -1,24 +1,25 @@
-# Example values file for deploying Helios on Holesky Testnet
+# Example values file for deploying Helios on Hoodi Testnet
 # Replace the execution RPC placeholder with your actual endpoint
 
 # Helios specific configuration
 helios:
-  # Network to sync to
+  # Network to sync to (supported in upstream Helios since Jan 2025)
   network: "hoodi"
-  
+
   # REQUIRED: Add your execution RPC endpoint (must support eth_getProof)
   # Example using AllthatNode (replace with your provider)
   executionRpc: "https://hoodi.drpc.org"
-  
-  consensusRpc: "https://ethereum-hoodi-beacon-api.publicnode.com"
-  
-  # Example checkpoint
-  checkpoint: ""
-  strictCheckpointAge: true
 
-  # Trusted URL to retrieve a checkpoint sync to begin the light client from
-  fallback: "https://checkpoint-sync.hoodi.ethpandaops.io"
-  loadExternalFallback: true
+  # Consensus RPC with light client API support (Nimbus test endpoint)
+  consensusRpc: "http://unstable.hoodi.beacon-api.nimbus.team"
+  
+  # Explicit checkpoint to bypass missing fallback services for Hoodi (finalized)
+  checkpoint: "0x0fa0a7ce698c708ba38e9362c4ef97e30c0d9d356f03abf73529708627b796f8"
+  strictCheckpointAge: false
+
+  # Disabled fallback as Helios doesn't have Hoodi in checkpoint services yet
+  fallback: ""
+  loadExternalFallback: false
   
   # Bind to 0.0.0.0 to allow connections from outside the pod
   rpcBindIp: "0.0.0.0"
@@ -29,9 +30,9 @@ helios:
 image:
   repository: obolnetwork/helios
   # This sets the pull policy for images.
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  #tag: "e10e753"
+  tag: "latest"
 
 # Configure service to be accessible
 service:
