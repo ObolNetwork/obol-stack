@@ -30,7 +30,7 @@ const StyledTooltipContent = styled(TooltipPrimitive.Content, {
   borderRadius: '8px',
   background: '#FFF',
   color: 'var(--Backgrounds-01, #091011)',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '12px',
   fontStyle: 'normal',
   fontWeight: '600',

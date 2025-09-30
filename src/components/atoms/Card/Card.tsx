@@ -15,7 +15,6 @@ const StyledCard = styled(Box, {
   backgroundColor: '$bg02',
   border: '1px solid $stroke',
   transition: 'background-color 300ms ease',
-  minWidth: 'fit-content',
 
   variants: {
     hover: {

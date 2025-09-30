@@ -47,7 +47,7 @@ const StyledPercentageChip = styled(Box, {
   gap: '$xxs',
   flexShrink: 0,
   borderRadius: '$3',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body', // Uses design token instead of hardcoded value
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '$semibold',

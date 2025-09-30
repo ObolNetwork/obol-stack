@@ -62,7 +62,7 @@ const MetricItem = styled(Box, {
 
 const MetricLabel = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '12px',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -73,7 +73,7 @@ const MetricLabel = styled(Text, {
 
 const MetricValue = styled(Text, {
   color: '#FFF',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '20px',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -177,7 +177,7 @@ export function NetworkStatus({
               <Text
                 css={{
                   color: '$body',
-                  fontFamily: '"DM Sans"',
+                  fontFamily: '$fonts$body',
                   fontSize: '12px',
                   fontStyle: 'normal',
                   fontWeight: '600',

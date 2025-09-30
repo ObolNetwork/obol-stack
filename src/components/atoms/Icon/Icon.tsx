@@ -2,15 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { styled } from '@/lib/stitches.config';
 import DOMPurify from 'dompurify';
 
-// Define available icon names (should match SVG filenames in public folder)
+// Singleton cache for SVG content to prevent re-fetching
+const svgCache = new Map<string, string>();
+
+// AUTO-GENERATED: Do not edit manually
+// Generated from SVG files in /public directory
+// Run 'npm run generate-icon-types' to regenerate
 export type IconName =
-  | 'peers'
+  | 'node-cpu'
   | 'node-disk'
   | 'node-memory'
-  | 'node-cpu'
   | 'node-uptime'
-  | 'ethereum'
-  | 'aztec';
+  | 'peers'
+  | 'stack-icon';
 
 // Define size variants
 export type IconSize = 'xxs' | 'xs' | 's' | 'm' | 'l' | 'xl' | 'xxl';
@@ -20,6 +24,8 @@ export interface IconProps {
   size?: IconSize;
   color?: string;
   className?: string;
+  'aria-label'?: string;
+  role?: string;
 }
 
 // Size mapping
@@ -127,6 +133,8 @@ export function Icon({
   size = 's',
   color = 'currentColor',
   className,
+  'aria-label': ariaLabel,
+  role = 'img',
 }: IconProps) {
   const [svgContent, setSvgContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -139,6 +147,18 @@ export function Icon({
       try {
         setLoading(true);
         setError(false);
+
+        // Development-time validation
+        if (process.env.NODE_ENV === 'development') {
+          console.debug(`🔍 Icon: Loading "${name}.svg"`);
+        }
+
+        // Check cache first to prevent re-fetching
+        if (svgCache.has(name)) {
+          setSvgContent(svgCache.get(name)!);
+          setLoading(false);
+          return;
+        }
 
         const response = await fetch(`/${name}.svg`, {
           signal: controller.signal,
@@ -166,6 +186,8 @@ export function Icon({
           ],
         });
 
+        // Cache the sanitized SVG for future use
+        svgCache.set(name, sanitizedSvg);
         setSvgContent(sanitizedSvg);
       } catch (err) {
         // Ignore AbortError when component unmounts
@@ -187,7 +209,13 @@ export function Icon({
 
   if (loading) {
     return (
-      <IconContainer size={size} className={className} style={{ color }}>
+      <IconContainer
+        size={size}
+        className={className}
+        style={{ color }}
+        aria-label={ariaLabel || `Loading ${name} icon`}
+        role={role}
+      >
         <div
           style={{
             width: '100%',
@@ -202,7 +230,13 @@ export function Icon({
 
   if (error || !svgContent) {
     return (
-      <IconContainer size={size} className={className} style={{ color }}>
+      <IconContainer
+        size={size}
+        className={className}
+        style={{ color }}
+        aria-label={ariaLabel || `${name} icon failed to load`}
+        role={role}
+      >
         <div
           style={{
             width: '100%',
@@ -227,6 +261,8 @@ export function Icon({
       size={size}
       className={className}
       style={{ color }}
+      aria-label={ariaLabel || `${name} icon`}
+      role={role}
       dangerouslySetInnerHTML={{ __html: svgContent }}
     />
   );

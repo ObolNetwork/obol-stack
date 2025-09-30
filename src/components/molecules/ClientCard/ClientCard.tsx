@@ -44,7 +44,7 @@ const ClientDetails = styled(Box, {});
 
 const ClientName = styled(Text, {
   color: '$white',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$4',
   fontStyle: 'normal',
   fontWeight: '$semibold',
@@ -53,7 +53,7 @@ const ClientName = styled(Text, {
 
 const ClientVersion = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '$medium',

@@ -45,6 +45,8 @@ const HeaderContent = styled(Box, {
 });
 
 const ChevronIcon = styled(Box, {
+  // Absolute positioning prevents chevron from pushing content to the left
+  // and maintains consistent text alignment regardless of chevron state
   position: 'absolute',
   top: '0',
   right: '0',

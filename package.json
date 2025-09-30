@@ -13,6 +13,8 @@
     "lint:fix": "next lint --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "generate-icon-types": "node scripts/generate-icon-types.mjs",
+    "prebuild": "npm run generate-icon-types",
     "prepare": "husky"
   },
   "dependencies": {

@@ -16,6 +16,9 @@ export const {
       orange: '#E89E30',
       red: '#C33',
     },
+    fonts: {
+      body: '"DM Sans"',
+    },
   },
 });
 

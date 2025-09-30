@@ -87,7 +87,7 @@ const MetricIconContainer = styled(Box, {
 
 const MetricLabel = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -97,7 +97,7 @@ const MetricLabel = styled(Text, {
 
 const MetricValue = styled(Text, {
   color: '$white',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$4',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -106,7 +106,7 @@ const MetricValue = styled(Text, {
 
 const MetricSubtext = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
@@ -174,7 +174,7 @@ const SectionContainer = styled(Box, {
 
 const SectionTitle = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$1',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -214,7 +214,7 @@ const PortNameAndNumber = styled(Flex, {
 
 const PortName = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -224,7 +224,7 @@ const PortName = styled(Text, {
 
 const PortNumber = styled(Text, {
   color: '$light',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
@@ -232,7 +232,7 @@ const PortNumber = styled(Text, {
 });
 
 const PortStatus = styled(Text, {
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
