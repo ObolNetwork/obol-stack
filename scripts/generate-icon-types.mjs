@@ -2,11 +2,16 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 /**
  * Script to generate IconName type from actual SVG files in /public
- * Run with: node scripts/generate-icon-types.js
+ * Run with: node scripts/generate-icon-types.mjs
  */
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ICON_COMPONENT_PATH = path.join(
