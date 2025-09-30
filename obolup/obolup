@@ -516,7 +516,7 @@ launch_stack() {
         log_info "Installing an Ethereum full node client synced to $__network..."
         docker pull nethermind/nethermind:latest
         docker pull statusim/nimbus-eth2:multiarch-latest
-        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
+        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node-$__network ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
         
         # Deploy MEV-boost for supported networks (not hoodi)
         log_info "Installing MEV-boost sidecar for $__network network..."
