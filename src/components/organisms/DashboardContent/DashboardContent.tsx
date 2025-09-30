@@ -12,7 +12,7 @@ const Container = styled(Box, {
 });
 
 const MainSection = styled(Box, {
-  maxWidth: '1200px',
+  maxWidth: '800px',
   margin: '0 auto',
   width: '100%',
 });

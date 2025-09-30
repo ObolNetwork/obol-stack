@@ -1,11 +1,12 @@
 import React from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
+import { Icon } from '../../atoms/Icon';
 
 export interface ClientCardProps {
   name: string;
   version: string;
-  peers: number;
+  peers: number | null;
   status?: 'synced' | 'syncing' | 'error';
   icon?: string;
 }
@@ -22,7 +23,7 @@ const Card = styled(Box, {
 });
 
 const ClientHeader = styled(Flex, {
-  alignItems: 'center',
+  alignItems: 'flex-start',
   justifyContent: 'space-between',
   width: '100%',
 });
@@ -43,7 +44,7 @@ const ClientDetails = styled(Box, {});
 
 const ClientName = styled(Text, {
   color: '$white',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$4',
   fontStyle: 'normal',
   fontWeight: '$semibold',
@@ -52,7 +53,7 @@ const ClientName = styled(Text, {
 
 const ClientVersion = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '$medium',
@@ -74,6 +75,12 @@ const ClientMetricRow = styled(Flex, {
 
 const ClientMetricLabel = styled(Text, {
   color: '$muted',
+});
+
+const ClientMetricValueContainer = styled(Flex, {
+  flex: 0,
+  alignItems: 'center',
+  gap: '$xxxs',
 });
 
 const ClientMetricValue = styled(Text, {
@@ -123,10 +130,15 @@ export function ClientCard({
         <StatusIndicator status={getStatusIndicatorStatus()} size="sm" />
       </ClientHeader>
       <ClientMetrics>
-        <ClientMetricRow>
-          <ClientMetricLabel>Peers</ClientMetricLabel>
-          <ClientMetricValue>{peers}</ClientMetricValue>
-        </ClientMetricRow>
+        {peers && (
+          <ClientMetricRow>
+            <ClientMetricLabel>Peers</ClientMetricLabel>
+            <ClientMetricValueContainer>
+              <Icon name="peers" size="xxs" />
+              <ClientMetricValue>{peers}</ClientMetricValue>
+            </ClientMetricValueContainer>
+          </ClientMetricRow>
+        )}
       </ClientMetrics>
     </Card>
   );

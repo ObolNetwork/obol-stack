@@ -4,12 +4,7 @@ import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { PercentageChip } from '../../atoms/PercentageChip';
 import { ProgressBar } from '../../molecules/ProgressBar';
-import {
-  DiskIcon,
-  MemoryIcon,
-  CpuIcon,
-  UptimeIcon,
-} from '../../icons/hardware';
+import { Icon } from '../../atoms/Icon';
 import { DashboardData } from '../../../types/dashboard';
 
 export interface NodeOverviewProps {
@@ -36,7 +31,7 @@ const NodeContent = styled(Box, {
 const MetricsGrid = styled(Box, {
   display: 'grid',
   gridTemplateColumns: 'repeat(4, 1fr)',
-  gap: '$lg',
+  gap: '$xxs',
   marginBottom: '$xl',
 
   '@media (max-width: 1200px)': {
@@ -52,7 +47,7 @@ const MetricsGrid = styled(Box, {
 interface MetricCardProps {
   icon: React.ReactNode;
   label: string;
-  percentage: number;
+  percentage?: number;
   value: string;
   subtext: string;
   isExpanded: boolean;
@@ -65,12 +60,13 @@ const MetricCardContainer = styled(Box, {
   flex: '1 0 0',
   borderRadius: '8px',
   background: '$bg03',
-  gap: '$sm',
 });
 
 const MetricHeader = styled(Flex, {
   display: 'flex',
-  padding: '12px',
+  paddingTop: '$xs',
+  paddingRight: '$xs',
+  paddingLeft: '$xs',
   justifyContent: 'space-between',
   alignItems: 'center',
   alignSelf: 'stretch',
@@ -91,7 +87,7 @@ const MetricIconContainer = styled(Box, {
 
 const MetricLabel = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -101,28 +97,33 @@ const MetricLabel = styled(Text, {
 
 const MetricValue = styled(Text, {
   color: '$white',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$4',
   fontStyle: 'normal',
   fontWeight: '600',
   lineHeight: '24px' /* 150% */,
-  padding: '0 12px',
 });
 
 const MetricSubtext = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
   lineHeight: '18px' /* 150% */,
-  padding: '0 12px 12px 12px',
+  paddingTop: '$xxs',
+  paddingBottom: '$xxs',
 });
 
 const ProgressBarContainer = styled(Box, {
-  paddingLeft: '8px',
-  paddingRight: '8px',
   width: '100%',
+});
+
+const MetricContentContainer = styled(Flex, {
+  paddingTop: '$xs',
+  paddingLeft: '$xs',
+  paddingRight: '$xs',
+  flexDirection: 'column',
 });
 
 const MetricCard: React.FC<MetricCardProps> = ({
@@ -140,20 +141,26 @@ const MetricCard: React.FC<MetricCardProps> = ({
           <MetricIconContainer>{icon}</MetricIconContainer>
           <MetricLabel>{label}</MetricLabel>
         </MetricHeaderLeft>
-        <PercentageChip percentage={percentage} />
+        {percentage !== undefined && <PercentageChip percentage={percentage} />}
       </MetricHeader>
       {isExpanded ? (
-        <>
+        <MetricContentContainer>
           <MetricValue>{value}</MetricValue>
-          <ProgressBarContainer>
-            <ProgressBar value={percentage} />
-          </ProgressBarContainer>
+          {percentage !== undefined && (
+            <ProgressBarContainer>
+              <ProgressBar value={percentage} />
+            </ProgressBarContainer>
+          )}
           <MetricSubtext>{subtext}</MetricSubtext>
-        </>
+        </MetricContentContainer>
       ) : (
-        <ProgressBarContainer>
-          <ProgressBar value={percentage} />
-        </ProgressBarContainer>
+        <MetricContentContainer>
+          {percentage !== undefined && (
+            <ProgressBarContainer>
+              <ProgressBar value={percentage} />
+            </ProgressBarContainer>
+          )}
+        </MetricContentContainer>
       )}
     </MetricCardContainer>
   );
@@ -167,7 +174,7 @@ const SectionContainer = styled(Box, {
 
 const SectionTitle = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$1',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -176,16 +183,22 @@ const SectionTitle = styled(Text, {
 });
 
 const PortsList = styled(Box, {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '$sm',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: '$xxs',
+
+  '@media (max-width: 1200px)': {
+    gridTemplateColumns: 'repeat(2, 1fr)',
+  },
+
+  '@media (max-width: 768px)': {
+    gridTemplateColumns: '1fr',
+  },
 });
 
 const PortItem = styled(Flex, {
   display: 'flex',
-  flex: '1 1 calc(50% - 8px)',
-  minWidth: '200px',
-  maxWidth: '171px',
+  flex: '1 0 0',
   padding: '12px',
   alignItems: 'center',
   justifyContent: 'space-between',
@@ -201,7 +214,7 @@ const PortNameAndNumber = styled(Flex, {
 
 const PortName = styled(Text, {
   color: '$body',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '600',
@@ -211,7 +224,7 @@ const PortName = styled(Text, {
 
 const PortNumber = styled(Text, {
   color: '$light',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
@@ -219,7 +232,7 @@ const PortNumber = styled(Text, {
 });
 
 const PortStatus = styled(Text, {
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '500',
@@ -288,7 +301,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
       <MetricsGrid>
         <MetricCard
           icon={
-            <DiskIcon width={20} height={20} fill={theme.colors.light.value} />
+            <Icon name="node-disk" size="xs" color={theme.colors.light.value} />
           }
           label="DISK"
           percentage={diskPercentage}
@@ -299,10 +312,10 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
 
         <MetricCard
           icon={
-            <MemoryIcon
-              width={20}
-              height={20}
-              fill={theme.colors.light.value}
+            <Icon
+              name="node-memory"
+              size="xs"
+              color={theme.colors.light.value}
             />
           }
           label="MEMORY"
@@ -314,7 +327,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
 
         <MetricCard
           icon={
-            <CpuIcon width={20} height={20} fill={theme.colors.light.value} />
+            <Icon name="node-cpu" size="xs" color={theme.colors.light.value} />
           }
           label="CPU"
           percentage={cpuPercentage}
@@ -325,14 +338,13 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
 
         <MetricCard
           icon={
-            <UptimeIcon
-              width={20}
-              height={20}
-              fill={theme.colors.light.value}
+            <Icon
+              name="node-uptime"
+              size="xs"
+              color={theme.colors.light.value}
             />
           }
           label="UPTIME"
-          percentage={8}
           value={formattedUptime}
           subtext="continuous operation"
           isExpanded={isExpanded}

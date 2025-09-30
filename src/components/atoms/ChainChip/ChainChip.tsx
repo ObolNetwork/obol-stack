@@ -15,7 +15,7 @@ const StyledChainChip = styled(Box, {
   gap: '8px',
   flexShrink: 0,
   borderRadius: '8px',
-  fontFamily: '"DM Sans"',
+  fontFamily: '$fonts$body',
   fontSize: '12px',
   fontStyle: 'normal',
   fontWeight: '500',
