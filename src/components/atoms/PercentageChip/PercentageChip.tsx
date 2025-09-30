@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, styled } from '@obolnetwork/obol-ui';
+import { Box } from '@obolnetwork/obol-ui';
+import { styled } from '@/lib/stitches.config';
 
 export interface PercentageChipProps {
   percentage: number;
@@ -7,31 +8,31 @@ export interface PercentageChipProps {
 }
 
 const getPercentageStyles = (percentage: number) => {
-  if (percentage >= 0 && percentage <= 8) {
+  if (percentage >= 0 && percentage <= 20) {
     return {
-      background: 'rgba(221, 96, 60, 0.20)', // $test with 20% opacity
-      color: '$test',
+      background: 'rgba(47, 228, 171, 0.20)',
+      color: '$obolGreen',
     };
-  } else if (percentage >= 9 && percentage <= 17) {
+  } else if (percentage >= 21 && percentage <= 40) {
     return {
-      background: 'rgba(232, 156, 135, 0.20)', // $testHover with 20% opacity
-      color: '$testHover',
-    };
-  } else if (percentage >= 18 && percentage <= 21) {
-    return {
-      background: 'rgba(232, 158, 48, 0.20)', // $obolGold with 20% opacity
-      color: '$obolGold',
-    };
-  } else if (percentage >= 22 && percentage <= 31) {
-    return {
-      background: 'rgba(182, 234, 92, 0.20)', // $obolGreenLight with 20% opacity
+      background: 'rgba(182, 234, 92, 0.20)',
       color: '$obolGreenLight',
     };
-  } else {
-    // 32% till 100%
+  } else if (percentage >= 41 && percentage <= 60) {
     return {
-      background: 'rgba(47, 228, 171, 0.20)', // $obolGreen with 20% opacity
-      color: '$obolGreen',
+      background: 'rgba(232, 158, 48, 0.20)',
+      color: '$orange',
+    };
+  } else if (percentage >= 61 && percentage <= 80) {
+    return {
+      background: 'rgba(221, 96, 60, 0.20)',
+      color: '$test',
+    };
+  } else {
+    // 81% till 100%
+    return {
+      background: 'rgba(204, 51, 51, 0.20)',
+      color: '$red',
     };
   }
 };

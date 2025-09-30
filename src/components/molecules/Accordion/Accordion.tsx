@@ -18,8 +18,8 @@ const AccordionContainer = styled(Box, {
 });
 
 const AccordionHeader = styled(Flex, {
+  position: 'relative',
   alignItems: 'start',
-  justifyContent: 'space-between',
   cursor: 'pointer',
   width: '100%',
   transition: 'all 0.2s ease',
@@ -45,6 +45,9 @@ const HeaderContent = styled(Box, {
 });
 
 const ChevronIcon = styled(Box, {
+  position: 'absolute',
+  top: '0',
+  right: '0',
   width: '20px',
   height: '20px',
   transition: 'transform 0.3s ease',
@@ -52,7 +55,6 @@ const ChevronIcon = styled(Box, {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  flexShrink: 0,
   transformOrigin: 'center',
 
   variants: {

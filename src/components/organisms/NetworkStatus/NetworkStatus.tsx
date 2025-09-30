@@ -23,6 +23,8 @@ const CardTitle = styled(Text, {
   fontSize: '$5',
   fontWeight: '$semibold',
   color: '$light',
+  marginRight: '$xxxs',
+  marginLeft: '$xxxs',
 });
 
 const NetworkContent = styled(Box, {
@@ -86,7 +88,7 @@ const ClientsSection = styled(Box, {
 const ClientsContainer = styled(Box, {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: '$lg',
+  gap: '$xs',
 });
 
 export function NetworkStatus({
@@ -94,45 +96,38 @@ export function NetworkStatus({
   defaultExpanded = true,
 }: NetworkStatusProps) {
   const headerContent = (
-    <NetworkHeader>
-      <Flex
-        css={{
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: '$md',
-          flex: 1,
-          paddingRight: '$sm',
-        }}
-      >
-        <Flex css={{ alignItems: 'center', gap: '$md' }}>
-          {/* Network Icon */}
-          {<ChainIcon chain={chainData.chainName} size={24} />}
+    <NetworkHeader
+      css={{
+        justifyContent: 'space-between',
+        paddingRight: '$xl',
+      }}
+    >
+      <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
+        {/* Network Icon */}
+        {<ChainIcon chain={chainData.chainName} size={24} />}
 
-          <CardTitle>
-            {chainData.chainName.charAt(0).toUpperCase() +
-              chainData.chainName.slice(1)}
-          </CardTitle>
+        <CardTitle>
+          {chainData.chainName.charAt(0).toUpperCase() +
+            chainData.chainName.slice(1)}
+        </CardTitle>
 
-          <ChainChip
-            variant={chainData.network === 'mainnet' ? 'mainnet' : 'testnet'}
-          />
+        <ChainChip
+          variant={chainData.network === 'mainnet' ? 'mainnet' : 'testnet'}
+        />
 
-          <ChainChip
-            variant={
-              chainData.nodeMode === 'fullMode' ? 'fullMode' : 'lightMode'
-            }
-          />
-        </Flex>
-
-        <StatusIndicator
-          status={
-            chainData.status === 'syncing'
-              ? 'unsynced'
-              : (chainData.status as 'synced' | 'unsynced')
-          }
-          size="md"
+        <ChainChip
+          variant={chainData.nodeMode === 'fullMode' ? 'fullMode' : 'lightMode'}
         />
       </Flex>
+
+      <StatusIndicator
+        status={
+          chainData.status === 'syncing'
+            ? 'unsynced'
+            : (chainData.status as 'synced' | 'unsynced')
+        }
+        size="md"
+      />
     </NetworkHeader>
   );
 
@@ -152,22 +147,28 @@ export function NetworkStatus({
               <MetricLabel>BLOCK HEIGHT</MetricLabel>
               <MetricValue>{chainData.blocks.toLocaleString()}</MetricValue>
             </MetricItem>
-            <MetricItem>
-              <MetricLabel>FINALIZED EPOCH</MetricLabel>
-              <MetricValue>{chainData.finalized.toLocaleString()}</MetricValue>
-            </MetricItem>
+            {chainData.nodeMode === 'fullMode' && (
+              <MetricItem>
+                <MetricLabel>FINALIZED EPOCH</MetricLabel>
+                <MetricValue>
+                  {chainData.finalized.toLocaleString()}
+                </MetricValue>
+              </MetricItem>
+            )}
             <MetricItem>
               <MetricLabel>NODE MODE</MetricLabel>
               <MetricValue css={{ fontFamily: 'inherit' }}>
                 {chainData.nodeMode === 'fullMode' ? 'Full Node' : 'Light Node'}
               </MetricValue>
             </MetricItem>
-            <MetricItem>
-              <MetricLabel>PARTICIPATION</MetricLabel>
-              <MetricValue>
-                <ParticipationNumber value={chainData.participation} />
-              </MetricValue>
-            </MetricItem>
+            {chainData.nodeMode === 'fullMode' && (
+              <MetricItem>
+                <MetricLabel>PARTICIPATION</MetricLabel>
+                <MetricValue>
+                  <ParticipationNumber value={chainData.participation} />
+                </MetricValue>
+              </MetricItem>
+            )}
           </MetricsGrid>
 
           {/* Embedded Client Components - only show for networks that have clients */}
@@ -193,7 +194,9 @@ export function NetworkStatus({
                     key={client.name}
                     name={client.name}
                     version={client.version}
-                    peers={client.peers}
+                    peers={
+                      chainData.nodeMode === 'fullMode' ? client.peers : null
+                    }
                     status={client.status}
                     icon={client.icon}
                   />

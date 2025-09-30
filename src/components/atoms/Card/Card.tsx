@@ -14,8 +14,8 @@ const StyledCard = styled(Box, {
   borderRadius: '$4',
   backgroundColor: '$bg02',
   border: '1px solid $stroke',
-  padding: '$lg',
   transition: 'background-color 300ms ease',
+  minWidth: 'fit-content',
 
   variants: {
     hover: {
@@ -38,7 +38,7 @@ export function Card({
   children,
   className,
   title,
-  hover = true,
+  hover = false,
   css,
 }: CardProps) {
   return (

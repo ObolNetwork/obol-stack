@@ -1,9 +1,10 @@
 import React from 'react';
-import { Box, styled } from '@obolnetwork/obol-ui';
+import { Box } from '@obolnetwork/obol-ui';
+import { styled } from '@/lib/stitches.config';
 
 export interface ProgressBarProps {
   value: number; // 0-100
-  variant?: 'critical' | 'warning' | 'caution' | 'good' | 'excellent';
+  variant?: 'excellent' | 'good' | 'warning' | 'critical' | 'severe';
 }
 
 const ProgressFill = styled(Box, {
@@ -13,20 +14,20 @@ const ProgressFill = styled(Box, {
 
   variants: {
     variant: {
-      critical: {
-        backgroundColor: '$test', // 0%-8% - Red for critical
-      },
-      warning: {
-        backgroundColor: '$testHover', // 9%-17% - Orange for warning
-      },
-      caution: {
-        backgroundColor: '$obolGold', // 18%-21% - Gold for caution
+      excellent: {
+        backgroundColor: '$obolGreen', // 0%-20% - Green for excellent (low usage)
       },
       good: {
-        backgroundColor: '$obolGreenLight', // 22%-31% - Light green for good
+        backgroundColor: '$obolGreenLight', // 21%-40% - Light green for good
       },
-      excellent: {
-        backgroundColor: '$obolGreen', // 32%-100% - Obol Green for excellent
+      warning: {
+        backgroundColor: '$orange', // 41%-60% - Orange for warning
+      },
+      critical: {
+        backgroundColor: '$test', // 61%-80% - Test color for critical
+      },
+      severe: {
+        backgroundColor: '$red', // 81%-100% - Red for severe
       },
     },
   },
@@ -40,13 +41,13 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({ value, variant }) => {
   // Auto-determine variant based on value if not provided
   const getVariant = (
     val: number
-  ): 'critical' | 'warning' | 'caution' | 'good' | 'excellent' => {
+  ): 'excellent' | 'good' | 'warning' | 'critical' | 'severe' => {
     if (variant) return variant;
-    if (val >= 0 && val <= 8) return 'critical';
-    if (val >= 9 && val <= 17) return 'warning';
-    if (val >= 18 && val <= 21) return 'caution';
-    if (val >= 22 && val <= 31) return 'good';
-    return 'excellent'; // 32% till 100%
+    if (val >= 0 && val <= 20) return 'excellent';
+    if (val >= 21 && val <= 40) return 'good';
+    if (val >= 41 && val <= 60) return 'warning';
+    if (val >= 61 && val <= 80) return 'critical';
+    return 'severe'; // 81% till 100%
   };
 
   const currentVariant = getVariant(value);
