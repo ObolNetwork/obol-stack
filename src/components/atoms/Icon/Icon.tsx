@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { styled } from '@/lib/stitches.config';
+import DOMPurify from 'dompurify';
 
 // Define available icon names (should match SVG filenames in public folder)
 export type IconName =
@@ -132,20 +133,45 @@ export function Icon({
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     const fetchSvg = async () => {
       try {
         setLoading(true);
         setError(false);
 
-        const response = await fetch(`/${name}.svg`);
+        const response = await fetch(`/${name}.svg`, {
+          signal: controller.signal,
+        });
 
         if (!response.ok) {
           throw new Error(`Failed to load icon: ${name}.svg`);
         }
 
         const svgText = await response.text();
-        setSvgContent(svgText);
+
+        // Sanitize SVG content to prevent XSS attacks
+        const sanitizedSvg = DOMPurify.sanitize(svgText, {
+          USE_PROFILES: { svg: true, svgFilters: true },
+          ADD_TAGS: ['svg', 'path', 'g', 'defs', 'clipPath', 'rect'],
+          ADD_ATTR: [
+            'viewBox',
+            'xmlns',
+            'fill',
+            'clip-path',
+            'width',
+            'height',
+            'd',
+            'id',
+          ],
+        });
+
+        setSvgContent(sanitizedSvg);
       } catch (err) {
+        // Ignore AbortError when component unmounts
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
         console.warn(`Icon "${name}.svg" not found in public folder.`, err);
         setError(true);
       } finally {
@@ -154,6 +180,9 @@ export function Icon({
     };
 
     fetchSvg();
+
+    // Cleanup: abort fetch request if component unmounts
+    return () => controller.abort();
   }, [name]);
 
   if (loading) {
