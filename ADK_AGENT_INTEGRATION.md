@@ -10,7 +10,7 @@ This document describes the integration of Google's Agent Development Kit (ADK) 
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  CopilotKit Provider (layout.tsx)                     │  │
 │  │  ┌─────────────────────────────────────────────────┐  │  │
-│  │  │  Agent Page (/agent)                            │  │  │
+│  │  │  Dashboard Page (/)                             │  │  │
 │  │  │  - CopilotSidebar UI Component                  │  │  │
 │  │  │  - Shared State Management                      │  │  │
 │  │  │  - Generative UI                                │  │  │
@@ -53,13 +53,14 @@ Wraps the entire application with CopilotKit provider:
 - Specifies the `adk_agent` for communication
 - Loads CopilotKit CSS styles
 
-### 3. Agent Page (`/src/app/agent/page.tsx`)
+### 3. Dashboard Page (`/src/app/page.tsx`)
 
-The main interface for interacting with your ADK agent:
+The main dashboard interface with integrated ADK agent:
 
-- **CopilotSidebar**: Pre-built chat UI component
+- **CopilotSidebar**: Pre-built chat UI component overlaying the dashboard
 - **Obol Branding**: Custom styling with Obol green (#2FE4AB) theme
 - **Real-time Communication**: Bidirectional streaming with the agent
+- **Non-intrusive**: Opens on demand, doesn't disrupt dashboard workflow
 
 ## Features Enabled
 
@@ -112,9 +113,9 @@ pnpm dev
 
 ### 3. Access the Agent Interface
 
-Navigate to: `http://localhost:3000/agent`
+Navigate to: `http://localhost:3000`
 
-You'll see the Obol ADK Agent interface with a sidebar ready for interaction.
+You'll see your Obol Stack Dashboard with an agent chat icon in the bottom right. Click it to open the sidebar and interact with your ADK agent.
 
 ## Extending the Integration
 
