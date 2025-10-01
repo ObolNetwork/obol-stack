@@ -41,5 +41,5 @@ temp/
 .tmp/
 
 .direnv
-
 manifests/
+result/
