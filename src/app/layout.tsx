@@ -1,6 +1,8 @@
-import type { Metadata } from 'next';
+'use client';
 import { DM_Sans } from 'next/font/google';
 import './globals.css';
+import { CopilotKit } from '@copilotkit/react-core';
+import '@copilotkit/react-ui/styles.css';
 
 const dmSans = DM_Sans({
   variable: '--font-dm-sans',
@@ -10,18 +12,6 @@ const dmSans = DM_Sans({
   preload: false, // Disable preloading to fix Turbopack issue
 });
 
-export const metadata: Metadata = {
-  title: 'Obol Stack Dashboard',
-  description: 'Monitoring dashboard for Obol Stack and Ethereum node status',
-  icons: {
-    icon: [
-      { url: '/favicon.png', sizes: '256x256', type: 'image/png' },
-      { url: '/obol-logo.png', sizes: '256x256', type: 'image/png' },
-    ],
-    apple: [{ url: '/obol-logo.png', sizes: '256x256', type: 'image/png' }],
-  },
-};
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -29,7 +19,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={dmSans.variable}>{children}</body>
+      <body className={dmSans.variable}>
+        <CopilotKit runtimeUrl="/api/copilotkit" agent="adk_agent">
+          {children}
+        </CopilotKit>
+      </body>
     </html>
   );
 }
