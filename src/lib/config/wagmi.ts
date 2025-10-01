@@ -1,7 +1,7 @@
 import { connectorsForWallets } from '@rainbow-me/rainbowkit';
 import { metaMaskWallet } from '@rainbow-me/rainbowkit/wallets';
 import { createConfig, http } from 'wagmi';
-import { mainnet, sepolia, holesky } from 'wagmi/chains';
+import { mainnet, sepolia, hoodi } from 'wagmi/chains';
 
 const connectors = connectorsForWallets(
   [
@@ -20,11 +20,11 @@ const connectors = connectorsForWallets(
 
 export const config = createConfig({
   connectors,
-  chains: [mainnet, sepolia, holesky],
+  chains: [mainnet, sepolia, hoodi],
   transports: {
     [mainnet.id]: http(),
     [sepolia.id]: http(),
-    [holesky.id]: http(),
+    [hoodi.id]: http(),
   },
   ssr: true,
 });
