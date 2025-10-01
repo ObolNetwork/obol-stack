@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+for cmd in docker kind rsync; do
+  if ! command -v $cmd &> /dev/null; then
+    echo "Error: $cmd is not installed or not in PATH"
+    exit 1
+  fi
+done
+
+project_root_path=$(cd "$(dirname "$(realpath "$0")")" && pwd)
+
+kind_config_path="$project_root_path/cluster/kind.yaml"
+
+__nix() {
+  if [[ "${FORCE_DOCKERISED_NIX:-}" == "true" ]] || ! command -v nix &> /dev/null; then
+    if ! docker volume inspect cached-nix-store &> /dev/null; then
+      docker volume create cached-nix-store
+    fi
+
+    if ! docker volume inspect cached-nix-var &> /dev/null; then
+      docker volume create cached-nix-var
+    fi
+
+    docker run --rm -it \
+      -v cached-nix-store:/nix \
+      -v cached-nix-var:/var \
+      -v $(pwd):/workspace \
+      -v ${HOME}/.kube:/root/.kube \
+      -w /workspace \
+      --network host \
+      nixos/nix \
+      bash -c "$*"
+  else
+    bash -c "$*"
+  fi
+}
+
+show_usage() {
+  echo "Usage: obol {up|down|generate}"
+  echo ""
+  echo "Commands:"
+  echo "  up          Create kind cluster and run docker container"
+  echo "  down        Delete kind cluster"
+  echo "  generate    Generate Kubernetes manifests"
+  echo ""
+  echo "For command-specific help, use: obol <command> --help"
+}
+
+show_up_usage() {
+  echo "Usage: obol up [FLAGS]"
+  echo ""
+  echo "Create kind cluster and run docker container"
+  echo ""
+  echo "Flags:"
+  echo "  --help      Show this help message"
+}
+
+show_down_usage() {
+  echo "Usage: obol down [FLAGS]"
+  echo ""
+  echo "Delete kind cluster"
+  echo ""
+  echo "Flags:"
+  echo "  --force     Also remove cached docker volumes (cached-nix-store, cached-nix-var)"
+  echo "  --help      Show this help message"
+}
+
+show_generate_usage() {
+  echo "Usage: obol generate [FLAGS]"
+  echo ""
+  echo "Generate Kubernetes manifests"
+  echo ""
+  echo "Flags:"
+  echo "  --out-dir <path>    Output directory (default: .manifests)"
+  echo "  --help              Show this help message"
+}
+
+cmd_up() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help)
+        show_up_usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown flag: $1"
+        show_up_usage
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  if ! kind get clusters | grep -q "^obol-stack$"; then
+    kind create cluster --name "obol-stack" --config "$kind_config_path"
+  fi
+
+  __nix "nix --extra-experimental-features 'nix-command flakes' build .#clusterDeclarative --out-link ./result && ./result/apply && rm -rf ./result"
+
+}
+
+cmd_down() {
+  local force=false
+  
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        force=true
+        shift
+        ;;
+      --help)
+        show_down_usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown flag: $1"
+        show_down_usage
+        exit 1
+        ;;
+    esac
+  done
+
+  kind delete cluster --name "obol-stack"
+  
+  if [[ "$force" == "true" ]]; then
+    docker volume rm cached-nix-store cached-nix-var 2>/dev/null || true
+  fi
+}
+
+cmd_generate() {
+  local out_dir=".manifests"
+  
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out-dir)
+        out_dir="$2"
+        shift 2
+        ;;
+      --help)
+        show_generate_usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown flag: $1"
+        show_generate_usage
+        exit 1
+        ;;
+    esac
+  done
+
+  mkdir -p "$out_dir"
+  
+  __nix "nix --extra-experimental-features 'nix-command flakes' build .#clusterEnvironment --out-link ./result"
+  rsync --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r --recursive --delete --copy-links ./result/ $out_dir/ && rm -rf ./result
+}
+
+case "${1:-}" in
+  up)
+    shift
+    cmd_up "$@"
+    ;;
+  down)
+    shift
+    cmd_down "$@"
+    ;;
+  generate)
+    shift
+    cmd_generate "$@"
+    ;;
+  help|--help)
+    show_usage
+    ;;
+  *)
+    show_usage
+    exit 1
+    ;;
+esac
+
+
