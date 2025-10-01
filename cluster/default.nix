@@ -2,6 +2,21 @@
   modules = [
     ./modules/l1.nix
     ./modules/nixidy.nix
+
+    ({lib, ...}: {
+      options.obol-stack = {
+        # TODO: Type this appropriately
+        settings = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          default = let
+            configPath = ../.obol-config.json;
+          in
+            if builtins.pathExists configPath
+            then builtins.fromJSON (builtins.readFile configPath)
+            else {};
+        };
+      };
+    })
   ];
 in {
   # We define this to have access to the config in the repl
@@ -10,7 +25,7 @@ in {
       (inputs.nixidy.lib.mkEnv {
         inherit modules;
         pkgs = inputs.nixpkgs.legacyPackages."x86_64-linux";
-      }).config.applications;
+      }).config;
   in {
     inherit cluster;
   };
