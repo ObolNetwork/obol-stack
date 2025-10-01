@@ -24,6 +24,7 @@ export { DashboardContent } from './organisms/DashboardContent';
 export { FooterBar } from './organisms/FooterBar';
 export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
 export { NodeOverview } from './organisms/NodeOverview';
+export { AgentSidebar } from './organisms/AgentSidebar';
 
 // Pages
 export { DashboardPage } from './pages/DashboardPage';
