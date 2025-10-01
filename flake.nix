@@ -1,20 +1,27 @@
 {
-  description = "Description for the project";
+  description = "Obol Stack";
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     devshell.url = "github:numtide/devshell";
-    obol-cli.url = "git+ssh://git@github.com/ObolNetwork/obol-cli";
+    nixidy.url = "github:arnarg/nixidy";
   };
 
   outputs = inputs @ {flake-parts, ...}:
     flake-parts.lib.mkFlake {inherit inputs;} {
-      imports = [inputs.devshell.flakeModule];
+      imports = [
+        inputs.devshell.flakeModule
+        ./cluster
+      ];
 
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
 
-      perSystem = {pkgs, ...}: {
+      perSystem = {
+        pkgs,
+        inputs',
+        ...
+      }: {
         devshells.default = {
           packages = with pkgs;
             [
@@ -27,11 +34,14 @@
               k9s
 
               foundry
+              rsync
 
               # nix
               alejandra
             ]
-            ++ [inputs.obol-cli.packages.${pkgs.system}.default];
+            ++ [
+              inputs'.nixidy.packages.default
+            ];
         };
       };
     };

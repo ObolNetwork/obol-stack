@@ -41,3 +41,5 @@ temp/
 .tmp/
 
 .direnv
+
+manifests/
