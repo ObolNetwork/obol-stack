@@ -9,9 +9,6 @@ for cmd in docker kind rsync; do
   fi
 done
 
-project_root_path=$(cd "$(dirname "$(realpath "$0")")" && pwd)
-
-kind_config_path="$project_root_path/cluster/kind.yaml"
 
 __nix() {
   if [[ "${FORCE_DOCKERISED_NIX:-}" == "true" ]] || ! command -v nix &> /dev/null; then
@@ -54,7 +51,8 @@ show_up_usage() {
   echo "Create kind cluster and run docker container"
   echo ""
   echo "Flags:"
-  echo "  --help      Show this help message"
+  echo "  --kind-config <path>    Path to kind config file (default: .kind.yaml or .kind.yml if exists)"
+  echo "  --help                  Show this help message"
 }
 
 show_down_usage() {
@@ -78,8 +76,14 @@ show_generate_usage() {
 }
 
 cmd_up() {
+  local kind_config_path=""
+  
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --kind-config)
+        kind_config_path="$2"
+        shift 2
+        ;;
       --help)
         show_up_usage
         exit 0
@@ -90,13 +94,25 @@ cmd_up() {
         exit 1
         ;;
     esac
-    shift
   done
+
+  if [[ -z "$kind_config_path" ]]; then
+    if [[ -f ".kind.yaml" ]]; then
+      kind_config_path=".kind.yaml"
+    elif [[ -f ".kind.yml" ]]; then
+      kind_config_path=".kind.yml"
+    else
+      echo "Error: No kind config found. Provide --kind-config or create .kind.yaml/.kind.yml"
+      exit 1
+    fi
+  fi
 
   if ! kind get clusters | grep -q "^obol-stack$"; then
     kind create cluster --name "obol-stack" --config "$kind_config_path"
   fi
 
+  # TODO: when repo is public call flake by url such that this script can be curled and executed
+  # e.g. __nix "nix --extra-experimental-features 'nix-command flakes' build github:ObolNetwork/obol-stack#clusterDeclarative ..."
   __nix "nix --extra-experimental-features 'nix-command flakes' build .#clusterDeclarative --out-link ./result && ./result/apply && rm -rf ./result"
 
 }
