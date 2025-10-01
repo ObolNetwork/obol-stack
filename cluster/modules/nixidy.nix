@@ -3,7 +3,7 @@
     target = {
       repository = "https://github.com/ObolNetwork/obol-stack";
       branch = "main";
-      rootPath = "./manifests";
+      rootPath = ".manifests";
     };
     # build.revision =
     #   if (self ? rev)

@@ -1,7 +1,10 @@
-{lib, ...}: {
+{
+  lib,
+  config,
+  ...
+}: {
   applications.l1 = let
     global = {
-      network = "mainnet";
       checkpointSync = {
         enabled = true;
         networks = {
@@ -30,7 +33,7 @@
           wsPort = 8546;
           p2pPort = 30303;
           extraArgs = [
-            "--${global.network}"
+            "--${config.obol-stack.settings.network}"
           ];
         };
         lighthouse = {
@@ -40,11 +43,11 @@
           p2pPort = 9000;
           checkpointSync = {
             enabled = global.checkpointSync.enabled;
-            url = global.checkpointSync.networks.${global.network};
+            url = global.checkpointSync.networks.${config.obol-stack.settings.network};
           };
           extraArgs = [
             "--execution-endpoint=http://l1-execution:8551"
-            "--network=${global.network}"
+            "--network=${config.obol-stack.settings.network}"
           ];
         };
       };

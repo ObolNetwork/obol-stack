@@ -113,8 +113,7 @@ cmd_up() {
 
   # TODO: when repo is public call flake by url such that this script can be curled and executed
   # e.g. __nix "nix --extra-experimental-features 'nix-command flakes' build github:ObolNetwork/obol-stack#clusterDeclarative ..."
-  __nix "nix --extra-experimental-features 'nix-command flakes' build .#clusterDeclarative --out-link ./result && ./result/apply && rm -rf ./result"
-
+  __nix "nix-build --expr \"(import ./default.nix).outputs.mkCluster\" --impure --arg \"settingsPath\" ./.obol-config.json --quiet -A clusterDeclarative && ./result/apply"
 }
 
 cmd_down() {
@@ -168,8 +167,8 @@ cmd_generate() {
 
   mkdir -p "$out_dir"
   
-  __nix "nix --extra-experimental-features 'nix-command flakes' build .#clusterEnvironment --out-link ./result"
-  rsync --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r --recursive --delete --copy-links ./result/ $out_dir/ && rm -rf ./result
+  __nix "nix-build --expr \"(import ./default.nix).outputs.mkCluster\" --impure --arg \"settingsPath\" ./.obol-config.json --quiet -A clusterEnvironment"
+  rsync --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r --recursive --delete --copy-links ./result/ "$out_dir/" && rm -rf ./result
 }
 
 case "${1:-}" in
