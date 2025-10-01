@@ -14,6 +14,8 @@ export { ErrorState } from './molecules/ErrorState';
 export { LoadingState } from './molecules/LoadingState';
 export { ParticipationNumber } from './molecules/ParticipationNumber';
 export { ProgressBar } from './molecules/ProgressBar';
+export { WalletConnection } from './molecules/WalletConnection';
+export { WalletModal } from './molecules/WalletModal';
 
 // Templates
 export { DashboardTemplate } from './templates/DashboardTemplate';
