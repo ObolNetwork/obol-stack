@@ -3,9 +3,10 @@ import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
 import { Icon } from '../../atoms/Icon';
 import { useBalance, UseBalanceReturnType, useChainId } from 'wagmi';
 import { formatUnits } from 'viem';
-import { useEthPrice } from '../../../hooks/useEthPrice';
+import { useTokenPrices } from '../../../hooks/useTokenPrices';
 import { ChainIcon } from '../../atoms/ChainIcon';
 import { getChainName } from '../../../types/dashboard';
+import { TOKEN_ADDRESSES } from '../../../lib/constants/tokens';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -191,13 +192,30 @@ export function WalletModal({
   const { data: ethBalance } = useBalance({
     address: account.address as `0x${string}`,
   });
+
+  // Get Obol token balance
+  const { data: obolBalance } = useBalance({
+    address: account.address as `0x${string}`,
+    token: TOKEN_ADDRESSES.OBOL,
+  });
+
   const chainId = useChainId();
 
-  // Get ETH price and 24h change using custom hook
-  const { ethPrice, ethChange24h } = useEthPrice();
+  // Get token prices using combined hook
+  const { ethPrice, ethChange24h, obolPrice, obolChange24h } = useTokenPrices();
 
-  // Calculate total balance in USD for now we have only eth
-  const balanceUsd = calculateUsdBalance(ethBalance, ethPrice);
+  // Calculate balances in USD
+  const ethBalanceUsd = calculateUsdBalance(ethBalance, ethPrice);
+  const obolBalanceUsd = calculateUsdBalance(obolBalance, obolPrice);
+
+  // Calculate total balance in USD
+  const totalBalanceUsd = (
+    parseFloat(ethBalanceUsd.replace(/,/g, '')) +
+    parseFloat(obolBalanceUsd.replace(/,/g, ''))
+  ).toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
 
   if (!isOpen) return null;
 
@@ -234,7 +252,7 @@ export function WalletModal({
             : 'Unknown')}
       </WalletName>
 
-      <BalanceText>$ {balanceUsd}</BalanceText>
+      <BalanceText>$ {totalBalanceUsd}</BalanceText>
 
       <Flex css={{ width: '100%', flexDirection: 'column', gap: '8px' }}>
         <TokenRow>
@@ -243,7 +261,7 @@ export function WalletModal({
               <ChainIcon chain={getChainName(chainId)} size={32} />
               <TokenText>Ethereum</TokenText>
             </TokenInfo>
-            <TokenText>$ {balanceUsd}</TokenText>
+            <TokenText>$ {ethBalanceUsd}</TokenText>
           </TokenRowFlex>
 
           <TokenRowFlex>
@@ -257,6 +275,40 @@ export function WalletModal({
                   ).toFixed(4)
                 : '0.0000'}{' '}
               ETH
+            </TokenChangeText>
+          </TokenRowFlex>
+        </TokenRow>
+
+        <TokenRow>
+          <TokenRowFlex>
+            <TokenInfo>
+              <Image
+                src="/obol-logo.png"
+                alt="Obol"
+                width={32}
+                height={32}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                }}
+              />
+              <TokenText>Obol</TokenText>
+            </TokenInfo>
+            <TokenText>$ {obolBalanceUsd}</TokenText>
+          </TokenRowFlex>
+
+          <TokenRowFlex>
+            <TokenChangeText color={getChangeColor(obolChange24h)}>
+              {formatChange(obolChange24h)}
+            </TokenChangeText>
+            <TokenChangeText color="body">
+              {obolBalance
+                ? parseFloat(
+                    formatUnits(obolBalance.value, obolBalance.decimals)
+                  ).toFixed(4)
+                : '0.0000'}{' '}
+              OBOL
             </TokenChangeText>
           </TokenRowFlex>
         </TokenRow>
