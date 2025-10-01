@@ -42,4 +42,4 @@ temp/
 
 .direnv
 manifests/
-result/
+result
