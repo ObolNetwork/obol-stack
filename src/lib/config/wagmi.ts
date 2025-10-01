@@ -1,7 +1,32 @@
 import { connectorsForWallets } from '@rainbow-me/rainbowkit';
 import { metaMaskWallet } from '@rainbow-me/rainbowkit/wallets';
+import { defineChain } from 'viem';
 import { createConfig, http } from 'wagmi';
-import { mainnet, sepolia, hoodi } from 'wagmi/chains';
+import { mainnet, sepolia } from 'wagmi/chains';
+
+export const hoodi = defineChain({
+  id: 560048,
+  name: 'Hoodi Network',
+  nativeCurrency: {
+    name: 'Ether',
+    symbol: 'ETH',
+    decimals: 18,
+  },
+  rpcUrls: {
+    default: {
+      http: ['https://ethereum-hoodi-rpc.publicnode.com'],
+    },
+    public: {
+      http: ['https://ethereum-hoodi-rpc.publicnode.com'],
+    },
+  },
+  blockExplorers: {
+    default: {
+      name: 'Hoodi Explorer',
+      url: 'https://hoodi.etherscan.io',
+    },
+  },
+});
 
 const connectors = connectorsForWallets(
   [
