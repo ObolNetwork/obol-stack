@@ -3,20 +3,18 @@
   config,
   ...
 }: {
-  applications.l1 = let
-    global = {
-      checkpointSync = {
-        enabled = true;
-        networks = {
-          mainnet = "https://mainnet-checkpoint-sync.attestant.io";
-          sepolia = "https://checkpoint-sync.sepolia.ethpandaops.io";
-          holesky = "https://checkpoint-sync.holesky.ethpandaops.io";
-          hoodi = "https://checkpoint-sync.hoodi.ethpandaops.io";
-        };
+  applications.ethereum = let
+    checkpointSync = {
+      enabled = true;
+      networks = {
+        mainnet = "https://mainnet-checkpoint-sync.attestant.io";
+        sepolia = "https://checkpoint-sync.sepolia.ethpandaops.io";
+        holesky = "https://checkpoint-sync.holesky.ethpandaops.io";
+        hoodi = "https://checkpoint-sync.hoodi.ethpandaops.io";
       };
     };
   in {
-    namespace = "l1";
+    namespace = "ethereum";
     createNamespace = true;
     helm.releases.l1 = {
       chart = lib.helm.downloadHelmChart {
@@ -42,8 +40,8 @@
           httpPort = 5052;
           p2pPort = 9000;
           checkpointSync = {
-            enabled = global.checkpointSync.enabled;
-            url = global.checkpointSync.networks.${config.obol-stack.settings.network};
+            enabled = checkpointSync.enabled;
+            url = checkpointSync.networks.${config.obol-stack.settings.network};
           };
           extraArgs = [
             "--execution-endpoint=http://l1-execution:8551"
