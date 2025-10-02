@@ -1,0 +1,4 @@
+google-adk
+ag-ui-adk
+fastapi
+uvicorn[standard]

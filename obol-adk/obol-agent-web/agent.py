@@ -1,108 +1,66 @@
-# Enhanced Obol Agent for ADK Web with comprehensive MCP toolsets
-import os
-import logging
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.tools.mcp_tool import StdioConnectionParams
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
-from mcp import StdioServerParameters
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
 
-# Configure logging to suppress repetitive authentication warnings
-logging.getLogger('google.adk.tools.base_authenticated_tool').setLevel(logging.ERROR)
-logging.getLogger('google.adk.tools.mcp_tool.mcp_tool').addFilter(
-    lambda record: 'EXPERIMENTAL' not in record.getMessage()
-)
+# Create core tools that are most likely to work
+core_tools = [
+    # 1. Filesystem MCP Server for debugging el/cl/charon nodes
+    MCPToolset(
+        connection_params=StdioServerParameters(
+            command='npx',
+            args=["-y", "@modelcontextprotocol/server-filesystem", 
+                  "/Users/bussyjd/Development/Obol_Workbench/obol-stack/obol-adk/docs/"]
+        )
+    ),
+    # 2. Obol MCP Server for debugging Obol clusters
+    MCPToolset(
+        connection_params=StdioServerParameters(
+            command="uv",
+            args=["run", "/Users/bussyjd/Development/Obol_Workbench/obol-mcp/server.py"],
+            cwd="/Users/bussyjd/Development/Obol_Workbench/obol-mcp"
+        )
+    )
+]
 
-# Configuration - Environment variables for flexibility
-WORKSPACE_PATH = os.getenv("OBOL_WORKSPACE_PATH", "/Users/bussyjd/Development/Obol_Workbench/obol-stack")
-DOCS_PATH = os.getenv("OBOL_DOCS_PATH", f"{WORKSPACE_PATH}/obol-adk/docs")
-KUBECONFIG_PATH = os.getenv("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+# Optional tools that might fail - add them conditionally
+optional_tools = []
 
-# Agent definition for ADK web with comprehensive MCP toolsets
+# Try to add Kubernetes MCP Server if available
+try:
+    import os
+    if os.path.exists("/Users/bussyjd/Development/kubernetes-mcp-server/kubernetes-mcp-server"):
+        optional_tools.append(
+            MCPToolset(
+                connection_params=StdioServerParameters(
+                    command="/Users/bussyjd/Development/kubernetes-mcp-server/kubernetes-mcp-server",
+                    args=[]
+                )
+            )
+        )
+except Exception:
+    pass
+
+# Try to add Foundry MCP Server if available
+try:
+    if os.path.exists("/Users/bussyjd/Development/foundry-mcp-server/dist/index.js"):
+        optional_tools.append(
+            MCPToolset(
+                connection_params=StdioServerParameters(
+                    command="node",
+                    args=["/Users/bussyjd/Development/foundry-mcp-server/dist/index.js"]
+                )
+            )
+        )
+except Exception:
+    pass
+
+# Create the agent with available tools
 root_agent = LlmAgent(
-    model=os.getenv("OBOL_AGENT_MODEL", "gemini-2.5-flash"),
+    model='gemini-2.0-flash',
     name='obol_agent',
     instruction=(
-        'You are Obol Agent, a comprehensive assistant specialized in distributed validator technology. '
-        'You help users manage:\n'
-        '• Obol Distributed Validator clusters and networks\n'
-        '• Kubernetes deployments and container orchestration\n'
-        '• Foundry smart contract development and testing\n'
-        '• File system operations and project management\n\n'
-        'Use the most appropriate tool(s) for each user query. You have access to:\n'
-        '- Obol API for cluster management and network status\n'
-        '- Kubernetes tools for container orchestration\n'
-        '- Foundry tools for smart contract development\n'
-        '- File system tools for project management\n\n'
-        'Always provide clear, actionable responses and suggest relevant follow-up actions.'
+        'You are Obol Agent an assistant that helps users to manage their Obol clusters, '
+        'Kubernetes clusters, and Foundry projects. Use the appropriate tool based on the user query. '
+        'If certain tools are not available, inform the user about the limitation.'
     ),
-    tools=[
-        # Filesystem MCP - File operations and project management (Official MCP Community)
-        MCPToolset(
-            connection_params=StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command='docker',
-                    args=[
-                        "run", "-i", "--rm",
-                        "--mount", f"type=bind,src={WORKSPACE_PATH},dst=/projects/workspace",
-                        "mcp/filesystem",
-                        "/projects"
-                    ],
-                ),
-                timeout=10
-            )
-        ),
-        
-        # Enhanced Obol MCP - Obol API and cluster management
-        MCPToolset(
-            connection_params=StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command="docker",
-                    args=[
-                        "run", "--rm", "-i",
-                    "obol-mcp:latest"
-                    ],
-                ),
-                timeout=10
-            )
-        ),
-        
-        # Kubernetes MCP - Container orchestration and cluster management
-        # Current: https://github.com/manusa/kubernetes-mcp-server
-        # Alternatives: https://github.com/Flux159/mcp-server-kubernetes
-        MCPToolset(
-            connection_params=StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command="docker",
-                    args=[
-                        "run", "--rm", "-i",
-                        "--network", "host",
-                        "-v", f"{KUBECONFIG_PATH}:/home/appuser/.kube/config",
-                        "-e", "K8S_NAMESPACE=l1",
-                        "flux159/mcp-server-kubernetes:latest"
-                    ],
-                ),
-                timeout=60,
-                # Optional: Filter which tools from the MCP server are exposed
-                tool_filter=['kubectl_delete']
-            )
-        ),
-        
-        # Foundry MCP - Smart contract development and testing
-        MCPToolset(
-            connection_params=StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command="docker",
-                    args=[
-                        "run", "--rm", "-i",
-                        "--network", "host",
-                        "foundry-mcp-server:latest"
-                    ],
-                ),
-                timeout=20
-            ),
-        ),
-    ],
+    tools=core_tools + optional_tools
 )
-
-# Export the agent for ADK to discover
-__all__ = ['root_agent']
