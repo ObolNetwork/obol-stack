@@ -63,3 +63,6 @@ obol-adk/docs/*
 test-*.yaml
 demo-*.yaml
 *.log
+
+# Local LLMs
+llms-full.txt
