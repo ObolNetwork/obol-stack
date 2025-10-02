@@ -6,6 +6,11 @@ from fastapi import FastAPI, Request
 import uvicorn
 import os
 import json
+from dotenv import load_dotenv
+
+# Load environment variables from parent directory .env file
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(env_path)
 
 # Create core tools
 core_tools = [
