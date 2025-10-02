@@ -39,3 +39,6 @@ build/
 tmp/
 temp/
 .tmp/
+
+.direnv
+result
