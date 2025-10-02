@@ -10,12 +10,6 @@ export const config = {
   grafanaUrl:
     process.env.GRAFANA_URL ||
     'http://monitoring-grafana.monitoring.svc.cluster.local',
-  beaconApiUrl:
-    process.env.BEACON_API_URL ||
-    'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
-  executionRpcUrl:
-    process.env.EXECUTION_RPC_URL ||
-    'http://l1-full-node-execution.l1.svc.cluster.local:8545',
   heliosClientUrl:
     process.env.HELIOS_CLIENT_URL ||
     'http://l1-light-client-helios.l1.svc.cluster.local:8545',
@@ -24,10 +18,10 @@ export const config = {
     'http://l1-light-client-beacon.l1.svc.cluster.local:5052',
   fullNodeExecutionUrl:
     process.env.FULL_NODE_EXECUTION_URL ||
-    'http://l1-full-node-execution.l1.svc.cluster.local:8545',
+    'http://l1-full-node-mainnet-execution.l1.svc.cluster.local:8545',
   fullNodeBeaconUrl:
     process.env.FULL_NODE_BEACON_URL ||
-    'http://l1-full-node-beacon.l1.svc.cluster.local:5052',
+    'http://l1-full-node-mainnet-beacon.l1.svc.cluster.local:5052',
 
   // Network Configuration
   defaultNetwork: process.env.DEFAULT_NETWORK || 'hoodi',
