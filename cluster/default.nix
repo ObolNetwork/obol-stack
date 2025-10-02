@@ -2,6 +2,7 @@
   modules = [
     ./modules/l1.nix
     ./modules/nixidy.nix
+    ./modules/demo.nix
 
     # ({lib, ...}: {
     #   options.obol-stack = {
@@ -29,7 +30,7 @@ in {
   in {
     inherit cluster;
 
-    mkCluster = {settingsPath}: let
+    mkCluster = {settingsPath ? ../.obol-config.json}: let
       clusterEnv = inputs.nixidy.lib.mkEnv {
         pkgs = inputs.nixpkgs.legacyPackages."x86_64-linux";
         modules =
