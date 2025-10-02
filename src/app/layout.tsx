@@ -20,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={dmSans.variable}>
-        <CopilotKit runtimeUrl="/api/copilotkit" agent="adk_agent">
+        <CopilotKit runtimeUrl="/api/copilotkit" agent="obol_agent">
           {children}
         </CopilotKit>
       </body>

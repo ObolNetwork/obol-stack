@@ -2,9 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { CopilotSidebar } from '@copilotkit/react-ui';
+import { useCoAgent } from '@copilotkit/react-core';
 
 export function AgentSidebar() {
   const [isMounted, setIsMounted] = useState(false);
+
+  // Connect to the ADK agent
+  useCoAgent({
+    name: 'obol_agent',
+  });
 
   useEffect(() => {
     setIsMounted(true);
