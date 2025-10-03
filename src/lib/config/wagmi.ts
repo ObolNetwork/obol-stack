@@ -49,9 +49,7 @@ const connectors = connectorsForWallets(
   ],
   {
     appName: 'Obol Stack Dashboard',
-    projectId:
-      process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID ||
-      '2f5a2b1c8e3d4f6a7b8c9d0e1f2a3b4c',
+    projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID!,
   }
 );
 
