@@ -4,6 +4,7 @@ import { Icon } from '../../atoms/Icon';
 import { StatusIndicator } from './StatusIndicator';
 import { determineNodeStatus } from './statusLogic';
 import { DashboardData } from '../../../types/dashboard';
+import { useCoAgent } from '@copilotkit/react-core';
 
 // Styled Components
 const HeaderContainer = styled(Box, {
@@ -113,6 +114,9 @@ interface AgentSidebarProps {
 }
 
 export function AgentSidebar({ onSidebarToggle, data }: AgentSidebarProps) {
+  useCoAgent({
+    name: 'obol_agent',
+  });
   return (
     <CopilotSidebar
       Header={() => <Header data={data} />}
