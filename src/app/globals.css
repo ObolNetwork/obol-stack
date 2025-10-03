@@ -14,6 +14,19 @@ body {
     Droid Sans,
     Helvetica Neue,
     sans-serif;
+  --copilot-kit-background-color: #091011;
+  --copilot-kit-primary-color: #182d32;
+  --copilot-kit-contrast-color: #e1e9eb;
+  --copilot-kit-input-background-color: #111f22;
+  --copilot-kit-secondary-color: #b8c5c7;
+  --copilot-kit-secondary-contrast-color: #e1e9eb; /* Body text color */
+  --copilot-kit-separator-color: transparent; /* Input border color */
+  --copilot-kit-muted-color: #6b7a7d;
+  --copilot-kit-error-background: #091011;
+  --copilot-kit-error-border: #c33;
+  --copilot-kit-error-text: #ff6b6b;
+  --copilot-kit-dev-console-bg: #0f1a1b;
+  --copilot-kit-dev-console-text: #fff;
 }
 
 a {
@@ -25,223 +38,48 @@ a {
   box-sizing: border-box;
 }
 
-/* Spinning digit animation for animated counters */
-@keyframes spin-digit {
-  0% {
-    transform: rotateX(0deg);
-    opacity: 1;
-  }
-  50% {
-    transform: rotateX(90deg);
-    opacity: 0.3;
-  }
-  100% {
-    transform: rotateX(0deg);
-    opacity: 1;
+/* CopilotKitSidebar styles */
+.copilotKitSidebar {
+  z-index: 30 !important;
+  position: fixed !important;
+  bottom: auto !important;
+  right: auto !important;
+  top: 136px !important;
+  right: 64px !important;
+  .copilotKitWindow {
+    border-left: 1px solid #2d4d53;
   }
 }
 
-.animate-spin-digit {
-  animation: spin-digit 0.6s ease-in-out;
-  transform-style: preserve-3d;
-  /* Ensure proper alignment with baseline */
-  vertical-align: baseline;
-  /* Prevent layout shift during animation */
-  display: inline-block;
+.copilotKitInput {
+  min-height: 24px !important;
+  padding: 12px 16px 12px 12px;
+  display: flex !important;
 }
 
-/* Progress fill animation - fills left to right over 12 seconds */
-/* Firefox-compatible version with explicit browser prefixes */
-@-webkit-keyframes progress-fill {
-  0% {
-    width: 0.1%;
-    opacity: 0.8;
-    -webkit-transform: scaleX(0);
-    transform: scaleX(0);
-  }
-  1% {
-    width: 0.1%;
-    opacity: 1;
-    -webkit-transform: scaleX(0.001);
-    transform: scaleX(0.001);
-  }
-  99% {
-    width: 99.9%;
-    opacity: 1;
-    -webkit-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.8;
-    -webkit-transform: scaleX(1);
-    transform: scaleX(1);
-  }
+/* Higher specificity to override CopilotKit styles */
+.copilotKitMessage.copilotKitAssistantMessage {
+  margin-bottom: 24px !important;
+  padding: 12px 16px !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  align-self: stretch !important;
+  /* Body/Medium */
+  font-family: 'DM Sans';
+  font-size: 16px !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  line-height: 24px !important; /* 150% */
+
+  border-radius: 0 8px 8px 8px !important;
+  background: #222829 !important;
+  margin-bottom: 40px !important;
 }
 
-@-moz-keyframes progress-fill {
-  0% {
-    width: 0.1%;
-    opacity: 0.8;
-    -moz-transform: scaleX(0);
-    transform: scaleX(0);
-  }
-  1% {
-    width: 0.1%;
-    opacity: 1;
-    -moz-transform: scaleX(0.001);
-    transform: scaleX(0.001);
-  }
-  99% {
-    width: 99.9%;
-    opacity: 1;
-    -moz-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.8;
-    -moz-transform: scaleX(1);
-    transform: scaleX(1);
-  }
+.copilotKitMessage.copilotKitAssistantMessage .copilotKitMessageControls {
+  padding: 20px 0 0 !important;
 }
 
-@keyframes progress-fill {
-  0% {
-    width: 0.1%; /* Firefox doesn't like starting at exactly 0% */
-    opacity: 0.8;
-    transform: scaleX(0);
-  }
-  1% {
-    width: 0.1%;
-    opacity: 1;
-    transform: scaleX(0.001);
-  }
-  99% {
-    width: 99.9%;
-    opacity: 1;
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.8;
-    transform: scaleX(1);
-  }
-}
-
-@-webkit-keyframes progress-glow {
-  0% {
-    width: 0.1%;
-    opacity: 0.6;
-    -webkit-transform: scaleX(0);
-    transform: scaleX(0);
-  }
-  2% {
-    width: 0.2%;
-    opacity: 0.8;
-    -webkit-transform: scaleX(0.002);
-    transform: scaleX(0.002);
-  }
-  98% {
-    width: 99.8%;
-    opacity: 0.8;
-    -webkit-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.6;
-    -webkit-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-}
-
-@-moz-keyframes progress-glow {
-  0% {
-    width: 0.1%;
-    opacity: 0.6;
-    -moz-transform: scaleX(0);
-    transform: scaleX(0);
-  }
-  2% {
-    width: 0.2%;
-    opacity: 0.8;
-    -moz-transform: scaleX(0.002);
-    transform: scaleX(0.002);
-  }
-  98% {
-    width: 99.8%;
-    opacity: 0.8;
-    -moz-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.6;
-    -moz-transform: scaleX(1);
-    transform: scaleX(1);
-  }
-}
-
-@keyframes progress-glow {
-  0% {
-    width: 0.1%;
-    opacity: 0.6;
-    transform: scaleX(0);
-  }
-  2% {
-    width: 0.2%;
-    opacity: 0.8;
-    transform: scaleX(0.002);
-  }
-  98% {
-    width: 99.8%;
-    opacity: 0.8;
-    transform: scaleX(1);
-  }
-  100% {
-    width: 100%;
-    opacity: 0.6;
-    transform: scaleX(1);
-  }
-}
-
-.progress-fill {
-  /* Fallback for browsers without animation support */
-  width: 100%;
-  opacity: 0.9;
-
-  /* Modern browsers with animation support */
-  animation: progress-fill linear infinite;
-  -webkit-animation: progress-fill linear infinite;
-  -moz-animation: progress-fill linear infinite;
-  will-change: width, opacity, transform;
-
-  /* Ensure proper rendering across browsers */
-  transform-origin: left center;
-  -webkit-transform-origin: left center;
-  -moz-transform-origin: left center;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  -moz-backface-visibility: hidden;
-}
-
-.progress-glow {
-  /* Fallback for browsers without animation support */
-  width: 100%;
-  opacity: 0.7;
-
-  /* Modern browsers with animation support */
-  animation: progress-glow linear infinite;
-  -webkit-animation: progress-glow linear infinite;
-  -moz-animation: progress-glow linear infinite;
-  will-change: width, opacity, transform;
-
-  /* Ensure proper rendering across browsers */
-  transform-origin: left center;
-  -webkit-transform-origin: left center;
-  -moz-transform-origin: left center;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  -moz-backface-visibility: hidden;
+.copilotKitMessageControlButton {
+  color: #e1e9eb !important;
 }
