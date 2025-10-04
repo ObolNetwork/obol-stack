@@ -139,6 +139,45 @@ validate_sync_mode() {
 	echo "$mode"
 }
 
+# Select the Kubernetes runtime
+select_runtime() {
+	local runtime="$1"
+
+	# If already specified, validate it
+	if [[ -n "$runtime" ]]; then
+		if [[ "$runtime" != "kind" && "$runtime" != "k3s" ]]; then
+			log_warn "Unrecognised runtime: \"${runtime}\".\n"
+			help 1
+		fi
+		echo "$runtime"
+		return
+	fi
+
+	# k3s only works on Linux
+	if [[ "$PLATFORM" != "linux" ]]; then
+		log_info "k3s only supports Linux. Using kind for $PLATFORM"
+		echo "kind"
+		return
+	fi
+
+	# Interactive selection
+	echo ""
+	log_info "Select Kubernetes runtime:"
+	echo "  1) kind (Docker-based, recommended for development)"
+	echo "  2) k3s (Native Kubernetes, production-like)"
+	echo ""
+	read -p "Choice [1]: " choice
+
+	case "${choice:-1}" in
+		1) echo "kind" ;;
+		2) echo "k3s" ;;
+		*)
+			log_warn "Invalid choice. Using kind."
+			echo "kind"
+			;;
+	esac
+}
+
 # Log functions
 log_info() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
@@ -247,6 +286,38 @@ install_kind() {
         sudo mv ./kind /usr/local/bin/kind
     fi
     log_info "Kind $KIND_VERSION is installed."
+}
+
+# Install or update k3s
+install_k3s() {
+    log_info "Checking k3s..."
+
+    if command_exists k3s; then
+        log_info "k3s is already installed."
+        # Check if k3s is running
+        if ! sudo systemctl is-active --quiet k3s 2>/dev/null; then
+            log_info "Starting k3s service..."
+            sudo systemctl start k3s || log_error "Failed to start k3s"
+        fi
+        return
+    fi
+
+    log_info "Installing k3s..."
+    # Install k3s with --write-kubeconfig-mode to make kubeconfig readable
+    ensure curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+
+    # Wait for k3s to be ready
+    log_info "Waiting for k3s to be ready..."
+    local retries=0
+    while ! sudo k3s kubectl get nodes >/dev/null 2>&1; do
+        retries=$((retries + 1))
+        if [[ $retries -gt 30 ]]; then
+            log_error "k3s failed to start after 30 seconds"
+        fi
+        sleep 1
+    done
+
+    log_info "k3s installed and running successfully."
 }
 
 # Install or update k9s
@@ -472,6 +543,7 @@ launch_stack() {
     local __mode="$2"
     local __headless="$3"
     local __use_current_context="$4"
+    local __runtime="$5"
 
     log_info "Launching core Obol Stack services..."
     if [[ "$__use_current_context" -ne 0 ]]; then
@@ -482,6 +554,17 @@ launch_stack() {
         fi
         local current_context=$(kubectl config current-context)
         log_info "Deploying to context: $current_context"
+    elif [[ "$__runtime" == "k3s" ]]; then
+        # Use k3s cluster
+        log_info "Using k3s cluster..."
+        # Set kubectl to use k3s kubeconfig
+        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+        # Verify k3s is running
+        if ! sudo k3s kubectl get nodes >/dev/null 2>&1; then
+            log_error "k3s is not running. Please check k3s service status."
+        fi
+        log_info "k3s cluster is ready."
     else
         # Create or use kind cluster
         if ! kind get clusters | grep -q "$STACK_NAME"; then
@@ -649,16 +732,27 @@ main() {
     network=$(validate_network "$network")
 	mode=$(validate_sync_mode "$mode")
 
+    # Select runtime (kind or k3s) if not using existing context
+    local runtime="kind"
+    if [[ "$use_current_context" -eq 0 ]]; then
+        runtime=$(select_runtime "")
+    fi
+
     log_info "Starting obolup..."
     log_info "Detected platform: $PLATFORM"
     log_info "Detected architecture: $ARCHITECTURE"
     log_info "Selected network: $network"
     log_info "Selected node type: $mode"
+    log_info "Selected runtime: $runtime"
     # start_docker
     start_docker
     install_kubectl
     if [[ "$use_current_context" -eq 0 ]]; then
-        install_kind
+        if [[ "$runtime" == "k3s" ]]; then
+            install_k3s
+        else
+            install_kind
+        fi
     fi
     install_helm
     install_k9s
@@ -667,10 +761,19 @@ main() {
     #check_obolup_update
     if [[ "$clean" -ne 0 ]]; then
         log_info "Clean command specified, deleting and recreating Obol Stack resources..."
-        kind delete cluster --name "$STACK_NAME"
+        if [[ "$runtime" == "k3s" ]]; then
+            if command_exists k3s-uninstall.sh; then
+                log_info "Uninstalling k3s..."
+                sudo /usr/local/bin/k3s-uninstall.sh
+            else
+                log_warn "k3s-uninstall.sh not found. Please uninstall k3s manually."
+            fi
+        else
+            kind delete cluster --name "$STACK_NAME"
+        fi
     fi
 
-    launch_stack "$network" "$mode" "$headless" "$use_current_context"
+    launch_stack "$network" "$mode" "$headless" "$use_current_context" "$runtime"
 
     log_info "Obol Stack is up and running!"
     exit 0
