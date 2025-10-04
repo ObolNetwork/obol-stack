@@ -85,19 +85,6 @@ config: |
               timeout:
                 duration: 30s
               retry:
-                maxAttempts: 2
-                delay: 100ms
-              hedge:
-                delay: 500ms
-                maxCount: 1
-          - architecture: evm
-            evm:
-              chainId: 11155111
-            alias: sepolia
-            failsafe:
-              timeout:
-                duration: 30s
-              retry:
                 maxAttempts: 3
                 delay: 0ms
               hedge:
@@ -114,12 +101,17 @@ config: |
             group: fallback
             evm:
               chainId: 560048
+          - endpoint: http://l1-light-client-helios.l1.svc.cluster.local:8545
+            id: helios-sepolia
+            evm:
+              chainId: 11155111
           - endpoint: https://ethereum-sepolia-rpc.publicnode.com
+            id: publicnode-sepolia
+            group: fallback
             evm:
               chainId: 11155111
           - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
             id: l1-full-node
-            nodeType: full
         cors:
           # List of allowed origins.
           # This allows any dApp in your browser to call the RPC.
