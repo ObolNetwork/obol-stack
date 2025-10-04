@@ -19,6 +19,10 @@ spec:
       labels:
         {{- include "chart.selectorLabels" . | nindent 8 }}
         app: node
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "chart.serviceAccountName" . }}
       dnsPolicy: ClusterFirstWithHostNet
@@ -51,32 +55,6 @@ spec:
               export P2P_IP=$(hostname -i)
 
               start_cmd=("node" "/usr/src/yarn-project/aztec/dest/bin/index.js" "start")
-              pod_index=$(echo $K8S_POD_NAME | awk -F'-' '{print $NF}')
-
-              {{- if or (has "--sequencer" .Values.node.startCmd) (has "--prover-node" .Values.node.startCmd) }}
-              if [[ -f /config/l1-publisher/mnemonic ]]; then
-                mnemonic=$(cat /config/l1-publisher/mnemonic)
-                mnemonic_start_index=$(cat /config/l1-publisher/mnemonicStartIndex)
-
-
-                export L1_PUBLISHER_KEY=$(cast wallet private-key --mnemonic "$mnemonic" --mnemonic-index $(($mnemonic_start_index + $pod_index)))
-                export VALIDATOR_PRIVATE_KEY=$L1_PUBLISHER_KEY
-                export SEQ_PUBLISHER_PRIVATE_KEY=$L1_PUBLISHER_KEY
-
-              elif [[ -f /config/l1-publisher/privateKeys ]]; then
-                line_index=$(($pod_index + 1))
-                export L1_PUBLISHER_KEY=$(sed -n -e "${line_index}p;${line_index}q" /config/l1-publisher/privateKeys)
-
-                if [[ -z $L1_PUBLISHER_KEY ]]; then
-                  echo "Private key for pod $K8S_POD_NAME not found"
-                  exit 1
-                fi
-
-              else
-                echo "No mnemonic or private keys configured."
-                exit 1
-              fi
-              {{- end }}
 
               start_cmd+=({{ join " " .Values.node.startCmd }})
 
@@ -102,6 +80,11 @@ spec:
           volumeMounts:
             - name: storage
               mountPath: {{ .Values.node.storage.dataDirectory }}
+            {{- if has "--sequencer" .Values.node.startCmd }}
+            - name: keystore
+              mountPath: /var/lib/keystore
+              readOnly: true
+            {{- end }}
           env:
             - name: POD_IP
               valueFrom:
@@ -204,6 +187,10 @@ spec:
             - name: PROVER_ID
               value: {{ .Values.node.coinbase | quote }}
             {{- end }}
+            {{- if has "--sequencer" .Values.node.startCmd }}
+            - name: KEY_STORE_DIRECTORY
+              value: /var/lib/keystore
+            {{- end }}
             - name: SENTINEL_ENABLED
               value: {{ .Values.node.sentinel.enabled | quote }}
           ports:
@@ -223,10 +210,10 @@ spec:
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
       volumes:
-        {{- if or (has "--sequencer" .Values.node.startCmd) (has "--prover-node" .Values.node.startCmd) }}
-        - name: l1-publisher
+        {{- if has "--sequencer" .Values.node.startCmd }}
+        - name: keystore
           secret:
-            secretName: {{ include "chart.fullname" . }}-l1-publisher
+            secretName: {{ include "chart.fullname" . }}-keystore
         {{- end }}
   {{- if not .Values.persistence.enabled }}
         - name: storage

@@ -31,6 +31,9 @@ rollupVersion: "canonical"
 # -- Use host network - this will disable nodePort service and use host networking instead
 hostNetwork: false
 
+# -- Pod annotations (e.g., for Keel auto-updates)
+podAnnotations: {}
+
 # -- Aztec node configuration
 node:
   # -- Number of replicas
@@ -38,10 +41,11 @@ node:
   # -- Log level - info, verbose, debug, trace
   logLevel: "info"
 
-  l1Publisher:
-    privateKeys: []
-    mnemonic:
-    mnemonicStartIndex:
+  # Sequencer configuration
+  # Ethereum private key for attester (signs blocks and attestations)
+  attesterPrivateKey: ""
+  # Aztec address (32 bytes) to receive unburnt transaction fees (defaults to zero address)
+  feeRecipient: "0x0000000000000000000000000000000000000000000000000000000000000000"
 
   # -- Ethereum configuration
   # -- Ethereum hosts - comma separated list of hosts (geth, reth are currently supported)
@@ -85,10 +89,10 @@ node:
   storage:
     # -- Data directory
     dataDirectory: /data
-    # -- Data store map size (kB)
-    dataStoreMapSize:
-    # -- World state map size (kB)
-    worldStateMapSize:
+    # -- Data store map size in kB (per database)
+    dataStoreMapSize: "134217728"  # 128 GB
+    # -- World state map size in kB (per merkle tree)
+    worldStateMapSize: "134217728"  # 128 GB
     # -- P2P storage map size (kB)
     p2pStorageMapSize:
     # -- Archive storage map size (kB)
@@ -101,8 +105,8 @@ node:
   startupProbe:
     # -- Period seconds
     periodSeconds: 30
-    # -- Failure threshold
-    failureThreshold: 3
+    # -- Failure threshold (10 minutes default - may need more if downloading many blocks)
+    failureThreshold: 20
   resources: {}
 
 persistence:

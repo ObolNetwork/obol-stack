@@ -3,18 +3,28 @@ image:
   # -- Image repository
   repository: aztecprotocol/aztec
   # -- Image tag
-  tag: 2.0.3
+  tag: latest  # Auto-updates to latest stable (currently 2.0.3)
   # -- Container pull policy
-  pullPolicy: IfNotPresent
+  pullPolicy: Always  # Required for Keel auto-updates
 
 network: alpha-testnet
 
 # Use host network for P2P connectivity (port 40400)
 hostNetwork: true
 
+# Keel auto-update configuration
+podAnnotations:
+  keel.sh/policy: force              # Always update to latest tag
+  keel.sh/trigger: poll              # Poll for updates
+  keel.sh/pollSchedule: "@every 10m" # Check every 10 minutes
+
 node:
   replicas: 1
   logLevel: "debug; info: aztec:simulator, json-rpc"
+
+  # Sequencer private key - Replace with your actual Ethereum private key
+  # Ensure this account has at least 0.1 ETH on Sepolia to avoid slashing
+  attesterPrivateKey: "0xYOUR_PRIVATE_KEY_HERE"
 
   l1ExecutionUrls: ["http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"]
   l1ConsensusUrls: ["http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"]

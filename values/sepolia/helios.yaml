@@ -9,15 +9,18 @@ helios:
   # REQUIRED: Add your execution RPC endpoint (must support eth_getProof)
   # Example using AllthatNode (replace with your provider)
   executionRpc: "https://sepolia.drpc.org"
-  
-  consensusRpc: "https://ethereum-sepolia-beacon-api.publicnode.com"
+
+  # Use Nimbus Sepolia testing endpoint for light client API
+  # TODO: Switch to local after Nimbus completes a full sync committee period
+  consensusRpc: "http://unstable.sepolia.beacon-api.nimbus.team"
   
   # Example checkpoint
   checkpoint: ""
-  strictCheckpointAge: true
+  strictCheckpointAge: false
 
   # Trusted URL to retrieve a checkpoint sync to begin the light client from
-  fallback: "https://checkpoint-sync.sepolia.ethpandaops.io"
+  # Using healthy checkpoint sync endpoint from ethpandaops
+  fallback: "https://sepolia.beaconstate.info"
   loadExternalFallback: true
   
   # Bind to 0.0.0.0 to allow connections from outside the pod

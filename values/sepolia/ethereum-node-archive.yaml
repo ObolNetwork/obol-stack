@@ -22,6 +22,9 @@ nethermind:
 
 nimbus:
   enabled: true
+  extraArgs:
+    - --light-client-data-serve=true  # Enable light client server (default: true)
+    - --light-client-data-import-mode=only-new  # Import new light client data incrementally
   persistence:
     size: 500Gi
   nodeSelector:
