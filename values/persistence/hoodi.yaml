@@ -1,0 +1,52 @@
+# Persistence overrides for Hoodi Testnet
+# Hoodi is a new testnet launched in March 2025
+
+# Execution clients
+besu:
+  persistence:
+    size: 50Gi
+
+erigon:
+  persistence:
+    size: 50Gi
+
+ethereumjs:
+  persistence:
+    size: 50Gi
+
+geth:
+  persistence:
+    size: 50Gi
+
+nethermind:
+  persistence:
+    size: 50Gi
+
+reth:
+  persistence:
+    size: 50Gi
+
+# Consensus clients
+grandine:
+  persistence:
+    size: 30Gi
+
+lighthouse:
+  persistence:
+    size: 30Gi
+
+lodestar:
+  persistence:
+    size: 30Gi
+
+nimbus:
+  persistence:
+    size: 30Gi
+
+prysm:
+  persistence:
+    size: 30Gi
+
+teku:
+  persistence:
+    size: 30Gi

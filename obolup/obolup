@@ -471,24 +471,36 @@ launch_stack() {
     local __network="$1"
     local __mode="$2"
     local __headless="$3"
+    local __use_current_context="$4"
 
     log_info "Launching core Obol Stack services..."
-    if ! kind get clusters | grep -q "$STACK_NAME"; then
-        # If headless=1, map host port 80 and 443 into the cluster and enable an ingress-controller and some default routes
-        if [[ "$__headless" -ne 0 ]]; then
-            log_info "Creating Kind cluster for Obol Stack in headless mode..."
-            kind create cluster --name "$STACK_NAME" --config ./manifests/kind_headless.yaml
-        else
-            log_info "Creating Kind cluster for Obol Stack..."
-            kind create cluster --name "$STACK_NAME" --config ./manifests/kind_host.yaml
+    if [[ "$__use_current_context" -ne 0 ]]; then
+        # Using existing kubectl context
+        log_info "Using current kubectl context..."
+        if ! kubectl config current-context >/dev/null 2>&1; then
+            log_error "No kubectl context found. Please configure kubectl or run without --use-current-context flag."
         fi
+        local current_context=$(kubectl config current-context)
+        log_info "Deploying to context: $current_context"
     else
-        # Cluster exists, check if we need host mode but don't have port mappings
-        if [[ "$__headless" -eq 0 ]] && ! check_cluster_port_mappings "$STACK_NAME"; then
-            log_warn "Existing cluster doesn't have the required port mappings to expose web services."
-            log_warn "The cluster needs to be recreated without the --headless flag."
-            log_info "Please run: ./obolup --clean"
-            log_error "Cannot proceed without proper port mappings. Exiting."
+        # Create or use kind cluster
+        if ! kind get clusters | grep -q "$STACK_NAME"; then
+            # If headless=1, map host port 80 and 443 into the cluster and enable an ingress-controller and some default routes
+            if [[ "$__headless" -ne 0 ]]; then
+                log_info "Creating Kind cluster for Obol Stack in headless mode..."
+                kind create cluster --name "$STACK_NAME" --config ./manifests/kind_headless.yaml
+            else
+                log_info "Creating Kind cluster for Obol Stack..."
+                kind create cluster --name "$STACK_NAME" --config ./manifests/kind_host.yaml
+            fi
+        else
+            # Cluster exists, check if we need host mode but don't have port mappings
+            if [[ "$__headless" -eq 0 ]] && ! check_cluster_port_mappings "$STACK_NAME"; then
+                log_warn "Existing cluster doesn't have the required port mappings to expose web services."
+                log_warn "The cluster needs to be recreated without the --headless flag."
+                log_info "Please run: ./obolup --clean"
+                log_error "Cannot proceed without proper port mappings. Exiting."
+            fi
         fi
     fi
 
@@ -516,7 +528,7 @@ launch_stack() {
         log_info "Installing an Ethereum full node client synced to $__network..."
         docker pull nethermind/nethermind:latest
         docker pull statusim/nimbus-eth2:multiarch-latest
-        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node-$__network ethereum/ethereum-node -f ../values/ethereum-node.yaml  --set global.main.network=$__network
+        ensure helm upgrade --install --namespace l1 --create-namespace l1-full-node-$__network ethereum/ethereum-node -f ../values/ethereum-node.yaml -f ../values/persistence/$__network.yaml --set global.main.network=$__network
         
         # Deploy MEV-boost for supported networks (not hoodi)
         log_info "Installing MEV-boost sidecar for $__network network..."
@@ -598,6 +610,7 @@ main() {
 	local mode=""
     declare -i headless=0
     declare -i clean=0
+    declare -i use_current_context=0
 
 	# Parse the CLI flags
 	while [[ $# -gt 0 ]]; do
@@ -617,6 +630,10 @@ main() {
 			;;
         --clean)
 			clean=1
+			shift 1
+			;;
+        --use-current-context)
+			use_current_context=1
 			shift 1
 			;;
         *)
@@ -640,7 +657,9 @@ main() {
     # start_docker
     start_docker
     install_kubectl
-    install_kind
+    if [[ "$use_current_context" -eq 0 ]]; then
+        install_kind
+    fi
     install_helm
     install_k9s
 
@@ -651,7 +670,7 @@ main() {
         kind delete cluster --name "$STACK_NAME"
     fi
 
-    launch_stack "$network" "$mode" "$headless"
+    launch_stack "$network" "$mode" "$headless" "$use_current_context"
 
     log_info "Obol Stack is up and running!"
     exit 0
@@ -682,7 +701,7 @@ Docs       : https://docs.obol.org/
 # Displays help text
 help() {
 	cat <<EOF
-Usage: $0 [--help] [--network <network>] [--mode <mode>] [--headless] [--clean]
+Usage: $0 [--help] [--network <network>] [--mode <mode>] [--headless] [--clean] [--use-current-context]
 
 Options:
   --help                            Display this help message
@@ -690,6 +709,7 @@ Options:
   --mode <mode>                     Specify the type of sync mode (default: light) [light, full]
   --headless                        Skips exposing the stack to the host operating system
   --clean                           Deletes and recreates the Obol Stack
+  --use-current-context             Use existing kubectl context instead of creating a kind cluster
 EOF
 	exit "${1:-1}"
 }

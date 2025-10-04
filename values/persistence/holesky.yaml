@@ -1,0 +1,52 @@
+# Persistence overrides for Holesky Testnet
+# Holesky is a medium-sized testnet
+
+# Execution clients
+besu:
+  persistence:
+    size: 200Gi
+
+erigon:
+  persistence:
+    size: 200Gi
+
+ethereumjs:
+  persistence:
+    size: 200Gi
+
+geth:
+  persistence:
+    size: 200Gi
+
+nethermind:
+  persistence:
+    size: 200Gi
+
+reth:
+  persistence:
+    size: 200Gi
+
+# Consensus clients
+grandine:
+  persistence:
+    size: 100Gi
+
+lighthouse:
+  persistence:
+    size: 100Gi
+
+lodestar:
+  persistence:
+    size: 100Gi
+
+nimbus:
+  persistence:
+    size: 100Gi
+
+prysm:
+  persistence:
+    size: 100Gi
+
+teku:
+  persistence:
+    size: 100Gi

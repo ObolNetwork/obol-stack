@@ -1,0 +1,53 @@
+# Persistence overrides for Sepolia Testnet
+# Sepolia is a smaller testnet (~10GB+ as of 2025)
+
+# Execution clients
+besu:
+  persistence:
+    size: 100Gi
+
+erigon:
+  persistence:
+    size: 100Gi
+
+ethereumjs:
+  persistence:
+    size: 100Gi
+
+geth:
+  persistence:
+    size: 100Gi
+
+nethermind:
+  persistence:
+    enabled: true
+    size: 600Gi
+
+reth:
+  persistence:
+    size: 100Gi
+
+# Consensus clients
+grandine:
+  persistence:
+    size: 50Gi
+
+lighthouse:
+  persistence:
+    size: 50Gi
+
+lodestar:
+  persistence:
+    size: 50Gi
+
+nimbus:
+  persistence:
+    size: 50Gi
+
+prysm:
+  persistence:
+    size: 50Gi
+
+teku:
+  persistence:
+    size: 50Gi

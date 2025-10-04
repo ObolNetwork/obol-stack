@@ -1,0 +1,56 @@
+# Persistence overrides for Ethereum Mainnet
+# Mainnet requires significant storage for full nodes
+
+# Execution clients
+besu:
+  persistence:
+    size: 2000Gi
+
+erigon:
+  persistence:
+    size: 2000Gi
+
+ethereumjs:
+  persistence:
+    size: 2000Gi
+
+geth:
+  persistence:
+    size: 2000Gi
+
+nethermind:
+  persistence:
+    size: 2000Gi
+  nodeSelector:
+    kubernetes.io/hostname: silvernuc3
+
+reth:
+  persistence:
+    size: 2000Gi
+
+# Consensus clients
+grandine:
+  persistence:
+    size: 500Gi
+
+lighthouse:
+  persistence:
+    size: 500Gi
+
+lodestar:
+  persistence:
+    size: 500Gi
+
+nimbus:
+  persistence:
+    size: 500Gi
+  nodeSelector:
+    kubernetes.io/hostname: silvernuc3
+
+prysm:
+  persistence:
+    size: 500Gi
+
+teku:
+  persistence:
+    size: 500Gi

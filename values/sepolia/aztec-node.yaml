@@ -3,24 +3,28 @@ image:
   # -- Image repository
   repository: aztecprotocol/aztec
   # -- Image tag
-  tag: 0.87.9
+  tag: 2.0.3
   # -- Container pull policy
   pullPolicy: IfNotPresent
 
 network: alpha-testnet
 
+# Use host network for P2P connectivity (port 40400)
 hostNetwork: true
 
 node:
   replicas: 1
   logLevel: "debug; info: aztec:simulator, json-rpc"
 
-  l1ExecutionUrls: ["https://ethereum-sepolia-rpc.publicnode.com"]
-  l1ConsensusUrls: ["https://ethereum-sepolia-beacon-api.publicnode.com"]
+  l1ExecutionUrls: ["http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"]
+  l1ConsensusUrls: ["http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"]
 
   startCmd:
     - --node
     - --archiver
+    - --sequencer
+    - --network testnet
+
 
   startupProbe:
     # -- Period seconds
@@ -30,19 +34,23 @@ node:
 
 persistence:
   enabled: true
-  size: 100Gi
-  storageClassName: standard
+  size: 512Gi
+  storageClassName: local-path
   accessModes:
     - ReadWriteOnce
   selector: {}
 
+# Pin to specific node for local-path storage
+nodeSelector:
+  kubernetes.io/hostname: silverfib
+
 service:
   p2p:
     enabled: true
-    nodePortEnabled: true
+    nodePortEnabled: false
     port: 40400
     announcePort: 40400
   admin:
     enabled: true
-    port: 8081
+    port: 8082
   httpPort: 8080

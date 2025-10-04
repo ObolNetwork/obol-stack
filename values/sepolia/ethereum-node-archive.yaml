@@ -1,0 +1,28 @@
+# Sepolia Archive Node Configuration
+# Required for Aztec and other L2s that need historical L1 data
+
+global:
+  main:
+    network: sepolia
+
+nethermind:
+  enabled: true
+  extraArgs:
+    - --config=sepolia
+    - --Sync.AncientBodiesBarrier=9330000
+    - --Sync.AncientReceiptsBarrier=9330000
+    - --Pruning.Mode=None
+  persistence:
+    # Partial archive from block ~9.33M (for Aztec v2.0.3+ support)
+    # Aztec requires L1 data from block 9,335,682 onwards
+    # Much smaller than full archive: ~500GB-800GB vs ~2TB
+    size: 1000Gi
+  nodeSelector:
+    kubernetes.io/hostname: silverfib
+
+nimbus:
+  enabled: true
+  persistence:
+    size: 500Gi
+  nodeSelector:
+    kubernetes.io/hostname: silvernuc3
