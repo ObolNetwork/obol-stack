@@ -665,7 +665,7 @@ banner() {
 .oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo.oOo
   ___  ____   ___  _
  / _ \| __ ) / _ \| |                A Kubernetes-based Stack for
-| | | |  _ \| | | | |               deploying Ethereum based dApps
+| | | |  _ \| | | | |             deploying Ethereum dApps and infra
 | |_| | |_) | |_| | |___                      using Helm
  \___/|____/ \___/|_____|
 

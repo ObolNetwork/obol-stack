@@ -1,0 +1,48 @@
+# -- Image to use for the container
+image:
+  # -- Image repository
+  repository: aztecprotocol/aztec
+  # -- Image tag
+  tag: 0.87.9
+  # -- Container pull policy
+  pullPolicy: IfNotPresent
+
+network: alpha-testnet
+
+hostNetwork: true
+
+node:
+  replicas: 1
+  logLevel: "debug; info: aztec:simulator, json-rpc"
+
+  l1ExecutionUrls: ["https://ethereum-sepolia-rpc.publicnode.com"]
+  l1ConsensusUrls: ["https://ethereum-sepolia-beacon-api.publicnode.com"]
+
+  startCmd:
+    - --node
+    - --archiver
+
+  startupProbe:
+    # -- Period seconds
+    periodSeconds: 60
+    # -- Failure threshold
+    failureThreshold: 60
+
+persistence:
+  enabled: true
+  size: 100Gi
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  selector: {}
+
+service:
+  p2p:
+    enabled: true
+    nodePortEnabled: true
+    port: 40400
+    announcePort: 40400
+  admin:
+    enabled: true
+    port: 8081
+  httpPort: 8080

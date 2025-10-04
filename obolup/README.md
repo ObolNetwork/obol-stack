@@ -21,6 +21,8 @@ Options:
   --clean                           Deletes and recreates the Obol Stack
 ```
 
+To shut down a running instance, run `./oboldown` from this directory. This clears all stack data.
+
 ### Troubleshooting
 
 Adding the `--clean` flag will start your cluster fresh, and may fix issues during alpha usage or version upgrades. 
