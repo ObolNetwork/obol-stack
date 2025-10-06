@@ -181,7 +181,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [Obol Network](https://obol.org)
 - [Documentation](https://docs.obol.org)
 - [Launchpad](https://launchpad.obol.org)
-- [Discord](https://discord.gg/obol)
+- [Discord](https://discord.obol.org)
 - [GitHub](https://github.com/ObolNetwork)
 
 ## Support
@@ -189,6 +189,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 For questions and support:
 
 - 📖 [Documentation](https://docs.obol.org)
-- 💬 [Discord Community](https://discord.gg/obol)
+- 💬 [Discord Community](https://discord.obol.org)
 - 🐛 [Issue Tracker](https://github.com/ObolNetwork/obol-stack-front-end/issues)
 - 📧 [Email Support](mailto:support@obol.org)
