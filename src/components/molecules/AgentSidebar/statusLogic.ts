@@ -9,9 +9,23 @@ export type NodeStatus =
   | 'disk-bottleneck'
   | 'low-disk';
 
+/**
+ * Thresholds for node health status determination
+ */
+export const STATUS_THRESHOLDS = {
+  /** Critical disk usage threshold (percentage) */
+  DISK_CRITICAL: 90,
+  /** High resource usage threshold for CPU/Memory (percentage) */
+  RESOURCE_HIGH: 80,
+  /** Low peer count threshold */
+  PEERS_LOW: 10,
+} as const;
+
 export function determineNodeStatus(data: DashboardData): NodeStatus {
   // Check for low disk space first (most critical)
-  if (data.nodeOverview.diskUsage.percentage > 90) {
+  if (
+    data.nodeOverview.diskUsage.percentage > STATUS_THRESHOLDS.DISK_CRITICAL
+  ) {
     return 'low-disk';
   }
 
@@ -33,17 +47,19 @@ export function determineNodeStatus(data: DashboardData): NodeStatus {
     return 'stalled';
   }
 
-  // Check for high resource usage (CPU or Memory > 80%)
+  // Check for high resource usage (CPU or Memory > threshold)
   if (
-    data.nodeOverview.cpuLoad.percentage > 80 ||
-    data.nodeOverview.memoryUsage.percentage > 80
+    data.nodeOverview.cpuLoad.percentage > STATUS_THRESHOLDS.RESOURCE_HIGH ||
+    data.nodeOverview.memoryUsage.percentage > STATUS_THRESHOLDS.RESOURCE_HIGH
   ) {
     return 'high-usage';
   }
 
-  // Check for low peer count (< 10 peers)
+  // Check for low peer count (< threshold)
   const hasLowPeers = data.chains.some(chain =>
-    chain.clients.some(client => (client.peers || 0) < 10)
+    chain.clients.some(
+      client => (client.peers || 0) < STATUS_THRESHOLDS.PEERS_LOW
+    )
   );
 
   if (hasLowPeers) {
