@@ -9,6 +9,7 @@ export { Tooltip } from './atoms/Tooltip';
 
 // Molecules
 export { Accordion } from './molecules/Accordion';
+export { AgentSidebar } from './molecules/AgentSidebar';
 export { ClientCard } from './molecules/ClientCard';
 export { ErrorState } from './molecules/ErrorState';
 export { LoadingState } from './molecules/LoadingState';

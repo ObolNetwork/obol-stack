@@ -9,13 +9,20 @@ const svgCache = new Map<string, string>();
 // Generated from SVG files in /public directory
 // Run 'npm run generate-icon-types' to regenerate
 export type IconName =
+  | 'behind'
+  | 'bottleneck'
   | 'clear'
+  | 'close'
+  | 'healthy'
+  | 'high-usage'
+  | 'low-peer'
   | 'node-cpu'
   | 'node-disk'
   | 'node-memory'
   | 'node-uptime'
   | 'peers'
-  | 'stack-icon';
+  | 'stack-icon'
+  | 'stalled-sync';
 
 // Define size variants
 export type IconSize = 'xxs' | 'xs' | 's' | 'm' | 'l' | 'xl' | 'xxl';
