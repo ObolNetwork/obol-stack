@@ -1,0 +1,139 @@
+{{- if eq .Values.role "prover" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chart.fullname" . }}-prover-agent
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+    aztec.network/role: prover
+    aztec.network/component: prover-agent
+spec:
+  serviceName: {{ include "chart.fullname" . }}-prover-agent
+  replicas: {{ .Values.prover.agent.replicas }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  updateStrategy:
+    {{- toYaml .Values.node.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "chart.selectorLabels" . | nindent 6 }}
+      app: prover-agent
+  template:
+    metadata:
+      labels:
+        {{- include "chart.selectorLabels" . | nindent 8 }}
+        app: prover-agent
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "chart.serviceAccountName" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.initContainers }}
+      initContainers:
+        {{- tpl (toYaml .Values.initContainers | nindent 8) $ }}
+      {{- end }}
+      containers:
+        - name: prover-agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              start_cmd=("node" "/usr/src/yarn-project/aztec/dest/bin/index.js" "start" "--prover-agent")
+              {{- if .Values.network }}
+              start_cmd+=("--network" "{{ .Values.network }}")
+              {{- end }}
+              "${start_cmd[@]}"
+          volumeMounts:
+            - name: storage
+              mountPath: {{ .Values.node.storage.dataDirectory }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: K8S_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OTEL_SERVICE_NAME
+              value: prover-agent
+            - name: K8S_NAMESPACE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if .Values.network }}
+            - name: NETWORK
+              value: "{{ .Values.network }}"
+            {{- else }}
+            - name: REGISTRY_CONTRACT_ADDRESS
+              value: "{{ .Values.customNetwork.registryContractAddress }}"
+            - name: L1_CHAIN_ID
+              value: "{{ .Values.customNetwork.l1ChainId }}"
+            - name: SLASH_FACTORY_ADDRESS
+              value: "{{ .Values.customNetwork.slashFactoryAddress }}"
+            - name: FEE_ASSET_HANDLER_CONTRACT_ADDRESS
+              value: "{{ .Values.customNetwork.feeAssetHandlerContractAddress }}"
+            {{- end }}
+            - name: NODE_OPTIONS
+              value: {{ join " " .Values.node.nodeJsOptions | quote }}
+            - name: LOG_LEVEL
+              value: "{{ .Values.node.logLevel }}"
+            - name: LOG_JSON
+              value: "1"
+            - name: PROVER_AGENT_COUNT
+              value: {{ .Values.prover.agent.count | quote }}
+            - name: PROVER_AGENT_POLL_INTERVAL_MS
+              value: {{ .Values.prover.agent.pollIntervalMs | quote }}
+            # Prover broker is running in the same deployment
+            - name: PROVER_BROKER_HOST
+              value: "http://{{ include "chart.fullname" . }}-prover-broker:{{ .Values.service.httpPort }}"
+            {{- if .Values.prover.id }}
+            - name: PROVER_ID
+              value: {{ .Values.prover.id | quote }}
+            {{- end }}
+            - name: DATA_DIRECTORY
+              value: {{ .Values.node.storage.dataDirectory | quote }}
+          resources:
+            {{- if .Values.prover.agent.resources }}
+            {{- toYaml .Values.prover.agent.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml .Values.node.resources | nindent 12 }}
+            {{- end }}
+  {{- if not .Values.persistence.enabled }}
+      volumes:
+        - name: storage
+          emptyDir: {}
+  {{- else if .Values.persistence.existingClaim }}
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+  {{- else }}
+  volumeClaimTemplates:
+  - metadata:
+      name: storage
+      annotations:
+        {{- toYaml .Values.persistence.annotations | nindent 10 }}
+    spec:
+      accessModes:
+        {{- toYaml .Values.persistence.accessModes | nindent 12 }}
+      resources:
+        requests:
+          storage: {{ .Values.prover.agent.persistence.size | default .Values.persistence.size | quote}}
+      storageClassName: {{ .Values.persistence.storageClassName }}
+      {{- if .Values.persistence.selector }}
+      selector:
+        {{- toYaml .Values.persistence.selector | nindent 12 }}
+      {{- end }}
+  {{- end }}
+{{- end }}

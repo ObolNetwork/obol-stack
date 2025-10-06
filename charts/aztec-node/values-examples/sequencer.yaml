@@ -1,0 +1,86 @@
+# Example values for deploying an Aztec sequencer
+# A sequencer produces blocks and attestations for the network
+
+# Deployment role
+role: sequencer
+
+# Sequencer-specific configuration
+sequencer:
+  # REQUIRED: Ethereum private key for attester (signs blocks and attestations)
+  # Must start with '0x' and have sufficient ETH on L1 (minimum 0.1 ETH recommended)
+  # SECURITY: Never commit real private keys to version control
+  # Use --set sequencer.attesterPrivateKey="0xYOUR_KEY" when deploying
+  attesterPrivateKey: "0xYOUR_PRIVATE_KEY_HERE"
+
+  # Aztec address (32 bytes) to receive unburnt transaction fees
+  feeRecipient: "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+# Network to connect to
+network: testnet
+
+# Container image configuration
+image:
+  repository: aztecprotocol/aztec
+  tag: latest
+  pullPolicy: Always  # Use Always for auto-updates
+
+# Node configuration
+node:
+  replicas: 1
+  logLevel: "info"
+
+  # L1 Ethereum configuration
+  # Sequencers need reliable, low-latency L1 connections
+  l1ExecutionUrls:
+    - "http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"
+  l1ConsensusUrls:
+    - "http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"
+
+  # Resource allocation (sequencers need more resources)
+  resources:
+    requests:
+      cpu: "4"
+      memory: "16Gi"
+    limits:
+      cpu: "8"
+      memory: "32Gi"
+
+  # Storage configuration
+  storage:
+    dataDirectory: /data
+    dataStoreMapSize: "134217728"  # 128 GB
+    worldStateMapSize: "134217728"  # 128 GB
+
+  # Startup probe (sequencers may need longer startup time)
+  startupProbe:
+    periodSeconds: 60
+    failureThreshold: 30  # 30 minutes max startup time
+
+# Persistence
+# Sequencer requires 1TB NVMe SSD for archiver data
+persistence:
+  enabled: true
+  size: 1000Gi
+  # storageClassName: fast-ssd  # Uncomment to specify high-performance NVMe storage class
+  accessModes:
+    - ReadWriteOnce
+
+# Service configuration
+service:
+  httpPort: 8080
+
+  p2p:
+    enabled: true
+    nodePortEnabled: true  # Enable for external P2P connectivity
+    port: 40400
+
+  admin:
+    enabled: true
+    port: 8081
+
+# Use host networking for better P2P performance (optional)
+hostNetwork: false
+
+# Optional: Pin to specific node for persistent storage
+# nodeSelector:
+#   kubernetes.io/hostname: your-node-name

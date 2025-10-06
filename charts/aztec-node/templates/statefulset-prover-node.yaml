@@ -1,48 +1,33 @@
-{{- include "chart.validate" . -}}
-{{- if or (eq .Values.role "fullnode") (eq .Values.role "sequencer") }}
+{{- if eq .Values.role "prover" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "chart.fullname" . }}
+  name: {{ include "chart.fullname" . }}-prover-node
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    aztec.network/role: {{ .Values.role }}
+    aztec.network/role: prover
+    aztec.network/component: prover-node
 spec:
-  serviceName: {{ include "chart.fullname" . }}
-  replicas: {{ .Values.node.replicas }}
+  serviceName: {{ include "chart.fullname" . }}-prover-node
+  replicas: 1
   podManagementPolicy: {{ .Values.podManagementPolicy }}
   updateStrategy:
     {{- toYaml .Values.node.updateStrategy | nindent 4 }}
   selector:
     matchLabels:
       {{- include "chart.selectorLabels" . | nindent 6 }}
-      app: node
+      app: prover-node
   template:
     metadata:
       labels:
         {{- include "chart.selectorLabels" . | nindent 8 }}
-        app: node
+        app: prover-node
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "chart.serviceAccountName" . }}
-      dnsPolicy: ClusterFirstWithHostNet
-      hostNetwork: {{ .Values.hostNetwork }}
-      {{- if or .Values.service.p2p.nodePortEnabled .Values.hostNetwork }}
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchExpressions:
-                  - key: app
-                    operator: In
-                    values:
-                      - node
-              topologyKey: kubernetes.io/hostname
-              namespaceSelector: {}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -52,7 +37,7 @@ spec:
         {{- tpl (toYaml .Values.initContainers | nindent 8) $ }}
       {{- end }}
       containers:
-        - name: aztec
+        - name: prover-node
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
@@ -60,17 +45,9 @@ spec:
             - -c
             - |
               export P2P_IP=$(hostname -i)
-
-              start_cmd=("node" "/usr/src/yarn-project/aztec/dest/bin/index.js" "start")
-
-              {{- $startCmd := include "chart.startCmd" . | fromYamlArray }}
-              {{- range $startCmd }}
-              start_cmd+=("{{ . }}")
-              {{- end }}
-
-              {{- if .Values.node.preStartScript }}
-              {{ .Values.node.preStartScript | nindent 14 }}
-
+              start_cmd=("node" "/usr/src/yarn-project/aztec/dest/bin/index.js" "start" "--prover-node" "--archiver")
+              {{- if .Values.network }}
+              start_cmd+=("--network" "{{ .Values.network }}")
               {{- end }}
               "${start_cmd[@]}"
           startupProbe:
@@ -90,16 +67,6 @@ spec:
           volumeMounts:
             - name: storage
               mountPath: {{ .Values.node.storage.dataDirectory }}
-            {{- if eq .Values.role "sequencer" }}
-            - name: keystore
-              mountPath: /var/lib/keystore
-              readOnly: true
-            {{- end }}
-            {{- if eq .Values.role "prover-node" }}
-            - name: prover-keystore
-              mountPath: /var/lib/keystore
-              readOnly: true
-            {{- end }}
           env:
             - name: POD_IP
               valueFrom:
@@ -114,7 +81,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OTEL_SERVICE_NAME
-              value: node
+              value: prover-node
             - name: K8S_NAMESPACE_NAME
               valueFrom:
                 fieldRef:
@@ -136,8 +103,6 @@ spec:
               value: {{ join " " .Values.node.nodeJsOptions | quote }}
             - name: AZTEC_PORT
               value: "{{ .Values.service.httpPort }}"
-            - name: AZTEC_ADMIN_PORT
-              value: "{{ .Values.service.admin.port }}"
             - name: LOG_LEVEL
               value: "{{ .Values.node.logLevel }}"
             - name: LOG_JSON
@@ -148,21 +113,14 @@ spec:
               value: "{{ .Values.service.p2p.port }}"
             - name: P2P_QUERY_FOR_IP
               value: "true"
-            {{- if .Values.node.remoteUrl.archiver }}
-            - name: ARCHIVER_URL
-              value: {{ .Values.node.remoteUrl.archiver | quote }}
-            {{- end }}
-            {{- if .Values.node.remoteUrl.proverBroker }}
+            - name: PROVER_PUBLISHER_PRIVATE_KEY
+              value: {{ .Values.prover.node.publisherPrivateKey | quote }}
+            # Prover broker is running in the same deployment
             - name: PROVER_BROKER_HOST
-              value: {{ .Values.node.remoteUrl.proverBroker | quote }}
-            {{- end }}
-            {{- if .Values.node.remoteUrl.blobSink }}
-            - name: BLOB_SINK_URL
-              value: {{ .Values.node.remoteUrl.blobSink | quote }}
-            {{- end }}
-            {{- if gt (len .Values.node.remoteUrl.proverCoordinationNodes) 0 }}
-            - name: PROVER_COORDINATION_NODE_URLS
-              value: {{ join "," .Values.node.remoteUrl.proverCoordinationNodes | quote }}
+              value: "http://{{ include "chart.fullname" . }}-prover-broker:{{ .Values.service.httpPort }}"
+            {{- if .Values.prover.id }}
+            - name: PROVER_ID
+              value: {{ .Values.prover.id | quote }}
             {{- end }}
             {{- if gt (len .Values.node.l1ExecutionUrls) 0 }}
             - name: ETHEREUM_HOSTS
@@ -184,50 +142,6 @@ spec:
               value: {{ .Values.node.storage.dataStoreMapSize | quote }}
             - name: WS_DB_MAP_SIZE_KB
               value: {{ .Values.node.storage.worldStateMapSize | quote }}
-            - name: USE_GCLOUD_LOGGING
-              value: {{ .Values.node.metrics.useGcloudLogging | quote }}
-            {{- if .Values.node.metrics.otelCollectorEndpoint }}
-            - name: OTEL_EXCLUDE_METRICS
-              value: {{ .Values.node.metrics.otelExcludeMetrics | quote }}
-            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
-              value: "{{ .Values.node.metrics.otelCollectorEndpoint }}/v1/metrics"
-            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-              value: "{{ .Values.node.metrics.otelCollectorEndpoint }}/v1/traces"
-            - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
-              value: "{{ .Values.node.metrics.otelCollectorEndpoint }}/v1/logs"
-            {{- end }}
-            {{- if .Values.node.coinbase }}
-            - name: COINBASE
-              value: {{ .Values.node.coinbase | quote }}
-            - name: PROVER_ID
-              value: {{ .Values.node.coinbase | quote }}
-            {{- end }}
-            {{- if eq .Values.role "sequencer" }}
-            - name: KEY_STORE_DIRECTORY
-              value: /var/lib/keystore
-            - name: FEE_RECIPIENT
-              value: {{ .Values.sequencer.feeRecipient | quote }}
-            {{- end }}
-            {{- if eq .Values.role "prover-node" }}
-            - name: KEY_STORE_DIRECTORY
-              value: /var/lib/keystore
-            {{- if .Values.prover.id }}
-            - name: PROVER_ID
-              value: {{ .Values.prover.id | quote }}
-            {{- end }}
-            {{- end }}
-            {{- if eq .Values.role "prover-agent" }}
-            - name: PROVER_AGENT_COUNT
-              value: {{ .Values.prover.agent.count | quote }}
-            - name: PROVER_AGENT_POLL_INTERVAL_MS
-              value: {{ .Values.prover.agent.pollIntervalMs | quote }}
-            {{- if .Values.prover.id }}
-            - name: PROVER_ID
-              value: {{ .Values.prover.id | quote }}
-            {{- end }}
-            {{- end }}
-            - name: SENTINEL_ENABLED
-              value: {{ .Values.node.sentinel.enabled | quote }}
           ports:
             - containerPort: {{ .Values.service.httpPort }}
               name: http-rpc
@@ -243,19 +157,13 @@ spec:
               name: p2p-udp
             {{- end }}
           resources:
+            {{- if .Values.prover.node.resources }}
+            {{- toYaml .Values.prover.node.resources | nindent 12 }}
+            {{- else }}
             {{- toYaml .Values.node.resources | nindent 12 }}
-      volumes:
-        {{- if eq .Values.role "sequencer" }}
-        - name: keystore
-          secret:
-            secretName: {{ include "chart.fullname" . }}-keystore
-        {{- end }}
-        {{- if eq .Values.role "prover-node" }}
-        - name: prover-keystore
-          secret:
-            secretName: {{ include "chart.fullname" . }}-prover-keystore
-        {{- end }}
+            {{- end }}
   {{- if not .Values.persistence.enabled }}
+      volumes:
         - name: storage
           emptyDir: {}
   {{- else if .Values.persistence.existingClaim }}
@@ -273,7 +181,7 @@ spec:
         {{- toYaml .Values.persistence.accessModes | nindent 12 }}
       resources:
         requests:
-          storage: {{ .Values.persistence.size | quote}}
+          storage: {{ .Values.prover.node.persistence.size | default .Values.persistence.size | quote}}
       storageClassName: {{ .Values.persistence.storageClassName }}
       {{- if .Values.persistence.selector }}
       selector:

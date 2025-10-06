@@ -1,0 +1,26 @@
+{{- if eq .Values.role "prover" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chart.fullname" . }}-prover-broker
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+    aztec.network/role: prover
+    aztec.network/component: prover-broker
+spec:
+  clusterIP: None
+  selector:
+    {{- include "chart.selectorLabels" . | nindent 4 }}
+    app: prover-broker
+  ports:
+    - port: {{ .Values.service.httpPort }}
+      name: http-rpc
+      protocol: TCP
+      targetPort: http-rpc
+    {{- if .Values.service.admin.enabled }}
+    - port: {{ .Values.service.admin.port }}
+      name: admin
+      protocol: TCP
+      targetPort: admin
+    {{- end }}
+{{- end }}

@@ -1,0 +1,36 @@
+{{- if eq .Values.role "prover" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chart.fullname" . }}-prover-node
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+    aztec.network/role: prover
+    aztec.network/component: prover-node
+spec:
+  clusterIP: None
+  selector:
+    {{- include "chart.selectorLabels" . | nindent 4 }}
+    app: prover-node
+  ports:
+    - port: {{ .Values.service.httpPort }}
+      name: http-rpc
+      protocol: TCP
+      targetPort: http-rpc
+    {{- if .Values.service.admin.enabled }}
+    - port: {{ .Values.service.admin.port }}
+      name: admin
+      protocol: TCP
+      targetPort: admin
+    {{- end }}
+    {{- if .Values.service.p2p.enabled }}
+    - port: {{ .Values.service.p2p.port }}
+      name: p2p-tcp
+      protocol: TCP
+      targetPort: p2p-tcp
+    - port: {{ .Values.service.p2p.port }}
+      name: p2p-udp
+      protocol: UDP
+      targetPort: p2p-udp
+    {{- end }}
+{{- end }}

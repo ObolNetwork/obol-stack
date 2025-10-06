@@ -9,14 +9,17 @@ nethermind:
   enabled: true
   extraArgs:
     - --config=sepolia
-    - --Sync.AncientBodiesBarrier=9330000
-    - --Sync.AncientReceiptsBarrier=9330000
+    - --Sync.AncientBodiesBarrier=9200000
+    - --Sync.AncientReceiptsBarrier=9200000
     - --Pruning.Mode=None
   persistence:
-    # Partial archive from block ~9.33M (for Aztec v2.0.3+ support)
-    # Aztec requires L1 data from block 9,335,682 onwards
+    enabled: true
+    # Partial archive from block ~9.2M (for Aztec support)
+    # Aztec requires L1 data from block 9,222,769 onwards (based on snapshot)
+    # Setting barrier to 9.2M provides buffer for earlier block access
     # Much smaller than full archive: ~500GB-800GB vs ~2TB
     size: 1000Gi
+    storageClassName: local-path
   nodeSelector:
     kubernetes.io/hostname: silverfib
 
@@ -27,6 +30,8 @@ nimbus:
     - --light-client-data-import-mode=only-new  # Import new light client data incrementally
     - --el=http://l1-full-node-sepolia-execution:8551  # Connect to execution layer (Nethermind)
   persistence:
+    enabled: true
     size: 500Gi
+    storageClassName: local-path
   nodeSelector:
     kubernetes.io/hostname: silvernuc3

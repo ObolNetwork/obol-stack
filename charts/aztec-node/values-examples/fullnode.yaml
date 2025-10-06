@@ -1,0 +1,62 @@
+# Example values for deploying an Aztec full node
+# A full node participates in the network by running archiver and node services
+
+# Deployment role
+role: fullnode
+
+# Network to connect to (testnet, devnet, or custom)
+network: testnet
+
+# Container image configuration
+image:
+  repository: aztecprotocol/aztec
+  tag: latest
+  pullPolicy: IfNotPresent  # Use 'Always' for auto-updates, 'IfNotPresent' for stability
+
+# Node configuration
+node:
+  replicas: 1
+  logLevel: "info"
+
+  # L1 Ethereum configuration
+  l1ExecutionUrls:
+    - "http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"
+  l1ConsensusUrls:
+    - "http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"
+
+  # Resource allocation
+  resources:
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "16Gi"
+
+  # Storage configuration
+  storage:
+    dataDirectory: /data
+    dataStoreMapSize: "134217728"  # 128 GB
+    worldStateMapSize: "134217728"  # 128 GB
+
+# Persistence
+# Full node requires 1TB NVMe SSD for archiver data
+persistence:
+  enabled: true
+  size: 1000Gi
+  # storageClassName: standard  # Uncomment to use a specific storage class
+  accessModes:
+    - ReadWriteOnce
+
+# Service configuration
+service:
+  httpPort: 8080
+
+  p2p:
+    enabled: true
+    nodePortEnabled: false
+    port: 40400
+
+  admin:
+    enabled: true
+    port: 8081

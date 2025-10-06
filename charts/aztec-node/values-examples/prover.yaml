@@ -1,0 +1,116 @@
+# Example configuration for Prover deployment
+# This creates 3 StatefulSets: prover-broker, prover-node, and prover-agent
+
+role: prover
+
+# Network to connect to
+network: testnet
+
+# Prover configuration
+prover:
+  # Prover node configuration
+  node:
+    # REQUIRED: Ethereum private key for publishing proofs to L1
+    # This key will be used to sign and submit rollup proofs
+    # WARNING: This is a TEST KEY - DO NOT USE IN PRODUCTION
+    # Replace with your actual private key for production use
+    publisherPrivateKey: "0x0000000000000000000000000000000000000000000000000000000000000001"
+
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"
+
+    # Prover-node needs 1TB NVMe SSD for archiver data
+    persistence:
+      size: 1000Gi
+
+  # Prover broker configuration
+  broker:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "4Gi"
+      limits:
+        cpu: "2"
+        memory: "8Gi"
+
+    # Broker needs 10GB SSD for job queue
+    persistence:
+      size: 10Gi
+
+  # Prover agent configuration
+  agent:
+    # Number of prover agent pods
+    replicas: 2
+
+    # Number of prover threads per pod
+    count: 4
+
+    # Polling interval in milliseconds
+    pollIntervalMs: 1000
+
+    # Recommended: 32 cores and 128GB RAM per agent
+    resources:
+      requests:
+        cpu: "16"
+        memory: "64Gi"
+      limits:
+        cpu: "32"
+        memory: "128Gi"
+
+    # Agent needs 10GB SSD per agent for CRS and temporary files
+    persistence:
+      size: 10Gi
+
+  # Prover ID - address for receiving proof rewards
+  # Should match the address derived from publisherPrivateKey
+  # The address below corresponds to the test key above
+  # REPLACE WITH YOUR ACTUAL ADDRESS when using a real private key
+  id: ""
+
+# Image configuration
+image:
+  repository: aztecprotocol/aztec
+  tag: latest
+  pullPolicy: IfNotPresent  # Use 'Always' for auto-updates, 'IfNotPresent' for stability
+
+# Node configuration
+node:
+  logLevel: "info"
+
+  # L1 Ethereum connections
+  l1ExecutionUrls:
+    - "http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"
+  l1ConsensusUrls:
+    - "http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"
+
+  resources: {}
+
+# Persistence for prover components
+# Each component has its own size configured under prover.{component}.persistence.size
+# This enabled flag applies to all prover components
+persistence:
+  enabled: true
+  # storageClassName: local-path  # Uncomment to use a specific storage class
+
+# Service configuration
+service:
+  httpPort: 8080
+
+  # P2P is required for prover-node
+  p2p:
+    enabled: true
+    nodePortEnabled: false
+    port: 40400
+
+  admin:
+    enabled: true
+    port: 8081
+
+# Optional: Pin to specific node
+# nodeSelector:
+#   kubernetes.io/hostname: high-performance-node

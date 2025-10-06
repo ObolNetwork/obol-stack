@@ -1,192 +1,405 @@
-## Aztec Node Chart
+# Aztec Node Helm Chart
 
-A chart for deploying a Stateful set of nodes into a kubernetes cluster.
+A Kubernetes Helm chart for deploying Aztec network nodes in different roles: Full Node, Sequencer, or Prover.
 
-## Networking
-There are two options on how to run these containers with external networking.
-- hostNetwork
-- nodePort
+## Overview
 
-***Host Networking***
-Host networking is useful whenever you want to deploy multiple replicas that all have open ports on the nodes they are running on. However, this will only work if the pod's affinity is set accordingly.
-If you deploy a set of containers that all have the same p2p ports, they need to be scheduled onto different k8s nodes.
+This chart deploys Aztec nodes using a role-based architecture. A single chart handles three distinct deployment types:
 
-***Node Port***
-If you do not have access to multiple k8s nodes, you can deploy using the `service.p2p.enableNodePort` option. If you want to run multiple instances on the same k8s node, you will need to deploy this chart mulitple
-times, each with a different p2p port set.
+- **Full Node** - Participates in the network by syncing and validating blocks
+- **Sequencer** - Produces blocks and participates in consensus
+- **Prover** - Generates zero-knowledge proofs for the network
+
+## Quick Start
+
+### Prerequisites
+
+- Kubernetes cluster (v1.19+)
+- Helm 3.0+
+- L1 Ethereum RPC access (execution + consensus layers)
+
+### Install a Full Node
+
+```bash
+helm install aztec-fullnode ./charts/aztec-node \
+  -f charts/aztec-node/values-examples/fullnode.yaml \
+  -n aztec --create-namespace
+```
+
+### Install a Sequencer
+
+```bash
+helm install aztec-sequencer ./charts/aztec-node \
+  -f charts/aztec-node/values-examples/sequencer.yaml \
+  --set sequencer.attesterPrivateKey="0xYOUR_PRIVATE_KEY" \
+  -n aztec --create-namespace
+```
+
+**Requirements:**
+- Ethereum private key with minimum 0.1 ETH on L1 (Sepolia for testnet)
+
+### Install a Prover
+
+```bash
+helm install aztec-prover ./charts/aztec-node \
+  -f charts/aztec-node/values-examples/prover.yaml \
+  --set prover.node.publisherPrivateKey="0xYOUR_PRIVATE_KEY" \
+  -n aztec --create-namespace
+```
+
+**Note:** The prover role creates 3 StatefulSets:
+- `prover-broker` - Manages the job queue
+- `prover-node` - Creates jobs and publishes proofs to L1
+- `prover-agent` - Executes proof generation (can scale replicas)
+
+## Architecture
+
+### Role-Based Deployment
+
+The chart uses a `role` field to determine the deployment type:
+
+```yaml
+role: fullnode  # Options: fullnode | sequencer | prover
+```
+
+Each role automatically configures the appropriate:
+- Container command and flags
+- Resource requirements
+- Storage configuration
+- Service endpoints
+- Required secrets
+
+### Storage Requirements
+
+All storage sizes match [Aztec's official specifications](https://docs.aztec.network/the_aztec_network):
+
+| Role/Component | Storage | Type |
+|----------------|---------|------|
+| Full Node | 1TB | NVMe SSD |
+| Sequencer | 1TB | NVMe SSD |
+| Prover Node | 1TB | NVMe SSD |
+| Prover Broker | 10GB | SSD |
+| Prover Agent | 10GB | SSD |
+
+## Configuration
+
+### Networks
+
+Connect to predefined Aztec networks:
+
+```yaml
+network: testnet  # Options: testnet | devnet
+```
+
+Or configure a custom network:
+
+```yaml
+network: null  # Disable predefined network
+customNetwork:
+  l1ChainId: "11155111"
+  registryContractAddress: "0x..."
+  slashFactoryAddress: "0x..."
+  feeAssetHandlerContractAddress: "0x..."
+```
+
+### L1 Ethereum Configuration
+
+All roles require L1 Ethereum RPC access:
+
+```yaml
+node:
+  l1ExecutionUrls:
+    - "http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"
+  l1ConsensusUrls:
+    - "http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"
+```
+
+### Persistence
+
+Persistence is enabled by default and uses the cluster's default storage class:
+
+```yaml
+persistence:
+  enabled: true
+  size: 1000Gi  # Automatically set per role
+  # storageClassName: local-path  # Optional: specify storage class
+  accessModes:
+    - ReadWriteOnce
+```
+
+**Component-Specific Sizes (Prover Role):**
+
+The prover role allows per-component storage configuration:
+
+```yaml
+prover:
+  node:
+    persistence:
+      size: 1000Gi  # Prover node (archiver data)
+  broker:
+    persistence:
+      size: 10Gi    # Broker (job queue)
+  agent:
+    persistence:
+      size: 10Gi    # Agent (CRS files)
+```
+
+### Networking
+
+**P2P Configuration:**
+
+```yaml
+service:
+  p2p:
+    enabled: true
+    nodePortEnabled: false  # Set true for external P2P
+    port: 40400
+```
+
+**Host Networking (Optional):**
+
+```yaml
+hostNetwork: true  # Use host network for better P2P performance
+```
+
+**Note:** When using `hostNetwork: true`, ensure pod affinity is set to distribute pods across different nodes if running multiple replicas.
+
+### Resource Allocation
+
+Example resource configuration:
+
+```yaml
+node:
+  resources:
+    requests:
+      cpu: "4"
+      memory: "16Gi"
+    limits:
+      cpu: "8"
+      memory: "32Gi"
+```
+
+**Prover-Specific Resources:**
+
+```yaml
+prover:
+  broker:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "4Gi"
+  node:
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+  agent:
+    replicas: 2  # Scale prover agents
+    resources:
+      requests:
+        cpu: "16"   # High CPU for proof generation
+        memory: "64Gi"
+```
 
 ## Examples
-### Running an aztec full node
-```yaml
-# -- Image to use for the container
-image:
-  # -- Image repository
-  repository: aztecprotocol/aztec
-  # -- Image tag
-  tag: 0.85.0-alpha-testnet.9
-  # -- Container pull policy
-  pullPolicy: IfNotPresent
 
-network: alpha-testnet
+See detailed configuration examples in [`values-examples/`](./values-examples/):
 
-hostNetwork: true
+- [`fullnode.yaml`](./values-examples/fullnode.yaml) - Full node configuration
+- [`sequencer.yaml`](./values-examples/sequencer.yaml) - Sequencer configuration
+- [`prover.yaml`](./values-examples/prover.yaml) - Prover configuration
+- [`README.md`](./values-examples/README.md) - Detailed deployment guide
 
-node:
-  replicas: 1
-  logLevel: "debug; info: aztec:simulator, json-rpc"
+## Monitoring
 
-  l1ExecutionUrls: []
-  l1ConsensusUrls: []
+Access node endpoints:
 
-  startCmd:
-    - --node
-    - --archiver
+```bash
+# HTTP RPC endpoint
+kubectl port-forward -n aztec svc/aztec-node 8080:8080
 
-  startupProbe:
-    # -- Period seconds
-    periodSeconds: 60
-    # -- Failure threshold
-    failureThreshold: 60
-
-persistence:
-  enabled: true
-  size: 512Gi
-  storageClassName: standard
-  accessModes:
-    - ReadWriteOnce
-  selector: {}
-
-service:
-  p2p:
-    enabled: true
-    nodePortEnabled: false
-    port: 40400
-    announcePort: 40400
-  admin:
-    enabled: true
-    port: 8081
-  httpPort: 8080
+# Admin endpoint
+kubectl port-forward -n aztec svc/aztec-node 8081:8081
 ```
 
-## Example running a validator node
+### Verify Node is Running Properly
+
+**1. Check node sync status:**
+
+```bash
+curl -X POST http://localhost:8080 --data '{"method": "node_getL2Tips"}'
+```
+
+You should see JSON response with the latest block number. If the block number is increasing, your node is syncing correctly.
+
+**2. Check P2P connectivity (TCP):**
+
+```bash
+# Get the external IP or node port
+kubectl get svc -n aztec
+
+# Test TCP connectivity (replace with your IP/port)
+nc -vz <EXTERNAL_IP> 40400
+```
+
+Expected: "Connection succeeded"
+
+**3. Check P2P connectivity (UDP):**
+
+```bash
+nc -vu <EXTERNAL_IP> 40400
+```
+
+Expected: "Connection succeeded"
+
+**4. View logs:**
+
+```bash
+kubectl logs -n aztec -l app.kubernetes.io/name=aztec-node --tail=100 -f
+```
+
+Look for messages indicating:
+- Block synchronization progress
+- P2P peer connections
+- No error messages
+
+## Upgrading
+
+### Upgrade a Release
+
+```bash
+helm upgrade aztec-node ./charts/aztec-node \
+  -f your-values.yaml \
+  -n aztec
+```
+
+### Auto-Updates
+
+Enable automatic image updates by setting the image pull policy:
+
 ```yaml
 image:
   repository: aztecprotocol/aztec
-  tag: 0.85.0-alpha-testnet.9
-  pullPolicy: IfNotPresent
-
-network: alpha-testnet
-hostNetwork: true
-
-node:
-  replicas: 1
-  logLevel: "debug; info: aztec:simulator, json-rpc"
-
-  l1ExecutionUrls: []
-  l1ConsensusUrls: []
-
-  l1Publisher:
-    mnemonic: "your validator mnemonic"
-    mnemonicStartIndex: 0
-
-  startCmd:
-    - --node
-    - --archiver
-    - --sequencer
-
-  startupProbe:
-    # -- Period seconds
-    periodSeconds: 60
-    # -- Failure threshold
-    failureThreshold: 60
-
-persistence:
-  enabled: true
-  size: 512Gi
-  storageClassName: standard
-  accessModes:
-    - ReadWriteOnce
-  selector: {}
-
-service:
-  p2p:
-    enabled: true
-    nodePortEnabled: false
-    port: 40400
-    announcePort: 40400
-  admin:
-    enabled: true
-    port: 8081
-  httpPort: 8080
+  tag: latest
+  pullPolicy: Always  # Pull latest image on every pod restart
 ```
 
-# All options
-| Option Path | Default | Description |
-|------------|---------|-------------|
-| nameOverride | "" | Overrides the chart name |
-| fullnameOverride | "" | Overrides the chart computed fullname |
-| image.repository | aztecprotocol/aztec | Image repository for the container |
-| image.tag | alpha-testnet | Image tag for the container |
-| image.pullPolicy | IfNotPresent | Container pull policy |
-| podManagementPolicy | Parallel | Pod management policy |
-| network | - | Network name - predefined network (alpha-testnet, devnet) |
-| customNetwork.l1ChainId | - | L1 chain ID for custom network |
-| customNetwork.registryContractAddress | - | Registry contract address for custom network |
-| customNetwork.slashFactoryAddress | - | Slash factory address for custom network |
-| customNetwork.feeAssetHandlerContractAddress | - | Fee asset handler contract address for custom network |
-| rollupVersion | "canonical" | Which rollup contract to follow from the registry |
-| hostNetwork | false | Use host network (disables nodePort service) |
-| node.replicas | 1 | Number of replicas |
-| node.logLevel | "info" | Log level (info, verbose, debug, trace) |
-| node.l1Publisher.privateKeys | [] | Private keys for L1 publisher |
-| node.l1Publisher.mnemonic | - | Mnemonic for L1 publisher |
-| node.l1Publisher.mnemonicStartIndex | - | Starting index for mnemonic |
-| node.l1ExecutionUrls | [] | Ethereum hosts (comma-separated list) |
-| node.l1ConsensusUrls | [] | L1 consensus host URLs (comma-separated list) |
-| node.l1ConsensusHostApiKeys | [] | API keys for L1 consensus hosts |
-| node.l1ConsensusHostApiKeyHeaders | [] | API key headers for L1 consensus hosts |
-| node.startCmd | ["--node", "--archiver"] | Startup command for the node |
-| node.remoteUrl.archiver | - | Remote URL for archiver |
-| node.remoteUrl.proverBroker | - | Remote URL for prover broker |
-| node.remoteUrl.proverCoordinationNodes | [] | Remote URLs for prover coordination nodes |
-| node.remoteUrl.blobSink | - | Remote URL for blob sink |
-| node.coinbase | - | Address that will receive block or proof rewards |
-| node.sentinel.enabled | false | Enable sentinel configuration for slashing information |
-| node.metrics.otelExcludeMetrics | "" | Comma-separated list of metrics to exclude |
-| node.metrics.otelCollectorEndpoint | "" | Collector endpoint (e.g., http://localhost:4318) |
-| node.metrics.useGcloudLogging | false | Use GCP logging |
-| node.storage.dataDirectory | /data | Data directory |
-| node.storage.dataStoreMapSize | - | Data store map size (kB) |
-| node.storage.worldStateMapSize | - | World state map size (kB) |
-| node.storage.p2pStorageMapSize | - | P2P storage map size (kB) |
-| node.storage.archiveStorageMapSize | - | Archive storage map size (kB) |
-| node.nodeJsOptions | ["--no-warnings", "--max-old-space-size=4096"] | Node.js options |
-| node.startupProbe.periodSeconds | 30 | Period seconds for startup probe |
-| node.startupProbe.failureThreshold | 3 | Failure threshold for startup probe |
-| persistence.enabled | false | Enable persistence (uses emptyDir when disabled) |
-| persistence.existingClaim | null | Use an existing PVC |
-| persistence.accessModes | ["ReadWriteOnce"] | Access modes for persistence |
-| persistence.size | 100Gi | Requested size for persistence |
-| persistence.storageClassName | null | Storage class name for persistence |
-| persistence.annotations | {} | Annotations for volume claim template |
-| persistence.selector | {} | Selector for volume claim template |
-| updateStrategy.type | RollingUpdate | Update strategy for the statefulset |
-| initContainers | [] | Additional init containers |
-| service.ingress.enabled | false | Enable ingress |
-| service.ingress.annotations | {} | Ingress annotations |
-| service.ingress.hosts | [] | Ingress hosts |
-| service.p2p.enabled | true | Enable P2P service |
-| service.p2p.nodePortEnabled | true | Enable node port for P2P service |
-| service.p2p.port | 40400 | P2P port |
-| service.p2p.announcePort | 40400 | P2P announce port |
-| service.admin.enabled | true | Enable admin service |
-| service.admin.port | 8081 | Admin port |
-| service.httpPort | 8080 | HTTP port |
-| certificate.enabled | false | Enable certificate configuration |
-| certificate.domains | [] | Certificate domains |
-| rbac.create | true | Create RBAC resources |
-| rbac.clusterRules | See values.yaml | Required ClusterRole rules |
-| rbac.rules | See values.yaml | Required Role rules |
-| serviceAccount.create | true | Create a service account |
-| serviceAccount.name | "" | Name of the service account |
-| serviceAccount.annotations | {} | Annotations for the service account |
+**Important Notes:**
+- Using `pullPolicy: Always` with `tag: latest` ensures you get the newest version when pods restart
+- This is recommended for testnet/devnet deployments to stay up-to-date
+- For production, pin to specific versions (e.g., `tag: "2.0.2"`) and use `pullPolicy: IfNotPresent`
+- Sequencers should use `pullPolicy: Always` to maintain network compatibility
+
+**Trigger an update manually:**
+
+```bash
+# Force pod restart to pull latest image
+kubectl rollout restart statefulset/aztec-node -n aztec
+
+# For prover components
+kubectl rollout restart statefulset/aztec-prover-broker -n aztec
+kubectl rollout restart statefulset/aztec-prover-node -n aztec
+kubectl rollout restart statefulset/aztec-prover-agent -n aztec
+```
+
+### Scale Prover Agents
+
+```bash
+helm upgrade aztec-prover ./charts/aztec-node \
+  -f charts/aztec-node/values-examples/prover.yaml \
+  --set prover.agent.replicas=4 \
+  -n aztec
+```
+
+## Uninstalling
+
+```bash
+helm uninstall aztec-node -n aztec
+```
+
+**Note:** PersistentVolumeClaims are not automatically deleted. Remove manually if needed:
+
+```bash
+kubectl delete pvc -n aztec -l app.kubernetes.io/name=aztec-node
+```
+
+## Security
+
+**⚠️ Important Security Notes:**
+
+1. **Private Keys:** Never commit private keys to version control
+2. **Sequencer:** Use `--set sequencer.attesterPrivateKey="0x..."` when deploying
+3. **Prover:** Use `--set prover.node.publisherPrivateKey="0x..."` when deploying
+4. **Secrets Management:** Consider using external secret managers (Vault, Sealed Secrets, etc.)
+
+## Troubleshooting
+
+### Pod Not Starting
+
+Check startup probe timeout (sequencers may need longer):
+
+```yaml
+node:
+  startupProbe:
+    periodSeconds: 60
+    failureThreshold: 30  # 30 minutes max
+```
+
+### Storage Issues
+
+Verify PVC creation:
+
+```bash
+kubectl get pvc -n aztec
+```
+
+Check storage class availability:
+
+```bash
+kubectl get storageclass
+```
+
+### P2P Connectivity
+
+For external P2P access, enable NodePort:
+
+```yaml
+service:
+  p2p:
+    nodePortEnabled: true
+```
+
+Or use host networking:
+
+```yaml
+hostNetwork: true
+```
+
+### Prover Components Not Communicating
+
+Verify all 3 StatefulSets are running:
+
+```bash
+kubectl get statefulsets -n aztec
+```
+
+Check service DNS resolution:
+
+```bash
+kubectl get svc -n aztec | grep prover
+```
+
+## Resources
+
+- [Aztec Documentation](https://docs.aztec.network)
+- [Aztec Network Guide](https://docs.aztec.network/the_aztec_network)
+- [Running an Aztec Node](https://docs.aztec.network/the_aztec_network/guides/run_nodes)
+- [Chart Values Reference](./values.yaml)
+
+## License
+
+Apache 2.0
+
+## Contributing
+
+Contributions welcome! Please submit issues and pull requests to the repository.
