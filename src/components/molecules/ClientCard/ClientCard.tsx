@@ -130,7 +130,7 @@ export function ClientCard({
         <StatusIndicator status={getStatusIndicatorStatus()} size="sm" />
       </ClientHeader>
       <ClientMetrics>
-        {peers && (
+        {peers !== null && (
           <ClientMetricRow>
             <ClientMetricLabel>Peers</ClientMetricLabel>
             <ClientMetricValueContainer>

@@ -74,7 +74,6 @@ const AztecIcon = ({ size = 32 }: { size: number }) => (
 
 const chainIcons: Record<ChainType, React.ComponentType<{ size: number }>> = {
   ethereum: EthereumIcon,
-  aztec: AztecIcon,
   sepolia: EthereumIcon, // Use Ethereum icon for Sepolia
   hoodi: EthereumIcon, // Use Ethereum icon for Hoodi
 };

@@ -3,6 +3,7 @@ import { DM_Sans } from 'next/font/google';
 import './globals.css';
 import { CopilotKit } from '@copilotkit/react-core';
 import '@copilotkit/react-ui/styles.css';
+import { Providers } from './providers';
 
 const dmSans = DM_Sans({
   variable: '--font-dm-sans',
@@ -20,9 +21,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={dmSans.variable}>
-        <CopilotKit runtimeUrl="/api/copilotkit" agent="obol_agent">
-          {children}
-        </CopilotKit>
+        <Providers>
+          <CopilotKit runtimeUrl="/api/copilotkit" agent="obol_agent">
+            {children}
+          </CopilotKit>
+        </Providers>
       </body>
     </html>
   );

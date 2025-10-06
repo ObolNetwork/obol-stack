@@ -11,6 +11,7 @@ const svgCache = new Map<string, string>();
 export type IconName =
   | 'behind'
   | 'bottleneck'
+  | 'clear'
   | 'close'
   | 'healthy'
   | 'high-usage'

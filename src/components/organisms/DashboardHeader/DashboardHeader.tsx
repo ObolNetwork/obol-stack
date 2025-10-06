@@ -1,4 +1,5 @@
 import { Box, Flex, Image } from '@obolnetwork/obol-ui';
+import { WalletConnection } from '../../molecules/WalletConnection';
 
 export function DashboardHeader() {
   return (
@@ -7,9 +8,9 @@ export function DashboardHeader() {
         <Image src="/obol-stack-logo.png" alt="obol-stack-logo" />
       </Box>
 
-      <Flex
-        css={{ gap: '$sm', itemsAlign: 'center', width: 'fit-content' }}
-      ></Flex>
+      <Flex css={{ gap: '$sm', alignItems: 'center', width: 'fit-content' }}>
+        <WalletConnection />
+      </Flex>
     </Flex>
   );
 }
