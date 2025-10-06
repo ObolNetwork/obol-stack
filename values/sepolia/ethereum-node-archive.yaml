@@ -25,6 +25,7 @@ nimbus:
   extraArgs:
     - --light-client-data-serve=true  # Enable light client server (default: true)
     - --light-client-data-import-mode=only-new  # Import new light client data incrementally
+    - --el=http://l1-full-node-sepolia-execution:8551  # Connect to execution layer (Nethermind)
   persistence:
     size: 500Gi
   nodeSelector:
