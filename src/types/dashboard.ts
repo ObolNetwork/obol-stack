@@ -1,10 +1,21 @@
 // Enums and Constants
 export const CHAINS = {
   ETHEREUM: 'ethereum',
-  AZTEC: 'aztec',
   SEPOLIA: 'sepolia',
   HOODI: 'hoodi',
 } as const;
+
+// Chain ID to Chain Name mapping
+export const CHAIN_ID_TO_NAME: Record<number, ChainType> = {
+  1: CHAINS.ETHEREUM,
+  11155111: CHAINS.SEPOLIA,
+  560048: CHAINS.HOODI,
+} as const;
+
+// Helper function to get chain name by ID
+export const getChainName = (chainId: ChainIdType): ChainType => {
+  return CHAIN_ID_TO_NAME[chainId];
+};
 
 export const NETWORKS = {
   MAINNET: 'mainnet',
@@ -34,6 +45,7 @@ export const PORT_STATUS = {
 } as const;
 
 // Type definitions from constants
+export type ChainIdType = keyof typeof CHAIN_ID_TO_NAME;
 export type ChainType = (typeof CHAINS)[keyof typeof CHAINS];
 export type NetworkType = (typeof NETWORKS)[keyof typeof NETWORKS];
 export type NodeModeType = (typeof NODE_MODES)[keyof typeof NODE_MODES];

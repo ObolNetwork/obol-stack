@@ -9,6 +9,7 @@ const svgCache = new Map<string, string>();
 // Generated from SVG files in /public directory
 // Run 'npm run generate-icon-types' to regenerate
 export type IconName =
+  | 'clear'
   | 'node-cpu'
   | 'node-disk'
   | 'node-memory'
