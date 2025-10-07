@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -Exeuo pipefail
+set -Eeuo pipefail
 
 readonly OBOL_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obol"
 readonly OBOL_DATA_DIR="${OBOL_CONFIG_DIR}/data"
@@ -91,7 +91,7 @@ validate_docker_environment() {
     fi
     
     if docker info 2>&1 | grep -iq "No cpuset support"; then
-        log_error "Docker does not have cpuset support. k3d requires cpuset cgroup controller.\nOn NixOS, ensure your kernel has CONFIG_CPUSETS=y and cgroup v2 is properly configured."
+        log_error "Docker does not have cpuset support. k3d requires cpuset cgroup controller. Please ensure your kernel has CONFIG_CPUSETS=y and cgroup v2 is properly configured."
     fi
     
     log_info "✓ Docker is installed and accessible"
@@ -275,6 +275,7 @@ Installs dependencies to ${OBOL_BIN_DIR}:
     - helmfile (Linux and macOS) - Declarative Helm charts deployment
 
 Options:
+    --debug         Enable debug mode (bash -x)
     --clean         Remove all obolup data files
     --clean --force Remove all obolup data files and binaries
 
@@ -290,14 +291,31 @@ EOF
 }
 
 main() {
-    if [ $# -gt 0 ] && [ "$1" = "--clean" ]; then
-        banner
-        local force="false"
-        if [ $# -gt 1 ] && [ "$2" = "--force" ]; then
-            force="true"
-        fi
-        clean_all "$force"
-        exit 0
+    local debug_mode="false"
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                debug_mode="true"
+                shift
+                ;;
+            --clean)
+                banner
+                local force="false"
+                if [ $# -gt 1 ] && [ "$2" = "--force" ]; then
+                    force="true"
+                fi
+                clean_all "$force"
+                exit 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    if [ "$debug_mode" = "true" ]; then
+        set -x
     fi
     
     banner
