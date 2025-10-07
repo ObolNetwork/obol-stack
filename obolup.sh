@@ -9,6 +9,9 @@ readonly OBOL_BIN_DIR="${OBOL_CONFIG_DIR}/bin"
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
 readonly cmd_helmfile="${OBOL_BIN_DIR}/helmfile"
 
+readonly CLUSTER_NAME="obol-stack"
+readonly KUBECONFIG_FILE="${OBOL_CONFIG_DIR}/kubeconfig.yaml"
+
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
@@ -74,12 +77,24 @@ declare -A TOOLS=(
     ["helmfile_compression"]="tar.gz"
 )
 
-check_prerequisites() {
+validate_docker_environment() {
     if ! command_exists docker; then
         log_error "Docker is required for k3d. Please install Docker first."
     fi
     
-    log_info "✓ Docker is installed"
+    if ! docker info >/dev/null 2>&1; then
+        log_error "Docker daemon is not accessible. Please ensure Docker is running and your user has permission to access it."
+    fi
+    
+    if ! docker ps >/dev/null 2>&1; then
+        log_error "Cannot list Docker containers. Check Docker socket permissions or add your user to the docker group."
+    fi
+    
+    if docker info 2>&1 | grep -iq "No cpuset support"; then
+        log_error "Docker does not have cpuset support. k3d requires cpuset cgroup controller.\nOn NixOS, ensure your kernel has CONFIG_CPUSETS=y and cgroup v2 is properly configured."
+    fi
+    
+    log_info "✓ Docker is installed and accessible"
 }
 
 setup_directories() {
@@ -151,6 +166,38 @@ install_tool() {
     log_info "✓ ${tool_name} installed successfully to ${target}"
 }
 
+setup_k3d_cluster() {
+    
+    
+    log_info "Checking for existing k3d cluster '${CLUSTER_NAME}'..."
+    
+    if ! "${cmd_k3d}" cluster list >/dev/null 2>&1; then
+        log_error "k3d cannot connect to Docker"
+    fi
+    
+    if "${cmd_k3d}" cluster list 2>/dev/null | grep -q "^${CLUSTER_NAME} "; then
+        log_info "✓ k3d cluster '${CLUSTER_NAME}' already exists"
+        return 0
+    fi
+    
+    log_info "Creating k3d cluster '${CLUSTER_NAME}'..."
+    # k3d  cluster create demo --api-port 6550  --servers 3 --port 8080:80@loadbalancer --volume $(pwd)/sample:/src@all --wait    
+    if ! "${cmd_k3d}" cluster create "${CLUSTER_NAME}" \
+        --servers 3 \
+        --agents 0 \
+        --api-port 6443 \
+        --port 8080:8080@loadbalancer \
+        --wait; then
+        log_error "Failed to create k3d cluster. Check Docker permissions and logs above."
+    fi
+    
+    log_info "Writing kubeconfig to ${KUBECONFIG_FILE}..."
+    "${cmd_k3d}" kubeconfig write "${CLUSTER_NAME}" --output "${KUBECONFIG_FILE}" --overwrite
+    
+    log_info "✓ k3d cluster '${CLUSTER_NAME}' created successfully"
+    log_info "  Kubeconfig: ${KUBECONFIG_FILE}"
+    log_info "  Access cluster: export KUBECONFIG=${KUBECONFIG_FILE} && kubectl cluster-info"
+}
 
 banner() {
     cat <<'EOF'
@@ -172,9 +219,18 @@ EOF
 clean_all() {
     local force="$1"
     
-    if [ ! -d "$OBOL_DATA_DIR" ] && [ ! -d "$OBOL_BIN_DIR" ]; then
+    if [ ! -d "$OBOL_DATA_DIR" ] && [ ! -d "$OBOL_BIN_DIR" ] && ! "${cmd_k3d}" cluster list 2>/dev/null | grep -q "^${CLUSTER_NAME} "; then
         log_info "Nothing to clean"
         return 0
+    fi
+    
+    if [ -f "${cmd_k3d}" ] && "${cmd_k3d}" cluster list 2>/dev/null | grep -q "^${CLUSTER_NAME} "; then
+        log_warn "Deleting k3d cluster '${CLUSTER_NAME}' and its Docker containers"
+        if "${cmd_k3d}" cluster delete "${CLUSTER_NAME}"; then
+            log_info "✓ Deleted k3d cluster '${CLUSTER_NAME}'"
+        else
+            log_warn "Failed to delete k3d cluster '${CLUSTER_NAME}'"
+        fi
     fi
     
     if [ -d "$OBOL_DATA_DIR" ]; then
@@ -253,9 +309,6 @@ main() {
     log_info "Architecture: ${arch}"
     echo ""
     
-    check_prerequisites
-    echo ""
-    
     setup_directories
     echo ""
     
@@ -263,6 +316,12 @@ main() {
     echo ""
     
     install_tool "helmfile" "$platform" "$arch"
+    echo ""
+    
+    validate_docker_environment
+    echo ""
+
+    setup_k3d_cluster
 }
 
 main "$@"
