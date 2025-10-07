@@ -237,14 +237,14 @@ sync_manifests() {
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local synced=false
     
-    if [ -d "${script_dir}/manifests" ] && [ -d "${script_dir}/values" ]; then
-        log_info "Found local manifests, syncing from repository..."
+    if [ -d "${script_dir}/.git" ] && [ -d "${script_dir}/manifests" ] && [ -d "${script_dir}/values" ]; then
+        log_info "Running from obol-stack repository, copying manifests directly..."
         cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
         cp -r "${script_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
         log_info "✓ Synced manifests from local repository"
         synced=true
     else
-        log_info "Local manifests not found, downloading from GitHub..."
+        log_info "Not in repository, downloading from GitHub..."
         
         local repo_url="https://github.com/ObolNetwork/obol-stack"
         local branch="${OBOLUP_BRANCH:-main}"
