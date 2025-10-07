@@ -9,6 +9,7 @@ readonly OBOL_MANIFESTS_DIR="${OBOL_CONFIG_DIR}/manifests"
 readonly OBOL_VALUES_DIR="${OBOL_CONFIG_DIR}/values"
 
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
+readonly cmd_helm="${OBOL_BIN_DIR}/helm"
 readonly cmd_helmfile="${OBOL_BIN_DIR}/helmfile"
 readonly cmd_k9s="${OBOL_BIN_DIR}/k9s"
 
@@ -63,6 +64,7 @@ detect_architecture() {
 }
 
 readonly K3D_VERSION="v5.7.5"
+readonly HELM_VERSION="v3.16.3"
 readonly HELMFILE_VERSION="v1.1.7"
 readonly K9S_VERSION="v0.50.15"
 
@@ -74,6 +76,15 @@ declare -A TOOLS=(
     ["k3d_url_darwin_arm64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-darwin-arm64"
     ["k3d_platforms"]="linux,darwin"
     ["k3d_compression"]="none"
+    
+    ["helm_version"]="${HELM_VERSION}"
+    ["helm_url_linux_amd64"]="https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+    ["helm_url_linux_arm64"]="https://get.helm.sh/helm-${HELM_VERSION}-linux-arm64.tar.gz"
+    ["helm_url_darwin_amd64"]="https://get.helm.sh/helm-${HELM_VERSION}-darwin-amd64.tar.gz"
+    ["helm_url_darwin_arm64"]="https://get.helm.sh/helm-${HELM_VERSION}-darwin-arm64.tar.gz"
+    ["helm_platforms"]="linux,darwin"
+    ["helm_compression"]="tar.gz"
+    ["helm_extract_subdir"]="true"
     
     ["helmfile_version"]="${HELMFILE_VERSION}"
     ["helmfile_url_linux_amd64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_linux_amd64.tar.gz"
@@ -156,11 +167,19 @@ install_tool() {
     fi
     
     local compression="${TOOLS[${tool_name}_compression]}"
+    local extract_subdir="${TOOLS[${tool_name}_extract_subdir]}"
+    
     case "$compression" in
         tar.gz)
             local temp_dir=$(mktemp -d)
             tar -xzf "$temp_file" -C "$temp_dir"
-            mv "$temp_dir/${tool_name}" "$target"
+            
+            if [ "$extract_subdir" = "true" ]; then
+                find "$temp_dir" -name "${tool_name}" -type f -exec mv {} "$target" \;
+            else
+                mv "$temp_dir/${tool_name}" "$target"
+            fi
+            
             rm -rf "$temp_dir" "$temp_file"
             ;;
         none)
@@ -268,8 +287,6 @@ deploy_stack() {
     
     KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_helmfile}" \
         -f "${helmfile_path}" \
-        # --state-values-set manifests_dir="${OBOL_MANIFESTS_DIR}" \
-        # --state-values-set values_dir="${OBOL_VALUES_DIR}" \
         apply
     
     log_info "✓ Stack deployment complete"
@@ -362,6 +379,7 @@ Bootstrap a local Kubernetes environment for Obol Stack.
 
 Installs dependencies to ${OBOL_BIN_DIR}:
     - k3d (Linux and macOS) - k3s in Docker
+    - helm (Linux and macOS) - Kubernetes package manager
     - helmfile (Linux and macOS) - Declarative Helm charts deployment
     - k9s (Linux and macOS) - Kubernetes CLI UI
 
@@ -422,6 +440,9 @@ main() {
     echo ""
     
     install_tool "k3d" "$platform" "$arch"
+    echo ""
+    
+    install_tool "helm" "$platform" "$arch"
     echo ""
     
     install_tool "helmfile" "$platform" "$arch"
