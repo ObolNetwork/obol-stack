@@ -5,6 +5,8 @@ set -Eeuo pipefail
 readonly OBOL_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obol"
 readonly OBOL_DATA_DIR="${OBOL_CONFIG_DIR}/data"
 readonly OBOL_BIN_DIR="${OBOL_CONFIG_DIR}/bin"
+readonly OBOL_MANIFESTS_DIR="${OBOL_CONFIG_DIR}/manifests"
+readonly OBOL_VALUES_DIR="${OBOL_CONFIG_DIR}/values"
 
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
 readonly cmd_helmfile="${OBOL_BIN_DIR}/helmfile"
@@ -113,16 +115,12 @@ validate_docker_environment() {
 setup_directories() {
     log_info "Setting up Obol directories..."
     
-    if [ ! -d "$OBOL_CONFIG_DIR" ]; then
-        mkdir -p "$OBOL_CONFIG_DIR"
-        log_info "Created config directory: $OBOL_CONFIG_DIR"
-    fi
-    
-    if [ ! -d "$OBOL_BIN_DIR" ]; then
-        mkdir -p "$OBOL_BIN_DIR"
-        log_info "Created bin directory: $OBOL_BIN_DIR"
-    fi
-    
+    for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR" "$OBOL_VALUES_DIR"; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            log_info "Created directory: $dir"
+        fi
+    done
 }
 
 install_tool() {
@@ -212,6 +210,69 @@ setup_k3d_cluster() {
     log_info "✓ k3d cluster '${CLUSTER_NAME}' created successfully"
     log_info "  Kubeconfig: ${KUBECONFIG_FILE}"
     log_info "  Access cluster: export KUBECONFIG=${KUBECONFIG_FILE} && kubectl cluster-info"
+}
+
+sync_manifests() {
+    log_info "Syncing manifests to ${OBOL_MANIFESTS_DIR}..."
+    
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local synced=false
+    
+    if [ -d "${script_dir}/manifests" ] && [ -d "${script_dir}/values" ]; then
+        log_info "Found local manifests, syncing from repository..."
+        cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
+        cp -r "${script_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
+        log_info "✓ Synced manifests from local repository"
+        synced=true
+    else
+        log_info "Local manifests not found, downloading from GitHub..."
+        
+        local repo_url="https://github.com/ObolNetwork/obol-stack"
+        local branch="${OBOLUP_BRANCH:-main}"
+        local temp_dir=$(mktemp -d)
+        
+        if curl -sSLf "${repo_url}/archive/refs/heads/${branch}.tar.gz" | tar -xz -C "${temp_dir}"; then
+            local extracted_dir="${temp_dir}/obol-stack-${branch}"
+            
+            if [ -d "${extracted_dir}/manifests" ]; then
+                cp -r "${extracted_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
+            fi
+            
+            if [ -d "${extracted_dir}/values" ]; then
+                cp -r "${extracted_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
+            fi
+            
+            log_info "✓ Downloaded and synced manifests from ${repo_url}/${branch}"
+            synced=true
+        else
+            log_warn "Failed to download manifests from GitHub"
+        fi
+        
+        rm -rf "${temp_dir}"
+    fi
+    
+    if [ "$synced" = false ]; then
+        log_error "Failed to sync manifests from local repository or GitHub"
+    fi
+}
+
+deploy_stack() {
+    log_info "Deploying Obol Stack with helmfile..."
+    
+    local helmfile_path="${OBOL_MANIFESTS_DIR}/helmfile.yaml"
+    
+    if [ ! -f "${helmfile_path}" ]; then
+        log_warn "No helmfile found at ${helmfile_path}, skipping deployment"
+        return 0
+    fi
+    
+    KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_helmfile}" \
+        -f "${helmfile_path}" \
+        # --state-values-set manifests_dir="${OBOL_MANIFESTS_DIR}" \
+        # --state-values-set values_dir="${OBOL_VALUES_DIR}" \
+        apply
+    
+    log_info "✓ Stack deployment complete"
 }
 
 launch_k9s() {
@@ -373,6 +434,12 @@ main() {
     echo ""
 
     setup_k3d_cluster
+    echo ""
+    
+    sync_manifests
+    echo ""
+    
+    deploy_stack
     echo ""
     
     launch_k9s
