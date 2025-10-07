@@ -168,7 +168,6 @@ install_tool() {
 
 setup_k3d_cluster() {
     
-    
     log_info "Checking for existing k3d cluster '${CLUSTER_NAME}'..."
     
     if ! "${cmd_k3d}" cluster list >/dev/null 2>&1; then
@@ -183,10 +182,12 @@ setup_k3d_cluster() {
     log_info "Creating k3d cluster '${CLUSTER_NAME}'..."
     # k3d  cluster create demo --api-port 6550  --servers 3 --port 8080:80@loadbalancer --volume $(pwd)/sample:/src@all --wait    
     if ! "${cmd_k3d}" cluster create "${CLUSTER_NAME}" \
-        --servers 3 \
-        --agents 0 \
+        --servers 1 \
+        --agents 3 \
         --api-port 6443 \
         --port 8080:8080@loadbalancer \
+        --k3s-arg "--kubelet-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
+        --k3s-arg "--kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
         --wait; then
         log_error "Failed to create k3d cluster. Check Docker permissions and logs above."
     fi
