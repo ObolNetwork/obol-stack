@@ -8,6 +8,7 @@ readonly OBOL_BIN_DIR="${OBOL_CONFIG_DIR}/bin"
 
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
 readonly cmd_helmfile="${OBOL_BIN_DIR}/helmfile"
+readonly cmd_k9s="${OBOL_BIN_DIR}/k9s"
 
 readonly CLUSTER_NAME="obol-stack"
 readonly KUBECONFIG_FILE="${OBOL_CONFIG_DIR}/kubeconfig.yaml"
@@ -59,22 +60,34 @@ detect_architecture() {
     fi
 }
 
+readonly K3D_VERSION="v5.7.5"
+readonly HELMFILE_VERSION="v1.1.7"
+readonly K9S_VERSION="v0.50.15"
+
 declare -A TOOLS=(
-    ["k3d_version"]="v5.7.5"
-    ["k3d_url_linux_amd64"]="https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-linux-amd64"
-    ["k3d_url_linux_arm64"]="https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-linux-arm64"
-    ["k3d_url_darwin_amd64"]="https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-darwin-amd64"
-    ["k3d_url_darwin_arm64"]="https://github.com/k3d-io/k3d/releases/download/v5.7.5/k3d-darwin-arm64"
+    ["k3d_version"]="${K3D_VERSION}"
+    ["k3d_url_linux_amd64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+    ["k3d_url_linux_arm64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-arm64"
+    ["k3d_url_darwin_amd64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-darwin-amd64"
+    ["k3d_url_darwin_arm64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-darwin-arm64"
     ["k3d_platforms"]="linux,darwin"
     ["k3d_compression"]="none"
     
-    ["helmfile_version"]="v1.1.7"
-    ["helmfile_url_linux_amd64"]="https://github.com/helmfile/helmfile/releases/download/v1.1.7/helmfile_1.1.7_linux_amd64.tar.gz"
-    ["helmfile_url_linux_arm64"]="https://github.com/helmfile/helmfile/releases/download/v1.1.7/helmfile_1.1.7_linux_arm64.tar.gz"
-    ["helmfile_url_darwin_amd64"]="https://github.com/helmfile/helmfile/releases/download/v1.1.7/helmfile_1.1.7_darwin_amd64.tar.gz"
-    ["helmfile_url_darwin_arm64"]="https://github.com/helmfile/helmfile/releases/download/v1.1.7/helmfile_1.1.7_darwin_arm64.tar.gz"
+    ["helmfile_version"]="${HELMFILE_VERSION}"
+    ["helmfile_url_linux_amd64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_linux_amd64.tar.gz"
+    ["helmfile_url_linux_arm64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_linux_arm64.tar.gz"
+    ["helmfile_url_darwin_amd64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_darwin_amd64.tar.gz"
+    ["helmfile_url_darwin_arm64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_darwin_arm64.tar.gz"
     ["helmfile_platforms"]="linux,darwin"
     ["helmfile_compression"]="tar.gz"
+    
+    ["k9s_version"]="${K9S_VERSION}"
+    ["k9s_url_linux_amd64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_amd64.tar.gz"
+    ["k9s_url_linux_arm64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_arm64.tar.gz"
+    ["k9s_url_darwin_amd64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Darwin_amd64.tar.gz"
+    ["k9s_url_darwin_arm64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Darwin_arm64.tar.gz"
+    ["k9s_platforms"]="linux,darwin"
+    ["k9s_compression"]="tar.gz"
 )
 
 validate_docker_environment() {
@@ -201,6 +214,20 @@ setup_k3d_cluster() {
     log_info "  Access cluster: export KUBECONFIG=${KUBECONFIG_FILE} && kubectl cluster-info"
 }
 
+launch_k9s() {
+    if [ ! -f "${cmd_k9s}" ]; then
+        log_warn "k9s not found at ${cmd_k9s}"
+        return 1
+    fi
+    
+    if [ ! -f "${KUBECONFIG_FILE}" ]; then
+        log_error "Kubeconfig not found at ${KUBECONFIG_FILE}"
+    fi
+    
+    log_info "Launching k9s with cluster config..."
+    KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_k9s}"
+}
+
 banner() {
     cat <<'EOF'
 
@@ -275,6 +302,7 @@ Bootstrap a local Kubernetes environment for Obol Stack.
 Installs dependencies to ${OBOL_BIN_DIR}:
     - k3d (Linux and macOS) - k3s in Docker
     - helmfile (Linux and macOS) - Declarative Helm charts deployment
+    - k9s (Linux and macOS) - Kubernetes CLI UI
 
 Options:
     --debug         Enable debug mode (bash -x)
@@ -338,10 +366,16 @@ main() {
     install_tool "helmfile" "$platform" "$arch"
     echo ""
     
+    install_tool "k9s" "$platform" "$arch"
+    echo ""
+    
     validate_docker_environment
     echo ""
 
     setup_k3d_cluster
+    echo ""
+    
+    launch_k9s
 }
 
 main "$@"
