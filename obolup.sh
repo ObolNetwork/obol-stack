@@ -7,11 +7,20 @@ readonly OBOL_DATA_DIR="${OBOL_CONFIG_DIR}/data"
 readonly OBOL_BIN_DIR="${OBOL_CONFIG_DIR}/bin"
 readonly OBOL_MANIFESTS_DIR="${OBOL_CONFIG_DIR}/manifests"
 readonly OBOL_VALUES_DIR="${OBOL_CONFIG_DIR}/values"
+readonly OBOL_HELM_PLUGINS_DIR="${OBOL_CONFIG_DIR}/helm_plugins"
 
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
-readonly cmd_helm="${OBOL_BIN_DIR}/helm"
-readonly cmd_helmfile="${OBOL_BIN_DIR}/helmfile"
+readonly helm_bin="${OBOL_BIN_DIR}/helm"
+readonly helmfile_bin="${OBOL_BIN_DIR}/helmfile"
 readonly cmd_k9s="${OBOL_BIN_DIR}/k9s"
+
+cmd_helm() {
+    HELM_PLUGINS="${OBOL_HELM_PLUGINS_DIR}" "${helm_bin}" "$@"
+}
+
+cmd_helmfile() {
+    HELM_PLUGINS="${OBOL_HELM_PLUGINS_DIR}" "${helmfile_bin}" --helm-binary "${helm_bin}" "$@"
+}
 
 readonly CLUSTER_NAME="obol-stack"
 readonly KUBECONFIG_FILE="${OBOL_CONFIG_DIR}/kubeconfig.yaml"
@@ -64,9 +73,10 @@ detect_architecture() {
 }
 
 readonly K3D_VERSION="v5.7.5"
-readonly HELM_VERSION="v3.16.3"
+readonly HELM_VERSION="v3.19.0"
 readonly HELMFILE_VERSION="v1.1.7"
 readonly K9S_VERSION="v0.50.15"
+readonly HELM_DIFF_VERSION="v3.13.0"
 
 declare -A TOOLS=(
     ["k3d_version"]="${K3D_VERSION}"
@@ -116,7 +126,7 @@ validate_docker_environment() {
         log_error "Cannot list Docker containers. Check Docker socket permissions or add your user to the docker group."
     fi
     
-    if docker info 2>&1 | grep -iq "No cpuset support"; then
+    if doerror unmarshaling JSON: while decoding JSON: json: unknown field "platformHooks"cker info 2>&1 | grep -iq "No cpuset support"; then
         log_error "Docker does not have cpuset support. k3d requires cpuset cgroup controller. Please ensure your kernel has CONFIG_CPUSETS=y and cgroup v2 is properly configured."
     fi
     
@@ -126,7 +136,7 @@ validate_docker_environment() {
 setup_directories() {
     log_info "Setting up Obol directories..."
     
-    for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR" "$OBOL_VALUES_DIR"; do
+    for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR" "$OBOL_VALUES_DIR" "$OBOL_HELM_PLUGINS_DIR"; do
         if [ ! -d "$dir" ]; then
             mkdir -p "$dir"
             log_info "Created directory: $dir"
@@ -145,7 +155,7 @@ install_tool() {
         log_error "${tool_name} is not supported on ${platform}"
     fi
     
-    if [ -f "$target" ]; then
+    if [ -f "$target" ] || { [ "$tool_name" = "helm" ] && [ -f "${helm_bin}" ]; } || { [ "$tool_name" = "helmfile" ] && [ -f "${helmfile_bin}" ]; }; then
         log_info "✓ ${tool_name} is already installed"
         return 0
     fi
@@ -162,7 +172,7 @@ install_tool() {
     local temp_file=$(mktemp)
     
     if ! curl -sSLf -o "$temp_file" "$tool_url"; then
-        rm -f "$temp_file"
+        rm -f "$temp_f.gitattributesile"
         log_error "Failed to download ${tool_name} from $tool_url"
     fi
     
@@ -194,13 +204,33 @@ install_tool() {
     chmod +x "$target"
     
     log_info "✓ ${tool_name} installed successfully to ${target}"
+    
+    if [ "${tool_name}" = "helm" ]; then
+        install_helm_diff
+    fi
+}
+
+install_helm_diff() {
+    log_info "Installing helm-diff plugin..."
+    
+    if cmd_helm plugin list 2>/dev/null | grep -q "^diff"; then
+        log_info "✓ helm-diff plugin already installed"
+        return 0
+    fi
+    
+    if cmd_helm plugin install https://github.com/databus23/helm-diff --version "${HELM_DIFF_VERSION}"; then
+        log_info "✓ helm-diff plugin installed"
+    else
+        log_warn "Failed to install helm-diff plugin"
+        return 1
+    fi
 }
 
 setup_k3d_cluster() {
     
     log_info "Checking for existing k3d cluster '${CLUSTER_NAME}'..."
     
-    if ! "${cmd_k3d}" cluster list >/dev/null 2>&1; then
+    if ! "${cmd_k3d}" cluster list .gitattributes>/dev/null 2>&1; then
         log_error "k3d cannot connect to Docker"
     fi
     
@@ -285,9 +315,7 @@ deploy_stack() {
         return 0
     fi
     
-    KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_helmfile}" \
-        -f "${helmfile_path}" \
-        apply
+    KUBECONFIG="${KUBECONFIG_FILE}" cmd_helmfile -f "${helmfile_path}" apply
     
     log_info "✓ Stack deployment complete"
 }
