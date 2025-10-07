@@ -81,6 +81,7 @@ declare -A TOOLS=(
     ["k3d_url_darwin_arm64"]="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-darwin-arm64"
     ["k3d_platforms"]="linux,darwin"
     ["k3d_compression"]="none"
+    ["k3d_extract_subdir"]="false"
     
     ["helm_version"]="${HELM_VERSION}"
     ["helm_url_linux_amd64"]="https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
@@ -98,6 +99,7 @@ declare -A TOOLS=(
     ["helmfile_url_darwin_arm64"]="https://github.com/helmfile/helmfile/releases/download/${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION#v}_darwin_arm64.tar.gz"
     ["helmfile_platforms"]="linux,darwin"
     ["helmfile_compression"]="tar.gz"
+    ["helmfile_extract_subdir"]="false"
     
     ["k9s_version"]="${K9S_VERSION}"
     ["k9s_url_linux_amd64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_amd64.tar.gz"
@@ -106,6 +108,7 @@ declare -A TOOLS=(
     ["k9s_url_darwin_arm64"]="https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Darwin_arm64.tar.gz"
     ["k9s_platforms"]="linux,darwin"
     ["k9s_compression"]="tar.gz"
+    ["k9s_extract_subdir"]="false"
 )
 
 validate_docker_environment() {
