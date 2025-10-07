@@ -21,11 +21,11 @@
               # obolup
               curl
               podman
-              kubernetes-helm
+              # kubernetes-helm
               kind
-              k9s
+              # k9s
               k3s
-              helmfile
+              # helmfile
 
               # ethereum devtools
               foundry
