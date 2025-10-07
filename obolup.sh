@@ -185,9 +185,10 @@ setup_k3d_cluster() {
         --servers 1 \
         --agents 3 \
         --api-port 6443 \
-        --port 8080:8080@loadbalancer \
+        --port 3000:80@loadbalancer \
         --k3s-arg "--kubelet-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
         --k3s-arg "--kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
+        --k3s-arg "--kubelet-arg=feature-gates=KubeletInUserNamespace=true@agent:*" \
         --wait; then
         log_error "Failed to create k3d cluster. Check Docker permissions and logs above."
     fi
