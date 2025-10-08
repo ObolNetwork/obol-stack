@@ -1,0 +1,83 @@
+releases:
+  - name: cluster-dashboards
+    namespace: monitoring
+    chart: ./dashboards
+    createNamespace: true
+
+  - name: grafana
+    namespace: monitoring
+    chart: grafana/grafana
+    version: ~8.9.0
+    createNamespace: true
+    values:
+      - persistence:
+          enabled: true
+          size: 10Gi
+      - adminPassword: admin
+      - env:
+          GF_AUTH_ANONYMOUS_ENABLED: "true"
+          GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+          GF_AUTH_DISABLE_LOGIN_FORM: "true"
+          GF_AUTH_DISABLE_SIGNOUT_MENU: "true"
+          GF_AUTH_BASIC_ENABLED: "false"
+      - grafana.ini:
+          auth:
+            disable_login_form: true
+            disable_signout_menu: true
+          auth.anonymous:
+            enabled: true
+            org_role: Admin
+          auth.basic:
+            enabled: false
+          users:
+            auto_assign_org_role: Admin
+          log:
+            filters: "rendering:debug oauth.generic_oauth:debug authn:info"
+      - service:
+          type: ClusterIP
+      - ingress:
+          enabled: true
+          ingressClassName: traefik
+          hosts:
+            - grafana.localhost
+      - datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server
+                isDefault: true
+      - dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: default
+                orgId: 1
+                folder: ""
+                type: file
+                disableDeletion: false
+                editable: true
+                options:
+                  path: /var/lib/grafana/dashboards/default
+      - dashboardsConfigMaps:
+          default: cluster-resources-dashboard
+
+  - name: prometheus
+    namespace: monitoring
+    chart: prometheus-community/prometheus
+    version: ~25.0.0
+    createNamespace: true
+    values:
+      - server:
+          persistentVolume:
+            enabled: true
+            size: 10Gi
+      - nodeExporter:
+          enabled: true
+      - kubeStateMetrics:
+          enabled: true
+      - alertmanager:
+          enabled: false
+      - prometheus-pushgateway:
+          enabled: false

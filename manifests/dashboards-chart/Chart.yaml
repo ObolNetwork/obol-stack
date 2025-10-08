@@ -1,5 +1,0 @@
-apiVersion: v2
-name: grafana-dashboards
-description: Grafana dashboards for Kubernetes monitoring
-version: 1.0.0
-appVersion: "1.0"
