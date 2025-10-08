@@ -153,29 +153,14 @@ select_runtime() {
 		return
 	fi
 
-	# k3s only works on Linux
-	if [[ "$PLATFORM" != "linux" ]]; then
-		log_info "k3s only supports Linux. Using kind for $PLATFORM"
+	# Automatically select runtime based on platform
+	if [[ "$PLATFORM" == "linux" ]]; then
+		log_info "Auto-selecting k3s for Linux (native Kubernetes, production-like)"
+		echo "k3s"
+	else
+		log_info "Auto-selecting kind for $PLATFORM (Docker-based, recommended for development)"
 		echo "kind"
-		return
 	fi
-
-	# Interactive selection
-	echo ""
-	log_info "Select Kubernetes runtime:"
-	echo "  1) kind (Docker-based, recommended for development)"
-	echo "  2) k3s (Native Kubernetes, production-like)"
-	echo ""
-	read -p "Choice [1]: " choice
-
-	case "${choice:-1}" in
-		1) echo "kind" ;;
-		2) echo "k3s" ;;
-		*)
-			log_warn "Invalid choice. Using kind."
-			echo "kind"
-			;;
-	esac
 }
 
 # Log functions
@@ -207,72 +192,38 @@ start_docker() {
     log_info "Docker is running."
 }
 
-# Install or update kubectl
-install_kubectl() {
+# Check for kubectl installation
+check_kubectl() {
     log_info "Checking kubectl..."
-    # Check if kubectl is already installed
     if command_exists kubectl; then
-        log_info "kubectl is already installed."
+        log_info "kubectl is already installed. Version: $(kubectl version --client --short 2>/dev/null || kubectl version --client -o yaml | grep gitVersion | cut -d: -f2 | tr -d ' ')"
     else
-        log_info "Installing kubectl..."
-        # Download the latest release
-        ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl"
-
-        # Validate the binary (optional)
-        ensure curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCHITECTURE/kubectl.sha256"
-        echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check || log_warn "kubectl checksum validation failed. Continuing anyway..."
-
-        # Install kubectl
-        ensure sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-
-        # Clean up
-        rm -f kubectl kubectl.sha256
-
-        log_info "kubectl installed successfully."
+        log_error "kubectl is not installed. Please install it first:\n\n" \
+            "  macOS (Intel):    brew install kubectl\n" \
+            "  macOS (Apple Silicon): brew install kubectl\n" \
+            "  Linux (x86_64):   curl -LO \"https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl\" && \\\\\n" \
+            "                    chmod +x kubectl && sudo mv kubectl /usr/local/bin/\n" \
+            "  Linux (ARM64):    curl -LO \"https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl\" && \\\\\n" \
+            "                    chmod +x kubectl && sudo mv kubectl /usr/local/bin/\n" \
+            "  Windows:          choco install kubernetes-cli\n\n" \
+            "For more installation methods, visit: https://kubernetes.io/docs/tasks/tools/"
     fi
 }
 
-# Install or update Helm
-install_helm() {
+# Check for Helm installation
+check_helm() {
     log_info "Checking helm..."
-
-    # Fetch and extract the latest helm release version
-    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/helm/helm/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-    # Check if we got a version (network connectivity)
-    if [[ -z "$LATEST_RELEASE" ]]; then
-        log_warn "Unable to fetch latest helm version. Network may be unavailable."
-        if command_exists helm; then
-            log_info "helm is already installed. Skipping update check. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
-            return
-        else
-            log_error "helm is not installed and unable to fetch latest version. Please check your internet connection."
-        fi
-    fi
-
-    log_info "Latest helm version available: $LATEST_RELEASE"
-
-    # Check if helm is already installed
     if command_exists helm; then
-        log_info "helm is already installed. Version installed: $(helm version --short 2>/dev/null || echo 'unknown')"
+        log_info "helm is already installed. Version: $(helm version --short 2>/dev/null || helm version --template='{{.Version}}' 2>/dev/null || echo 'unknown')"
     else
-        log_info "helm is not installed."
-        log_info "Installing helm..."
-        # Download the latest release
-        ensure curl -sSL -O "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz"
-
-        # Validate the binary (optional)
-        ensure curl -sSLo helm.tar.gz.sha256sum "https://get.helm.sh/helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz.sha256sum"
-        echo "$(cat helm.tar.gz.sha256sum)" | sha256sum --check --status || log_error "helm checksum validation failed. helm installation failed."
-
-        # Proceed to install
-        ensure tar -xzf helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz
-        ensure chmod +x ./$PLATFORM-$ARCHITECTURE/helm
-        ensure sudo mv ./$PLATFORM-$ARCHITECTURE/helm /usr/local/bin/
-        rm helm-$LATEST_RELEASE-$PLATFORM-$ARCHITECTURE.tar.gz helm.tar.gz.sha256sum
-        rm -r ./$PLATFORM-$ARCHITECTURE
-
-        log_info "helm installed successfully."
+        log_error "helm is not installed. Please install it first:\n\n" \
+            "  macOS:            brew install helm\n" \
+            "  Linux (script):   curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 && \\\\\n" \
+            "                    chmod 700 get_helm.sh && ./get_helm.sh\n" \
+            "  Linux (snap):     sudo snap install helm --classic\n" \
+            "  Windows (Chocolatey): choco install kubernetes-helm\n" \
+            "  Windows (Scoop):  scoop install helm\n\n" \
+            "For binary downloads and more options, visit: https://helm.sh/docs/intro/install/"
     fi
 }
 
@@ -746,7 +697,7 @@ main() {
     log_info "Selected runtime: $runtime"
     # start_docker
     start_docker
-    install_kubectl
+    check_kubectl
     if [[ "$use_current_context" -eq 0 ]]; then
         if [[ "$runtime" == "k3s" ]]; then
             install_k3s
@@ -754,7 +705,7 @@ main() {
             install_kind
         fi
     fi
-    install_helm
+    check_helm
     install_k9s
 
     #install_obol_cli
