@@ -34,38 +34,57 @@ export const hoodi = defineChain({
   },
 });
 
-// Use a placeholder project ID if not provided (required for builds)
-// This should be replaced with a real project ID from https://cloud.walletconnect.com
+// WalletConnect requires a project ID from https://cloud.walletconnect.com
+// This should be set via NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID environment variable
 const walletConnectProjectId =
-  process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID ||
-  '2f5c0e3b4d6a8f9e1c3b7d5a4e2f8c9d'; // Placeholder for builds
+  process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID;
 
-const connectors = connectorsForWallets(
-  [
-    {
-      groupName: 'Recommended',
-      wallets: [
-        metaMaskWallet,
-        rabbyWallet,
-        coinbaseWallet,
-        safeWallet,
-        walletConnectWallet,
+// Helper function to check if WalletConnect is configured
+export function isWalletConnectConfigured(): boolean {
+  return !!walletConnectProjectId;
+}
+
+// Only initialize connectors if WalletConnect is configured
+// Otherwise, create a minimal config without wallet connectors
+const connectors = walletConnectProjectId
+  ? connectorsForWallets(
+      [
+        {
+          groupName: 'Recommended',
+          wallets: [
+            metaMaskWallet,
+            rabbyWallet,
+            coinbaseWallet,
+            safeWallet,
+            walletConnectWallet,
+          ],
+        },
       ],
-    },
-  ],
-  {
-    appName: 'Obol Stack Dashboard',
-    projectId: walletConnectProjectId,
-  }
-);
+      {
+        appName: 'Obol Stack Dashboard',
+        projectId: walletConnectProjectId,
+      }
+    )
+  : undefined;
 
-export const config = createConfig({
-  connectors,
-  chains: [mainnet, sepolia, hoodi],
-  transports: {
-    [mainnet.id]: http(),
-    [sepolia.id]: http(),
-    [hoodi.id]: http(),
-  },
-  ssr: true,
-});
+// Create config with or without connectors based on availability
+export const config = connectors
+  ? createConfig({
+      connectors,
+      chains: [mainnet, sepolia, hoodi],
+      transports: {
+        [mainnet.id]: http(),
+        [sepolia.id]: http(),
+        [hoodi.id]: http(),
+      },
+      ssr: true,
+    })
+  : createConfig({
+      chains: [mainnet, sepolia, hoodi],
+      transports: {
+        [mainnet.id]: http(),
+        [sepolia.id]: http(),
+        [hoodi.id]: http(),
+      },
+      ssr: true,
+    });

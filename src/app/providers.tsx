@@ -5,13 +5,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import { theme } from '@obolnetwork/obol-ui';
-import { config } from '../lib/config/wagmi';
+import { config, isWalletConnectConfigured } from '../lib/config/wagmi';
 
 import '@rainbow-me/rainbowkit/styles.css';
 
 const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  // If WalletConnect is not configured, render without RainbowKit
+  if (!isWalletConnectConfigured()) {
+    return (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+  }
+
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>

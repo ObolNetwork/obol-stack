@@ -1,5 +1,6 @@
 import { Box, Flex, Image } from '@obolnetwork/obol-ui';
 import { WalletConnection } from '../../molecules/WalletConnection';
+import { isWalletConnectConfigured } from '@/lib/config/wagmi';
 
 export function DashboardHeader() {
   return (
@@ -9,7 +10,7 @@ export function DashboardHeader() {
       </Box>
 
       <Flex css={{ gap: '$sm', alignItems: 'center', width: 'fit-content' }}>
-        <WalletConnection />
+        {isWalletConnectConfigured() && <WalletConnection />}
       </Flex>
     </Flex>
   );
