@@ -11,6 +11,7 @@ nethermind:
     - --config=sepolia
     - --Sync.AncientBodiesBarrier=9200000
     - --Sync.AncientReceiptsBarrier=9200000
+    - --Sync.PivotNumber=9300000  # Force pivot above block 9,222,769
     - --Pruning.Mode=None
   persistence:
     enabled: true
