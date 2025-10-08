@@ -26,6 +26,14 @@ The script syncs manifests to `~/.config/obol/manifests/` and applies them via h
 
 **Key principle**: All cluster changes should be made by editing `manifests/helmfile.yaml` (or charts within `manifests/`) and applying via a single `helmfile apply` command. This ensures the cluster state is fully reproducible and version-controlled.
 
+**CRITICAL**: `obolup.sh` must NOT perform any out-of-band cluster mutations (no direct `kubectl`, `helm uninstall`, etc.). All cluster state changes happen exclusively through `helmfile apply`. The script only:
+1. Downloads binaries
+2. Creates k3d cluster (if missing)
+3. Syncs manifest files
+4. Runs `helmfile apply`
+
+Any cleanup or migration logic belongs in helmfile or pre-sync hooks, never in the bootstrap script.
+
 **Best practices**: https://helmfile.readthedocs.io
 
 ## Installation
