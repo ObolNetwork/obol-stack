@@ -136,7 +136,7 @@ validate_docker_environment() {
 setup_directories() {
 	log_info "Setting up Obol directories..."
 
-	for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR" "$OBOL_VALUES_DIR"; do
+	for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR"; do
 		if [ ! -d "$dir" ]; then
 			mkdir -p "$dir"
 			log_info "Created directory: $dir"
@@ -265,7 +265,6 @@ sync_manifests() {
 	local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	log_info "Copying manifests locally"
 	cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
-	cp -r "${script_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
 	log_info "✓ Synced manifests from local repository"
 }
 
@@ -366,6 +365,10 @@ usage() {
 	cat <<EOF
 Usage: curl -sSfL https://stack.obol.org/obolup.sh | bash
        obolup.sh --clean [--force]
+       obolup.sh k9s
+       obolup.sh kubectl [args...]
+       obolup.sh helm [args...]
+       obolup.sh helmfile [args...]
 
 Bootstrap a local Kubernetes environment for Obol Stack.
 
@@ -380,6 +383,12 @@ Options:
     --clean         Remove all obolup data files
     --clean --force Remove all obolup data files and binaries
 
+Proxy commands (automatically uses obol kubeconfig):
+    k9s             Launch k9s with obol cluster config
+    kubectl         Run kubectl with obol cluster config
+    helm            Run helm with obol cluster config
+    helmfile        Run helmfile with obol cluster config
+
 Supported Platforms:
     - Linux (amd64, arm64)
     - macOS (amd64, arm64)
@@ -393,6 +402,39 @@ EOF
 
 main() {
 	local debug_mode="false"
+
+	if [ $# -gt 0 ]; then
+		case "$1" in
+		k9s)
+			launch_k9s
+			exit 0
+			;;
+		kubectl)
+			shift
+			if [ ! -f "${KUBECONFIG_FILE}" ]; then
+				log_error "Kubeconfig not found at ${KUBECONFIG_FILE}. Run obolup.sh first."
+			fi
+			KUBECONFIG="${KUBECONFIG_FILE}" kubectl "$@"
+			exit 0
+			;;
+		helm)
+			shift
+			if [ ! -f "${KUBECONFIG_FILE}" ]; then
+				log_error "Kubeconfig not found at ${KUBECONFIG_FILE}. Run obolup.sh first."
+			fi
+			KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_helm}" "$@"
+			exit 0
+			;;
+		helmfile)
+			shift
+			if [ ! -f "${KUBECONFIG_FILE}" ]; then
+				log_error "Kubeconfig not found at ${KUBECONFIG_FILE}. Run obolup.sh first."
+			fi
+			KUBECONFIG="${KUBECONFIG_FILE}" cmd_helmfile "$@"
+			exit 0
+			;;
+		esac
+	fi
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -458,7 +500,7 @@ main() {
 	deploy_stack
 	echo ""
 
-	launch_k9s
+	# launch_k9s
 }
 
 main "$@"
