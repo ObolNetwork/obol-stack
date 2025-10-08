@@ -260,45 +260,12 @@ setup_k3d_cluster() {
 sync_manifests() {
     log_info "Syncing manifests to ${OBOL_MANIFESTS_DIR}..."
     
+    # NOTE: When the repo is published, sync from local directory
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local synced=false
-    
-    if [ -d "${script_dir}/.git" ] && [ -d "${script_dir}/manifests" ] && [ -d "${script_dir}/values" ]; then
-        log_info "Running from obol-stack repository, copying manifests directly..."
-        cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
-        cp -r "${script_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
-        log_info "✓ Synced manifests from local repository"
-        synced=true
-    else
-        log_info "Not in repository, downloading from GitHub..."
-        
-        local repo_url="https://github.com/ObolNetwork/obol-stack"
-        local branch="${OBOLUP_BRANCH:-main}"
-        local temp_dir=$(mktemp -d)
-        
-        if curl -sSLf "${repo_url}/archive/refs/heads/${branch}.tar.gz" | tar -xz -C "${temp_dir}"; then
-            local extracted_dir="${temp_dir}/obol-stack-${branch}"
-            
-            if [ -d "${extracted_dir}/manifests" ]; then
-                cp -r "${extracted_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
-            fi
-            
-            if [ -d "${extracted_dir}/values" ]; then
-                cp -r "${extracted_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
-            fi
-            
-            log_info "✓ Downloaded and synced manifests from ${repo_url}/${branch}"
-            synced=true
-        else
-            log_warn "Failed to download manifests from GitHub"
-        fi
-        
-        rm -rf "${temp_dir}"
-    fi
-    
-    if [ "$synced" = false ]; then
-        log_error "Failed to sync manifests from local repository or GitHub"
-    fi
+    log_info "Copying manifests locally"
+    cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
+    cp -r "${script_dir}/values/"* "${OBOL_VALUES_DIR}/" 2>/dev/null || true
+    log_info "✓ Synced manifests from local repository"
 }
 
 deploy_stack() {
