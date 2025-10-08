@@ -1,0 +1,31 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: obol-stack
+servers: 1
+agents: 5
+ports:
+  - port: 3000:80
+    nodeFilters:
+      - loadbalancer
+options:
+  k3d:
+    wait: true
+  k3s:
+    extraArgs:
+      - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true
+        nodeFilters:
+          - server:*
+      - arg: --kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true
+        nodeFilters:
+          - server:*
+      - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true
+        nodeFilters:
+          - agent:*
+      - arg: --node-label=node-role=monitoring
+        nodeFilters:
+          - agent:0
+  kubeconfig:
+    updateDefaultKubeconfig: false
+    switchCurrentContext: false
+network: k3d-obol-stack

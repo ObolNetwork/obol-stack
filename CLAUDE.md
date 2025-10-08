@@ -7,6 +7,7 @@ Bootstrap script for local Kubernetes development using k3d (k3s in Docker). Dep
 ## Technologies
 
 - **k3d (v5.7.5)**: Lightweight Kubernetes distribution (k3s) running in Docker containers
+- **k3s**: Configuration reference at https://docs.k3s.io/installation/configuration
 - **helm (v3.19.0)**: Kubernetes package manager for deploying charts
 - **helmfile (v1.1.7)**: Declarative spec for deploying helm charts
 - **k9s (v0.50.15)**: Terminal UI for Kubernetes cluster management
@@ -33,7 +34,13 @@ The script syncs manifests to `~/.config/obol/manifests/` and applies them via h
 ./obolup.sh
 ```
 
-Downloads tools to `~/.config/obol/bin/`, creates k3d cluster, applies helmfile manifests.
+Downloads tools to `~/.config/obol/bin/`, creates k3d cluster from `k3d-config.yaml`, applies helmfile manifests.
+
+## k3d Configuration
+
+Cluster defined in `k3d-config.yaml`. Node labels set via k3s `--node-label` arg (see https://docs.k3s.io/installation/configuration).
+
+Config synced to `~/.config/obol/k3d-config.yaml` during bootstrap.
 
 ## Cluster Access
 

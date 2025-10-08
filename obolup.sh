@@ -237,16 +237,13 @@ setup_k3d_cluster() {
 	fi
 
 	log_info "Creating k3d cluster '${CLUSTER_NAME}'..."
-	# k3d  cluster create demo --api-port 6550  --servers 3 --port 8080:80@loadbalancer --volume $(pwd)/sample:/src@all --wait
-	if ! "${cmd_k3d}" cluster create "${CLUSTER_NAME}" \
-		--servers 1 \
-		--agents 3 \
-		--api-port 6443 \
-		--port 3000:80@loadbalancer \
-		--k3s-arg "--kubelet-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
-		--k3s-arg "--kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true@server:*" \
-		--k3s-arg "--kubelet-arg=feature-gates=KubeletInUserNamespace=true@agent:*" \
-		--wait; then
+	local k3d_config="${OBOL_CONFIG_DIR}/k3d-config.yaml"
+
+	if [ ! -f "${k3d_config}" ]; then
+		log_error "k3d config not found at ${k3d_config}. Run sync_config first."
+	fi
+
+	if ! "${cmd_k3d}" cluster create --config "${k3d_config}"; then
 		log_error "Failed to create k3d cluster. Check Docker permissions and logs above."
 	fi
 
@@ -258,11 +255,17 @@ setup_k3d_cluster() {
 	log_info "  Access cluster: export KUBECONFIG=${KUBECONFIG_FILE} && kubectl cluster-info"
 }
 
-sync_manifests() {
-	log_info "Syncing manifests to ${OBOL_MANIFESTS_DIR}..."
+# NOTE: This syncs the development k3d-config and manifests for now but will do a remote checkout instead when repo is public
+sync_config() {
+	log_info "Syncing config files to ${OBOL_CONFIG_DIR}..."
 
-	# NOTE: When the repo is published, sync from local directory
 	local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+	# Copy k3d config
+	cp "${script_dir}/k3d-config.yaml" "${OBOL_CONFIG_DIR}/k3d-config.yaml"
+	log_info "✓ Copied k3d-config.yaml"
+
+	# Copy manifests
 	log_info "Copying manifests locally"
 	cp -r "${script_dir}/manifests/"* "${OBOL_MANIFESTS_DIR}/" 2>/dev/null || true
 	log_info "✓ Synced manifests from local repository"
@@ -491,10 +494,10 @@ main() {
 	validate_docker_environment
 	echo ""
 
-	setup_k3d_cluster
+	sync_config
 	echo ""
 
-	sync_manifests
+	setup_k3d_cluster
 	echo ""
 
 	deploy_stack
