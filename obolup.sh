@@ -12,6 +12,7 @@ readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
 readonly cmd_helm="${OBOL_BIN_DIR}/helm"
 readonly helmfile_bin="${OBOL_BIN_DIR}/helmfile"
 readonly cmd_k9s="${OBOL_BIN_DIR}/k9s"
+readonly cmd_argocd="${OBOL_BIN_DIR}/argocd"
 
 cmd_helmfile() {
 	"${helmfile_bin}" --helm-binary "${cmd_helm}" "$@"
@@ -74,6 +75,7 @@ readonly K3D_VERSION="v5.7.5"
 readonly HELM_VERSION="v3.19.0"
 readonly HELMFILE_VERSION="v1.1.7"
 readonly K9S_VERSION="v0.50.15"
+readonly ARGOCD_VERSION="v3.1.8"
 readonly HELM_DIFF_VERSION="v3.13.0"
 
 declare -A TOOLS=(
@@ -112,6 +114,15 @@ declare -A TOOLS=(
 	["k9s_platforms"]="linux,darwin"
 	["k9s_compression"]="tar.gz"
 	["k9s_extract_subdir"]="false"
+
+	["argocd_version"]="${ARGOCD_VERSION}"
+	["argocd_url_linux_amd64"]="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
+	["argocd_url_linux_arm64"]="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-arm64"
+	["argocd_url_darwin_amd64"]="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-darwin-amd64"
+	["argocd_url_darwin_arm64"]="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-darwin-arm64"
+	["argocd_platforms"]="linux,darwin"
+	["argocd_compression"]="none"
+	["argocd_extract_subdir"]="false"
 )
 
 validate_docker_environment() {
@@ -256,6 +267,75 @@ setup_k3d_cluster() {
 	log_info "  Access cluster: export KUBECONFIG=${KUBECONFIG_FILE} && kubectl cluster-info"
 }
 
+bootstrap_argocd() {
+	log_info "Bootstrapping ArgoCD..."
+
+	if KUBECONFIG="${KUBECONFIG_FILE}" kubectl get namespace argocd >/dev/null 2>&1; then
+		log_info "✓ ArgoCD already installed"
+		return 0
+	fi
+
+	log_info "Creating argocd namespace..."
+	KUBECONFIG="${KUBECONFIG_FILE}" kubectl create namespace argocd
+
+	log_info "Installing ArgoCD..."
+	if ! KUBECONFIG="${KUBECONFIG_FILE}" kubectl apply -n argocd -f \
+		https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml; then
+		log_error "Failed to install ArgoCD"
+	fi
+
+	log_info "Waiting for ArgoCD to be ready..."
+	KUBECONFIG="${KUBECONFIG_FILE}" kubectl wait --for=condition=available --timeout=300s \
+		deployment/argocd-server -n argocd || log_warn "ArgoCD server deployment not ready yet"
+
+	log_info "Configuring argo-cd-helmfile plugin (sidecar method)..."
+	
+	KUBECONFIG="${KUBECONFIG_FILE}" kubectl patch deployment argocd-repo-server -n argocd --type='json' -p='[
+		{
+			"op": "add",
+			"path": "/spec/template/spec/containers/-",
+			"value": {
+				"name": "helmfile-plugin",
+				"image": "travisghansen/argo-cd-helmfile:latest",
+				"command": ["/var/run/argocd/argocd-cmp-server"],
+				"securityContext": {
+					"runAsNonRoot": true,
+					"runAsUser": 999
+				},
+				"volumeMounts": [
+					{
+						"mountPath": "/var/run/argocd",
+						"name": "var-files"
+					},
+					{
+						"mountPath": "/home/argocd/cmp-server/plugins",
+						"name": "plugins"
+					},
+					{
+						"mountPath": "/tmp",
+						"name": "cmp-tmp"
+					}
+				]
+			}
+		},
+		{
+			"op": "add",
+			"path": "/spec/template/spec/volumes/-",
+			"value": {
+				"name": "cmp-tmp",
+				"emptyDir": {}
+			}
+		}
+	]'
+
+	log_info "Waiting for ArgoCD repo-server to restart..."
+	KUBECONFIG="${KUBECONFIG_FILE}" kubectl rollout status deployment/argocd-repo-server -n argocd --timeout=120s
+
+	log_info "✓ ArgoCD with helmfile plugin installed successfully"
+	log_info "  ArgoCD UI will be available at: http://localhost:8080"
+	log_info "  Get admin password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+}
+
 # NOTE: This syncs the development k3d-config and manifests for now but will do a remote checkout instead when repo is public
 sync_config() {
 	log_info "Syncing config files to ${OBOL_CONFIG_DIR}..."
@@ -272,8 +352,41 @@ sync_config() {
 	log_info "✓ Synced manifests from local repository"
 }
 
+create_argocd_application() {
+	log_info "Creating ArgoCD Application for Obol Stack..."
+
+	cat <<EOF | KUBECONFIG="${KUBECONFIG_FILE}" kubectl apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: obol-stack
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: oci://k3d-registry.localhost:5000
+    chart: obol-manifests
+    targetRevision: latest
+    plugin:
+      name: argocd-helmfile
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+EOF
+
+	log_info "✓ ArgoCD Application created"
+}
+
 deploy_stack() {
-	log_info "Deploying Obol Stack with helmfile..."
+	log_info "Deploying Obol Stack via ArgoCD..."
 
 	local helmfile_path="${OBOL_MANIFESTS_DIR}/helmfile.yaml"
 
@@ -282,9 +395,33 @@ deploy_stack() {
 		return 0
 	fi
 
-	KUBECONFIG="${KUBECONFIG_FILE}" cmd_helmfile -f "${helmfile_path}" apply
+	log_info "Packaging manifests as OCI artifact..."
+	
+	cd "${OBOL_MANIFESTS_DIR}"
+	tar czf /tmp/obol-manifests.tgz .
+	
+	if ! curl -f -X POST \
+		--data-binary "@/tmp/obol-manifests.tgz" \
+		"http://localhost:5000/v2/obol-manifests/blobs/uploads/?digest=sha256:$(sha256sum /tmp/obol-manifests.tgz | cut -d' ' -f1)" \
+		-H "Content-Type: application/gzip" 2>/dev/null; then
+		log_warn "OCI push via curl failed, trying oras..."
+		
+		if command_exists oras; then
+			oras push k3d-registry.localhost:5000/obol-manifests:latest "${OBOL_MANIFESTS_DIR}"
+		else
+			log_warn "Neither curl nor oras available for OCI push, using direct helmfile apply"
+			KUBECONFIG="${KUBECONFIG_FILE}" cmd_helmfile -f "${helmfile_path}" apply
+			rm -f /tmp/obol-manifests.tgz
+			return 0
+		fi
+	fi
+	
+	rm -f /tmp/obol-manifests.tgz
 
-	log_info "✓ Stack deployment complete"
+	log_info "✓ Manifests pushed to OCI registry"
+	log_info "  ArgoCD will sync within 3 minutes..."
+	log_info "  Monitor with: ./obolup.sh argocd app get obol-stack"
+	log_info "  Force sync: ./obolup.sh argocd app sync obol-stack"
 }
 
 launch_k9s() {
@@ -373,13 +510,15 @@ Usage: curl -sSfL https://stack.obol.org/obolup.sh | bash
        obolup.sh kubectl [args...]
        obolup.sh helm [args...]
        obolup.sh helmfile [args...]
+       obolup.sh argocd [args...]
 
 Bootstrap a local Kubernetes environment for Obol Stack.
 
 Installs dependencies to ${OBOL_BIN_DIR}:
-    - k3d (Linux and macOS) - k3s in Docker
+    - k3d (Linux and macOS) - k3s in Docker with OCI registry
     - helm (Linux and macOS) - Kubernetes package manager
     - helmfile (Linux and macOS) - Declarative Helm charts deployment
+    - argocd (Linux and macOS) - GitOps continuous delivery
     - k9s (Linux and macOS) - Kubernetes CLI UI
 
 Options:
@@ -437,6 +576,14 @@ main() {
 			KUBECONFIG="${KUBECONFIG_FILE}" cmd_helmfile "$@"
 			exit 0
 			;;
+		argocd)
+			shift
+			if [ ! -f "${KUBECONFIG_FILE}" ]; then
+				log_error "Kubeconfig not found at ${KUBECONFIG_FILE}. Run obolup.sh first."
+			fi
+			KUBECONFIG="${KUBECONFIG_FILE}" "${cmd_argocd}" --server localhost:8080 --insecure "$@"
+			exit 0
+			;;
 		esac
 	fi
 
@@ -489,6 +636,9 @@ main() {
 	install_tool "k9s" "$platform" "$arch"
 	echo ""
 
+	install_tool "argocd" "$platform" "$arch"
+	echo ""
+
 	install_helm_diff
 	echo ""
 
@@ -499,6 +649,12 @@ main() {
 	echo ""
 
 	setup_k3d_cluster
+	echo ""
+
+	bootstrap_argocd
+	echo ""
+
+	create_argocd_application
 	echo ""
 
 	deploy_stack

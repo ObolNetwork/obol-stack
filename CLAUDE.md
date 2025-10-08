@@ -2,39 +2,73 @@
 
 ## Purpose
 
-Bootstrap script for local Kubernetes development using k3d (k3s in Docker). Deploys a monitoring stack with Prometheus and Grafana via declarative helmfile manifests.
+Bootstrap script for local Kubernetes development using k3d (k3s in Docker). Deploys a monitoring stack with Prometheus and Grafana using ArgoCD GitOps with helmfile and OCI registry artifacts.
 
 ## Technologies
 
-- **k3d (v5.7.5)**: Lightweight Kubernetes distribution (k3s) running in Docker containers
+- **k3d (v5.7.5)**: Lightweight Kubernetes distribution (k3s) running in Docker containers with embedded OCI registry
 - **k3s**: Configuration reference at https://docs.k3s.io/installation/configuration
 - **helm (v3.19.0)**: Kubernetes package manager for deploying charts
-- **helmfile (v1.1.7)**: Declarative spec for deploying helm charts
+- **helmfile (v1.1.7)**: Declarative spec for deploying helm charts (used by ArgoCD plugin)
+- **argocd (v3.1.8)**: GitOps continuous delivery with helmfile plugin support
 - **k9s (v0.50.15)**: Terminal UI for Kubernetes cluster management
 - **Prometheus**: Metrics collection and storage with cAdvisor, node-exporter, and kube-state-metrics
 - **Grafana**: Metrics visualization with Kubernetes cluster monitoring dashboards
 
-## Helmfile Approach
+## ArgoCD GitOps Approach
 
-All cluster resources are declaratively defined in `manifests/helmfile.yaml` as a **single source of truth**:
+All cluster resources are declaratively defined in `manifests/helmfile.yaml` and deployed via **ArgoCD with native helmfile support**:
 
-1. **Grafana release**: Deploys Grafana with anonymous auth enabled, ingress at `grafana.localhost`
-2. **Prometheus release**: Deploys Prometheus with node exporters and kube-state-metrics
-3. **Dashboard chart**: Local helm chart deploying Grafana dashboard ConfigMaps
+**Architecture:**
+```
+manifests/helmfile.yaml (source of truth)
+   ↓ (obolup.sh syncs)
+~/.config/obol/manifests/
+   ↓ (package as OCI artifact)
+OCI Registry (localhost:5000/obol-manifests:latest)
+   ↓ (ArgoCD watches)
+argo-cd-helmfile plugin (templates helmfile)
+   ↓ (ArgoCD applies + prunes)
+Cluster resources (1:1 with helmfile)
+```
 
-The script syncs manifests to `~/.config/obol/manifests/` and applies them via helmfile during cluster bootstrap.
+**Key components:**
+1. **OCI Registry**: k3d-embedded registry at `localhost:5000`
+2. **ArgoCD**: GitOps controller with web UI at `localhost:8080`
+3. **argo-cd-helmfile plugin**: Native helmfile.yaml support in ArgoCD (https://github.com/travisghansen/argo-cd-helmfile)
+4. **ArgoCD Application**: Configured with `prune: true` and `selfHeal: true`
 
-**Key principle**: All cluster changes should be made by editing `manifests/helmfile.yaml` (or charts within `manifests/`) and applying via a single `helmfile apply` command. This ensures the cluster state is fully reproducible and version-controlled.
+**Deployment flow:**
+1. Edit `manifests/helmfile.yaml` (or charts within `manifests/`)
+2. Run `./obolup.sh` → syncs to `~/.config/obol/manifests/` and pushes to OCI
+3. ArgoCD detects new OCI artifact (3-minute polling interval)
+4. Plugin runs `helmfile template` to generate manifests
+5. ArgoCD applies changes and prunes orphaned resources
 
-**CRITICAL**: `obolup.sh` must NOT perform any out-of-band cluster mutations (no direct `kubectl`, `helm uninstall`, etc.). All cluster state changes happen exclusively through `helmfile apply`. The script only:
-1. Downloads binaries
-2. Creates k3d cluster (if missing)
-3. Syncs manifest files
-4. Runs `helmfile apply`
+**Key principle**: 
+- **Source of truth**: `manifests/helmfile.yaml` (native helmfile syntax)
+- **Automatic pruning**: ArgoCD removes resources not in helmfile (via `prune: true`)
+- **Drift correction**: ArgoCD reverts manual changes (via `selfHeal: true`)
+- **No manual kubectl**: All changes via manifests → ArgoCD reconciliation
 
-Any cleanup or migration logic belongs in helmfile or pre-sync hooks, never in the bootstrap script.
+**obolup.sh responsibilities**:
+1. Download binaries (k3d, helm, helmfile, argocd, k9s)
+2. Create k3d cluster with OCI registry
+3. Bootstrap ArgoCD with helmfile plugin
+4. Create ArgoCD Application
+5. Sync manifests and push to OCI registry
 
-**Best practices**: https://helmfile.readthedocs.io
+**Benefits over pure helmfile**:
+- ✓ Automatic orphaned resource pruning
+- ✓ Continuous drift detection and correction
+- ✓ Web UI for visualization
+- ✓ Native helmfile.yaml syntax (no conversion)
+- ✓ True 1:1 mapping between helmfile and cluster
+
+**References**:
+- ArgoCD docs: https://argo-cd.readthedocs.io/
+- argo-cd-helmfile: https://github.com/travisghansen/argo-cd-helmfile
+- Helmfile: https://helmfile.readthedocs.io
 
 ## Installation
 
@@ -42,7 +76,7 @@ Any cleanup or migration logic belongs in helmfile or pre-sync hooks, never in t
 ./obolup.sh
 ```
 
-Downloads tools to `~/.config/obol/bin/`, creates k3d cluster from `k3d-config.yaml`, applies helmfile manifests.
+Downloads tools to `~/.config/obol/bin/`, creates k3d cluster from `k3d-config.yaml`, bootstraps ArgoCD with helmfile plugin, pushes manifests to OCI registry.
 
 ## k3d Configuration
 
@@ -64,11 +98,12 @@ kubectl get pods -n monitoring
 # Using obolup.sh proxies
 ./obolup.sh kubectl get pods -n monitoring
 ./obolup.sh helm list -n monitoring
-./obolup.sh helmfile list
+./obolup.sh argocd app get obol-stack
 ./obolup.sh k9s
 ```
 
 **Grafana UI**: http://grafana.localhost (anonymous access enabled)
+**ArgoCD UI**: http://localhost:8080 (get password: `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`)
 
 ## Manifest Structure
 
@@ -95,19 +130,35 @@ manifests/
 Edit manifests in `manifests/` directory, then redeploy:
 
 ```bash
-# Manifests are synced from repo to ~/.config/obol/manifests/ during obolup.sh execution
-./obolup.sh  # Syncs manifests and applies helmfile
+# Automatic sync and deploy
+./obolup.sh  # Syncs manifests, pushes to OCI, ArgoCD syncs within 3 minutes
 
-# Or manually sync and apply
-cp -r manifests/* ~/.config/obol/manifests/
-cd ~/.config/obol/manifests
-KUBECONFIG=~/.config/obol/kubeconfig.yaml helmfile apply
+# Monitor ArgoCD sync status
+./obolup.sh argocd app get obol-stack
+./obolup.sh argocd app sync obol-stack  # Force immediate sync
+
+# View ArgoCD logs
+./obolup.sh kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server -f
+
+# ArgoCD Web UI (recommended)
+open http://localhost:8080
 ```
 
 ## Development Workflow
 
-1. **Modify manifests** in `manifests/helmfile.yaml` or `manifests/dashboards-chart/`
-2. **Test changes**: Run `./obolup.sh` to sync manifests and apply via helmfile
-3. **Verify deployment**: Use `./obolup.sh k9s` or `./obolup.sh kubectl get pods -n monitoring`
+1. **Modify manifests** in `manifests/helmfile.yaml` or dashboard templates
+2. **Deploy changes**: Run `./obolup.sh` to push to OCI registry
+3. **Wait for ArgoCD**: ArgoCD syncs within 3 minutes (or force with `argocd app sync`)
+4. **Verify deployment**: 
+   - ArgoCD UI: http://localhost:8080
+   - CLI: `./obolup.sh argocd app get obol-stack`
+   - k9s: `./obolup.sh k9s`
 
-Script automatically syncs `manifests/` → `~/.config/obol/manifests/` on each run (see `obolup.sh:260-268`).
+**Orphaned resource cleanup**: ArgoCD automatically prunes resources removed from helmfile (via `prune: true`).
+
+**Drift correction**: Manual changes via `kubectl` are automatically reverted by ArgoCD (via `selfHeal: true`).
+
+**Debugging**:
+- View ArgoCD Application status: `./obolup.sh argocd app get obol-stack`
+- Check sync errors: ArgoCD UI → Applications → obol-stack → Details
+- View helmfile plugin logs: `kubectl logs -n argocd -l app.kubernetes.io/name=argocd-repo-server -c helmfile-plugin`
