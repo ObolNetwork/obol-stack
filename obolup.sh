@@ -6,6 +6,7 @@ readonly OBOL_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obol"
 readonly OBOL_DATA_DIR="${OBOL_CONFIG_DIR}/data"
 readonly OBOL_BIN_DIR="${OBOL_CONFIG_DIR}/bin"
 readonly OBOL_MANIFESTS_DIR="${OBOL_CONFIG_DIR}/manifests"
+readonly OBOL_LOGS_DIR="${OBOL_CONFIG_DIR}/logs"
 
 readonly cmd_k3d="${OBOL_BIN_DIR}/k3d"
 readonly cmd_helm="${OBOL_BIN_DIR}/helm"
@@ -136,7 +137,7 @@ validate_docker_environment() {
 setup_directories() {
 	log_info "Setting up Obol directories..."
 
-	for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR"; do
+	for dir in "$OBOL_CONFIG_DIR" "$OBOL_BIN_DIR" "$OBOL_MANIFESTS_DIR" "$OBOL_LOGS_DIR"; do
 		if [ ! -d "$dir" ]; then
 			mkdir -p "$dir"
 			log_info "Created directory: $dir"

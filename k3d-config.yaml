@@ -3,7 +3,11 @@ kind: Simple
 metadata:
   name: obol-stack
 servers: 1
-agents: 5
+agents: 3
+volumes:
+  - volume: ${HOME}/.config/obol/logs:/var/log/k3s
+    nodeFilters:
+      - all
 ports:
   - port: 3000:80
     nodeFilters:
@@ -22,9 +26,6 @@ options:
       - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true
         nodeFilters:
           - agent:*
-      - arg: --node-label=node-role=monitoring
-        nodeFilters:
-          - agent:0
   kubeconfig:
     updateDefaultKubeconfig: false
     switchCurrentContext: false
