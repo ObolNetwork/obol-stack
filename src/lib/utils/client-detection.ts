@@ -68,6 +68,45 @@ export function getClients(mode: NodeModeType): ClientConfig[] {
         icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
       },
     ];
+  } else if (mode === NODE_MODES.AZTEC_FULLNODE) {
+    return [
+      {
+        name: 'Archiver',
+        endpoint: config.aztecFullNodeUrl,
+        type: 'aztec',
+        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4', // Aztec org avatar
+      },
+    ];
+  } else if (mode === NODE_MODES.AZTEC_SEQUENCER) {
+    return [
+      {
+        name: 'Sequencer',
+        endpoint: config.aztecSequencerUrl,
+        type: 'aztec',
+        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
+      },
+    ];
+  } else if (mode === NODE_MODES.AZTEC_PROVER) {
+    return [
+      {
+        name: 'Prover',
+        endpoint: config.aztecProverNodeUrl,
+        type: 'aztec',
+        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
+      },
+      {
+        name: 'Broker',
+        endpoint: config.aztecProverBrokerUrl,
+        type: 'aztec',
+        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
+      },
+      {
+        name: 'Agent',
+        endpoint: config.aztecProverAgentUrl,
+        type: 'aztec',
+        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
+      },
+    ];
   }
 
   return [];

@@ -3,6 +3,7 @@ export const CHAINS = {
   ETHEREUM: 'ethereum',
   SEPOLIA: 'sepolia',
   HOODI: 'hoodi',
+  AZTEC: 'aztec',
 } as const;
 
 // Chain ID to Chain Name mapping
@@ -25,6 +26,9 @@ export const NETWORKS = {
 export const NODE_MODES = {
   FULL_MODE: 'fullMode',
   LIGHT_MODE: 'lightMode',
+  AZTEC_FULLNODE: 'aztec-fullnode',
+  AZTEC_SEQUENCER: 'aztec-sequencer',
+  AZTEC_PROVER: 'aztec-prover',
 } as const;
 
 export const CLIENT_STATUS = {

@@ -1,8 +1,8 @@
 /**
- * Service for fetching real-time metrics from Ethereum clients
+ * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
-export type ClientType = 'execution' | 'consensus' | 'helios';
+export type ClientType = 'execution' | 'consensus' | 'helios' | 'aztec';
 
 export interface ExecutionClientMetrics {
   peers: number;
@@ -33,6 +33,19 @@ export interface ConsensusClientMetrics {
   participation?: number; // Nimbus-specific enrichment
 }
 
+export interface AztecClientMetrics {
+  peers: number;
+  version: string;
+  syncing: boolean;
+  blockNumber: number;
+  chainId: number;
+  finalizedEpoch: number; // proven block number
+  participation: number; // proof progress percentage
+  latestBlock?: number;
+  provenBlock?: number;
+  finalizedBlock?: number;
+}
+
 export class ClientMetricsService {
   constructor() {}
 
@@ -45,7 +58,10 @@ export class ClientMetricsService {
     type: ClientType,
     url: string
   ): Promise<
-    ExecutionClientMetrics | ConsensusClientMetrics | HeliosClientMetrics
+    | ExecutionClientMetrics
+    | ConsensusClientMetrics
+    | HeliosClientMetrics
+    | AztecClientMetrics
   > {
     switch (type) {
       case 'execution':
@@ -54,6 +70,8 @@ export class ClientMetricsService {
         return this.getHeliosMetrics(url);
       case 'consensus':
         return this.getConsensusMetrics(url);
+      case 'aztec':
+        return this.getAztecMetrics(url);
       default:
         throw new Error(`Unknown client type: ${type}`);
     }
@@ -154,6 +172,66 @@ export class ClientMetricsService {
         syncing: false,
         headSlot: 0,
         finalizedEpoch: 0,
+      };
+    }
+  }
+
+  /**
+   * Fetch metrics from Aztec L2 nodes
+   */
+  private async getAztecMetrics(aztecUrl: string): Promise<AztecClientMetrics> {
+    try {
+      const resp = await fetch(aztecUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'node_getL2Tips',
+          params: [],
+          id: 67,
+        }),
+      });
+
+      const data = await resp.json();
+      const result = data.result;
+
+      if (!result) {
+        throw new Error('No result from Aztec node');
+      }
+
+      const latestBlock = result.latest?.number || 0;
+      const provenBlock = result.proven?.number || 0;
+      const finalizedBlock = result.finalized?.number || 0;
+
+      // Calculate participation as proof progress
+      const participation =
+        latestBlock > 0 ? (provenBlock / latestBlock) * 100 : 0;
+
+      // Consider syncing if proven is far behind latest
+      const syncing = latestBlock - provenBlock > 10;
+
+      return {
+        peers: 0, // Aztec doesn't expose peer count
+        version: 'Aztec Node',
+        syncing,
+        blockNumber: latestBlock,
+        chainId: 11155111, // Sepolia (where Aztec testnet runs)
+        finalizedEpoch: provenBlock,
+        participation: Math.round(participation),
+        latestBlock,
+        provenBlock,
+        finalizedBlock,
+      };
+    } catch (err) {
+      console.error('Failed to fetch Aztec metrics:', err);
+      return {
+        peers: 0,
+        version: 'Aztec Node',
+        syncing: false,
+        blockNumber: 0,
+        chainId: 11155111,
+        finalizedEpoch: 0,
+        participation: 0,
       };
     }
   }

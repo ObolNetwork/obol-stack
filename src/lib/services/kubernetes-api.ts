@@ -29,13 +29,19 @@ export class KubernetesAPIClient {
    */
   async checkServiceHealth(serviceUrl: string): Promise<boolean> {
     try {
-      // Use POST for JSON-RPC endpoints
+      // Check if this is an Aztec node by URL pattern
+      const isAztecNode =
+        serviceUrl.includes('aztec') || serviceUrl.includes('l2-');
+
+      // Use appropriate health check method
+      const method = isAztecNode ? 'node_getL2Tips' : 'web3_clientVersion';
+
       const response = await fetch(serviceUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          method: 'web3_clientVersion',
+          method: method,
           params: [],
           id: 1,
         }),
@@ -56,6 +62,18 @@ export class KubernetesAPIClient {
       {
         url: config.heliosClientUrl,
         type: NODE_MODES.LIGHT_MODE,
+      },
+      {
+        url: config.aztecFullNodeUrl,
+        type: NODE_MODES.AZTEC_FULLNODE,
+      },
+      {
+        url: config.aztecSequencerUrl,
+        type: NODE_MODES.AZTEC_SEQUENCER,
+      },
+      {
+        url: config.aztecProverNodeUrl,
+        type: NODE_MODES.AZTEC_PROVER,
       },
     ];
 

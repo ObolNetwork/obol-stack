@@ -102,6 +102,7 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
             BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             GITCOMMIT=${{ github.sha }}
+            NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ secrets.WALLET_CONNECT_PROJECT_ID || '2f5c0e3b4d6a8f9e1c3b7d5a4e2f8c9d' }}
 
 
   security-scan:

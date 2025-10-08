@@ -158,7 +158,17 @@ export function NetworkStatus({
             <MetricItem>
               <MetricLabel>NODE MODE</MetricLabel>
               <MetricValue css={{ fontFamily: 'inherit' }}>
-                {chainData.nodeMode === 'fullMode' ? 'Full Node' : 'Light Node'}
+                {chainData.nodeMode === 'fullMode'
+                  ? 'Full Node'
+                  : chainData.nodeMode === 'lightMode'
+                    ? 'Light Node'
+                    : chainData.nodeMode === 'aztec-fullnode'
+                      ? 'Full Node (Archiver)'
+                      : chainData.nodeMode === 'aztec-sequencer'
+                        ? 'Sequencer'
+                        : chainData.nodeMode === 'aztec-prover'
+                          ? 'Prover'
+                          : 'Unknown'}
               </MetricValue>
             </MetricItem>
             {chainData.nodeMode === 'fullMode' && (

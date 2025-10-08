@@ -34,6 +34,12 @@ export const hoodi = defineChain({
   },
 });
 
+// Use a placeholder project ID if not provided (required for builds)
+// This should be replaced with a real project ID from https://cloud.walletconnect.com
+const walletConnectProjectId =
+  process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID ||
+  '2f5c0e3b4d6a8f9e1c3b7d5a4e2f8c9d'; // Placeholder for builds
+
 const connectors = connectorsForWallets(
   [
     {
@@ -49,7 +55,7 @@ const connectors = connectorsForWallets(
   ],
   {
     appName: 'Obol Stack Dashboard',
-    projectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID!,
+    projectId: walletConnectProjectId,
   }
 );
 

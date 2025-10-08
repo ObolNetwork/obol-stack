@@ -23,6 +23,21 @@ export const config = {
     process.env.FULL_NODE_BEACON_URL ||
     'http://l1-full-node-mainnet-beacon.l1.svc.cluster.local:5052',
 
+  // Aztec L2 Service URLs
+  aztecFullNodeUrl:
+    process.env.AZTEC_FULLNODE_URL ||
+    'http://l2-full-node-sepolia-node.aztec-testnet.svc.cluster.local:8080',
+  aztecSequencerUrl: process.env.AZTEC_SEQUENCER_URL || 'http://localhost:8080',
+  aztecProverNodeUrl:
+    process.env.AZTEC_PROVER_NODE_URL ||
+    'http://l2-prover-node-sepolia-node.aztec-testnet.svc.cluster.local:8080',
+  aztecProverBrokerUrl:
+    process.env.AZTEC_PROVER_BROKER_URL ||
+    'http://l2-prover-node-sepolia-broker.aztec-testnet.svc.cluster.local:8080',
+  aztecProverAgentUrl:
+    process.env.AZTEC_PROVER_AGENT_URL ||
+    'http://l2-prover-node-sepolia-agent.aztec-testnet.svc.cluster.local:8080',
+
   // Network Configuration
   defaultNetwork: process.env.DEFAULT_NETWORK || 'hoodi',
   networks: {

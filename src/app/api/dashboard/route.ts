@@ -6,6 +6,7 @@ import {
   ConsensusClientMetrics,
   ExecutionClientMetrics,
   HeliosClientMetrics,
+  AztecClientMetrics,
 } from '@/lib/services/client-metrics';
 import { config } from '@/lib/config/environment';
 import {
@@ -119,6 +120,16 @@ export async function GET() {
               (result as ConsensusClientMetrics).finalizedEpoch || 0;
             participation =
               (result as ConsensusClientMetrics).participation || 0;
+          } else if (client.type === 'aztec') {
+            // Handle Aztec metrics
+            blockHeight = (result as AztecClientMetrics).blockNumber || 0;
+            finalizedEpoch = (result as AztecClientMetrics).finalizedEpoch || 0;
+            participation = (result as AztecClientMetrics).participation || 0;
+            // Override chain info for Aztec nodes
+            chainInfo = {
+              chainName: CHAINS.AZTEC,
+              network: NETWORKS.TESTNET, // Aztec testnet runs on Sepolia
+            };
           }
           clients.push({
             name: client.name,
