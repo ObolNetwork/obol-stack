@@ -1,6 +1,8 @@
 # Obol Agents
 
-This directory contains examples of integrating Google's Agent Development Kit (ADK) with various Model Context Protocol (MCP) servers related to Obol Stack
+This directory contains examples of integrating Google's Agent Development Kit (ADK) with various Model Context Protocol (MCP) servers related to Obol Stack.
+
+> **Note:** Docker configurations have been moved to individual agent directories. See [DOCKER_NOTE.md](DOCKER_NOTE.md) for details.
 ## Prerequisites
 
 1.  **Python Environment:** Ensure you have a Python 3.10+ environment set up. It's recommended to use a virtual environment:
@@ -57,6 +59,41 @@ This agent is designed to be run using the ADK Web UI. It connects to Filesystem
 5.  Select the `obol-agent-web` application from the dropdown list in the ADK Web UI.
 6.  Interact with the agent through the chat interface.
 
+
+### 3. AG-UI Backend Agent (`obol-agent-ag-ui/agent.py`)
+
+This agent provides an AG-UI backend for interacting with Obol Stack through a modern web interface.
+
+**To run locally:**
+
+1.  Navigate to the `obol-agent-ag-ui` directory:
+    ```bash
+    cd /Users/bussyjd/Development/Obol_Workbench/obol-stack/obol-adk/obol-agent-ag-ui
+    ```
+2.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  Run the agent:
+    ```bash
+    python agent.py
+    ```
+    The AG-UI backend will be available at `http://localhost:8000/`
+
+**To run with Docker:**
+
+1.  Navigate to the `obol-agent-ag-ui` directory
+2.  Build and run with Docker Compose:
+    ```bash
+    docker-compose up -d
+    ```
+    Or build manually:
+    ```bash
+    docker build -t obol-agent-ag-ui:latest .
+    docker run -d -p 8000:8000 obol-agent-ag-ui:latest
+    ```
+
+See the [obol-agent-ag-ui README](obol-agent-ag-ui/README.md) for detailed configuration options.
 
 ## Improvements
 
