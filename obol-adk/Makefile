@@ -1,6 +1,7 @@
 .PHONY: help install setup start dev clean test
 
-VENV := .venv
+# Use absolute path for venv to work from subdirectories
+VENV := $(CURDIR)/.venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
