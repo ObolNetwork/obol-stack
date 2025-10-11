@@ -56,22 +56,31 @@ This agent connects to Obol, Kubernetes, and Foundry MCP servers and runs direct
 
 ### 2. Web UI Agent (`obol-agent-web/agent.py`)
 
-This agent is designed to be run using the ADK Web UI. It connects to Filesystem, Obol, Kubernetes, and Foundry MCP servers.
+This agent is designed to be run using the ADK Web UI. It connects to Obol, Kubernetes, and Filesystem MCP servers.
 
-**To run:**
+**To run (recommended):**
+
+```bash
+# From the obol-adk directory
+make start-web
+```
+
+This will launch the ADK Web interface. Make sure to select `obol_agent` from the dropdown in the web UI.
+
+**Manual alternative:**
 
 1.  Navigate to the `obol-adk` root directory:
     ```bash
     cd /Users/bussyjd/Development/Obol_Workbench/obol-stack/obol-adk
     ```
-2.  Ensure your `.env` file is present in the `obol-agent-web/` subdirectory.
+2.  Ensure your `.env` file is configured (see `.env.example`)
 3.  Start the ADK Web server:
     ```bash
-    adk web
+    cd obol-agent-web && adk web
     ```
-4.  Open your web browser and navigate to the URL provided (usually `http://localhost:8000`).
-5.  Select the `obol-agent-web` application from the dropdown list in the ADK Web UI.
-6.  Interact with the agent through the chat interface.
+4.  Open your web browser and navigate to the URL provided
+5.  Select `obol_agent` from the dropdown list in the ADK Web UI
+6.  Interact with the agent through the chat interface
 
 
 ### 3. AG-UI Backend Agent (`obol-agent-ag-ui/agent.py`) - Recommended
@@ -139,14 +148,15 @@ The `obol-adk` directory includes a Makefile for convenient development workflow
 ### Available Commands
 
 ```bash
-make help      # Show all available commands
-make dev       # Full setup and start (one command for first-time setup)
-make install   # Create virtual environment and install dependencies
-make setup     # Clone/update obol-gitbook and configure .env
-make start     # Start the obol-agent-ag-ui agent
-make test      # Run agent unit tests
-make ci        # Run full CI workflow locally (simulates GitHub Actions)
-make clean     # Remove obol-gitbook directory
+make help       # Show all available commands
+make dev        # Full setup and start (one command for first-time setup)
+make install    # Create virtual environment and install dependencies
+make setup      # Clone/update obol-gitbook and configure .env
+make start      # Start the obol-agent-ag-ui agent (FastAPI backend)
+make start-web  # Start the obol-agent-web agent (ADK Web UI)
+make test       # Run agent unit tests
+make ci         # Run full CI workflow locally (simulates GitHub Actions)
+make clean      # Remove obol-gitbook directory
 ```
 
 ### How It Works

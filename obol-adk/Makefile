@@ -1,23 +1,26 @@
-.PHONY: help install setup start dev clean test ci
+.PHONY: help install setup start start-web dev clean test ci
 
 # Use absolute path for venv to work from subdirectories
 VENV := $(CURDIR)/.venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
+ADK := $(VENV)/bin/adk
 AGENT_DIR := $(CURDIR)/obol-agent-ag-ui
+WEB_AGENT_DIR := $(CURDIR)/obol-agent-web
 
 # Default target
 help:
 	@echo "Obol ADK - Development Commands"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make dev      - Full setup (venv + gitbook + env) and start agent"
-	@echo "  make install  - Create venv and install Python dependencies"
-	@echo "  make setup    - Clone/update obol-gitbook and configure .env"
-	@echo "  make start    - Start the obol-agent-ag-ui agent"
-	@echo "  make test     - Run agent unit tests"
-	@echo "  make ci       - Run full CI workflow locally (simulates GitHub Actions)"
-	@echo "  make clean    - Remove obol-gitbook directory"
+	@echo "  make dev       - Full setup (venv + gitbook + env) and start agent"
+	@echo "  make install   - Create venv and install Python dependencies"
+	@echo "  make setup     - Clone/update obol-gitbook and configure .env"
+	@echo "  make start     - Start the obol-agent-ag-ui agent (FastAPI backend)"
+	@echo "  make start-web - Start the obol-agent-web agent (ADK Web UI)"
+	@echo "  make test      - Run agent unit tests"
+	@echo "  make ci        - Run full CI workflow locally (simulates GitHub Actions)"
+	@echo "  make clean     - Remove obol-gitbook directory"
 	@echo ""
 
 # Create virtual environment and install dependencies
@@ -45,8 +48,22 @@ start:
 		echo "✗ Virtual environment not found. Run 'make install' first."; \
 		exit 1; \
 	fi
-	@echo "Starting Obol Agent AG-UI..."
+	@echo "Starting Obol Agent AG-UI (FastAPI backend)..."
+	@echo "Available at: http://localhost:8000/"
 	@cd obol-agent-ag-ui && $(PYTHON) agent.py
+
+# Start the web agent with ADK Web UI
+start-web:
+	@if [ ! -d "$(VENV)" ]; then \
+		echo "✗ Virtual environment not found. Run 'make install' first."; \
+		exit 1; \
+	fi
+	@echo "Starting Obol Agent Web UI..."
+	@echo "This will launch the ADK Web interface"
+	@echo ""
+	@echo "Important: Make sure to select 'obol-agent-web' from the dropdown in the web UI"
+	@echo ""
+	@$(ADK) web
 
 # Dev workflow: install + setup + start
 dev: install setup
