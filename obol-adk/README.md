@@ -144,7 +144,8 @@ make dev       # Full setup and start (one command for first-time setup)
 make install   # Create virtual environment and install dependencies
 make setup     # Clone/update obol-gitbook and configure .env
 make start     # Start the obol-agent-ag-ui agent
-make test      # Run agent tests
+make test      # Run agent unit tests
+make ci        # Run full CI workflow locally (simulates GitHub Actions)
 make clean     # Remove obol-gitbook directory
 ```
 
@@ -167,6 +168,16 @@ make clean     # Remove obol-gitbook directory
 4. **`make dev`** - Combines `install` + `setup` + `start`
    - Perfect for first-time setup
    - One command to go from zero to running agent
+
+5. **`make test`** - Runs unit tests
+   - Quick test suite for development
+   - Tests agent health and basic functionality
+
+6. **`make ci`** - Full CI workflow simulation
+   - Simulates the exact GitHub Actions workflow
+   - Runs agent in background, performs health checks, runs full test suite
+   - Perfect for validating changes before pushing
+   - Requires `GOOGLE_API_KEY` in `.env`
 
 ### First Time Setup
 

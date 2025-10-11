@@ -64,6 +64,7 @@ obol-adk/obol-gitbook/
 test-*.yaml
 demo-*.yaml
 *.log
+*.pid
 
 # Local LLMs
 llms-full.txt
