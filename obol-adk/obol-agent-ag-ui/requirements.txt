@@ -1,5 +1,5 @@
-google-adk
-ag-ui-adk
-fastapi
-uvicorn[standard]
-python-dotenv
+google-adk>=1.16.0
+ag-ui-adk>=0.3.1
+fastapi>=0.118.3
+uvicorn[standard]>=0.37.0
+python-dotenv>=1.1.1

@@ -1,2 +1,2 @@
-google_adk
+google-adk>=1.16.0
 
