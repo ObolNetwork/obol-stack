@@ -43,6 +43,7 @@ __pycache__/
 
 adk-samples/
 obol-adk/docs/*
+obol-adk/obol-gitbook/
 
 # SECURITY Prevent sensitive data leaks
 # ========================================
