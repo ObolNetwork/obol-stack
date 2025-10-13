@@ -40,6 +40,472 @@ The system is designed in **3 distinct layers**, each with independent lifecycle
 └─────────────────────────────────────────┘
 ```
 
+## Tooling Architecture
+
+The obol-stack is managed through two primary tools that work together:
+1. **obolup.sh** - Bootstrap installer and updater
+2. **obol** - CLI binary for cluster and application management
+
+### obolup.sh - Bootstrap Installer
+
+`obolup.sh` is a curl-to-bash bootstrap installer (similar to rustup) that handles initial setup and ongoing updates of the obol toolchain.
+
+**Purpose:**
+- Downloads and installs the `obol` binary from GitHub releases
+- Manages dependency versions (k3d, helm, helmfile, k9s)
+- Validates prerequisites (Docker installation and status)
+- Optionally bootstraps a cluster through the obol binary
+
+**Installation:**
+```bash
+# Curl-to-bash installation
+curl -sSL https://raw.githubusercontent.com/obol/obol-stack/main/obolup.sh | bash
+
+# Or download and run
+curl -sSL https://raw.githubusercontent.com/obol/obol-stack/main/obolup.sh -o obolup.sh
+chmod +x obolup.sh
+./obolup.sh
+```
+
+**Core Responsibilities:**
+
+#### 1. Binary Management
+- Downloads latest `obol` binary release from GitHub
+- Installs to `$OBOL_CONFIG_DIR/bin/obol`
+- Detects and upgrades to new obol binary versions
+- Prints shell PATH instructions for user configuration
+
+#### 2. Dependency Version Management
+Each obol release specifies compatible versions of dependencies:
+- k3d
+- helm
+- helmfile
+- k9s
+
+When upgrading obol, obolup.sh automatically:
+- Detects version changes in dependencies
+- Downloads/upgrades/downgrades dependencies as needed
+- Ensures version compatibility across the toolchain
+
+#### 3. Prerequisites Validation
+- Validates Docker is installed
+- Validates Docker daemon is running
+- Exits with instructions if Docker is missing or inactive
+- Respects user's system Docker installation method
+
+#### 4. Optional Cluster Bootstrap
+Via environment variables or arguments:
+```bash
+# Bootstrap with cluster initialization
+OBOL_INIT_CLUSTER=true ./obolup.sh
+
+# Or with arguments
+./obolup.sh --init-cluster
+```
+
+When enabled, obolup.sh delegates to the obol binary:
+1. Runs `obol cluster init` - Syncs default k3d config from obol-stack repo
+2. Runs `obol cluster up` - Spins up cluster and validates health
+3. Runs `obol cluster connect` - Launches k9s for cluster interaction
+
+**Future Scope:**
+- Layer 2 (Base Infrastructure) deployment via obolup.sh
+- Automatic application of base layer during bootstrap
+
+---
+
+### obol - Cluster Management Binary
+
+The `obol` binary is a Golang project within the obol-stack repository that provides comprehensive cluster and application lifecycle management.
+
+**Installation Location:** `$OBOL_CONFIG_DIR/bin/obol`
+
+**Architecture:** Golang CLI that wraps and orchestrates:
+- k3d (cluster management)
+- kubectl (Kubernetes API)
+- helmfile (manifest generation)
+- k9s (cluster UI)
+
+---
+
+#### Cluster Management Commands
+
+##### `obol cluster init`
+
+Initializes cluster configuration from obol-stack repository.
+
+```bash
+obol cluster init
+```
+
+**Behavior:**
+- Downloads default k3d configuration file to `$OBOL_CONFIG_DIR/cluster/k3d/`
+- Syncs latest cluster config from obol-stack GitHub repo
+- Performs optional system analysis to estimate resource tolerances
+- Prepares cluster definition but does not start cluster
+
+**Output:**
+- `$OBOL_CONFIG_DIR/cluster/k3d/config.yaml`
+
+---
+
+##### `obol cluster up`
+
+Spins up the k3d cluster and validates Layer 1 health.
+
+```bash
+obol cluster up
+```
+
+**Behavior:**
+1. Reads k3d configuration from `$OBOL_CONFIG_DIR/cluster/k3d/`
+2. Creates k3d cluster via `k3d cluster create`
+3. Validates Layer 1 foundation health:
+   - Cluster API reachability
+   - Networking configuration (CNI, ingress)
+   - Persistent storage provisioners
+4. Generates kubeconfig at `$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
+5. Runs healthcheck against ingress endpoints
+
+**Exit behavior:**
+- Returns success if cluster is healthy and ready
+- Returns error if cluster creation or healthcheck fails
+
+---
+
+##### `obol cluster down`
+
+Gracefully tears down the cluster.
+
+```bash
+obol cluster down
+```
+
+**Behavior:**
+- Stops k3d cluster via `k3d cluster stop`
+- Preserves persistent storage volumes in `$OBOL_STATE_DIR`
+- Retains configuration in `$OBOL_CONFIG_DIR`
+
+**Note:** Cluster can be restarted with `obol cluster up` without data loss.
+
+---
+
+##### `obol cluster purge`
+
+Completely removes cluster and all persistent data.
+
+```bash
+obol cluster purge
+```
+
+**Behavior:**
+1. Stops k3d cluster
+2. Deletes k3d cluster via `k3d cluster delete`
+3. **Deletes all persistent storage volumes** from `$OBOL_STATE_DIR`
+4. Removes kubeconfig from `$OBOL_CONFIG_DIR/cluster/kubeconfig/`
+
+**Warning:** This is destructive and cannot be undone.
+
+**Confirmation:** Requires user confirmation before proceeding.
+
+---
+
+##### `obol cluster connect`
+
+Connects to the cluster by launching k9s with the correct kubeconfig.
+
+```bash
+obol cluster connect
+```
+
+**Behavior:**
+- Wraps `k9s` with `KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
+- Launches interactive k9s session
+- Provides immediate cluster visibility and management
+
+**Equivalent to:**
+```bash
+KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml k9s
+```
+
+---
+
+##### `obol cluster backup <volume>`
+
+Backs up persistent storage volumes to a compressed archive.
+
+```bash
+obol cluster backup <volume-name>
+```
+
+**Behavior:**
+1. Persistent storage is hardcoded to `$OBOL_STATE_DIR` for all PVC volumes
+2. Identifies the volume's directory in `$OBOL_STATE_DIR/<volume-name>`
+3. Creates compressed archive: `$OBOL_STATE_DIR/backups/<volume-name>-<timestamp>.tar.gz`
+4. Validates archive integrity
+
+**Example:**
+```bash
+# Backup Prometheus data
+obol cluster backup prometheus-data
+
+# Creates: $OBOL_STATE_DIR/backups/prometheus-data-2025-10-13T14-30-00.tar.gz
+```
+
+**Use cases:**
+- Backing up Ethereum validator keys
+- Preserving historical metrics data
+- Creating restore points before upgrades
+
+---
+
+#### Application Management Commands
+
+##### `obol app install <APP>`
+
+Installs an application from the obol-stack repository.
+
+```bash
+obol app install <app-name>
+```
+
+**Behavior:**
+1. Checks `obol-base` applyset exists (dependency validation)
+2. Validates application dependencies (base layer components, other apps)
+3. Downloads application manifests from `github.com/obol/obol-stack/manifests/apps/<app>/`
+4. Saves to `$OBOL_CONFIG_DIR/helmfile/<app>/`
+5. Applies default configuration
+6. Runs `helmfile template` to generate YAML manifests
+7. Applies with `kubectl apply --prune --applyset=obol-app-<app>`
+8. Tracks installation in `$OBOL_CONFIG_DIR/.apps.yaml`
+
+**Example:**
+```bash
+obol app install sequencer
+# Downloads sequencer helmfile
+# Applies with applyset: obol-app-sequencer
+```
+
+---
+
+##### `obol app edit <APP>`
+
+Opens the application's values file in the user's editor.
+
+```bash
+obol app edit <app-name>
+```
+
+**Behavior:**
+1. Locates app values file: `$OBOL_CONFIG_DIR/helmfile/<app>/values.yaml`
+2. Opens in `$EDITOR` (falls back to `vim` or `nano`)
+3. Waits for editor to close
+4. Prompts: "Apply changes? [y/n]"
+5. If yes, runs `obol app sync <app>` to apply mutations
+
+**Example:**
+```bash
+export EDITOR=code
+obol app edit sequencer
+# Opens VS Code with sequencer/values.yaml
+```
+
+---
+
+##### `obol app sync <APP>`
+
+Generates manifests and applies changes to the cluster.
+
+```bash
+obol app sync <app-name>
+```
+
+**Behavior:**
+1. Reads app helmfile from `$OBOL_CONFIG_DIR/helmfile/<app>/`
+2. Runs `helmfile template` with current values
+3. Generates Kubernetes YAML manifests
+4. Applies with `kubectl apply --prune --applyset=obol-app-<app>`
+5. ApplySet automatically prunes removed resources
+
+**Example:**
+```bash
+# After editing values
+obol app sync sequencer
+# Regenerates and applies sequencer manifests
+```
+
+---
+
+##### `obol app update <APP>`
+
+Pulls the latest application template from obol-stack repository.
+
+```bash
+obol app update <app-name>
+```
+
+**Behavior:**
+1. Fetches latest app version from GitHub
+2. Downloads updated helmfile templates
+3. **Preserves user customizations** in `values.yaml`
+4. Merges user values with new template
+5. Prompts: "Review changes and apply? [y/n]"
+6. If yes, runs `obol app sync <app>` to apply updates
+
+**Example:**
+```bash
+obol app update sequencer
+# Fetches latest sequencer template
+# Merges with existing values.yaml
+# Applies updated manifests
+```
+
+---
+
+##### `obol app delete <APP>`
+
+Removes an application from the cluster.
+
+```bash
+obol app delete <app-name>
+```
+
+**Behavior:**
+1. Checks for dependent applications
+2. If dependencies exist, prevents deletion:
+   ```
+   ERROR: Cannot delete 'sequencer', required by: validator
+   ```
+3. If no dependencies, deletes applyset:
+   ```bash
+   kubectl delete applyset obol-app-<app>
+   ```
+4. All resources with `applyset.kubernetes.io/part-of=obol-app-<app>` are pruned
+5. Optionally removes local manifests from `$OBOL_CONFIG_DIR/helmfile/<app>/`
+6. Updates `$OBOL_CONFIG_DIR/.apps.yaml`
+
+**Example:**
+```bash
+obol app delete sequencer
+# Removes all sequencer resources from cluster
+# Base layer and other apps remain untouched
+```
+
+---
+
+#### Wrapped Utility Commands
+
+##### `obol kubectl [args...]`
+
+Wraps kubectl with the correct kubeconfig.
+
+```bash
+obol kubectl get pods
+```
+
+**Equivalent to:**
+```bash
+KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml kubectl get pods
+```
+
+---
+
+##### `obol k9s`
+
+Wraps k9s with the correct kubeconfig.
+
+```bash
+obol k9s
+```
+
+**Equivalent to:**
+```bash
+KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml k9s
+```
+
+---
+
+##### `obol helm [args...]`
+
+Wraps helm with the correct kubeconfig.
+
+```bash
+obol helm list
+```
+
+**Equivalent to:**
+```bash
+KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml helm list
+```
+
+---
+
+### Directory Structure (Updated)
+
+```
+$OBOL_CONFIG_DIR/                      # User runtime directory (~/.config/obol)
+├── bin/                               # Downloaded binaries
+│   ├── obol                           # Main CLI binary
+│   ├── k3d
+│   ├── helm
+│   ├── helmfile
+│   └── k9s
+├── cluster/                           # Cluster configuration
+│   ├── k3d/
+│   │   └── config.yaml                # k3d cluster definition
+│   └── kubeconfig/
+│       └── default.yaml               # Generated kubeconfig
+├── helmfile/                          # Application manifests
+│   ├── sequencer/
+│   │   ├── helmfile.yaml
+│   │   ├── values.yaml                # User-editable values
+│   │   └── charts/
+│   └── validator/
+│       ├── helmfile.yaml
+│       ├── values.yaml
+│       └── charts/
+├── .apps.yaml                         # Installed apps tracking (auto-generated)
+└── manifests/                         # Synced from obol-stack repo (legacy)
+    └── base/                          # Base infrastructure (future use)
+
+$OBOL_STATE_DIR/                       # Persistent data directory (~/.local/share/obol)
+├── volumes/                           # PVC persistent storage
+│   ├── prometheus-data/
+│   ├── grafana-data/
+│   └── validator-keys/
+└── backups/                           # Volume backups
+    ├── prometheus-data-2025-10-13T14-30-00.tar.gz
+    └── validator-keys-2025-10-13T15-00-00.tar.gz
+```
+
+**Key Changes:**
+- `$OBOL_CONFIG_DIR/bin/obol` - Main CLI binary installed by obolup.sh
+- `$OBOL_CONFIG_DIR/cluster/` - Cluster configuration and kubeconfig
+- `$OBOL_CONFIG_DIR/helmfile/` - Application manifests (renamed from `manifests/apps/`)
+- `$OBOL_STATE_DIR/` - Persistent storage volumes and backups
+
+---
+
+### Environment Variables
+
+**OBOL_CONFIG_DIR**
+- Default: `~/.config/obol`
+- Purpose: Configuration, binaries, and application manifests
+
+**OBOL_STATE_DIR**
+- Default: `~/.local/share/obol`
+- Purpose: Persistent storage volumes and backups
+
+**EDITOR**
+- Purpose: Editor used by `obol app edit`
+- Default: Falls back to `vim` or `nano`
+
+**KUBECONFIG**
+- Automatically set by obol wrapped commands
+- Points to: `$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
+
+---
+
 ## Layer Details
 
 ### Layer 1: Cluster Bootstrap
