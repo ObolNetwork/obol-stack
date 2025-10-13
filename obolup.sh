@@ -502,6 +502,91 @@ install_k3d() {
 	fi
 }
 
+# Install helmfile
+install_helmfile() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+	local latest_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
+		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
+	fi
+
+	# Get latest version from GitHub
+	latest_version=$(get_github_latest_version "helmfile/helmfile")
+	latest_version="${latest_version#v}"
+
+	if [[ -z "$latest_version" ]]; then
+		log_warn "Could not determine latest helmfile version"
+		return 1
+	fi
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$latest_version"; then
+		log_success "helmfile v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading helmfile from v$current_version to v$latest_version..."
+	else
+		log_info "Installing helmfile v$latest_version..."
+	fi
+
+	# Map platform/arch to helmfile naming
+	local helmfile_platform="$platform"
+	local helmfile_arch="$arch"
+
+	# Helmfile uses different naming for architectures
+	if [[ "$arch" == "amd64" ]]; then
+		helmfile_arch="amd64"
+	elif [[ "$arch" == "arm64" ]]; then
+		helmfile_arch="arm64"
+	fi
+
+	# Download and extract helmfile
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://github.com/helmfile/helmfile/releases/download/v${latest_version}/helmfile_${latest_version}_${helmfile_platform}_${helmfile_arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/helmfile" "$OBOL_BIN_DIR/helmfile"
+		chmod +x "$OBOL_BIN_DIR/helmfile"
+		rm -rf "$tmp_dir"
+		log_success "helmfile v$latest_version installed"
+	else
+		log_error "Failed to download helmfile"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
+# Install helm-diff plugin
+install_helm_diff() {
+	# Ensure helm is installed first
+	if [[ ! -f "$OBOL_BIN_DIR/helm" ]]; then
+		log_warn "helm not found, skipping helm-diff plugin"
+		return 1
+	fi
+
+	# Check if plugin is already installed
+	if "$OBOL_BIN_DIR/helm" plugin list 2>/dev/null | grep -q "diff"; then
+		log_success "helm-diff plugin already installed"
+		return 0
+	fi
+
+	log_info "Installing helm-diff plugin..."
+
+	# Install the plugin
+	if "$OBOL_BIN_DIR/helm" plugin install https://github.com/databus23/helm-diff >/dev/null 2>&1; then
+		log_success "helm-diff plugin installed"
+	else
+		log_error "Failed to install helm-diff plugin"
+		return 1
+	fi
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -511,6 +596,8 @@ install_dependencies() {
 	install_kubectl || log_warn "kubectl installation failed (continuing...)"
 	install_helm || log_warn "helm installation failed (continuing...)"
 	install_k3d || log_warn "k3d installation failed (continuing...)"
+	install_helmfile || log_warn "helmfile installation failed (continuing...)"
+	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 
 	echo ""
 	log_success "Dependencies check complete"
