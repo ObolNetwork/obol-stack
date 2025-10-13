@@ -3,124 +3,115 @@
 
 &nbsp;
 
-  <h1>The Obol Stack: Decentralised Applications For Ethereum</h1>
+  <h1>Obol Stack Management CLI</h1>
 
 </div>
 
 ## Overview
 
-The Obol Stack is a framework to make it easier to distribute decentralised applications (dApps), and easier to install and run them locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
-
-![Demo of the Stack Front End](./assets/frontend.gif)
+The Obol Stack is a CLI tool for managing local Kubernetes clusters and Ethereum node infrastructure. It provides a simple interface for cluster lifecycle management with XDG-compliant directory structure.
 
 ## Getting Started
 
 > [!IMPORTANT]
 > The Obol Stack is alpha software. It is not complete, and it may not be working smoothly. If you encounter an issue that does not appear to be documented, please open a [github issue](http://github.com/obolNetwork/obol-stack/issues) if an appropriate one is not already present.
->
-> See [here](./obolup/README.md#supported-architectures) for the latest on OS and architectures supported.
 
-### Pre-requisites
+### Prerequisites
 
-Running the Obol Stack locally requires a [Docker](https://www.docker.com/) engine. Install Docker for Linux using one of the options [here](https://docs.docker.com/engine/install/). Install Docker Desktop for Other Operating Systems [here](https://docs.docker.com/desktop/).
+- [Docker](https://www.docker.com/) engine installed
+- [Go](https://golang.org/) 1.25+ (for building from source)
 
-> [!TIP]
-> If you use Docker Desktop, be sure to go to the settings section, resources tab, and allocate most or all of your CPUs and most of your disk space. The stack won't succeed in syncing a local L1 node if there is not enough available disk space.
+### Installation
 
-Once you have Docker installed, the easiest way to bootstrap the stack is to use the `obolup` installer. `obolup` keeps your stack running the latest versions of its software.
-
-> [!IMPORTANT]
-> This first method of installation is not yet live, for now you must clone the repo and run `obolup` locally, as described in the second installation option.
-
-```sh
-# This mode of installation is not yet live, please use the repo clone approach until this message is removed
-
-# Add the `obolup` program to your path
-curl -L https://stack.obol.org | sudo bash
-
-# Reload your terminal, and run `obolup`
-obolup
-```
-
-You can also clone this repo locally and run:
+Use the `obolup.sh` bootstrap installer to build and install the `obol` CLI:
 
 ```sh
 # Clone this repo
 git clone git@github.com:ObolNetwork/obol-stack.git
+cd obol-stack
 
-# Change to ./obolup subdirectory
-cd obol-stack/obolup
-sudo chmod u+x ./obolup
-
-# Launch the stack in light client mode
-./obolup
+# Run the installer
+./obolup.sh
 ```
 
-The complete usage of `obolup` is documented [here](./obolup/README.md).
+The installer will:
+- Validate Docker is installed
+- Build the `obol` binary from source
+- Install it to the appropriate bin directory
 
-## Stack Overview
+The installer is idempotent - running it multiple times will upgrade existing installations.
 
-The default installation of the Stack configures an Ethereum L1 light client (using [Helios](https://github.com/a16z/helios)) and when `--mode=full` is passed, the stack syncs an L1 full node. Both sit behind a specialised Ethereum load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a high quality L1 RPC for all dApps installed on the stack. The default address for this RPC is:
+### Basic Usage
 
-```bash
-# Obol Stack L1 JSON-RPC for Obol Apps running within the stack
-http://rpc.l1.cluster.svc.local/rpc/mainnet
-http://rpc.l1.cluster.svc.local/rpc/hoodi
+```sh
+# Initialize a new cluster configuration
+obol cluster init
 
-# Obol Stack L1 Beacon Node API for Obol Apps in the stack that communicate with Ethereum's consensus layer
-http://l1-full-node-beacon.l1.cluster.svc.local:5052
+# Start the cluster
+obol cluster up
 
-# Obol Stack L1 JSON-RPC accessible by the host OS
-http://obol.stack/rpc/mainnnet
-http://obol.stack/rpc/hoodi
+# Stop the cluster
+obol cluster down
+
+# Connect to cluster services
+obol cluster connect
+
+# Backup cluster data
+obol cluster backup
+
+# Purge all cluster data
+obol cluster purge
 ```
 
-### `host` mode
+## Configuration
 
-By default, the Obol Stack configures itself to be accessible to dApps in your web browser, such as wallets and dApps. The stack configures itself on custom domain; https://obol.stack/
-This behaviour can be disabled by running the stack in `--headless` mode.
+The CLI follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
 
-> [!INFO]
-> When accessing the Obol Stack from your host OS, your browser may warn you about self-signed HTTPS certificates. This is unavoidable when using custom local web domains. You should click "Accept the risk and continue" to access the stack web page.
+- **Config directory**: `$XDG_CONFIG_HOME/obol` (default: `~/.config/obol`)
+- **Bin directory**: `$XDG_CONFIG_HOME/obol/bin` (default: `~/.config/obol/bin`)
+- **State directory**: `$XDG_DATA_HOME/obol` (default: `~/.local/share/obol`)
 
-### Installing an Obol App (Helm Chart)
+### Environment Variable Overrides
 
-Here's an example of adding on a popular Ethereum sidecar called contributoor, built by the EthPandaOps team, which streams data from your full node to their backend for analysis and visualisation.
+You can override default paths with environment variables:
 
-```bash
-obol install ethereum/contributooor
+```sh
+export OBOL_CONFIG_DIR=/custom/config/path
+export OBOL_BIN_DIR=/custom/bin/path
+export OBOL_STATE_DIR=/custom/state/path
 ```
 
-### Adding another Obol App Store
+Or use CLI flags:
 
-The Obol Stack is built on Helm, so you can add your own Helm Chart repository easily.
-
-```bash
-# Add a repository of Helm Charts
-obol repo add ithaca https://github.com/ithacaxyz/obol-charts
-# Install a chart from the new 'App Store'
-obol install ithaca/op-reth
+```sh
+obol --config-dir=/custom/path cluster init
 ```
 
-### Custom deployments
+Priority: CLI flags > Environment variables > XDG defaults
 
-Each Obol App has a `values.yaml` file with default values. You can customize these values by creating your own values file and passing it to the install command:
+### Development Mode
 
-```bash
-obol install <app-store-name>/<chart-name> --values custom-values.yaml
+For local development, use the `OBOL_DEVELOPMENT` flag to use a local `.workspace` directory instead of system paths:
+
+```sh
+export OBOL_DEVELOPMENT=true
+./obolup.sh
 ```
 
-### Using advanced tooling
+This creates an isolated development environment in `.workspace/` with the same structure as production:
 
-The `obol` CLI is intended to be a simple command-line user interface to simplify the use of the Obol Stack for non-developers, it is a work in progress, and does not cover many advanced use cases that Kubernetes and Helm can offer. If you are an experienced Kubernetes user, `obolup` also installs [`kubectl`](https://kubernetes.io/docs/reference/kubectl/) and [`helm`](https://helm.sh/docs/helm/helm/), such that you can manage your stack with the tooling you are used to.
+```
+.workspace/
+├── bin/           # Binary location
+├── config/        # Configuration files
+└── share/         # State and data
+```
 
-If you encounter node management requirements that an end-user might need but cannot achieve with the Obol CLI, instead needing to use `kubectl` or `helm`, consider opening a feature request issue on the [obol-cli](https://github.com/ObolNetwork/obol-cli/issues) repo.
+For persistent local development settings, copy `.envrc.local.example` to `.envrc.local` and customize as needed. This file is gitignored and automatically loaded by [direnv](https://direnv.net/).
 
 ## Project Status
 
-This project is currently in alpha, and should not be used in production.
-
-The stack aims to support all popular Kubernetes backends and all Ethereum client types, with a developer experience designed to be useful for local app development, through to production deployment and management.
+This project is currently in early alpha development. The CLI structure and core commands are in place, but implementations are still being developed.
 
 ## Contributing
 
