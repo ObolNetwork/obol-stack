@@ -712,6 +712,31 @@ $OBOL_STATE_DIR/                       # Persistent data directory (~/.local/sha
 
 ---
 
+## Persistent Storage Strategy
+
+Persistent state is saved to the host machine via k3d volume mounts, enabling data to survive pod deletions and cluster teardowns.
+
+**Approach:**
+
+1. **Host Directory Mount**: k3d mounts a host directory into all cluster nodes
+   - Source: `$OBOL_STATE_DIR` (defaults to `.workspace/state` in dev, `~/.local/share/obol` in production)
+   - Target: `/data` inside k3d nodes
+   - Configured via `k3d/config.yaml` volumes section
+
+2. **Kubernetes Storage**: Applications use PersistentVolumes with hostPath pointing to subdirectories within the mounted path
+   - Example: `/data/ethereum-execution`, `/data/validator-keys`, `/data/prometheus-data`
+   - Data persists on host filesystem, survives cluster lifecycle
+
+3. **Flexibility**: Default single mount configuration can be extended with additional mounts for performance/capacity needs
+   - Users can add multiple volume mounts for different storage backends
+   - See `k3d/config.yaml` for optional mount examples
+
+**Lifecycle:**
+- `obol cluster down`: Preserves all persistent volumes
+- `obol cluster purge`: Deletes persistent volumes (requires confirmation)
+
+---
+
 ## Layer Details
 
 ### Layer 1: Cluster Bootstrap
