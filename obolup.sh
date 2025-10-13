@@ -587,6 +587,79 @@ install_helm_diff() {
 	fi
 }
 
+# Install k9s
+install_k9s() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+	local latest_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/k9s" ]]; then
+		current_version=$("$OBOL_BIN_DIR/k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
+	fi
+
+	# Get latest version from GitHub
+	latest_version=$(get_github_latest_version "derailed/k9s")
+	latest_version="${latest_version#v}"
+
+	if [[ -z "$latest_version" ]]; then
+		log_warn "Could not determine latest k9s version"
+		return 1
+	fi
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$latest_version"; then
+		log_success "k9s v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading k9s from v$current_version to v$latest_version..."
+	else
+		log_info "Installing k9s v$latest_version..."
+	fi
+
+	# Map platform/arch to k9s naming
+	local k9s_platform
+	case "$platform" in
+		darwin)
+			k9s_platform="Darwin"
+			;;
+		linux)
+			k9s_platform="Linux"
+			;;
+		windows)
+			k9s_platform="Windows"
+			;;
+	esac
+
+	local k9s_arch
+	case "$arch" in
+		amd64)
+			k9s_arch="amd64"
+			;;
+		arm64)
+			k9s_arch="arm64"
+			;;
+	esac
+
+	# Download and extract k9s
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://github.com/derailed/k9s/releases/download/v${latest_version}/k9s_${k9s_platform}_${k9s_arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/k9s" "$OBOL_BIN_DIR/k9s"
+		chmod +x "$OBOL_BIN_DIR/k9s"
+		rm -rf "$tmp_dir"
+		log_success "k9s v$latest_version installed"
+	else
+		log_error "Failed to download k9s"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -597,6 +670,7 @@ install_dependencies() {
 	install_helm || log_warn "helm installation failed (continuing...)"
 	install_k3d || log_warn "k3d installation failed (continuing...)"
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
+	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 
 	echo ""
