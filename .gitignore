@@ -24,6 +24,9 @@ dist/
 build/
 .cache/
 
+# Go binary
+/obol
+
 # Dependencies
 /node_modules/
 /vendor/
