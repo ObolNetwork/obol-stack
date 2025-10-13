@@ -371,19 +371,93 @@ install_dependencies() {
 	log_success "Dependencies check complete"
 }
 
+# Prompt to update shell PATH
+# Returns 0 if PATH was configured, 1 otherwise
+update_shell_path() {
+	# Skip in development mode
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		PATH_CONFIGURED="true"
+		return 0
+	fi
+
+	# Detect shell config file
+	local shell_name=$(basename "$SHELL" 2>/dev/null || echo "")
+	local config_file=""
+
+	case "$shell_name" in
+		bash)
+			config_file="$HOME/.bashrc"
+			;;
+		zsh)
+			config_file="$HOME/.zshrc"
+			;;
+		fish)
+			config_file="$HOME/.config/fish/config.fish"
+			;;
+		*)
+			# Unknown shell, skip
+			PATH_CONFIGURED="false"
+			return 1
+			;;
+	esac
+
+	# Check if config file exists
+	if [[ ! -f "$config_file" ]]; then
+		PATH_CONFIGURED="false"
+		return 1
+	fi
+
+	# Check if PATH entry already exists
+	if grep -q "$OBOL_BIN_DIR" "$config_file" 2>/dev/null; then
+		log_success "PATH already configured in $config_file"
+		PATH_CONFIGURED="true"
+		return 0
+	fi
+
+	# Prompt user
+	echo ""
+	log_info "Detected shell: $shell_name"
+	echo ""
+	read -p "Add $OBOL_BIN_DIR to PATH in $config_file? [y/N] " -r
+	echo ""
+
+	if [[ $REPLY =~ ^[Yy]$ ]]; then
+		# Add PATH export to config file
+		{
+			echo ""
+			echo "# Added by obolup installer"
+			echo "export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+		} >> "$config_file"
+
+		log_success "Added to PATH in $config_file"
+		log_info "Reload your shell or run: source $config_file"
+		PATH_CONFIGURED="true"
+		return 0
+	else
+		log_info "Skipped PATH update"
+		PATH_CONFIGURED="false"
+		return 1
+	fi
+}
+
 # Print post-install instructions
 print_instructions() {
 	echo ""
 	log_success "Obol Stack installation complete!"
 	echo ""
-	echo "Add the following to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
-	echo ""
-	echo "Then reload your shell or run:"
-	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
-	echo ""
+
+	# Only show manual instructions if PATH wasn't configured
+	if [[ "${PATH_CONFIGURED}" != "true" ]]; then
+		echo "Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+		echo ""
+		echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+		echo ""
+		echo "Then reload your shell or run:"
+		echo ""
+		echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+		echo ""
+	fi
+
 	echo "Verify installation:"
 	echo ""
 	echo "  obol version"
@@ -410,6 +484,7 @@ main() {
 	create_directories
 	install_obol_binary
 	install_dependencies
+	update_shell_path
 	print_instructions
 
 	echo ""
