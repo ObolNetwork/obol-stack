@@ -86,8 +86,7 @@ func Up(cfg *config.Config) error {
 	fmt.Printf("Starting stack '%s' [%s]...\n", stackName, stackID)
 
 	// Get absolute path to data directory for k3d volume mount
-	dataDir := cfg.DataDir
-	absDataDir, err := filepath.Abs(dataDir)
+	absDataDir, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
 	}
