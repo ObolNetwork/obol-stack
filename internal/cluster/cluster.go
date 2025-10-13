@@ -55,6 +55,7 @@ func Init(cfg *config.Config, force bool) error {
 
 	fmt.Printf("✓ Initialized cluster configuration at %s\n", k3dConfigPath)
 	fmt.Printf("✓ Cluster ID: %s\n", clusterID)
+
 	return nil
 }
 
@@ -105,6 +106,7 @@ func Up(cfg *config.Config) error {
 		"--kubeconfig-update-default=false",
 		"--verbose",
 	)
+
 	// Set OBOL_DATA_DIR for k3d config expansion (must be absolute path)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir))
 	cmd.Stdout = os.Stdout
@@ -131,9 +133,11 @@ func Up(cfg *config.Config) error {
 	}
 
 	fmt.Printf("✓ Cluster started successfully\n")
+
 	if clusterID != "" {
 		fmt.Printf("✓ Cluster ID: %s\n", clusterID)
 	}
+
 	fmt.Printf("✓ Kubeconfig saved to %s\n", kubeconfigPath)
 	fmt.Printf("\nTo use kubectl with this cluster:\n")
 	fmt.Printf("  export KUBECONFIG=%s\n", kubeconfigPath)
