@@ -275,19 +275,245 @@ install_obol_binary() {
 	fi
 }
 
-# Download dependencies (stub for now)
-install_dependencies() {
-	log_info "Checking dependencies..."
-
-	local deps=("k3d" "kubectl" "helm" "helmfile" "k9s")
-
-	for dep in "${deps[@]}"; do
-		if command_exists "$dep"; then
-			log_success "$dep already installed"
+# Detect platform
+detect_platform() {
+	local platform
+	case "$(uname -s)" in
+	Linux*)
+		# Check if running under WSL
+		if grep -qi microsoft /proc/version 2>/dev/null; then
+			platform="linux" # WSL uses Linux binaries
 		else
-			log_warn "$dep not found (dependency installation not yet implemented)"
+			platform="linux"
 		fi
-	done
+		;;
+	Darwin*)
+		platform="darwin"
+		;;
+	MINGW* | MSYS* | CYGWIN*)
+		platform="windows"
+		;;
+	*)
+		log_error "Unsupported platform: $(uname -s)"
+		exit 1
+		;;
+	esac
+	echo "$platform"
+}
+
+# Detect architecture
+detect_arch() {
+	local arch
+	case "$(uname -m)" in
+	x86_64 | amd64)
+		arch="amd64"
+		;;
+	aarch64 | arm64)
+		arch="arm64"
+		;;
+	armv7l)
+		arch="arm"
+		;;
+	*)
+		log_error "Unsupported architecture: $(uname -m)"
+		exit 1
+		;;
+	esac
+	echo "$arch"
+}
+
+# Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
+version_ge() {
+	local v1="$1"
+	local v2="$2"
+
+	# Remove 'v' prefix if present
+	v1="${v1#v}"
+	v2="${v2#v}"
+
+	# Simple version comparison using sort -V
+	if printf '%s\n%s\n' "$v2" "$v1" | sort -V -C 2>/dev/null; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+# Fetch latest version from GitHub releases
+get_github_latest_version() {
+	local repo="$1"
+	local version
+
+	# Try using GitHub API (no auth required for public repos)
+	version=$(curl -sSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+
+	if [[ -z "$version" ]]; then
+		log_warn "Could not fetch latest version for $repo"
+		return 1
+	fi
+
+	echo "$version"
+}
+
+# Install kubectl
+install_kubectl() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+	local latest_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/kubectl" ]]; then
+		current_version=$("$OBOL_BIN_DIR/kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
+	fi
+
+	# Get latest stable version
+	latest_version=$(curl -sSL "https://dl.k8s.io/release/stable.txt" 2>/dev/null)
+	latest_version="${latest_version#v}"
+
+	if [[ -z "$latest_version" ]]; then
+		log_warn "Could not determine latest kubectl version"
+		return 1
+	fi
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$latest_version"; then
+		log_success "kubectl v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading kubectl from v$current_version to v$latest_version..."
+	else
+		log_info "Installing kubectl v$latest_version..."
+	fi
+
+	# Download kubectl
+	local download_url="https://dl.k8s.io/release/v${latest_version}/bin/${platform}/${arch}/kubectl"
+
+	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/kubectl.tmp"; then
+		chmod +x "$OBOL_BIN_DIR/kubectl.tmp"
+		mv "$OBOL_BIN_DIR/kubectl.tmp" "$OBOL_BIN_DIR/kubectl"
+		log_success "kubectl v$latest_version installed"
+	else
+		log_error "Failed to download kubectl"
+		rm -f "$OBOL_BIN_DIR/kubectl.tmp"
+		return 1
+	fi
+}
+
+# Install helm
+install_helm() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+	local latest_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/helm" ]]; then
+		current_version=$("$OBOL_BIN_DIR/helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
+	fi
+
+	# Get latest version from GitHub
+	latest_version=$(get_github_latest_version "helm/helm")
+	latest_version="${latest_version#v}"
+
+	if [[ -z "$latest_version" ]]; then
+		log_warn "Could not determine latest helm version"
+		return 1
+	fi
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$latest_version"; then
+		log_success "helm v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading helm from v$current_version to v$latest_version..."
+	else
+		log_info "Installing helm v$latest_version..."
+	fi
+
+	# Download and extract helm
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://get.helm.sh/helm-v${latest_version}-${platform}-${arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/${platform}-${arch}/helm" "$OBOL_BIN_DIR/helm"
+		chmod +x "$OBOL_BIN_DIR/helm"
+		rm -rf "$tmp_dir"
+		log_success "helm v$latest_version installed"
+	else
+		log_error "Failed to download helm"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
+# Install k3d
+install_k3d() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+	local latest_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/k3d" ]]; then
+		current_version=$("$OBOL_BIN_DIR/k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
+	fi
+
+	# Get latest version from GitHub
+	latest_version=$(get_github_latest_version "k3d-io/k3d")
+	latest_version="${latest_version#v}"
+
+	if [[ -z "$latest_version" ]]; then
+		log_warn "Could not determine latest k3d version"
+		return 1
+	fi
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$latest_version"; then
+		log_success "k3d v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading k3d from v$current_version to v$latest_version..."
+	else
+		log_info "Installing k3d v$latest_version..."
+	fi
+
+	# Map platform/arch to k3d naming
+	local k3d_platform="$platform"
+	local k3d_arch="$arch"
+
+	# Download k3d
+	local download_url="https://github.com/k3d-io/k3d/releases/download/v${latest_version}/k3d-${k3d_platform}-${k3d_arch}"
+
+	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/k3d.tmp"; then
+		chmod +x "$OBOL_BIN_DIR/k3d.tmp"
+		mv "$OBOL_BIN_DIR/k3d.tmp" "$OBOL_BIN_DIR/k3d"
+		log_success "k3d v$latest_version installed"
+	else
+		log_error "Failed to download k3d"
+		rm -f "$OBOL_BIN_DIR/k3d.tmp"
+		return 1
+	fi
+}
+
+# Install all dependencies
+install_dependencies() {
+	log_info "Checking and installing dependencies..."
+	echo ""
+
+	# Install each dependency
+	install_kubectl || log_warn "kubectl installation failed (continuing...)"
+	install_helm || log_warn "helm installation failed (continuing...)"
+	install_k3d || log_warn "k3d installation failed (continuing...)"
+
+	echo ""
+	log_success "Dependencies check complete"
 }
 
 # Check if OBOL_BIN_DIR is in PATH and print instructions if not
