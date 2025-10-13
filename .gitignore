@@ -23,6 +23,7 @@ logs/
 dist/
 build/
 .cache/
+.workspace/
 
 # Go binary
 /obol
