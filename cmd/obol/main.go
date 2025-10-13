@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
@@ -35,43 +36,35 @@ func main() {
 						Name:  "init",
 						Usage: "Initialize stack configuration",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack init - not yet implemented")
-							fmt.Printf("Config dir: %s\n", cfg.ConfigDir)
-							fmt.Printf("Bin dir: %s\n", cfg.BinDir)
-							fmt.Printf("State dir: %s\n", cfg.StateDir)
-							return nil
+							return stack.Init(cfg)
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack up - not yet implemented")
-							return nil
+							return stack.Up(cfg)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack down - not yet implemented")
-							return nil
+							return stack.Down(cfg)
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete stack and all data",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack purge - not yet implemented")
-							return nil
+							return stack.Purge(cfg)
 						},
 					},
 					{
 						Name:  "connect",
 						Usage: "Connect to stack with k9s",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack connect - not yet implemented")
-							return nil
+							return stack.Connect(cfg)
 						},
 					},
 					{
