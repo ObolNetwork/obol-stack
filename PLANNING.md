@@ -67,6 +67,32 @@ chmod +x obolup.sh
 ./obolup.sh
 ```
 
+**Idempotency:**
+
+The `obolup.sh` script is designed to be idempotent and can be run multiple times safely:
+- Detects existing `obol` binary installation
+- Shows current version before upgrading
+- Overwrites binary with new version
+- Creates directories only if they don't exist
+- Can be used for both initial installation and upgrades
+
+**Example behavior:**
+```bash
+# First run: Fresh installation
+$ ./obolup.sh
+==> Installing obol binary...
+==> Building from source...
+✓ Installed obol binary (version: 0.1.0)
+
+# Second run: Upgrade
+$ ./obolup.sh
+==> Installing obol binary...
+==> Found existing obol binary (version: 0.1.0)
+==> Upgrading...
+==> Building from source...
+✓ Installed obol binary (version: 0.2.0)
+```
+
 **Core Responsibilities:**
 
 #### 1. Binary Management
