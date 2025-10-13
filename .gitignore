@@ -37,6 +37,7 @@ build/
 *.env
 .env.*
 !.env.example
+.envrc.local
 
 # Temporary files
 *.tmp
