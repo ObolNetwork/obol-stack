@@ -73,6 +73,18 @@ func Up(cfg *config.Config) error {
 
 	fmt.Printf("Starting cluster '%s'...\n", clusterName)
 
+	// Get absolute path to data directory for k3d volume mount
+	dataDir := cfg.GetDataDir()
+	absDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
+	}
+
+	// Create data directory if it doesn't exist
+	if err := os.MkdirAll(absDataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
 	// Create cluster using k3d config
 	cmd = exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
@@ -81,8 +93,12 @@ func Up(cfg *config.Config) error {
 		"--kubeconfig-update-default=false",
 		"--verbose",
 	)
+	// Set OBOL_DATA_DIR for k3d config expansion (must be absolute path)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	fmt.Printf("Using data directory: %s\n", absDataDir)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
