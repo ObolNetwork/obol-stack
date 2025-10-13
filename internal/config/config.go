@@ -22,9 +22,16 @@ func Load() *Config {
 }
 
 // getConfigDir returns OBOL_CONFIG_DIR or XDG_CONFIG_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/config
 func getConfigDir() string {
 	if dir := os.Getenv("OBOL_CONFIG_DIR"); dir != "" {
 		return dir
+	}
+
+	// Development mode: use .workspace directory in project root
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".workspace", "config")
 	}
 
 	// XDG_CONFIG_HOME defaults to ~/.config
@@ -38,18 +45,32 @@ func getConfigDir() string {
 }
 
 // getBinDir returns OBOL_BIN_DIR or OBOL_CONFIG_DIR/bin
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/bin
 func getBinDir() string {
 	if dir := os.Getenv("OBOL_BIN_DIR"); dir != "" {
 		return dir
+	}
+
+	// Development mode: use .workspace directory in project root
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".workspace", "bin")
 	}
 
 	return filepath.Join(getConfigDir(), "bin")
 }
 
 // getStateDir returns OBOL_STATE_DIR or XDG_DATA_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/share
 func getStateDir() string {
 	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
 		return dir
+	}
+
+	// Development mode: use .workspace directory in project root
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".workspace", "share")
 	}
 
 	// XDG_DATA_HOME defaults to ~/.local/share

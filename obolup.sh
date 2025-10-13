@@ -12,15 +12,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# XDG Base Directory specification
-# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+# Development mode detection
+if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+	# Get script directory for development mode
+	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	WORKSPACE_DIR="$SCRIPT_DIR/.workspace"
 
-# Configuration directories with XDG defaults
-OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$XDG_CONFIG_HOME/obol}"
-OBOL_STATE_DIR="${OBOL_STATE_DIR:-$XDG_DATA_HOME/obol}"
-OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_CONFIG_DIR/bin}"
+	# Override directories to use local .workspace
+	OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$WORKSPACE_DIR/config}"
+	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$WORKSPACE_DIR/share}"
+	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$WORKSPACE_DIR/bin}"
+
+	log_warn() { echo -e "${YELLOW}!${NC} $1"; }
+	log_warn "Development mode enabled - using local .workspace directory"
+else
+	# XDG Base Directory specification
+	# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+	XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+	XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+	# Configuration directories with XDG defaults
+	OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$XDG_CONFIG_HOME/obol}"
+	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$XDG_DATA_HOME/obol}"
+	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_CONFIG_DIR/bin}"
+fi
 
 # Logging functions
 log_info() {
