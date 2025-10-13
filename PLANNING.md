@@ -440,6 +440,186 @@ KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml helm list
 
 ---
 
+#### AI-Assisted Commands
+
+##### `obol ai <prompt>`
+
+Provides AI-powered cluster debugging and monitoring using a local AI with kubernetes-mcp integration.
+
+```bash
+obol ai "validate why my cluster is not working"
+obol ai "why is the sequencer pod crashing?"
+obol ai "check if all apps are healthy"
+```
+
+**Purpose:**
+- Natural language cluster diagnostics
+- Automated issue detection and root cause analysis
+- Monitoring of installed applications
+- Configuration validation
+- Guided troubleshooting
+
+**Architecture:**
+
+The `obol ai` command connects to a local AI agent that has:
+1. **kubernetes-mcp access** - Direct read access to cluster state via Model Context Protocol
+2. **Cluster context** - Awareness of installed apps, base layer, and configuration
+3. **Log analysis** - Ability to query pod logs and events
+4. **Metrics access** - Integration with Prometheus for performance data
+
+**Behavior:**
+
+1. Connects to local AI endpoint (defaults to localhost MCP server)
+2. Passes user prompt to AI with cluster context
+3. AI uses kubernetes-mcp tools to:
+   - Query pod status, deployments, services
+   - Read logs and events
+   - Check resource utilization
+   - Validate configurations
+4. Returns analysis and recommendations in natural language
+
+**Example Use Cases:**
+
+1. **Cluster Health Validation:**
+   ```bash
+   $ obol ai "validate why my cluster is not working"
+
+   Analyzing cluster state...
+
+   Found 3 issues:
+
+   1. Prometheus pod in CrashLoopBackOff
+      └─ Root cause: Insufficient memory (OOMKilled)
+      └─ Current limit: 1Gi, Recommended: 2Gi
+
+   2. Sequencer deployment has 0/1 replicas ready
+      └─ Root cause: Image pull failure (ImagePullBackOff)
+      └─ Image: ghcr.io/obol/sequencer:v1.2.3 not found
+
+   3. Persistent volume claim 'validator-data' pending
+      └─ Root cause: No storage class available
+      └─ k3d local-path provisioner not running
+
+   Suggested actions:
+   1. Increase Prometheus memory: obol app edit monitoring
+   2. Check sequencer image tag in values.yaml
+   3. Verify k3d storage provisioner: kubectl get pods -n kube-system
+   ```
+
+2. **Application-Specific Debugging:**
+   ```bash
+   $ obol ai "why is the sequencer pod crashing?"
+
+   Analyzing sequencer deployment...
+
+   Sequencer pod 'sequencer-7d9f8b6c-xkj2p' crash loop detected.
+
+   Last 20 log lines show:
+   - Fatal: Connection refused to L1 RPC endpoint
+   - Configured endpoint: http://eth-l1:8545
+
+   Root cause: L1 Ethereum node not reachable
+
+   Validation:
+   ✗ Service 'eth-l1' exists but no endpoints ready
+   ✗ eth-l1 pod in 'Pending' state
+   ✗ PVC 'eth-l1-data' stuck in Pending (no storage)
+
+   Resolution steps:
+   1. Fix storage provisioner (see above issue)
+   2. Once eth-l1 starts, sequencer will auto-recover
+   ```
+
+3. **Health Check All Apps:**
+   ```bash
+   $ obol ai "check if all apps are healthy"
+
+   Scanning installed applications...
+
+   Base Layer (obol-base):
+   ✓ Prometheus: Running (1/1 replicas)
+   ✓ Grafana: Running (1/1 replicas)
+   ✗ eth-l1-execution: Syncing (12 hours behind)
+   ✓ eth-l1-consensus: Synced
+
+   Applications:
+   ✓ sequencer: Running (1/1 replicas, 45 blocks processed)
+   ✗ validator: Degraded (2/3 replicas ready)
+      └─ validator-2 pod evicted (node pressure)
+
+   Overall Status: Degraded
+   Recommendation: Address validator replica issue and wait for L1 sync
+   ```
+
+4. **Configuration Validation:**
+   ```bash
+   $ obol ai "is my sequencer configured correctly?"
+
+   Analyzing sequencer configuration...
+
+   Configuration Review:
+   ✓ L1 RPC endpoint: http://eth-l1:8545 (reachable)
+   ✓ Sequencer private key: Set via secret
+   ✓ Resource requests: 2 CPU, 4Gi RAM (appropriate)
+   ⚠ Resource limits: Not set (recommended to add)
+   ✗ Persistent storage: Using emptyDir (data loss on restart)
+   ✓ Monitoring: Prometheus annotations present
+
+   Recommendations:
+   1. Add resource limits to prevent node exhaustion
+   2. Switch to PVC for persistent storage
+   3. Consider adding liveness/readiness probes
+   ```
+
+5. **Performance Analysis:**
+   ```bash
+   $ obol ai "why is the validator slow?"
+
+   Analyzing validator performance...
+
+   Metrics from last 1 hour:
+   - CPU usage: 95% (near limit of 2 cores)
+   - Memory usage: 6.2Gi / 8Gi (78%)
+   - Attestation success rate: 94% (below target 99%)
+   - P2P peer count: 12 (healthy)
+
+   Root cause: CPU bottleneck
+   - Validator is CPU-bound during attestation duties
+   - Current limit: 2 cores insufficient for 100 validators
+
+   Recommendation:
+   Increase CPU allocation to 4 cores:
+   $ obol app edit validator
+   # Set: resources.limits.cpu: "4"
+   $ obol app sync validator
+   ```
+
+**Infrastructure:**
+
+The AI capability is part of the base infrastructure setup (Layer 2). When the base layer is deployed, a local AI agent with kubernetes-mcp integration is installed and configured to monitor the cluster. The `obol ai` command connects to this local agent for diagnostics and troubleshooting.
+
+**Interactive Mode:**
+
+```bash
+# Start interactive AI session
+obol ai chat
+
+> What's wrong with my cluster?
+[AI analyzes and responds]
+
+> How do I fix the prometheus memory issue?
+[AI provides step-by-step guidance]
+
+> Show me the logs for the sequencer
+[AI fetches and displays logs]
+
+> exit
+```
+
+**Note:** This feature integrates with the AI Assistant deployed as part of Layer 2 (Base Infrastructure), as described in the "AI Integration and Chatbot" experimental feature section later in this document.
+
+---
+
 ### Directory Structure (Updated)
 
 ```
