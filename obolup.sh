@@ -511,7 +511,7 @@ install_helmfile() {
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
-		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
+		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*\([0-9.]*\).*/\1/p' || echo "")
 	fi
 
 	# Get latest version from GitHub
