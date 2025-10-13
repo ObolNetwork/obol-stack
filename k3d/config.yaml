@@ -8,7 +8,7 @@ image: rancher/k3s:v1.31.4-k3s1
 # Mount host directories into all nodes for persistent storage
 # Uses OBOL_DATA_DIR env var, falls back to .workspace/data
 volumes:
-  - volume: ${OBOL_DATA_DIR:-.workspace/state}:/data
+  - volume: ${OBOL_DATA_DIR}:/data
     nodeFilters:
       - all
 ports:

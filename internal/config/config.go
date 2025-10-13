@@ -61,7 +61,7 @@ func getBinDir() string {
 }
 
 // getStateDir returns OBOL_STATE_DIR or XDG_DATA_HOME/obol
-// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/share
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/state
 func getStateDir() string {
 	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
 		return dir
@@ -70,7 +70,7 @@ func getStateDir() string {
 	// Development mode: use .workspace directory in project root
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		cwd, _ := os.Getwd()
-		return filepath.Join(cwd, ".workspace", "share")
+		return filepath.Join(cwd, ".workspace", "state")
 	}
 
 	// XDG_DATA_HOME defaults to ~/.local/share
@@ -81,4 +81,10 @@ func getStateDir() string {
 	}
 
 	return filepath.Join(xdgDataHome, "obol")
+}
+
+// GetDataDir returns the data directory for use in k3d volumes
+// This is the same as StateDir but exposed for external tools
+func (c *Config) GetDataDir() string {
+	return c.StateDir
 }

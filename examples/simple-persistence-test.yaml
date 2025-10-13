@@ -1,0 +1,64 @@
+# Simple example to test persistent storage
+# This pod writes a text file that survives pod deletion and cluster teardowns
+
+---
+# PersistentVolume pointing to host-mounted storage
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: simple-test-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /data/test  # Maps to .workspace/state/test on your host
+    type: DirectoryOrCreate
+---
+# PersistentVolumeClaim to request storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: simple-test-pvc
+  namespace: default
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Pod that writes a text file with timestamp
+apiVersion: v1
+kind: Pod
+metadata:
+  name: writer-pod
+  namespace: default
+spec:
+  containers:
+  - name: writer
+    image: busybox
+    command:
+      - sh
+      - -c
+      - |
+        echo "Pod started at: $(date)" >> /data/messages.txt
+        echo "Hostname: $(hostname)" >> /data/messages.txt
+        echo "---" >> /data/messages.txt
+        echo "File contents:"
+        cat /data/messages.txt
+        echo ""
+        echo "Sleeping for 1 hour..."
+        sleep 3600
+    volumeMounts:
+    - name: persistent-storage
+      mountPath: /data
+  volumes:
+  - name: persistent-storage
+    persistentVolumeClaim:
+      claimName: simple-test-pvc
+  restartPolicy: Never
