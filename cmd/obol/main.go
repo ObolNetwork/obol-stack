@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/obol/obol-stack/internal/cluster"
 	"github.com/obol/obol-stack/internal/config"
 	"github.com/urfave/cli/v2"
 )
@@ -28,43 +29,35 @@ func main() {
 						Name:  "init",
 						Usage: "Initialize cluster configuration",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster init - not yet implemented")
-							fmt.Printf("Config dir: %s\n", cfg.ConfigDir)
-							fmt.Printf("Bin dir: %s\n", cfg.BinDir)
-							fmt.Printf("State dir: %s\n", cfg.StateDir)
-							return nil
+							return cluster.Init(cfg)
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the k3d cluster",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster up - not yet implemented")
-							return nil
+							return cluster.Up(cfg)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the k3d cluster",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster down - not yet implemented")
-							return nil
+							return cluster.Down(cfg)
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete cluster and all data",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster purge - not yet implemented")
-							return nil
+							return cluster.Purge(cfg)
 						},
 					},
 					{
 						Name:  "connect",
 						Usage: "Connect to cluster with k9s",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster connect - not yet implemented")
-							return nil
+							return cluster.Connect(cfg)
 						},
 					},
 					{
