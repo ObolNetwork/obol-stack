@@ -179,6 +179,10 @@ geth:
   httpPort: 8545
   wsPort: 8546
   p2pPort: 30303
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
   extraArgs:
     - >-
       {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
@@ -255,6 +259,10 @@ lighthouse:
   nameOverride: beacon
   httpPort: 5052
   p2pPort: 9000
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
   checkpointSync:
     enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
     url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
@@ -345,6 +353,10 @@ nimbus:
 ethereum-metrics-exporter:
   enabled: true
   nameOverride: metrics-exporter
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
   config:
     consensus:
       enabled: true

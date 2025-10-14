@@ -282,16 +282,220 @@ obol app apply ethereum
 
 ## Monitoring and Dashboards
 
-Once deployed, view your Ethereum node metrics in Grafana:
+The ethereum application includes comprehensive monitoring integration with automatic dashboard provisioning.
 
-1. **Access Grafana**: http://grafana.localhost:8080
-2. **Find Ethereum dashboards** in the dashboard list
-3. **View metrics**:
-   - Block height and sync status
-   - Peer connections
-   - Transaction pool
-   - Resource usage (CPU, memory, disk)
-   - Consensus attestations and proposals
+### Dashboard Auto-Loading
+
+Ethereum client dashboards are automatically downloaded from Grafana.com and loaded into Grafana when you deploy the application. This happens through a **dashboard provisioner Job** that runs post-install/post-upgrade.
+
+**How it works:**
+
+```
+1. Run: obol app sync ethereum
+
+2. Helmfile deploys:
+   ├─ Ethereum node (geth + lighthouse)
+   ├─ ServiceMonitors (enable Prometheus scraping)
+   └─ Dashboard provisioner Job
+
+3. Dashboard provisioner Job:
+   ├─ Downloads dashboards from Grafana.com:
+   │  • Geth (ID: 13877, revision: 1)
+   │  • Lighthouse (ID: 16737, revision: 1)
+   │  • Ethereum Metrics Exporter (ID: 16277, revision: 1)
+   │
+   ├─ Creates ConfigMaps with discovery labels:
+   │  • label: grafana_dashboard = "1"
+   │  • annotation: grafana_folder = "Ethereum"
+   │
+   └─ Grafana sidecar detects ConfigMaps
+      └─ Dashboards appear in Grafana (~30 seconds)
+
+4. Access dashboards:
+   └─ http://grafana.localhost:8080
+      └─ Dashboards → Browse → Ethereum folder
+```
+
+### Available Dashboards
+
+Once deployed, the following dashboards are available:
+
+| Dashboard | Source | Metrics |
+|-----------|--------|---------|
+| **Geth** | Grafana.com (13877) | Block sync, peers, transaction pool, resource usage, chain data |
+| **Lighthouse** | Grafana.com (16737) | Attestations, proposals, sync status, peer connections, validator performance |
+| **Ethereum Metrics Exporter** | Grafana.com (16277) | Combined execution + consensus metrics, chain health, client status |
+
+**Key metrics visualized:**
+- Block height and sync status
+- Peer connections and network health
+- Transaction pool size and gas prices
+- Resource usage (CPU, memory, disk I/O)
+- Consensus layer: attestations, proposals, sync committees
+- Execution layer: transaction processing, state sync
+
+### Accessing Dashboards
+
+1. **Wait for deployment to complete**:
+   ```bash
+   kubectl get jobs -n ethereum
+   # dashboard-provisioner should show COMPLETIONS: 1/1
+   ```
+
+2. **Verify dashboards were created**:
+   ```bash
+   kubectl get configmaps -n ethereum -l grafana_dashboard=1
+   ```
+   Expected output:
+   ```
+   NAME                                          DATA   AGE
+   grafana-dashboard-ethereum-metrics-exporter   1      2m
+   grafana-dashboard-geth                        1      2m
+   grafana-dashboard-lighthouse                  1      2m
+   ```
+
+3. **Access Grafana**:
+   - Open: http://grafana.localhost:8080
+   - Navigate: **Dashboards** → **Browse** → **Ethereum** folder
+   - Select any dashboard to view metrics
+
+4. **Verify metrics are flowing**:
+   - Check Prometheus is scraping:
+     ```bash
+     kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+     # Open http://localhost:9090/targets
+     # Look for "ethereum" targets
+     ```
+
+### Dashboard Configuration
+
+Dashboards are defined in `dashboards.yaml` as a Kubernetes Job that runs automatically. The Job downloads dashboards from Grafana.com using their public API.
+
+**To add more dashboards** (e.g., for other Ethereum clients):
+
+1. Find the dashboard on [Grafana.com](https://grafana.com/grafana/dashboards/)
+2. Note the dashboard ID and revision
+3. Edit `dashboards.yaml` in the DASHBOARDS array:
+   ```bash
+   declare -A DASHBOARDS=(
+     ["geth"]="13877:1"
+     ["lighthouse"]="16737:1"
+     ["ethereum-metrics-exporter"]="16277:1"
+     # Add new dashboard here:
+     ["nethermind"]="<dashboard-id>:<revision>"
+   )
+   ```
+4. Redeploy: `obol app sync ethereum`
+
+**To use custom dashboards:**
+
+Create a ConfigMap directly:
+```bash
+kubectl create configmap my-custom-dashboard \
+  --from-file=dashboard.json \
+  --namespace=ethereum
+
+kubectl label configmap my-custom-dashboard \
+  grafana_dashboard=1 \
+  --namespace=ethereum
+
+kubectl annotate configmap my-custom-dashboard \
+  grafana_folder=Ethereum \
+  --namespace=ethereum
+```
+
+The dashboard appears in Grafana within 30 seconds.
+
+### Metrics Collection
+
+The ethereum application exposes metrics via **ServiceMonitors** that Prometheus automatically discovers:
+
+**Geth (Execution Client)**:
+```yaml
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring  # Required for Prometheus discovery
+```
+- Metrics endpoint: `:6060/debug/metrics/prometheus`
+- Scrape interval: 30s
+
+**Lighthouse (Consensus Client)**:
+```yaml
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring
+```
+- Metrics endpoint: `:5054/metrics`
+- Scrape interval: 30s
+
+**Ethereum Metrics Exporter**:
+```yaml
+serviceMonitor:
+  enabled: true
+  labels:
+    release: monitoring
+```
+- Aggregates metrics from both execution and consensus clients
+- Provides high-level chain health metrics
+
+### Troubleshooting Dashboards
+
+**Dashboards not appearing:**
+
+1. Check if provisioner Job completed successfully:
+   ```bash
+   kubectl logs -n ethereum job/dashboard-provisioner
+   ```
+
+2. Verify ConfigMaps were created:
+   ```bash
+   kubectl get cm -n ethereum -l grafana_dashboard=1
+   ```
+
+3. Check Grafana sidecar discovered them:
+   ```bash
+   kubectl logs -n monitoring -l app.kubernetes.io/name=grafana -c grafana-sc-dashboard | grep ethereum
+   ```
+
+4. Force Grafana to rediscover:
+   ```bash
+   kubectl delete pod -n monitoring -l app.kubernetes.io/name=grafana
+   # Wait for pod to restart, dashboards will be reloaded
+   ```
+
+**Dashboards show "No Data":**
+
+1. Verify Prometheus is scraping ethereum namespace:
+   ```bash
+   kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+   # Open http://localhost:9090/targets
+   # Look for ethereum/geth-metrics, ethereum/lighthouse-metrics
+   ```
+
+2. Check ServiceMonitors have correct labels:
+   ```bash
+   kubectl get servicemonitor -n ethereum -o yaml | grep "release: monitoring"
+   ```
+
+3. Manually query metrics in Prometheus:
+   ```
+   up{namespace="ethereum"}
+   ```
+
+4. Check if pods are exposing metrics:
+   ```bash
+   # Geth
+   kubectl port-forward -n ethereum svc/ethereum-node-geth 6060:6060
+   curl http://localhost:6060/debug/metrics/prometheus
+
+   # Lighthouse
+   kubectl port-forward -n ethereum svc/ethereum-node-lighthouse 5054:5054
+   curl http://localhost:5054/metrics
+   ```
+
+For comprehensive monitoring integration guidance, see the [Monitoring Stack README](../default/monitoring/README.md).
 
 ## Accessing Your Node
 

@@ -1,0 +1,112 @@
+# Grafana Dashboard Provisioner for Ethereum
+# This creates ConfigMaps with dashboards that are auto-discovered by the monitoring stack's Grafana sidecar
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dashboard-provisioner
+  namespace: ethereum
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dashboard-provisioner
+  namespace: ethereum
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "update", "patch", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dashboard-provisioner
+  namespace: ethereum
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dashboard-provisioner
+subjects:
+- kind: ServiceAccount
+  name: dashboard-provisioner
+  namespace: ethereum
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dashboard-provisioner
+  namespace: ethereum
+  annotations:
+    # Helmfile hook to ensure this runs after the main release
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      name: dashboard-provisioner
+    spec:
+      serviceAccountName: dashboard-provisioner
+      restartPolicy: Never
+      containers:
+      - name: provisioner
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+
+          echo "Provisioning Ethereum Grafana dashboards..."
+
+          # Dashboard definitions (Grafana.com ID and revision)
+          declare -A DASHBOARDS=(
+            ["geth"]="13877:1"
+            ["lighthouse"]="16737:1"
+            ["ethereum-metrics-exporter"]="16277:1"
+          )
+
+          # Function to download and create ConfigMap
+          provision_dashboard() {
+            local name=$1
+            local dashboard_id=$2
+            local revision=$3
+
+            echo "Downloading ${name} dashboard (ID: ${dashboard_id}, revision: ${revision})..."
+
+            # Download dashboard JSON from Grafana.com
+            if ! curl -sSLf "https://grafana.com/api/dashboards/${dashboard_id}/revisions/${revision}/download" \
+              -o "/tmp/${name}.json"; then
+              echo "ERROR: Failed to download ${name} dashboard"
+              return 1
+            fi
+
+            # Create ConfigMap with the dashboard
+            # The label 'grafana_dashboard: "1"' makes it discoverable by Grafana sidecar
+            # The annotation 'grafana_folder: "Ethereum"' organizes it in a folder
+            kubectl create configmap "grafana-dashboard-${name}" \
+              --from-file="${name}.json=/tmp/${name}.json" \
+              --namespace=ethereum \
+              --dry-run=client -o yaml | \
+            kubectl label --local -f - \
+              grafana_dashboard=1 \
+              --dry-run=client -o yaml | \
+            kubectl annotate --local -f - \
+              grafana_folder=Ethereum \
+              --dry-run=client -o yaml | \
+            kubectl apply -f -
+
+            echo "✓ Provisioned ${name} dashboard"
+          }
+
+          # Provision all dashboards
+          for dashboard_name in "${!DASHBOARDS[@]}"; do
+            IFS=':' read -r dashboard_id revision <<< "${DASHBOARDS[$dashboard_name]}"
+            provision_dashboard "$dashboard_name" "$dashboard_id" "$revision"
+          done
+
+          echo ""
+          echo "✓ All Ethereum dashboards provisioned successfully!"
+          echo "  Access Grafana: http://grafana.localhost:8080"
+          echo "  Navigate to: Dashboards → Ethereum folder"
