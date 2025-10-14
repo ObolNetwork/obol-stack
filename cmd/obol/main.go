@@ -10,6 +10,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
+	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/urfave/cli/v2"
 )
 
@@ -56,6 +57,15 @@ GLOBAL OPTIONS:
    {{range $index, $option := .VisibleFlags}}{{if $index}}
    {{end}}{{$option}}{{end}}{{end}}
 `
+	// Initialize logger
+	logger, err := logging.NewLogger(cfg.StateDir)
+	if err != nil {
+		log.Printf("Warning: failed to initialize logger: %v\n", err)
+		logger = nil // Continue without logging
+	}
+	if logger != nil {
+		defer logger.Close()
+	}
 
 	app := &cli.App{
 		Name:    "obol",
@@ -80,28 +90,28 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return stack.Init(cfg, c.Bool("force"))
+							return stack.Init(cfg, logger, c.Bool("force"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Up(cfg)
+							return stack.Up(cfg, logger)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Down(cfg)
+							return stack.Down(cfg, logger)
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete stack and all data",
 						Action: func(c *cli.Context) error {
-							return stack.Purge(cfg)
+							return stack.Purge(cfg, logger)
 						},
 					},
 				},
