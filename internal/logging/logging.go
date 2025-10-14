@@ -33,12 +33,24 @@ type CommandEntry struct {
 type Logger struct {
 	*slog.Logger
 	sessionID   SessionID
+	stackID     string
 	stateDir    string
 	historyFile *os.File
 }
 
 // NewLogger creates a new logger with session tracking
+// Deprecated: All logging must be cluster-specific. Use NewLoggerWithCluster instead.
 func NewLogger(stateDir string) (*Logger, error) {
+	return nil, fmt.Errorf("stack_id is required - use NewLoggerWithCluster instead")
+}
+
+// NewLoggerWithCluster creates a new logger with session and cluster tracking
+func NewLoggerWithStack(stateDir, stackID string) (*Logger, error) {
+	// Require cluster_id - all logging is on a cluster lifecycle basis
+	if stackID == "" {
+		return nil, fmt.Errorf("cluster_id is required for logging")
+	}
+
 	// Generate unique session ID
 	sessionID := SessionID(uuid.New().String())
 
@@ -47,8 +59,12 @@ func NewLogger(stateDir string) (*Logger, error) {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
+	// Cluster-specific directories only
+	clusterDir := filepath.Join(stateDir, stackID)
+	logsDir := filepath.Join(clusterDir, "logs")
+	historyFile := filepath.Join(clusterDir, "history.jsonl")
+
 	// Create logs directory
-	logsDir := filepath.Join(stateDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
@@ -76,15 +92,18 @@ func NewLogger(stateDir string) (*Logger, error) {
 		handlers: []slog.Handler{consoleHandler, jsonHandler},
 	}
 
-	// Wrap with session ID
-	handlerWithSession := teeHandler.WithAttrs([]slog.Attr{
+	// Wrap with session ID and cluster_id
+	attrs := []slog.Attr{
 		slog.String("session_id", string(sessionID)),
-	})
+	}
+	if stackID != "" {
+		attrs = append(attrs, slog.String("cluster_id", stackID))
+	}
+	handlerWithSession := teeHandler.WithAttrs(attrs)
 
 	logger := slog.New(handlerWithSession)
 
 	// Open history file
-	historyFile := filepath.Join(stateDir, "history.jsonl")
 	historyHandle, err := os.OpenFile(historyFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFileHandle.Close()
@@ -94,6 +113,7 @@ func NewLogger(stateDir string) (*Logger, error) {
 	return &Logger{
 		Logger:      logger,
 		sessionID:   sessionID,
+		stackID:     stackID,
 		stateDir:    stateDir,
 		historyFile: historyHandle,
 	}, nil
@@ -104,13 +124,23 @@ func (l *Logger) SessionID() SessionID {
 	return l.sessionID
 }
 
+// ClusterID returns the current cluster ID
+func (l *Logger) StackID() string {
+	return l.stackID
+}
+
+// HasCluster returns true if this logger is tracking a specific cluster
+func (l *Logger) HasStack() bool {
+	return l.stackID != ""
+}
+
 // LogCommand records a command execution in history
 func (l *Logger) LogCommand(cmd string, args []string) error {
-	return l.LogCommandWithClusterID(cmd, args, "")
+	return l.LogCommandWithStackID(cmd, args, "")
 }
 
 // LogCommandWithClusterID records a command execution with cluster_id in history
-func (l *Logger) LogCommandWithClusterID(cmd string, args []string, stackID string) error {
+func (l *Logger) LogCommandWithStackID(cmd string, args []string, stackID string) error {
 	entry := CommandEntry{
 		SessionID:   l.sessionID,
 		StackID:     stackID,

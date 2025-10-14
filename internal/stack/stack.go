@@ -21,8 +21,7 @@ const (
 // Init initializes the stack configuration
 func Init(cfg *config.Config, force bool) error {
 	// Create flat stack config directory
-	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	k3dConfigPath := filepath.Join(stackConfigDir, k3dConfigFile)
+	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
 
 	// Check if config already exists
 	if _, err := os.Stat(k3dConfigPath); err == nil {
@@ -32,7 +31,7 @@ func Init(cfg *config.Config, force bool) error {
 		fmt.Printf("Overwriting existing stack configuration at %s\n", k3dConfigPath)
 	}
 
-	if err := os.MkdirAll(stackConfigDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.ConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create stack config dir: %w", err)
 	}
 
@@ -48,7 +47,7 @@ func Init(cfg *config.Config, force bool) error {
 	}
 
 	// Store stack ID for later use
-	stackIDPath := filepath.Join(stackConfigDir, stackIDFile)
+	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
@@ -60,9 +59,8 @@ func Init(cfg *config.Config, force bool) error {
 
 // Up starts the k3d cluster
 func Up(cfg *config.Config) error {
-	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	k3dConfigPath := filepath.Join(stackConfigDir, k3dConfigFile)
-	kubeconfigPath := filepath.Join(stackConfigDir, kubeconfigFile)
+	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
 
 	// Check if config exists
 	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
@@ -99,7 +97,7 @@ func Up(cfg *config.Config) error {
 	// Create cluster using k3d config
 	cmd = exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "create",
+		"cluster", "create", stackName,
 		"--config", k3dConfigPath,
 		"--kubeconfig-update-default=false",
 		"--verbose",
@@ -171,8 +169,19 @@ func Purge(cfg *config.Config) error {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
+	// Get stack_id (optional - may not exist if stack was never initialized)
+	stackID := getStackID(cfg)
+
+	// If we can't determine the stackID we don't down
+	if stackID != "" {
+		// Stop cluster first
+		if err := Down(cfg); err != nil {
+			fmt.Printf("Warning: %v\n", err)
+		}
+	}
+
 	// Remove stack config directory
-	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	stackConfigDir := filepath.Join(cfg.ConfigDir)
 	if err := os.RemoveAll(stackConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
