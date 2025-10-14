@@ -9,6 +9,7 @@ import (
 
 	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/embed"
 	"github.com/obol/obol-stack/internal/executor"
 	"github.com/obol/obol-stack/internal/logging"
 )
@@ -64,25 +65,19 @@ func Init(cfg *config.Config, _ *logging.Logger, force bool) error {
 		logger.Info("Overwriting existing cluster configuration", "path", destPath)
 	}
 
-	// Get the k3d config template path
-	templatePath, err := getK3dTemplatePath()
-	if err != nil {
-		return fmt.Errorf("failed to find k3d config template: %w", err)
-	}
-
 	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cluster config dir: %w", err)
 	}
 
-	// Read template
-	template, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("failed to read k3d config template: %w", err)
+	// Write embedded k3d config
+	if err := embed.WriteK3dConfig(destPath); err != nil {
+		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
-	// Write to destination
-	if err := os.WriteFile(destPath, template, 0644); err != nil {
-		return fmt.Errorf("failed to write k3d config: %w", err)
+	// Copy embedded applications directory
+	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
+	if err := embed.CopyApplications(applicationsDestDir); err != nil {
+		return fmt.Errorf("failed to copy applications: %w", err)
 	}
 
 	// Create kubeconfig directory
@@ -174,9 +169,17 @@ func Up(cfg *config.Config, _ *logging.Logger) error {
 		"--kubeconfig-update-default=false",
 		"--verbose",
 	)
+	// Get absolute path to config directory for manifests mount
+	absConfigDir, err := filepath.Abs(cfg.ConfigDir)
+	if err != nil {
+		cmdErr = fmt.Errorf("failed to get absolute path for config directory: %w", err)
+		return cmdErr
+	}
+
 	// Set environment variables for k3d config expansion (must be absolute paths)
 	createCmd.Env = append(os.Environ(),
 		fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir),
+		fmt.Sprintf("OBOL_CONFIG_DIR=%s", absConfigDir),
 		fmt.Sprintf("OBOL_CLUSTER_ID=%s", clusterID),
 	)
 
@@ -400,27 +403,6 @@ func Connect(cfg *config.Config) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
-}
-
-// getK3dTemplatePath finds the k3d config template
-func getK3dTemplatePath() (string, error) {
-	// Try relative to current directory (development mode)
-	cwd, _ := os.Getwd()
-	templatePath := filepath.Join(cwd, "k3d", k3dConfigFile)
-	if _, err := os.Stat(templatePath); err == nil {
-		return templatePath, nil
-	}
-
-	// Try relative to executable (production mode)
-	exe, err := os.Executable()
-	if err == nil {
-		templatePath = filepath.Join(filepath.Dir(exe), "..", "k3d", k3dConfigFile)
-		if _, err := os.Stat(templatePath); err == nil {
-			return templatePath, nil
-		}
-	}
-
-	return "", fmt.Errorf("k3d config template not found")
 }
 
 // clusterExists checks if cluster name exists in k3d cluster list output

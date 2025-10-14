@@ -11,6 +11,12 @@ volumes:
   - volume: ${OBOL_DATA_DIR}:/data
     nodeFilters:
       - all
+  # Mount default applications for auto-deployment
+  # These are embedded applications that deploy automatically with every cluster
+  # k3s automatically applies any manifests in /var/lib/rancher/k3s/server/manifests/
+  - volume: ${OBOL_CONFIG_DIR}/applications/default:/var/lib/rancher/k3s/server/manifests/default
+    nodeFilters:
+      - server:*
 ports:
   - port: 8080:80
     nodeFilters:

@@ -123,7 +123,7 @@ install_obol_binary() {
 	# For development, we'll build from source if go is available
 	if command_exists go && [[ -f "cmd/obol/main.go" ]]; then
 		log_info "Building from source..."
-		go build -o "$OBOL_BIN_DIR/obol" ./cmd/obol
+		CGO_ENABLED=0 go build -o "$OBOL_BIN_DIR/obol" ./cmd/obol
 		chmod +x "$OBOL_BIN_DIR/obol"
 
 		local new_version

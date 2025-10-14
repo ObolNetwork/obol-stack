@@ -9,9 +9,9 @@ default:
 install:
     ./obolup.sh
 
-# Build obol binary from source
+# Build obol binary from source with embedded files
 build:
-    go build -o bin/obol ./cmd/obol
+    CGO_ENABLED=0 go build -o bin/obol ./cmd/obol
 
 # Initialize cluster configuration
 init:
@@ -58,7 +58,7 @@ clean-run:
 dev-build:
     #!/usr/bin/env bash
     export OBOL_DEVELOPMENT=true
-    go build -o .workspace/bin/obol ./cmd/obol
+    CGO_ENABLED=0 go build -o .workspace/bin/obol ./cmd/obol
     echo "✓ Built obol to .workspace/bin/obol"
 
 # Run tests
