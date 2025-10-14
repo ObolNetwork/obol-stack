@@ -232,7 +232,7 @@ func Down(cfg *config.Config, logger *logging.Logger) error {
 	return nil
 }
 
-// Purge deletes the cluster and all data
+// Purge deletes the cluster and all data (except binaries)
 func Purge(cfg *config.Config, logger *logging.Logger) error {
 	var cmdErr error
 	if logger != nil {
@@ -257,8 +257,23 @@ func Purge(cfg *config.Config, logger *logging.Logger) error {
 		cmdErr = fmt.Errorf("failed to remove cluster config: %w", err)
 		return cmdErr
 	}
+	fmt.Printf("✓ Removed cluster config directory\n")
 
-	fmt.Printf("✓ Cluster configuration purged\n")
+	// Remove data directory
+	if err := os.RemoveAll(cfg.DataDir); err != nil {
+		cmdErr = fmt.Errorf("failed to remove data directory: %w", err)
+		return cmdErr
+	}
+	fmt.Printf("✓ Removed data directory\n")
+
+	// Remove state directory (logs, history)
+	if err := os.RemoveAll(cfg.StateDir); err != nil {
+		cmdErr = fmt.Errorf("failed to remove state directory: %w", err)
+		return cmdErr
+	}
+	fmt.Printf("✓ Removed state directory\n")
+
+	fmt.Printf("✓ Cluster purged (binaries preserved)\n")
 	return nil
 }
 
