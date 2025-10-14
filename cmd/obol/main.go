@@ -7,6 +7,7 @@ import (
 
 	"github.com/obol/obol-stack/internal/cluster"
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/logging"
 	"github.com/urfave/cli/v2"
 )
 
@@ -15,6 +16,16 @@ const version = "0.0.0"
 func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
+
+	// Initialize logger
+	logger, err := logging.NewLogger(cfg.StateDir)
+	if err != nil {
+		log.Printf("Warning: failed to initialize logger: %v\n", err)
+		logger = nil // Continue without logging
+	}
+	if logger != nil {
+		defer logger.Close()
+	}
 
 	app := &cli.App{
 		Name:    "obol",
@@ -36,28 +47,28 @@ func main() {
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return cluster.Init(cfg, c.Bool("force"))
+							return cluster.Init(cfg, logger, c.Bool("force"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the k3d cluster",
 						Action: func(c *cli.Context) error {
-							return cluster.Up(cfg)
+							return cluster.Up(cfg, logger)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the k3d cluster",
 						Action: func(c *cli.Context) error {
-							return cluster.Down(cfg)
+							return cluster.Down(cfg, logger)
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete cluster and all data",
 						Action: func(c *cli.Context) error {
-							return cluster.Purge(cfg)
+							return cluster.Purge(cfg, logger)
 						},
 					},
 					{
@@ -79,6 +90,12 @@ func main() {
 							return nil
 						},
 					},
+					// TODO: Implement doctor command for diagnostic reports
+					// {
+					//     Name:  "doctor",
+					//     Usage: "Generate diagnostic report for debugging",
+					//     ...
+					// },
 				},
 			},
 			// TODO: Implement app command
@@ -119,8 +136,13 @@ func main() {
 				EnvVars: []string{"OBOL_BIN_DIR"},
 			},
 			&cli.StringFlag{
+				Name:    "data-dir",
+				Usage:   "Persistent data directory (overrides OBOL_DATA_DIR and XDG_DATA_HOME)",
+				EnvVars: []string{"OBOL_DATA_DIR"},
+			},
+			&cli.StringFlag{
 				Name:    "state-dir",
-				Usage:   "Persistent data directory (overrides OBOL_STATE_DIR and XDG_DATA_HOME)",
+				Usage:   "State directory for logs and history (overrides OBOL_STATE_DIR and XDG_STATE_HOME)",
 				EnvVars: []string{"OBOL_STATE_DIR"},
 			},
 		},
@@ -131,6 +153,9 @@ func main() {
 			}
 			if c.String("bin-dir") != "" {
 				cfg.BinDir = c.String("bin-dir")
+			}
+			if c.String("data-dir") != "" {
+				cfg.DataDir = c.String("data-dir")
 			}
 			if c.String("state-dir") != "" {
 				cfg.StateDir = c.String("state-dir")

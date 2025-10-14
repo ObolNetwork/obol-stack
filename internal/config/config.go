@@ -9,7 +9,8 @@ import (
 type Config struct {
 	ConfigDir string
 	BinDir    string
-	StateDir  string
+	DataDir   string // XDG_DATA_HOME - persistent user data (databases, k3d volumes)
+	StateDir  string // XDG_STATE_HOME - logs, history, runtime state
 }
 
 // Load returns the configuration with XDG-compliant defaults
@@ -17,6 +18,7 @@ func Load() *Config {
 	return &Config{
 		ConfigDir: getConfigDir(),
 		BinDir:    getBinDir(),
+		DataDir:   getDataDir(),
 		StateDir:  getStateDir(),
 	}
 }
@@ -60,17 +62,17 @@ func getBinDir() string {
 	return filepath.Join(getConfigDir(), "bin")
 }
 
-// getStateDir returns OBOL_STATE_DIR or XDG_DATA_HOME/obol
-// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/state
-func getStateDir() string {
-	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
+// getDataDir returns OBOL_DATA_DIR or XDG_DATA_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/data
+func getDataDir() string {
+	if dir := os.Getenv("OBOL_DATA_DIR"); dir != "" {
 		return dir
 	}
 
 	// Development mode: use .workspace directory in project root
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		cwd, _ := os.Getwd()
-		return filepath.Join(cwd, ".workspace", "state")
+		return filepath.Join(cwd, ".workspace", "data")
 	}
 
 	// XDG_DATA_HOME defaults to ~/.local/share
@@ -83,8 +85,25 @@ func getStateDir() string {
 	return filepath.Join(xdgDataHome, "obol")
 }
 
-// GetDataDir returns the data directory for use in k3d volumes
-// This is the same as StateDir but exposed for external tools
-func (c *Config) GetDataDir() string {
-	return c.StateDir
+// getStateDir returns OBOL_STATE_DIR or XDG_STATE_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/state
+func getStateDir() string {
+	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
+		return dir
+	}
+
+	// Development mode: use .workspace directory in project root
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".workspace", "state")
+	}
+
+	// XDG_STATE_HOME defaults to ~/.local/state
+	xdgStateHome := os.Getenv("XDG_STATE_HOME")
+	if xdgStateHome == "" {
+		home, _ := os.UserHomeDir()
+		xdgStateHome = filepath.Join(home, ".local", "state")
+	}
+
+	return filepath.Join(xdgStateHome, "obol")
 }

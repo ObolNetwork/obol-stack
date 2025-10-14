@@ -2,12 +2,14 @@ package cluster
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/logging"
 )
 
 const (
@@ -17,7 +19,13 @@ const (
 )
 
 // Init initializes the cluster configuration
-func Init(cfg *config.Config, force bool) error {
+func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
+	if logger != nil {
+		logger.LogCommand("cluster init", []string{fmt.Sprintf("force=%v", force)})
+		defer func() {
+			logger.LogCommandComplete("cluster init", 0, nil)
+		}()
+	}
 	// Create cluster config directory
 	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
 	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
@@ -63,34 +71,48 @@ func Init(cfg *config.Config, force bool) error {
 }
 
 // Up starts the k3d cluster
-func Up(cfg *config.Config) error {
+func Up(cfg *config.Config, logger *logging.Logger) error {
+	var cmdErr error
+	if logger != nil {
+		logger.LogCommand("cluster up", []string{})
+		defer func() {
+			exitCode := 0
+			if cmdErr != nil {
+				exitCode = 1
+			}
+			logger.LogCommandComplete("cluster up", exitCode, cmdErr)
+		}()
+	}
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, "cluster", "k3d", k3dConfigFile)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
 
 	// Check if config exists
 	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster config not found, run 'obol cluster init' first")
+		cmdErr = fmt.Errorf("cluster config not found, run 'obol cluster init' first")
+		return cmdErr
 	}
 
 	// Check if cluster already exists using cluster list
 	cmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
 	output, _ := cmd.Output()
 	if clusterExists(string(output), clusterName) {
-		return fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", clusterName)
+		cmdErr = fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", clusterName)
+		return cmdErr
 	}
 
 	fmt.Printf("Starting cluster '%s'...\n", clusterName)
 
 	// Get absolute path to data directory for k3d volume mount
-	dataDir := cfg.GetDataDir()
-	absDataDir, err := filepath.Abs(dataDir)
+	absDataDir, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
+		cmdErr = fmt.Errorf("failed to get absolute path for data directory: %w", err)
+		return cmdErr
 	}
 
 	// Create data directory if it doesn't exist
 	if err := os.MkdirAll(absDataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
+		cmdErr = fmt.Errorf("failed to create data directory: %w", err)
+		return cmdErr
 	}
 
 	// Create cluster using k3d config
@@ -108,8 +130,16 @@ func Up(cfg *config.Config) error {
 
 	fmt.Printf("Using data directory: %s\n", absDataDir)
 
+	// Capture stdout/stderr to logger if available
+	if logger != nil {
+		logWriter := &logWriter{logger: logger, level: "info"}
+		cmd.Stdout = io.MultiWriter(os.Stdout, logWriter)
+		cmd.Stderr = io.MultiWriter(os.Stderr, logWriter)
+	}
+
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create cluster: %w", err)
+		cmdErr = fmt.Errorf("failed to create cluster: %w", err)
+		return cmdErr
 	}
 
 	// Export kubeconfig
@@ -119,11 +149,13 @@ func Up(cfg *config.Config) error {
 	)
 	kubeconfigData, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get kubeconfig: %w", err)
+		cmdErr = fmt.Errorf("failed to get kubeconfig: %w", err)
+		return cmdErr
 	}
 
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
-		return fmt.Errorf("failed to write kubeconfig: %w", err)
+		cmdErr = fmt.Errorf("failed to write kubeconfig: %w", err)
+		return cmdErr
 	}
 
 	fmt.Printf("✓ Cluster started successfully\n")
@@ -134,7 +166,19 @@ func Up(cfg *config.Config) error {
 }
 
 // Down stops the k3d cluster
-func Down(cfg *config.Config) error {
+func Down(cfg *config.Config, logger *logging.Logger) error {
+	var cmdErr error
+	if logger != nil {
+		logger.LogCommand("cluster down", []string{})
+		defer func() {
+			exitCode := 0
+			if cmdErr != nil {
+				exitCode = 1
+			}
+			logger.LogCommandComplete("cluster down", exitCode, cmdErr)
+		}()
+	}
+
 	fmt.Printf("Stopping cluster '%s'...\n", clusterName)
 
 	cmd := exec.Command(
@@ -145,7 +189,8 @@ func Down(cfg *config.Config) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop cluster: %w", err)
+		cmdErr = fmt.Errorf("failed to stop cluster: %w", err)
+		return cmdErr
 	}
 
 	fmt.Printf("✓ Cluster stopped successfully\n")
@@ -153,16 +198,29 @@ func Down(cfg *config.Config) error {
 }
 
 // Purge deletes the cluster and all data
-func Purge(cfg *config.Config) error {
+func Purge(cfg *config.Config, logger *logging.Logger) error {
+	var cmdErr error
+	if logger != nil {
+		logger.LogCommand("cluster purge", []string{})
+		defer func() {
+			exitCode := 0
+			if cmdErr != nil {
+				exitCode = 1
+			}
+			logger.LogCommandComplete("cluster purge", exitCode, cmdErr)
+		}()
+	}
+
 	// Stop cluster first
-	if err := Down(cfg); err != nil {
+	if err := Down(cfg, logger); err != nil {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
 	// Remove cluster config directory
 	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
 	if err := os.RemoveAll(clusterConfigDir); err != nil {
-		return fmt.Errorf("failed to remove cluster config: %w", err)
+		cmdErr = fmt.Errorf("failed to remove cluster config: %w", err)
+		return cmdErr
 	}
 
 	fmt.Printf("✓ Cluster configuration purged\n")
@@ -221,4 +279,33 @@ func getK3dTemplatePath() (string, error) {
 func clusterExists(output, name string) bool {
 	// Check if the cluster name appears in the output
 	return strings.Contains(output, name)
+}
+
+// logWriter wraps a logger to implement io.Writer for capturing command output
+type logWriter struct {
+	logger *logging.Logger
+	level  string
+	buffer []byte
+}
+
+func (w *logWriter) Write(p []byte) (n int, err error) {
+	// Accumulate data and log line by line
+	w.buffer = append(w.buffer, p...)
+
+	// Process complete lines
+	for {
+		idx := strings.IndexByte(string(w.buffer), '\n')
+		if idx == -1 {
+			break
+		}
+
+		line := string(w.buffer[:idx])
+		w.buffer = w.buffer[idx+1:]
+
+		if line != "" {
+			w.logger.Info("command output", "line", line)
+		}
+	}
+
+	return len(p), nil
 }
