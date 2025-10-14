@@ -2,11 +2,13 @@
 
 ## Purpose
 
-Local-first Kubernetes stack for running Ethereum infrastructure with a layered architecture supporting base infrastructure and multiple applications.
+Local-first Kubernetes stack for running Ethereum infrastructure with a layered
+architecture supporting base infrastructure and multiple applications.
 
 ## Architecture Overview
 
-The system is designed in **3 distinct layers**, each with independent lifecycle management:
+The system is designed in **3 distinct layers**, each with independent lifecycle
+management:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -43,20 +45,24 @@ The system is designed in **3 distinct layers**, each with independent lifecycle
 ## Tooling Architecture
 
 The obol-stack is managed through two primary tools that work together:
+
 1. **obolup.sh** - Bootstrap installer and updater
 2. **obol** - CLI binary for cluster and application management
 
 ### obolup.sh - Bootstrap Installer
 
-`obolup.sh` is a curl-to-bash bootstrap installer (similar to rustup) that handles initial setup and ongoing updates of the obol toolchain.
+`obolup.sh` is a curl-to-bash bootstrap installer (similar to rustup) that
+handles initial setup and ongoing updates of the obol toolchain.
 
 **Purpose:**
+
 - Downloads and installs the `obol` binary from GitHub releases
 - Manages dependency versions (k3d, helm, helmfile, k9s)
 - Validates prerequisites (Docker installation and status)
 - Optionally bootstraps a cluster through the obol binary
 
 **Installation:**
+
 ```bash
 # Curl-to-bash installation
 curl -sSL https://raw.githubusercontent.com/obol/obol-stack/main/obolup.sh | bash
@@ -69,84 +75,57 @@ chmod +x obolup.sh
 
 **Idempotency:**
 
-The `obolup.sh` script is designed to be idempotent and can be run multiple times safely:
+The `obolup.sh` script is designed to be idempotent and can be run multiple
+times safely:
+
 - Detects existing `obol` binary installation
 - Shows current version before upgrading
 - Overwrites binary with new version
 - Creates directories only if they don't exist
 - Can be used for both initial installation and upgrades
 
-**Example behavior:**
-```bash
-# First run: Fresh installation
-$ ./obolup.sh
-==> Installing obol binary...
-==> Building from source...
-✓ Installed obol binary (version: 0.1.0)
-
-# Second run: Upgrade
-$ ./obolup.sh
-==> Installing obol binary...
-==> Found existing obol binary (version: 0.1.0)
-==> Upgrading...
-==> Building from source...
-✓ Installed obol binary (version: 0.2.0)
-```
-
 **Core Responsibilities:**
 
 #### 1. Binary Management
+
 - Downloads latest `obol` binary release from GitHub
 - Installs to `$OBOL_CONFIG_DIR/bin/obol`
 - Detects and upgrades to new obol binary versions
 - Prints shell PATH instructions for user configuration
 
 #### 2. Dependency Version Management
+
 Each obol release specifies compatible versions of dependencies:
+
 - k3d
 - helm
 - helmfile
 - k9s
 
 When upgrading obol, obolup.sh automatically:
+
 - Detects version changes in dependencies
 - Downloads/upgrades/downgrades dependencies as needed
 - Ensures version compatibility across the toolchain
 
 #### 3. Prerequisites Validation
+
 - Validates Docker is installed
 - Validates Docker daemon is running
 - Exits with instructions if Docker is missing or inactive
 - Respects user's system Docker installation method
 
-#### 4. Optional Cluster Bootstrap
-Via environment variables or arguments:
-```bash
-# Bootstrap with cluster initialization
-OBOL_INIT_CLUSTER=true ./obolup.sh
-
-# Or with arguments
-./obolup.sh --init-cluster
-```
-
-When enabled, obolup.sh delegates to the obol binary:
-1. Runs `obol cluster init` - Syncs default k3d config from obol-stack repo
-2. Runs `obol cluster up` - Spins up cluster and validates health
-3. Runs `obol cluster connect` - Launches k9s for cluster interaction
-
-**Future Scope:**
-- Layer 2 (Base Infrastructure) deployment via obolup.sh
-- Automatic application of base layer during bootstrap
-
 ---
 
 ### obol - Cluster Management Binary
 
-The `obol` binary is a Golang project within the obol-stack repository that provides comprehensive cluster and application lifecycle management.
+The `obol` binary is a Golang project within the obol-stack repository that
+provides comprehensive cluster and application lifecycle management.
 
 **Installation Location:** `$OBOL_CONFIG_DIR/bin/obol`
 
 **Architecture:** Golang CLI that wraps and orchestrates:
+
 - k3d (cluster management)
 - kubectl (Kubernetes API)
 - helmfile (manifest generation)
@@ -165,12 +144,14 @@ obol cluster init
 ```
 
 **Behavior:**
+
 - Downloads default k3d configuration file to `$OBOL_CONFIG_DIR/cluster/k3d/`
 - Syncs latest cluster config from obol-stack GitHub repo
-- Performs optional system analysis to estimate resource tolerances
+- May perform optional system analysis to estimate resource tolerances
 - Prepares cluster definition but does not start cluster
 
 **Output:**
+
 - `$OBOL_CONFIG_DIR/cluster/k3d/config.yaml`
 
 ---
@@ -184,6 +165,7 @@ obol cluster up
 ```
 
 **Behavior:**
+
 1. Reads k3d configuration from `$OBOL_CONFIG_DIR/cluster/k3d/`
 2. Creates k3d cluster via `k3d cluster create`
 3. Validates Layer 1 foundation health:
@@ -191,11 +173,12 @@ obol cluster up
    - Networking configuration (CNI, ingress)
    - Persistent storage provisioners
 4. Generates kubeconfig at `$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
-5. Runs healthcheck against ingress endpoints
+5. Runs health check against ingress endpoints
 
 **Exit behavior:**
+
 - Returns success if cluster is healthy and ready
-- Returns error if cluster creation or healthcheck fails
+- Returns error if cluster creation or health check fails
 
 ---
 
@@ -208,6 +191,7 @@ obol cluster down
 ```
 
 **Behavior:**
+
 - Stops k3d cluster via `k3d cluster stop`
 - Preserves persistent storage volumes in `$OBOL_STATE_DIR`
 - Retains configuration in `$OBOL_CONFIG_DIR`
@@ -225,6 +209,7 @@ obol cluster purge
 ```
 
 **Behavior:**
+
 1. Stops k3d cluster
 2. Deletes k3d cluster via `k3d cluster delete`
 3. **Deletes all persistent storage volumes** from `$OBOL_STATE_DIR`
@@ -245,11 +230,13 @@ obol cluster connect
 ```
 
 **Behavior:**
+
 - Wraps `k9s` with `KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
 - Launches interactive k9s session
 - Provides immediate cluster visibility and management
 
 **Equivalent to:**
+
 ```bash
 KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml k9s
 ```
@@ -265,12 +252,15 @@ obol cluster backup <volume-name>
 ```
 
 **Behavior:**
+
 1. Persistent storage is hardcoded to `$OBOL_STATE_DIR` for all PVC volumes
 2. Identifies the volume's directory in `$OBOL_STATE_DIR/<volume-name>`
-3. Creates compressed archive: `$OBOL_STATE_DIR/backups/<volume-name>-<timestamp>.tar.gz`
+3. Creates compressed archive:
+   `$OBOL_STATE_DIR/backups/<volume-name>-<timestamp>.tar.gz`
 4. Validates archive integrity
 
 **Example:**
+
 ```bash
 # Backup Prometheus data
 obol cluster backup prometheus-data
@@ -279,6 +269,7 @@ obol cluster backup prometheus-data
 ```
 
 **Use cases:**
+
 - Backing up Ethereum validator keys
 - Preserving historical metrics data
 - Creating restore points before upgrades
@@ -296,9 +287,11 @@ obol app install <app-name>
 ```
 
 **Behavior:**
+
 1. Checks `obol-base` applyset exists (dependency validation)
 2. Validates application dependencies (base layer components, other apps)
-3. Downloads application manifests from `github.com/obol/obol-stack/manifests/apps/<app>/`
+3. Downloads application manifests from
+   `github.com/obol/obol-stack/manifests/apps/<app>/`
 4. Saves to `$OBOL_CONFIG_DIR/helmfile/<app>/`
 5. Applies default configuration
 6. Runs `helmfile template` to generate YAML manifests
@@ -306,6 +299,7 @@ obol app install <app-name>
 8. Tracks installation in `$OBOL_CONFIG_DIR/.apps.yaml`
 
 **Example:**
+
 ```bash
 obol app install sequencer
 # Downloads sequencer helmfile
@@ -323,6 +317,7 @@ obol app edit <app-name>
 ```
 
 **Behavior:**
+
 1. Locates app values file: `$OBOL_CONFIG_DIR/helmfile/<app>/values.yaml`
 2. Opens in `$EDITOR` (falls back to `vim` or `nano`)
 3. Waits for editor to close
@@ -330,6 +325,7 @@ obol app edit <app-name>
 5. If yes, runs `obol app sync <app>` to apply mutations
 
 **Example:**
+
 ```bash
 export EDITOR=code
 obol app edit sequencer
@@ -347,6 +343,7 @@ obol app sync <app-name>
 ```
 
 **Behavior:**
+
 1. Reads app helmfile from `$OBOL_CONFIG_DIR/helmfile/<app>/`
 2. Runs `helmfile template` with current values
 3. Generates Kubernetes YAML manifests
@@ -354,6 +351,7 @@ obol app sync <app-name>
 5. ApplySet automatically prunes removed resources
 
 **Example:**
+
 ```bash
 # After editing values
 obol app sync sequencer
@@ -371,6 +369,7 @@ obol app update <app-name>
 ```
 
 **Behavior:**
+
 1. Fetches latest app version from GitHub
 2. Downloads updated helmfile templates
 3. **Preserves user customizations** in `values.yaml`
@@ -379,6 +378,7 @@ obol app update <app-name>
 6. If yes, runs `obol app sync <app>` to apply updates
 
 **Example:**
+
 ```bash
 obol app update sequencer
 # Fetches latest sequencer template
@@ -397,6 +397,7 @@ obol app delete <app-name>
 ```
 
 **Behavior:**
+
 1. Checks for dependent applications
 2. If dependencies exist, prevents deletion:
    ```
@@ -411,6 +412,7 @@ obol app delete <app-name>
 6. Updates `$OBOL_CONFIG_DIR/.apps.yaml`
 
 **Example:**
+
 ```bash
 obol app delete sequencer
 # Removes all sequencer resources from cluster
@@ -430,6 +432,7 @@ obol kubectl get pods
 ```
 
 **Equivalent to:**
+
 ```bash
 KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml kubectl get pods
 ```
@@ -445,6 +448,7 @@ obol k9s
 ```
 
 **Equivalent to:**
+
 ```bash
 KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml k9s
 ```
@@ -460,6 +464,7 @@ obol helm list
 ```
 
 **Equivalent to:**
+
 ```bash
 KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml helm list
 ```
@@ -470,7 +475,8 @@ KUBECONFIG=$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml helm list
 
 ##### `obol ai <prompt>`
 
-Provides AI-powered cluster debugging and monitoring using a local AI with kubernetes-mcp integration.
+Provides AI-powered cluster debugging and monitoring using a local AI with
+kubernetes-mcp integration.
 
 ```bash
 obol ai "validate why my cluster is not working"
@@ -479,6 +485,7 @@ obol ai "check if all apps are healthy"
 ```
 
 **Purpose:**
+
 - Natural language cluster diagnostics
 - Automated issue detection and root cause analysis
 - Monitoring of installed applications
@@ -488,8 +495,11 @@ obol ai "check if all apps are healthy"
 **Architecture:**
 
 The `obol ai` command connects to a local AI agent that has:
-1. **kubernetes-mcp access** - Direct read access to cluster state via Model Context Protocol
-2. **Cluster context** - Awareness of installed apps, base layer, and configuration
+
+1. **kubernetes-mcp access** - Direct read access to cluster state via Model
+   Context Protocol
+2. **Cluster context** - Awareness of installed apps, base layer, and
+   configuration
 3. **Log analysis** - Ability to query pod logs and events
 4. **Metrics access** - Integration with Prometheus for performance data
 
@@ -622,7 +632,10 @@ The `obol ai` command connects to a local AI agent that has:
 
 **Infrastructure:**
 
-The AI capability is part of the base infrastructure setup (Layer 2). When the base layer is deployed, a local AI agent with kubernetes-mcp integration is installed and configured to monitor the cluster. The `obol ai` command connects to this local agent for diagnostics and troubleshooting.
+The AI capability is part of the base infrastructure setup (Layer 2). When the
+base layer is deployed, a local AI agent with kubernetes-mcp integration is
+installed and configured to monitor the cluster. The `obol ai` command connects
+to this local agent for diagnostics and troubleshooting.
 
 **Interactive Mode:**
 
@@ -642,7 +655,9 @@ obol ai chat
 > exit
 ```
 
-**Note:** This feature integrates with the AI Assistant deployed as part of Layer 2 (Base Infrastructure), as described in the "AI Integration and Chatbot" experimental feature section later in this document.
+**Note:** This feature integrates with the AI Assistant deployed as part of
+Layer 2 (Base Infrastructure), as described in the "AI Integration and Chatbot"
+experimental feature section later in this document.
 
 ---
 
@@ -685,9 +700,11 @@ $OBOL_STATE_DIR/                       # Persistent data directory (~/.local/sha
 ```
 
 **Key Changes:**
+
 - `$OBOL_CONFIG_DIR/bin/obol` - Main CLI binary installed by obolup.sh
 - `$OBOL_CONFIG_DIR/cluster/` - Cluster configuration and kubeconfig
-- `$OBOL_CONFIG_DIR/helmfile/` - Application manifests (renamed from `manifests/apps/`)
+- `$OBOL_CONFIG_DIR/helmfile/` - Application manifests (renamed from
+  `manifests/apps/`)
 - `$OBOL_STATE_DIR/` - Persistent storage volumes and backups
 
 ---
@@ -695,18 +712,22 @@ $OBOL_STATE_DIR/                       # Persistent data directory (~/.local/sha
 ### Environment Variables
 
 **OBOL_CONFIG_DIR**
+
 - Default: `~/.config/obol`
 - Purpose: Configuration, binaries, and application manifests
 
 **OBOL_STATE_DIR**
+
 - Default: `~/.local/share/obol`
 - Purpose: Persistent storage volumes and backups
 
 **EDITOR**
+
 - Purpose: Editor used by `obol app edit`
 - Default: Falls back to `vim` or `nano`
 
 **KUBECONFIG**
+
 - Automatically set by obol wrapped commands
 - Points to: `$OBOL_CONFIG_DIR/cluster/kubeconfig/default.yaml`
 
@@ -744,12 +765,14 @@ Persistent state is saved to the host machine via k3d volume mounts, enabling da
 **Responsibility:** Create the Kubernetes cluster foundation
 
 **Components:**
+
 - k3d cluster creation from `k3d-config.yaml`
 - kubeconfig generation
 - Container runtime setup
 - Network/storage provisioners
 
 **Management:**
+
 ```bash
 # Initial installation (curl to bash)
 curl -sSL https://raw.githubusercontent.com/obol/obol-stack/main/obolup.sh | bash
@@ -764,6 +787,7 @@ chmod +x obolup.sh
 ```
 
 **Characteristics:**
+
 - Ephemeral cluster, intended to be frequently destroyed and recreated
 - No ApplySet (infrastructure layer)
 - Prerequisite for layers 2 & 3
@@ -776,6 +800,7 @@ chmod +x obolup.sh
 **Responsibility:** Provide shared Ethereum and monitoring infrastructure
 
 **Components:**
+
 - Ethereum L1 execution/consensus clients
 - Prometheus metrics collection
 - Grafana dashboards
@@ -784,23 +809,27 @@ chmod +x obolup.sh
 - Certificate management
 
 **Management:**
+
 ```bash
 # Apply base layer (default behavior)
 ./obolup.sh
 ```
 
 **Source of Truth:**
+
 - Obol GitHub repository: `github.com/obol/obol-stack/manifests/base/`
 - Synced to: `$OBOL_CONFIG_DIR/manifests/base/`
 - Users do not maintain git repository
 - Base configuration managed by Obol
 
 **ApplySet:**
+
 - Name: `obol-base`
 - Scope: All base infrastructure resources
 - Pruning: Automatic removal of deleted base resources
 
 **Characteristics:**
+
 - Single applyset for all base components
 - Changes applied manually when needed
 - Stable, infrequently updated
@@ -813,6 +842,7 @@ chmod +x obolup.sh
 **Responsibility:** Run application-specific Ethereum workloads
 
 **Components:**
+
 - L2 sequencer nodes
 - Validator instances
 - Rollup infrastructure
@@ -820,6 +850,7 @@ chmod +x obolup.sh
 - Application-specific services
 
 **Management:**
+
 ```bash
 # Via CLI
 obol-cli app list
@@ -832,16 +863,19 @@ obol-stack-ui
 ```
 
 **Source of Truth:**
+
 - Obol GitHub repository: `github.com/obol/obol-stack/manifests/apps/`
 - Downloaded to: `$OBOL_CONFIG_DIR/manifests/apps/{app-name}/`
 - Applications are helmfile-based templates
 
 **ApplySet:**
+
 - Name: `obol-app-{app-name}` (one per application)
 - Scope: All resources for that specific application
 - Pruning: Automatic removal when app is uninstalled or updated
 
 **Characteristics:**
+
 - Multiple independent applysets
 - Managed via obol-cli or obol-stack-ui
 - Versioning strategy TBD
@@ -852,9 +886,11 @@ obol-stack-ui
 
 ### What are ApplySets?
 
-ApplySets are Kubernetes' native resource tracking mechanism for pruning (alpha in k8s 1.27+).
+ApplySets are Kubernetes' native resource tracking mechanism for pruning (alpha
+in k8s 1.27+).
 
 **Key concepts:**
+
 1. Creates a parent tracking object (Secret/ConfigMap)
 2. Labels all applied resources: `applyset.kubernetes.io/part-of={name}`
 3. Tracks resource inventory in parent object
@@ -863,39 +899,46 @@ ApplySets are Kubernetes' native resource tracking mechanism for pruning (alpha 
 
 ### Why ApplySets vs ArgoCD/Flux?
 
-| Feature | ApplySets | ArgoCD/Flux |
-|---------|-----------|-------------|
-| Complexity | Native kubectl | Separate controller |
-| Daemon | None | Runs 24/7 |
-| Pruning | Built-in | Built-in |
-| Drift detection | Manual apply | Continuous reconciliation |
-| Resource usage | Zero | ~200-500MB RAM |
-| Setup | Enable alpha flag | Install operator |
-| Best for | Local dev | Production clusters |
+| Feature         | ApplySets         | ArgoCD/Flux               |
+| --------------- | ----------------- | ------------------------- |
+| Complexity      | Native kubectl    | Separate controller       |
+| Daemon          | None              | Runs 24/7                 |
+| Pruning         | Built-in          | Built-in                  |
+| Drift detection | Manual apply      | Continuous reconciliation |
+| Resource usage  | Zero              | ~200-500MB RAM            |
+| Setup           | Enable alpha flag | Install operator          |
+| Best for        | Local dev         | Production clusters       |
 
-**For local-first Ethereum stacks:** ApplySets provide sufficient guarantees without controller overhead.
+**For local-first Ethereum stacks:** ApplySets provide sufficient guarantees
+without controller overhead.
 
-**Note on Helmfile:** Helmfile is used **solely for generating YAML manifests** per applyset. Helmfile does NOT handle resource pruning - that responsibility belongs to kubectl with ApplySets.
+**Note on Helmfile:** Helmfile is used **solely for generating YAML manifests**
+per applyset. Helmfile does NOT handle resource pruning - that responsibility
+belongs to kubectl with ApplySets.
 
 ### ApplySet Usage
 
 **Enable ApplySets:**
+
 ```bash
 export KUBECTL_APPLYSET=true
 ```
 
 **Apply with pruning:**
+
 ```bash
 kubectl apply -f manifests/ --prune --applyset={name}
 ```
 
 **View applysets:**
+
 ```bash
 kubectl get applysets
 kubectl get applyset obol-base -o yaml
 ```
 
 **Delete applyset (prunes all resources):**
+
 ```bash
 kubectl delete applyset obol-app-sequencer
 # All sequencer resources automatically removed
@@ -914,12 +957,15 @@ helmfile -f manifests/base/helmfile.yaml template --include-crds | \
 ```
 
 **Behavior:**
+
 - All base resources tracked under `obol-base`
 - Base layer configuration is stable and rarely changes
 - Managed by Obol team in obol-stack repository
 - Application layer depends on base layer
 
-**Note:** Base layer helmfile defines core infrastructure (monitoring, Ethereum L1, networking). This configuration is maintained by Obol and synced to users' local systems. Users should not need to modify base layer configuration.
+**Note:** Base layer helmfile defines core infrastructure (monitoring, Ethereum
+L1, networking). This configuration is maintained by Obol and synced to users'
+local systems. Users should not need to modify base layer configuration.
 
 #### Application Layer: One ApplySet per App
 
@@ -938,22 +984,28 @@ helmfile -f ~/.config/obol/manifests/apps/validator/helmfile.yaml template | \
 ```
 
 **Behavior:**
+
 - Each app has isolated applyset
 - Apps can be installed/removed independently
 - Uninstalling removes only that app's resources
 - Base layer unaffected
-- **Important:** Applications may depend on base layer components OR have inter-dependencies with other applications
+- **Important:** Applications may depend on base layer components OR have
+  inter-dependencies with other applications
 
-**Dependency Complexity Note:**
-Explicitly expressing and managing complex inter-application dependencies could become problematic. Dependency resolution logic will need to:
+**Dependency Complexity Note:** Explicitly expressing and managing complex
+inter-application dependencies could become problematic. Dependency resolution
+logic will need to:
+
 - Check base layer prerequisites (e.g., requires Prometheus, Ethereum L1 RPC)
 - Validate inter-app dependencies (e.g., validator requires sequencer)
 - Prevent uninstall of apps with dependent apps
 - Handle dependency ordering during installation
 
-This complexity may require careful design of the dependency resolution system in obol-cli/obol-stack-ui.
+This complexity may require careful design of the dependency resolution system
+in obol-cli/obol-stack-ui.
 
 **Example:**
+
 ```bash
 # Install two apps
 obol-cli app install sequencer
@@ -1000,11 +1052,17 @@ $OBOL_CONFIG_DIR/                      # User runtime directory (~/.config/obol)
 ```
 
 **Key Points:**
-- `$OBOL_CONFIG_DIR/manifests/base/`: Synced from obol-stack GitHub repo during `./obolup.sh`
-- `$OBOL_CONFIG_DIR/manifests/apps/{app}/`: Pulled from obol-stack GitHub repo when user installs app via CLI/UI
-- `$OBOL_CONFIG_DIR/.apps.yaml`: Hidden file auto-generated by obol-cli to track installed applications
-- Each app directory contains a `helmfile.yaml` defining the application's Kubernetes resources
-- Helmfile is used solely to generate YAML manifests, which are then applied with kubectl ApplySets
+
+- `$OBOL_CONFIG_DIR/manifests/base/`: Synced from obol-stack GitHub repo during
+  `./obolup.sh`
+- `$OBOL_CONFIG_DIR/manifests/apps/{app}/`: Pulled from obol-stack GitHub repo
+  when user installs app via CLI/UI
+- `$OBOL_CONFIG_DIR/.apps.yaml`: Hidden file auto-generated by obol-cli to track
+  installed applications
+- Each app directory contains a `helmfile.yaml` defining the application's
+  Kubernetes resources
+- Helmfile is used solely to generate YAML manifests, which are then applied
+  with kubectl ApplySets
 
 ## Deployment Flow
 
@@ -1035,26 +1093,34 @@ graph TD
 
 ### Application Distribution
 
-Applications are helmfile-based templates stored in the Obol GitHub repository (`github.com/obol/obol-stack/manifests/apps/`).
+Applications are helmfile-based templates stored in the Obol GitHub repository
+(`github.com/obol/obol-stack/manifests/apps/`).
 
 **Installation Flow:**
+
 1. User installs app via `obol-cli` or `obol-stack-ui`
-2. Application helmfile pulled from GitHub to `$OBOL_CONFIG_DIR/manifests/apps/{app-name}/`
-3. Application comes with sane defaults and automatic integration with base layer
+2. Application helmfile pulled from GitHub to
+   `$OBOL_CONFIG_DIR/manifests/apps/{app-name}/`
+3. Application comes with sane defaults and automatic integration with base
+   layer
 4. User can customize values via `values.yaml` or UI configuration
 5. Helmfile generates YAML manifests
 6. Manifests applied to cluster with kubectl ApplySet
 
 **Versioning:** TBD - Strategy for application versioning to be determined.
 
-**Community Contributions:**
-Users are encouraged to contribute improvements to application manifests via pull requests to the obol-stack repository. This enables the community to:
+**Community Contributions:** Users are encouraged to contribute improvements to
+application manifests via pull requests to the obol-stack repository. This
+enables the community to:
+
 - Fix bugs and improve existing applications
 - Add new application templates
 - Share best practices and optimizations
 - Contribute Ethereum-specific integrations
 
-**Alternative:** A separate repository (e.g., `obol-stack-apps`) could be created specifically for community-contributed application manifests, keeping the core obol-stack repository focused on base infrastructure.
+**Alternative:** A separate repository (e.g., `obol-stack-apps`) could be
+created specifically for community-contributed application manifests, keeping
+the core obol-stack repository focused on base infrastructure.
 
 ### Custom Applications
 
@@ -1071,8 +1137,9 @@ $OBOL_CONFIG_DIR/manifests/apps/my-custom-app/
         └── templates/
 ```
 
-**Custom Application Template:**
-We could provide a template generator that bootstraps helmfile configuration with global variables relative to base configuration:
+**Custom Application Template:** We could provide a template generator that
+bootstraps helmfile configuration with global variables relative to base
+configuration:
 
 ```bash
 # Generate custom app scaffold
@@ -1086,12 +1153,16 @@ obol-cli app create my-custom-app
 ```
 
 This template would include:
+
 - Pre-configured connection to base layer services
 - Standard labels and annotations
 - Monitoring/logging integration
 - Service discovery configuration
 
-**Trade-off:** Custom applications without using the template lose the ease of use and automatic integration provided by Obol-managed application templates. Users will need to:
+**Trade-off:** Custom applications without using the template lose the ease of
+use and automatic integration provided by Obol-managed application templates.
+Users will need to:
+
 - Manually configure service discovery/endpoints
 - Handle dependencies and prerequisites
 - Manage upgrades and compatibility
@@ -1099,6 +1170,7 @@ This template would include:
 ### Management Tools
 
 #### obol-cli (Command-line)
+
 ```bash
 # List available applications
 obol-cli app list
@@ -1117,6 +1189,7 @@ obol-cli app status
 ```
 
 #### obol-stack-ui (Web Interface)
+
 - Browse available applications
 - Install/uninstall applications
 - Configure application settings
@@ -1128,25 +1201,30 @@ obol-cli app status
 **Versioning Strategy:** TBD - Application versioning approach to be determined.
 
 #### Install Application
+
 ```bash
 obol-cli app install sequencer
 ```
 
 **Steps:**
+
 1. Check `obol-base` applyset exists (dependency check)
 2. Check application dependencies (base layer components, other apps)
-3. Pull application helmfile from GitHub to `$OBOL_CONFIG_DIR/manifests/apps/sequencer/`
+3. Pull application helmfile from GitHub to
+   `$OBOL_CONFIG_DIR/manifests/apps/sequencer/`
 4. Apply default configuration with automatic base layer integration
 5. Run `helmfile template` to generate YAML manifests
 6. Apply with `kubectl apply --prune --applyset=obol-app-sequencer`
 7. Track installation in `$OBOL_CONFIG_DIR/installed-apps.yaml`
 
 #### Upgrade Application
+
 ```bash
 obol-cli app upgrade sequencer
 ```
 
 **Steps:**
+
 1. Pull updated application helmfile from GitHub
 2. Merge user customizations from existing `values.yaml`
 3. Run `helmfile template` with updated configuration
@@ -1155,23 +1233,30 @@ obol-cli app upgrade sequencer
 6. Update tracking in `installed-apps.yaml`
 
 #### Uninstall Application
+
 ```bash
 obol-cli app uninstall sequencer
 ```
 
 **Steps:**
-1. Check for dependent applications (prevent uninstall if other apps depend on this)
+
+1. Check for dependent applications (prevent uninstall if other apps depend on
+   this)
 2. Delete applyset: `kubectl delete applyset obol-app-sequencer`
-3. All resources with `applyset.kubernetes.io/part-of=obol-app-sequencer` automatically pruned
-4. Optionally remove local manifests: `rm -rf $OBOL_CONFIG_DIR/manifests/apps/sequencer/`
+3. All resources with `applyset.kubernetes.io/part-of=obol-app-sequencer`
+   automatically pruned
+4. Optionally remove local manifests:
+   `rm -rf $OBOL_CONFIG_DIR/manifests/apps/sequencer/`
 5. Update tracking in `installed-apps.yaml`
 
 #### Show Status
+
 ```bash
 obol-cli app status
 ```
 
 **Output:**
+
 ```
 Installed Applications:
   sequencer - Running ✓
@@ -1183,12 +1268,12 @@ Available Applications:
 
 ## Key Design Decisions
 
-
 ### 1. No GitOps Controllers (ArgoCD/Flux)
 
 **Decision:** Use kubectl ApplySets instead of ArgoCD/Flux
 
 **Rationale:**
+
 - Local-first development stack, not production
 - Manual apply is acceptable (no continuous drift detection needed)
 - Eliminates controller overhead (~200-500MB RAM)
@@ -1196,6 +1281,7 @@ Available Applications:
 - Still gets automatic pruning via ApplySets
 
 **Trade-offs:**
+
 - ✅ Zero daemon overhead
 - ✅ Simple kubectl-based workflow
 - ❌ No automatic drift detection/correction
@@ -1207,30 +1293,35 @@ Available Applications:
 **Decision:** Use helmfile as templating layer
 
 **Rationale:**
+
 - Helm charts provide Ethereum application packaging
 - Helmfile simplifies multi-chart deployments
 - Mature ecosystem of charts (prometheus, grafana, etc.)
 - Template generation: `helmfile template` → kubectl apply
 
-**Note:** Helmfile is used **solely for generating YAML manifests** per applyset. Helmfile does NOT handle pruning → that's why ApplySets are needed.
+**Note:** Helmfile is used **solely for generating YAML manifests** per
+applyset. Helmfile does NOT handle pruning → that's why ApplySets are needed.
 
 ### 3. One ApplySet per Application
 
 **Decision:** Separate applysets for each Layer 3 application
 
 **Rationale:**
+
 - Independent lifecycle management
 - Clean uninstall (delete applyset = all resources gone)
 - No risk of base layer interference
 - Easy to see what resources belong to each app
 
-**Alternative considered:** Single applyset for all apps → rejected because uninstalling one app would be complex
+**Alternative considered:** Single applyset for all apps → rejected because
+uninstalling one app would be complex
 
 ### 4. Base Configuration Managed by Obol
 
 **Decision:** Base layer provides stable foundation for user experimentation
 
 **Rationale:**
+
 - Base configuration synced from Obol's GitHub repository during `./obolup.sh`
 - Provides consistent, tested foundation for Ethereum infrastructure
 - Reduces complexity for end users
@@ -1242,7 +1333,9 @@ Available Applications:
 **Decision:** Applications are helmfile templates in Obol's GitHub repository
 
 **Rationale:**
-- Applications pulled from `github.com/obol/obol-stack/manifests/apps/` when installed
+
+- Applications pulled from `github.com/obol/obol-stack/manifests/apps/` when
+  installed
 - Comes with sane defaults and automatic base layer integration
 - Users can customize via `values.yaml` or UI
 - Versioning strategy TBD
@@ -1253,31 +1346,42 @@ Available Applications:
 
 **Concept:** Support swapping k3d for alternative Kubernetes solutions
 
-The current implementation uses k3d (k3s in Docker) for Layer 1, but the architecture could support alternative Kubernetes distributions for different performance, portability, or operational requirements.
+The current implementation uses k3d (k3s in Docker) for Layer 1, but the
+architecture could support alternative Kubernetes distributions for different
+performance, portability, or operational requirements.
 
 **Potential alternatives:**
 
 #### k3s (bare metal)
-- **Pros:** Better performance than k3d, native system integration, lower overhead
+
+- **Pros:** Better performance than k3d, native system integration, lower
+  overhead
 - **Cons:** Requires root access, harder cleanup, less portable
 - **Use case:** Long-running local development, CI/CD environments
 
 #### kind (Kubernetes in Docker)
-- **Pros:** Official Kubernetes SIG project, multi-node cluster support, closer to production k8s
+
+- **Pros:** Official Kubernetes SIG project, multi-node cluster support, closer
+  to production k8s
 - **Cons:** Heavier than k3d, slower startup, more resource intensive
 - **Use case:** Testing k8s features, multi-node scenarios
 
 #### minikube
-- **Pros:** Mature ecosystem, driver flexibility (Docker, VM, bare metal), addons
+
+- **Pros:** Mature ecosystem, driver flexibility (Docker, VM, bare metal),
+  addons
 - **Cons:** Heavier footprint, more complex setup
 - **Use case:** Development environments with established minikube workflows
 
 #### colima (macOS)
-- **Pros:** Native macOS container runtime, lighter than Docker Desktop, Lima-based
+
+- **Pros:** Native macOS container runtime, lighter than Docker Desktop,
+  Lima-based
 - **Cons:** macOS only, newer project
 - **Use case:** macOS developers avoiding Docker Desktop licensing
 
 #### Bare metal Kubernetes (kubeadm/k0s)
+
 - **Pros:** Maximum performance, production-like, full control
 - **Cons:** Complex setup, manual cluster management, not ephemeral
 - **Use case:** Performance testing, production-like local environments
@@ -1296,15 +1400,17 @@ export OBOL_K8S_DISTRO=minikube
 
 **Compatibility matrix:**
 
-| Feature | k3d | kind | minikube | k3s | colima |
-|---------|-----|------|----------|-----|--------|
-| Ephemeral | ✓ | ✓ | ✓ | ~ | ✓ |
-| Fast startup | ✓ | ~ | ✗ | ✓ | ✓ |
-| Multi-node | ~ | ✓ | ✓ | ✓ | ✗ |
-| macOS native | ✗ | ✗ | ✗ | ✗ | ✓ |
-| OCI registry | ✓ | ~ | ~ | ✓ | ~ |
+| Feature      | k3d | kind | minikube | k3s | colima |
+| ------------ | --- | ---- | -------- | --- | ------ |
+| Ephemeral    | ✓   | ✓    | ✓        | ~   | ✓      |
+| Fast startup | ✓   | ~    | ✗        | ✓   | ✓      |
+| Multi-node   | ~   | ✓    | ✓        | ✓   | ✗      |
+| macOS native | ✗   | ✗    | ✗        | ✗   | ✓      |
+| OCI registry | ✓   | ~    | ~        | ✓   | ~      |
 
-**Key consideration:** Layer 2 (base) and Layer 3 (apps) remain distribution-agnostic since they operate at the Kubernetes API level. Only Layer 1 bootstrap logic needs adaptation.
+**Key consideration:** Layer 2 (base) and Layer 3 (apps) remain
+distribution-agnostic since they operate at the Kubernetes API level. Only Layer
+1 bootstrap logic needs adaptation.
 
 ---
 
@@ -1312,7 +1418,9 @@ export OBOL_K8S_DISTRO=minikube
 
 **Concept:** AI-powered cluster management as part of base infrastructure
 
-An AI chatbot integrated into Layer 2 (base infrastructure) that provides context-aware Kubernetes mutation, configuration management, and operational intelligence.
+An AI chatbot integrated into Layer 2 (base infrastructure) that provides
+context-aware Kubernetes mutation, configuration management, and operational
+intelligence.
 
 **Architecture:**
 
@@ -1331,6 +1439,7 @@ An AI chatbot integrated into Layer 2 (base infrastructure) that provides contex
 **Capabilities:**
 
 #### 1. Context-Aware Configuration
+
 ```
 User: "Increase sequencer replicas to handle more load"
 AI: Analyzing sequencer deployment... Currently 1 replica.
@@ -1339,6 +1448,7 @@ AI: Analyzing sequencer deployment... Currently 1 replica.
 ```
 
 #### 2. Value Mutations
+
 ```
 User: "Set Prometheus retention to 30 days"
 AI: Updating $OBOL_CONFIG_DIR/manifests/base/monitoring/values.yaml
@@ -1348,6 +1458,7 @@ AI: Updating $OBOL_CONFIG_DIR/manifests/base/monitoring/values.yaml
 ```
 
 #### 3. Failure Detection and Remediation
+
 ```
 AI: ⚠️ Detected: grafana pod CrashLoopBackOff
     Root cause: PVC storage full
@@ -1359,6 +1470,7 @@ AI: ⚠️ Detected: grafana pod CrashLoopBackOff
 ```
 
 #### 4. Dependency Guidance
+
 ```
 User: "Install validator app"
 AI: Checking dependencies...
@@ -1372,6 +1484,7 @@ AI: Checking dependencies...
 ```
 
 #### 5. Monitoring and Alerts
+
 ```
 AI: 📊 Cluster health summary:
     - Base layer: Healthy ✓
@@ -1411,6 +1524,7 @@ releases:
 **kubernetes-mcp Integration:**
 
 The AI uses Model Context Protocol (MCP) to interact with Kubernetes:
+
 - Read cluster state (pods, deployments, services)
 - Query logs and metrics
 - Propose configuration changes
@@ -1419,24 +1533,28 @@ The AI uses Model Context Protocol (MCP) to interact with Kubernetes:
 **Interface Options:**
 
 1. **CLI chat mode:**
+
 ```bash
 obol-cli chat
 > Help me debug why validator isn't syncing
 ```
 
 2. **Web UI (obol-stack-ui):**
+
 ```
 [Chat widget in sidebar]
 💬 Ask AI about your cluster...
 ```
 
 3. **Slack/Discord bot:**
+
 ```
 @obol-bot cluster status
 @obol-bot why is sequencer using so much memory?
 ```
 
 **Safety guardrails:**
+
 - Read-only mode by default (can be enabled in values)
 - All mutations require explicit user approval
 - Audit log of all AI actions
@@ -1444,11 +1562,13 @@ obol-cli chat
 - Scope limited to user's namespace/cluster
 
 **Privacy considerations:**
+
 - Optional: Run local LLM (ollama) instead of API
 - No cluster data sent to external APIs without consent
 - Configurable data retention policies
 
 **Benefits:**
+
 - Lower barrier to entry for Kubernetes newcomers
 - Faster troubleshooting and remediation
 - Natural language cluster management
@@ -1456,6 +1576,7 @@ obol-cli chat
 - Reduced cognitive load for complex operations
 
 **Challenges:**
+
 - API costs (mitigated by local LLM option)
 - Trust in AI suggestions (addressed by approval flow)
 - Context window limits (addressed by kubernetes-mcp filtering)
