@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/obol/obol-stack/internal/config"
 	"github.com/obol/obol-stack/internal/logging"
 )
@@ -16,16 +17,11 @@ const (
 	clusterName      = "obol-stack"
 	k3dConfigFile    = "config.yaml"
 	kubeconfigFile   = "kubeconfig.yaml"
+	clusterIDFile    = ".cluster_id"
 )
 
 // Init initializes the cluster configuration
 func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
-	if logger != nil {
-		logger.LogCommand("cluster init", []string{fmt.Sprintf("force=%v", force)})
-		defer func() {
-			logger.LogCommandComplete("cluster init", 0, nil)
-		}()
-	}
 	// Create cluster config directory
 	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
 	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
@@ -34,9 +30,33 @@ func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
 	if _, err := os.Stat(destPath); err == nil {
 		if !force {
 			fmt.Printf("✓ Cluster configuration already exists at %s\n", destPath)
+			// Still show the cluster_id if it exists
+			if clusterID, err := getClusterID(clusterConfigDir); err == nil {
+				fmt.Printf("  Cluster ID: %s\n", clusterID)
+				if logger != nil {
+					logger.LogCommandWithClusterID("cluster init", []string{fmt.Sprintf("force=%v", force)}, clusterID)
+					defer func() {
+						logger.LogCommandComplete("cluster init", 0, nil)
+					}()
+				}
+			}
 			return nil
 		}
 		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
+	}
+
+	// Generate or get existing cluster_id
+	clusterID, err := getOrCreateClusterID(clusterConfigDir, force)
+	if err != nil {
+		return fmt.Errorf("failed to generate cluster_id: %w", err)
+	}
+
+	// Now log with cluster_id
+	if logger != nil {
+		logger.LogCommandWithClusterID("cluster init", []string{fmt.Sprintf("force=%v", force)}, clusterID)
+		defer func() {
+			logger.LogCommandComplete("cluster init", 0, nil)
+		}()
 	}
 
 	// Get the k3d config template path
@@ -67,14 +87,33 @@ func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
 	}
 
 	fmt.Printf("✓ Initialized cluster configuration at %s\n", destPath)
+	fmt.Printf("  Cluster ID: %s\n", clusterID)
 	return nil
 }
 
 // Up starts the k3d cluster
 func Up(cfg *config.Config, logger *logging.Logger) error {
 	var cmdErr error
+	k3dConfigPath := filepath.Join(cfg.ConfigDir, "cluster", "k3d", k3dConfigFile)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
+
+	// Check if config exists
+	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
+		cmdErr = fmt.Errorf("cluster config not found, run 'obol cluster init' first")
+		return cmdErr
+	}
+
+	// Get cluster_id
+	clusterID, err := getClusterID(clusterConfigDir)
+	if err != nil {
+		cmdErr = fmt.Errorf("failed to read cluster_id: %w", err)
+		return cmdErr
+	}
+
+	// Log command with cluster_id
 	if logger != nil {
-		logger.LogCommand("cluster up", []string{})
+		logger.LogCommandWithClusterID("cluster up", []string{}, clusterID)
 		defer func() {
 			exitCode := 0
 			if cmdErr != nil {
@@ -82,14 +121,6 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 			}
 			logger.LogCommandComplete("cluster up", exitCode, cmdErr)
 		}()
-	}
-	k3dConfigPath := filepath.Join(cfg.ConfigDir, "cluster", "k3d", k3dConfigFile)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
-
-	// Check if config exists
-	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
-		cmdErr = fmt.Errorf("cluster config not found, run 'obol cluster init' first")
-		return cmdErr
 	}
 
 	// Check if cluster already exists using cluster list
@@ -123,12 +154,16 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 		"--kubeconfig-update-default=false",
 		"--verbose",
 	)
-	// Set OBOL_DATA_DIR for k3d config expansion (must be absolute path)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir))
+	// Set environment variables for k3d config expansion (must be absolute paths)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir),
+		fmt.Sprintf("OBOL_CLUSTER_ID=%s", clusterID),
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	fmt.Printf("Using data directory: %s\n", absDataDir)
+	fmt.Printf("Cluster ID: %s\n", clusterID)
 
 	// Capture stdout/stderr to logger if available
 	if logger != nil {
@@ -308,4 +343,54 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 	}
 
 	return len(p), nil
+}
+
+// generateClusterID creates a new cluster ID using petname
+// Format: obol-stack__adjective-noun
+// Example: obol-stack__wise-phoenix
+func generateClusterID() string {
+	name := petname.Generate(2, "-") // 2 words: adjective-noun
+	return fmt.Sprintf("obol-stack__%s", name)
+}
+
+// getOrCreateClusterID reads existing cluster_id or generates a new one
+func getOrCreateClusterID(clusterConfigDir string, force bool) (string, error) {
+	clusterIDPath := filepath.Join(clusterConfigDir, clusterIDFile)
+
+	// Try to read existing cluster_id
+	if !force {
+		if data, err := os.ReadFile(clusterIDPath); err == nil {
+			existingID := strings.TrimSpace(string(data))
+			if existingID != "" {
+				return existingID, nil
+			}
+		}
+	}
+
+	// Generate new cluster_id
+	clusterID := generateClusterID()
+
+	// Write to file
+	if err := os.WriteFile(clusterIDPath, []byte(clusterID), 0644); err != nil {
+		return "", fmt.Errorf("failed to write cluster_id: %w", err)
+	}
+
+	return clusterID, nil
+}
+
+// getClusterID reads the cluster_id from the cluster config directory
+func getClusterID(clusterConfigDir string) (string, error) {
+	clusterIDPath := filepath.Join(clusterConfigDir, clusterIDFile)
+
+	data, err := os.ReadFile(clusterIDPath)
+	if err != nil {
+		return "", fmt.Errorf("cluster_id not found (cluster may not be initialized): %w", err)
+	}
+
+	clusterID := strings.TrimSpace(string(data))
+	if clusterID == "" {
+		return "", fmt.Errorf("cluster_id file is empty")
+	}
+
+	return clusterID, nil
 }
