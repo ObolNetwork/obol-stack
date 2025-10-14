@@ -18,6 +18,11 @@ var k3dFS embed.FS
 //go:embed all:applications
 var applicationsFS embed.FS
 
+// GetApplicationsFS returns the embedded applications filesystem for use by other packages
+func GetApplicationsFS() embed.FS {
+	return applicationsFS
+}
+
 // WriteK3dConfig writes the embedded k3d config to destination
 func WriteK3dConfig(destPath string) error {
 	data, err := k3dFS.ReadFile("k3d/config.yaml")
@@ -32,8 +37,10 @@ func WriteK3dConfig(destPath string) error {
 	return nil
 }
 
-// CopyApplications copies embedded applications directory to destination
-func CopyApplications(destDir string) error {
+// CopyDefaultApplications copies only default applications and README to destination
+// This is used by cluster init to set up the base applications
+// Non-default applications (like ethereum) must be installed via 'obol app install'
+func CopyDefaultApplications(destDir string) error {
 	// Walk through embedded filesystem starting at applications/
 	return fs.WalkDir(applicationsFS, "applications", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -48,15 +55,32 @@ func CopyApplications(destDir string) error {
 		// Remove the "applications/" prefix to get relative path
 		relPath := strings.TrimPrefix(path, "applications/")
 
+		// Split path to check if it's a top-level directory (not default)
+		pathParts := strings.Split(relPath, string(filepath.Separator))
+		if len(pathParts) > 0 {
+			topLevelDir := pathParts[0]
+
+			// Skip non-default application directories (like ethereum)
+			// Only copy: default/ directory and README.md file
+			if d.IsDir() && topLevelDir != "default" && !strings.HasPrefix(relPath, "default/") {
+				return fs.SkipDir // Skip this entire directory tree
+			}
+
+			// Skip files in non-default app directories
+			if !d.IsDir() && topLevelDir != "default" && topLevelDir != "README.md" {
+				return nil // Skip this file
+			}
+		}
+
 		// Build destination path
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
-			// Create directory and continue walking (don't return yet)
+			// Create directory and continue walking
 			if err := os.MkdirAll(destPath, 0755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
 			}
-			return nil // Continue walking into this directory
+			return nil
 		}
 
 		// Ensure parent directory exists before writing file

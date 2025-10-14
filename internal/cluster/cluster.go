@@ -74,10 +74,11 @@ func Init(cfg *config.Config, _ *logging.Logger, force bool) error {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
-	// Copy embedded applications directory
+	// Copy only default applications (monitoring stack)
+	// Non-default applications must be installed via 'obol app install'
 	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
-	if err := embed.CopyApplications(applicationsDestDir); err != nil {
-		return fmt.Errorf("failed to copy applications: %w", err)
+	if err := embed.CopyDefaultApplications(applicationsDestDir); err != nil {
+		return fmt.Errorf("failed to copy default applications: %w", err)
 	}
 
 	// Create kubeconfig directory
@@ -329,16 +330,15 @@ func Purge(cfg *config.Config, _ *logging.Logger) error {
 		}
 	}
 
-	// Remove cluster config directory
-	clusterDir := filepath.Join(cfg.ConfigDir, "cluster")
-	if err := os.RemoveAll(clusterDir); err != nil {
-		cmdErr = fmt.Errorf("failed to remove cluster config: %w", err)
+	// Remove entire config directory (includes cluster config, applications, etc.)
+	if err := os.RemoveAll(cfg.ConfigDir); err != nil {
+		cmdErr = fmt.Errorf("failed to remove config directory: %w", err)
 		return cmdErr
 	}
 	if logger != nil {
-		logger.Info("✓ Removed cluster config directory")
+		logger.Info("✓ Removed config directory", "path", cfg.ConfigDir)
 	} else {
-		fmt.Printf("✓ Removed cluster config directory\n")
+		fmt.Printf("✓ Removed config directory: %s\n", cfg.ConfigDir)
 	}
 
 	// Remove data directory

@@ -5,8 +5,10 @@ import (
 	"log"
 	"os"
 
+	"github.com/obol/obol-stack/internal/app"
 	"github.com/obol/obol-stack/internal/cluster"
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/embed"
 	"github.com/obol/obol-stack/internal/logging"
 	"github.com/urfave/cli/v2"
 )
@@ -17,15 +19,11 @@ func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
 
-	// Initialize logger
-	logger, err := logging.NewLogger(cfg.StateDir)
-	if err != nil {
-		log.Printf("Warning: failed to initialize logger: %v\n", err)
-		logger = nil // Continue without logging
-	}
-	if logger != nil {
-		defer logger.Close()
-	}
+	// Note: Logger is not initialized here as it requires a cluster_id.
+	// Individual commands (cluster, app) handle their own logging as needed.
+	// Cluster commands create cluster-specific loggers with the cluster_id.
+	// App commands can optionally log but don't require it.
+	var logger *logging.Logger = nil
 
 	app := &cli.App{
 		Name:    "obol",
@@ -98,18 +96,82 @@ func main() {
 					// },
 				},
 			},
-			// TODO: Implement app command
-			// {
-			//     Name:  "app",
-			//     Usage: "Manage applications",
-			//     Subcommands: []*cli.Command{
-			//         {Name: "install", Usage: "Install an application"},
-			//         {Name: "edit", Usage: "Edit application values"},
-			//         {Name: "sync", Usage: "Sync application changes to cluster"},
-			//         {Name: "update", Usage: "Update application template"},
-			//         {Name: "delete", Usage: "Delete an application"},
-			//     },
-			// },
+			{
+				Name:  "app",
+				Usage: "Manage applications",
+				Subcommands: []*cli.Command{
+					{
+						Name:      "list",
+						Usage:     "List available applications",
+						ArgsUsage: " ",
+						Action: func(c *cli.Context) error {
+							return app.List(cfg, logger, embed.GetApplicationsFS())
+						},
+					},
+					{
+						Name:      "install",
+						Usage:     "Install an application",
+						ArgsUsage: "<app-name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Force overwrite if application already exists",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Install(cfg, logger, embed.GetApplicationsFS(), appName, c.Bool("force"))
+						},
+					},
+					{
+						Name:      "edit",
+						Usage:     "Edit application values.yaml",
+						ArgsUsage: "<app-name>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Edit(cfg, logger, appName)
+						},
+					},
+					{
+						Name:      "sync",
+						Usage:     "Sync application to cluster (apply changes)",
+						ArgsUsage: "<app-name>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Sync(cfg, logger, appName)
+						},
+					},
+					{
+						Name:      "delete",
+						Usage:     "Delete application and remove from cluster",
+						ArgsUsage: "<app-name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Skip confirmation prompt",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Delete(cfg, logger, appName, c.Bool("force"))
+						},
+					},
+				},
+			},
 			// TODO: Implement ai command
 			// {
 			//     Name:      "ai",
