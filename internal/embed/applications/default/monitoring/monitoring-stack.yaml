@@ -90,6 +90,16 @@ spec:
               editable: true
               options:
                 path: /var/lib/grafana/dashboards/default
+      # Enable sidecar to discover dashboards from ConfigMaps
+      sidecar:
+        dashboards:
+          enabled: true
+          label: grafana_dashboard
+          labelValue: "1"
+          searchNamespace: ALL
+          folderAnnotation: grafana_folder
+          provider:
+            foldersFromFilesStructure: true
       # Load default Kubernetes dashboards
       dashboards:
         default:
