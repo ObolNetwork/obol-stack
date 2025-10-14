@@ -34,9 +34,16 @@ func main() {
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize stack configuration",
+						Usage: "Initialize cluster configuration",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Force overwrite existing configuration",
+							},
+						},
 						Action: func(c *cli.Context) error {
-							return stack.Init(cfg)
+							return stack.Init(cfg, c.Bool("force"))
 						},
 					},
 					{

@@ -17,21 +17,29 @@ const (
 )
 
 // Init initializes the cluster configuration
-func Init(cfg *config.Config) error {
+func Init(cfg *config.Config, force bool) error {
+	// Create cluster config directory
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
+	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
+
+	// Check if config already exists
+	if _, err := os.Stat(destPath); err == nil {
+		if !force {
+			fmt.Printf("✓ Cluster configuration already exists at %s\n", destPath)
+			return nil
+		}
+		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
+	}
+
 	// Get the k3d config template path
 	templatePath, err := getK3dTemplatePath()
 	if err != nil {
 		return fmt.Errorf("failed to find k3d config template: %w", err)
 	}
 
-	// Create cluster config directory
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
 	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cluster config dir: %w", err)
 	}
-
-	// Copy config template to cluster config directory
-	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
 
 	// Read template
 	template, err := os.ReadFile(templatePath)
