@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-const version = "0.1.0"
+const version = "0.0.0"
 
 func main() {
 	// Load config with XDG defaults
@@ -28,8 +28,15 @@ func main() {
 					{
 						Name:  "init",
 						Usage: "Initialize cluster configuration",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Force overwrite existing configuration",
+							},
+						},
 						Action: func(c *cli.Context) error {
-							return cluster.Init(cfg)
+							return cluster.Init(cfg, c.Bool("force"))
 						},
 					},
 					{
