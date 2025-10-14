@@ -222,6 +222,7 @@ func (l *Logger) Close() error {
 	return nil
 }
 
+
 // getCurrentDir returns the current working directory
 func getCurrentDir() string {
 	dir, err := os.Getwd()
