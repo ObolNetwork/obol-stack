@@ -20,7 +20,8 @@ if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 
 	# Override directories to use local .workspace
 	OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$WORKSPACE_DIR/config}"
-	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$WORKSPACE_DIR/share}"
+	OBOL_DATA_DIR="${OBOL_DATA_DIR:-$WORKSPACE_DIR/data}"
+	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$WORKSPACE_DIR/state}"
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$WORKSPACE_DIR/bin}"
 
 	log_warn() { echo -e "${YELLOW}!${NC} $1"; }
@@ -30,10 +31,12 @@ else
 	# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 	XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 	XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+	XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 
 	# Configuration directories with XDG defaults
 	OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$XDG_CONFIG_HOME/obol}"
-	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$XDG_DATA_HOME/obol}"
+	OBOL_DATA_DIR="${OBOL_DATA_DIR:-$XDG_DATA_HOME/obol}"
+	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$XDG_STATE_HOME/obol}"
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_CONFIG_DIR/bin}"
 fi
 
@@ -91,12 +94,16 @@ validate_prerequisites() {
 create_directories() {
 	log_info "Creating directory structure..."
 
+	# Config directories
 	mkdir -p "$OBOL_BIN_DIR"
 	mkdir -p "$OBOL_CONFIG_DIR/cluster/k3d"
 	mkdir -p "$OBOL_CONFIG_DIR/cluster/kubeconfig"
-	mkdir -p "$OBOL_CONFIG_DIR/helmfile"
-	mkdir -p "$OBOL_STATE_DIR/volumes"
-	mkdir -p "$OBOL_STATE_DIR/backups"
+
+	# State directories (logs, history)
+	mkdir -p "$OBOL_STATE_DIR/logs"
+
+	# Data directories (persistent data)
+	mkdir -p "$OBOL_DATA_DIR"
 
 	log_success "Directories created"
 }
