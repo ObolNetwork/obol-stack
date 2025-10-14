@@ -32,13 +32,25 @@ type CommandEntry struct {
 // Logger wraps slog.Logger with session tracking
 type Logger struct {
 	*slog.Logger
-	sessionID SessionID
-	stateDir  string
+	sessionID   SessionID
+	clusterID   string
+	stateDir    string
 	historyFile *os.File
 }
 
 // NewLogger creates a new logger with session tracking
+// Deprecated: All logging must be cluster-specific. Use NewLoggerWithCluster instead.
 func NewLogger(stateDir string) (*Logger, error) {
+	return nil, fmt.Errorf("cluster_id is required - use NewLoggerWithCluster instead")
+}
+
+// NewLoggerWithCluster creates a new logger with session and cluster tracking
+func NewLoggerWithCluster(stateDir, clusterID string) (*Logger, error) {
+	// Require cluster_id - all logging is on a cluster lifecycle basis
+	if clusterID == "" {
+		return nil, fmt.Errorf("cluster_id is required for logging")
+	}
+
 	// Generate unique session ID
 	sessionID := SessionID(uuid.New().String())
 
@@ -47,8 +59,12 @@ func NewLogger(stateDir string) (*Logger, error) {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
+	// Cluster-specific directories only
+	clusterDir := filepath.Join(stateDir, clusterID)
+	logsDir := filepath.Join(clusterDir, "logs")
+	historyFile := filepath.Join(clusterDir, "history.jsonl")
+
 	// Create logs directory
-	logsDir := filepath.Join(stateDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create logs directory: %w", err)
 	}
@@ -76,15 +92,18 @@ func NewLogger(stateDir string) (*Logger, error) {
 		handlers: []slog.Handler{consoleHandler, jsonHandler},
 	}
 
-	// Wrap with session ID
-	handlerWithSession := teeHandler.WithAttrs([]slog.Attr{
+	// Wrap with session ID and cluster_id
+	attrs := []slog.Attr{
 		slog.String("session_id", string(sessionID)),
-	})
+	}
+	if clusterID != "" {
+		attrs = append(attrs, slog.String("cluster_id", clusterID))
+	}
+	handlerWithSession := teeHandler.WithAttrs(attrs)
 
 	logger := slog.New(handlerWithSession)
 
 	// Open history file
-	historyFile := filepath.Join(stateDir, "history.jsonl")
 	historyHandle, err := os.OpenFile(historyFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFileHandle.Close()
@@ -94,6 +113,7 @@ func NewLogger(stateDir string) (*Logger, error) {
 	return &Logger{
 		Logger:      logger,
 		sessionID:   sessionID,
+		clusterID:   clusterID,
 		stateDir:    stateDir,
 		historyFile: historyHandle,
 	}, nil
@@ -102,6 +122,16 @@ func NewLogger(stateDir string) (*Logger, error) {
 // SessionID returns the current session ID
 func (l *Logger) SessionID() SessionID {
 	return l.sessionID
+}
+
+// ClusterID returns the current cluster ID
+func (l *Logger) ClusterID() string {
+	return l.clusterID
+}
+
+// HasCluster returns true if this logger is tracking a specific cluster
+func (l *Logger) HasCluster() bool {
+	return l.clusterID != ""
 }
 
 // LogCommand records a command execution in history

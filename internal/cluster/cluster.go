@@ -14,49 +14,54 @@ import (
 )
 
 const (
-	clusterName      = "obol-stack"
-	k3dConfigFile    = "config.yaml"
-	kubeconfigFile   = "kubeconfig.yaml"
-	clusterIDFile    = ".cluster_id"
+	clusterNamePrefix = "obol-stack"
+	k3dConfigFile     = "config.yaml"
+	kubeconfigFile    = "kubeconfig.yaml"
+	clusterIDFile     = ".cluster_id"
 )
 
+// getClusterName returns the full cluster name with cluster_id
+func getClusterName(clusterID string) string {
+	return fmt.Sprintf("%s-%s", clusterNamePrefix, clusterID)
+}
+
 // Init initializes the cluster configuration
-func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
-	// Create cluster config directory
+func Init(cfg *config.Config, _ *logging.Logger, force bool) error {
+	// Create cluster config directory early
 	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
+	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cluster config dir: %w", err)
+	}
+
+	// Generate or get existing cluster_id first
+	clusterID, err := getOrCreateClusterID(clusterConfigDir, force)
+	if err != nil {
+		return fmt.Errorf("failed to generate cluster_id: %w", err)
+	}
+
+	// Always create cluster-specific logger
+	logger, err := logging.NewLoggerWithCluster(cfg.StateDir, clusterID)
+	if err != nil {
+		return fmt.Errorf("failed to create cluster logger: %w", err)
+	}
+	defer logger.Close()
+
+	// Log command
+	logger.LogCommandWithClusterID("cluster init", []string{fmt.Sprintf("force=%v", force)}, clusterID)
+	defer func() {
+		logger.LogCommandComplete("cluster init", 0, nil)
+	}()
+
 	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
 
 	// Check if config already exists
 	if _, err := os.Stat(destPath); err == nil {
 		if !force {
 			fmt.Printf("✓ Cluster configuration already exists at %s\n", destPath)
-			// Still show the cluster_id if it exists
-			if clusterID, err := getClusterID(clusterConfigDir); err == nil {
-				fmt.Printf("  Cluster ID: %s\n", clusterID)
-				if logger != nil {
-					logger.LogCommandWithClusterID("cluster init", []string{fmt.Sprintf("force=%v", force)}, clusterID)
-					defer func() {
-						logger.LogCommandComplete("cluster init", 0, nil)
-					}()
-				}
-			}
+			fmt.Printf("  Cluster ID: %s\n", clusterID)
 			return nil
 		}
 		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
-	}
-
-	// Generate or get existing cluster_id
-	clusterID, err := getOrCreateClusterID(clusterConfigDir, force)
-	if err != nil {
-		return fmt.Errorf("failed to generate cluster_id: %w", err)
-	}
-
-	// Now log with cluster_id
-	if logger != nil {
-		logger.LogCommandWithClusterID("cluster init", []string{fmt.Sprintf("force=%v", force)}, clusterID)
-		defer func() {
-			logger.LogCommandComplete("cluster init", 0, nil)
-		}()
 	}
 
 	// Get the k3d config template path
@@ -92,7 +97,7 @@ func Init(cfg *config.Config, logger *logging.Logger, force bool) error {
 }
 
 // Up starts the k3d cluster
-func Up(cfg *config.Config, logger *logging.Logger) error {
+func Up(cfg *config.Config, _ *logging.Logger) error {
 	var cmdErr error
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, "cluster", "k3d", k3dConfigFile)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
@@ -111,27 +116,36 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 		return cmdErr
 	}
 
-	// Log command with cluster_id
-	if logger != nil {
-		logger.LogCommandWithClusterID("cluster up", []string{}, clusterID)
-		defer func() {
-			exitCode := 0
-			if cmdErr != nil {
-				exitCode = 1
-			}
-			logger.LogCommandComplete("cluster up", exitCode, cmdErr)
-		}()
+	// Always create cluster-specific logger
+	logger, err := logging.NewLoggerWithCluster(cfg.StateDir, clusterID)
+	if err != nil {
+		cmdErr = fmt.Errorf("failed to create cluster logger: %w", err)
+		return cmdErr
 	}
+	defer logger.Close()
+
+	// Log command with cluster_id
+	logger.LogCommandWithClusterID("cluster up", []string{}, clusterID)
+	defer func() {
+		exitCode := 0
+		if cmdErr != nil {
+			exitCode = 1
+		}
+		logger.LogCommandComplete("cluster up", exitCode, cmdErr)
+	}()
+
+	// Build full cluster name
+	fullClusterName := getClusterName(clusterID)
 
 	// Check if cluster already exists using cluster list
 	cmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
 	output, _ := cmd.Output()
-	if clusterExists(string(output), clusterName) {
-		cmdErr = fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", clusterName)
+	if clusterExists(string(output), fullClusterName) {
+		cmdErr = fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", fullClusterName)
 		return cmdErr
 	}
 
-	fmt.Printf("Starting cluster '%s'...\n", clusterName)
+	fmt.Printf("Starting cluster '%s'...\n", fullClusterName)
 
 	// Get absolute path to data directory for k3d volume mount
 	absDataDir, err := filepath.Abs(cfg.DataDir)
@@ -146,10 +160,10 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 		return cmdErr
 	}
 
-	// Create cluster using k3d config
+	// Create cluster using k3d config with custom name
 	cmd = exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "create",
+		"cluster", "create", fullClusterName,
 		"--config", k3dConfigPath,
 		"--kubeconfig-update-default=false",
 		"--verbose",
@@ -180,7 +194,7 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 	// Export kubeconfig
 	cmd = exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"kubeconfig", "get", clusterName,
+		"kubeconfig", "get", fullClusterName,
 	)
 	kubeconfigData, err := cmd.Output()
 	if err != nil {
@@ -201,24 +215,45 @@ func Up(cfg *config.Config, logger *logging.Logger) error {
 }
 
 // Down stops the k3d cluster
-func Down(cfg *config.Config, logger *logging.Logger) error {
+func Down(cfg *config.Config, _ *logging.Logger) error {
 	var cmdErr error
-	if logger != nil {
-		logger.LogCommand("cluster down", []string{})
-		defer func() {
-			exitCode := 0
-			if cmdErr != nil {
-				exitCode = 1
-			}
-			logger.LogCommandComplete("cluster down", exitCode, cmdErr)
-		}()
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
+
+	// Get cluster_id (optional - may not exist if cluster was never initialized)
+	clusterID, _ := getClusterID(clusterConfigDir)
+
+	// Build full cluster name (use clusterID if available, otherwise use default)
+	var fullClusterName string
+	if clusterID != "" {
+		fullClusterName = getClusterName(clusterID)
+	} else {
+		// Fallback for legacy clusters without cluster_id
+		fullClusterName = clusterNamePrefix
 	}
 
-	fmt.Printf("Stopping cluster '%s'...\n", clusterName)
+	// Create cluster-specific logger if we have a cluster_id
+	var logger *logging.Logger
+	if clusterID != "" {
+		var err error
+		logger, err = logging.NewLoggerWithCluster(cfg.StateDir, clusterID)
+		if err == nil {
+			defer logger.Close()
+			logger.LogCommand("cluster down", []string{})
+			defer func() {
+				exitCode := 0
+				if cmdErr != nil {
+					exitCode = 1
+				}
+				logger.LogCommandComplete("cluster down", exitCode, cmdErr)
+			}()
+		}
+	}
+
+	fmt.Printf("Stopping cluster '%s'...\n", fullClusterName)
 
 	cmd := exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "delete", clusterName,
+		"cluster", "delete", fullClusterName,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -233,27 +268,39 @@ func Down(cfg *config.Config, logger *logging.Logger) error {
 }
 
 // Purge deletes the cluster and all data (except binaries)
-func Purge(cfg *config.Config, logger *logging.Logger) error {
+func Purge(cfg *config.Config, _ *logging.Logger) error {
 	var cmdErr error
-	if logger != nil {
-		logger.LogCommand("cluster purge", []string{})
-		defer func() {
-			exitCode := 0
-			if cmdErr != nil {
-				exitCode = 1
-			}
-			logger.LogCommandComplete("cluster purge", exitCode, cmdErr)
-		}()
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
+
+	// Get cluster_id (optional - may not exist if cluster was never initialized)
+	clusterID, _ := getClusterID(clusterConfigDir)
+
+	// Create cluster-specific logger if we have a cluster_id
+	var logger *logging.Logger
+	if clusterID != "" {
+		var err error
+		logger, err = logging.NewLoggerWithCluster(cfg.StateDir, clusterID)
+		if err == nil {
+			defer logger.Close()
+			logger.LogCommand("cluster purge", []string{})
+			defer func() {
+				exitCode := 0
+				if cmdErr != nil {
+					exitCode = 1
+				}
+				logger.LogCommandComplete("cluster purge", exitCode, cmdErr)
+			}()
+		}
 	}
 
 	// Stop cluster first
-	if err := Down(cfg, logger); err != nil {
+	if err := Down(cfg, nil); err != nil {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
 	// Remove cluster config directory
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	if err := os.RemoveAll(clusterConfigDir); err != nil {
+	clusterDir := filepath.Join(cfg.ConfigDir, "cluster")
+	if err := os.RemoveAll(clusterDir); err != nil {
 		cmdErr = fmt.Errorf("failed to remove cluster config: %w", err)
 		return cmdErr
 	}
@@ -361,11 +408,10 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 }
 
 // generateClusterID creates a new cluster ID using petname
-// Format: obol-stack__adjective-noun
-// Example: obol-stack__wise-phoenix
+// Format: adjective-noun
+// Example: wise-phoenix
 func generateClusterID() string {
-	name := petname.Generate(2, "-") // 2 words: adjective-noun
-	return fmt.Sprintf("obol-stack__%s", name)
+	return petname.Generate(2, "-") // 2 words: adjective-noun
 }
 
 // getOrCreateClusterID reads existing cluster_id or generates a new one
