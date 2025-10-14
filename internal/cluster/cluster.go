@@ -349,15 +349,22 @@ func Purge(cfg *config.Config, _ *logging.Logger) error {
 		fmt.Printf("✓ Removed data directory\n")
 	}
 
-	// Remove state directory (logs, history)
-	if err := os.RemoveAll(cfg.StateDir); err != nil {
-		cmdErr = fmt.Errorf("failed to remove state directory: %w", err)
-		return cmdErr
-	}
-	if logger != nil {
-		logger.Info("✓ Removed state directory")
-	} else {
-		fmt.Printf("✓ Removed state directory\n")
+	// Remove state directory (history only - preserve logs)
+	if clusterID != "" {
+		clusterStateDir := filepath.Join(cfg.StateDir, clusterID)
+		historyFile := filepath.Join(clusterStateDir, "history.jsonl")
+
+		// Remove only the history file, preserve logs directory
+		if err := os.Remove(historyFile); err != nil && !os.IsNotExist(err) {
+			cmdErr = fmt.Errorf("failed to remove history file: %w", err)
+			return cmdErr
+		}
+
+		if logger != nil {
+			logger.Info("✓ Removed command history (logs preserved)")
+		} else {
+			fmt.Printf("✓ Removed command history (logs preserved)\n")
+		}
 	}
 
 	if logger != nil {
