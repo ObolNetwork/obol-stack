@@ -16,6 +16,8 @@
       perSystem = {pkgs, ...}: {
         devshells.default = {
           packages = with pkgs; [
+            just
+
             # bash
             shellcheck
 
