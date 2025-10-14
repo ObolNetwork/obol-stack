@@ -164,7 +164,7 @@ func Down(cfg *config.Config) error {
 	return nil
 }
 
-// Purge deletes the stack and all data
+// Purge deletes the cluster and all data (except binaries)
 func Purge(cfg *config.Config) error {
 	// Stop stack first
 	if err := Down(cfg); err != nil {
@@ -176,8 +176,21 @@ func Purge(cfg *config.Config) error {
 	if err := os.RemoveAll(stackConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
+	fmt.Printf("✓ Removed cluster config directory\n")
 
-	fmt.Printf("✓ Stack configuration purged\n")
+	// Remove data directory
+	if err := os.RemoveAll(cfg.DataDir); err != nil {
+		return fmt.Errorf("failed to remove data directory: %w", err)
+	}
+	fmt.Printf("✓ Removed data directory\n")
+
+	// Remove state directory (logs, history)
+	if err := os.RemoveAll(cfg.StateDir); err != nil {
+		return fmt.Errorf("failed to remove state directory: %w", err)
+	}
+	fmt.Printf("✓ Removed state directory\n")
+
+	fmt.Printf("✓ Cluster purged (binaries preserved)\n")
 	return nil
 }
 
