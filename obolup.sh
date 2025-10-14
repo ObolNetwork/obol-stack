@@ -99,8 +99,8 @@ create_directories() {
 	mkdir -p "$OBOL_CONFIG_DIR/cluster/k3d"
 	mkdir -p "$OBOL_CONFIG_DIR/cluster/kubeconfig"
 
-	# State directories (logs, history)
-	mkdir -p "$OBOL_STATE_DIR/logs"
+	# State directories (logs and history are created per-cluster by the obol binary)
+	mkdir -p "$OBOL_STATE_DIR"
 
 	# Data directories (persistent data)
 	mkdir -p "$OBOL_DATA_DIR"
