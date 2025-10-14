@@ -44,3 +44,5 @@ build/
 tmp/
 temp/
 .tmp/
+
+bin
