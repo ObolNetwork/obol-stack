@@ -240,22 +240,117 @@ func Sync(cfg *config.Config, logger *logging.Logger, appName string) error {
 
 	fmt.Printf("Syncing application '%s'...\n", appName)
 
-	// Run helmfile sync with applyset support
-	syncCmd := exec.CommandWithLogging(
+	// Check if kubectl exists
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	if _, err := os.Stat(kubectlBin); os.IsNotExist(err) {
+		cmdErr = fmt.Errorf("kubectl not found at %s\nPlease install kubectl", kubectlBin)
+		return cmdErr
+	}
+
+	// Create temporary directory for rendered manifests
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("obol-app-%s-*", appName))
+	if err != nil {
+		cmdErr = fmt.Errorf("failed to create temp directory: %w", err)
+		return cmdErr
+	}
+	defer os.RemoveAll(tmpDir)
+
+	fmt.Printf("Rendering manifests...\n")
+
+	// Step 1: Use helmfile template to generate all YAML manifests
+	templateCmd := exec.CommandWithLogging(
 		helmfileBin,
 		"-f", helmfilePath,
-		"sync",
-		"--skip-deps", // Skip dependency updates for faster sync
+		"template",
+		"--output-dir", tmpDir,
 	)
-
-	// Set environment variables
-	syncCmd.Env = append(os.Environ(),
+	templateCmd.Env = append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 	)
-	syncCmd.Dir = appDir
+	templateCmd.Dir = appDir
 
-	if err := syncCmd.Run(); err != nil {
-		cmdErr = fmt.Errorf("failed to sync application: %w", err)
+	if err := templateCmd.Run(); err != nil {
+		cmdErr = fmt.Errorf("failed to render manifests: %w", err)
+		return cmdErr
+	}
+
+	fmt.Printf("Applying manifests with applyset tracking...\n")
+
+	// Find all YAML files in the rendered directory
+	var yamlFiles []string
+	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && (strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")) {
+			yamlFiles = append(yamlFiles, path)
+		}
+		return nil
+	})
+	if err != nil {
+		cmdErr = fmt.Errorf("failed to find YAML files: %w", err)
+		return cmdErr
+	}
+
+	if len(yamlFiles) == 0 {
+		cmdErr = fmt.Errorf("no YAML files found in rendered manifests")
+		return cmdErr
+	}
+
+	fmt.Printf("Found %d manifest files\n", len(yamlFiles))
+
+	// Step 2: Ensure namespace exists before applying
+	fmt.Printf("Ensuring namespace '%s' exists...\n", appName)
+	getNsCmd := exec.Command(
+		kubectlBin,
+		"get", "namespace", appName,
+	)
+	getNsCmd.Env = append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+	)
+
+	// Check if namespace exists
+	if err := getNsCmd.Run(); err != nil {
+		// Namespace doesn't exist, create it
+		createNsCmd := exec.CommandWithLogging(
+			kubectlBin,
+			"create", "namespace", appName,
+		)
+		createNsCmd.Env = append(os.Environ(),
+			fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		)
+
+		if err := createNsCmd.Run(); err != nil {
+			cmdErr = fmt.Errorf("failed to create namespace: %w", err)
+			return cmdErr
+		}
+	}
+
+	// Step 3: Use kubectl apply with --prune and applyset for lifecycle management
+	// ApplySet-based pruning automatically tracks and removes resources no longer in manifests
+	// Requires KUBECTL_APPLYSET=true environment variable (alpha feature in k8s 1.27+)
+	args := []string{
+		"apply",
+		"--prune",
+		"--applyset", appName,
+		"--namespace", appName,
+	}
+	// Add all YAML files
+	for _, yamlFile := range yamlFiles {
+		args = append(args, "-f", yamlFile)
+	}
+
+	applyCmd := exec.CommandWithLogging(
+		kubectlBin,
+		args...,
+	)
+	applyCmd.Env = append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		"KUBECTL_APPLYSET=true", // Enable applyset feature
+	)
+
+	if err := applyCmd.Run(); err != nil {
+		cmdErr = fmt.Errorf("failed to apply manifests: %w", err)
 		return cmdErr
 	}
 
