@@ -1,0 +1,185 @@
+# Ethereum Node Configuration
+# This file provides sane defaults for running an Ethereum node with Lighthouse (consensus) and Reth (execution)
+# You can switch clients by editing the consensus.client and execution.client values below
+
+global:
+  network: holesky  # mainnet, sepolia, holesky, or hoodi
+
+  # JWT secret for consensus-execution communication (auto-generated if empty)
+  jwt:
+    fromLiteral: ""
+
+  # Optional: Configure checkpoint sync for faster consensus client startup
+  checkpointSync:
+    enabled: true
+    # URL will be auto-configured based on network if left empty
+    url: ""
+
+# Execution Layer Configuration
+execution:
+  # Available clients: besu, erigon, ethereumjs, geth, nethermind, reth
+  client: reth
+
+  # Client-specific configuration
+  reth:
+    enabled: true
+    image:
+      repository: ghcr.io/paradigmxyz/reth
+      tag: latest
+
+    # Resource limits
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "4Gi"
+      limits:
+        cpu: "4000m"
+        memory: "16Gi"
+
+    # Persistent storage for blockchain data
+    persistence:
+      enabled: true
+      size: 1000Gi  # Adjust based on network (mainnet needs ~1TB+, testnets much less)
+      storageClassName: local-path  # k3d default storage class
+
+    # Networking
+    service:
+      type: ClusterIP
+
+    # Expose metrics for Prometheus
+    metrics:
+      enabled: true
+      port: 9001
+      serviceMonitor:
+        enabled: true
+        labels:
+          release: monitoring  # Match kube-prometheus-stack release name
+
+    # RPC endpoints
+    http:
+      enabled: true
+      port: 8545
+      apis:
+        - eth
+        - net
+        - web3
+        - debug
+        - trace
+
+    ws:
+      enabled: true
+      port: 8546
+
+    # P2P networking
+    p2p:
+      enabled: true
+      port: 30303
+
+    # Extra args for fine-tuning
+    extraArgs: []
+    # Example:
+    # - --max-connections=50
+    # - --prune-all
+
+# Consensus Layer Configuration
+consensus:
+  # Available clients: grandine, lighthouse, lodestar, nimbus, prysm, teku
+  client: lighthouse
+
+  # Client-specific configuration
+  lighthouse:
+    enabled: true
+    image:
+      repository: sigp/lighthouse
+      tag: latest
+
+    # Resource limits
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "2Gi"
+      limits:
+        cpu: "2000m"
+        memory: "8Gi"
+
+    # Persistent storage for beacon chain data
+    persistence:
+      enabled: true
+      size: 200Gi  # Adjust based on network
+      storageClassName: local-path
+
+    # Networking
+    service:
+      type: ClusterIP
+
+    # Expose metrics for Prometheus
+    metrics:
+      enabled: true
+      port: 5054
+      serviceMonitor:
+        enabled: true
+        labels:
+          release: monitoring
+
+    # Beacon API
+    http:
+      enabled: true
+      port: 5052
+
+    # P2P networking
+    p2p:
+      enabled: true
+      port: 9000
+
+    # Checkpoint sync (faster initial sync)
+    checkpointSync:
+      enabled: true
+      # URL will be auto-configured based on network
+
+    # Extra args
+    extraArgs: []
+    # Example:
+    # - --validator-monitor-auto
+    # - --subscribe-all-subnets
+
+# Optional: Ethereum Metrics Exporter for enhanced monitoring
+ethereumMetricsExporter:
+  enabled: true
+
+  image:
+    repository: ethpandaops/ethereum-metrics-exporter
+    tag: latest
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # Expose metrics for Prometheus
+  metrics:
+    enabled: true
+    port: 9090
+    serviceMonitor:
+      enabled: true
+      labels:
+        release: monitoring
+
+# Optional: Xatu Sentry for advanced monitoring and data collection
+xatuSentry:
+  enabled: false  # Disabled by default - enable if you want detailed network monitoring
+
+  config:
+    logging: info
+    metricsAddr: ":9090"
+
+    # Configure beacon node connection
+    beacon:
+      url: "http://ethereum-node-lighthouse:5052"
+
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring

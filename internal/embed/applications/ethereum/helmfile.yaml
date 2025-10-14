@@ -1,0 +1,39 @@
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+
+releases:
+  - name: ethereum-node
+    namespace: ethereum
+    createNamespace: true
+    chart: ethereum-helm-charts/ethereum-node
+    version: 0.2.4
+    values:
+      - values.yaml
+    # Apply common labels for applyset tracking
+    labels:
+      applyset.kubernetes.io/id: ethereum
+      app.kubernetes.io/managed-by: obol
+    # Enable applyset pruning - resources removed from config are deleted
+    hooks:
+      - events: ["presync"]
+        showlogs: true
+        command: "kubectl"
+        args:
+          - "label"
+          - "namespace"
+          - "ethereum"
+          - "applyset.kubernetes.io/id=ethereum"
+          - "--overwrite"
+    # Post-sync hook to label all resources
+    transformers:
+      - apiVersion: builtin
+        kind: LabelTransformer
+        metadata:
+          name: applyset-labels
+        labels:
+          applyset.kubernetes.io/id: ethereum
+          app.kubernetes.io/part-of: obol-stack
+        fieldSpecs:
+          - path: metadata/labels
+            create: true
