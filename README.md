@@ -93,14 +93,18 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 ### Available Scripts
 
 ```bash
-pnpm run dev          # Development server
-pnpm run dev:local    # Development server (localhost)
-pnpm run build        # Production build
-pnpm run start        # Production server
-pnpm run start:local  # Production server (localhost)
-pnpm run lint         # ESLint
-pnpm run format       # Prettier formatting
-pnpm run format:check # Check Prettier formatting
+pnpm run dev              # Development server
+pnpm run dev:local        # Development server (localhost)
+pnpm run build            # Production build
+pnpm run start            # Production server
+pnpm run start:local      # Production server (localhost)
+pnpm run lint             # ESLint
+pnpm run format           # Prettier formatting
+pnpm run format:check     # Check Prettier formatting
+pnpm run test:e2e         # Run E2E tests
+pnpm run test:e2e:ui      # Run E2E tests in UI mode
+pnpm run test:e2e:headed  # Run E2E tests with visible browser
+pnpm run test:e2e:debug   # Debug E2E tests
 ```
 
 ### Project Structure
@@ -126,6 +130,38 @@ src/
 │   └── index.ts         # Component exports
 └── lib/                 # Utilities and helpers
 ```
+
+## Testing
+
+This project uses [Playwright](https://playwright.dev/) for end-to-end testing.
+
+### Running Tests
+
+```bash
+# Run all tests
+pnpm test:e2e
+
+# Run tests with UI (recommended for development)
+pnpm test:e2e:ui
+
+# Run tests with visible browser
+pnpm test:e2e:headed
+
+# Debug tests
+pnpm test:e2e:debug
+
+# View test report
+pnpm test:e2e:report
+```
+
+### Test Coverage
+
+- **Functional Tests**: User flows and interactions
+- **Accessibility Tests**: Keyboard navigation, ARIA, contrast
+- **Visual Regression Tests**: Screenshot comparisons
+- **API Tests**: Direct endpoint testing
+
+See [TESTING.md](TESTING.md) for detailed testing documentation.
 
 ## Contributing
 
