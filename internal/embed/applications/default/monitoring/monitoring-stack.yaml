@@ -1,0 +1,125 @@
+---
+# HelmChart CRD for k3s to auto-deploy kube-prometheus-stack
+# This file is mounted into k3s and automatically applied
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kube-prometheus-stack
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: kube-prometheus-stack
+  version: 55.5.0  # Pin to known stable version
+  targetNamespace: monitoring
+  createNamespace: true
+  valuesContent: |-
+    # Sane defaults for local k3d cluster
+    defaultRules:
+      create: true
+      rules:
+        alertmanager: false  # Disable alerting for local dev
+        etcd: false
+        kubeApiserver: false
+        kubeScheduler: false
+
+    # Disable components not needed for local dev
+    kubeEtcd:
+      enabled: false
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+
+    # Prometheus configuration
+    prometheus:
+      prometheusSpec:
+        retention: 7d
+        retentionSize: "5GB"
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 10Gi
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        # Enable pod monitoring by default
+        podMonitorSelectorNilUsesHelmValues: false
+        serviceMonitorSelectorNilUsesHelmValues: false
+        # Scrape all namespaces
+        serviceMonitorNamespaceSelector: {}
+        podMonitorNamespaceSelector: {}
+
+    # Grafana configuration
+    grafana:
+      enabled: true
+      adminPassword: admin  # Default password for local dev
+      persistence:
+        enabled: true
+        size: 5Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      # Disable authentication for local dev
+      grafana.ini:
+        auth.anonymous:
+          enabled: true
+          org_role: Admin  # Give anonymous users admin access
+        auth:
+          disable_login_form: true
+      # Enable useful default dashboards
+      dashboardProviders:
+        dashboardproviders.yaml:
+          apiVersion: 1
+          providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              editable: true
+              options:
+                path: /var/lib/grafana/dashboards/default
+      # Load default Kubernetes dashboards
+      dashboards:
+        default:
+          kubernetes-cluster:
+            gnetId: 7249
+            revision: 1
+            datasource: Prometheus
+          kubernetes-pods:
+            gnetId: 6417
+            revision: 1
+            datasource: Prometheus
+          node-exporter:
+            gnetId: 1860
+            revision: 29
+            datasource: Prometheus
+
+    # Node exporter for system metrics
+    nodeExporter:
+      enabled: true
+
+    # kube-state-metrics for k8s object metrics
+    kube-state-metrics:
+      enabled: true
+
+    # Prometheus Operator
+    prometheusOperator:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
