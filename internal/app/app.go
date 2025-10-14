@@ -274,6 +274,26 @@ func Sync(cfg *config.Config, logger *logging.Logger, appName string) error {
 		return cmdErr
 	}
 
+	// Step 1.5: Copy additional manifests (if they exist) to temp directory
+	additionalManifests := []string{"dashboards.yaml"}
+	for _, manifestFile := range additionalManifests {
+		srcPath := filepath.Join(appDir, manifestFile)
+		if _, err := os.Stat(srcPath); err == nil {
+			// Copy the file to tmpDir
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				fmt.Printf("Warning: failed to read %s: %v\n", manifestFile, err)
+				continue
+			}
+			dstPath := filepath.Join(tmpDir, manifestFile)
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				fmt.Printf("Warning: failed to copy %s: %v\n", manifestFile, err)
+				continue
+			}
+			fmt.Printf("Including additional manifest: %s\n", manifestFile)
+		}
+	}
+
 	fmt.Printf("Applying manifests with applyset tracking...\n")
 
 	// Find all YAML files in the rendered directory

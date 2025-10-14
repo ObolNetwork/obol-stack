@@ -1,0 +1,111 @@
+# Grafana Dashboard Loader for Ethereum Clients
+# This Job downloads dashboards from grafana.com and creates ConfigMaps with the actual JSON
+# Runs as a post-install/post-upgrade hook
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-dashboard-loader
+  namespace: ethereum
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-dashboard-loader
+  namespace: ethereum
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "update", "patch", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-dashboard-loader
+  namespace: ethereum
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grafana-dashboard-loader
+subjects:
+- kind: ServiceAccount
+  name: grafana-dashboard-loader
+  namespace: ethereum
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grafana-dashboard-loader
+  namespace: ethereum
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      name: grafana-dashboard-loader
+    spec:
+      serviceAccountName: grafana-dashboard-loader
+      restartPolicy: Never
+      containers:
+      - name: loader
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+
+          echo "Downloading Ethereum dashboards from Grafana.com..."
+
+          # Function to download and create ConfigMap
+          create_dashboard() {
+            local name=$1
+            local dashboard_id=$2
+            local revision=$3
+
+            echo "Downloading $name (ID: $dashboard_id)..."
+
+            # Download dashboard JSON
+            curl -sSLf "https://grafana.com/api/dashboards/${dashboard_id}/revisions/${revision}/download" \
+              -o "/tmp/${name}.json"
+
+            # Create ConfigMap YAML
+            cat <<EOF > "/tmp/${name}-cm.yaml"
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-dashboard-${name}
+            namespace: ethereum
+            labels:
+              grafana_dashboard: "1"
+            annotations:
+              grafana_folder: "Ethereum"
+          data:
+            ${name}.json: |
+          EOF
+
+            # Indent the JSON content and append to ConfigMap
+            sed 's/^/      /' "/tmp/${name}.json" >> "/tmp/${name}-cm.yaml"
+
+            # Apply the ConfigMap
+            curl -sSLk \
+              -X POST \
+              -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+              -H "Content-Type: application/yaml" \
+              --data-binary "@/tmp/${name}-cm.yaml" \
+              "https://kubernetes.default.svc/api/v1/namespaces/ethereum/configmaps" \
+              || curl -sSLk \
+                -X PUT \
+                -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                -H "Content-Type: application/yaml" \
+                --data-binary "@/tmp/${name}-cm.yaml" \
+                "https://kubernetes.default.svc/api/v1/namespaces/ethereum/configmaps/grafana-dashboard-${name}"
+
+            echo "✓ Created ConfigMap for $name"
+          }
+
+          # Download and create dashboards
+          create_dashboard "geth" "13877" "1"
+          create_dashboard "lighthouse" "16737" "1"
+          create_dashboard "ethereum-metrics-exporter" "16277" "1"
+
+          echo "✓ All dashboards loaded successfully!"
