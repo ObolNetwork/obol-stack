@@ -255,21 +255,125 @@ func Sync(cfg *config.Config, appName string) error {
 
 	l.Info(fmt.Sprintf("Syncing application '%s' to cluster", appName))
 
-	// Run helmfile sync with applyset support
-	syncCmd := exec.CommandWithOutput(
+	// Check if kubectl exists
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	if _, err := os.Stat(kubectlBin); os.IsNotExist(err) {
+		return fmt.Errorf("kubectl not found at %s\nPlease install kubectl", kubectlBin)
+	}
+
+	// Create temporary directory for rendered manifests
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("obol-app-%s-*", appName))
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	l.Info("Rendering manifests with helmfile template")
+
+	// Step 1: Use helmfile template to generate all YAML manifests
+	templateCmd := exec.CommandWithOutput(
 		helmfileBin,
 		"-f", helmfilePath,
-		"sync",
-		"--skip-deps", // Skip dependency updates for faster sync
+		"template",
+		"--output-dir", tmpDir,
 	)
-
-	// Set environment variables
-	syncCmd.SetEnv(append(os.Environ(),
+	templateCmd.SetEnv(append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 	))
 
-	if err := syncCmd.Run(); err != nil {
-		return fmt.Errorf("failed to sync application: %w", err)
+	if err := templateCmd.Run(); err != nil {
+		return fmt.Errorf("failed to render manifests: %w", err)
+	}
+
+	// Find all YAML files in the rendered directory
+	var yamlFiles []string
+	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && (strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")) {
+			yamlFiles = append(yamlFiles, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find YAML files: %w", err)
+	}
+
+	if len(yamlFiles) == 0 {
+		return fmt.Errorf("no YAML files found in rendered manifests")
+	}
+
+	l.Info(fmt.Sprintf("Found %d manifest files", len(yamlFiles)))
+
+	// Step 2: Ensure namespace exists before applying
+	l.Info(fmt.Sprintf("Ensuring namespace '%s' exists", appName))
+
+	// Create namespace (idempotent - will succeed if it already exists)
+	createNsCmd := exec.Command(
+		kubectlBin,
+		"create", "namespace", appName,
+		"--dry-run=client", "-o", "yaml",
+	)
+	createNsCmd.Env = append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+	)
+
+	// Get the namespace YAML
+	nsYamlBytes, err := createNsCmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to generate namespace YAML: %w", err)
+	}
+
+	// Log the captured namespace YAML for file logging
+	l.Info("subprocess execution",
+		"subprocess", true,
+		"command", kubectlBin,
+		"args", []string{"create", "namespace", appName, "--dry-run=client", "-o", "yaml"},
+		"output", string(nsYamlBytes),
+	)
+
+	// Apply the namespace
+	applyNsCmd := exec.CommandWithOutput(
+		kubectlBin,
+		"apply", "-f", "-",
+	)
+	applyNsCmd.SetEnv(append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+	))
+	applyNsCmd.SetStdin(strings.NewReader(string(nsYamlBytes)))
+
+	if err := applyNsCmd.Run(); err != nil {
+		return fmt.Errorf("failed to create namespace: %w", err)
+	}
+
+	l.Info("Applying manifests with applyset tracking")
+
+	// Step 3: Use kubectl apply with --prune and applyset for lifecycle management
+	// ApplySet-based pruning automatically tracks and removes resources no longer in manifests
+	// Requires KUBECTL_APPLYSET=true environment variable (alpha feature in k8s 1.27+)
+	args := []string{
+		"apply",
+		"--prune",
+		"--applyset", appName,
+		"--namespace", appName,
+	}
+	// Add all YAML files
+	for _, yamlFile := range yamlFiles {
+		args = append(args, "-f", yamlFile)
+	}
+
+	applyCmd := exec.CommandWithOutput(
+		kubectlBin,
+		args...,
+	)
+	applyCmd.SetEnv(append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		"KUBECTL_APPLYSET=true", // Enable applyset feature
+	))
+
+	if err := applyCmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply manifests: %w", err)
 	}
 
 	l.Success(fmt.Sprintf("Application '%s' synced successfully", appName))
@@ -324,42 +428,21 @@ func Delete(cfg *config.Config, appName string, force bool) error {
 		exec := executor.New(l.Logger)
 		defer exec.Close()
 
-		helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
-
-		// Check if helmfile exists
-		if _, err := os.Stat(helmfileBin); err == nil {
-			helmfilePath := filepath.Join(appDir, "helmfile.yaml")
-
-			if _, err := os.Stat(helmfilePath); err == nil {
-				l.Info("Removing application resources from cluster")
-
-				// Run helmfile destroy to remove all resources
-				destroyCmd := exec.CommandWithOutput(
-					helmfileBin,
-					"-f", helmfilePath,
-					"destroy",
-				)
-
-				destroyCmd.SetEnv(append(os.Environ(),
-					fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
-				))
-
-				if err := destroyCmd.Run(); err != nil {
-					l.Warn(fmt.Sprintf("Failed to remove cluster resources: %v", err))
-					l.Warn(fmt.Sprintf("You may need to manually clean up resources in namespace '%s'", appName))
-				} else {
-					l.Success("Cluster resources removed")
-				}
-			}
-		}
-
-		// Additionally, delete the namespace with applyset label
 		kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+
+		// Check if kubectl exists
 		if _, err := os.Stat(kubectlBin); err == nil {
+			l.Info("Removing application resources from cluster")
+
+			// Delete the namespace (removes all resources including applyset tracking)
+			// The applyset is used during sync for tracking/pruning, but for full deletion
+			// we simply remove the namespace which cascades to all resources
+			l.Info(fmt.Sprintf("Deleting namespace '%s' and all resources", appName))
 			deleteNsCmd := exec.CommandWithOutput(
 				kubectlBin,
 				"delete", "namespace", appName,
 				"--ignore-not-found",
+				"--wait=true",
 			)
 			deleteNsCmd.SetEnv(append(os.Environ(),
 				fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
@@ -367,7 +450,13 @@ func Delete(cfg *config.Config, appName string, force bool) error {
 
 			if err := deleteNsCmd.Run(); err != nil {
 				l.Warn(fmt.Sprintf("Failed to delete namespace: %v", err))
+				l.Warn(fmt.Sprintf("You may need to manually clean up namespace '%s'", appName))
+			} else {
+				l.Success(fmt.Sprintf("Namespace '%s' and all resources deleted", appName))
 			}
+		} else {
+			l.Warn(fmt.Sprintf("kubectl not found at %s", kubectlBin))
+			l.Info("Skipping cluster resource cleanup")
 		}
 	} else {
 		l.Info("Cluster not running, skipping cluster resource cleanup")
