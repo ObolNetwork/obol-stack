@@ -17,22 +17,23 @@ type SessionID string
 
 // CommandEntry represents a command execution in history
 type CommandEntry struct {
-	SessionID   SessionID `json:"session_id"`
-	Command     string    `json:"command"`
-	Args        []string  `json:"args"`
-	StartTime   time.Time `json:"start_time"`
-	EndTime     time.Time `json:"end_time,omitempty"`
-	ExitCode    int       `json:"exit_code,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	WorkingDir  string    `json:"working_dir"`
+	SessionID   SessionID         `json:"session_id"`
+	StackID     string            `json:"stack_id,omitempty"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	StartTime   time.Time         `json:"start_time"`
+	EndTime     time.Time         `json:"end_time,omitempty"`
+	ExitCode    int               `json:"exit_code,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	WorkingDir  string            `json:"working_dir"`
 	Environment map[string]string `json:"environment,omitempty"`
 }
 
 // Logger wraps slog.Logger with session tracking
 type Logger struct {
 	*slog.Logger
-	sessionID SessionID
-	stateDir  string
+	sessionID   SessionID
+	stateDir    string
 	historyFile *os.File
 }
 
@@ -105,12 +106,18 @@ func (l *Logger) SessionID() SessionID {
 
 // LogCommand records a command execution in history
 func (l *Logger) LogCommand(cmd string, args []string) error {
+	return l.LogCommandWithClusterID(cmd, args, "")
+}
+
+// LogCommandWithClusterID records a command execution with cluster_id in history
+func (l *Logger) LogCommandWithClusterID(cmd string, args []string, stackID string) error {
 	entry := CommandEntry{
-		SessionID:  l.sessionID,
-		Command:    cmd,
-		Args:       args,
-		StartTime:  time.Now(),
-		WorkingDir: getCurrentDir(),
+		SessionID:   l.sessionID,
+		StackID:     stackID,
+		Command:     cmd,
+		Args:        args,
+		StartTime:   time.Now(),
+		WorkingDir:  getCurrentDir(),
 		Environment: getRelevantEnv(),
 	}
 
@@ -123,10 +130,18 @@ func (l *Logger) LogCommand(cmd string, args []string) error {
 		return fmt.Errorf("failed to write history entry: %w", err)
 	}
 
-	l.Info("Command started",
-		"command", cmd,
-		"args", args,
-	)
+	if stackID != "" {
+		l.Info("Command started",
+			"command", cmd,
+			"args", args,
+			"cluster_id", stackID,
+		)
+	} else {
+		l.Info("Command started",
+			"command", cmd,
+			"args", args,
+		)
+	}
 
 	return nil
 }
