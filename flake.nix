@@ -26,7 +26,7 @@
             go-tools
             gopls
             gotools
-            gcc # cgo
+            # gcc # cgo
 
             # nix
             alejandra
