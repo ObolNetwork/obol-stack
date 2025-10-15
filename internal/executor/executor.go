@@ -41,6 +41,20 @@ func newCmdLogger(logger *slog.Logger, cmd string, args []string) *cmdLogger {
 	}
 }
 
+func (c *cmdLogger) logStart() {
+	if c.logger == nil {
+		return
+	}
+
+	// Log the subprocess command before execution starts
+	c.logger.Info("subprocess start",
+		slog.Bool("subprocess", true),
+		slog.String("command", c.cmd),
+		slog.Any("args", c.args),
+		slog.String("output", ""), // Empty output for start indicator
+	)
+}
+
 func (c *cmdLogger) logComplete() {
 	if c.logger == nil {
 		return
@@ -140,12 +154,14 @@ type loggingCmd struct {
 }
 
 func (c *loggingCmd) Run() error {
+	c.logger.logStart()
 	err := c.Cmd.Run()
 	c.logger.logComplete()
 	return err
 }
 
 func (c *loggingCmd) Start() error {
+	c.logger.logStart()
 	return c.Cmd.Start()
 }
 

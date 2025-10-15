@@ -25,11 +25,12 @@ const LevelSuccess = slog.Level(2)
 
 // Symbol prefixes with colors for each log level
 const (
-	prefixDebug   = "\033[90m[·]\033[0m" // Gray bullet
-	prefixInfo    = "\033[34m[→]\033[0m" // Blue arrow
-	prefixSuccess = "\033[32m[✓]\033[0m" // Green check
-	prefixWarn    = "\033[33m[!]\033[0m" // Yellow exclamation
-	prefixError   = "\033[31m[✗]\033[0m" // Red X
+	prefixDebug     = "\033[90m[·]\033[0m" // Gray bullet
+	prefixInfo      = "\033[34m[→]\033[0m" // Blue arrow
+	prefixSuccess   = "\033[32m[✓]\033[0m" // Green check
+	prefixWarn      = "\033[33m[!]\033[0m" // Yellow exclamation
+	prefixError     = "\033[31m[✗]\033[0m" // Red X
+	prefixSubproc   = "\033[35m[⚙]\033[0m" // Magenta gear for subprocess
 )
 
 // ConsoleHandler formats logs for human-readable console output
@@ -89,16 +90,21 @@ func (h *ConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	})
 
 	// Format subprocess output with indentation and indicator
-	if isSubprocess && subprocessOutput != "" {
-		// Print subprocess command indicator if we have command info
-		if subprocessCommand != "" {
-			cmdLine := subprocessCommand
-			if subprocessArgs != "" {
-				cmdLine += " " + subprocessArgs
+	if isSubprocess {
+		// If output is empty, this is the start indicator - just show command
+		if subprocessOutput == "" {
+			if subprocessCommand != "" {
+				cmdLine := subprocessCommand
+				if subprocessArgs != "" {
+					cmdLine += " " + subprocessArgs
+				}
+				// Print command with subprocess symbol prefix
+				fmt.Fprintf(h.w, "%s %s\n", prefixSubproc, cmdLine)
 			}
-			fmt.Fprintf(h.w, "$ %s\n", cmdLine)
+			return nil
 		}
 
+		// If we have output, show it indented (command was already shown at start)
 		lines := strings.Split(subprocessOutput, "\n")
 		for _, line := range lines {
 			if line != "" {
