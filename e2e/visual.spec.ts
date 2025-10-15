@@ -4,7 +4,7 @@ test.describe('Visual Regression Tests', () => {
   test('should match homepage screenshot', async ({ page, browserName }) => {
     // Skip mobile browsers due to inconsistent layout behavior
     test.skip(
-      browserName === 'Mobile Chrome' || browserName === 'Mobile Safari',
+      browserName.includes('Mobile'),
       'Visual regression tests skipped on mobile browsers due to layout inconsistencies'
     );
 
