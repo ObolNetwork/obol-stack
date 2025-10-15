@@ -158,33 +158,6 @@ func Purge(cfg *config.Config) error {
 	return nil
 }
 
-// Connect opens k9s connected to the cluster
-func Connect(cfg *config.Config) error {
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
-
-	// Check if kubeconfig exists
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running, use 'obol cluster up' first")
-	}
-
-	k9sPath := filepath.Join(cfg.BinDir, "k9s")
-
-	// Check if k9s exists
-	if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
-		return fmt.Errorf("k9s not found, please install it in %s", cfg.BinDir)
-	}
-
-	fmt.Printf("Connecting to cluster with k9s...\n")
-
-	cmd := exec.Command(k9sPath)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
-}
-
 // clusterExists checks if cluster name exists in k3d cluster list output
 func clusterExists(output, name string) bool {
 	// Check if the cluster name appears in the output
