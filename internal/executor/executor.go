@@ -1,53 +1,76 @@
 package executor
 
 import (
+	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"sync"
 )
 
-// Executor wraps subprocess execution with automatic output logging
+// Executor wraps subprocess execution with automatic output logging via slog
 type Executor struct {
-	stateDir  string
-	clusterID string
-	logFile   *os.File
+	logger *slog.Logger
 }
 
-// New creates a new Executor that will log subprocess output to cluster-specific log files
-// If stateDir or clusterID are empty, logging is disabled and output goes directly to stdout/stderr
-func New(stateDir, clusterID string) *Executor {
-	e := &Executor{
-		stateDir:  stateDir,
-		clusterID: clusterID,
+// New creates a new Executor that logs subprocess output via slog
+// The logger should be configured to handle subprocess output appropriately
+func New(logger *slog.Logger) *Executor {
+	return &Executor{
+		logger: logger,
 	}
-
-	// Open log file for subprocess output if we have cluster info
-	if stateDir != "" && clusterID != "" {
-		e.logFile = e.openLogFile()
-	}
-
-	return e
 }
 
-// Command creates a new command that automatically logs all subprocess output
-// Use this exactly like exec.Command - it's a drop-in replacement
-// Subprocess output goes to stdout/stderr (so user sees it) and to log files (when available)
-//
-// NOTE: If you need to use cmd.Output() or cmd.CombinedOutput(), those methods will
-// override Stdout, so we only set Stderr by default. For commands using Run(), the
-// caller should set both Stdout and Stderr if they want visible output.
+// cmdLogger accumulates subprocess output and logs it when complete
+type cmdLogger struct {
+	stdout *outputAccumulator
+	stderr *outputAccumulator
+	logger *slog.Logger
+	cmd    string
+	args   []string
+}
+
+func newCmdLogger(logger *slog.Logger, cmd string, args []string) *cmdLogger {
+	return &cmdLogger{
+		stdout: &outputAccumulator{display: os.Stdout, buffer: &bytes.Buffer{}},
+		stderr: &outputAccumulator{display: os.Stderr, buffer: &bytes.Buffer{}},
+		logger: logger,
+		cmd:    cmd,
+		args:   args,
+	}
+}
+
+func (c *cmdLogger) logComplete() {
+	if c.logger == nil {
+		return
+	}
+
+	// Log the complete subprocess execution as a single entry
+	stdoutStr := c.stdout.buffer.String()
+	stderrStr := c.stderr.buffer.String()
+
+	if stdoutStr != "" || stderrStr != "" {
+		c.logger.Info("subprocess execution",
+			slog.Bool("subprocess", true),
+			slog.String("command", c.cmd),
+			slog.Any("args", c.args),
+			slog.String("output", stdoutStr+stderrStr),
+		)
+	}
+}
+
+// Command creates a new command for use with Output()
+// Only stderr is logged/displayed, stdout is captured by Output()
 func (e *Executor) Command(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
 
-	// Only set up Stderr by default - this works with both Run() and Output()
-	// For Run(), the caller can explicitly set Stdout if they want output
-	if e.logFile != nil {
-		stderr := &teeWriter{
-			writers: []io.Writer{os.Stderr},
-			logFile: e.logFile,
+	if e.logger != nil {
+		// Capture stderr for display with indentation
+		cmd.Stderr = &outputAccumulator{
+			display: os.Stderr,
+			buffer:  &bytes.Buffer{},
 		}
-		cmd.Stderr = stderr
 	} else {
 		cmd.Stderr = os.Stderr
 	}
@@ -55,149 +78,141 @@ func (e *Executor) Command(name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// CommandWithOutput creates a command that shows output to the user
-// Use this for commands that call Run() (not Output()) and you want to see stdout/stderr
-// Output is indented with 4 spaces for better visual clarity
-func (e *Executor) CommandWithOutput(name string, args ...string) *exec.Cmd {
-	cmd := e.Command(name, args...)
+// CommandWithOutput creates a command that displays and logs subprocess output
+// Use this for commands that call Run() (not Output())
+// Output is displayed in real-time with indentation, then logged as a single entry when complete
+func (e *Executor) CommandWithOutput(name string, args ...string) CmdRunner {
+	cmd := exec.Command(name, args...)
 
-	// Set up stdout for visible output with indentation
-	if e.logFile != nil {
-		stdout := &teeWriter{
-			writers:     []io.Writer{os.Stdout},
-			logFile:     e.logFile,
-			indent:      true,
-			indentText:  "    ", // 4 spaces
-			atLineStart: true,   // Start at beginning of line
-		}
-		cmd.Stdout = stdout
+	if e.logger != nil {
+		// Create command logger to accumulate output
+		cmdLog := newCmdLogger(e.logger, name, args)
 
-		// Update stderr to also indent
-		stderr := &teeWriter{
-			writers:     []io.Writer{os.Stderr},
-			logFile:     e.logFile,
-			indent:      true,
-			indentText:  "    ", // 4 spaces
-			atLineStart: true,   // Start at beginning of line
-		}
-		cmd.Stderr = stderr
-	} else {
-		// Create indenting writers even without logging
-		stdout := &teeWriter{
-			writers:     []io.Writer{os.Stdout},
-			indent:      true,
-			indentText:  "    ",
-			atLineStart: true, // Start at beginning of line
-		}
-		cmd.Stdout = stdout
+		cmd.Stdout = cmdLog.stdout
+		cmd.Stderr = cmdLog.stderr
 
-		stderr := &teeWriter{
-			writers:     []io.Writer{os.Stderr},
-			indent:      true,
-			indentText:  "    ",
-			atLineStart: true, // Start at beginning of line
+		// Return a wrapped command that logs when complete
+		return &loggingCmd{
+			Cmd:    cmd,
+			logger: cmdLog,
 		}
-		cmd.Stderr = stderr
 	}
 
-	return cmd
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return &basicCmd{Cmd: cmd}
 }
 
-// Close closes the log file
+// CmdRunner is an interface that exec.Cmd-like commands must implement
+type CmdRunner interface {
+	Run() error
+	Start() error
+	Wait() error
+	Output() ([]byte, error)
+	CombinedOutput() ([]byte, error)
+	StdinPipe() (io.WriteCloser, error)
+	StdoutPipe() (io.ReadCloser, error)
+	StderrPipe() (io.ReadCloser, error)
+	SetEnv(env []string)
+	SetStdin(stdin io.Reader)
+}
+
+// basicCmd wraps exec.Cmd without logging
+type basicCmd struct {
+	*exec.Cmd
+}
+
+func (c *basicCmd) Run() error                              { return c.Cmd.Run() }
+func (c *basicCmd) Start() error                            { return c.Cmd.Start() }
+func (c *basicCmd) Wait() error                             { return c.Cmd.Wait() }
+func (c *basicCmd) Output() ([]byte, error)                 { return c.Cmd.Output() }
+func (c *basicCmd) CombinedOutput() ([]byte, error)         { return c.Cmd.CombinedOutput() }
+func (c *basicCmd) StdinPipe() (io.WriteCloser, error)      { return c.Cmd.StdinPipe() }
+func (c *basicCmd) StdoutPipe() (io.ReadCloser, error)      { return c.Cmd.StdoutPipe() }
+func (c *basicCmd) StderrPipe() (io.ReadCloser, error)      { return c.Cmd.StderrPipe() }
+func (c *basicCmd) SetEnv(env []string)                     { c.Cmd.Env = env }
+func (c *basicCmd) SetStdin(stdin io.Reader)                { c.Cmd.Stdin = stdin }
+
+// loggingCmd wraps exec.Cmd to log output when command completes
+type loggingCmd struct {
+	*exec.Cmd
+	logger *cmdLogger
+}
+
+func (c *loggingCmd) Run() error {
+	err := c.Cmd.Run()
+	c.logger.logComplete()
+	return err
+}
+
+func (c *loggingCmd) Start() error {
+	return c.Cmd.Start()
+}
+
+func (c *loggingCmd) Wait() error {
+	err := c.Cmd.Wait()
+	c.logger.logComplete()
+	return err
+}
+
+func (c *loggingCmd) Output() ([]byte, error)                 { return c.Cmd.Output() }
+func (c *loggingCmd) CombinedOutput() ([]byte, error)         { return c.Cmd.CombinedOutput() }
+func (c *loggingCmd) StdinPipe() (io.WriteCloser, error)      { return c.Cmd.StdinPipe() }
+func (c *loggingCmd) StdoutPipe() (io.ReadCloser, error)      { return c.Cmd.StdoutPipe() }
+func (c *loggingCmd) StderrPipe() (io.ReadCloser, error)      { return c.Cmd.StderrPipe() }
+func (c *loggingCmd) SetEnv(env []string)                     { c.Cmd.Env = env }
+func (c *loggingCmd) SetStdin(stdin io.Reader)                { c.Cmd.Stdin = stdin }
+
+// Close is a no-op for compatibility
 func (e *Executor) Close() error {
-	if e.logFile != nil {
-		return e.logFile.Close()
-	}
 	return nil
 }
 
-// openLogFile opens or creates the subprocess log file for appending
-func (e *Executor) openLogFile() *os.File {
-	if e.stateDir == "" || e.clusterID == "" {
-		return nil
-	}
-
-	// Create cluster-specific log directory
-	logDir := filepath.Join(e.stateDir, e.clusterID, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil
-	}
-
-	// Open subprocess log file for appending (create if doesn't exist)
-	logPath := filepath.Join(logDir, "subprocess.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil
-	}
-
-	return f
+// outputAccumulator captures subprocess output for both display and logging
+// It displays output in real-time with indentation and accumulates it for batch logging
+type outputAccumulator struct {
+	display io.Writer     // Where to write for display (os.Stdout/Stderr)
+	buffer  *bytes.Buffer // Accumulate complete output
+	mu      sync.Mutex    // Protect concurrent writes
 }
 
-// teeWriter writes to multiple writers simultaneously
-// This allows subprocess output to go to both stdout/stderr AND log files
-// Optionally indents output for better visual clarity
-type teeWriter struct {
-	writers    []io.Writer
-	logFile    *os.File
-	indent     bool   // Whether to indent output for visual writers
-	indentText string // The indentation text (e.g., "    ")
-	atLineStart bool  // Track if we're at the start of a new line
-}
+func (w *outputAccumulator) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-func (t *teeWriter) Write(p []byte) (n int, err error) {
-	// Write to visual writers (stdout/stderr) with indentation if enabled
-	if t.indent {
-		// Process the data with indentation
-		indented := t.indentData(p)
-		for _, w := range t.writers {
-			_, err = w.Write(indented)
-			if err != nil {
-				return n, err
-			}
-		}
-	} else {
-		// Write without indentation
-		for _, w := range t.writers {
-			_, err = w.Write(p)
-			if err != nil {
-				return n, err
-			}
-		}
+	// Display immediately with indentation (so user sees real-time output)
+	indented := addIndent(p)
+	if _, err = w.display.Write(indented); err != nil {
+		return 0, err
 	}
 
-	// Write to log file without indentation (keep raw output)
-	if t.logFile != nil {
-		t.logFile.Write(p)
-	}
+	// Also accumulate for batch logging later
+	w.buffer.Write(p)
 
 	return len(p), nil
 }
 
-// indentData adds indentation to each line in the data
-func (t *teeWriter) indentData(data []byte) []byte {
+// addIndent adds 4-space indentation to each line for console display
+func addIndent(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
 
 	var result []byte
+	atLineStart := true
 
-	// Start with indent if we're at the beginning of a line
-	if t.atLineStart {
-		result = append(result, []byte(t.indentText)...)
-		t.atLineStart = false
-	}
-
-	// Process each byte
 	for i := 0; i < len(data); i++ {
+		// Add indent at start of each line
+		if atLineStart && data[i] != '\n' {
+			result = append(result, []byte("    ")...)
+			atLineStart = false
+		}
+
 		result = append(result, data[i])
 
-		// If we hit a newline, add indent for the next line
-		// (unless it's the last character)
-		if data[i] == '\n' && i < len(data)-1 {
-			result = append(result, []byte(t.indentText)...)
-		} else if data[i] == '\n' && i == len(data)-1 {
-			// Mark that we're at line start for next write
-			t.atLineStart = true
+		// Track line boundaries
+		if data[i] == '\n' {
+			atLineStart = true
 		}
 	}
 

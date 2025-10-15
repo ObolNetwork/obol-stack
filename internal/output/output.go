@@ -2,116 +2,122 @@ package output
 
 import (
 	"fmt"
-	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
+
+	"github.com/obol/obol-stack/internal/logging"
 )
 
-// Writer handles user-friendly output and logging
+// Writer handles user-friendly output and logging using slog
 type Writer struct {
-	stateDir  string
-	clusterID string
-	logFile   *os.File
+	logger *slog.Logger
+	file   *os.File // Keep reference to close later
 }
 
-// New creates a new output writer
-// If stateDir and clusterID are provided, all output is also logged to files
+// New creates a new output writer with slog-based logging
+// Console output: human-readable with proper formatting
+// File output: JSON with full trace details (when cluster ID is known)
 func New(stateDir, clusterID string) *Writer {
-	w := &Writer{
-		stateDir:  stateDir,
-		clusterID: clusterID,
-	}
+	var handlers []slog.Handler
 
-	// Open log file if we have cluster info
+	// Console handler - always present, user-friendly format
+	consoleHandler := logging.NewConsoleHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+	handlers = append(handlers, consoleHandler)
+
+	var file *os.File
+
+	// File handler - JSON logs with full details (when cluster ID known)
 	if stateDir != "" && clusterID != "" {
-		w.logFile = w.openLogFile()
+		logDir := filepath.Join(stateDir, clusterID, "logs")
+		if err := os.MkdirAll(logDir, 0755); err == nil {
+			logPath := filepath.Join(logDir, "session.log")
+			f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				file = f
+				// JSON handler for detailed file logging
+				jsonHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{
+					Level:     slog.LevelDebug, // Log everything to file
+					AddSource: true,            // Add source file/line info
+				})
+				handlers = append(handlers, jsonHandler)
+			}
+		}
 	}
 
-	return w
+	// Create multi-handler to log to both console and file
+	multiHandler := logging.NewMultiHandler(handlers...)
+
+	// Add cluster ID to all logs if available
+	var logger *slog.Logger
+	if clusterID != "" {
+		logger = slog.New(multiHandler).With("cluster_id", clusterID)
+	} else {
+		logger = slog.New(multiHandler)
+	}
+
+	return &Writer{
+		logger: logger,
+		file:   file,
+	}
 }
 
-// openLogFile opens or creates the log file for this session
-func (w *Writer) openLogFile() *os.File {
-	if w.stateDir == "" || w.clusterID == "" {
-		return nil
-	}
-
-	// Create cluster-specific log directory
-	logDir := filepath.Join(w.stateDir, w.clusterID, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil
-	}
-
-	// Open log file for appending (create if doesn't exist)
-	logPath := filepath.Join(logDir, "session.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil
-	}
-
-	return f
-}
-
-// Info prints an informational message to stdout and logs it
+// Info prints an informational message
 func (w *Writer) Info(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Println(msg)
-	w.log("INFO", msg)
+	w.logger.Info(msg)
 }
 
-// Success prints a success message (with checkmark) to stdout and logs it
+// Success prints a success message with checkmark
 func (w *Writer) Success(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Printf("✓ %s\n", msg)
-	w.log("SUCCESS", msg)
+	w.logger.Info("✓ " + msg)
 }
 
-// Warn prints a warning message to stderr and logs it
+// Warn prints a warning message
 func (w *Writer) Warn(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
-	w.log("WARN", msg)
+	w.logger.Warn(msg)
 }
 
-// Error prints an error message to stderr and logs it
+// Error prints an error message
 func (w *Writer) Error(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
-	w.log("ERROR", msg)
+	w.logger.Error(msg)
 }
 
-// Step prints a step/progress message to stdout and logs it
+// Step prints a step/progress message
 func (w *Writer) Step(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Printf("→ %s\n", msg)
-	w.log("STEP", msg)
+	w.logger.Info("→ " + msg)
 }
 
-// log writes a timestamped message to the log file
-func (w *Writer) log(level, msg string) {
-	if w.logFile == nil {
-		return
-	}
+// Debug prints a debug message (only to file, not console)
+func (w *Writer) Debug(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	w.logger.Debug(msg)
+}
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logLine := fmt.Sprintf("[%s] %s: %s\n", timestamp, level, msg)
-	w.logFile.WriteString(logLine)
+// LogSubprocess logs subprocess output
+// This will be indented on console and stored as a string in JSON logs
+func (w *Writer) LogSubprocess(output string) {
+	w.logger.Info("subprocess output",
+		slog.Bool("subprocess", true),
+		slog.String("output", output),
+	)
 }
 
 // Close closes the log file
 func (w *Writer) Close() error {
-	if w.logFile != nil {
-		return w.logFile.Close()
+	if w.file != nil {
+		return w.file.Close()
 	}
 	return nil
 }
 
-// GetLogWriter returns an io.Writer that logs to the file
-// This is useful for subprocess output that needs to be logged
-func (w *Writer) GetLogWriter() io.Writer {
-	if w.logFile != nil {
-		return w.logFile
-	}
-	return io.Discard
+// Logger returns the underlying slog.Logger for advanced usage
+func (w *Writer) Logger() *slog.Logger {
+	return w.logger
 }
