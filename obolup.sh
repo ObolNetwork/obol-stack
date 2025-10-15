@@ -62,39 +62,6 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
-# Validate prerequisites
-validate_prerequisites() {
-	# Skip Docker validation in development mode (not needed for build)
-	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
-		return 0
-	fi
-
-	log_info "Validating prerequisites..."
-
-	# Check for Docker
-	if ! command_exists docker; then
-		log_error "Docker is not installed"
-		echo ""
-		echo "Please install Docker first:"
-		echo "  - Linux: https://docs.docker.com/engine/install/"
-		echo "  - macOS: https://docs.docker.com/desktop/install/mac-install/"
-		echo "  - Windows: https://docs.docker.com/desktop/install/windows-install/"
-		exit 1
-	fi
-
-	# Check if Docker daemon is running
-	if ! docker info >/dev/null 2>&1; then
-		log_error "Docker daemon is not running"
-		echo ""
-		echo "Please start Docker daemon:"
-		echo "  - systemctl start docker    (Linux with systemd)"
-		echo "  - Open Docker Desktop       (macOS/Windows)"
-		exit 1
-	fi
-
-	log_success "Docker installed and running"
-}
-
 # Create directory structure
 create_directories() {
 	log_info "Creating directory structure..."
@@ -109,7 +76,7 @@ create_directories() {
 
 # Get version information
 get_version_info() {
-	local version="0.0.0"  # Default semantic version
+	local version="0.0.0" # Default semantic version
 	local git_commit="unknown"
 	local build_time
 	local git_dirty="false"
@@ -147,7 +114,7 @@ install_dev_wrapper() {
 	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 	# Create wrapper script that uses 'go run'
-	cat > "$OBOL_BIN_DIR/obol" <<'EOF'
+	cat >"$OBOL_BIN_DIR/obol" <<'EOF'
 #!/usr/bin/env bash
 # Obol CLI Development Wrapper
 # This script runs the obol CLI using 'go run' for rapid development
@@ -171,15 +138,21 @@ download_release() {
 	# Detect OS and architecture
 	local os arch
 	case "$(uname -s)" in
-		Linux*)  os="linux" ;;
-		Darwin*) os="darwin" ;;
-		*)       log_error "Unsupported OS: $(uname -s)"; return 1 ;;
+	Linux*) os="linux" ;;
+	Darwin*) os="darwin" ;;
+	*)
+		log_error "Unsupported OS: $(uname -s)"
+		return 1
+		;;
 	esac
 
 	case "$(uname -m)" in
-		x86_64)  arch="amd64" ;;
-		aarch64|arm64) arch="arm64" ;;
-		*)       log_error "Unsupported architecture: $(uname -m)"; return 1 ;;
+	x86_64) arch="amd64" ;;
+	aarch64 | arm64) arch="arm64" ;;
+	*)
+		log_error "Unsupported architecture: $(uname -m)"
+		return 1
+		;;
 	esac
 
 	# Construct download URL
@@ -236,7 +209,7 @@ build_from_source() {
 	cd "$tmp_dir"
 
 	# Get version information
-	read -r version git_commit build_time git_dirty <<< "$(get_version_info)"
+	read -r version git_commit build_time git_dirty <<<"$(get_version_info)"
 
 	# Build binary
 	log_info "Building binary..."
@@ -351,7 +324,6 @@ main() {
 	echo "╚═══════════════════════════════════════════╝"
 	echo ""
 
-	validate_prerequisites
 	create_directories
 	install_obol_binary
 	install_dependencies
