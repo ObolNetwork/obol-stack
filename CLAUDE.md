@@ -70,23 +70,31 @@ Development layout:
 
 ### Development Mode
 
-- `OBOL_DEVELOPMENT=TRUE` should always be the case and the local path should
-  reference `.workspace/bin`
-- Always run `./obolup.sh` to build the project to the `.workspace/bin`
-- Do validate build correctness via `go build *` or other tooling
+When `OBOL_DEVELOPMENT=true`, `./obolup.sh` installs a wrapper script at
+`.workspace/bin/obol` that uses `go run ./cmd/obol`. No compilation needed -
+code changes are immediately reflected.
 
-This mode is useful for:
+**Development cycle:**
+```bash
+# One-time setup (or when switching to dev mode)
+./obolup.sh
 
-- Testing changes without affecting system directories
-- Developing new features
-- CI/CD environments
+# Make code changes, then run directly
+obol <command>  # Uses go run under the hood
+```
 
 ### Production Mode
 
 Standard installation for end users:
 
 ```bash
-./obolup.sh            # Bootstrap (uses XDG directories)
+# Install from latest release or build from source
+OBOL_RELEASE=latest ./obolup.sh
+
+# Or install specific version
+OBOL_RELEASE=v0.1.0 ./obolup.sh
+
+# Run commands
 obol cluster init
 obol cluster up
 ```
