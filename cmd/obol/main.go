@@ -8,7 +8,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/executor"
-	"github.com/ObolNetwork/obol-stack/internal/output"
+	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
@@ -130,11 +130,14 @@ GLOBAL OPTIONS:
 
 					stackID := stack.GetStackID(cfg)
 
-					// Create output writer and executor
-					out := output.New(cfg.StateDir, stackID)
-					defer out.Close()
+					// Create logger and executor
+					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+						StateDir: cfg.StateDir,
+						StackID:  stackID,
+					})
+					defer cleanup()
 
-					exec := executor.New(out.Logger())
+					exec := executor.New(logger)
 					cmd := exec.CommandWithOutput(kubectlPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -163,11 +166,14 @@ GLOBAL OPTIONS:
 
 					stackID := stack.GetStackID(cfg)
 
-					// Create output writer and executor
-					out := output.New(cfg.StateDir, stackIdstackID)
-					defer out.Close()
+					// Create logger and executor
+					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+						StateDir: cfg.StateDir,
+						StackID:  stackID,
+					})
+					defer cleanup()
 
-					exec := executor.New(out.Logger())
+					exec := executor.New(logger)
 					cmd := exec.CommandWithOutput(helmPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -180,7 +186,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run helmfile with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -196,11 +202,14 @@ GLOBAL OPTIONS:
 
 					stackID := stack.GetStackID(cfg)
 
-					// Create output writer and executor
-					out := output.New(cfg.StateDir, stackID)
-					defer out.Close()
+					// Create logger and executor
+					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+						StateDir: cfg.StateDir,
+						StackID:  stackID,
+					})
+					defer cleanup()
 
-					exec := executor.New(out.Logger())
+					exec := executor.New(logger)
 					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -213,7 +222,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run k9s with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -229,11 +238,14 @@ GLOBAL OPTIONS:
 
 					stackID := stack.GetStackID(cfg)
 
-					// Create output writer and executor
-					out := output.New(cfg.StateDir, stackID)
-					defer out.Close()
+					// Create logger and executor
+					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+						StateDir: cfg.StateDir,
+						StackID:  stackID,
+					})
+					defer cleanup()
 
-					exec := executor.New(out.Logger())
+					exec := executor.New(logger)
 					cmd := exec.CommandWithOutput(k9sPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
