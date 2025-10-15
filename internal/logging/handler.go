@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ANSI color codes
@@ -221,7 +222,7 @@ func NewSlogLogger(cfg LoggerConfig) (*slog.Logger, func() error) {
 	if cfg.StateDir != "" && cfg.StackID != "" {
 		logDir := filepath.Join(cfg.StateDir, cfg.StackID, "logs")
 		if err := os.MkdirAll(logDir, 0755); err == nil {
-			logPath := filepath.Join(logDir, "session.log")
+			logPath := filepath.Join(logDir, fmt.Sprintf("%s.log", time.Now().Format("2006-01-02")))
 			f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err == nil {
 				file = f
