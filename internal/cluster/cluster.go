@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/embed"
 )
 
 const (
@@ -31,24 +32,12 @@ func Init(cfg *config.Config, force bool) error {
 		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
 	}
 
-	// Get the k3d config template path
-	templatePath, err := getK3dTemplatePath()
-	if err != nil {
-		return fmt.Errorf("failed to find k3d config template: %w", err)
-	}
-
 	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cluster config dir: %w", err)
 	}
 
-	// Read template
-	template, err := os.ReadFile(templatePath)
-	if err != nil {
-		return fmt.Errorf("failed to read k3d config template: %w", err)
-	}
-
-	// Write to destination
-	if err := os.WriteFile(destPath, template, 0644); err != nil {
+	// Write embedded k3d config to destination
+	if err := os.WriteFile(destPath, []byte(embed.K3dConfig), 0644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
@@ -82,7 +71,7 @@ func Up(cfg *config.Config) error {
 	fmt.Printf("Starting cluster '%s'...\n", clusterName)
 
 	// Get absolute path to data directory for k3d volume mount
-	dataDir := cfg.GetDataDir()
+	dataDir := cfg.DataDir
 	absDataDir, err := filepath.Abs(dataDir)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
@@ -194,27 +183,6 @@ func Connect(cfg *config.Config) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
-}
-
-// getK3dTemplatePath finds the k3d config template
-func getK3dTemplatePath() (string, error) {
-	// Try relative to current directory (development mode)
-	cwd, _ := os.Getwd()
-	templatePath := filepath.Join(cwd, "k3d", k3dConfigFile)
-	if _, err := os.Stat(templatePath); err == nil {
-		return templatePath, nil
-	}
-
-	// Try relative to executable (production mode)
-	exe, err := os.Executable()
-	if err == nil {
-		templatePath = filepath.Join(filepath.Dir(exe), "..", "k3d", k3dConfigFile)
-		if _, err := os.Stat(templatePath); err == nil {
-			return templatePath, nil
-		}
-	}
-
-	return "", fmt.Errorf("k3d config template not found")
 }
 
 // clusterExists checks if cluster name exists in k3d cluster list output
