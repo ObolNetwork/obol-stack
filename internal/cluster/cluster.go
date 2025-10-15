@@ -7,14 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/obol/obol-stack/internal/config"
 	"github.com/obol/obol-stack/internal/embed"
 )
 
 const (
-	clusterName      = "obol-stack"
-	k3dConfigFile    = "config.yaml"
-	kubeconfigFile   = "kubeconfig.yaml"
+	k3dConfigFile  = "config.yaml"
+	kubeconfigFile = "kubeconfig.yaml"
+	clusterIDFile  = ".cluster-id"
 )
 
 // Init initializes the cluster configuration
@@ -26,8 +27,7 @@ func Init(cfg *config.Config, force bool) error {
 	// Check if config already exists
 	if _, err := os.Stat(destPath); err == nil {
 		if !force {
-			fmt.Printf("✓ Cluster configuration already exists at %s\n", destPath)
-			return nil
+			return fmt.Errorf("cluster configuration already exists at %s\nUse --force to overwrite", destPath)
 		}
 		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
 	}
@@ -36,8 +36,14 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to create cluster config dir: %w", err)
 	}
 
-	// Write embedded k3d config to destination
-	if err := os.WriteFile(destPath, []byte(embed.K3dConfig), 0644); err != nil {
+	// Generate unique cluster ID
+	clusterID := petname.Generate(2, "-")
+
+	// Replace placeholder in k3d config with actual cluster ID
+	k3dConfig := strings.ReplaceAll(embed.K3dConfig, "{{CLUSTER_ID}}", clusterID)
+
+	// Write k3d config with cluster ID to destination
+	if err := os.WriteFile(destPath, []byte(k3dConfig), 0644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
@@ -47,7 +53,14 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to create kubeconfig dir: %w", err)
 	}
 
+	// Store cluster ID for later use
+	clusterIDPath := filepath.Join(cfg.ConfigDir, "cluster", clusterIDFile)
+	if err := os.WriteFile(clusterIDPath, []byte(clusterID), 0644); err != nil {
+		return fmt.Errorf("failed to write cluster ID: %w", err)
+	}
+
 	fmt.Printf("✓ Initialized cluster configuration at %s\n", destPath)
+	fmt.Printf("✓ Cluster ID: %s\n", clusterID)
 	return nil
 }
 
@@ -61,6 +74,13 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("cluster config not found, run 'obol cluster init' first")
 	}
 
+	// Get cluster ID and full cluster name
+	clusterID := getClusterID(cfg)
+	if clusterID == "" {
+		return fmt.Errorf("cluster ID not found, run 'obol cluster init' first")
+	}
+	clusterName := getClusterName(cfg)
+
 	// Check if cluster already exists using cluster list
 	cmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
 	output, _ := cmd.Output()
@@ -68,7 +88,7 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", clusterName)
 	}
 
-	fmt.Printf("Starting cluster '%s'...\n", clusterName)
+	fmt.Printf("Starting cluster '%s' [%s]...\n", clusterName, clusterID)
 
 	// Get absolute path to data directory for k3d volume mount
 	dataDir := cfg.DataDir
@@ -116,6 +136,9 @@ func Up(cfg *config.Config) error {
 	}
 
 	fmt.Printf("✓ Cluster started successfully\n")
+	if clusterID != "" {
+		fmt.Printf("✓ Cluster ID: %s\n", clusterID)
+	}
 	fmt.Printf("✓ Kubeconfig saved to %s\n", kubeconfigPath)
 	fmt.Printf("\nTo use kubectl with this cluster:\n")
 	fmt.Printf("  export KUBECONFIG=%s\n", kubeconfigPath)
@@ -124,7 +147,13 @@ func Up(cfg *config.Config) error {
 
 // Down stops the k3d cluster
 func Down(cfg *config.Config) error {
-	fmt.Printf("Stopping cluster '%s'...\n", clusterName)
+	clusterID := getClusterID(cfg)
+	if clusterID == "" {
+		return fmt.Errorf("cluster ID not found, cluster may not be initialized")
+	}
+	clusterName := getClusterName(cfg)
+
+	fmt.Printf("Stopping cluster '%s' [%s]...\n", clusterName, clusterID)
 
 	cmd := exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
@@ -162,4 +191,23 @@ func Purge(cfg *config.Config) error {
 func clusterExists(output, name string) bool {
 	// Check if the cluster name appears in the output
 	return strings.Contains(output, name)
+}
+
+// getClusterID reads the stored cluster ID
+func getClusterID(cfg *config.Config) string {
+	clusterIDPath := filepath.Join(cfg.ConfigDir, "cluster", clusterIDFile)
+	data, err := os.ReadFile(clusterIDPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// getClusterName returns the full cluster name (obol-stack-{clusterid})
+func getClusterName(cfg *config.Config) string {
+	clusterID := getClusterID(cfg)
+	if clusterID == "" {
+		return ""
+	}
+	return fmt.Sprintf("obol-stack-%s", clusterID)
 }
