@@ -24,3 +24,13 @@ build:
 # Clean build artifacts
 clean:
     rm -rf bin/ .workspace/bin/
+
+# Initialize and start the cluster
+up:
+    obol cluster init
+    obol cluster up
+
+# Stop and purge the cluster
+down:
+    obol cluster down
+    obol cluster purge
