@@ -34,6 +34,28 @@ const (
 	prefixSubproc   = "\033[35m[⚙]\033[0m" // Magenta gear for subprocess
 )
 
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorGreen  = "\033[32m"
+	colorGray   = "\033[90m"
+)
+
+// Custom log level for success (between Info and Warn)
+const LevelSuccess = slog.Level(2)
+
+// Symbol prefixes with colors for each log level
+const (
+	prefixDebug   = "\033[90m[·]\033[0m" // Gray bullet
+	prefixInfo    = "\033[34m[→]\033[0m" // Blue arrow
+	prefixSuccess = "\033[32m[✓]\033[0m" // Green check
+	prefixWarn    = "\033[33m[!]\033[0m" // Yellow exclamation
+	prefixError   = "\033[31m[✗]\033[0m" // Red X
+)
+
 // ConsoleHandler formats logs for human-readable console output
 type ConsoleHandler struct {
 	opts    slog.HandlerOptions
