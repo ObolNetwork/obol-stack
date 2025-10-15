@@ -253,7 +253,17 @@ internal/embed/applications/
 
 See: `internal/embed/applications/README.md` for detailed architecture
 
->>>>>>> d06eb3f (updated CLAUDE.md with context)
+=======
+
+### Cluster Lifecycle
+
+1. **Init**: Generates k3d.yaml with unique cluster ID using petname library
+2. **Up**: Creates k3d cluster, exports kubeconfig to `cluster/kubeconfig.yaml`
+3. **Down**: Deletes k3d cluster (preserves config)
+4. **Purge**: Removes cluster and all config files
+
+See: `internal/cluster/cluster.go`, `internal/embed/k3d-config.yaml`
+>>>>>>> ec4cd89 (update CLAUDE.md with latest context changes)
 
 ## Key Design Principles
 
