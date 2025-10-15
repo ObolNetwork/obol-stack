@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
@@ -68,13 +70,6 @@ func main() {
 						},
 					},
 					{
-						Name:  "connect",
-						Usage: "Connect to stack with k9s",
-						Action: func(c *cli.Context) error {
-							return stack.Connect(cfg)
-						},
-					},
-					{
 						Name:      "backup",
 						Usage:     "Backup persistent volume",
 						ArgsUsage: "<volume-name>",
@@ -86,6 +81,35 @@ func main() {
 							return nil
 						},
 					},
+				},
+			},
+			{
+				Name:            "k9s",
+				Usage:           "Launch k9s with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					k9sPath := filepath.Join(cfg.BinDir, "k9s")
+
+					// Check if k9s exists
+					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
+						return fmt.Errorf("k9s not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to k9s
+					cmd := exec.Command(k9sPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
 				},
 			},
 			// TODO: Implement app command

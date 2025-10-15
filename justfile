@@ -35,7 +35,7 @@ purge:
 
 # Connect to cluster with k9s
 connect:
-    obol cluster connect
+    obol k9s
 
 # Full run: install, down, init, up, connect
 run:
@@ -43,7 +43,7 @@ run:
     obol cluster down || true
     obol cluster init --force
     obol cluster up
-    obol cluster connect
+    obol k9s
 
 # Clean run: purge, install, init, up, connect
 clean-run:
@@ -52,7 +52,7 @@ clean-run:
     ./obolup.sh
     obol cluster init
     obol cluster up
-    obol cluster connect
+    obol k9s
 
 # Development build and install to .workspace
 dev-build:
