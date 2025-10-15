@@ -13,23 +13,23 @@ import (
 )
 
 const (
-	k3dConfigFile  = "config.yaml"
+	k3dConfigFile  = "k3d.yaml"
 	kubeconfigFile = "kubeconfig.yaml"
 	clusterIDFile  = ".cluster-id"
 )
 
 // Init initializes the cluster configuration
 func Init(cfg *config.Config, force bool) error {
-	// Create cluster config directory
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster", "k3d")
-	destPath := filepath.Join(clusterConfigDir, k3dConfigFile)
+	// Create flat cluster config directory
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	k3dConfigPath := filepath.Join(clusterConfigDir, k3dConfigFile)
 
 	// Check if config already exists
-	if _, err := os.Stat(destPath); err == nil {
+	if _, err := os.Stat(k3dConfigPath); err == nil {
 		if !force {
-			return fmt.Errorf("cluster configuration already exists at %s\nUse --force to overwrite", destPath)
+			return fmt.Errorf("cluster configuration already exists at %s\nUse --force to overwrite", k3dConfigPath)
 		}
-		fmt.Printf("Overwriting existing cluster configuration at %s\n", destPath)
+		fmt.Printf("Overwriting existing cluster configuration at %s\n", k3dConfigPath)
 	}
 
 	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
@@ -43,31 +43,26 @@ func Init(cfg *config.Config, force bool) error {
 	k3dConfig := strings.ReplaceAll(embed.K3dConfig, "{{CLUSTER_ID}}", clusterID)
 
 	// Write k3d config with cluster ID to destination
-	if err := os.WriteFile(destPath, []byte(k3dConfig), 0644); err != nil {
+	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
-	// Create kubeconfig directory
-	kubeconfigDir := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig")
-	if err := os.MkdirAll(kubeconfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create kubeconfig dir: %w", err)
-	}
-
 	// Store cluster ID for later use
-	clusterIDPath := filepath.Join(cfg.ConfigDir, "cluster", clusterIDFile)
+	clusterIDPath := filepath.Join(clusterConfigDir, clusterIDFile)
 	if err := os.WriteFile(clusterIDPath, []byte(clusterID), 0644); err != nil {
 		return fmt.Errorf("failed to write cluster ID: %w", err)
 	}
 
-	fmt.Printf("✓ Initialized cluster configuration at %s\n", destPath)
+	fmt.Printf("✓ Initialized cluster configuration at %s\n", k3dConfigPath)
 	fmt.Printf("✓ Cluster ID: %s\n", clusterID)
 	return nil
 }
 
 // Up starts the k3d cluster
 func Up(cfg *config.Config) error {
-	k3dConfigPath := filepath.Join(cfg.ConfigDir, "cluster", "k3d", k3dConfigFile)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", kubeconfigFile)
+	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	k3dConfigPath := filepath.Join(clusterConfigDir, k3dConfigFile)
+	kubeconfigPath := filepath.Join(clusterConfigDir, kubeconfigFile)
 
 	// Check if config exists
 	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
