@@ -31,7 +31,9 @@ test.describe('Accessibility Tests', () => {
 
   test('should have proper heading hierarchy', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    // Wait for the page to load with a more reliable condition
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000); // Allow additional time for dynamic content
 
     // Get all headings
     const headings = await page.locator('h1, h2, h3, h4, h5, h6').all();
