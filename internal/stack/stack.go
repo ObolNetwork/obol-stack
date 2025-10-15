@@ -227,3 +227,8 @@ func getStackName(cfg *config.Config) string {
 	}
 	return fmt.Sprintf("obol-stack-%s", stackID)
 }
+
+// GetStackID reads the stored stack ID (exported for use in main)
+func GetStackID(cfg *config.Config) string {
+	return getStackID(cfg)
+}

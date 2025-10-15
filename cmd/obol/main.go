@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
@@ -113,7 +113,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run kubectl with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -127,12 +127,13 @@ GLOBAL OPTIONS:
 						return fmt.Errorf("kubectl not found in %s", cfg.BinDir)
 					}
 
-					// Pass all arguments to kubectl
-					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+					stackID := stack.GetStackID(cfg)
+
+					// Create executor and pass all arguments to kubectl
+					exec := executor.New(cfg.StateDir, stackID)
+					cmd := exec.CommandWithOutput(kubectlPath, c.Args().Slice()...)
 					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
 					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
 
 					return cmd.Run()
 				},
@@ -142,7 +143,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run helm with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -156,12 +157,13 @@ GLOBAL OPTIONS:
 						return fmt.Errorf("helm not found in %s", cfg.BinDir)
 					}
 
-					// Pass all arguments to helm
-					cmd := exec.Command(helmPath, c.Args().Slice()...)
+					stackID := stack.GetStackID(cfg)
+
+					// Create executor and pass all arguments to helm
+					exec := executor.New(cfg.StateDir, stackID)
+					cmd := exec.CommandWithOutput(helmPath, c.Args().Slice()...)
 					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
 					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
 
 					return cmd.Run()
 				},
@@ -185,12 +187,13 @@ GLOBAL OPTIONS:
 						return fmt.Errorf("helmfile not found in %s", cfg.BinDir)
 					}
 
-					// Pass all arguments to helmfile
-					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
+					stackID := stack.GetStackID(cfg)
+
+					// Create executor and pass all arguments to helmfile
+					exec := executor.New(cfg.StateDir, stackID)
+					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
 					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
 					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
 
 					return cmd.Run()
 				},
@@ -214,12 +217,13 @@ GLOBAL OPTIONS:
 						return fmt.Errorf("k9s not found in %s", cfg.BinDir)
 					}
 
-					// Pass all arguments to k9s
-					cmd := exec.Command(k9sPath, c.Args().Slice()...)
+					stackID := stack.GetStackID(cfg)
+
+					// Create executor and pass all arguments to k9s
+					exec := executor.New(cfg.StateDir, stackID)
+					cmd := exec.CommandWithOutput(k9sPath, c.Args().Slice()...)
 					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
 					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
 
 					return cmd.Run()
 				},
