@@ -64,6 +64,11 @@ command_exists() {
 
 # Validate prerequisites
 validate_prerequisites() {
+	# Skip Docker validation in development mode (not needed for build)
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		return 0
+	fi
+
 	log_info "Validating prerequisites..."
 
 	# Check for Docker
@@ -102,32 +107,197 @@ create_directories() {
 	log_success "Directories created"
 }
 
+# Get version information
+get_version_info() {
+	local version="0.0.0"  # Default semantic version
+	local git_commit="unknown"
+	local build_time
+	local git_dirty="false"
+
+	# Get build timestamp (YYYYMMDDHHMMSS format)
+	build_time=$(date -u +"%Y%m%d%H%M%S")
+
+	# Get git information if available
+	if command_exists git && [[ -d .git ]]; then
+		# Get short commit hash
+		git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+		# Check if repo is dirty (has uncommitted changes)
+		if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+			git_dirty="true"
+		fi
+
+		# Try to get version from git tag
+		local git_tag
+		git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
+		if [[ -n "$git_tag" ]]; then
+			# Strip 'v' prefix if present
+			version="${git_tag#v}"
+		fi
+	fi
+
+	echo "$version" "$git_commit" "$build_time" "$git_dirty"
+}
+
+# Install obol binary for development mode (wrapper script)
+install_dev_wrapper() {
+	log_info "Installing development wrapper script..."
+
+	# Get script directory
+	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+	# Create wrapper script that uses 'go run'
+	cat > "$OBOL_BIN_DIR/obol" <<'EOF'
+#!/usr/bin/env bash
+# Obol CLI Development Wrapper
+# This script runs the obol CLI using 'go run' for rapid development
+
+# Find the project root (where obolup.sh is located)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Run the CLI
+cd "$SCRIPT_DIR" && exec go run ./cmd/obol "$@"
+EOF
+
+	chmod +x "$OBOL_BIN_DIR/obol"
+	log_success "Installed development wrapper at $OBOL_BIN_DIR/obol"
+}
+
+# Download and install binary from GitHub releases
+download_release() {
+	local release_tag="$1"
+	log_info "Downloading release: $release_tag"
+
+	# Detect OS and architecture
+	local os arch
+	case "$(uname -s)" in
+		Linux*)  os="linux" ;;
+		Darwin*) os="darwin" ;;
+		*)       log_error "Unsupported OS: $(uname -s)"; return 1 ;;
+	esac
+
+	case "$(uname -m)" in
+		x86_64)  arch="amd64" ;;
+		aarch64|arm64) arch="arm64" ;;
+		*)       log_error "Unsupported architecture: $(uname -m)"; return 1 ;;
+	esac
+
+	# Construct download URL
+	local binary_name="obol_${os}_${arch}"
+	local download_url="https://github.com/obol/obol-stack/releases/download/${release_tag}/${binary_name}"
+
+	log_info "Downloading from: $download_url"
+
+	# Download binary
+	if command_exists curl; then
+		if ! curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/obol"; then
+			log_warn "Failed to download release $release_tag"
+			return 1
+		fi
+	elif command_exists wget; then
+		if ! wget -q "$download_url" -O "$OBOL_BIN_DIR/obol"; then
+			log_warn "Failed to download release $release_tag"
+			return 1
+		fi
+	else
+		log_error "Neither curl nor wget is available"
+		return 1
+	fi
+
+	chmod +x "$OBOL_BIN_DIR/obol"
+	log_success "Downloaded and installed release $release_tag"
+	return 0
+}
+
+# Build from source (latest or specific commit)
+build_from_source() {
+	local build_ref="${1:-main}"
+	log_info "Building from source (ref: $build_ref)..."
+
+	# Create temporary directory
+	local tmp_dir
+	tmp_dir=$(mktemp -d)
+	trap "rm -rf '$tmp_dir'" EXIT
+
+	log_info "Cloning repository..."
+	if ! git clone --depth 1 --branch "$build_ref" https://github.com/obol/obol-stack.git "$tmp_dir" 2>/dev/null; then
+		# If branch doesn't exist, try as a tag
+		if ! git clone https://github.com/obol/obol-stack.git "$tmp_dir" 2>/dev/null; then
+			log_error "Failed to clone repository"
+			return 1
+		fi
+		cd "$tmp_dir"
+		git checkout "$build_ref" 2>/dev/null || {
+			log_error "Failed to checkout ref: $build_ref"
+			return 1
+		}
+	fi
+
+	cd "$tmp_dir"
+
+	# Get version information
+	read -r version git_commit build_time git_dirty <<< "$(get_version_info)"
+
+	# Build binary
+	log_info "Building binary..."
+	local ldflags="-X github.com/obol/obol-stack/internal/version.Version=$version"
+	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.GitCommit=$git_commit"
+	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.BuildTime=$build_time"
+	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.GitDirty=$git_dirty"
+
+	if ! go build -ldflags "$ldflags" -o "$OBOL_BIN_DIR/obol" ./cmd/obol; then
+		log_error "Failed to build binary"
+		return 1
+	fi
+
+	chmod +x "$OBOL_BIN_DIR/obol"
+	log_success "Built and installed from source"
+	return 0
+}
+
 # Install obol binary
 install_obol_binary() {
 	log_info "Installing obol binary..."
 
-	# Check if obol binary already exists
-	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
-		local current_version
-		current_version=$("$OBOL_BIN_DIR/obol" --version 2>/dev/null | grep -oP 'version \K[0-9.]+' || echo "unknown")
-		log_info "Found existing obol binary (version: $current_version)"
-		log_info "Upgrading..."
+	# Development mode: install wrapper script
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		install_dev_wrapper
+		return 0
 	fi
 
-	# For development, we'll build from source if go is available
-	if command_exists go && [[ -f "cmd/obol/main.go" ]]; then
-		log_info "Building from source..."
-		go build -o "$OBOL_BIN_DIR/obol" ./cmd/obol
-		chmod +x "$OBOL_BIN_DIR/obol"
+	# Production mode: handle OBOL_RELEASE
+	local release="${OBOL_RELEASE:-latest}"
 
-		local new_version
-		new_version=$("$OBOL_BIN_DIR/obol" --version 2>/dev/null | grep -oP 'version \K[0-9.]+' || echo "unknown")
-		log_success "Installed obol binary (version: $new_version)"
+	if [[ "$release" == "latest" ]]; then
+		log_info "OBOL_RELEASE=latest: attempting to download latest release..."
+
+		# Try to get latest release tag from GitHub API
+		local latest_tag
+		if command_exists curl; then
+			latest_tag=$(curl -fsSL https://api.github.com/repos/obol/obol-stack/releases/latest 2>/dev/null | grep -oP '"tag_name": "\K(.*)(?=")')
+		fi
+
+		# If we got a tag, try to download it
+		if [[ -n "$latest_tag" ]]; then
+			if download_release "$latest_tag"; then
+				return 0
+			fi
+			log_warn "Download failed, falling back to building from source..."
+		else
+			log_info "No releases found, building from source..."
+		fi
+
+		# Fallback: build from source
+		build_from_source "main"
 	else
-		# In production, this would download from GitHub releases
-		log_warn "Production binary download not yet implemented"
-		log_info "Please build manually: go build -o $OBOL_BIN_DIR/obol ./cmd/obol"
-		return 1
+		# Specific release requested
+		log_info "Attempting to download release: $release"
+		if download_release "$release"; then
+			return 0
+		fi
+
+		log_warn "Release $release not found, building from source..."
+		build_from_source "$release"
 	fi
 }
 
