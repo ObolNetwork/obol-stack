@@ -63,6 +63,18 @@ installable application system.
    - Applications mounted to k3s manifest directory for automatic application
    - See: `internal/embed/embed.go`, `internal/embed/applications/`
 
+3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
+   - **Console output**: Structured logging with colored symbols and clean formatting
+     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]` Error (red)
+     - `[⚙]` Subprocess execution (magenta) with indented output
+   - **File logging**: Date-based JSON logs at `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
+     - One log file per day, all sessions append to same file
+     - Full structured logs with source info, cluster ID tagging
+   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic logging
+     - Captures and logs all subprocess output via slog
+     - Displays subprocess commands and output with visual hierarchy
+   - See: `internal/logging/handler.go`, `internal/executor/executor.go`
+
 ### Configuration System
 
 The application follows XDG Base Directory specification with override
@@ -258,12 +270,15 @@ See: `internal/embed/applications/README.md` for detailed architecture
 ### Cluster Lifecycle
 
 1. **Init**: Generates k3d.yaml with unique cluster ID using petname library
-2. **Up**: Creates k3d cluster, exports kubeconfig to `cluster/kubeconfig.yaml`
-3. **Down**: Deletes k3d cluster (preserves config)
-4. **Purge**: Removes cluster and all config files
+2. **Up**: Creates k3d cluster with labeled containers, exports kubeconfig
+3. **Down**: Deletes k3d cluster (preserves config and logs)
+4. **Purge**: Removes cluster, config files, and state directory (including logs)
 
-See: `internal/cluster/cluster.go`, `internal/embed/k3d-config.yaml`
->>>>>>> ec4cd89 (update CLAUDE.md with latest context changes)
+=======
+All lifecycle commands use structured logging with cluster ID context.
+
+See: `internal/cluster/cluster.go`, `k3d/config.yaml`
+>>>>>>> 54530bf (update CLAUDE.md with latest context)
 
 ## Key Design Principles
 
