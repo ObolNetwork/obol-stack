@@ -6,10 +6,9 @@ import (
 	"os"
 
 	"github.com/obol/obol-stack/internal/config"
+	"github.com/obol/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
-
-const version = "0.1.0"
 
 func main() {
 	// Load config with XDG defaults
@@ -18,8 +17,16 @@ func main() {
 	app := &cli.App{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
-		Version: version,
+		Version: version.Full(),
 		Commands: []*cli.Command{
+			{
+				Name:  "version",
+				Usage: "Show detailed version information",
+				Action: func(c *cli.Context) error {
+					fmt.Print(version.BuildInfo())
+					return nil
+				},
+			},
 			{
 				Name:  "cluster",
 				Usage: "Manage k3d cluster lifecycle",
