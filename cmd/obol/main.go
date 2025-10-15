@@ -236,6 +236,139 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
+
+			// ============================================================
+			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
+			// ============================================================
+			{
+				Name:            "kubectl",
+				Usage:           "Run kubectl with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
+					// Check if kubectl exists
+					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
+						return fmt.Errorf("kubectl not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to kubectl
+					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helm",
+				Usage:           "Run helm with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					helmPath := filepath.Join(cfg.BinDir, "helm")
+
+					// Check if helm exists
+					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
+						return fmt.Errorf("helm not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helm
+					cmd := exec.Command(helmPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helmfile",
+				Usage:           "Run helmfile with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
+
+					// Check if helmfile exists
+					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+						return fmt.Errorf("helmfile not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helmfile
+					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "k9s",
+				Usage:           "Run k9s with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					k9sPath := filepath.Join(cfg.BinDir, "k9s")
+
+					// Check if k9s exists
+					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
+						return fmt.Errorf("k9s not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to k9s
+					cmd := exec.Command(k9sPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+
+			// ============================================================
+			// Utility Commands
+			// ============================================================
+			{
+				Name:  "version",
+				Usage: "Show detailed version information",
+				Action: func(c *cli.Context) error {
+					fmt.Print(version.BuildInfo())
+					return nil
+				},
+			},
+
 			// TODO: Implement app command
 			// {
 			//     Name:  "app",
