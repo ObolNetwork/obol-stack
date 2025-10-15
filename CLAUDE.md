@@ -17,7 +17,7 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
      helmfile, k9s)
    - Supports two modes:
      - **Production mode**: Uses XDG Base Directory specification
-       (`~/.config/obol`, `~/.local/share/obol`)
+       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`)
      - **Development mode**: Uses local `.workspace/` directory (set via
        `OBOL_DEVELOPMENT=true`)
 
@@ -35,8 +35,10 @@ capability:
   `.workspace/config`)
 - `OBOL_BIN_DIR` - Binary directory (default: `$OBOL_CONFIG_DIR/bin` or
   `.workspace/bin`)
-- `OBOL_STATE_DIR` - Persistent data (default: `~/.local/share/obol` or
-  `.workspace/share`)
+- `OBOL_DATA_DIR` - Persistent volumes and data (default: `~/.local/share/obol`
+  or `.workspace/data`)
+- `OBOL_STATE_DIR` - Logs and runtime state (default: `~/.local/state/obol` or
+  `.workspace/state`)
 - `OBOL_DEVELOPMENT=true` - Enables local development mode using `.workspace/`
 
 See: `internal/config/config.go`
@@ -46,21 +48,22 @@ See: `internal/config/config.go`
 Production layout:
 
 ```
-~/.config/obol/
-  ├── bin/                  # obol binary and dependencies
-  ├── cluster/
-  │   ├── k3d/             # k3d configurations
-  │   └── kubeconfig/      # Kubernetes configs
-  └── helmfile/            # Helmfile configurations
+~/.config/obol/          # Configuration files
+  └── bin/               # obol binary and dependencies
+
+~/.local/share/obol/     # Persistent data (volumes)
+
+~/.local/state/obol/     # Runtime state (logs)
 ```
 
 Development layout:
 
 ```
 .workspace/
-  ├── bin/                 # Local binaries
-  ├── config/              # Local configs
-  └── share/               # Local state
+  ├── bin/               # Local binaries
+  ├── config/            # Local configs
+  ├── data/              # Local persistent data
+  └── state/             # Local runtime state
 ```
 
 ## Running Locally
@@ -112,7 +115,8 @@ focus:
 2. The obol CLI is designed for non-developers; advanced users should use
    kubectl/helm directly
 3. Applications are environment-specific Helm charts, not generic charts
-4. All persistent data should respect the configured state directory
+4. All persistent data should use `DataDir` (XDG_DATA_HOME), logs should use
+   `StateDir` (XDG_STATE_HOME)
 5. The stack provides a local L1 RPC endpoint at
    `http://rpc.l1.cluster.svc.local/rpc/mainnet`
 
