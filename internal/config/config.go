@@ -9,6 +9,7 @@ import (
 type Config struct {
 	ConfigDir string
 	BinDir    string
+	DataDir   string
 	StateDir  string
 }
 
@@ -17,6 +18,7 @@ func Load() *Config {
 	return &Config{
 		ConfigDir: getConfigDir(),
 		BinDir:    getBinDir(),
+		DataDir:   getDataDir(),
 		StateDir:  getStateDir(),
 	}
 }
@@ -60,17 +62,18 @@ func getBinDir() string {
 	return filepath.Join(getConfigDir(), "bin")
 }
 
-// getStateDir returns OBOL_STATE_DIR or XDG_DATA_HOME/obol
-// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/share
-func getStateDir() string {
-	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
+// getDataDir returns OBOL_DATA_DIR or XDG_DATA_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/data
+// This is used for persistent volumes and data files
+func getDataDir() string {
+	if dir := os.Getenv("OBOL_DATA_DIR"); dir != "" {
 		return dir
 	}
 
 	// Development mode: use .workspace directory in project root
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		cwd, _ := os.Getwd()
-		return filepath.Join(cwd, ".workspace", "share")
+		return filepath.Join(cwd, ".workspace", "data")
 	}
 
 	// XDG_DATA_HOME defaults to ~/.local/share
@@ -81,4 +84,28 @@ func getStateDir() string {
 	}
 
 	return filepath.Join(xdgDataHome, "obol")
+}
+
+// getStateDir returns OBOL_STATE_DIR or XDG_STATE_HOME/obol
+// In development mode (OBOL_DEVELOPMENT=true), uses .workspace/state
+// This is used for logs and runtime state
+func getStateDir() string {
+	if dir := os.Getenv("OBOL_STATE_DIR"); dir != "" {
+		return dir
+	}
+
+	// Development mode: use .workspace directory in project root
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		cwd, _ := os.Getwd()
+		return filepath.Join(cwd, ".workspace", "state")
+	}
+
+	// XDG_STATE_HOME defaults to ~/.local/state
+	xdgStateHome := os.Getenv("XDG_STATE_HOME")
+	if xdgStateHome == "" {
+		home, _ := os.UserHomeDir()
+		xdgStateHome = filepath.Join(home, ".local", "state")
+	}
+
+	return filepath.Join(xdgStateHome, "obol")
 }
