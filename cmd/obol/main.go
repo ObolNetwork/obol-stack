@@ -17,19 +17,54 @@ func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
 
+	// Custom help template with command sections
+	cli.AppHelpTemplate = `
+   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗
+  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
+  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝
+  ██║   ██║██╔══██╗██║   ██║██║         ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
+  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
+   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
+
+NAME:
+   {{.Name}}{{if .Usage}} - {{.Usage}}{{end}}
+
+USAGE:
+   {{if .UsageText}}{{.UsageText}}{{else}}{{.HelpName}} {{if .VisibleFlags}}[global options]{{end}}{{if .Commands}} command [command options]{{end}}{{end}}
+
+VERSION:
+   {{.Version}}
+
+COMMANDS:
+   Stack Lifecycle:
+     stack init      Initialize cluster configuration
+     stack up        Start the Obol Stack
+     stack down      Stop the Obol Stack
+     stack purge     Delete stack and all data
+
+   Kubernetes Tools (with auto-configured KUBECONFIG):
+     kubectl         Run kubectl with cluster kubeconfig (passthrough)
+     helm            Run helm with cluster kubeconfig (passthrough)
+     helmfile        Run helmfile with cluster kubeconfig (passthrough)
+     k9s             Run k9s with cluster kubeconfig (passthrough)
+
+   Other:
+     version         Show detailed version information
+     help, h         Shows a list of commands or help for one command
+{{if .VisibleFlags}}
+GLOBAL OPTIONS:
+   {{range $index, $option := .VisibleFlags}}{{if $index}}
+   {{end}}{{$option}}{{end}}{{end}}
+`
+
 	app := &cli.App{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
 		Version: version.Full(),
 		Commands: []*cli.Command{
-			{
-				Name:  "version",
-				Usage: "Show detailed version information",
-				Action: func(c *cli.Context) error {
-					fmt.Print(version.BuildInfo())
-					return nil
-				},
-			},
+			// ============================================================
+			// Obol Stack Lifecycle Commands
+			// ============================================================
 			{
 				Name:  "stack",
 				Usage: "Manage Obol Stack lifecycle",
@@ -69,23 +104,101 @@ func main() {
 							return stack.Purge(cfg)
 						},
 					},
-					{
-						Name:      "backup",
-						Usage:     "Backup persistent volume",
-						ArgsUsage: "<volume-name>",
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
-								return fmt.Errorf("volume name required")
-							}
-							fmt.Printf("Stack backup %s - not yet implemented\n", c.Args().First())
-							return nil
-						},
-					},
+				},
+			},
+			// ============================================================
+			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
+			// ============================================================
+			{
+				Name:            "kubectl",
+				Usage:           "Run kubectl with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
+					// Check if kubectl exists
+					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
+						return fmt.Errorf("kubectl not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to kubectl
+					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helm",
+				Usage:           "Run helm with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					helmPath := filepath.Join(cfg.BinDir, "helm")
+
+					// Check if helm exists
+					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
+						return fmt.Errorf("helm not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helm
+					cmd := exec.Command(helmPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helmfile",
+				Usage:           "Run helmfile with cluster kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+					}
+
+					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
+
+					// Check if helmfile exists
+					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+						return fmt.Errorf("helmfile not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helmfile
+					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
 				},
 			},
 			{
 				Name:            "k9s",
-				Usage:           "Launch k9s with cluster kubeconfig (passthrough)",
+				Usage:           "Run k9s with cluster kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
@@ -110,6 +223,17 @@ func main() {
 					cmd.Stderr = os.Stderr
 
 					return cmd.Run()
+				},
+			},
+			// ============================================================
+			// Utility Commands
+			// ============================================================
+			{
+				Name:  "version",
+				Usage: "Show detailed version information",
+				Action: func(c *cli.Context) error {
+					fmt.Print(version.BuildInfo())
+					return nil
 				},
 			},
 			// TODO: Implement app command
