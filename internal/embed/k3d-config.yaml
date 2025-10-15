@@ -1,7 +1,7 @@
 apiVersion: k3d.io/v1alpha5
 kind: Simple
 metadata:
-  name: obol-stack
+  name: obol-stack-{{CLUSTER_ID}}
 servers: 1
 agents: 3  # Multiple workers for fault tolerance and pod distribution
 image: rancher/k3s:v1.31.4-k3s1
