@@ -3,7 +3,9 @@ import { test, expect } from '@playwright/test';
 test.describe('Accessibility Tests', () => {
   test('should have proper semantic HTML structure', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    // Wait for the page to load with a more reliable condition
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000); // Allow additional time for dynamic content
 
     // Check for main landmark or body (flexible for current implementation)
     const main = page.locator('main, [role="main"], body');
@@ -12,7 +14,9 @@ test.describe('Accessibility Tests', () => {
 
   test('should have accessible images with alt text', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    // Wait for the page to load with a more reliable condition
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000); // Allow additional time for dynamic content
 
     // Find all images
     const images = await page.locator('img').all();
@@ -38,7 +42,9 @@ test.describe('Accessibility Tests', () => {
 
   test('should have sufficient color contrast', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    // Wait for the page to load with a more reliable condition
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000); // Allow additional time for dynamic content
 
     // This is a basic test - for comprehensive contrast checking,
     // consider using axe-core or similar tools
