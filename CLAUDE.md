@@ -64,16 +64,30 @@ installable application system.
    - See: `internal/embed/embed.go`, `internal/embed/applications/`
 
 3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
-   - **Console output**: Structured logging with colored symbols and clean formatting
-     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]` Error (red)
+   - **Console output**: Structured logging with colored symbols and clean
+     formatting
+     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]`
+       Error (red)
      - `[⚙]` Subprocess execution (magenta) with indented output
-   - **File logging**: Date-based JSON logs at `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
+   - **File logging**: Date-based JSON logs at
+     `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
      - One log file per day, all sessions append to same file
      - Full structured logs with source info, cluster ID tagging
-   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic logging
+   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic
+     logging
      - Captures and logs all subprocess output via slog
      - Displays subprocess commands and output with visual hierarchy
    - See: `internal/logging/handler.go`, `internal/executor/executor.go`
+
+4. **Embedded Applications System** (internal/embed/)
+   - **Dual embed pattern**:
+     - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
+     - `applicationsFS embed.FS`: Entire applications directory tree
+   - **CopyApplications()**: Recursively extracts embedded apps to disk
+   - **Default applications**: Auto-deployed monitoring stack
+     (Prometheus/Grafana)
+   - Applications mounted to k3s manifest directory for automatic application
+   - See: `internal/embed/embed.go`, `internal/embed/applications/`
 
 ### Configuration System
 
@@ -269,16 +283,80 @@ See: `internal/embed/applications/README.md` for detailed architecture
 
 ### Cluster Lifecycle
 
-1. **Init**: Generates k3d.yaml with unique cluster ID using petname library
-2. **Up**: Creates k3d cluster with labeled containers, exports kubeconfig
-3. **Down**: Deletes k3d cluster (preserves config and logs)
-4. **Purge**: Removes cluster, config files, and state directory (including logs)
+1. **Init**:
+   - Generates unique cluster ID (petname)
+   - Gets absolute paths for data and config directories
+   - Replaces all template placeholders in k3d config
+   - Writes resolved k3d.yaml with absolute paths
+   - Copies embedded applications to `applications/` directory
+   - Stores cluster ID in `.cluster-id` file
+
+2. **Up**:
+   - Creates k3d cluster using pre-resolved config
+   - k3d mounts applications directory to k3s manifests path
+   - k3s auto-applies all manifests (monitoring stack deployed)
+   - Exports kubeconfig
+
+3. **Down**:
+   - Deletes k3d cluster
+   - Preserves config directory and logs
+
+4. **Purge**:
+   - Stops cluster (via Down)
+   - Removes entire config directory (k3d.yaml, kubeconfig, .cluster-id,
+     applications/)
+   - Removes data directory (persistent volumes)
+   - Preserves state directory (logs remain for debugging)
 
 =======
 All lifecycle commands use structured logging with cluster ID context.
 
-See: `internal/cluster/cluster.go`, `k3d/config.yaml`
->>>>>>> 54530bf (update CLAUDE.md with latest context)
+=======
+See: `internal/cluster/cluster.go`, `internal/embed/k3d-config.yaml`
+
+## Embedded Applications
+
+### Default Applications (`internal/embed/applications/default/`)
+
+**Auto-deployed with every cluster:**
+
+- **Monitoring stack** (Prometheus + Grafana via kube-prometheus-stack)
+  - Grafana: `http://grafana.localhost:8080` (anonymous admin access)
+  - Prometheus: `http://prometheus.localhost:8080`
+  - Pre-configured Kubernetes dashboards
+  - Persistent storage: Prometheus (10Gi), Grafana (5Gi)
+  - Resource limits configured for local development
+
+**Deployment mechanism:**
+
+- Applications embedded in binary as `embed.FS`
+- Extracted to disk during `obol cluster init`
+- Mounted into k3s at `/var/lib/rancher/k3s/server/manifests/default/`
+- k3s automatically applies manifests on startup
+- Uses k3s HelmChart CRD for Helm chart deployment
+
+**Structure:**
+
+```
+internal/embed/applications/
+├── README.md                    # Architecture and future plans
+└── default/
+    └── monitoring/
+        ├── monitoring-stack.yaml      # HelmChart CRD (kube-prometheus-stack)
+        └── monitoring-ingress.yaml    # Traefik IngressRoutes
+```
+
+### Future: Installable Applications (Planned)
+
+**Not yet implemented:**
+
+- `obol app install <app-name>` - Download application from registry
+- `obol app apply <app-name>` - Deploy using Helmfile + applyset tracking
+- Applyset pattern for atomic updates and automatic pruning
+- Example applications: ethereum (client stacks), charon (DVT)
+
+See: `internal/embed/applications/README.md` for detailed architecture
+>>>>>>> d06eb3f (updated CLAUDE.md with context)
 
 ## Key Design Principles
 
