@@ -1,6 +1,0 @@
-apiVersion: v2
-name: dashboard-provisioner
-description: Provisions Grafana dashboards for Ethereum clients
-type: application
-version: 0.1.0
-appVersion: "1.0"
