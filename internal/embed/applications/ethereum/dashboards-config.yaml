@@ -1,0 +1,11 @@
+# Dashboard provisioner configuration
+# This chart deploys a Job that downloads Ethereum client dashboards from Grafana.com
+# and creates ConfigMaps that are auto-discovered by the monitoring stack
+
+# The dashboards are defined in charts/dashboard-provisioner/templates/dashboards.yaml
+# Modify the DASHBOARDS array in that file to add/remove dashboards
+
+# Dashboard IDs from Grafana.com:
+# - geth: 13877 (revision 1)
+# - lighthouse: 16737 (revision 1)
+# - ethereum-metrics-exporter: 16277 (revision 1)

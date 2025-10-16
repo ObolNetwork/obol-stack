@@ -369,13 +369,40 @@ Once deployed, the following dashboards are available:
 
 ### Dashboard Configuration
 
-Dashboards are defined in `dashboards.yaml` as a Kubernetes Job that runs automatically. The Job downloads dashboards from Grafana.com using their public API.
+Dashboards are defined in `charts/dashboard-provisioner/templates/dashboards.yaml` as a Kubernetes Job that runs automatically. The Job downloads dashboards from Grafana.com using their public API.
+
+**Application structure:**
+```
+ethereum/
+├── helmfile.yaml                          # Defines two releases
+│   ├─ ethereum-node (main application)
+│   └─ dashboard-provisioner (dashboards)
+├── values.yaml                            # Ethereum node configuration
+├── dashboards-config.yaml                 # Dashboard provisioner config
+└── charts/
+    └── dashboard-provisioner/             # Local Helm chart
+        ├── Chart.yaml
+        └── templates/
+            └── dashboards.yaml            # Job + RBAC manifests
+```
+
+**How helmfile includes dashboards:**
+
+The `helmfile.yaml` defines two releases:
+1. **ethereum-node** - Main Ethereum clients (from remote chart)
+2. **dashboard-provisioner** - Dashboard loader (from local chart)
+
+When you run `obol app sync ethereum`, helmfile:
+1. Templates both releases
+2. Generates all Kubernetes manifests (including dashboard Job)
+3. Applies everything with a single applyset ID
+4. Dashboard Job runs post-install via Helm hooks
 
 **To add more dashboards** (e.g., for other Ethereum clients):
 
 1. Find the dashboard on [Grafana.com](https://grafana.com/grafana/dashboards/)
 2. Note the dashboard ID and revision
-3. Edit `dashboards.yaml` in the DASHBOARDS array:
+3. Edit `charts/dashboard-provisioner/templates/dashboards.yaml` in the DASHBOARDS array:
    ```bash
    declare -A DASHBOARDS=(
      ["geth"]="13877:1"

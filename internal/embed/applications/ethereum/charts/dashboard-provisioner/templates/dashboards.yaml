@@ -5,13 +5,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dashboard-provisioner
-  namespace: ethereum
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dashboard-provisioner
-  namespace: ethereum
+  namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
@@ -21,7 +21,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: dashboard-provisioner
-  namespace: ethereum
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -29,13 +29,13 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: dashboard-provisioner
-  namespace: ethereum
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: dashboard-provisioner
-  namespace: ethereum
+  namespace: {{ .Release.Namespace }}
   annotations:
     # Helmfile hook to ensure this runs after the main release
     helm.sh/hook: post-install,post-upgrade
@@ -82,20 +82,30 @@ spec:
               return 1
             fi
 
-            # Create ConfigMap with the dashboard
-            # The label 'grafana_dashboard: "1"' makes it discoverable by Grafana sidecar
-            # The annotation 'grafana_folder: "Ethereum"' organizes it in a folder
-            kubectl create configmap "grafana-dashboard-${name}" \
+            # Test: Create ConfigMap without any labels/annotations to isolate the issue
+            #  If this fails, the dashboard JSON itself is the problem
+
+            # Delete existing ConfigMap if it exists
+            kubectl delete configmap "grafana-dashboard-${name}" --namespace={{ .Release.Namespace }} 2>/dev/null || true
+
+            # Try creating with just kubectl create (no dry-run, no piping)
+            echo "Attempting to create ConfigMap..."
+            if kubectl create configmap "grafana-dashboard-${name}" \
               --from-file="${name}.json=/tmp/${name}.json" \
-              --namespace=ethereum \
-              --dry-run=client -o yaml | \
-            kubectl label --local -f - \
-              grafana_dashboard=1 \
-              --dry-run=client -o yaml | \
-            kubectl annotate --local -f - \
-              grafana_folder=Ethereum \
-              --dry-run=client -o yaml | \
-            kubectl apply -f -
+              --namespace={{ .Release.Namespace }} \
+              --save-config=false; then
+              echo "✓ ConfigMap created successfully"
+
+              # Now try adding label with patch
+              echo "Adding discovery label..."
+              kubectl patch configmap "grafana-dashboard-${name}" \
+                --namespace={{ .Release.Namespace }} \
+                --type=json \
+                -p '[{"op":"add","path":"/metadata/labels","value":{"grafana_dashboard":"1"}}]'
+            else
+              echo "✗ Failed to create ConfigMap"
+              return 1
+            fi
 
             echo "✓ Provisioned ${name} dashboard"
           }

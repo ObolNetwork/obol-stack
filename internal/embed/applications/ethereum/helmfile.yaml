@@ -3,6 +3,7 @@ repositories:
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
+  # Main ethereum node (execution + consensus clients)
   - name: ethereum-node
     namespace: ethereum
     createNamespace: true
@@ -10,3 +11,10 @@ releases:
     version: 0.2.4
     values:
       - values.yaml
+
+  # Dashboard provisioner (downloads and creates Grafana dashboards)
+  - name: dashboard-provisioner
+    namespace: ethereum
+    chart: ./charts/dashboard-provisioner
+    values:
+      - dashboards-config.yaml

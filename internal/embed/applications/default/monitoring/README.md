@@ -231,21 +231,60 @@ data:
 
 #### Pattern 2: Dashboard Provisioner Job (Recommended)
 
-For dashboards from Grafana.com or complex provisioning:
+For dashboards from Grafana.com or complex provisioning, create a local Helm chart with the Job manifests.
 
+**Directory structure:**
+```
+my-app/
+├── helmfile.yaml
+├── values.yaml
+├── dashboards-config.yaml
+└── charts/
+    └── dashboard-provisioner/
+        ├── Chart.yaml
+        └── templates/
+            └── dashboards.yaml  # Job + RBAC manifests
+```
+
+**helmfile.yaml:**
+```yaml
+releases:
+  # Main application
+  - name: my-app
+    chart: my-repo/my-chart
+    values:
+      - values.yaml
+
+  # Dashboard provisioner (local chart)
+  - name: dashboard-provisioner
+    chart: ./charts/dashboard-provisioner
+    values:
+      - dashboards-config.yaml
+```
+
+**charts/dashboard-provisioner/Chart.yaml:**
+```yaml
+apiVersion: v2
+name: dashboard-provisioner
+description: Provisions Grafana dashboards
+type: application
+version: 0.1.0
+```
+
+**charts/dashboard-provisioner/templates/dashboards.yaml:**
 ```yaml
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dashboard-provisioner
-  namespace: my-app
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dashboard-provisioner
-  namespace: my-app
+  namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
   resources: ["configmaps"]
@@ -255,7 +294,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: dashboard-provisioner
-  namespace: my-app
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -268,7 +307,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: dashboard-provisioner
-  namespace: my-app
+  namespace: {{ .Release.Namespace }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "5"
@@ -301,28 +340,46 @@ spec:
             curl -sSLf "https://grafana.com/api/dashboards/${id}/revisions/${rev}/download" \
               -o "/tmp/${name}.json"
 
-            # Create ConfigMap with discovery labels
-            kubectl create configmap "grafana-dashboard-${name}" \
-              --from-file="${name}.json=/tmp/${name}.json" \
-              --namespace=my-app \
-              --dry-run=client -o yaml | \
-            kubectl label --local -f - \
-              grafana_dashboard=1 \
-              --dry-run=client -o yaml | \
-            kubectl annotate --local -f - \
-              grafana_folder=MyApp \
-              --dry-run=client -o yaml | \
-            kubectl apply -f -
+            # Create ConfigMap YAML with labels and annotations
+            # Build YAML directly to avoid annotation size limits
+            cat <<YAML > "/tmp/${name}-cm.yaml"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-${name}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "MyApp"
+data:
+  ${name}.json: |
+YAML
+
+            # Indent dashboard JSON (4 spaces) and append
+            sed 's/^/    /' "/tmp/${name}.json" >> "/tmp/${name}-cm.yaml"
+
+            # Apply the ConfigMap
+            kubectl apply -f "/tmp/${name}-cm.yaml"
 
             echo "✓ Provisioned ${name} dashboard"
           done
 ```
 
-**Benefits of the Job pattern:**
-- Downloads dashboards at deploy time (not embedded in binary)
+**How it works:**
+1. Helmfile templates both releases (main app + dashboard provisioner)
+2. All manifests are generated (including the Job)
+3. Everything is applied together with one applyset ID
+4. Job runs post-install via Helm hooks
+5. ConfigMaps are created with discovery labels
+6. Grafana sidecar auto-discovers and loads dashboards
+
+**Benefits of the local chart pattern:**
+- Dashboards downloaded at deploy time (not embedded)
 - Version pinning via revision numbers
-- Automatic cleanup (TTL)
-- Works with Helm hooks
+- Automatic cleanup (TTL + helm hooks)
+- Everything deployed together atomically
+- Works with helmfile + applyset tracking
 
 #### Dashboard Folder Organization
 
