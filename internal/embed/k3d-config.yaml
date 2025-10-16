@@ -7,15 +7,15 @@ servers: 1
 agents: 0
 image: rancher/k3s:v1.31.4-k3s1
 # Mount host directories into all nodes for persistent storage
-# Uses OBOL_DATA_DIR env var, falls back to .workspace/data
+# Absolute paths are written during cluster init
 volumes:
-  - volume: ${OBOL_DATA_DIR}:/data
+  - volume: {{DATA_DIR}}:/data
     nodeFilters:
       - all
   # Mount default applications for auto-deployment
   # These are embedded applications that deploy automatically with every cluster
   # k3s automatically applies any manifests in /var/lib/rancher/k3s/server/manifests/
-  - volume: ${OBOL_CONFIG_DIR}/applications/default:/var/lib/rancher/k3s/server/manifests/default
+  - volume: {{CONFIG_DIR}}/applications/default:/var/lib/rancher/k3s/server/manifests/default
     nodeFilters:
       - server:*
 ports:
@@ -43,11 +43,6 @@ options:
         nodeFilters:
           - server:*
   runtime:
-    # Apply cluster_id as a label to all containers for tracking
-    labels:
-      - label: obol.cluster-id=${OBOL_CLUSTER_ID}
-        nodeFilters:
-          - all
     # Increase file descriptor limits to prevent "too many open files" errors
     ulimits:
       - name: nofile

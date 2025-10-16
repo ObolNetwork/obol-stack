@@ -46,18 +46,43 @@ func Init(cfg *config.Config, force bool) error {
 	})
 	defer cleanup()
 
+	l.Info("Initializing cluster configuration")
+	l.Info(fmt.Sprintf("Cluster ID: %s", stackID))
+
+	absDataDir, err := filepath.Abs(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
+	}
+
+	absConfigDir, err := filepath.Abs(cfg.ConfigDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for config directory: %w", err)
+	}
+
 	// Check if overwriting config
 	if _, err := os.Stat(k3dConfigPath); err == nil {
 		l.Info("Overwriting existing stack configuration", "path", k3dConfigPath)
 	}
 
 	// Replace placeholder in k3d config with actual stack ID
-	k3dConfig := strings.ReplaceAll(embed.K3dConfig, "{{STACK_ID}}", stackID)
+	k3dConfig := embed.K3dConfig
+	k3dConfig = strings.ReplaceAll(k3dConfig, "{{STACK_ID}}", stackID)
+	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
+	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
 
 	// Write k3d config with stack ID to destination
 	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
+
+	l.Info(fmt.Sprintf("K3d config saved to: %s", k3dConfigPath))
+
+	// Copy embedded applications directory
+	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
+	if err := embed.CopyApplications(applicationsDestDir); err != nil {
+		return fmt.Errorf("failed to copy applications: %w", err)
+	}
+	l.Info(fmt.Sprintf("Applications copied to: %s", applicationsDestDir))
 
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
@@ -129,12 +154,6 @@ func Up(cfg *config.Config) error {
 		"--config", k3dConfigPath,
 		"--kubeconfig-update-default=false",
 	)
-	// Set environment variables for k3d config expansion (must be absolute paths)
-	createCmd.SetEnv(append(os.Environ(),
-		fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir),
-	))
-
-	l.Info("Using data directory", "path", absDataDir)
 
 	if err := createCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
@@ -158,8 +177,8 @@ func Up(cfg *config.Config) error {
 	if stackID != "" {
 		l.Success("Stack ID", "id", stackID)
 	}
+	l.Info(fmt.Sprintf("export KUBECONFIG=%s", kubeconfigPath))
 	l.Success("Kubeconfig saved", "path", kubeconfigPath)
-	l.Info("To use kubectl with this stack", "command", fmt.Sprintf("export KUBECONFIG=%s", kubeconfigPath))
 	return nil
 }
 
@@ -223,12 +242,6 @@ func Purge(cfg *config.Config) error {
 		return fmt.Errorf("failed to remove data directory: %w", err)
 	}
 	l.Success("Removed data directory")
-
-	// Remove state directory (logs, history)
-	if err := os.RemoveAll(cfg.StateDir); err != nil {
-		return fmt.Errorf("failed to remove state directory: %w", err)
-	}
-	l.Success("Removed state directory")
 
 	l.Success("Cluster purged (binaries preserved)")
 	return nil
