@@ -290,41 +290,26 @@ install_dependencies() {
 	done
 }
 
-# Prompt to update shell PATH
-# Returns 0 if PATH was configured, 1 otherwise
-update_shell_path() {
+# Check if OBOL_BIN_DIR is in PATH and print instructions if not
+check_and_print_path_instructions() {
 	# Skip in development mode
 	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
-		PATH_CONFIGURED="true"
 		return 0
 	fi
 
 	# Check if OBOL_BIN_DIR is already in PATH
 	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
 		log_success "OBOL_BIN_DIR already in PATH"
-		PATH_CONFIGURED="true"
 		return 0
 	fi
 
-	# Prompt user to add to PATH
-	echo ""
+	# Print instructions to add to PATH
 	log_info "OBOL_BIN_DIR not found in PATH"
 	echo ""
-	read -p "Add $OBOL_BIN_DIR to your shell configuration? [y/N] " -r
+	echo "Add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
 	echo ""
-
-	if [[ $REPLY =~ ^[Yy]$ ]]; then
-		log_info "Add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-		echo ""
-		echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
-		echo ""
-		PATH_CONFIGURED="false"
-		return 1
-	else
-		log_info "Skipped PATH update"
-		PATH_CONFIGURED="false"
-		return 1
-	fi
+	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo ""
 }
 
 # Print post-install instructions
@@ -356,7 +341,7 @@ main() {
 	create_directories
 	install_obol_binary
 	install_dependencies
-	update_shell_path
+	check_and_print_path_instructions
 	print_instructions
 
 	echo ""
