@@ -234,7 +234,7 @@ func stackExists(output, name string) bool {
 
 // getStackID reads the stored stack ID
 func getStackID(cfg *config.Config) string {
-	stackIDPath := filepath.Join(cfg.ConfigDir, "cluster", stackIDFile)
+	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	data, err := os.ReadFile(stackIDPath)
 	if err != nil {
 		return ""
