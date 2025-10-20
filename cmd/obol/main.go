@@ -80,28 +80,63 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return stack.Init(cfg, c.Bool("force"))
+							if err := stack.Init(cfg, c.Bool("force")); err != nil {
+								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+									StateDir: cfg.StateDir,
+									StackID:  "",
+								})
+								l.Error("Failed to initialize stack", "error", err.Error())
+								return err
+							}
+							return nil
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Up(cfg)
+							if err := stack.Up(cfg); err != nil {
+								stackID := stack.GetStackID(cfg)
+								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+									StateDir: cfg.StateDir,
+									StackID:  stackID,
+								})
+								l.Error("Failed to start stack", "error", err.Error())
+								return err
+							}
+							return nil
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Down(cfg)
+							if err := stack.Down(cfg); err != nil {
+								stackID := stack.GetStackID(cfg)
+								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+									StateDir: cfg.StateDir,
+									StackID:  stackID,
+								})
+								l.Error("Failed to stop stack", "error", err.Error())
+								return err
+							}
+							return nil
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete stack and all data",
 						Action: func(c *cli.Context) error {
-							return stack.Purge(cfg)
+							if err := stack.Purge(cfg); err != nil {
+								stackID := stack.GetStackID(cfg)
+								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+									StateDir: cfg.StateDir,
+									StackID:  stackID,
+								})
+								l.Error("Failed to purge stack", "error", err.Error())
+								return err
+							}
+							return nil
 						},
 					},
 				},
@@ -118,14 +153,26 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("stack not running, use 'obol stack up' first")
+						return err
 					}
 
 					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
 					// Check if kubectl exists
 					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
-						return fmt.Errorf("kubectl not found in %s", cfg.BinDir)
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("kubectl not found", "path", cfg.BinDir)
+						return err
 					}
 
 					stackID := stack.GetStackID(cfg)
@@ -142,7 +189,11 @@ GLOBAL OPTIONS:
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
 
-					return cmd.Run()
+					if err := cmd.Run(); err != nil {
+						l.Error("kubectl command failed", "error", err.Error())
+						return err
+					}
+					return nil
 				},
 			},
 			{
@@ -154,14 +205,26 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("stack not running, use 'obol stack up' first")
+						return err
 					}
 
 					helmPath := filepath.Join(cfg.BinDir, "helm")
 
 					// Check if helm exists
 					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
-						return fmt.Errorf("helm not found in %s", cfg.BinDir)
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("helm not found", "path", cfg.BinDir)
+						return err
 					}
 
 					stackID := stack.GetStackID(cfg)
@@ -178,7 +241,11 @@ GLOBAL OPTIONS:
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
 
-					return cmd.Run()
+					if err := cmd.Run(); err != nil {
+						l.Error("helm command failed", "error", err.Error())
+						return err
+					}
+					return nil
 				},
 			},
 			{
@@ -190,14 +257,26 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("stack not running, use 'obol stack up' first")
+						return err
 					}
 
 					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
 
 					// Check if helmfile exists
 					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-						return fmt.Errorf("helmfile not found in %s", cfg.BinDir)
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("helmfile not found", "path", cfg.BinDir)
+						return err
 					}
 
 					stackID := stack.GetStackID(cfg)
@@ -214,7 +293,11 @@ GLOBAL OPTIONS:
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
 
-					return cmd.Run()
+					if err := cmd.Run(); err != nil {
+						l.Error("helmfile command failed", "error", err.Error())
+						return err
+					}
+					return nil
 				},
 			},
 			{
@@ -226,14 +309,26 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("stack not running, use 'obol stack up' first")
+						return err
 					}
 
 					k9sPath := filepath.Join(cfg.BinDir, "k9s")
 
 					// Check if k9s exists
 					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
-						return fmt.Errorf("k9s not found in %s", cfg.BinDir)
+						stackID := stack.GetStackID(cfg)
+						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+							StateDir: cfg.StateDir,
+							StackID:  stackID,
+						})
+						l.Error("k9s not found", "path", cfg.BinDir)
+						return err
 					}
 
 					stackID := stack.GetStackID(cfg)
@@ -250,7 +345,11 @@ GLOBAL OPTIONS:
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
 
-					return cmd.Run()
+					if err := cmd.Run(); err != nil {
+						l.Error("k9s command failed", "error", err.Error())
+						return err
+					}
+					return nil
 				},
 			},
 			// ============================================================
