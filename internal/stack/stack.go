@@ -65,8 +65,8 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
-	l.Info("Initialized stack configuration", "path", k3dConfigPath)
-	l.Info("Stack ID", "id", stackID)
+	l.Success("Initialized stack configuration", "path", k3dConfigPath)
+	l.Success("Stack ID", "id", stackID)
 	return nil
 }
 
@@ -154,11 +154,11 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	l.Info("Stack started successfully")
+	l.Success("Stack started successfully")
 	if stackID != "" {
-		l.Info("Stack ID", "id", stackID)
+		l.Success("Stack ID", "id", stackID)
 	}
-	l.Info("Kubeconfig saved", "path", kubeconfigPath)
+	l.Success("Kubeconfig saved", "path", kubeconfigPath)
 	l.Info("To use kubectl with this stack", "command", fmt.Sprintf("export KUBECONFIG=%s", kubeconfigPath))
 	return nil
 }
@@ -191,7 +191,7 @@ func Down(cfg *config.Config) error {
 		return fmt.Errorf("failed to stop cluster: %w", err)
 	}
 
-	l.Info("Stack stopped successfully")
+	l.Success("Stack stopped successfully")
 	return nil
 }
 
@@ -216,21 +216,21 @@ func Purge(cfg *config.Config) error {
 	if err := os.RemoveAll(stackConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
-	l.Info("Removed cluster config directory")
+	l.Success("Removed cluster config directory")
 
 	// Remove data directory
 	if err := os.RemoveAll(cfg.DataDir); err != nil {
 		return fmt.Errorf("failed to remove data directory: %w", err)
 	}
-	l.Info("Removed data directory")
+	l.Success("Removed data directory")
 
 	// Remove state directory (logs, history)
 	if err := os.RemoveAll(cfg.StateDir); err != nil {
 		return fmt.Errorf("failed to remove state directory: %w", err)
 	}
-	l.Info("Removed state directory")
+	l.Success("Removed state directory")
 
-	l.Info("Cluster purged (binaries preserved)")
+	l.Success("Cluster purged (binaries preserved)")
 	return nil
 }
 
