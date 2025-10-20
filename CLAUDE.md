@@ -23,6 +23,8 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
        (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`, `~/.local/bin`)
      - **Development mode**: Uses local `.workspace/` directory (set via
        `OBOL_DEVELOPMENT=true`)
+   - Supported platforms: Linux, Darwin
+   - Supported architectures: amd64, arm64
 
 2. **obol CLI** (cmd/obol/) - Go-based cluster management tool
    - Written in Go

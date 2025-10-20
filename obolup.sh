@@ -289,18 +289,10 @@ detect_platform() {
 	local platform
 	case "$(uname -s)" in
 	Linux*)
-		# Check if running under WSL
-		if grep -qi microsoft /proc/version 2>/dev/null; then
-			platform="linux" # WSL uses Linux binaries
-		else
-			platform="linux"
-		fi
+		platform="linux"
 		;;
 	Darwin*)
 		platform="darwin"
-		;;
-	MINGW* | MSYS* | CYGWIN*)
-		platform="windows"
 		;;
 	*)
 		log_error "Unsupported platform: $(uname -s)"
@@ -319,9 +311,6 @@ detect_arch() {
 		;;
 	aarch64 | arm64)
 		arch="arm64"
-		;;
-	armv7l)
-		arch="arm"
 		;;
 	*)
 		log_error "Unsupported architecture: $(uname -m)"
@@ -623,25 +612,25 @@ install_k9s() {
 	# Map platform/arch to k9s naming
 	local k9s_platform
 	case "$platform" in
-		darwin)
-			k9s_platform="Darwin"
-			;;
-		linux)
-			k9s_platform="Linux"
-			;;
-		windows)
-			k9s_platform="Windows"
-			;;
+	darwin)
+		k9s_platform="Darwin"
+		;;
+	linux)
+		k9s_platform="Linux"
+		;;
+	windows)
+		k9s_platform="Windows"
+		;;
 	esac
 
 	local k9s_arch
 	case "$arch" in
-		amd64)
-			k9s_arch="amd64"
-			;;
-		arm64)
-			k9s_arch="arm64"
-			;;
+	amd64)
+		k9s_arch="amd64"
+		;;
+	arm64)
+		k9s_arch="arm64"
+		;;
 	esac
 
 	# Download and extract k9s
