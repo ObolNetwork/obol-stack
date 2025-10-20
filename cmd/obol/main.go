@@ -114,36 +114,6 @@ func main() {
 			//     },
 			// },
 		},
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "config-dir",
-				Usage:   "Configuration directory (overrides OBOL_CONFIG_DIR and XDG_CONFIG_HOME)",
-				EnvVars: []string{"OBOL_CONFIG_DIR"},
-			},
-			&cli.StringFlag{
-				Name:    "bin-dir",
-				Usage:   "Binary directory (overrides OBOL_BIN_DIR)",
-				EnvVars: []string{"OBOL_BIN_DIR"},
-			},
-			&cli.StringFlag{
-				Name:    "state-dir",
-				Usage:   "Persistent data directory (overrides OBOL_STATE_DIR and XDG_DATA_HOME)",
-				EnvVars: []string{"OBOL_STATE_DIR"},
-			},
-		},
-		Before: func(c *cli.Context) error {
-			// Override config with CLI flags if provided
-			if c.String("config-dir") != "" {
-				cfg.ConfigDir = c.String("config-dir")
-			}
-			if c.String("bin-dir") != "" {
-				cfg.BinDir = c.String("bin-dir")
-			}
-			if c.String("state-dir") != "" {
-				cfg.StateDir = c.String("state-dir")
-			}
-			return nil
-		},
 	}
 
 	if err := app.Run(os.Args); err != nil {

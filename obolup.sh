@@ -32,12 +32,13 @@ else
 	XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 	XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 	XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+	XDG_BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
 	# Configuration directories with XDG defaults
 	OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$XDG_CONFIG_HOME/obol}"
 	OBOL_DATA_DIR="${OBOL_DATA_DIR:-$XDG_DATA_HOME/obol}"
 	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$XDG_STATE_HOME/obol}"
-	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_CONFIG_DIR/bin}"
+	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$XDG_BIN_HOME}"
 fi
 
 # Logging functions

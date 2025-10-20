@@ -46,7 +46,7 @@ func getConfigDir() string {
 	return filepath.Join(xdgConfigHome, "obol")
 }
 
-// getBinDir returns OBOL_BIN_DIR or OBOL_CONFIG_DIR/bin
+// getBinDir returns OBOL_BIN_DIR or XDG_BIN_HOME or ~/.local/bin
 // In development mode (OBOL_DEVELOPMENT=true), uses .workspace/bin
 func getBinDir() string {
 	if dir := os.Getenv("OBOL_BIN_DIR"); dir != "" {
@@ -59,7 +59,14 @@ func getBinDir() string {
 		return filepath.Join(cwd, ".workspace", "bin")
 	}
 
-	return filepath.Join(getConfigDir(), "bin")
+	// XDG_BIN_HOME defaults to ~/.local/bin
+	xdgBinHome := os.Getenv("XDG_BIN_HOME")
+	if xdgBinHome == "" {
+		home, _ := os.UserHomeDir()
+		xdgBinHome = filepath.Join(home, ".local", "bin")
+	}
+
+	return xdgBinHome
 }
 
 // getDataDir returns OBOL_DATA_DIR or XDG_DATA_HOME/obol

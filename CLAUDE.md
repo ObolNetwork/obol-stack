@@ -17,7 +17,7 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
      helmfile, k9s)
    - Supports two modes:
      - **Production mode**: Uses XDG Base Directory specification
-       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`)
+       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`, `~/.local/bin`)
      - **Development mode**: Uses local `.workspace/` directory (set via
        `OBOL_DEVELOPMENT=true`)
 
@@ -33,8 +33,9 @@ capability:
 
 - `OBOL_CONFIG_DIR` - Configuration files (default: `~/.config/obol` or
   `.workspace/config`)
-- `OBOL_BIN_DIR` - Binary directory (default: `$OBOL_CONFIG_DIR/bin` or
+- `OBOL_BIN_DIR` - Binary directory (default: `$XDG_BIN_HOME` → `~/.local/bin` or
   `.workspace/bin`)
+- `XDG_BIN_HOME` - XDG standard for user binaries (default: `~/.local/bin`)
 - `OBOL_DATA_DIR` - Persistent volumes and data (default: `~/.local/share/obol`
   or `.workspace/data`)
 - `OBOL_STATE_DIR` - Logs and runtime state (default: `~/.local/state/obol` or
@@ -49,7 +50,8 @@ Production layout:
 
 ```
 ~/.config/obol/          # Configuration files
-  └── bin/               # obol binary and dependencies
+
+~/.local/bin/            # obol binary and dependencies
 
 ~/.local/share/obol/     # Persistent data (volumes)
 
