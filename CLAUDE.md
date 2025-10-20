@@ -35,6 +35,18 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
    - Cluster package: `internal/cluster/cluster.go` handles k3d operations
    - Embedded config: k3d config template in `internal/embed/k3d-config.yaml`
 
+3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
+   - **Console output**: Structured logging with colored symbols and clean formatting
+     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]` Error (red)
+     - `[⚙]` Subprocess execution (magenta) with indented output
+   - **File logging**: Date-based JSON logs at `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
+     - One log file per day, all sessions append to same file
+     - Full structured logs with source info, cluster ID tagging
+   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic logging
+     - Captures and logs all subprocess output via slog
+     - Displays subprocess commands and output with visual hierarchy
+   - See: `internal/logging/handler.go`, `internal/executor/executor.go`
+
 ### Configuration System
 
 The application follows XDG Base Directory specification with override
@@ -69,7 +81,9 @@ Production layout:
 
 ~/.local/share/obol/     # Persistent data (k3d volume mount: /data in nodes)
 
-~/.local/state/obol/     # Runtime state (logs)
+~/.local/state/obol/     # Runtime state
+  └── {cluster-id}/
+      └── 2025-10-15.log # Date-based log files (JSON)
 ```
 
 Development layout:
@@ -83,7 +97,9 @@ Development layout:
   │       ├── .stack-id      # Petname-generated stack identifier
   │       └── kubeconfig.yaml # Exported stack kubeconfig
   ├── data/              # Local persistent data (k3d volume mount: /data in nodes)
-  └── state/             # Local runtime state (logs)
+  └── state/             # Local runtime state
+      └── {cluster-id}/
+          └── 2025-10-15.log # Date-based log files (JSON)
 ```
 
 ## Running Locally
@@ -128,6 +144,7 @@ obol stack up
 - **Image**: rancher/k3s:v1.31.4-k3s1
 - **Unique naming**: Each stack gets petname-generated ID (e.g.,
   `obol-stack-adorable-hippo`)
+- **Container labels**: `obol.cluster-id` label applied to all containers for tracking
 - **Volume mounts**: `$OBOL_DATA_DIR:/data` mounted on all nodes
 - **Ports**: 8080:80, 8443:443 via load balancer
 - **Feature gates**: KubeletInUserNamespace=true (fixes /dev/kmsg permission
@@ -169,6 +186,9 @@ focus:
 5. Data directory must be absolute path for k3d volume mounts
 6. Passthrough commands check kubeconfig exists before delegating to binaries
 7. Version info injected at build time via ldflags (VERSION file + git metadata)
+8. All subprocess execution should use `executor.Executor` for consistent logging
+9. Logging requires cluster ID context - use `logging.NewSlogLogger()` with `LoggerConfig`
+10. Log files are date-based and shared across all sessions on the same day
 
 ### Build System
 
