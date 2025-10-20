@@ -102,7 +102,7 @@ func main() {
 			// },
 			// TODO: Implement ai command
 			// {
-			//     Name:      "ai",
+			//     Name:      "agent",
 			//     Usage:     "AI-assisted cluster debugging",
 			//     ArgsUsage: "<prompt>",
 			//     Action: func(c *cli.Context) error {
