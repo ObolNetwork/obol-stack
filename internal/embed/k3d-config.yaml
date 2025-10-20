@@ -43,6 +43,11 @@ options:
         nodeFilters:
           - server:*
   runtime:
+    # Apply cluster_id as a label to all containers for tracking
+    labels:
+      - label: obol.cluster-id={{CLUSTER_ID}}
+        nodeFilters:
+          - all
     # Increase file descriptor limits to prevent "too many open files" errors
     ulimits:
       - name: nofile

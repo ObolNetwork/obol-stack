@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
@@ -375,19 +377,82 @@ GLOBAL OPTIONS:
 			//         {Name: "delete", Usage: "Delete an application"},
 			//     },
 			// },
-			// TODO: Implement ai command
-			// {
-			//     Name:      "agent",
-			//     Usage:     "AI-assisted cluster debugging",
-			//     ArgsUsage: "<prompt>",
-			//     Action: func(c *cli.Context) error {
-			//         if c.NArg() == 0 {
-			//             return fmt.Errorf("prompt required")
-			//         }
-			//         fmt.Printf("AI prompt: %s - not yet implemented\n", c.Args().First())
-			//         return nil
-			//     },
-			// },
+			{
+				Name:  "app",
+				Usage: "Manage applications",
+				Subcommands: []*cli.Command{
+					{
+						Name:      "list",
+						Usage:     "List available applications",
+						ArgsUsage: " ",
+						Action: func(c *cli.Context) error {
+							return app.List(cfg, embed.GetApplicationsFS())
+						},
+					},
+					{
+						Name:      "install",
+						Usage:     "Install an application",
+						ArgsUsage: "<app-name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Force overwrite if application already exists",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Install(cfg, embed.GetApplicationsFS(), appName, c.Bool("force"))
+						},
+					},
+					{
+						Name:      "edit",
+						Usage:     "Edit application values.yaml",
+						ArgsUsage: "<app-name>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Edit(cfg, appName)
+						},
+					},
+					{
+						Name:      "sync",
+						Usage:     "Sync application to cluster (apply changes)",
+						ArgsUsage: "<app-name>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Sync(cfg, appName)
+						},
+					},
+					{
+						Name:      "delete",
+						Usage:     "Delete application and remove from cluster",
+						ArgsUsage: "<app-name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Skip confirmation prompt",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("application name required")
+							}
+							appName := c.Args().First()
+							return app.Delete(cfg, appName, c.Bool("force"))
+						},
+					},
+				},
+			},
 		},
 	}
 

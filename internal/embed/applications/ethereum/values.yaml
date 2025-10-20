@@ -1,0 +1,416 @@
+global:
+  main:
+    network: hoodi
+    engineEndpoint: http://{{ .Release.Name }}-execution:8551
+    rpcEndpoint: http://{{ .Release.Name }}-execution:8545
+    wsEndpoint: ws://{{ .Release.Name }}-execution:8546
+    beaconEndpoint: http://{{ .Release.Name }}-beacon:5052
+  checkpointSync:
+    enabled: true
+    addresses:
+      mainnet: https://mainnet-checkpoint-sync.attestant.io
+      sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
+      holesky: https://checkpoint-sync.holesky.ethpandaops.io
+      hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+  clientArgs:
+    networks:
+      mainnet:
+        execution:
+          besu: []
+          erigon: []
+          ethereumjs: []
+          geth: []
+          nethermind: []
+          reth: []
+        consensus:
+          grandine: []
+          lighthouse: []
+          lodestar: []
+          nimbus: []
+          prysm: []
+          teku: []
+      sepolia:
+        execution:
+          besu:
+            - --network=sepolia
+          erigon:
+            - --chain=sepolia
+          ethereumjs:
+            - --network=sepolia
+          geth:
+            - --sepolia
+          nethermind:
+            - --config=sepolia
+          reth:
+            - --chain=sepolia
+        consensus:
+          grandine:
+            - --network=sepolia
+          lighthouse:
+            - --network=sepolia
+          lodestar:
+            - --network=sepolia
+          nimbus:
+            - --network=sepolia
+          prysm:
+            - --sepolia
+          teku:
+            - --network=sepolia
+      holesky:
+        execution:
+          besu:
+            - --network=holesky
+          erigon:
+            - --chain=holesky
+          ethereumjs:
+            - --network=holesky
+          geth:
+            - --holesky
+            - --syncmode=snap
+          nethermind:
+            - --config=holesky
+          reth:
+            - --chain=holesky
+        consensus:
+          grandine:
+            - --network=holesky
+          lighthouse:
+            - --network=holesky
+          lodestar:
+            - --network=holesky
+          nimbus:
+            - --network=holesky
+          prysm:
+            - --holesky
+          teku:
+            - --network=holesky
+      hoodi:
+        execution:
+          besu:
+            - --network=hoodi
+          erigon:
+            - --chain=hoodi
+          ethereumjs:
+            - --network=hoodi
+          geth:
+            - --hoodi
+          nethermind:
+            - --config=hoodi
+          reth:
+            - --chain=hoodi
+        consensus:
+          grandine:
+            - --network=hoodi
+          lighthouse:
+            - --network=hoodi
+          lodestar:
+            - --network=hoodi
+          nimbus:
+            - --network=hoodi
+          prysm:
+            - --hoodi
+          teku:
+            - --network=hoodi
+
+
+########################
+###
+###  Execution clients
+###
+########################
+
+besu:
+  enabled: false
+  nameOverride: execution
+  httpPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.besu }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+erigon:
+  enabled: false
+  nameOverride: execution
+  httpPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.erigon }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+ethereumjs:
+  enabled: false
+  nameOverride: execution
+  rpcPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.ethereumjs }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+geth:
+  enabled: true
+  nameOverride: execution
+  httpPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.geth }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+nethermind:
+  enabled: false
+  nameOverride: execution
+  httpPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.nethermind }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+reth:
+  enabled: false
+  nameOverride: execution
+  httpPort: 8545
+  wsPort: 8546
+  p2pPort: 30303
+  extraArgs:
+    - >-
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range $i, $v := .execution.reth }}
+        {{- if (eq $i 0) }}
+        {{- $v }}
+        {{- else }}
+        {{ $v }}
+        {{- end }}
+        {{- end -}}
+      {{- end }}
+
+########################
+###
+###  Consensus clients
+###
+########################
+
+grandine:
+  enabled: false
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --eth1-rpc-urls={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.grandine }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+lighthouse:
+  enabled: true
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --execution-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.lighthouse }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+teku:
+  enabled: false
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --ee-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.teku }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+lodestar:
+  enabled: false
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --execution.urls={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.lodestar }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+prysm:
+  enabled: false
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --execution-endpoint={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.prysm }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+nimbus:
+  enabled: false
+  nameOverride: beacon
+  httpPort: 5052
+  p2pPort: 9000
+  checkpointSync:
+    enabled: "{{ default .Values.global.checkpointSync.enabled false }}"
+    url: "{{ index .Values.global.checkpointSync.addresses .Values.global.main.network }}"
+    network: "{{ .Values.global.main.network }}"
+  extraArgs:
+    - >-
+      --web3-url={{ tpl .Values.global.main.engineEndpoint . }}
+      {{- with( index .Values.global.clientArgs.networks .Values.global.main.network ) }}
+        {{- range .consensus.nimbus }}
+        {{ . }}
+        {{- end -}}
+      {{- end -}}
+
+########################
+###
+###  Monitoring
+###
+########################
+
+ethereum-metrics-exporter:
+  enabled: true
+  nameOverride: metrics-exporter
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+  config:
+    consensus:
+      enabled: true
+      url: "{{ tpl  .Values.global.main.beaconEndpoint . }}"
+      name: consensus-client
+    execution:
+      enabled: true
+      url: "{{ tpl  .Values.global.main.rpcEndpoint . }}"
+      name: execution-client
+      modules:
+        - eth
+        - net
+        - web3
+
+xatu-sentry:
+  enabled: false
+  nameOverride: xatu-sentry
+  config:
+    logging: "info"
+    metricsAddr: ":9090"
+    name: "{{ .Release.Name }}"
+    ethereum:
+      beaconNodeAddress: "{{ tpl  .Values.global.main.beaconEndpoint . }}"
+    execution:
+      wsAddress: "{{ tpl  .Values.global.main.wsEndpoint . }}"
+      rpcAddress: "{{ tpl  .Values.global.main.rpcEndpoint . }}"
+    outputs:
+    - name: basic
+      type: http
+      config:
+        address: http://localhost:8080
+        headers:
+          authorization: Someb64Value
+
+tracoor-agent:
+  enabled: false
+  nameOverride: tracoor-agent
+  config:
+    logging: "info"
+    metricsAddr: ":9090"
+    pprofAddr: ":6065"
+    name: "{{ .Release.Name }}"
+    ethereum:
+      beacon:
+        nodeAddress: "{{ tpl  .Values.global.main.beaconEndpoint . }}"
+      execution:
+        nodeAddress: "{{ tpl  .Values.global.main.rpcEndpoint . }}"
+
+    indexer:
+      address: localhost:8081 # GRPC port of tracoor-server
+
+    store:
+      type: s3
+      config:
+        region: "us-east-1"
+        endpoint: http://localhost:9000
+        bucket_name: tracoor

@@ -79,7 +79,7 @@ func Init(cfg *config.Config, force bool) error {
 
 	// Copy embedded applications directory
 	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
-	if err := embed.CopyApplications(applicationsDestDir); err != nil {
+	if err := embed.CopyDefaultApplications(applicationsDestDir); err != nil {
 		return fmt.Errorf("failed to copy applications: %w", err)
 	}
 	l.Info(fmt.Sprintf("Applications copied to: %s", applicationsDestDir))
