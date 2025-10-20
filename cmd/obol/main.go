@@ -37,16 +37,16 @@ VERSION:
 
 COMMANDS:
    Stack Lifecycle:
-     stack init      Initialize cluster configuration
+     stack init      Initialize stack configuration
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
      stack purge     Delete stack and all data
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
-     kubectl         Run kubectl with cluster kubeconfig (passthrough)
-     helm            Run helm with cluster kubeconfig (passthrough)
-     helmfile        Run helmfile with cluster kubeconfig (passthrough)
-     k9s             Run k9s with cluster kubeconfig (passthrough)
+     kubectl         Run kubectl with stack kubeconfig (passthrough)
+     helm            Run helm with stack kubeconfig (passthrough)
+     helmfile        Run helmfile with stack kubeconfig (passthrough)
+     k9s             Run k9s with stack kubeconfig (passthrough)
 
    Other:
      version         Show detailed version information
@@ -71,7 +71,7 @@ GLOBAL OPTIONS:
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize cluster configuration",
+						Usage: "Initialize stack configuration",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
@@ -111,14 +111,14 @@ GLOBAL OPTIONS:
 			// ============================================================
 			{
 				Name:            "kubectl",
-				Usage:           "Run kubectl with cluster kubeconfig (passthrough)",
+				Usage:           "Run kubectl with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -140,14 +140,14 @@ GLOBAL OPTIONS:
 			},
 			{
 				Name:            "helm",
-				Usage:           "Run helm with cluster kubeconfig (passthrough)",
+				Usage:           "Run helm with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					helmPath := filepath.Join(cfg.BinDir, "helm")
@@ -169,14 +169,14 @@ GLOBAL OPTIONS:
 			},
 			{
 				Name:            "helmfile",
-				Usage:           "Run helmfile with cluster kubeconfig (passthrough)",
+				Usage:           "Run helmfile with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
@@ -198,14 +198,14 @@ GLOBAL OPTIONS:
 			},
 			{
 				Name:            "k9s",
-				Usage:           "Run k9s with cluster kubeconfig (passthrough)",
+				Usage:           "Run k9s with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("cluster not running, use 'obol cluster up' first")
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					k9sPath := filepath.Join(cfg.BinDir, "k9s")

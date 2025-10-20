@@ -1,7 +1,7 @@
 apiVersion: k3d.io/v1alpha5
 kind: Simple
 metadata:
-  name: obol-stack-{{CLUSTER_ID}}
+  name: obol-stack-{{STACK_ID}}
 # Maximize memory availability for cluster
 servers: 1
 agents: 0

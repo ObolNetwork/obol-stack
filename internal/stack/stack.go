@@ -15,75 +15,75 @@ import (
 const (
 	k3dConfigFile  = "k3d.yaml"
 	kubeconfigFile = "kubeconfig.yaml"
-	clusterIDFile  = ".cluster-id"
+	stackIDFile    = ".stack-id"
 )
 
-// Init initializes the cluster configuration
+// Init initializes the stack configuration
 func Init(cfg *config.Config, force bool) error {
-	// Create flat cluster config directory
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	k3dConfigPath := filepath.Join(clusterConfigDir, k3dConfigFile)
+	// Create flat stack config directory
+	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	k3dConfigPath := filepath.Join(stackConfigDir, k3dConfigFile)
 
 	// Check if config already exists
 	if _, err := os.Stat(k3dConfigPath); err == nil {
 		if !force {
-			return fmt.Errorf("cluster configuration already exists at %s\nUse --force to overwrite", k3dConfigPath)
+			return fmt.Errorf("stack configuration already exists at %s\nUse --force to overwrite", k3dConfigPath)
 		}
-		fmt.Printf("Overwriting existing cluster configuration at %s\n", k3dConfigPath)
+		fmt.Printf("Overwriting existing stack configuration at %s\n", k3dConfigPath)
 	}
 
-	if err := os.MkdirAll(clusterConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cluster config dir: %w", err)
+	if err := os.MkdirAll(stackConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create stack config dir: %w", err)
 	}
 
-	// Generate unique cluster ID
-	clusterID := petname.Generate(2, "-")
+	// Generate unique stack ID
+	stackID := petname.Generate(2, "-")
 
-	// Replace placeholder in k3d config with actual cluster ID
-	k3dConfig := strings.ReplaceAll(embed.K3dConfig, "{{CLUSTER_ID}}", clusterID)
+	// Replace placeholder in k3d config with actual stack ID
+	k3dConfig := strings.ReplaceAll(embed.K3dConfig, "{{STACK_ID}}", stackID)
 
-	// Write k3d config with cluster ID to destination
+	// Write k3d config with stack ID to destination
 	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
-	// Store cluster ID for later use
-	clusterIDPath := filepath.Join(clusterConfigDir, clusterIDFile)
-	if err := os.WriteFile(clusterIDPath, []byte(clusterID), 0644); err != nil {
-		return fmt.Errorf("failed to write cluster ID: %w", err)
+	// Store stack ID for later use
+	stackIDPath := filepath.Join(stackConfigDir, stackIDFile)
+	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
+		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
-	fmt.Printf("✓ Initialized cluster configuration at %s\n", k3dConfigPath)
-	fmt.Printf("✓ Cluster ID: %s\n", clusterID)
+	fmt.Printf("✓ Initialized stack configuration at %s\n", k3dConfigPath)
+	fmt.Printf("✓ Stack ID: %s\n", stackID)
 	return nil
 }
 
 // Up starts the k3d cluster
 func Up(cfg *config.Config) error {
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	k3dConfigPath := filepath.Join(clusterConfigDir, k3dConfigFile)
-	kubeconfigPath := filepath.Join(clusterConfigDir, kubeconfigFile)
+	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	k3dConfigPath := filepath.Join(stackConfigDir, k3dConfigFile)
+	kubeconfigPath := filepath.Join(stackConfigDir, kubeconfigFile)
 
 	// Check if config exists
 	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster config not found, run 'obol cluster init' first")
+		return fmt.Errorf("stack config not found, run 'obol stack init' first")
 	}
 
-	// Get cluster ID and full cluster name
-	clusterID := getClusterID(cfg)
-	if clusterID == "" {
-		return fmt.Errorf("cluster ID not found, run 'obol cluster init' first")
+	// Get stack ID and full stack name
+	stackID := getStackID(cfg)
+	if stackID == "" {
+		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
-	clusterName := getClusterName(cfg)
+	stackName := getStackName(cfg)
 
-	// Check if cluster already exists using cluster list
+	// Check if stack already exists using cluster list
 	cmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
 	output, _ := cmd.Output()
-	if clusterExists(string(output), clusterName) {
-		return fmt.Errorf("cluster '%s' already exists, use 'obol cluster down' to stop it first", clusterName)
+	if stackExists(string(output), stackName) {
+		return fmt.Errorf("stack '%s' already exists, use 'obol stack down' to stop it first", stackName)
 	}
 
-	fmt.Printf("Starting cluster '%s' [%s]...\n", clusterName, clusterID)
+	fmt.Printf("Starting stack '%s' [%s]...\n", stackName, stackID)
 
 	// Get absolute path to data directory for k3d volume mount
 	dataDir := cfg.DataDir
@@ -119,7 +119,7 @@ func Up(cfg *config.Config) error {
 	// Export kubeconfig
 	cmd = exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"kubeconfig", "get", clusterName,
+		"kubeconfig", "get", stackName,
 	)
 	kubeconfigData, err := cmd.Output()
 	if err != nil {
@@ -130,79 +130,79 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	fmt.Printf("✓ Cluster started successfully\n")
-	if clusterID != "" {
-		fmt.Printf("✓ Cluster ID: %s\n", clusterID)
+	fmt.Printf("✓ Stack started successfully\n")
+	if stackID != "" {
+		fmt.Printf("✓ Stack ID: %s\n", stackID)
 	}
 	fmt.Printf("✓ Kubeconfig saved to %s\n", kubeconfigPath)
-	fmt.Printf("\nTo use kubectl with this cluster:\n")
+	fmt.Printf("\nTo use kubectl with this stack:\n")
 	fmt.Printf("  export KUBECONFIG=%s\n", kubeconfigPath)
 	return nil
 }
 
 // Down stops the k3d cluster
 func Down(cfg *config.Config) error {
-	clusterID := getClusterID(cfg)
-	if clusterID == "" {
-		return fmt.Errorf("cluster ID not found, cluster may not be initialized")
+	stackID := getStackID(cfg)
+	if stackID == "" {
+		return fmt.Errorf("stack ID not found, stack may not be initialized")
 	}
-	clusterName := getClusterName(cfg)
+	stackName := getStackName(cfg)
 
-	fmt.Printf("Stopping cluster '%s' [%s]...\n", clusterName, clusterID)
+	fmt.Printf("Stopping stack '%s' [%s]...\n", stackName, stackID)
 
 	cmd := exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "delete", clusterName,
+		"cluster", "delete", stackName,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop cluster: %w", err)
+		return fmt.Errorf("failed to stop stack: %w", err)
 	}
 
-	fmt.Printf("✓ Cluster stopped successfully\n")
+	fmt.Printf("✓ Stack stopped successfully\n")
 	return nil
 }
 
-// Purge deletes the cluster and all data
+// Purge deletes the stack and all data
 func Purge(cfg *config.Config) error {
-	// Stop cluster first
+	// Stop stack first
 	if err := Down(cfg); err != nil {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
-	// Remove cluster config directory
-	clusterConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
-	if err := os.RemoveAll(clusterConfigDir); err != nil {
-		return fmt.Errorf("failed to remove cluster config: %w", err)
+	// Remove stack config directory
+	stackConfigDir := filepath.Join(cfg.ConfigDir, "cluster")
+	if err := os.RemoveAll(stackConfigDir); err != nil {
+		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
 
-	fmt.Printf("✓ Cluster configuration purged\n")
+	fmt.Printf("✓ Stack configuration purged\n")
 	return nil
 }
 
-// clusterExists checks if cluster name exists in k3d cluster list output
-func clusterExists(output, name string) bool {
-	// Check if the cluster name appears in the output
+// stackExists checks if stack name exists in k3d cluster list output
+func stackExists(output, name string) bool {
+	// Check if the stack name appears in the output
 	return strings.Contains(output, name)
 }
 
-// getClusterID reads the stored cluster ID
-func getClusterID(cfg *config.Config) string {
-	clusterIDPath := filepath.Join(cfg.ConfigDir, "cluster", clusterIDFile)
-	data, err := os.ReadFile(clusterIDPath)
+// getStackID reads the stored stack ID
+func getStackID(cfg *config.Config) string {
+	stackIDPath := filepath.Join(cfg.ConfigDir, "cluster", stackIDFile)
+	data, err := os.ReadFile(stackIDPath)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
 }
 
-// getClusterName returns the full cluster name (obol-stack-{clusterid})
-func getClusterName(cfg *config.Config) string {
-	clusterID := getClusterID(cfg)
-	if clusterID == "" {
+// getStackName returns the full stack name (obol-stack-{stackid})
+func getStackName(cfg *config.Config) string {
+	stackID := getStackID(cfg)
+	if stackID == "" {
 		return ""
 	}
-	return fmt.Sprintf("obol-stack-%s", clusterID)
+	return fmt.Sprintf("obol-stack-%s", stackID)
 }
