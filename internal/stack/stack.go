@@ -3,12 +3,12 @@ package stack
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -85,7 +85,6 @@ func Up(cfg *config.Config) error {
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
-	stackName := getStackName(cfg)
 
 	// Create logger and executor
 	logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
@@ -94,10 +93,19 @@ func Up(cfg *config.Config) error {
 	})
 	defer cleanup()
 
-	// Check if stack already exists using cluster list
-	cmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
-	output, _ := cmd.Output()
-	if stackExists(string(output), stackName) {
+	stackName := getStackName(cfg)
+
+	// Create executor for subprocess calls with the logger
+	exec := executor.New(logger)
+	defer exec.Close()
+
+	// Check if cluster already exists using cluster list
+	listCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
+	listCmdOutput, err := listCmd.Output()
+	if err != nil {
+		return fmt.Errorf("k3d list command failed: %w", err)
+	}
+	if stackExists(string(listCmdOutput), stackName) {
 		return fmt.Errorf("stack '%s' already exists, use 'obol stack down' to stop it first", stackName)
 	}
 
@@ -114,31 +122,30 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Create cluster using k3d config
-	cmd = exec.Command(
+	// Create cluster using k3d config with custom name
+	createCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "k3d"),
 		"cluster", "create", stackName,
 		"--config", k3dConfigPath,
 		"--kubeconfig-update-default=false",
-		"--verbose",
 	)
-	// Set OBOL_DATA_DIR for k3d config expansion (must be absolute path)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Set environment variables for k3d config expansion (must be absolute paths)
+	createCmd.SetEnv(append(os.Environ(),
+		fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir),
+	))
 
 	logger.Info("Using data directory", "path", absDataDir)
 
-	if err := cmd.Run(); err != nil {
+	if err := createCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
 
 	// Export kubeconfig
-	cmd = exec.Command(
+	kubeconfigCmd := exec.Command(
 		filepath.Join(cfg.BinDir, "k3d"),
 		"kubeconfig", "get", stackName,
 	)
-	kubeconfigData, err := cmd.Output()
+	kubeconfigData, err := kubeconfigCmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
@@ -170,17 +177,18 @@ func Down(cfg *config.Config) error {
 	})
 	defer cleanup()
 
+	exec := executor.New(logger)
+	defer exec.Close()
+
 	logger.Info("Stopping stack", "name", stackName, "id", stackID)
 
-	cmd := exec.Command(
+	deleteCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "k3d"),
 		"cluster", "delete", stackName,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop stack: %w", err)
+	if err := deleteCmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop cluster: %w", err)
 	}
 
 	logger.Info("Stack stopped successfully")
@@ -189,11 +197,6 @@ func Down(cfg *config.Config) error {
 
 // Purge deletes the cluster and all data (except binaries)
 func Purge(cfg *config.Config) error {
-	// Stop stack first
-	if err := Down(cfg); err != nil {
-		// Warning will be logged by Down, just continue
-	}
-
 	// Get stack_id (optional - may not exist if stack was never initialized)
 	stackID := getStackID(cfg)
 
@@ -202,6 +205,11 @@ func Purge(cfg *config.Config) error {
 		StackID:  stackID,
 	})
 	defer cleanup()
+
+	// Stop cluster first
+	if err := Down(cfg); err != nil {
+		logger.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
+	}
 
 	// Remove stack config directory
 	stackConfigDir := filepath.Join(cfg.ConfigDir)

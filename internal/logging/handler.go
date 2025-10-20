@@ -134,8 +134,24 @@ func (h *ConsoleHandler) Handle(ctx context.Context, r slog.Record) error {
 		prefix = prefixInfo
 	}
 
-	// Write: prefix + space + message
-	fmt.Fprintf(h.w, "%s %s\n", prefix, r.Message)
+	// Build message with attributes
+	msg := r.Message
+
+	// Collect all attributes
+	var attrs []string
+	r.Attrs(func(a slog.Attr) bool {
+		// Format key=value
+		attrs = append(attrs, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+		return true
+	})
+
+	// Append attributes to message if present
+	if len(attrs) > 0 {
+		msg = msg + " " + strings.Join(attrs, " ")
+	}
+
+	// Write: prefix + space + message + attributes
+	fmt.Fprintf(h.w, "%s %s\n", prefix, msg)
 	return nil
 }
 
