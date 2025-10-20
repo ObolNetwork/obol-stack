@@ -23,6 +23,10 @@ logs/
 dist/
 build/
 .cache/
+.workspace/
+
+# Go binary
+/obol
 
 # Dependencies
 /node_modules/
@@ -33,9 +37,12 @@ build/
 *.env
 .env.*
 !.env.example
+.envrc.local
 
 # Temporary files
 *.tmp
 tmp/
 temp/
 .tmp/
+
+.direnv/

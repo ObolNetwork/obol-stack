@@ -1,0 +1,17 @@
+# Local environment overrides (copy to .envrc.local)
+# This file is for local development customizations and is gitignored
+
+# Example: Override development mode
+# export OBOL_DEVELOPMENT=false
+
+# Example: Add workspace bin to PATH
+# PATH_add .workspace/bin
+
+# Example: Override config directories
+# export OBOL_CONFIG_DIR=/custom/config/path
+# export OBOL_BIN_DIR=/custom/bin/path
+# export OBOL_STATE_DIR=/custom/state/path
+
+# Example: Set custom XDG directories
+# export XDG_CONFIG_HOME=/custom/xdg/config
+# export XDG_DATA_HOME=/custom/xdg/data
