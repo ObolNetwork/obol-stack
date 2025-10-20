@@ -133,7 +133,7 @@ install_dev_wrapper() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Run the CLI
-cd "$SCRIPT_DIR" && exec go run ./cmd/obol "$@"
+cd "$SCRIPT_DIR" && exec go run -a ./cmd/obol "$@"
 EOF
 
 	chmod +x "$OBOL_BIN_DIR/obol"

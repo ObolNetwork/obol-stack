@@ -26,10 +26,14 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
    - Supported platforms: Linux, Darwin
    - Supported architectures: amd64, arm64
 
-2. **obol CLI** (cmd/obol/) - Go-based cluster management tool
-   - Written in Go
-   - Abstracts k3d cluster lifecycle management
-   - Manages installation of applications via Helm/Helmfile
+2. **obol CLI** (cmd/obol/) - Go-based stack management tool
+   - Built with urfave/cli/v2 framework
+   - Commands grouped: stack lifecycle, passthrough k8s tools, utilities
+   - Stack lifecycle: `init`, `up`, `down`, `purge`
+   - Passthrough tools: `kubectl`, `helm`, `helmfile`, `k9s` (auto-set
+     KUBECONFIG)
+   - Cluster package: `internal/cluster/cluster.go` handles k3d operations
+   - Embedded config: k3d config template in `internal/embed/k3d-config.yaml`
 
 ### Configuration System
 
@@ -54,11 +58,16 @@ See: `internal/config/config.go`
 Production layout:
 
 ```
-~/.config/obol/          # Configuration files
+~/.config/obol/
+  ├── cluster/           # Stack-specific config
+  │   ├── k3d.yaml       # Generated k3d config with unique stack ID
+  │   ├── .stack-id      # Petname-generated stack identifier
+  │   └── kubeconfig.yaml # Exported stack kubeconfig
+  └── [other config files]
 
 ~/.local/bin/            # obol binary and dependencies
 
-~/.local/share/obol/     # Persistent data (volumes)
+~/.local/share/obol/     # Persistent data (k3d volume mount: /data in nodes)
 
 ~/.local/state/obol/     # Runtime state (logs)
 ```
@@ -68,9 +77,13 @@ Development layout:
 ```
 .workspace/
   ├── bin/               # Local binaries
-  ├── config/            # Local configs
-  ├── data/              # Local persistent data
-  └── state/             # Local runtime state
+  ├── config/
+  │   └── cluster/       # Stack-specific config
+  │       ├── k3d.yaml       # Generated k3d config with unique stack ID
+  │       ├── .stack-id      # Petname-generated stack identifier
+  │       └── kubeconfig.yaml # Exported stack kubeconfig
+  ├── data/              # Local persistent data (k3d volume mount: /data in nodes)
+  └── state/             # Local runtime state (logs)
 ```
 
 ## Running Locally
@@ -103,18 +116,40 @@ OBOL_RELEASE=latest ./obolup.sh
 OBOL_RELEASE=v0.1.0 ./obolup.sh
 
 # Run commands
-obol cluster init
-obol cluster up
+obol stack init
+obol stack up
 ```
+
+## Stack Architecture
+
+### k3d Configuration
+
+- **Topology**: 1 server + 3 agent nodes (fault tolerance and pod distribution)
+- **Image**: rancher/k3s:v1.31.4-k3s1
+- **Unique naming**: Each stack gets petname-generated ID (e.g.,
+  `obol-stack-adorable-hippo`)
+- **Volume mounts**: `$OBOL_DATA_DIR:/data` mounted on all nodes
+- **Ports**: 8080:80, 8443:443 via load balancer
+- **Feature gates**: KubeletInUserNamespace=true (fixes /dev/kmsg permission
+  issues)
+- **Ulimits**: nofile 26677 (prevents "too many open files")
+
+### Stack Lifecycle
+
+1. **Init**: Generates k3d.yaml with unique stack ID using petname library
+2. **Up**: Creates k3d stack, exports kubeconfig to `cluster/kubeconfig.yaml`
+3. **Down**: Deletes k3d stack (preserves config)
+4. **Purge**: Removes stack and all config files
+
+See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
 
 ## Key Design Principles
 
-1. **Local-first**: Designed to run entirely on the user's local machine using
-   k3d
-2. **Simplified UX**: Abstract Kubernetes complexity behind simple CLI commands
+1. **Local-first**: Runs entirely on local machine using k3d
+2. **Simplified UX**: Abstracts Kubernetes complexity behind simple CLI commands
 3. **XDG-compliant**: Follows Linux filesystem standards for configuration
-4. **Application-centric**: Applications are tailored Helm charts/Helmfiles for
-   the environment
+4. **Unique stacks**: Petname-generated IDs prevent naming conflicts
+5. **Passthrough pattern**: Wraps k8s tools with auto-configured KUBECONFIG
 
 ## Legacy Structure
 
@@ -126,15 +161,20 @@ focus:
 
 ## Important Notes for Development
 
-1. Always check if running in development mode via `OBOL_DEVELOPMENT`
-   environment variable
-2. The obol CLI is designed for non-developers; advanced users should use
-   kubectl/helm directly
-3. Applications are environment-specific Helm charts, not generic charts
-4. All persistent data should use `DataDir` (XDG_DATA_HOME), logs should use
-   `StateDir` (XDG_STATE_HOME)
-5. The stack provides a local L1 RPC endpoint at
-   `http://rpc.l1.cluster.svc.local/rpc/mainnet`
+1. Check `OBOL_DEVELOPMENT` environment variable for dev mode detection
+2. Stack ID stored in `.stack-id` file, used for unique k3d stack names
+3. Kubeconfig path: `$OBOL_CONFIG_DIR/cluster/kubeconfig/kubeconfig.yaml`
+   (legacy) or `$OBOL_CONFIG_DIR/cluster/kubeconfig.yaml` (current)
+4. k3d config uses `{{STACK_ID}}` placeholder, replaced during `stack init`
+5. Data directory must be absolute path for k3d volume mounts
+6. Passthrough commands check kubeconfig exists before delegating to binaries
+7. Version info injected at build time via ldflags (VERSION file + git metadata)
+
+### Build System
+
+- **justfile**: Task runner with `install`, `build`, `up`, `down` commands
+- **VERSION**: Semver file (0.0.0) used by `just build` for ldflags
+- **Go build**: Injects version, commit, build time, dirty flag into binary
 
 ## Updating This File
 
@@ -147,3 +187,8 @@ maintain accuracy and relevance.
 - Bootstrap script: `obolup.sh`
 - CLI entrypoint: `cmd/obol/main.go`
 - Config system: `internal/config/config.go`
+- Stack management: `internal/stack/stack.go`
+- Embedded assets: `internal/embed/embed.go`, `internal/embed/k3d-config.yaml`
+- Build tasks: `justfile`
+- Version tracking: `VERSION`, `internal/version/version.go`
+- Example manifests: `examples/simple-persistence-test.yaml`

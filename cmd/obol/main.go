@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
@@ -14,19 +17,54 @@ func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
 
+	// Custom help template with command sections
+	cli.AppHelpTemplate = `
+   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗
+  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
+  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝
+  ██║   ██║██╔══██╗██║   ██║██║         ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
+  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
+   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
+
+NAME:
+   {{.Name}}{{if .Usage}} - {{.Usage}}{{end}}
+
+USAGE:
+   {{if .UsageText}}{{.UsageText}}{{else}}{{.HelpName}} {{if .VisibleFlags}}[global options]{{end}}{{if .Commands}} command [command options]{{end}}{{end}}
+
+VERSION:
+   {{.Version}}
+
+COMMANDS:
+   Stack Lifecycle:
+     stack init      Initialize stack configuration
+     stack up        Start the Obol Stack
+     stack down      Stop the Obol Stack
+     stack purge     Delete stack and all data
+
+   Kubernetes Tools (with auto-configured KUBECONFIG):
+     kubectl         Run kubectl with stack kubeconfig (passthrough)
+     helm            Run helm with stack kubeconfig (passthrough)
+     helmfile        Run helmfile with stack kubeconfig (passthrough)
+     k9s             Run k9s with stack kubeconfig (passthrough)
+
+   Other:
+     version         Show detailed version information
+     help, h         Shows a list of commands or help for one command
+{{if .VisibleFlags}}
+GLOBAL OPTIONS:
+   {{range $index, $option := .VisibleFlags}}{{if $index}}
+   {{end}}{{$option}}{{end}}{{end}}
+`
+
 	app := &cli.App{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
 		Version: version.Full(),
 		Commands: []*cli.Command{
-			{
-				Name:  "version",
-				Usage: "Show detailed version information",
-				Action: func(c *cli.Context) error {
-					fmt.Print(version.BuildInfo())
-					return nil
-				},
-			},
+			// ============================================================
+			// Obol Stack Lifecycle Commands
+			// ============================================================
 			{
 				Name:  "stack",
 				Usage: "Manage Obol Stack lifecycle",
@@ -34,58 +72,168 @@ func main() {
 					{
 						Name:  "init",
 						Usage: "Initialize stack configuration",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Force overwrite existing configuration",
+							},
+						},
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack init - not yet implemented")
-							fmt.Printf("Config dir: %s\n", cfg.ConfigDir)
-							fmt.Printf("Bin dir: %s\n", cfg.BinDir)
-							fmt.Printf("State dir: %s\n", cfg.StateDir)
-							return nil
+							return stack.Init(cfg, c.Bool("force"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack up - not yet implemented")
-							return nil
+							return stack.Up(cfg)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack down - not yet implemented")
-							return nil
+							return stack.Down(cfg)
 						},
 					},
 					{
 						Name:  "purge",
 						Usage: "Delete stack and all data",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Stack purge - not yet implemented")
-							return nil
+							return stack.Purge(cfg)
 						},
 					},
-					{
-						Name:  "connect",
-						Usage: "Connect to stack with k9s",
-						Action: func(c *cli.Context) error {
-							fmt.Println("Stack connect - not yet implemented")
-							return nil
-						},
-					},
-					{
-						Name:      "backup",
-						Usage:     "Backup persistent volume",
-						ArgsUsage: "<volume-name>",
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
-								return fmt.Errorf("volume name required")
-							}
-							fmt.Printf("Stack backup %s - not yet implemented\n", c.Args().First())
-							return nil
-						},
-					},
+				},
+			},
+			// ============================================================
+			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
+			// ============================================================
+			{
+				Name:            "kubectl",
+				Usage:           "Run kubectl with stack kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
+					}
+
+					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
+					// Check if kubectl exists
+					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
+						return fmt.Errorf("kubectl not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to kubectl
+					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helm",
+				Usage:           "Run helm with stack kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
+					}
+
+					helmPath := filepath.Join(cfg.BinDir, "helm")
+
+					// Check if helm exists
+					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
+						return fmt.Errorf("helm not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helm
+					cmd := exec.Command(helmPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "helmfile",
+				Usage:           "Run helmfile with stack kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
+					}
+
+					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
+
+					// Check if helmfile exists
+					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+						return fmt.Errorf("helmfile not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to helmfile
+					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			{
+				Name:            "k9s",
+				Usage:           "Run k9s with stack kubeconfig (passthrough)",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
+
+					// Check if kubeconfig exists
+					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
+					}
+
+					k9sPath := filepath.Join(cfg.BinDir, "k9s")
+
+					// Check if k9s exists
+					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
+						return fmt.Errorf("k9s not found in %s", cfg.BinDir)
+					}
+
+					// Pass all arguments to k9s
+					cmd := exec.Command(k9sPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+
+					return cmd.Run()
+				},
+			},
+			// ============================================================
+			// Utility Commands
+			// ============================================================
+			{
+				Name:  "version",
+				Usage: "Show detailed version information",
+				Action: func(c *cli.Context) error {
+					fmt.Print(version.BuildInfo())
+					return nil
 				},
 			},
 			// TODO: Implement app command
