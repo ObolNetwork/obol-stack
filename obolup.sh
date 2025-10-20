@@ -290,18 +290,47 @@ install_dependencies() {
 	done
 }
 
+# Prompt to update shell PATH
+# Returns 0 if PATH was configured, 1 otherwise
+update_shell_path() {
+	# Skip in development mode
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		PATH_CONFIGURED="true"
+		return 0
+	fi
+
+	# Check if OBOL_BIN_DIR is already in PATH
+	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
+		log_success "OBOL_BIN_DIR already in PATH"
+		PATH_CONFIGURED="true"
+		return 0
+	fi
+
+	# Prompt user to add to PATH
+	echo ""
+	log_info "OBOL_BIN_DIR not found in PATH"
+	echo ""
+	read -p "Add $OBOL_BIN_DIR to your shell configuration? [y/N] " -r
+	echo ""
+
+	if [[ $REPLY =~ ^[Yy]$ ]]; then
+		log_info "Add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+		echo ""
+		echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+		echo ""
+		PATH_CONFIGURED="false"
+		return 1
+	else
+		log_info "Skipped PATH update"
+		PATH_CONFIGURED="false"
+		return 1
+	fi
+}
+
 # Print post-install instructions
 print_instructions() {
 	echo ""
 	log_success "Obol Stack installation complete!"
-	echo ""
-	echo "Add the following to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
-	echo ""
-	echo "Then reload your shell or run:"
-	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 	echo ""
 	echo "Verify installation:"
 	echo ""
@@ -311,7 +340,6 @@ print_instructions() {
 	echo ""
 	echo "  obol cluster init"
 	echo "  obol cluster up"
-	echo "  obol cluster connect"
 	echo ""
 }
 
@@ -328,6 +356,7 @@ main() {
 	create_directories
 	install_obol_binary
 	install_dependencies
+	update_shell_path
 	print_instructions
 
 	echo ""
