@@ -114,7 +114,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run kubectl with cluster kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -143,7 +143,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run helm with cluster kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -172,7 +172,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run helmfile with cluster kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -201,7 +201,7 @@ GLOBAL OPTIONS:
 				Usage:           "Run k9s with cluster kubeconfig (passthrough)",
 				SkipFlagParsing: true,
 				Action: func(c *cli.Context) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig", "kubeconfig.yaml")
+					kubeconfigPath := filepath.Join(cfg.ConfigDir, "cluster", "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
