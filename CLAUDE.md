@@ -13,13 +13,18 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
 1. **obolup.sh** - Bootstrap installer script
    - Validates prerequisites (Docker daemon)
    - Creates XDG-compliant directory structure
-   - Installs the `obol` CLI binary and dependencies (k3d, kubectl, helm,
-     helmfile, k9s)
+   - Installs the `obol` CLI binary and dependencies with pinned versions:
+     - kubectl, helm, k3d, helmfile, k9s (binaries)
+     - helm-diff plugin (pinned for helm compatibility)
+   - Version constants defined at script top - update to upgrade all
+     installations
    - Supports two modes:
      - **Production mode**: Uses XDG Base Directory specification
        (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`, `~/.local/bin`)
      - **Development mode**: Uses local `.workspace/` directory (set via
        `OBOL_DEVELOPMENT=true`)
+   - Supported platforms: Linux, Darwin
+   - Supported architectures: amd64, arm64
 
 2. **obol CLI** (cmd/obol/) - Go-based cluster management tool
    - Written in Go
@@ -77,6 +82,7 @@ When `OBOL_DEVELOPMENT=true`, `./obolup.sh` installs a wrapper script at
 code changes are immediately reflected.
 
 **Development cycle:**
+
 ```bash
 # One-time setup (or when switching to dev mode)
 ./obolup.sh

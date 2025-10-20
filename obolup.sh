@@ -41,6 +41,15 @@ else
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$XDG_BIN_HOME}"
 fi
 
+# Pinned dependency versions
+# Update these versions to upgrade dependencies across all installations
+readonly KUBECTL_VERSION="1.31.0"
+readonly HELM_VERSION="3.16.2"
+readonly K3D_VERSION="5.7.4"
+readonly HELMFILE_VERSION="0.169.1"
+readonly K9S_VERSION="0.32.5"
+readonly HELM_DIFF_VERSION="3.9.11"
+
 # Logging functions
 log_info() {
 	echo -e "${BLUE}==>${NC} $1"
@@ -275,19 +284,362 @@ install_obol_binary() {
 	fi
 }
 
-# Download dependencies (stub for now)
-install_dependencies() {
-	log_info "Checking dependencies..."
+# Detect platform
+detect_platform() {
+	local platform
+	case "$(uname -s)" in
+	Linux*)
+		platform="linux"
+		;;
+	Darwin*)
+		platform="darwin"
+		;;
+	*)
+		log_error "Unsupported platform: $(uname -s)"
+		exit 1
+		;;
+	esac
+	echo "$platform"
+}
 
-	local deps=("k3d" "kubectl" "helm" "helmfile" "k9s")
+# Detect architecture
+detect_arch() {
+	local arch
+	case "$(uname -m)" in
+	x86_64 | amd64)
+		arch="amd64"
+		;;
+	aarch64 | arm64)
+		arch="arm64"
+		;;
+	*)
+		log_error "Unsupported architecture: $(uname -m)"
+		exit 1
+		;;
+	esac
+	echo "$arch"
+}
 
-	for dep in "${deps[@]}"; do
-		if command_exists "$dep"; then
-			log_success "$dep already installed"
-		else
-			log_warn "$dep not found (dependency installation not yet implemented)"
+# Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
+version_ge() {
+	local v1="$1"
+	local v2="$2"
+
+	# Remove 'v' prefix if present
+	v1="${v1#v}"
+	v2="${v2#v}"
+
+	# Simple version comparison using sort -V
+	if printf '%s\n%s\n' "$v2" "$v1" | sort -V -C 2>/dev/null; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+# Install kubectl
+install_kubectl() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/kubectl" ]]; then
+		current_version=$("$OBOL_BIN_DIR/kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
+	fi
+
+	# Use pinned version
+	local target_version="$KUBECTL_VERSION"
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "kubectl v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading kubectl from v$current_version to v$target_version..."
+	else
+		log_info "Installing kubectl v$target_version..."
+	fi
+
+	# Download kubectl
+	local download_url="https://dl.k8s.io/release/v${target_version}/bin/${platform}/${arch}/kubectl"
+
+	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/kubectl.tmp"; then
+		chmod +x "$OBOL_BIN_DIR/kubectl.tmp"
+		mv "$OBOL_BIN_DIR/kubectl.tmp" "$OBOL_BIN_DIR/kubectl"
+		log_success "kubectl v$target_version installed"
+	else
+		log_error "Failed to download kubectl"
+		rm -f "$OBOL_BIN_DIR/kubectl.tmp"
+		return 1
+	fi
+}
+
+# Install helm
+install_helm() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/helm" ]]; then
+		current_version=$("$OBOL_BIN_DIR/helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
+	fi
+
+	# Use pinned version
+	local target_version="$HELM_VERSION"
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "helm v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading helm from v$current_version to v$target_version..."
+	else
+		log_info "Installing helm v$target_version..."
+	fi
+
+	# Download and extract helm
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://get.helm.sh/helm-v${target_version}-${platform}-${arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/${platform}-${arch}/helm" "$OBOL_BIN_DIR/helm"
+		chmod +x "$OBOL_BIN_DIR/helm"
+		rm -rf "$tmp_dir"
+		log_success "helm v$target_version installed"
+	else
+		log_error "Failed to download helm"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
+# Install k3d
+install_k3d() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/k3d" ]]; then
+		current_version=$("$OBOL_BIN_DIR/k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
+	fi
+
+	# Use pinned version
+	local target_version="$K3D_VERSION"
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "k3d v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading k3d from v$current_version to v$target_version..."
+	else
+		log_info "Installing k3d v$target_version..."
+	fi
+
+	# Map platform/arch to k3d naming
+	local k3d_platform="$platform"
+	local k3d_arch="$arch"
+
+	# Download k3d
+	local download_url="https://github.com/k3d-io/k3d/releases/download/v${target_version}/k3d-${k3d_platform}-${k3d_arch}"
+
+	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/k3d.tmp"; then
+		chmod +x "$OBOL_BIN_DIR/k3d.tmp"
+		mv "$OBOL_BIN_DIR/k3d.tmp" "$OBOL_BIN_DIR/k3d"
+		log_success "k3d v$target_version installed"
+	else
+		log_error "Failed to download k3d"
+		rm -f "$OBOL_BIN_DIR/k3d.tmp"
+		return 1
+	fi
+}
+
+# Install helmfile
+install_helmfile() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
+		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*\([0-9.]*\).*/\1/p' || echo "")
+	fi
+
+	# Use pinned version
+	local target_version="$HELMFILE_VERSION"
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "helmfile v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading helmfile from v$current_version to v$target_version..."
+	else
+		log_info "Installing helmfile v$target_version..."
+	fi
+
+	# Map platform/arch to helmfile naming
+	local helmfile_platform="$platform"
+	local helmfile_arch="$arch"
+
+	# Helmfile uses different naming for architectures
+	if [[ "$arch" == "amd64" ]]; then
+		helmfile_arch="amd64"
+	elif [[ "$arch" == "arm64" ]]; then
+		helmfile_arch="arm64"
+	fi
+
+	# Download and extract helmfile
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://github.com/helmfile/helmfile/releases/download/v${target_version}/helmfile_${target_version}_${helmfile_platform}_${helmfile_arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/helmfile" "$OBOL_BIN_DIR/helmfile"
+		chmod +x "$OBOL_BIN_DIR/helmfile"
+		rm -rf "$tmp_dir"
+		log_success "helmfile v$target_version installed"
+	else
+		log_error "Failed to download helmfile"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
+# Install helm-diff plugin
+install_helm_diff() {
+	# Ensure helm is installed first
+	if [[ ! -f "$OBOL_BIN_DIR/helm" ]]; then
+		log_warn "helm not found, skipping helm-diff plugin"
+		return 1
+	fi
+
+	# Try to check plugin list - if this fails, the plugin directory may be corrupted
+	local plugin_check
+	plugin_check=$("$OBOL_BIN_DIR/helm" plugin list 2>&1)
+	local check_exit=$?
+
+	# If plugin check succeeded and diff is already installed, we're done
+	if [[ $check_exit -eq 0 ]] && echo "$plugin_check" | grep -q "diff"; then
+		log_success "helm-diff plugin already installed"
+		return 0
+	fi
+
+	# If plugin check failed with corruption error, try to remove the corrupted plugin
+	if echo "$plugin_check" | grep -q "failed to load plugin"; then
+		log_info "Detected corrupted helm-diff plugin, attempting to clean up..."
+
+		# Get helm plugin directory (usually ~/.local/share/helm/plugins)
+		local helm_plugins_dir
+		helm_plugins_dir=$(dirname "$("$OBOL_BIN_DIR/helm" env 2>/dev/null | grep HELM_PLUGINS | cut -d'=' -f2 | tr -d '"' || echo "$HOME/.local/share/helm/plugins")")
+
+		# Remove corrupted helm-diff plugin if it exists
+		if [[ -d "$helm_plugins_dir/plugins/helm-diff" ]]; then
+			rm -rf "$helm_plugins_dir/plugins/helm-diff"
+			log_info "Removed corrupted plugin"
 		fi
-	done
+	fi
+
+	log_info "Installing helm-diff plugin v${HELM_DIFF_VERSION}..."
+
+	# Install the plugin with pinned version
+	if "$OBOL_BIN_DIR/helm" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" 2>&1 | grep -q "Installed plugin"; then
+		log_success "helm-diff plugin v${HELM_DIFF_VERSION} installed"
+		return 0
+	else
+		log_warn "helm-diff plugin installation failed (non-critical, continuing...)"
+		return 1
+	fi
+}
+
+# Install k9s
+install_k9s() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+	local current_version=""
+
+	# Check current version
+	if [[ -f "$OBOL_BIN_DIR/k9s" ]]; then
+		current_version=$("$OBOL_BIN_DIR/k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
+	fi
+
+	# Use pinned version
+	local target_version="$K9S_VERSION"
+
+	# Check if update needed
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "k9s v$current_version is up to date"
+		return 0
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading k9s from v$current_version to v$target_version..."
+	else
+		log_info "Installing k9s v$target_version..."
+	fi
+
+	# Map platform/arch to k9s naming
+	local k9s_platform
+	case "$platform" in
+	darwin)
+		k9s_platform="Darwin"
+		;;
+	linux)
+		k9s_platform="Linux"
+		;;
+	esac
+
+	local k9s_arch
+	case "$arch" in
+	amd64)
+		k9s_arch="amd64"
+		;;
+	arm64)
+		k9s_arch="arm64"
+		;;
+	esac
+
+	# Download and extract k9s
+	local tmp_dir=$(mktemp -d)
+	local download_url="https://github.com/derailed/k9s/releases/download/v${target_version}/k9s_${k9s_platform}_${k9s_arch}.tar.gz"
+
+	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+		mv "$tmp_dir/k9s" "$OBOL_BIN_DIR/k9s"
+		chmod +x "$OBOL_BIN_DIR/k9s"
+		rm -rf "$tmp_dir"
+		log_success "k9s v$target_version installed"
+	else
+		log_error "Failed to download k9s"
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+}
+
+# Install all dependencies
+install_dependencies() {
+	log_info "Checking and installing dependencies..."
+	echo ""
+
+	# Install each dependency
+	install_kubectl || log_warn "kubectl installation failed (continuing...)"
+	install_helm || log_warn "helm installation failed (continuing...)"
+	install_k3d || log_warn "k3d installation failed (continuing...)"
+	install_helmfile || log_warn "helmfile installation failed (continuing...)"
+	install_k9s || log_warn "k9s installation failed (continuing...)"
+	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
+
+	echo ""
+	log_success "Dependencies check complete"
 }
 
 # Check if OBOL_BIN_DIR is in PATH and print instructions if not
