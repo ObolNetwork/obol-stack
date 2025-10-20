@@ -40,7 +40,7 @@ func Init(cfg *config.Config, force bool) error {
 	stackID := petname.Generate(2, "-")
 
 	// Create logger and executor
-	logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 		StateDir: cfg.StateDir,
 		StackID:  stackID,
 	})
@@ -48,7 +48,7 @@ func Init(cfg *config.Config, force bool) error {
 
 	// Check if overwriting config
 	if _, err := os.Stat(k3dConfigPath); err == nil {
-		logger.Info("Overwriting existing stack configuration", "path", k3dConfigPath)
+		l.Info("Overwriting existing stack configuration", "path", k3dConfigPath)
 	}
 
 	// Replace placeholder in k3d config with actual stack ID
@@ -65,8 +65,8 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
-	logger.Info("Initialized stack configuration", "path", k3dConfigPath)
-	logger.Info("Stack ID", "id", stackID)
+	l.Info("Initialized stack configuration", "path", k3dConfigPath)
+	l.Info("Stack ID", "id", stackID)
 	return nil
 }
 
@@ -87,7 +87,7 @@ func Up(cfg *config.Config) error {
 	}
 
 	// Create logger and executor
-	logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 		StateDir: cfg.StateDir,
 		StackID:  stackID,
 	})
@@ -96,7 +96,7 @@ func Up(cfg *config.Config) error {
 	stackName := getStackName(cfg)
 
 	// Create executor for subprocess calls with the logger
-	exec := executor.New(logger)
+	exec := executor.New(l.Logger)
 	defer exec.Close()
 
 	// Check if cluster already exists using cluster list
@@ -109,7 +109,7 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("stack '%s' already exists, use 'obol stack down' to stop it first", stackName)
 	}
 
-	logger.Info("Starting stack", "name", stackName, "id", stackID)
+	l.Info("Starting stack", "name", stackName, "id", stackID)
 
 	// Get absolute path to data directory for k3d volume mount
 	absDataDir, err := filepath.Abs(cfg.DataDir)
@@ -134,7 +134,7 @@ func Up(cfg *config.Config) error {
 		fmt.Sprintf("OBOL_DATA_DIR=%s", absDataDir),
 	))
 
-	logger.Info("Using data directory", "path", absDataDir)
+	l.Info("Using data directory", "path", absDataDir)
 
 	if err := createCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
@@ -154,12 +154,12 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	logger.Info("Stack started successfully")
+	l.Info("Stack started successfully")
 	if stackID != "" {
-		logger.Info("Stack ID", "id", stackID)
+		l.Info("Stack ID", "id", stackID)
 	}
-	logger.Info("Kubeconfig saved", "path", kubeconfigPath)
-	logger.Info("To use kubectl with this stack", "command", fmt.Sprintf("export KUBECONFIG=%s", kubeconfigPath))
+	l.Info("Kubeconfig saved", "path", kubeconfigPath)
+	l.Info("To use kubectl with this stack", "command", fmt.Sprintf("export KUBECONFIG=%s", kubeconfigPath))
 	return nil
 }
 
@@ -171,16 +171,16 @@ func Down(cfg *config.Config) error {
 	}
 	stackName := getStackName(cfg)
 
-	logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 		StateDir: cfg.StateDir,
 		StackID:  stackID,
 	})
 	defer cleanup()
 
-	exec := executor.New(logger)
+	exec := executor.New(l.Logger)
 	defer exec.Close()
 
-	logger.Info("Stopping stack", "name", stackName, "id", stackID)
+	l.Info("Stopping stack", "name", stackName, "id", stackID)
 
 	deleteCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "k3d"),
@@ -191,7 +191,7 @@ func Down(cfg *config.Config) error {
 		return fmt.Errorf("failed to stop cluster: %w", err)
 	}
 
-	logger.Info("Stack stopped successfully")
+	l.Info("Stack stopped successfully")
 	return nil
 }
 
@@ -200,7 +200,7 @@ func Purge(cfg *config.Config) error {
 	// Get stack_id (optional - may not exist if stack was never initialized)
 	stackID := getStackID(cfg)
 
-	logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 		StateDir: cfg.StateDir,
 		StackID:  stackID,
 	})
@@ -208,7 +208,7 @@ func Purge(cfg *config.Config) error {
 
 	// Stop cluster first
 	if err := Down(cfg); err != nil {
-		logger.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
+		l.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
 	}
 
 	// Remove stack config directory
@@ -216,21 +216,21 @@ func Purge(cfg *config.Config) error {
 	if err := os.RemoveAll(stackConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
-	logger.Info("Removed cluster config directory")
+	l.Info("Removed cluster config directory")
 
 	// Remove data directory
 	if err := os.RemoveAll(cfg.DataDir); err != nil {
 		return fmt.Errorf("failed to remove data directory: %w", err)
 	}
-	logger.Info("Removed data directory")
+	l.Info("Removed data directory")
 
 	// Remove state directory (logs, history)
 	if err := os.RemoveAll(cfg.StateDir); err != nil {
 		return fmt.Errorf("failed to remove state directory: %w", err)
 	}
-	logger.Info("Removed state directory")
+	l.Info("Removed state directory")
 
-	logger.Info("Cluster purged (binaries preserved)")
+	l.Info("Cluster purged (binaries preserved)")
 	return nil
 }
 

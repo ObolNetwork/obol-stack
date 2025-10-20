@@ -212,17 +212,27 @@ func (h *MultiHandler) WithGroup(name string) slog.Handler {
 	return &MultiHandler{handlers: newHandlers}
 }
 
+// Logger wraps *slog.Logger to add a Success method
+type Logger struct {
+	*slog.Logger
+}
+
+// Success logs a success message with a green check symbol
+func (l *Logger) Success(msg string, args ...any) {
+	l.Log(context.Background(), LevelSuccess, msg, args...)
+}
+
 // LoggerConfig holds configuration for creating a logger
 type LoggerConfig struct {
 	StateDir string // Directory for log files
 	StackID  string // Stack ID for grouping logs
 }
 
-// NewSlogLogger creates a new slog.Logger with console and optional file output
+// NewSlogLogger creates a new Logger with console and optional file output
 // Console output: human-readable with proper formatting
 // File output: JSON with full trace details (when stack ID is known)
 // Returns the logger and a cleanup function to close the file
-func NewSlogLogger(cfg LoggerConfig) (*slog.Logger, func() error) {
+func NewSlogLogger(cfg LoggerConfig) (*Logger, func() error) {
 	var handlers []slog.Handler
 
 	// Console handler - always present, user-friendly format
@@ -262,17 +272,15 @@ func NewSlogLogger(cfg LoggerConfig) (*slog.Logger, func() error) {
 	multiHandler := NewMultiHandler(handlers...)
 
 	// Add stack ID to all logs if available
-	var logger *slog.Logger
+	var slogger *slog.Logger
 	if cfg.StackID != "" {
-		logger = slog.New(multiHandler).With("stack_id", cfg.StackID)
+		slogger = slog.New(multiHandler).With("stack_id", cfg.StackID)
 	} else {
-		logger = slog.New(multiHandler)
+		slogger = slog.New(multiHandler)
 	}
 
-	return logger, cleanup
-}
+	// Wrap in Logger type to add Success method
+	l := &Logger{Logger: slogger}
 
-// Success logs a success message with a green check symbol
-func Success(logger *slog.Logger, msg string, args ...any) {
-	logger.Log(context.Background(), LevelSuccess, msg, args...)
+	return l, cleanup
 }

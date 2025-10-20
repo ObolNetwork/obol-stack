@@ -131,13 +131,13 @@ GLOBAL OPTIONS:
 					stackID := stack.GetStackID(cfg)
 
 					// Create logger and executor
-					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 						StateDir: cfg.StateDir,
 						StackID:  stackID,
 					})
 					defer cleanup()
 
-					exec := executor.New(logger)
+					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(kubectlPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -167,13 +167,13 @@ GLOBAL OPTIONS:
 					stackID := stack.GetStackID(cfg)
 
 					// Create logger and executor
-					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 						StateDir: cfg.StateDir,
 						StackID:  stackID,
 					})
 					defer cleanup()
 
-					exec := executor.New(logger)
+					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(helmPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -203,13 +203,13 @@ GLOBAL OPTIONS:
 					stackID := stack.GetStackID(cfg)
 
 					// Create logger and executor
-					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 						StateDir: cfg.StateDir,
 						StackID:  stackID,
 					})
 					defer cleanup()
 
-					exec := executor.New(logger)
+					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
@@ -239,13 +239,13 @@ GLOBAL OPTIONS:
 					stackID := stack.GetStackID(cfg)
 
 					// Create logger and executor
-					logger, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
+					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
 						StateDir: cfg.StateDir,
 						StackID:  stackID,
 					})
 					defer cleanup()
 
-					exec := executor.New(logger)
+					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(k9sPath, c.Args().Slice()...)
 					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
 					cmd.SetStdin(os.Stdin)
