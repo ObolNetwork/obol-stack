@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/obol/obol-stack/internal/config"
-	"github.com/obol/obol-stack/internal/version"
+	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
 

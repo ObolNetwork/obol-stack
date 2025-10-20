@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # obolup.sh - Bootstrap installer for Obol Stack
-# Usage: curl -sSL https://raw.githubusercontent.com/obol/obol-stack/main/obolup.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh | bash
 
 # Color output
 RED='\033[0;31m'
@@ -157,7 +157,7 @@ download_release() {
 
 	# Construct download URL
 	local binary_name="obol_${os}_${arch}"
-	local download_url="https://github.com/obol/obol-stack/releases/download/${release_tag}/${binary_name}"
+	local download_url="https://github.com/ObolNetwork/obol-stack/releases/download/${release_tag}/${binary_name}"
 
 	log_info "Downloading from: $download_url"
 
@@ -193,9 +193,9 @@ build_from_source() {
 	trap "rm -rf '$tmp_dir'" EXIT
 
 	log_info "Cloning repository..."
-	if ! git clone --depth 1 --branch "$build_ref" https://github.com/obol/obol-stack.git "$tmp_dir" 2>/dev/null; then
+	if ! git clone --depth 1 --branch "$build_ref" https://github.com/ObolNetwork/obol-stack.git "$tmp_dir" 2>/dev/null; then
 		# If branch doesn't exist, try as a tag
-		if ! git clone https://github.com/obol/obol-stack.git "$tmp_dir" 2>/dev/null; then
+		if ! git clone https://github.com/ObolNetwork/obol-stack.git "$tmp_dir" 2>/dev/null; then
 			log_error "Failed to clone repository"
 			return 1
 		fi
@@ -213,10 +213,10 @@ build_from_source() {
 
 	# Build binary
 	log_info "Building binary..."
-	local ldflags="-X github.com/obol/obol-stack/internal/version.Version=$version"
-	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.GitCommit=$git_commit"
-	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.BuildTime=$build_time"
-	ldflags="$ldflags -X github.com/obol/obol-stack/internal/version.GitDirty=$git_dirty"
+	local ldflags="-X github.com/ObolNetwork/obol-stack/internal/version.Version=$version"
+	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit=$git_commit"
+	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=$build_time"
+	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=$git_dirty"
 
 	if ! go build -ldflags "$ldflags" -o "$OBOL_BIN_DIR/obol" ./cmd/obol; then
 		log_error "Failed to build binary"
@@ -247,7 +247,7 @@ install_obol_binary() {
 		# Try to get latest release tag from GitHub API
 		local latest_tag
 		if command_exists curl; then
-			latest_tag=$(curl -fsSL https://api.github.com/repos/obol/obol-stack/releases/latest 2>/dev/null | grep -oP '"tag_name": "\K(.*)(?=")')
+			latest_tag=$(curl -fsSL https://api.github.com/repos/ObolNetwork/obol-stack/releases/latest 2>/dev/null | grep -oP '"tag_name": "\K(.*)(?=")')
 		fi
 
 		# If we got a tag, try to download it
