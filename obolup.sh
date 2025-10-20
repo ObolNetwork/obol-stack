@@ -338,8 +338,8 @@ print_instructions() {
 	echo ""
 	echo "To initialize a cluster, run:"
 	echo ""
-	echo "  obol cluster init"
-	echo "  obol cluster up"
+	echo "  obol stack init"
+	echo "  obol stack up"
 	echo ""
 }
 

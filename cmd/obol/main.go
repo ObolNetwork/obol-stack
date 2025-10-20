@@ -28,14 +28,14 @@ func main() {
 				},
 			},
 			{
-				Name:  "cluster",
-				Usage: "Manage k3d cluster lifecycle",
+				Name:  "stack",
+				Usage: "Manage Obol Stack lifecycle",
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize cluster configuration",
+						Usage: "Initialize stack configuration",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster init - not yet implemented")
+							fmt.Println("Stack init - not yet implemented")
 							fmt.Printf("Config dir: %s\n", cfg.ConfigDir)
 							fmt.Printf("Bin dir: %s\n", cfg.BinDir)
 							fmt.Printf("State dir: %s\n", cfg.StateDir)
@@ -44,33 +44,33 @@ func main() {
 					},
 					{
 						Name:  "up",
-						Usage: "Start the k3d cluster",
+						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster up - not yet implemented")
+							fmt.Println("Stack up - not yet implemented")
 							return nil
 						},
 					},
 					{
 						Name:  "down",
-						Usage: "Stop the k3d cluster",
+						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster down - not yet implemented")
+							fmt.Println("Stack down - not yet implemented")
 							return nil
 						},
 					},
 					{
 						Name:  "purge",
-						Usage: "Delete cluster and all data",
+						Usage: "Delete stack and all data",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster purge - not yet implemented")
+							fmt.Println("Stack purge - not yet implemented")
 							return nil
 						},
 					},
 					{
 						Name:  "connect",
-						Usage: "Connect to cluster with k9s",
+						Usage: "Connect to stack with k9s",
 						Action: func(c *cli.Context) error {
-							fmt.Println("Cluster connect - not yet implemented")
+							fmt.Println("Stack connect - not yet implemented")
 							return nil
 						},
 					},
@@ -82,7 +82,7 @@ func main() {
 							if c.NArg() == 0 {
 								return fmt.Errorf("volume name required")
 							}
-							fmt.Printf("Cluster backup %s - not yet implemented\n", c.Args().First())
+							fmt.Printf("Stack backup %s - not yet implemented\n", c.Args().First())
 							return nil
 						},
 					},
