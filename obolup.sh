@@ -337,28 +337,11 @@ version_ge() {
 	fi
 }
 
-# Fetch latest version from GitHub releases
-get_github_latest_version() {
-	local repo="$1"
-	local version
-
-	# Try using GitHub API (no auth required for public repos)
-	version=$(curl -sSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-
-	if [[ -z "$version" ]]; then
-		log_warn "Could not fetch latest version for $repo"
-		return 1
-	fi
-
-	echo "$version"
-}
-
 # Install kubectl
 install_kubectl() {
 	local platform=$(detect_platform)
 	local arch=$(detect_arch)
 	local current_version=""
-	local latest_version=""
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/kubectl" ]]; then
@@ -399,7 +382,6 @@ install_helm() {
 	local platform=$(detect_platform)
 	local arch=$(detect_arch)
 	local current_version=""
-	local latest_version=""
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/helm" ]]; then
@@ -442,7 +424,6 @@ install_k3d() {
 	local platform=$(detect_platform)
 	local arch=$(detect_arch)
 	local current_version=""
-	local latest_version=""
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/k3d" ]]; then
@@ -487,7 +468,6 @@ install_helmfile() {
 	local platform=$(detect_platform)
 	local arch=$(detect_arch)
 	local current_version=""
-	local latest_version=""
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
@@ -587,7 +567,6 @@ install_k9s() {
 	local platform=$(detect_platform)
 	local arch=$(detect_arch)
 	local current_version=""
-	local latest_version=""
 
 	# Check current version
 	if [[ -f "$OBOL_BIN_DIR/k9s" ]]; then
@@ -617,9 +596,6 @@ install_k9s() {
 		;;
 	linux)
 		k9s_platform="Linux"
-		;;
-	windows)
-		k9s_platform="Windows"
 		;;
 	esac
 
