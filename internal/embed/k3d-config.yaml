@@ -2,8 +2,9 @@ apiVersion: k3d.io/v1alpha5
 kind: Simple
 metadata:
   name: obol-stack-{{CLUSTER_ID}}
+# Maximize memory availability for cluster
 servers: 1
-agents: 3  # Multiple workers for fault tolerance and pod distribution
+agents: 0
 image: rancher/k3s:v1.31.4-k3s1
 # Mount host directories into all nodes for persistent storage
 # Uses OBOL_DATA_DIR env var, falls back to .workspace/data
