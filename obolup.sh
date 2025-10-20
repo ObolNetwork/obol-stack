@@ -76,6 +76,7 @@ command_exists() {
 create_directories() {
 	log_info "Creating directory structure..."
 
+	# Config directories
 	mkdir -p "$OBOL_BIN_DIR"
 	mkdir -p "$OBOL_CONFIG_DIR"
 	mkdir -p "$OBOL_DATA_DIR"

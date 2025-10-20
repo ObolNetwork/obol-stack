@@ -4,7 +4,8 @@
 
 The Obol Stack is a local Kubernetes-based framework for running decentralized
 Ethereum applications (dApps). It provides a simplified CLI experience for
-managing a k3d cluster and installing/managing Helm-packaged applications.
+managing a k3d cluster with embedded default applications and a planned
+installable application system.
 
 ## Architecture
 
@@ -20,7 +21,8 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
      installations
    - Supports two modes:
      - **Production mode**: Uses XDG Base Directory specification
-       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`, `~/.local/bin`)
+       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`,
+       `~/.local/bin`)
      - **Development mode**: Uses local `.workspace/` directory (set via
        `OBOL_DEVELOPMENT=true`)
    - Supported platforms: Linux, Darwin
@@ -32,20 +34,34 @@ managing a k3d cluster and installing/managing Helm-packaged applications.
    - Stack lifecycle: `init`, `up`, `down`, `purge`
    - Passthrough tools: `kubectl`, `helm`, `helmfile`, `k9s` (auto-set
      KUBECONFIG)
-   - Cluster package: `internal/cluster/cluster.go` handles k3d operations
-   - Embedded config: k3d config template in `internal/embed/k3d-config.yaml`
+   - Stack package: `internal/stack/stack.go` handles k3d operations
+   - Embedded assets: k3d config template and applications in `internal/embed/`
 
 3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
-   - **Console output**: Structured logging with colored symbols and clean formatting
-     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]` Error (red)
+   - **Console output**: Structured logging with colored symbols and clean
+     formatting
+     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]`
+       Error (red)
      - `[⚙]` Subprocess execution (magenta) with indented output
-   - **File logging**: Date-based JSON logs at `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
+   - **File logging**: Date-based JSON logs at
+     `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
      - One log file per day, all sessions append to same file
      - Full structured logs with source info, cluster ID tagging
-   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic logging
+   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic
+     logging
      - Captures and logs all subprocess output via slog
      - Displays subprocess commands and output with visual hierarchy
    - See: `internal/logging/handler.go`, `internal/executor/executor.go`
+
+4. **Embedded Applications System** (internal/embed/)
+   - **Dual embed pattern**:
+     - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
+     - `applicationsFS embed.FS`: Entire applications directory tree
+   - **CopyApplications()**: Recursively extracts embedded apps to disk
+   - **Default applications**: Auto-deployed monitoring stack
+     (Prometheus/Grafana)
+   - Applications mounted to k3s manifest directory for automatic application
+   - See: `internal/embed/embed.go`, `internal/embed/applications/`
 
 ### Configuration System
 
@@ -54,8 +70,8 @@ capability:
 
 - `OBOL_CONFIG_DIR` - Configuration files (default: `~/.config/obol` or
   `.workspace/config`)
-- `OBOL_BIN_DIR` - Binary directory (default: `$XDG_BIN_HOME` → `~/.local/bin` or
-  `.workspace/bin`)
+- `OBOL_BIN_DIR` - Binary directory (default: `$XDG_BIN_HOME` → `~/.local/bin`
+  or `.workspace/bin`)
 - `XDG_BIN_HOME` - XDG standard for user binaries (default: `~/.local/bin`)
 - `OBOL_DATA_DIR` - Persistent volumes and data (default: `~/.local/share/obol`
   or `.workspace/data`)
@@ -71,35 +87,40 @@ Production layout:
 
 ```
 ~/.config/obol/
-  ├── cluster/           # Stack-specific config
-  │   ├── k3d.yaml       # Generated k3d config with unique stack ID
-  │   ├── .stack-id      # Petname-generated stack identifier
-  │   └── kubeconfig.yaml # Exported stack kubeconfig
-  └── [other config files]
+  ├── k3d.yaml                       # Generated k3d config (absolute paths substituted)
+  ├── .stack-id                      # Petname-generated stack identifier
+  ├── kubeconfig.yaml                # Exported stack kubeconfig
+  └── applications/                  # Copied from embedded FS
+      └── default/                   # Auto-deployed applications
+          └── monitoring/            # Prometheus/Grafana stack
+              ├── monitoring-stack.yaml
+              └── monitoring-ingress.yaml
 
-~/.local/bin/            # obol binary and dependencies
+~/.local/bin/                        # obol binary and dependencies
 
-~/.local/share/obol/     # Persistent data (k3d volume mount: /data in nodes)
+~/.local/share/obol/                 # Persistent data (k3d volume mount: /data in nodes)
 
-~/.local/state/obol/     # Runtime state
-  └── {cluster-id}/
-      └── 2025-10-15.log # Date-based log files (JSON)
+~/.local/state/obol/                 # Runtime state
+  └── {stack-id}/
+      └── 2025-10-15.log             # Date-based log files (JSON)
 ```
 
 Development layout:
 
 ```
 .workspace/
-  ├── bin/               # Local binaries
+  ├── bin/                           # Local binaries
   ├── config/
-  │   └── cluster/       # Stack-specific config
-  │       ├── k3d.yaml       # Generated k3d config with unique stack ID
-  │       ├── .stack-id      # Petname-generated stack identifier
-  │       └── kubeconfig.yaml # Exported stack kubeconfig
-  ├── data/              # Local persistent data (k3d volume mount: /data in nodes)
-  └── state/             # Local runtime state
-      └── {cluster-id}/
-          └── 2025-10-15.log # Date-based log files (JSON)
+  │   ├── k3d.yaml                   # Generated k3d config (absolute paths substituted)
+  │   ├── .stack-id                  # Petname-generated stack identifier
+  │   ├── kubeconfig.yaml            # Exported stack kubeconfig
+  │   └── applications/              # Copied from embedded FS
+  │       └── default/               # Auto-deployed applications
+  │           └── monitoring/        # Prometheus/Grafana stack
+  ├── data/                          # Local persistent data (k3d volume mount: /data)
+  └── state/                         # Local runtime state
+      └── {stack-id}/
+          └── 2025-10-15.log         # Date-based log files (JSON)
 ```
 
 ## Running Locally
@@ -144,21 +165,95 @@ obol stack up
 - **Image**: rancher/k3s:v1.31.4-k3s1
 - **Unique naming**: Each stack gets petname-generated ID (e.g.,
   `obol-stack-adorable-hippo`)
-- **Container labels**: `obol.cluster-id` label applied to all containers for tracking
-- **Volume mounts**: `$OBOL_DATA_DIR:/data` mounted on all nodes
+- **Container labels**: `obol.cluster-id={{CLUSTER_ID}}` label applied to all
+  containers
+- **Volume mounts**:
+  - Data: `{{DATA_DIR}}:/data` (persistent storage, all nodes)
+  - Applications:
+    `{{CONFIG_DIR}}/applications/default:/var/lib/rancher/k3s/server/manifests/default`
+    (server only)
 - **Ports**: 8080:80, 8443:443 via load balancer
 - **Feature gates**: KubeletInUserNamespace=true (fixes /dev/kmsg permission
   issues)
 - **Ulimits**: nofile 26677 (prevents "too many open files")
+- **Template placeholders**: `{{CLUSTER_ID}}`, `{{DATA_DIR}}`, `{{CONFIG_DIR}}`
+  replaced during init with absolute paths
 
 ### Stack Lifecycle
 
-1. **Init**: Generates k3d.yaml with unique stack ID using petname library
-2. **Up**: Creates k3d stack, exports kubeconfig to `cluster/kubeconfig.yaml`
-3. **Down**: Deletes k3d stack (preserves config)
-4. **Purge**: Removes stack and all config files
+1. **Init**:
+   - Generates unique stack ID (petname)
+   - Gets absolute paths for data and config directories
+   - Replaces all template placeholders in k3d config
+   - Writes resolved k3d.yaml with absolute paths
+   - Copies embedded applications to `applications/` directory
+   - Stores stack ID in `.stack-id` file
+
+2. **Up**:
+   - Creates k3d cluster using pre-resolved config
+   - k3d mounts applications directory to k3s manifests path
+   - k3s auto-applies all manifests (monitoring stack deployed)
+   - Exports kubeconfig
+
+3. **Down**:
+   - Deletes k3d cluster
+   - Preserves config directory and logs
+
+4. **Purge**:
+   - Stops cluster (via Down)
+   - Removes entire config directory (k3d.yaml, kubeconfig, .stack-id,
+     applications/)
+   - Removes data directory (persistent volumes)
+   - Preserves state directory (logs remain for debugging)
+
+All lifecycle commands use structured logging with stack ID context.
 
 See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
+
+## Embedded Applications
+
+### Default Applications (`internal/embed/applications/default/`)
+
+**Auto-deployed with every cluster:**
+
+- **Monitoring stack** (Prometheus + Grafana via kube-prometheus-stack)
+  - Grafana: `http://grafana.localhost:8080` (anonymous admin access)
+  - Prometheus: `http://prometheus.localhost:8080`
+  - Pre-configured Kubernetes dashboards
+  - Persistent storage: Prometheus (10Gi), Grafana (5Gi)
+  - Resource limits configured for local development
+
+**Deployment mechanism:**
+
+- Applications embedded in binary as `embed.FS`
+- Extracted to disk during `obol stack init`
+- Mounted into k3s at `/var/lib/rancher/k3s/server/manifests/default/`
+- k3s automatically applies manifests on startup
+- Uses k3s HelmChart CRD for Helm chart deployment
+
+**Structure:**
+
+```
+internal/embed/applications/
+├── README.md                    # Architecture and future plans
+└── default/
+    └── monitoring/
+        ├── monitoring-stack.yaml      # HelmChart CRD (kube-prometheus-stack)
+        └── monitoring-ingress.yaml    # Traefik IngressRoutes
+```
+
+### Future: Installable Applications (Planned)
+
+**Not yet implemented:**
+
+- `obol app install <app-name>` - Download application from registry
+- `obol app apply <app-name>` - Deploy using Helmfile + applyset tracking
+- Applyset pattern for atomic updates and automatic pruning
+- Example applications: ethereum (client stacks), charon (DVT)
+
+See: `internal/embed/applications/README.md` for detailed architecture
+
+>>>>>>> d06eb3f (updated CLAUDE.md with context)
 
 ## Key Design Principles
 
@@ -167,28 +262,35 @@ See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
 3. **XDG-compliant**: Follows Linux filesystem standards for configuration
 4. **Unique stacks**: Petname-generated IDs prevent naming conflicts
 5. **Passthrough pattern**: Wraps k8s tools with auto-configured KUBECONFIG
-
-## Legacy Structure
-
-The following directories are part of the old architecture and should NOT be the
-focus:
-
-- `obolup/` - Old directory (functionality moved to `obolup.sh`)
-- `values/` - Old directory structure for manifests
+6. **Embedded defaults**: Core services bundled in binary, auto-deployed
+7. **Template resolution**: Config values substituted at init time, not runtime
 
 ## Important Notes for Development
 
-1. Check `OBOL_DEVELOPMENT` environment variable for dev mode detection
-2. Stack ID stored in `.stack-id` file, used for unique k3d stack names
-3. Kubeconfig path: `$OBOL_CONFIG_DIR/cluster/kubeconfig/kubeconfig.yaml`
-   (legacy) or `$OBOL_CONFIG_DIR/cluster/kubeconfig.yaml` (current)
-4. k3d config uses `{{STACK_ID}}` placeholder, replaced during `stack init`
-5. Data directory must be absolute path for k3d volume mounts
-6. Passthrough commands check kubeconfig exists before delegating to binaries
-7. Version info injected at build time via ldflags (VERSION file + git metadata)
-8. All subprocess execution should use `executor.Executor` for consistent logging
-9. Logging requires cluster ID context - use `logging.NewSlogLogger()` with `LoggerConfig`
-10. Log files are date-based and shared across all sessions on the same day
+1. **Embed pattern**: Use string embed for templates (`K3dConfig`), FS embed for
+   directories (`applicationsFS`)
+2. **Template placeholders**: `{{STACK_ID}}`, `{{DATA_DIR}}`, `{{CONFIG_DIR}}`
+   replaced during init
+3. **Absolute paths required**: Docker volume mounts need absolute paths (use
+   `filepath.Abs()`)
+4. **Config resolution timing**: All template values substituted during `init`,
+   not at `up` time
+5. **k3s auto-apply**: Manifests in `/var/lib/rancher/k3s/server/manifests/`
+   automatically applied
+6. **Stack ID context**: All logging requires stack ID via
+   `logging.NewSlogLogger()`
+7. **Subprocess execution**: Use `executor.Executor` for consistent logging and
+   output capture
+8. **Log persistence**: Date-based JSON logs at
+   `$OBOL_STATE_DIR/{stack-id}/{date}.log`
+9. **Purge behavior**: Removes config and data directories, preserves state
+   (logs)
+10. **Development mode**: Set `OBOL_DEVELOPMENT=true` for local `.workspace/`
+    usage
+11. **Logger wrapper**: Use `logging.Logger` type with embedded `*slog.Logger`
+    to get `Success()` method for success-level logging with green check symbol
+12. **Error logging**: All errors propagated through CLI commands should log via
+    `l.Error()` before returning
 
 ### Build System
 
@@ -208,7 +310,12 @@ maintain accuracy and relevance.
 - CLI entrypoint: `cmd/obol/main.go`
 - Config system: `internal/config/config.go`
 - Stack management: `internal/stack/stack.go`
-- Embedded assets: `internal/embed/embed.go`, `internal/embed/k3d-config.yaml`
+- Logging framework: `internal/logging/handler.go`
+- Subprocess execution: `internal/executor/executor.go`
+- Embedded assets: `internal/embed/embed.go`
+- k3d configuration template: `internal/embed/k3d-config.yaml`
+- Default applications: `internal/embed/applications/`
+- Application architecture: `internal/embed/applications/README.md`
 - Build tasks: `justfile`
 - Version tracking: `VERSION`, `internal/version/version.go`
 - Example manifests: `examples/simple-persistence-test.yaml`
