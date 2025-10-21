@@ -68,3 +68,4 @@ demo-*.yaml
 
 # Local LLMs
 llms-full.txt
+CLAUDE.md

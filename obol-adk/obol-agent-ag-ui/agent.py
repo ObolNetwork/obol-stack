@@ -3,13 +3,16 @@ from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StdioConnectionPar
 from mcp.client.stdio import StdioServerParameters
 from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import json
 from dotenv import load_dotenv
 
-# Load environment variables from parent directory .env file
+# Load environment variables - check parent dir first (local dev), then current dir (Docker)
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+if not os.path.exists(env_path):
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path)
 
 # Create core tools
@@ -45,20 +48,25 @@ if filesystem_paths:
 # Optional tools
 optional_tools = []
 
-# Try to add Kubernetes MCP Server if available
-try:
-    optional_tools.append(
-        McpToolset(
-            connection_params=StdioConnectionParams(
-                server_params=StdioServerParameters(
-                    command="uvx",
-                    args=["mcp-server-kubernetes"]
+# Check if running in public mode (e.g., DV Launchpad)
+# When PUBLIC_MODE=true, skip Kubernetes tools for security
+public_mode = os.getenv('PUBLIC_MODE', 'false').lower() == 'true'
+
+# Add Kubernetes MCP Server only in private mode (local deployments)
+if not public_mode:
+    try:
+        optional_tools.append(
+            McpToolset(
+                connection_params=StdioConnectionParams(
+                    server_params=StdioServerParameters(
+                        command="uvx",
+                        args=["mcp-server-kubernetes"]
+                    )
                 )
             )
         )
-    )
-except Exception:
-    pass
+    except Exception:
+        pass
 
 # Try to add Foundry MCP Server if available
 # try:
@@ -116,6 +124,34 @@ adk_agent = ADKAgent(
 
 # Create FastAPI app
 app = FastAPI(title="Obol Agent - AG UI Backend")
+
+# Add CORS middleware for browser-based clients
+# This allows dv-launchpad to connect directly from the browser
+cors_origins = os.getenv('CORS_ORIGINS', '').split(',') if os.getenv('CORS_ORIGINS') else [
+    "http://localhost:3000",           # Local dev
+    "http://localhost:3001",           # Alternative dev port
+    "https://launchpad.obol.org",      # Production
+    "https://dev.launchpad.obol.org",  # Dev environment
+    "https://qa.launchpad.obol.org",   # QA environment
+    "https://mainnet.launchpad.obol.org",  # Mainnet
+    "https://holesky.launchpad.obol.org",  # Testnet
+    "https://sepolia.launchpad.obol.org",  # Testnet
+    "https://secret.launchpad.obol.org",   # Secret testnet
+    "https://gnosis.launchpad.obol.org",   # Gnosis chain
+]
+
+# Remove empty strings from origins list
+cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["POST", "OPTIONS", "GET"],
+    allow_headers=["*"],
+    max_age=3600,
+    expose_headers=["content-type", "content-length"],
+)
 
 # Add request logging middleware
 @app.middleware("http")
