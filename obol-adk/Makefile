@@ -1,4 +1,4 @@
-.PHONY: help install setup start start-web dev clean test ci
+.PHONY: help install setup start start-web dev clean test ci deploy
 
 # Use absolute path for venv to work from subdirectories
 VENV := $(CURDIR)/.venv
@@ -20,6 +20,7 @@ help:
 	@echo "  make start-web - Start the obol-agent-web agent (ADK Web UI)"
 	@echo "  make test      - Run agent unit tests"
 	@echo "  make ci        - Run full CI workflow locally (simulates GitHub Actions)"
+	@echo "  make deploy    - Deploy obol-agent-ag-ui to Google Cloud Run"
 	@echo "  make clean     - Remove obol-gitbook directory"
 	@echo ""
 
@@ -124,6 +125,16 @@ ci:
 	@echo "==================================================================="
 	@echo "✓ CI workflow completed successfully!"
 	@echo "==================================================================="
+
+# Deploy to Google Cloud Run
+deploy:
+	@echo "Deploying obol-agent-ag-ui to Google Cloud Run..."
+	@echo "Region: us-east4"
+	@echo "Project: prj-d-playgrounds-f0cb"
+	@cd $(AGENT_DIR) && gcloud builds submit \
+		--config=cloudbuild.yaml \
+		--region=us-east4 \
+		--substitutions=SHORT_SHA=$$(git rev-parse --short HEAD)
 
 # Clean up gitbook directory
 clean:
