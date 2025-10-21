@@ -169,6 +169,21 @@ add_adk_fastapi_endpoint(
     path="/"
 )
 
+# Startup event to eagerly initialize MCP toolsets
+@app.on_event("startup")
+async def warmup_mcp_tools():
+    """Warm up MCP toolsets during startup to avoid first-request delays/errors"""
+    print("Warming up MCP toolsets...")
+    try:
+        # Trigger tool discovery by getting tools from each MCP toolset
+        for tool in core_tools + optional_tools:
+            if isinstance(tool, McpToolset):
+                # This triggers the async connection and tool discovery
+                await tool.get_tools(context=None)
+        print("✓ MCP toolsets warmed up successfully")
+    except Exception as e:
+        print(f"⚠ Warning: MCP warmup encountered an error (will retry on first request): {e}")
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
