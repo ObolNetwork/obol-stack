@@ -15,7 +15,16 @@
     "format:check": "prettier --check .",
     "generate-icon-types": "node scripts/generate-icon-types.mjs",
     "prebuild": "npm run generate-icon-types",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:codegen": "playwright codegen localhost:3000",
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:firefox": "playwright test --project=firefox",
+    "test:e2e:webkit": "playwright test --project=webkit"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.39",
@@ -37,6 +46,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.56.0",
     "@types/dompurify": "^3.2.0",
     "@types/node": "^24.5.2",
     "@types/react": "^19",
