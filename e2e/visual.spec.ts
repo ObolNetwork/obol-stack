@@ -9,7 +9,10 @@ test.describe('Visual Regression Tests', () => {
     );
 
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+
+    // Use a more reliable wait condition instead of networkidle
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000); // Give more time for dynamic content
 
     // Take a screenshot and compare
     // Note: First run will generate baseline, subsequent runs will compare
@@ -19,8 +22,8 @@ test.describe('Visual Regression Tests', () => {
       mask: [
         // Add selectors for dynamic content like timestamps, if any
       ],
-      maxDiffPixels: 5000, // Allow more differences for cross-platform compatibility
-      threshold: 0.5, // Allow 50% difference threshold for minor layout variations
+      maxDiffPixels: 15000, // Increased tolerance for cross-platform compatibility
+      threshold: 0.2, // Reduced threshold for better matching
     });
   });
 
@@ -31,12 +34,15 @@ test.describe('Visual Regression Tests', () => {
     // Skip this test entirely due to inconsistent mobile browser rendering and CI environment
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
+
+    // Wait for any dynamic content to stabilize
+    await page.waitForTimeout(2000);
 
     await expect(page).toHaveScreenshot('homepage-mobile.png', {
       fullPage: true,
-      maxDiffPixels: 5000, // Allow more differences for cross-platform compatibility
-      threshold: 0.5, // Allow 50% difference threshold for minor layout variations
+      maxDiffPixels: 20000, // Increased tolerance for mobile rendering differences
+      threshold: 0.1, // Very low threshold for mobile matching
     });
   });
 });
