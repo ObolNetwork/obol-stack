@@ -1,0 +1,48 @@
+# Prysm Configuration for Aztec Sequencer Support
+# Based on Aztec supernode requirements from https://github.com/Gmhax/aztec-packages
+
+# Chart-specific configuration for ethpandaops/prysm
+mode: "beacon"
+
+image:
+  repository: gcr.io/prysmaticlabs/prysm/beacon-chain
+  tag: "v6.1.2"  # Locked version as per Aztec guide
+  pullPolicy: IfNotPresent
+
+extraArgs:
+  # Network
+  - --sepolia
+
+  # Execution endpoint
+  - --execution-endpoint=http://l1-full-node-sepolia-execution:8551
+
+  # Checkpoint sync for faster initial sync
+  - --checkpoint-sync-url=https://checkpoint-sync.sepolia.ethpandaops.io
+  - --genesis-beacon-api-url=https://checkpoint-sync.sepolia.ethpandaops.io
+
+  # Aztec Supernode Requirements
+  - --subscribe-all-data-subnets      # ✅ Required for Fusaka / Aztec Supernode mode
+  - --blob-storage-layout=by-epoch    # Organize blob storage by epoch
+
+# Enable checkpoint sync for faster initial sync
+checkpointSync:
+  enabled: true
+  url: "https://checkpoint-sync.sepolia.ethpandaops.io"
+
+# JWT for execution layer auth (ensure this matches your Nethermind JWT)
+jwt: "ecb22bc24e7d4061f7ed690ccd5846d7d73f5d2b9733267e12f56790398d908a"
+
+persistence:
+  enabled: true
+  # Larger size for supernode blob storage
+  size: 800Gi
+  storageClass: local-path
+
+nodeSelector:
+  kubernetes.io/hostname: silverfib
+
+# Service ports
+httpPort: 3500
+rpcPort: 4000
+metricsPort: 8080
+p2pPort: 13001  # Use 13001 instead of default 13000 to avoid conflict

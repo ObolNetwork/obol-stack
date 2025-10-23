@@ -34,7 +34,12 @@ node:
   logLevel: "debug; info: aztec:simulator, json-rpc"
 
   l1ExecutionUrls: ["http://l1-full-node-sepolia-execution.l1.svc.cluster.local:8545"]
-  l1ConsensusUrls: ["http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"]
+  l1ConsensusUrls:
+    - "http://prysm-aztec.l1.svc.cluster.local:3500"              # Prysm with --subscribe-all-data-subnets
+    - "http://l1-full-node-sepolia-beacon.l1.svc.cluster.local:5052"  # Nimbus
+    - "http://l1-lighthouse-sepolia.l1.svc.cluster.local:5052"    # Lighthouse
+    - "https://beacon.sepolia.ethpandaops.io"                     # Public fallback
+    - "https://ethereum-sepolia-beacon-api.publicnode.com"        # Public fallback
 
   startCmd:
     - --node
