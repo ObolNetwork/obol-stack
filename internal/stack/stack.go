@@ -91,6 +91,13 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	l.Info(fmt.Sprintf("Charts copied to: %s", chartsDir))
 
+	// Copy embedded manifests (k3s auto-apply manifests)
+	manifestsDir := filepath.Join(cfg.ConfigDir, "manifests")
+	if err := embed.CopyManifests(manifestsDir); err != nil {
+		return fmt.Errorf("failed to copy manifests: %w", err)
+	}
+	l.Info(fmt.Sprintf("Manifests copied to: %s", manifestsDir))
+
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {

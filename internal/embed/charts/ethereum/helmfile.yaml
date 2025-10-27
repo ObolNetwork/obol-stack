@@ -3,13 +3,25 @@ repositories:
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
-  # Ethereum node (execution and consensus clients)
-  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
-  - name: ethereum
+  # Storage classes, persistent volumes, and ingress (deploy first!)
+  # These must exist before the Ethereum chart creates its StatefulSet
+  - name: ethereum-storage
     namespace: ethereum
     createNamespace: true
+    chart: ./
+    values:
+      - executionStorageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
+        consensusStorageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
+
+  # Ethereum node (execution and consensus clients)
+  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
+  # Depends on storage being created first
+  - name: ethereum
+    namespace: ethereum
     chart: ethereum-helm-charts/ethereum-node
     version: 0.2.4
+    needs:
+      - ethereum-storage
     values:
       # Network and checkpoint sync configuration
       - global:
@@ -38,13 +50,3 @@ releases:
             enabled: true
             storageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
             size: 200Gi
-
-  # Storage classes and ingress for execution and consensus clients
-  - name: ethereum-storage
-    namespace: ethereum
-    chart: ./
-    needs:
-      - ethereum
-    values:
-      - executionStorageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
-        consensusStorageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'

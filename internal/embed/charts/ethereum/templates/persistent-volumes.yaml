@@ -1,0 +1,48 @@
+{{- if and .Values.executionStorageClassName .Values.consensusStorageClassName }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Release.Namespace }}-execution-pvc
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.executionStorageClassName }}
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /data/{{ .Release.Namespace }}/execution-pvc-{{ .Values.executionStorageClassName }}
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - k3d-obol-stack-dear-lemur-server-0
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Release.Namespace }}-consensus-pvc
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.consensusStorageClassName }}
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /data/{{ .Release.Namespace }}/consensus-pvc-{{ .Values.consensusStorageClassName }}
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - k3d-obol-stack-dear-lemur-server-0
+{{- end }}
