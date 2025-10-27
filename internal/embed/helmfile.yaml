@@ -9,6 +9,6 @@ helmfiles:
     values:
       - obol:
           clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
-          network: '{{ env "OBOL_NETWORK" | default "mainnet" }}'
+          network: '{{ env "OBOL_NETWORK" | default "hoodi" }}'
           dataDir: /data
           storageClass: local-path
