@@ -12,3 +12,8 @@ helmfiles:
           network: '{{ env "OBOL_NETWORK" | default "hoodi" }}'
           dataDir: /data
           storageClass: local-path
+          ethereum:
+            execution:
+              client: '{{ env "OBOL_ETHEREUM_EXECUTION_CLIENT" | default "reth" }}'
+            consensus:
+              client: '{{ env "OBOL_ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}'

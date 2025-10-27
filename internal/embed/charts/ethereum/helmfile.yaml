@@ -3,10 +3,48 @@ repositories:
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
+  # Ethereum node (execution and consensus clients)
+  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
   - name: ethereum
     namespace: ethereum
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     version: 0.2.4
     values:
-      - values.yaml
+      # Network and checkpoint sync configuration
+      - global:
+          main:
+            network: '{{ .Values.obol.network }}'
+          checkpointSync:
+            enabled: true
+            addresses:
+              mainnet: https://mainnet-checkpoint-sync.attestant.io
+              sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
+              holesky: https://checkpoint-sync.holesky.ethpandaops.io
+              hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+
+      # Execution client (configured by OBOL_ETHEREUM_EXECUTION_CLIENT env var)
+      - {{ .Values.obol.ethereum.execution.client }}:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
+            size: 500Gi
+
+      # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
+      - {{ .Values.obol.ethereum.consensus.client }}:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
+            size: 200Gi
+
+  # Storage classes and ingress for execution and consensus clients
+  - name: ethereum-storage
+    namespace: ethereum
+    chart: ./
+    needs:
+      - ethereum
+    values:
+      - executionStorageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
+        consensusStorageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
