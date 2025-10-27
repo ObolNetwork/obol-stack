@@ -1,0 +1,8 @@
+releases:
+  - name: hello
+    namespace: hello
+    createNamespace: true
+    chart: ./
+    values:
+      - values.yaml
+      - network: '{{ .Values.obol.network }}'

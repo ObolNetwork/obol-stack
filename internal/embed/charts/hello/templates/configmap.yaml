@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-content
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+      <body style="text-align: center; padding-top: 50px; font-family: Arial;">
+        <h1>Network: {{ .Values.network }}</h1>
+      </body>
+    </html>
