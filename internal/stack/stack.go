@@ -84,12 +84,12 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	l.Info(fmt.Sprintf("Helmfile copied to: %s", helmfileDestPath))
 
-	// Create applications directory for installable apps
-	applicationsDir := filepath.Join(cfg.ConfigDir, "applications")
-	if err := os.MkdirAll(applicationsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create applications directory: %w", err)
+	// Copy embedded charts (default + examples)
+	chartsDir := filepath.Join(cfg.ConfigDir, "charts")
+	if err := embed.CopyCharts(chartsDir); err != nil {
+		return fmt.Errorf("failed to copy charts: %w", err)
 	}
-	l.Info(fmt.Sprintf("Applications directory created: %s", applicationsDir))
+	l.Info(fmt.Sprintf("Charts copied to: %s", chartsDir))
 
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)

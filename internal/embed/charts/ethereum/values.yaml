@@ -1,0 +1,34 @@
+# Ethereum Node - Default Configuration
+# Edit this file to customize your deployment
+
+# Execution client configuration
+execution:
+  client: reth
+  # Image and tag can be customized
+  # pullPolicy: IfNotPresent
+
+# Consensus client configuration
+consensus:
+  client: lighthouse
+  # Image and tag can be customized
+  # pullPolicy: IfNotPresent
+
+# Persistence configuration
+persistence:
+  enabled: true
+  storageClassName: "{{ .Values.obol.storageClass }}"
+  size: 100Gi
+
+# Network configuration
+network:
+  # mainnet, holesky, sepolia
+  name: "{{ .Values.obol.network }}"
+
+# Resource limits
+resources:
+  limits:
+    memory: 4Gi
+    cpu: 2000m
+  requests:
+    memory: 2Gi
+    cpu: 1000m

@@ -1,8 +1,8 @@
 # Root helmfile for Obol Stack
-# Orchestrates all applications in applications/*/helmfile.yaml
-# Each application is self-contained with its own repositories and releases
+# Orchestrates all charts in charts/*/helmfile.yaml
+# Each chart is self-contained with its own repositories and releases
 
-# Global values available to all applications via .Values.obol
+# Global values available to all charts via .Values.obol
 values:
   obol:
     clusterId: "{{ env \"OBOL_CLUSTER_ID\" | default \"local\" }}"
@@ -11,8 +11,8 @@ values:
     storageClass: local-path
 
 helmfiles:
-  # Auto-discover all applications
-  # Each app defines its own repositories and releases
-  - path: applications/*/helmfile.yaml
+  # Auto-discover all charts
+  # Each chart defines its own repositories and releases
+  - path: charts/*/helmfile.yaml
     values:
       - obol

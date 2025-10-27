@@ -1,0 +1,12 @@
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+
+releases:
+  - name: ethereum
+    namespace: ethereum
+    createNamespace: true
+    chart: ethereum-helm-charts/ethereum-node
+    version: 0.2.4
+    values:
+      - values.yaml
