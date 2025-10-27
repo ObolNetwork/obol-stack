@@ -290,9 +290,16 @@ GLOBAL OPTIONS:
 					})
 					defer cleanup()
 
+					// Set up environment with KUBECONFIG and HELMFILE_FILE_PATH
+					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
+					env := append(os.Environ(),
+						fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+						fmt.Sprintf("HELMFILE_FILE_PATH=%s", helmfileConfigPath),
+					)
+
 					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
-					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
+					cmd.SetEnv(env)
 					cmd.SetStdin(os.Stdin)
 
 					if err := cmd.Run(); err != nil {
