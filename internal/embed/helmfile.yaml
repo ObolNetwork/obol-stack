@@ -1,0 +1,78 @@
+# Root helmfile for Obol Stack
+#
+# This file orchestrates Helm-based applications across the cluster.
+#
+# IMPORTANT: This helmfile is NOT used to deploy default/monitoring.
+# Default applications (monitoring, etc.) are deployed as raw Kubernetes
+# manifests that are auto-applied by k3s on cluster startup.
+#
+# This helmfile is used only for installable, Helm-based applications
+# installed via 'obol app install <app-name>'.
+
+repositories:
+  # Obol Network charts
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts
+
+  # EthPandaOps charts (used by ethereum application)
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+
+helmDefaults:
+  # Ensure deployments are atomic (all-or-nothing)
+  atomic: true
+  # Clean up resources if deployment fails
+  cleanupOnFail: true
+  # Don't wait for resources to be ready (for local development)
+  wait: false
+  # Timeout for helmfile operations
+  timeout: 600
+
+# Shared values passed to all imported helmfiles
+# These are available to all applications via .Values.obol
+values:
+  obol:
+    # Cluster metadata (populated from environment or defaults)
+    clusterId: "{{ env \"OBOL_CLUSTER_ID\" | default \"local\" }}"
+    network: "{{ env \"OBOL_NETWORK\" | default \"mainnet\" }}"
+    # Persistent data directory mounted in all pods
+    dataDir: /data
+    # Optional: shared registry credentials or pull policies
+    imagePullPolicy: IfNotPresent
+
+# Import application helmfiles
+# Pattern explanation:
+#   - applications/*/helmfile.yaml matches any app directory (ethereum, etc.)
+#   - Each app's helmfile is self-contained and defines its releases
+#   - Apps are deployed in alphabetical order unless dependencies are specified
+#
+# Typical workflow:
+#   1. User installs app: obol app install ethereum
+#   2. Creates: ~/.config/obol/applications/ethereum/helmfile.yaml
+#   3. Root helmfile auto-discovers and imports it here
+#   4. User runs: helmfile apply
+#   5. All applications deploy via their individual helmfiles
+helmfiles:
+  # Glob pattern imports all installed applications
+  # Each app's helmfile is isolated - changes to one don't affect others
+  - path: applications/*/helmfile.yaml
+    values:
+      # Pass shared values to all applications
+      - obol:
+          clusterId: "{{ env \"OBOL_CLUSTER_ID\" | default \"local\" }}"
+          network: "{{ env \"OBOL_NETWORK\" | default \"mainnet\" }}"
+          dataDir: /data
+          imagePullPolicy: IfNotPresent
+
+# Environment profiles (optional)
+# Usage: helmfile -e prod sync
+# Allows different configs for local vs production deployments
+environments:
+  local:
+    values:
+      environment: local
+      loglevel: debug
+  prod:
+    values:
+      environment: production
+      loglevel: info
