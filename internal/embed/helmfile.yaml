@@ -2,17 +2,13 @@
 # Orchestrates all charts in charts/*/helmfile.yaml
 # Each chart is self-contained with its own repositories and releases
 
-# Global values available to all charts via .Values.obol
-values:
-  obol:
-    clusterId: "{{ env \"OBOL_CLUSTER_ID\" | default \"local\" }}"
-    network: "{{ env \"OBOL_NETWORK\" | default \"mainnet\" }}"
-    dataDir: /data
-    storageClass: local-path
-
+# Auto-discover all charts
+# Each chart defines its own repositories and releases
 helmfiles:
-  # Auto-discover all charts
-  # Each chart defines its own repositories and releases
-  - path: charts/*/helmfile.yaml
+  - path: charts/ingress/helmfile.yaml
     values:
-      - obol
+      - obol:
+          clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
+          network: '{{ env "OBOL_NETWORK" | default "mainnet" }}'
+          dataDir: /data
+          storageClass: local-path
