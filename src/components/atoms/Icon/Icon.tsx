@@ -31,7 +31,6 @@ export interface IconProps {
   color?: string;
   className?: string;
   'aria-label'?: string;
-  role?: string;
 }
 
 // Size mapping
@@ -140,16 +139,9 @@ export function Icon({
   color = 'currentColor',
   className,
   'aria-label': ariaLabel,
-  role = 'img',
 }: IconProps) {
   return (
-    <IconContainer
-      size={size}
-      className={className}
-      style={{ color }}
-      aria-label={ariaLabel || `${name} icon`}
-      role={role}
-    >
+    <IconContainer size={size} className={className} style={{ color }}>
       <Image
         src={`/${name}.svg`}
         alt={ariaLabel || `${name} icon`}
