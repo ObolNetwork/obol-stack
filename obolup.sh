@@ -72,6 +72,18 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+# Check if binary exists globally in PATH
+check_global_binary() {
+	local binary_name="$1"
+	if command_exists "$binary_name"; then
+		local global_path
+		global_path=$(which "$binary_name" 2>/dev/null)
+		echo "$global_path"
+		return 0
+	fi
+	return 1
+}
+
 # Create directory structure
 create_directories() {
 	log_info "Creating directory structure..."
@@ -344,7 +356,18 @@ install_kubectl() {
 	local arch=$(detect_arch)
 	local current_version=""
 
-	# Check current version
+	# Check for global kubectl first
+	local global_kubectl
+	if global_kubectl=$(check_global_binary "kubectl"); then
+		local global_version
+		global_version=$("$global_kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$KUBECTL_VERSION"; then
+			log_success "kubectl v$global_version already installed at: $global_kubectl"
+			return 0
+		fi
+	fi
+
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/kubectl" ]]; then
 		current_version=$("$OBOL_BIN_DIR/kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
 	fi
@@ -384,7 +407,18 @@ install_helm() {
 	local arch=$(detect_arch)
 	local current_version=""
 
-	# Check current version
+	# Check for global helm first
+	local global_helm
+	if global_helm=$(check_global_binary "helm"); then
+		local global_version
+		global_version=$("$global_helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELM_VERSION"; then
+			log_success "helm v$global_version already installed at: $global_helm"
+			return 0
+		fi
+	fi
+
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/helm" ]]; then
 		current_version=$("$OBOL_BIN_DIR/helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
 	fi
@@ -426,7 +460,18 @@ install_k3d() {
 	local arch=$(detect_arch)
 	local current_version=""
 
-	# Check current version
+	# Check for global k3d first
+	local global_k3d
+	if global_k3d=$(check_global_binary "k3d"); then
+		local global_version
+		global_version=$("$global_k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K3D_VERSION"; then
+			log_success "k3d v$global_version already installed at: $global_k3d"
+			return 0
+		fi
+	fi
+
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/k3d" ]]; then
 		current_version=$("$OBOL_BIN_DIR/k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
 	fi
@@ -470,9 +515,20 @@ install_helmfile() {
 	local arch=$(detect_arch)
 	local current_version=""
 
-	# Check current version
+	# Check for global helmfile first
+	local global_helmfile
+	if global_helmfile=$(check_global_binary "helmfile"); then
+		local global_version
+		global_version=$("$global_helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*v\([0-9.]*\).*/\1/p' || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELMFILE_VERSION"; then
+			log_success "helmfile v$global_version already installed at: $global_helmfile"
+			return 0
+		fi
+	fi
+
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
-		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*\([0-9.]*\).*/\1/p' || echo "")
+		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*v\([0-9.]*\).*/\1/p' || echo "")
 	fi
 
 	# Use pinned version
@@ -519,15 +575,18 @@ install_helmfile() {
 
 # Install helm-diff plugin
 install_helm_diff() {
-	# Ensure helm is installed first
-	if [[ ! -f "$OBOL_BIN_DIR/helm" ]]; then
-		log_warn "helm not found, skipping helm-diff plugin"
-		return 1
+	# Find helm binary (check OBOL_BIN_DIR first, then global PATH)
+	local helm_bin="$OBOL_BIN_DIR/helm"
+	if [[ ! -f "$helm_bin" ]]; then
+		helm_bin=$(check_global_binary "helm") || {
+			log_warn "helm not found, skipping helm-diff plugin"
+			return 1
+		}
 	fi
 
 	# Try to check plugin list - if this fails, the plugin directory may be corrupted
 	local plugin_check
-	plugin_check=$("$OBOL_BIN_DIR/helm" plugin list 2>&1)
+	plugin_check=$("$helm_bin" plugin list 2>&1)
 	local check_exit=$?
 
 	# If plugin check succeeded and diff is already installed, we're done
@@ -542,7 +601,7 @@ install_helm_diff() {
 
 		# Get helm plugin directory (usually ~/.local/share/helm/plugins)
 		local helm_plugins_dir
-		helm_plugins_dir=$(dirname "$("$OBOL_BIN_DIR/helm" env 2>/dev/null | grep HELM_PLUGINS | cut -d'=' -f2 | tr -d '"' || echo "$HOME/.local/share/helm/plugins")")
+		helm_plugins_dir=$(dirname "$("$helm_bin" env 2>/dev/null | grep HELM_PLUGINS | cut -d'=' -f2 | tr -d '"' || echo "$HOME/.local/share/helm/plugins")")
 
 		# Remove corrupted helm-diff plugin if it exists
 		if [[ -d "$helm_plugins_dir/plugins/helm-diff" ]]; then
@@ -554,7 +613,7 @@ install_helm_diff() {
 	log_info "Installing helm-diff plugin v${HELM_DIFF_VERSION}..."
 
 	# Install the plugin with pinned version
-	if "$OBOL_BIN_DIR/helm" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" 2>&1 | grep -q "Installed plugin"; then
+	if "$helm_bin" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" 2>&1 | grep -q "Installed plugin"; then
 		log_success "helm-diff plugin v${HELM_DIFF_VERSION} installed"
 		return 0
 	else
@@ -569,7 +628,18 @@ install_k9s() {
 	local arch=$(detect_arch)
 	local current_version=""
 
-	# Check current version
+	# Check for global k9s first
+	local global_k9s
+	if global_k9s=$(check_global_binary "k9s"); then
+		local global_version
+		global_version=$("$global_k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K9S_VERSION"; then
+			log_success "k9s v$global_version already installed at: $global_k9s"
+			return 0
+		fi
+	fi
+
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/k9s" ]]; then
 		current_version=$("$OBOL_BIN_DIR/k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
 	fi
