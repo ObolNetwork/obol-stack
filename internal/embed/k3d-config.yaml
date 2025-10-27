@@ -2,22 +2,13 @@ apiVersion: k3d.io/v1alpha5
 kind: Simple
 metadata:
   name: obol-stack-{{STACK_ID}}
-# Maximize memory availability for cluster
 servers: 1
 agents: 0
 image: rancher/k3s:v1.31.4-k3s1
-# Mount host directories into all nodes for persistent storage
-# Absolute paths are written during cluster init
 volumes:
   - volume: {{DATA_DIR}}:/data
     nodeFilters:
       - all
-  # Mount default applications for auto-deployment
-  # These are embedded applications that deploy automatically with every cluster
-  # k3s automatically applies any manifests in /var/lib/rancher/k3s/server/manifests/
-  - volume: {{CONFIG_DIR}}/applications/default:/var/lib/rancher/k3s/server/manifests/default
-    nodeFilters:
-      - server:*
 ports:
   - port: 8080:80
     nodeFilters:
@@ -27,28 +18,25 @@ ports:
       - loadbalancer
 options:
   k3d:
-    # Wait for cluster to be ready before returning
     wait: true
     timeout: "100s"
   k3s:
     extraArgs:
-      # Enable KubeletInUserNamespace feature to allow k3s to run without /dev/kmsg access
-      # This fixes "operation not permitted" errors when Docker doesn't have full privileges
       - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true
         nodeFilters:
           - server:*
-          - agent:*
-      # kube-apiserver only runs on server nodes, not agents
       - arg: --kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true
         nodeFilters:
           - server:*
+      # Disable Traefik to use nginx instead
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
   runtime:
-    # Apply cluster_id as a label to all containers for tracking
     labels:
-      - label: obol.cluster-id={{CLUSTER_ID}}
+      - label: obol.cluster-id={{STACK_ID}}
         nodeFilters:
           - all
-    # Increase file descriptor limits to prevent "too many open files" errors
     ulimits:
       - name: nofile
         soft: 26677
