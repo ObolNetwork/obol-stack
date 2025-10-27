@@ -1,16 +1,6 @@
 # Root helmfile for Obol Stack
-# Orchestrates all Helm-based applications installed in applications/*/
-# Global values are passed to all child helmfiles
-
-repositories:
-  - name: obol
-    url: https://obolnetwork.github.io/helm-charts
-  - name: ethereum-helm-charts
-    url: https://ethpandaops.github.io/ethereum-helm-charts
-  - name: prometheus-community
-    url: https://prometheus-community.github.io/helm-charts
-  - name: traefik
-    url: https://helm.traefik.io/traefik
+# Orchestrates all applications in applications/*/helmfile.yaml
+# Each application is self-contained with its own repositories and releases
 
 # Global values available to all applications via .Values.obol
 values:
@@ -18,11 +8,11 @@ values:
     clusterId: "{{ env \"OBOL_CLUSTER_ID\" | default \"local\" }}"
     network: "{{ env \"OBOL_NETWORK\" | default \"mainnet\" }}"
     dataDir: /data
+    storageClass: local-path
 
 helmfiles:
-  # Auto-discover all installed applications
-  # Each app's helmfile is at: applications/{repo}/{chart}/helmfile.yaml
-  # All apps receive .Values.obol from above
+  # Auto-discover all applications
+  # Each app defines its own repositories and releases
   - path: applications/*/helmfile.yaml
     values:
-      - obol  # Pass global obol values to child helmfiles
+      - obol
