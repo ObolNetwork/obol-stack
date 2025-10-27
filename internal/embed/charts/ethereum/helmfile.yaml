@@ -3,25 +3,14 @@ repositories:
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
-  # Storage classes, persistent volumes, and ingress (deploy first!)
-  # These must exist before the Ethereum chart creates its StatefulSet
-  - name: ethereum-storage
-    namespace: ethereum
-    createNamespace: true
-    chart: ./
-    values:
-      - executionStorageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
-        consensusStorageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
-
   # Ethereum node (execution and consensus clients)
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
-  # Depends on storage being created first
+  # Note: Storage uses the cluster-level "local-persistent" StorageClass
   - name: ethereum
     namespace: ethereum
+    createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     version: 0.2.4
-    needs:
-      - ethereum-storage
     values:
       # Network and checkpoint sync configuration
       - global:
@@ -40,7 +29,7 @@ releases:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: '{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}'
+            storageClassName: 'local-persistent'
             size: 500Gi
 
       # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
@@ -48,5 +37,10 @@ releases:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: '{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}'
+            storageClassName: 'local-persistent'
             size: 200Gi
+
+  # Ingress for Ethereum RPC endpoints
+  - name: ethereum-ingress
+    namespace: ethereum
+    chart: .

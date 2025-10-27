@@ -11,7 +11,7 @@ helmfiles:
           clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
           network: '{{ env "OBOL_NETWORK" | default "hoodi" }}'
           dataDir: /data
-          storageClass: local-path
+          storageClass: local-persistent
           ethereum:
             execution:
               client: '{{ env "OBOL_ETHEREUM_EXECUTION_CLIENT" | default "reth" }}'

@@ -1,5 +1,5 @@
 apiVersion: v2
-name: ethereum-stack
-description: Ethereum execution and consensus layer stack with ingress
+name: ethereum-addons
+description: Ethereum node addons and extensions (ingress, monitoring integration)
 type: application
 version: 0.1.0
