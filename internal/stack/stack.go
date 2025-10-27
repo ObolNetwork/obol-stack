@@ -77,12 +77,19 @@ func Init(cfg *config.Config, force bool) error {
 
 	l.Info(fmt.Sprintf("K3d config saved to: %s", k3dConfigPath))
 
-	// Copy embedded applications directory
-	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
-	if err := embed.CopyDefaultApplications(applicationsDestDir); err != nil {
-		return fmt.Errorf("failed to copy applications: %w", err)
+	// Copy root helmfile to config directory for application orchestration
+	helmfileDestPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
+	if err := os.WriteFile(helmfileDestPath, []byte(embed.HelmfileTemplate), 0644); err != nil {
+		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
-	l.Info(fmt.Sprintf("Applications copied to: %s", applicationsDestDir))
+	l.Info(fmt.Sprintf("Helmfile copied to: %s", helmfileDestPath))
+
+	// Create applications directory for installable apps
+	applicationsDir := filepath.Join(cfg.ConfigDir, "applications")
+	if err := os.MkdirAll(applicationsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create applications directory: %w", err)
+	}
+	l.Info(fmt.Sprintf("Applications directory created: %s", applicationsDir))
 
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
