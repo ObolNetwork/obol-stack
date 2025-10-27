@@ -1,8 +1,6 @@
 package embed
 
-import (
-	"embed"
-)
+import _ "embed"
 
 // Embedded file systems
 // Note: embed paths are relative to this file's directory (internal/embed/)
