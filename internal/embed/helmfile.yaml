@@ -5,7 +5,7 @@
 # Auto-discover all charts
 # Each chart defines its own repositories and releases
 helmfiles:
-  - path: charts/ingress/helmfile.yaml
+  - path: charts/*/helmfile.yaml
     values:
       - obol:
           clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
