@@ -18,31 +18,12 @@ import (
 //   - Per-app values: $OBOL_CONFIG_DIR/applications/{repo}/{chart}/values.yaml
 //
 // Implementation needed:
-//   1. List(cfg, helmCharts []HelmChart) - List available Helm charts from repos
-//   2. Install(cfg, chart, repo, valuesOverride) - Scaffold application directory
-//   3. Edit(cfg, appPath) - Open helmfile or values.yaml in editor
-//   4. Sync(cfg, appPath) - Deploy via helmfile
-//   5. Delete(cfg, appPath) - Remove app and clean up cluster resources
+//   1. Install(cfg, chart, repo, valuesOverride) - Scaffold application directory
+//   2. Edit(cfg, appPath) - Open helmfile or values.yaml in editor
+//   3. Sync(cfg, appPath) - Deploy via helmfile
+//   4. Delete(cfg, appPath) - Remove app and clean up cluster resources
 //
 // See: internal/embed/helmfile.yaml for root orchestration pattern
-
-// List returns available applications
-func List(cfg *config.Config) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info("Listing available applications")
-	l.Warn("TODO: Implement chart discovery from configured Helm repositories")
-
-	return nil
-}
 
 // Install scaffolds a new application directory
 func Install(cfg *config.Config, chart string, repo string, valuesOverride string) error {
