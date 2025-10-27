@@ -228,8 +228,8 @@ func Down(cfg *config.Config) error {
 	return nil
 }
 
-// Purge deletes the cluster and all data (except binaries)
-func Purge(cfg *config.Config) error {
+// Purge deletes the cluster config and optionally data
+func Purge(cfg *config.Config, force bool) error {
 	// Get stack_id (optional - may not exist if stack was never initialized)
 	stackID := getStackID(cfg)
 
@@ -251,13 +251,19 @@ func Purge(cfg *config.Config) error {
 	}
 	l.Success("Removed cluster config directory")
 
-	// Remove data directory
-	if err := os.RemoveAll(cfg.DataDir); err != nil {
-		return fmt.Errorf("failed to remove data directory: %w", err)
+	// Remove data directory only if force flag is set
+	if force {
+		if err := os.RemoveAll(cfg.DataDir); err != nil {
+			return fmt.Errorf("failed to remove data directory: %w", err)
+		}
+		l.Success("Removed data directory")
+		l.Success("Cluster fully purged (binaries preserved)")
+	} else {
+		l.Success("Cluster purged (config removed, data preserved)")
+		l.Info(fmt.Sprintf("To delete persistent data: rm -rf %s", cfg.DataDir))
+		l.Info("Or use 'obol stack purge --force' to remove everything")
 	}
-	l.Success("Removed data directory")
 
-	l.Success("Cluster purged (binaries preserved)")
 	return nil
 }
 

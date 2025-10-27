@@ -43,7 +43,7 @@ COMMANDS:
      stack init      Initialize stack configuration
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
-     stack purge     Delete stack and all data
+     stack purge     Delete stack config (use --force to also delete data)
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -127,9 +127,16 @@ GLOBAL OPTIONS:
 					},
 					{
 						Name:  "purge",
-						Usage: "Delete stack and all data",
+						Usage: "Delete stack config (data preserved by default)",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Also delete persistent data",
+							},
+						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Purge(cfg); err != nil {
+							if err := stack.Purge(cfg, c.Bool("force")); err != nil {
 								stackID := stack.GetStackID(cfg)
 								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
 									StateDir: cfg.StateDir,
