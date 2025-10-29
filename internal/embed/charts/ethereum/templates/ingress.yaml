@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ethereum
+  namespace: {{ .Release.Namespace }}
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: execution.ethereum.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ethereum-execution
+            port:
+              number: 8545
+  - host: beacon.ethereum.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ethereum-beacon
+            port:
+              number: 5052

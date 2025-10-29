@@ -1,0 +1,19 @@
+# Root helmfile for Obol Stack
+# Orchestrates all charts in charts/*/helmfile.yaml
+# Each chart is self-contained with its own repositories and releases
+
+# Auto-discover all charts
+# Each chart defines its own repositories and releases
+helmfiles:
+  - path: charts/*/helmfile.yaml
+    values:
+      - obol:
+          clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
+          network: '{{ env "OBOL_NETWORK" | default "hoodi" }}'
+          dataDir: /data
+          storageClass: local-persistent
+          ethereum:
+            execution:
+              client: '{{ env "OBOL_ETHEREUM_EXECUTION_CLIENT" | default "reth" }}'
+            consensus:
+              client: '{{ env "OBOL_ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}'

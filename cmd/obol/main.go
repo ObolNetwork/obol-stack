@@ -5,10 +5,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
@@ -43,7 +43,7 @@ COMMANDS:
      stack init      Initialize stack configuration
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
-     stack purge     Delete stack and all data
+     stack purge     Delete stack config (use --force to also delete data)
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -127,9 +127,16 @@ GLOBAL OPTIONS:
 					},
 					{
 						Name:  "purge",
-						Usage: "Delete stack and all data",
+						Usage: "Delete stack config (data preserved by default)",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Also delete persistent data",
+							},
+						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Purge(cfg); err != nil {
+							if err := stack.Purge(cfg, c.Bool("force")); err != nil {
 								stackID := stack.GetStackID(cfg)
 								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
 									StateDir: cfg.StateDir,
@@ -290,9 +297,16 @@ GLOBAL OPTIONS:
 					})
 					defer cleanup()
 
+					// Set up environment with KUBECONFIG and HELMFILE_FILE_PATH
+					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
+					env := append(os.Environ(),
+						fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+						fmt.Sprintf("HELMFILE_FILE_PATH=%s", helmfileConfigPath),
+					)
+
 					exec := executor.New(l.Logger)
 					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
-					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
+					cmd.SetEnv(env)
 					cmd.SetStdin(os.Stdin)
 
 					if err := cmd.Run(); err != nil {
@@ -365,77 +379,63 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
-			// TODO: Implement app command
-			// {
-			//     Name:  "app",
-			//     Usage: "Manage applications",
-			//     Subcommands: []*cli.Command{
-			//         {Name: "install", Usage: "Install an application"},
-			//         {Name: "edit", Usage: "Edit application values"},
-			//         {Name: "sync", Usage: "Sync application changes to cluster"},
-			//         {Name: "update", Usage: "Update application template"},
-			//         {Name: "delete", Usage: "Delete an application"},
-			//     },
-			// },
 			{
 				Name:  "app",
 				Usage: "Manage applications",
 				Subcommands: []*cli.Command{
 					{
-						Name:      "list",
-						Usage:     "List available applications",
-						ArgsUsage: " ",
-						Action: func(c *cli.Context) error {
-							return app.List(cfg, embed.GetApplicationsFS())
-						},
-					},
-					{
 						Name:      "install",
-						Usage:     "Install an application",
-						ArgsUsage: "<app-name>",
+						Usage:     "Install a Helm chart as an application",
+						ArgsUsage: "<chart-url> [--values <override.yaml>]",
 						Flags: []cli.Flag{
-							&cli.BoolFlag{
-								Name:    "force",
-								Aliases: []string{"f"},
-								Usage:   "Force overwrite if application already exists",
+							&cli.StringFlag{
+								Name:    "values",
+								Aliases: []string{"v"},
+								Usage:   "Path to values override file",
 							},
 						},
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application name required")
+								return fmt.Errorf("chart URL required (e.g., obol/ethereum or ethereum-helm-charts/ethereum-node)")
 							}
-							appName := c.Args().First()
-							return app.Install(cfg, embed.GetApplicationsFS(), appName, c.Bool("force"))
+							chartURL := c.Args().First()
+							valuesOverride := c.String("values")
+							// Parse chart URL: repo/chart -> repo and chart
+							parts := strings.SplitN(chartURL, "/", 2)
+							if len(parts) != 2 {
+								return fmt.Errorf("invalid chart URL format, use: <repo>/<chart>")
+							}
+							return app.Install(cfg, parts[1], parts[0], valuesOverride)
 						},
 					},
 					{
 						Name:      "edit",
-						Usage:     "Edit application values.yaml",
-						ArgsUsage: "<app-name>",
+						Usage:     "Edit application helmfile or values",
+						ArgsUsage: "<app-path>",
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application name required")
+								return fmt.Errorf("application path required (e.g., obol/ethereum)")
 							}
-							appName := c.Args().First()
-							return app.Edit(cfg, appName)
+							appPath := c.Args().First()
+							return app.Edit(cfg, appPath)
 						},
 					},
 					{
 						Name:      "sync",
-						Usage:     "Sync application to cluster (apply changes)",
-						ArgsUsage: "<app-name>",
+						Usage:     "Deploy application to cluster via helmfile",
+						ArgsUsage: "<app-path>",
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application name required")
+								return fmt.Errorf("application path required (e.g., obol/ethereum)")
 							}
-							appName := c.Args().First()
-							return app.Sync(cfg, appName)
+							appPath := c.Args().First()
+							return app.Sync(cfg, appPath)
 						},
 					},
 					{
 						Name:      "delete",
-						Usage:     "Delete application and remove from cluster",
-						ArgsUsage: "<app-name>",
+						Usage:     "Remove application and clean up cluster resources",
+						ArgsUsage: "<app-path>",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
@@ -445,10 +445,10 @@ GLOBAL OPTIONS:
 						},
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application name required")
+								return fmt.Errorf("application path required (e.g., obol/ethereum)")
 							}
-							appName := c.Args().First()
-							return app.Delete(cfg, appName, c.Bool("force"))
+							appPath := c.Args().First()
+							return app.Delete(cfg, appPath, c.Bool("force"))
 						},
 					},
 				},

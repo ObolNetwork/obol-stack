@@ -1,0 +1,46 @@
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+
+releases:
+  # Ethereum node (execution and consensus clients)
+  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
+  # Note: Storage uses the cluster-level "local-persistent" StorageClass
+  - name: ethereum
+    namespace: ethereum
+    createNamespace: true
+    chart: ethereum-helm-charts/ethereum-node
+    version: 0.2.4
+    values:
+      # Network and checkpoint sync configuration
+      - global:
+          main:
+            network: '{{ .Values.obol.network }}'
+          checkpointSync:
+            enabled: true
+            addresses:
+              mainnet: https://mainnet-checkpoint-sync.attestant.io
+              sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
+              holesky: https://checkpoint-sync.holesky.ethpandaops.io
+              hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+
+      # Execution client (configured by OBOL_ETHEREUM_EXECUTION_CLIENT env var)
+      - {{ .Values.obol.ethereum.execution.client }}:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: 'local-persistent'
+            size: 500Gi
+
+      # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
+      - {{ .Values.obol.ethereum.consensus.client }}:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: 'local-persistent'
+            size: 200Gi
+
+  # Ingress for Ethereum RPC endpoints
+  - name: ethereum-ingress
+    namespace: ethereum
+    chart: .

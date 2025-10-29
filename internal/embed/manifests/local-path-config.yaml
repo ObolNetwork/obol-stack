@@ -1,0 +1,44 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-persistent
+provisioner: rancher.io/local-path
+parameters:
+  pathPattern: '{{ .PVC.Namespace }}/{{ .PVC.Name }}'
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-path-config
+  namespace: kube-system
+data:
+  config.json: |-
+    {
+      "nodePathMap":[
+      {
+        "node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+        "paths":["/data"]
+      }
+      ]
+    }
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+      - name: helper-pod
+        image: "rancher/mirrored-library-busybox:1.36.1"
+        imagePullPolicy: IfNotPresent
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "${VOL_DIR}"
+    chmod 755 "${VOL_DIR}/.."
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "${VOL_DIR}"

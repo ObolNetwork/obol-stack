@@ -77,12 +77,26 @@ func Init(cfg *config.Config, force bool) error {
 
 	l.Info(fmt.Sprintf("K3d config saved to: %s", k3dConfigPath))
 
-	// Copy embedded applications directory
-	applicationsDestDir := filepath.Join(cfg.ConfigDir, "applications")
-	if err := embed.CopyDefaultApplications(applicationsDestDir); err != nil {
-		return fmt.Errorf("failed to copy applications: %w", err)
+	// Copy root helmfile to config directory for application orchestration
+	helmfileDestPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
+	if err := os.WriteFile(helmfileDestPath, []byte(embed.HelmfileTemplate), 0644); err != nil {
+		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
-	l.Info(fmt.Sprintf("Applications copied to: %s", applicationsDestDir))
+	l.Info(fmt.Sprintf("Helmfile copied to: %s", helmfileDestPath))
+
+	// Copy embedded charts (default + examples)
+	chartsDir := filepath.Join(cfg.ConfigDir, "charts")
+	if err := embed.CopyCharts(chartsDir); err != nil {
+		return fmt.Errorf("failed to copy charts: %w", err)
+	}
+	l.Info(fmt.Sprintf("Charts copied to: %s", chartsDir))
+
+	// Copy embedded manifests (k3s auto-apply manifests)
+	manifestsDir := filepath.Join(cfg.ConfigDir, "manifests")
+	if err := embed.CopyManifests(manifestsDir); err != nil {
+		return fmt.Errorf("failed to copy manifests: %w", err)
+	}
+	l.Info(fmt.Sprintf("Manifests copied to: %s", manifestsDir))
 
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
@@ -214,8 +228,8 @@ func Down(cfg *config.Config) error {
 	return nil
 }
 
-// Purge deletes the cluster and all data (except binaries)
-func Purge(cfg *config.Config) error {
+// Purge deletes the cluster config and optionally data
+func Purge(cfg *config.Config, force bool) error {
 	// Get stack_id (optional - may not exist if stack was never initialized)
 	stackID := getStackID(cfg)
 
@@ -237,13 +251,19 @@ func Purge(cfg *config.Config) error {
 	}
 	l.Success("Removed cluster config directory")
 
-	// Remove data directory
-	if err := os.RemoveAll(cfg.DataDir); err != nil {
-		return fmt.Errorf("failed to remove data directory: %w", err)
+	// Remove data directory only if force flag is set
+	if force {
+		if err := os.RemoveAll(cfg.DataDir); err != nil {
+			return fmt.Errorf("failed to remove data directory: %w", err)
+		}
+		l.Success("Removed data directory")
+		l.Success("Cluster fully purged (binaries preserved)")
+	} else {
+		l.Success("Cluster purged (config removed, data preserved)")
+		l.Info(fmt.Sprintf("To delete persistent data: rm -rf %s", cfg.DataDir))
+		l.Info("Or use 'obol stack purge --force' to remove everything")
 	}
-	l.Success("Removed data directory")
 
-	l.Success("Cluster purged (binaries preserved)")
 	return nil
 }
 
