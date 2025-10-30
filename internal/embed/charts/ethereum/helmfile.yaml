@@ -55,10 +55,21 @@ releases:
             existingClaim: consensus-{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}
 
   # Ingress for Ethereum RPC endpoints
+  # Wait for nginx ingress controller webhook to be ready
   - name: ethereum-ingress
     namespace: ethereum
     chart: .
     needs: [ethereum]
+    hooks:
+      - events: ["presync"]
+        showlogs: true
+        command: "sh"
+        args:
+          - "-c"
+          - |
+            echo "Waiting for nginx ingress controller admission webhook to be ready..."
+            kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=controller,app.kubernetes.io/instance=ingress-nginx -n ingress --timeout=120s || true
+            sleep 2
     values:
       # Pass through values for ingress template
       - executionClient: '{{ .Values.obol.ethereum.execution.client }}'

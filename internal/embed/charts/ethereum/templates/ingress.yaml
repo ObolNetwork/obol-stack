@@ -14,14 +14,14 @@ spec:
     http:
       paths:
       - path: /ethereum/execution(/|$)(.*)
-        pathType: Prefix
+        pathType: ImplementationSpecific
         backend:
           service:
             name: ethereum-execution
             port:
               number: 8545
       - path: /ethereum/beacon(/|$)(.*)
-        pathType: Prefix
+        pathType: ImplementationSpecific
         backend:
           service:
             name: ethereum-beacon
