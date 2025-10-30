@@ -29,7 +29,6 @@ releases:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: 'local-persistent'
             size: 500Gi
 
       # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
@@ -37,7 +36,6 @@ releases:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: 'local-persistent'
             size: 200Gi
 
   # Ingress for Ethereum RPC endpoints

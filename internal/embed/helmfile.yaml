@@ -8,12 +8,10 @@ helmfiles:
   - path: charts/*/helmfile.yaml
     values:
       - obol:
-          clusterId: '{{ env "OBOL_CLUSTER_ID" | default "local" }}'
-          network: '{{ env "OBOL_NETWORK" | default "hoodi" }}'
+          network: "mainnet"
           dataDir: /data
-          storageClass: local-persistent
           ethereum:
             execution:
-              client: '{{ env "OBOL_ETHEREUM_EXECUTION_CLIENT" | default "reth" }}'
+              client: '{{ env "OBOL_ETHEREUM_EXECUTION_CLIENT" | default "geth" }}'
             consensus:
               client: '{{ env "OBOL_ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}'
