@@ -13,7 +13,13 @@ volumes:
     nodeFilters:
       - server:*
 ports:
+  - port: 80:80
+    nodeFilters:
+      - loadbalancer
   - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+  - port: 443:443
     nodeFilters:
       - loadbalancer
   - port: 8443:443
