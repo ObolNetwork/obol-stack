@@ -1,0 +1,30 @@
+{{- if eq .Release.Name "ethereum-pvcs" }}
+---
+# Ethereum Execution Client PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+  namespace: ethereum
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-storage
+  resources:
+    requests:
+      storage: 500Gi
+---
+# Ethereum Consensus Client PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+  namespace: ethereum
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-storage
+  resources:
+    requests:
+      storage: 200Gi
+{{- end }}
