@@ -29,6 +29,10 @@ options:
   k3d:
     wait: true
     timeout: "100s"
+    disableLoadbalancer: false
+  docker:
+    # Graceful shutdown timeout for containers
+    gpuRequest: null
   k3s:
     extraArgs:
       - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true

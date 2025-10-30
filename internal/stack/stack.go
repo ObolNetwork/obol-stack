@@ -145,8 +145,20 @@ func Up(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("k3d list command failed: %w", err)
 	}
+
 	if stackExists(string(listCmdOutput), stackName) {
-		return fmt.Errorf("stack '%s' already exists, use 'obol stack down' to stop it first", stackName)
+		// Cluster exists - check if it's stopped or running
+		l.Info("Stack already exists, attempting to start", "name", stackName, "id", stackID)
+		startCmd := exec.CommandWithOutput(
+			filepath.Join(cfg.BinDir, "k3d"),
+			"cluster", "start", stackName,
+		)
+		if err := startCmd.Run(); err != nil {
+			return fmt.Errorf("failed to start existing cluster: %w", err)
+		}
+		l.Success("Stack restarted successfully")
+		l.Success("Stack ID", "id", stackID)
+		return nil
 	}
 
 	l.Info("Starting stack", "name", stackName, "id", stackID)
@@ -214,15 +226,24 @@ func Down(cfg *config.Config) error {
 	exec := executor.New(l.Logger)
 	defer exec.Close()
 
-	l.Info("Stopping stack", "name", stackName, "id", stackID)
+	l.Info("Stopping stack gracefully", "name", stackName, "id", stackID)
 
-	deleteCmd := exec.CommandWithOutput(
+	// First attempt graceful stop (allows processes to shutdown gracefully)
+	stopCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "delete", stackName,
+		"cluster", "stop", stackName,
 	)
 
-	if err := deleteCmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop cluster: %w", err)
+	if err := stopCmd.Run(); err != nil {
+		l.Warn("Graceful stop timed out or failed, forcing cluster deletion")
+		// Fallback to delete if stop fails
+		deleteCmd := exec.CommandWithOutput(
+			filepath.Join(cfg.BinDir, "k3d"),
+			"cluster", "delete", stackName,
+		)
+		if err := deleteCmd.Run(); err != nil {
+			return fmt.Errorf("failed to stop cluster: %w", err)
+		}
 	}
 
 	l.Success("Stack stopped successfully")
