@@ -8,6 +8,9 @@ import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
 import { ChainData } from '../../../types/dashboard';
 import { ChainIcon } from '../../atoms/ChainIcon';
+import { Icon } from '../../atoms/Icon';
+import { useWalletClient } from 'wagmi';
+import { addNetworkToWallet } from '../../../lib/utils/wallet';
 
 export interface NetworkStatusProps {
   chainData: ChainData;
@@ -91,10 +94,42 @@ const ClientsContainer = styled(Box, {
   gap: '$xs',
 });
 
+const AddToWalletButton = styled(Flex, {
+  width: 'max-content',
+  alignItems: 'center',
+  gap: '$xxxs',
+  backgroundColor: 'transparent',
+  cursor: 'pointer',
+});
+
+const AddToWalletText = styled(Text, {
+  color: '$light',
+  fontFamily: '$fonts$body',
+  fontSize: '$3',
+  fontStyle: 'normal',
+  fontWeight: '$semibold',
+  lineHeight: '10px',
+});
+
 export function NetworkStatus({
   chainData,
   defaultExpanded = true,
 }: NetworkStatusProps) {
+  const { data: walletClient } = useWalletClient();
+
+  const handleAddNetwork = async () => {
+    if (!walletClient) {
+      console.warn('Wallet not connected');
+      return;
+    }
+
+    try {
+      await addNetworkToWallet(walletClient, chainData.chainName);
+    } catch (error) {
+      console.error('Error adding network:', error);
+    }
+  };
+
   const headerContent = (
     <NetworkHeader
       css={{
@@ -120,14 +155,26 @@ export function NetworkStatus({
         />
       </Flex>
 
-      <StatusIndicator
-        status={
-          chainData.status === 'syncing'
-            ? 'unsynced'
-            : (chainData.status as 'synced' | 'unsynced')
-        }
-        size="md"
-      />
+      <Flex css={{ alignItems: 'center', gap: '$xxs', width: 'auto' }}>
+        <AddToWalletButton
+          onClick={(e: React.MouseEvent) => {
+            e.stopPropagation();
+            handleAddNetwork();
+          }}
+        >
+          <Icon name="add-circle" size="s" />
+          <AddToWalletText>Add network to wallet</AddToWalletText>
+        </AddToWalletButton>
+
+        <StatusIndicator
+          status={
+            chainData.status === 'syncing'
+              ? 'unsynced'
+              : (chainData.status as 'synced' | 'unsynced')
+          }
+          size="md"
+        />
+      </Flex>
     </NetworkHeader>
   );
 
