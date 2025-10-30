@@ -98,6 +98,7 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	l.Info(fmt.Sprintf("Manifests copied to: %s", manifestsDir))
 
+
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
@@ -239,6 +240,10 @@ func Purge(cfg *config.Config, force bool) error {
 	})
 	defer cleanup()
 
+	// Create executor for subprocess calls
+	exec := executor.New(l.Logger)
+	defer exec.Close()
+
 	// Stop cluster first
 	if err := Down(cfg); err != nil {
 		l.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
@@ -253,14 +258,16 @@ func Purge(cfg *config.Config, force bool) error {
 
 	// Remove data directory only if force flag is set
 	if force {
-		if err := os.RemoveAll(cfg.DataDir); err != nil {
+		// Use sudo to remove data directory since it may contain root-owned files
+		rmCmd := exec.CommandWithOutput("sudo", "rm", "-rf", cfg.DataDir)
+		if err := rmCmd.Run(); err != nil {
 			return fmt.Errorf("failed to remove data directory: %w", err)
 		}
 		l.Success("Removed data directory")
 		l.Success("Cluster fully purged (binaries preserved)")
 	} else {
 		l.Success("Cluster purged (config removed, data preserved)")
-		l.Info(fmt.Sprintf("To delete persistent data: rm -rf %s", cfg.DataDir))
+		l.Info(fmt.Sprintf("To delete persistent data: sudo rm -rf %s", cfg.DataDir))
 		l.Info("Or use 'obol stack purge --force' to remove everything")
 	}
 
