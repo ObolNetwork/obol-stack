@@ -265,9 +265,44 @@ func Purge(cfg *config.Config, force bool) error {
 	exec := executor.New(l.Logger)
 	defer exec.Close()
 
-	// Stop cluster first
-	if err := Down(cfg); err != nil {
-		l.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
+	// Delete cluster containers
+	stackName := getStackName(cfg)
+	if stackName != "" {
+		if force {
+			// Force delete without graceful shutdown
+			l.Info("Force deleting cluster containers", "name", stackName)
+			deleteCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "delete", stackName,
+			)
+			if err := deleteCmd.Run(); err != nil {
+				l.Warn(fmt.Sprintf("Failed to delete cluster (may already be deleted): %v", err))
+			}
+			l.Success("Cluster containers force deleted")
+		} else {
+			// Graceful shutdown first to ensure data is written properly
+			l.Info("Gracefully stopping cluster before deletion", "name", stackName)
+			stopCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "stop", stackName,
+			)
+			if err := stopCmd.Run(); err != nil {
+				l.Warn("Graceful stop timed out or failed, proceeding with deletion anyway")
+			} else {
+				l.Success("Cluster stopped gracefully")
+			}
+
+			// Now delete the stopped cluster
+			l.Info("Deleting cluster containers", "name", stackName)
+			deleteCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "delete", stackName,
+			)
+			if err := deleteCmd.Run(); err != nil {
+				l.Warn(fmt.Sprintf("Failed to delete cluster (may already be deleted): %v", err))
+			}
+			l.Success("Cluster containers deleted")
+		}
 	}
 
 	// Remove stack config directory
