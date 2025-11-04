@@ -70,13 +70,6 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to get absolute path for config directory: %w", err)
 	}
 
-	// Get absolute path to state directory for rendered defaults
-	absStateDir, err := filepath.Abs(cfg.StateDir)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for state directory: %w", err)
-	}
-	renderedDefaultsDir := filepath.Join(absStateDir, stackID, "rendered-defaults")
-
 	// Check if overwriting config
 	if _, err := os.Stat(k3dConfigPath); err == nil {
 		l.Info("Overwriting existing stack configuration", "path", k3dConfigPath)
@@ -87,7 +80,6 @@ func Init(cfg *config.Config, force bool) error {
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{STACK_ID}}", stackID)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
-	k3dConfig = strings.ReplaceAll(k3dConfig, "{{RENDERED_DEFAULTS_DIR}}", renderedDefaultsDir)
 
 	// Write k3d config with stack ID to destination
 	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
@@ -160,6 +152,23 @@ func Up(cfg *config.Config) error {
 		if err := startCmd.Run(); err != nil {
 			return fmt.Errorf("failed to start existing cluster: %w", err)
 		}
+
+		l.Info("Deploying default infrastructure with helmfile")
+
+		// Apply defaults using helmfile (handles Helm hooks properly)
+		defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
+		helmfileCmd := exec.CommandWithOutput(
+			filepath.Join(cfg.BinDir, "helmfile"),
+			"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
+			"--kubeconfig", kubeconfigPath,
+			"apply",
+		)
+
+		if err := helmfileCmd.Run(); err != nil {
+			return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+		}
+
+		l.Success("Default infrastructure deployed")
 		l.Success("Stack restarted successfully")
 		l.Success("Stack ID", "id", stackID)
 		return nil
@@ -177,40 +186,6 @@ func Up(cfg *config.Config) error {
 	if err := os.MkdirAll(absDataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
-
-	// Render helmfile for defaults to generate manifests
-	absStateDir, err := filepath.Abs(cfg.StateDir)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for state directory: %w", err)
-	}
-	renderedDefaultsDir := filepath.Join(absStateDir, stackID, "rendered-defaults")
-
-	// Clean any previous rendered defaults
-	if err := os.RemoveAll(renderedDefaultsDir); err != nil {
-		return fmt.Errorf("failed to clean previous rendered defaults: %w", err)
-	}
-
-	// Create rendered defaults directory
-	if err := os.MkdirAll(renderedDefaultsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create rendered defaults directory: %w", err)
-	}
-
-	l.Info("Rendering default manifests from helmfile")
-
-	// Render helmfile templates from config/defaults/helmfile.yaml
-	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
-	helmfileCmd := exec.CommandWithOutput(
-		filepath.Join(cfg.BinDir, "helmfile"),
-		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
-		"template",
-		"--output-dir", renderedDefaultsDir,
-	)
-
-	if err := helmfileCmd.Run(); err != nil {
-		return fmt.Errorf("failed to render defaults helmfile: %w", err)
-	}
-
-	l.Success("Default manifests rendered", "path", renderedDefaultsDir)
 
 	// Create cluster using k3d config with custom name
 	createCmd := exec.CommandWithOutput(
@@ -237,6 +212,23 @@ func Up(cfg *config.Config) error {
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
+
+	l.Info("Deploying default infrastructure with helmfile")
+
+	// Apply defaults using helmfile (handles Helm hooks properly)
+	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
+	helmfileCmd := exec.CommandWithOutput(
+		filepath.Join(cfg.BinDir, "helmfile"),
+		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
+		"--kubeconfig", kubeconfigPath,
+		"apply",
+	)
+
+	if err := helmfileCmd.Run(); err != nil {
+		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+	}
+
+	l.Success("Default infrastructure deployed")
 
 	l.Success("Stack started successfully")
 	if stackID != "" {

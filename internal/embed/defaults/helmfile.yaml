@@ -15,7 +15,6 @@ releases:
 
   # Nginx ingress controller (upstream chart)
   - name: ingress-nginx
-    namespace: ingress
     createNamespace: true
     chart: ingress-nginx/ingress-nginx
     version: 4.13.3
