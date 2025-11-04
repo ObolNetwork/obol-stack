@@ -36,8 +36,15 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to create stack config dir: %w", err)
 	}
 
-	// Generate unique stack ID
-	stackID := petname.Generate(2, "-")
+	// Check if stack ID already exists (preserve on --force)
+	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+	var stackID string
+	if existingID, err := os.ReadFile(stackIDPath); err == nil {
+		stackID = string(existingID)
+	} else {
+		// Generate unique stack ID only if one doesn't exist
+		stackID = petname.Generate(2, "-")
+	}
 
 	// Create logger and executor
 	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
@@ -45,6 +52,10 @@ func Init(cfg *config.Config, force bool) error {
 		StackID:  stackID,
 	})
 	defer cleanup()
+
+	if _, err := os.Stat(stackIDPath); err == nil {
+		l.Warn("Preserving existing stack ID (use purge to reset)", "id", stackID)
+	}
 
 	l.Info("Initializing cluster configuration")
 	l.Info(fmt.Sprintf("Cluster ID: %s", stackID))
@@ -93,8 +104,7 @@ func Init(cfg *config.Config, force bool) error {
 	l.Info(fmt.Sprintf("Defaults copied to: %s", defaultsDir))
 
 
-	// Store stack ID for later use
-	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+	// Store stack ID for later use (stackIDPath already declared above)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
