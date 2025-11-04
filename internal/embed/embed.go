@@ -21,8 +21,8 @@ var HelmfileTemplate string
 //go:embed all:charts
 var chartsFS embed.FS
 
-//go:embed all:manifests
-var manifestsFS embed.FS
+//go:embed all:defaults
+var defaultsFS embed.FS
 
 // CopyCharts recursively copies all embedded charts to the destination directory
 func CopyCharts(destDir string) error {
@@ -69,20 +69,20 @@ func CopyCharts(destDir string) error {
 	})
 }
 
-// CopyManifests recursively copies all embedded manifests to the destination directory
-func CopyManifests(destDir string) error {
-	return fs.WalkDir(manifestsFS, "manifests", func(path string, d fs.DirEntry, err error) error {
+// CopyDefaults recursively copies all embedded default manifests to the destination directory
+func CopyDefaults(destDir string) error {
+	return fs.WalkDir(defaultsFS, "defaults", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root manifests directory
-		if path == "manifests" {
+		// Skip root defaults directory
+		if path == "defaults" {
 			return nil
 		}
 
-		// Get relative path within manifests/
-		relPath := strings.TrimPrefix(path, "manifests/")
+		// Get relative path within defaults/
+		relPath := strings.TrimPrefix(path, "defaults/")
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
@@ -100,7 +100,7 @@ func CopyManifests(destDir string) error {
 		}
 
 		// Read embedded file
-		data, err := manifestsFS.ReadFile(path)
+		data, err := defaultsFS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
