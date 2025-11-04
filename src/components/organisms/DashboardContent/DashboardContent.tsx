@@ -48,7 +48,7 @@ export function DashboardContent({
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
-          {!error && <ErrorState onRetry={onRetry} />}
+          {error && <ErrorState onRetry={onRetry} />}
           {data &&
             data.chains.map((chain, index) => (
               <NetworkStatus
