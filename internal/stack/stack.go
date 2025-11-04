@@ -85,21 +85,7 @@ func Init(cfg *config.Config, force bool) error {
 
 	l.Info(fmt.Sprintf("K3d config saved to: %s", k3dConfigPath))
 
-	// Copy root helmfile to config directory for application orchestration
-	helmfileDestPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
-	if err := os.WriteFile(helmfileDestPath, []byte(embed.HelmfileTemplate), 0644); err != nil {
-		return fmt.Errorf("failed to write helmfile: %w", err)
-	}
-	l.Info(fmt.Sprintf("Helmfile copied to: %s", helmfileDestPath))
-
-	// Copy embedded charts (default + examples)
-	chartsDir := filepath.Join(cfg.ConfigDir, "charts")
-	if err := embed.CopyCharts(chartsDir); err != nil {
-		return fmt.Errorf("failed to copy charts: %w", err)
-	}
-	l.Info(fmt.Sprintf("Charts copied to: %s", chartsDir))
-
-	// Copy embedded defaults (k3s auto-apply manifests)
+	// Copy embedded defaults (helmfile + charts for infrastructure)
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
