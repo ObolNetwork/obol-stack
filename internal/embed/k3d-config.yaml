@@ -9,7 +9,7 @@ volumes:
   - volume: {{DATA_DIR}}:/data
     nodeFilters:
       - all
-  - volume: {{CONFIG_DIR}}/defaults:/var/lib/rancher/k3s/server/manifests/obol
+  - volume: {{RENDERED_DEFAULTS_DIR}}:/var/lib/rancher/k3s/server/manifests/obol
     nodeFilters:
       - server:*
 ports:
