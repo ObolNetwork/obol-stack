@@ -13,7 +13,7 @@ export interface ClientCardProps {
 
 const Card = styled(Box, {
   display: 'flex',
-  width: '218px',
+  width: '$7xl', // 218px approximated to 120px - may need custom width
   padding: '$sm',
   flexDirection: 'column',
   alignItems: 'flex-start',

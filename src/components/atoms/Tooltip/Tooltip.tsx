@@ -23,18 +23,18 @@ const StyledTooltipTrigger = styled(TooltipPrimitive.Trigger, {});
 
 const StyledTooltipContent = styled(TooltipPrimitive.Content, {
   display: 'inline-flex',
-  padding: '6px 12px',
+  padding: '$xxs $xs',
   flexDirection: 'column',
   justifyContent: 'center',
   alignItems: 'center',
-  borderRadius: '8px',
-  background: '#FFF',
-  color: 'var(--Backgrounds-01, #091011)',
+  borderRadius: '$3',
+  background: '$white',
+  color: '$bg01',
   fontFamily: '$fonts$body',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '24px',
+  fontWeight: '$semibold',
+  lineHeight: '$base',
   maxWidth: '250px',
   wordWrap: 'break-word',
   zIndex: 50,
@@ -43,7 +43,7 @@ const StyledTooltipContent = styled(TooltipPrimitive.Content, {
 });
 
 const StyledTooltipArrow = styled(TooltipPrimitive.Arrow, {
-  fill: '#FFF',
+  fill: '$white',
 });
 
 export function Tooltip({

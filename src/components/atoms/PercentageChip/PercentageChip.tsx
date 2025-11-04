@@ -39,7 +39,7 @@ const getPercentageStyles = (percentage: number) => {
 
 const StyledPercentageChip = styled(Box, {
   display: 'flex',
-  width: '40px',
+  width: '$2xl',
   height: '$lg',
   padding: '$1 $xs',
   justifyContent: 'center',
@@ -51,7 +51,7 @@ const StyledPercentageChip = styled(Box, {
   fontSize: '$2',
   fontStyle: 'normal',
   fontWeight: '$semibold',
-  lineHeight: 'normal',
+  lineHeight: '$normal',
 });
 
 export function PercentageChip({ percentage, className }: PercentageChipProps) {

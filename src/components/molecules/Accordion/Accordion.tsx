@@ -1,5 +1,6 @@
 import React, { useState, ReactNode, useRef, useEffect } from 'react';
-import { Box, Flex, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, styled, theme } from '@obolnetwork/obol-ui';
+import { Up } from '@/icons';
 
 export interface AccordionProps {
   children: ReactNode;
@@ -50,19 +51,20 @@ const ChevronIcon = styled(Box, {
   position: 'absolute',
   top: '0',
   right: '0',
-  width: '20px',
-  height: '20px',
+  width: '$md',
+  height: '$md',
   transition: 'transform 0.3s ease',
-  fill: '#97B2B8', // var(--Text-Body, #97B2B8)
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   transformOrigin: 'center',
+  // Up icon points up by default, so rotate 180deg when collapsed to point down
+  transform: 'rotate(180deg)',
 
   variants: {
     expanded: {
       true: {
-        transform: 'rotate(180deg)',
+        transform: 'rotate(0deg)',
       },
     },
   },
@@ -128,21 +130,7 @@ export function Accordion({
       <AccordionHeader onClick={handleToggle} disabled={disabled}>
         <HeaderContent>{header}</HeaderContent>
         <ChevronIcon expanded={isExpanded} data-chevron>
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 20 20"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M5 7.5L10 12.5L15 7.5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <Up size="s" color={theme.colors.body.value} />
         </ChevronIcon>
       </AccordionHeader>
 

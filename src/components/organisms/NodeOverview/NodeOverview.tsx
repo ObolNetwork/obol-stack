@@ -58,7 +58,7 @@ const MetricCardContainer = styled(Box, {
   flexDirection: 'column',
   alignItems: 'flex-start',
   flex: '1 0 0',
-  borderRadius: '8px',
+  borderRadius: '$3',
   background: '$bg03',
 });
 
@@ -90,8 +90,8 @@ const MetricLabel = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: 'normal',
+  fontWeight: '$semibold',
+  lineHeight: '$normal',
   textTransform: 'uppercase',
 });
 
@@ -100,8 +100,8 @@ const MetricValue = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$4',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '24px' /* 150% */,
+  fontWeight: '$semibold',
+  lineHeight: '$base' /* 150% */,
 });
 
 const MetricSubtext = styled(Text, {
@@ -109,8 +109,8 @@ const MetricSubtext = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '500',
-  lineHeight: '18px' /* 150% */,
+  fontWeight: '$medium',
+  lineHeight: '$base' /* 150% */,
   paddingTop: '$xxs',
   paddingBottom: '$xxs',
 });
@@ -177,8 +177,8 @@ const SectionTitle = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$1',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '28px' /* 280% */,
+  fontWeight: '$semibold',
+  lineHeight: '$tall2' /* 280% */,
   textTransform: 'uppercase',
 });
 
@@ -199,17 +199,17 @@ const PortsList = styled(Box, {
 const PortItem = styled(Flex, {
   display: 'flex',
   flex: '1 0 0',
-  padding: '12px',
+  padding: '$xs',
   alignItems: 'center',
   justifyContent: 'space-between',
-  borderRadius: '8px',
+  borderRadius: '$3',
   background: '$bg03',
 });
 
 const PortNameAndNumber = styled(Flex, {
   flexDirection: 'column',
   alignItems: 'flex-start',
-  gap: '4px',
+  gap: '$xxxs',
 });
 
 const PortName = styled(Text, {
@@ -217,8 +217,8 @@ const PortName = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: 'normal',
+  fontWeight: '$semibold',
+  lineHeight: '$normal',
   textTransform: 'uppercase',
 });
 
@@ -227,16 +227,16 @@ const PortNumber = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '500',
-  lineHeight: '18px' /* 150% */,
+  fontWeight: '$medium',
+  lineHeight: '$base' /* 150% */,
 });
 
 const PortStatus = styled(Text, {
   fontFamily: '$fonts$body',
   fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '500',
-  lineHeight: '18px' /* 150% */,
+  fontWeight: '$medium',
+  lineHeight: '$base' /* 150% */,
   padding: '$1 $2',
   borderRadius: '$1',
 

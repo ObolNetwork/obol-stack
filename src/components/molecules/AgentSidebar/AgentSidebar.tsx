@@ -10,16 +10,16 @@ import { useCoAgent } from '@copilotkit/react-core';
 const HeaderContainer = styled(Box, {
   display: 'flex',
   width: '100%',
-  height: '64px',
-  padding: '8px',
+  height: '$4xl',
+  padding: '$xxs',
   justifyContent: 'space-between',
   alignItems: 'center',
   borderBottom: '1px solid var(--Backgrounds-05, #2D4D53)',
 });
 
 const AIImage = styled(Image, {
-  width: '48px',
-  height: '48px',
+  width: '$3xl',
+  height: '$3xl',
   objectFit: 'contain',
 });
 
@@ -30,8 +30,8 @@ const StatusContainer = styled(Box, {
 });
 
 const CloseButton = styled(Box, {
-  width: '24px',
-  height: '24px',
+  width: '$lg',
+  height: '$lg',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -48,8 +48,8 @@ const ButtonContainer = styled(Box, {
   position: 'sticky',
   top: '136px',
   right: '64px',
-  width: '80px',
-  height: '80px',
+  width: '$5xl',
+  height: '$5xl',
   aspectRatio: '1/1',
   flexShrink: 0,
   background: 'none',

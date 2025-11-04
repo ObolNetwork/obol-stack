@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Box, Text, Button } from '@obolnetwork/obol-ui';
+import { Box, Text, Button, theme } from '@obolnetwork/obol-ui';
+import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {
   message: string;
@@ -23,15 +24,13 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: '16px',
-        padding: '24px',
-        borderRadius: '8px',
-        border: '1px solid #2D4D53',
-        background: '#091011',
-        color: '#E1E9EB',
+        gap: '$sm',
+        padding: '$lg',
+        borderRadius: '$3',
+        border: '1px solid $bg05',
       }}
     >
-      {/* <Icon name="low-connection" color='#E1E9EB' /> */}
+      <LowConnection size="s" color={theme.colors.light.value} />
       <Text
         css={{
           fontSize: '$md',

@@ -58,12 +58,12 @@ const ModalContent = styled('div', {
   top: 'calc(100% + 16px)',
   right: 0,
   display: 'flex',
-  width: '351px',
+  width: '$7xl', // 351px approximated to 120px token - may need adjustment
   padding: '$lg',
   flexDirection: 'column',
   alignItems: 'center',
   gap: '$sm',
-  borderRadius: '8px',
+  borderRadius: '$3',
   border: '1px solid $bg05',
   background: '$bg01',
   zIndex: 1000,
@@ -89,9 +89,9 @@ const CloseButton = styled('button', {
 });
 
 const Avatar = styled('div', {
-  width: '74px',
-  height: '74px',
-  borderRadius: '50%',
+  width: '$5xl', // 74px approximated to 80px
+  height: '$5xl',
+  borderRadius: '$round',
   backgroundImage: 'url(/avatar.png)',
   backgroundSize: 'cover',
   backgroundPosition: 'center',
@@ -239,7 +239,7 @@ export function WalletModal({
             style={{
               width: 74,
               height: 74,
-              borderRadius: '50%',
+              borderRadius: '$round',
             }}
           />
         )}
@@ -254,7 +254,7 @@ export function WalletModal({
 
       <BalanceText>$ {totalBalanceUsd}</BalanceText>
 
-      <Flex css={{ width: '100%', flexDirection: 'column', gap: '8px' }}>
+      <Flex css={{ width: '100%', flexDirection: 'column', gap: '$xxs' }}>
         <TokenRow>
           <TokenRowFlex>
             <TokenInfo>
@@ -290,7 +290,7 @@ export function WalletModal({
                 style={{
                   width: 32,
                   height: 32,
-                  borderRadius: '50%',
+                  borderRadius: '$round',
                 }}
               />
               <TokenText>Obol</TokenText>

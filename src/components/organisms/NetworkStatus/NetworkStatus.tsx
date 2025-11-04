@@ -63,21 +63,21 @@ const MetricItem = styled(Box, {
 const MetricLabel = styled(Text, {
   color: '$body',
   fontFamily: '$fonts$body',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '28px',
+  fontWeight: '$semibold',
+  lineHeight: '$tall2',
   textTransform: 'uppercase',
   marginBottom: '$1',
 });
 
 const MetricValue = styled(Text, {
-  color: '#FFF',
+  color: '$white',
   fontFamily: '$fonts$body',
-  fontSize: '20px',
+  fontSize: '$6',
   fontStyle: 'normal',
-  fontWeight: '600',
-  lineHeight: '24px',
+  fontWeight: '$semibold',
+  lineHeight: '$base',
 });
 
 const ClientsSection = styled(Box, {
@@ -188,10 +188,10 @@ export function NetworkStatus({
                 css={{
                   color: '$body',
                   fontFamily: '$fonts$body',
-                  fontSize: '12px',
+                  fontSize: '$2',
                   fontStyle: 'normal',
-                  fontWeight: '600',
-                  lineHeight: '28px',
+                  fontWeight: '$semibold',
+                  lineHeight: '$taller',
                   textTransform: 'uppercase',
                   marginBottom: '$md',
                 }}

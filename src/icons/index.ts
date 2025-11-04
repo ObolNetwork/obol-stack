@@ -25,3 +25,5 @@ export { NodeMemory } from './NodeMemory';
 export { NodeUptime } from './NodeUptime';
 export { Peers } from './Peers';
 export { StalledSync } from './StalledSync';
+export { LowConnection } from './LowConnection';
+export { Up } from './Up';

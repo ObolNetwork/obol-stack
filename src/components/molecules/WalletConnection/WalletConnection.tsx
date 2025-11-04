@@ -6,25 +6,25 @@ import { WalletModal } from '../WalletModal';
 
 const ConnectedButton = styled('button', {
   display: 'flex',
-  height: '40px',
-  padding: '12px',
+  height: '$2xl',
+  padding: '$xs',
   justifyContent: 'center',
   alignItems: 'center',
-  gap: '10px',
-  borderRadius: '8px',
+  gap: '$xs',
+  borderRadius: '$3',
   border: '1px solid #2D4D53',
   opacity: 0.9,
   background: '#091011',
   backdropFilter: 'blur(2px)',
-  color: '#E1E9EB',
+  color: '$light',
   cursor: 'pointer',
-  fontSize: '14px',
+  fontSize: '$3',
 });
 
 const AvatarContainer = styled('div', {
-  width: '24px',
-  height: '24px',
-  borderRadius: '50%',
+  width: '$lg',
+  height: '$lg',
+  borderRadius: '$round',
   backgroundImage: 'url(/avatar.png)',
   backgroundSize: 'cover',
   backgroundPosition: 'center',
@@ -32,7 +32,7 @@ const AvatarContainer = styled('div', {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: 'bold',
 });
 
@@ -113,7 +113,7 @@ export function WalletConnection() {
                             style={{
                               width: 24,
                               height: 24,
-                              borderRadius: '50%',
+                              borderRadius: '$round',
                             }}
                           />
                         )}
@@ -121,10 +121,10 @@ export function WalletConnection() {
                       <Text
                         css={{
                           fontFamily: '$fonts$body',
-                          fontSize: '16px',
+                          fontSize: '$4',
                           fontWeight: '$semibold',
-                          lineHeight: '24px',
-                          color: '#E1E9EB',
+                          lineHeight: '$base',
+                          color: '$light',
                         }}
                       >
                         {account.displayName ||

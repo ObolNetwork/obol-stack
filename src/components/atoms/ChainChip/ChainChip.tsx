@@ -8,18 +8,18 @@ export interface ChainChipProps {
 
 const StyledChainChip = styled(Box, {
   display: 'inline-flex',
-  height: '28px',
-  padding: '4px 12px',
+  height: '$xl', // 28px approximated to 32px
+  padding: '$xxxs $xs',
   justifyContent: 'center',
   alignItems: 'center',
-  gap: '8px',
+  gap: '$xxs',
   flexShrink: 0,
-  borderRadius: '8px',
+  borderRadius: '$3',
   fontFamily: '$fonts$body',
-  fontSize: '12px',
+  fontSize: '$2',
   fontStyle: 'normal',
-  fontWeight: '500',
-  lineHeight: '18px',
+  fontWeight: '$medium',
+  lineHeight: '$base',
 
   variants: {
     variant: {
@@ -29,16 +29,16 @@ const StyledChainChip = styled(Box, {
       },
       lightMode: {
         background: 'rgba(217, 238, 243, 0.20)',
-        color: '#E1E9EB', // Text/Light
+        color: '$light',
       },
       testnet: {
-        border: '1px solid #2D4D53', // var(--Backgrounds-05, #2D4D53)
-        background: '#111F22', // var(--Backgrounds-02, #111F22)
-        color: '#E1E9EB', // Text/Light
+        border: '1px solid $bg05',
+        background: '$bg02',
+        color: '$light',
       },
       mainnet: {
-        background: '#E1E9EB', // var(--Text-Light, #E1E9EB)
-        color: '#0A1518', // Backgrounds/01
+        background: '$light',
+        color: '$bg01',
       },
     },
   },
