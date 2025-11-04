@@ -22,7 +22,7 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
         height: '50vh',
       }}
     >
-      <Text css={{ fontSize: '$lg', color: '$gray11' }}>{message}</Text>
+      <Text css={{ fontSize: '$4', color: '$light' }}>{message}</Text>
     </Box>
   );
 };

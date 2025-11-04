@@ -4,7 +4,6 @@ import { DashboardContent } from '../../organisms/DashboardContent';
 import { FooterBar } from '../../organisms/FooterBar';
 import { LoadingState } from '../../molecules/LoadingState';
 import { useDashboardData } from '../../../hooks/useDashboardData';
-import { Box } from '@obolnetwork/obol-ui';
 
 export function DashboardPage() {
   const { data, loading, error, refetch } = useDashboardData(12000); // Refresh every 12 seconds

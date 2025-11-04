@@ -5,26 +5,16 @@ import { Box, Text, Button, theme } from '@obolnetwork/obol-ui';
 import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {
-  message: string;
   onRetry?: () => void;
-  retryLabel?: string;
-  className?: string;
 }
 
-export const ErrorState: React.FC<ErrorStateProps> = ({
-  message,
-  onRetry,
-  retryLabel = 'Retry',
-  className = '',
-}) => {
+export const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => {
   return (
     <Box
-      className={className}
       css={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: '$sm',
         padding: '$lg',
         borderRadius: '$3',
         border: '1px solid $bg05',
@@ -33,16 +23,32 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
       <LowConnection size="s" color={theme.colors.light.value} />
       <Text
         css={{
-          fontSize: '$md',
+          fontSize: '$3',
           color: '$light',
           textAlign: 'center',
+          fontWeight: '$semibold',
+          lineHeight: '$tall2',
+          marginTop: '$xxxs',
+          marginBottom: '$xxxs',
         }}
       >
-        {message}
+        API connection failed. Using cached data
+      </Text>
+      <Text
+        css={{
+          fontSize: '$3',
+          color: '$body',
+          textAlign: 'center',
+          fontWeight: '$medium',
+          lineHeight: '$shorter',
+          marginBottom: '$sm',
+        }}
+      >
+        Error: Failed to fetch
       </Text>
       {onRetry && (
-        <Button onClick={onRetry} variant="secondary" size="md">
-          {retryLabel}
+        <Button onClick={onRetry} color="secondary" size="md">
+          Retry
         </Button>
       )}
     </Box>

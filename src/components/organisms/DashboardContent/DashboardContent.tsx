@@ -48,12 +48,7 @@ export function DashboardContent({
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
-          {!error && (
-            <ErrorState
-              message={`API connection failed. Using cached data. Error: ${error}`}
-              onRetry={onRetry}
-            />
-          )}
+          {!error && <ErrorState onRetry={onRetry} />}
           {data &&
             data.chains.map((chain, index) => (
               <NetworkStatus
