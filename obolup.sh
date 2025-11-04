@@ -713,6 +713,82 @@ install_dependencies() {
 	log_success "Dependencies check complete"
 }
 
+# Check if obol.stack hostname is configured in /etc/hosts
+check_hosts_file() {
+	log_info "Checking /etc/hosts for obol.stack entry..."
+
+	# Check if /etc/hosts contains obol.stack pointing to localhost
+	if grep -q "obol.stack" /etc/hosts 2>/dev/null; then
+		# Check if it points to localhost (127.0.0.1 or ::1)
+		if grep -E "^(127\.0\.0\.1|::1)[[:space:]].*obol\.stack" /etc/hosts >/dev/null 2>&1; then
+			log_success "obol.stack already configured in /etc/hosts"
+			return 0
+		else
+			log_warn "obol.stack found in /etc/hosts but not pointing to localhost"
+			return 1
+		fi
+	fi
+
+	# Entry not found
+	return 1
+}
+
+# Add obol.stack entry to /etc/hosts
+update_hosts_file() {
+	log_info "Adding obol.stack to /etc/hosts..."
+
+	local hosts_entry="127.0.0.1 obol.stack"
+
+	# Check if sudo is available
+	if ! command_exists sudo; then
+		log_error "sudo not available, cannot update /etc/hosts automatically"
+		echo ""
+		echo "Please manually add this line to /etc/hosts:"
+		echo ""
+		echo "  $hosts_entry"
+		echo ""
+		return 1
+	fi
+
+	# Check if we need password (sudo -n tests non-interactive)
+	if sudo -n true 2>/dev/null; then
+		# Already have sudo privileges or NOPASSWD configured
+		log_info "Updating /etc/hosts with existing privileges..."
+	else
+		# Will need password - inform user
+		echo ""
+		log_warn "Administrator privileges required to update /etc/hosts"
+		echo ""
+		echo "Please enter your password when prompted to add:"
+		echo "  $hosts_entry"
+		echo ""
+	fi
+
+	# Try to append to /etc/hosts with sudo
+	if echo "$hosts_entry" | sudo tee -a /etc/hosts >/dev/null 2>&1; then
+		log_success "Added obol.stack to /etc/hosts"
+		return 0
+	else
+		log_warn "Failed to update /etc/hosts"
+		echo ""
+		echo "Please manually add this line to /etc/hosts:"
+		echo ""
+		echo "  $hosts_entry"
+		echo ""
+		echo "Example command:"
+		echo "  echo '$hosts_entry' | sudo tee -a /etc/hosts"
+		echo ""
+		return 1
+	fi
+}
+
+# Check and configure /etc/hosts entry for obol.stack
+configure_hosts_file() {
+	if ! check_hosts_file; then
+		update_hosts_file
+	fi
+}
+
 # Check if OBOL_BIN_DIR is in PATH and print instructions if not
 check_and_print_path_instructions() {
 	# Skip in development mode
@@ -764,6 +840,7 @@ main() {
 	create_directories
 	install_obol_binary
 	install_dependencies
+	configure_hosts_file
 	check_and_print_path_instructions
 	print_instructions
 
