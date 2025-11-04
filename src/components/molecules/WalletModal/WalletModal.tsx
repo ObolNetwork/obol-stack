@@ -1,6 +1,6 @@
 import React from 'react';
 import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
-import { Icon } from '../../atoms/Icon';
+import { Close } from '@/icons';
 import { useBalance, UseBalanceReturnType, useChainId } from 'wagmi';
 import { formatUnits } from 'viem';
 import { useTokenPrices } from '../../../hooks/useTokenPrices';
@@ -226,7 +226,7 @@ export function WalletModal({
   return (
     <ModalContent>
       <CloseButton onClick={onClose}>
-        <Icon name="clear" size="xs" color={theme.colors.body.value} />
+        <Close size="xs" color={theme.colors.body.value} />
       </CloseButton>
 
       <Avatar>

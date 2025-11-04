@@ -1,6 +1,6 @@
 import { CopilotSidebar, useChatContext } from '@copilotkit/react-ui';
 import { Box, Image, styled } from '@obolnetwork/obol-ui';
-import { Icon } from '../../atoms/Icon';
+import { Close } from '@/icons';
 import { StatusIndicator } from './StatusIndicator';
 import { determineNodeStatus } from './statusLogic';
 import { DashboardData } from '../../../types/dashboard';
@@ -88,7 +88,7 @@ const Header = ({ data }: HeaderProps) => {
 
       {/* Right: Close Icon */}
       <CloseButton onClick={handleClose}>
-        <Icon name="close" size="s" />
+        <Close size="s" />
       </CloseButton>
     </HeaderContainer>
   );

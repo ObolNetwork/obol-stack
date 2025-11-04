@@ -2,7 +2,6 @@
 export { Card } from './atoms/Card';
 export { ChainChip } from './atoms/ChainChip';
 export { ChainIcon } from './atoms/ChainIcon';
-export { Icon } from './atoms/Icon';
 export { PercentageChip } from './atoms/PercentageChip';
 export { StatusIndicator } from './atoms/StatusIndicator';
 export { Tooltip } from './atoms/Tooltip';

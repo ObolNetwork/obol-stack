@@ -4,7 +4,7 @@ import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { PercentageChip } from '../../atoms/PercentageChip';
 import { ProgressBar } from '../../molecules/ProgressBar';
-import { Icon } from '../../atoms/Icon';
+import { NodeDisk, NodeMemory, NodeCpu, NodeUptime } from '@/icons';
 import { DashboardData } from '../../../types/dashboard';
 
 export interface NodeOverviewProps {
@@ -300,9 +300,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
       <CardTitle>Node Overview</CardTitle>
       <MetricsGrid>
         <MetricCard
-          icon={
-            <Icon name="node-disk" size="xs" color={theme.colors.light.value} />
-          }
+          icon={<NodeDisk size="xs" color={theme.colors.light.value} />}
           label="DISK"
           percentage={diskPercentage}
           value={`${data.diskUsage.value} GB`}
@@ -311,13 +309,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
         />
 
         <MetricCard
-          icon={
-            <Icon
-              name="node-memory"
-              size="xs"
-              color={theme.colors.light.value}
-            />
-          }
+          icon={<NodeMemory size="xs" color={theme.colors.light.value} />}
           label="MEMORY"
           percentage={memoryPercentage}
           value={`${data.memoryUsage.value} GB`}
@@ -326,9 +318,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
         />
 
         <MetricCard
-          icon={
-            <Icon name="node-cpu" size="xs" color={theme.colors.light.value} />
-          }
+          icon={<NodeCpu size="xs" color={theme.colors.light.value} />}
           label="CPU"
           percentage={cpuPercentage}
           value={`${cpuPercentage}%`}
@@ -337,13 +327,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
         />
 
         <MetricCard
-          icon={
-            <Icon
-              name="node-uptime"
-              size="xs"
-              color={theme.colors.light.value}
-            />
-          }
+          icon={<NodeUptime size="xs" color={theme.colors.light.value} />}
           label="UPTIME"
           value={formattedUptime}
           subtext="continuous operation"
