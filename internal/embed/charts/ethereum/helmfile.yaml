@@ -3,14 +3,26 @@ repositories:
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
+  # Create PVCs first - before the Ethereum node
+  - name: ethereum-pvcs
+    namespace: ethereum
+    createNamespace: true
+    chart: .
+    needs: []
+    values:
+      # Pass only the values needed for PVC creation
+      - executionClient: '{{ .Values.obol.ethereum.execution.client }}'
+        consensusClient: '{{ .Values.obol.ethereum.consensus.client }}'
+        network: '{{ .Values.obol.network }}'
+
   # Ethereum node (execution and consensus clients)
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
-  # Note: Storage uses the cluster-level "local-persistent" StorageClass
+  # Depends on ethereum-pvcs to ensure PVCs exist first
   - name: ethereum
     namespace: ethereum
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
-    version: 0.2.4
+    needs: [ethereum-pvcs]
     values:
       # Network and checkpoint sync configuration
       - global:
@@ -29,18 +41,37 @@ releases:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: 'local-persistent'
             size: 500Gi
+            # Use existing PVC with network/client naming: execution-{client}-{network}
+            existingClaim: execution-{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}
 
       # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
       - {{ .Values.obol.ethereum.consensus.client }}:
           enabled: true
           persistence:
             enabled: true
-            storageClassName: 'local-persistent'
             size: 200Gi
+            # Use existing PVC with network/client naming: consensus-{client}-{network}
+            existingClaim: consensus-{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}
 
   # Ingress for Ethereum RPC endpoints
+  # Wait for nginx ingress controller webhook to be ready
   - name: ethereum-ingress
     namespace: ethereum
     chart: .
+    needs: [ethereum]
+    hooks:
+      - events: ["presync"]
+        showlogs: true
+        command: "sh"
+        args:
+          - "-c"
+          - |
+            echo "Waiting for nginx ingress controller admission webhook to be ready..."
+            kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=controller,app.kubernetes.io/instance=ingress-nginx -n ingress --timeout=120s || true
+            sleep 2
+    values:
+      # Pass through values for ingress template
+      - executionClient: '{{ .Values.obol.ethereum.execution.client }}'
+        consensusClient: '{{ .Values.obol.ethereum.consensus.client }}'
+        network: '{{ .Values.obol.network }}'

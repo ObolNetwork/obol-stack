@@ -98,6 +98,7 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	l.Info(fmt.Sprintf("Manifests copied to: %s", manifestsDir))
 
+
 	// Store stack ID for later use
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
@@ -144,8 +145,20 @@ func Up(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("k3d list command failed: %w", err)
 	}
+
 	if stackExists(string(listCmdOutput), stackName) {
-		return fmt.Errorf("stack '%s' already exists, use 'obol stack down' to stop it first", stackName)
+		// Cluster exists - check if it's stopped or running
+		l.Info("Stack already exists, attempting to start", "name", stackName, "id", stackID)
+		startCmd := exec.CommandWithOutput(
+			filepath.Join(cfg.BinDir, "k3d"),
+			"cluster", "start", stackName,
+		)
+		if err := startCmd.Run(); err != nil {
+			return fmt.Errorf("failed to start existing cluster: %w", err)
+		}
+		l.Success("Stack restarted successfully")
+		l.Success("Stack ID", "id", stackID)
+		return nil
 	}
 
 	l.Info("Starting stack", "name", stackName, "id", stackID)
@@ -213,15 +226,24 @@ func Down(cfg *config.Config) error {
 	exec := executor.New(l.Logger)
 	defer exec.Close()
 
-	l.Info("Stopping stack", "name", stackName, "id", stackID)
+	l.Info("Stopping stack gracefully", "name", stackName, "id", stackID)
 
-	deleteCmd := exec.CommandWithOutput(
+	// First attempt graceful stop (allows processes to shutdown gracefully)
+	stopCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "delete", stackName,
+		"cluster", "stop", stackName,
 	)
 
-	if err := deleteCmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop cluster: %w", err)
+	if err := stopCmd.Run(); err != nil {
+		l.Warn("Graceful stop timed out or failed, forcing cluster deletion")
+		// Fallback to delete if stop fails
+		deleteCmd := exec.CommandWithOutput(
+			filepath.Join(cfg.BinDir, "k3d"),
+			"cluster", "delete", stackName,
+		)
+		if err := deleteCmd.Run(); err != nil {
+			return fmt.Errorf("failed to stop cluster: %w", err)
+		}
 	}
 
 	l.Success("Stack stopped successfully")
@@ -239,9 +261,48 @@ func Purge(cfg *config.Config, force bool) error {
 	})
 	defer cleanup()
 
-	// Stop cluster first
-	if err := Down(cfg); err != nil {
-		l.Warn(fmt.Sprintf("Failed to stop stack (may already be stopped): %v", err))
+	// Create executor for subprocess calls
+	exec := executor.New(l.Logger)
+	defer exec.Close()
+
+	// Delete cluster containers
+	stackName := getStackName(cfg)
+	if stackName != "" {
+		if force {
+			// Force delete without graceful shutdown
+			l.Info("Force deleting cluster containers", "name", stackName)
+			deleteCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "delete", stackName,
+			)
+			if err := deleteCmd.Run(); err != nil {
+				l.Warn(fmt.Sprintf("Failed to delete cluster (may already be deleted): %v", err))
+			}
+			l.Success("Cluster containers force deleted")
+		} else {
+			// Graceful shutdown first to ensure data is written properly
+			l.Info("Gracefully stopping cluster before deletion", "name", stackName)
+			stopCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "stop", stackName,
+			)
+			if err := stopCmd.Run(); err != nil {
+				l.Warn("Graceful stop timed out or failed, proceeding with deletion anyway")
+			} else {
+				l.Success("Cluster stopped gracefully")
+			}
+
+			// Now delete the stopped cluster
+			l.Info("Deleting cluster containers", "name", stackName)
+			deleteCmd := exec.CommandWithOutput(
+				filepath.Join(cfg.BinDir, "k3d"),
+				"cluster", "delete", stackName,
+			)
+			if err := deleteCmd.Run(); err != nil {
+				l.Warn(fmt.Sprintf("Failed to delete cluster (may already be deleted): %v", err))
+			}
+			l.Success("Cluster containers deleted")
+		}
 	}
 
 	// Remove stack config directory
@@ -253,14 +314,16 @@ func Purge(cfg *config.Config, force bool) error {
 
 	// Remove data directory only if force flag is set
 	if force {
-		if err := os.RemoveAll(cfg.DataDir); err != nil {
+		// Use sudo to remove data directory since it may contain root-owned files
+		rmCmd := exec.CommandWithOutput("sudo", "rm", "-rf", cfg.DataDir)
+		if err := rmCmd.Run(); err != nil {
 			return fmt.Errorf("failed to remove data directory: %w", err)
 		}
 		l.Success("Removed data directory")
 		l.Success("Cluster fully purged (binaries preserved)")
 	} else {
 		l.Success("Cluster purged (config removed, data preserved)")
-		l.Info(fmt.Sprintf("To delete persistent data: rm -rf %s", cfg.DataDir))
+		l.Info(fmt.Sprintf("To delete persistent data: sudo rm -rf %s", cfg.DataDir))
 		l.Info("Or use 'obol stack purge --force' to remove everything")
 	}
 

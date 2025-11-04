@@ -13,7 +13,13 @@ volumes:
     nodeFilters:
       - server:*
 ports:
+  - port: 80:80
+    nodeFilters:
+      - loadbalancer
   - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+  - port: 443:443
     nodeFilters:
       - loadbalancer
   - port: 8443:443
@@ -23,6 +29,7 @@ options:
   k3d:
     wait: true
     timeout: "100s"
+    disableLoadbalancer: false
   k3s:
     extraArgs:
       - arg: --kubelet-arg=feature-gates=KubeletInUserNamespace=true

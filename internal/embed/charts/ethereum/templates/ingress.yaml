@@ -1,28 +1,30 @@
+{{- if eq .Release.Name "ethereum-ingress" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ethereum
   namespace: {{ .Release.Namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
   ingressClassName: nginx
   rules:
-  - host: execution.ethereum.localhost
+  - host: obol.stack
     http:
       paths:
-      - path: /
-        pathType: Prefix
+      - path: /ethereum/execution(/|$)(.*)
+        pathType: ImplementationSpecific
         backend:
           service:
             name: ethereum-execution
             port:
               number: 8545
-  - host: beacon.ethereum.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
+      - path: /ethereum/beacon(/|$)(.*)
+        pathType: ImplementationSpecific
         backend:
           service:
             name: ethereum-beacon
             port:
               number: 5052
+{{- end }}

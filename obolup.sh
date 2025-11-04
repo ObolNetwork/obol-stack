@@ -519,7 +519,7 @@ install_helmfile() {
 	local global_helmfile
 	if global_helmfile=$(check_global_binary "helmfile"); then
 		local global_version
-		global_version=$("$global_helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*v\([0-9.]*\).*/\1/p' || echo "")
+		global_version=$("$global_helmfile" version 2>/dev/null | sed -n 's/.*Version[[:space:]]*v*\([0-9.]*\).*/\1/p' | head -1 || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELMFILE_VERSION"; then
 			log_success "helmfile v$global_version already installed at: $global_helmfile"
 			return 0
@@ -528,7 +528,7 @@ install_helmfile() {
 
 	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
-		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | grep "Version" | sed -n 's/.*Version[[:space:]]*v\([0-9.]*\).*/\1/p' || echo "")
+		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | sed -n 's/.*Version[[:space:]]*v*\([0-9.]*\).*/\1/p' | head -1 || echo "")
 	fi
 
 	# Use pinned version
