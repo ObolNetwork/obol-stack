@@ -6,6 +6,8 @@ repositories:
     url: https://kubernetes.github.io/ingress-nginx
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
+  - name: ethereum
+    url: https://ethpandaops.github.io/ethereum-helm-charts
 
 # Single source of truth: change this to switch networks
 values:
@@ -55,8 +57,7 @@ releases:
   # eRPC
   - name: erpc
     namespace: default
-    chart: oci://ghcr.io/ethpandaops/ethereum-helm-charts/erpc
-    version: 0.1.0
+    chart: ethereum/erpc
     needs:
       - default/obol-stack-defaults
       - default/helios
