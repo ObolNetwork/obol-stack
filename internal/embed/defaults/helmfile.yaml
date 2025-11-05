@@ -4,6 +4,8 @@
 repositories:
   - name: ingress-nginx
     url: https://kubernetes.github.io/ingress-nginx
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -32,3 +34,34 @@ releases:
               cpu: 100m
               memory: 128Mi
           tolerations: []
+          admissionWebhooks:
+            enabled: false
+
+  # Obol Stack frontend
+  - name: obol-frontend
+    namespace: default
+    chart: obol/obol-app
+    version: 0.1.0
+    needs:
+      - default/ingress-nginx
+    values:
+      - replicaCount: 1
+        image:
+          repository: obolnetwork/obol-stack-front-end
+          pullPolicy: IfNotPresent
+          tag: ""
+        service:
+          type: ClusterIP
+          port: 3000
+        ingress:
+          enabled: true
+          className: "nginx"
+          hosts:
+            - host: obol.stack
+              paths:
+                - path: /
+                  pathType: Prefix
+        obol:
+          stack:
+            enabled: true
+            ethRpcUrl: "http://rpc.l1.svc.cluster.local/rpc/mainnet"
