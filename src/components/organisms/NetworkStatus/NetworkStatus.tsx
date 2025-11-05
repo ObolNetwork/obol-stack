@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { ChainChip } from '../../atoms/ChainChip';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
@@ -8,9 +8,9 @@ import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
 import { ChainData } from '../../../types/dashboard';
 import { ChainIcon } from '../../atoms/ChainIcon';
-import { Icon } from '../../atoms/Icon';
 import { useWalletClient } from 'wagmi';
 import { addNetworkToWallet } from '../../../lib/utils/wallet';
+import { AddCircle } from '../../../icons';
 
 export interface NetworkStatusProps {
   chainData: ChainData;
@@ -162,7 +162,7 @@ export function NetworkStatus({
             handleAddNetwork();
           }}
         >
-          <Icon name="add-circle" size="s" />
+          <AddCircle size="s" color={theme.colors.obolGreen.value} />
           <AddToWalletText>Add network to wallet</AddToWalletText>
         </AddToWalletButton>
 
