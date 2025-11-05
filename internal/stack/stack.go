@@ -36,8 +36,15 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to create stack config dir: %w", err)
 	}
 
-	// Generate unique stack ID
-	stackID := petname.Generate(2, "-")
+	// Check if stack ID already exists (preserve on --force)
+	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+	var stackID string
+	if existingID, err := os.ReadFile(stackIDPath); err == nil {
+		stackID = string(existingID)
+	} else {
+		// Generate unique stack ID only if one doesn't exist
+		stackID = petname.Generate(2, "-")
+	}
 
 	// Create logger and executor
 	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
@@ -45,6 +52,10 @@ func Init(cfg *config.Config, force bool) error {
 		StackID:  stackID,
 	})
 	defer cleanup()
+
+	if _, err := os.Stat(stackIDPath); err == nil {
+		l.Warn("Preserving existing stack ID (use purge to reset)", "id", stackID)
+	}
 
 	l.Info("Initializing cluster configuration")
 	l.Info(fmt.Sprintf("Cluster ID: %s", stackID))
@@ -77,30 +88,14 @@ func Init(cfg *config.Config, force bool) error {
 
 	l.Info(fmt.Sprintf("K3d config saved to: %s", k3dConfigPath))
 
-	// Copy root helmfile to config directory for application orchestration
-	helmfileDestPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
-	if err := os.WriteFile(helmfileDestPath, []byte(embed.HelmfileTemplate), 0644); err != nil {
-		return fmt.Errorf("failed to write helmfile: %w", err)
+	// Copy embedded defaults (helmfile + charts for infrastructure)
+	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
+	if err := embed.CopyDefaults(defaultsDir); err != nil {
+		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
-	l.Info(fmt.Sprintf("Helmfile copied to: %s", helmfileDestPath))
+	l.Info(fmt.Sprintf("Defaults copied to: %s", defaultsDir))
 
-	// Copy embedded charts (default + examples)
-	chartsDir := filepath.Join(cfg.ConfigDir, "charts")
-	if err := embed.CopyCharts(chartsDir); err != nil {
-		return fmt.Errorf("failed to copy charts: %w", err)
-	}
-	l.Info(fmt.Sprintf("Charts copied to: %s", chartsDir))
-
-	// Copy embedded manifests (k3s auto-apply manifests)
-	manifestsDir := filepath.Join(cfg.ConfigDir, "manifests")
-	if err := embed.CopyManifests(manifestsDir); err != nil {
-		return fmt.Errorf("failed to copy manifests: %w", err)
-	}
-	l.Info(fmt.Sprintf("Manifests copied to: %s", manifestsDir))
-
-
-	// Store stack ID for later use
-	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+	// Store stack ID for later use (stackIDPath already declared above)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
@@ -156,6 +151,11 @@ func Up(cfg *config.Config) error {
 		if err := startCmd.Run(); err != nil {
 			return fmt.Errorf("failed to start existing cluster: %w", err)
 		}
+
+		if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+			return err
+		}
+
 		l.Success("Stack restarted successfully")
 		l.Success("Stack ID", "id", stackID)
 		return nil
@@ -198,6 +198,10 @@ func Up(cfg *config.Config) error {
 
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
+	}
+
+	if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+		return err
 	}
 
 	l.Success("Stack started successfully")
@@ -358,4 +362,31 @@ func getStackName(cfg *config.Config) string {
 // GetStackID reads the stored stack ID (exported for use in main)
 func GetStackID(cfg *config.Config) string {
 	return getStackID(cfg)
+}
+
+// applyDefaults deploys the default infrastructure using helmfile
+// If deployment fails, the cluster is automatically stopped via Down()
+func applyDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string) error {
+	l.Info("Deploying default infrastructure with helmfile")
+
+	// Apply defaults using helmfile (handles Helm hooks properly)
+	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
+	helmfileCmd := exec.CommandWithOutput(
+		filepath.Join(cfg.BinDir, "helmfile"),
+		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
+		"--kubeconfig", kubeconfigPath,
+		"apply",
+	)
+
+	if err := helmfileCmd.Run(); err != nil {
+		l.Error("Failed to apply defaults helmfile, stopping cluster")
+		// Attempt to stop the cluster to clean up
+		if downErr := Down(cfg); downErr != nil {
+			l.Warn("Failed to stop cluster during cleanup", "error", downErr)
+		}
+		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+	}
+
+	l.Success("Default infrastructure deployed")
+	return nil
 }

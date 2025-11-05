@@ -9,9 +9,6 @@ volumes:
   - volume: {{DATA_DIR}}:/data
     nodeFilters:
       - all
-  - volume: {{CONFIG_DIR}}/manifests:/var/lib/rancher/k3s/server/manifests/obol
-    nodeFilters:
-      - server:*
 ports:
   - port: 80:80
     nodeFilters:
@@ -40,6 +37,10 @@ options:
           - server:*
       # Disable Traefik to use nginx instead
       - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+      # Disable local-storage addon (we provide our own config)
+      - arg: --disable=local-storage
         nodeFilters:
           - server:*
   runtime:
