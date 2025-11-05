@@ -72,15 +72,71 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
-# Check if binary exists globally in PATH
+# Check if binary exists globally in PATH (excluding OBOL_BIN_DIR)
 check_global_binary() {
 	local binary_name="$1"
-	if command_exists "$binary_name"; then
-		local global_path
-		global_path=$(which "$binary_name" 2>/dev/null)
-		echo "$global_path"
-		return 0
+
+	# Get all matching binaries in PATH
+	local all_paths
+	all_paths=$(type -a -P "$binary_name" 2>/dev/null || true)
+
+	# Find first path that's NOT in OBOL_BIN_DIR
+	while IFS= read -r path; do
+		if [[ -n "$path" && "$path" != "$OBOL_BIN_DIR/$binary_name" ]]; then
+			# Found a global binary outside OBOL_BIN_DIR
+			echo "$path"
+			return 0
+		fi
+	done <<< "$all_paths"
+
+	return 1
+}
+
+# Create symlink to global binary in OBOL_BIN_DIR
+create_binary_symlink() {
+	local binary_name="$1"
+	local global_path="$2"
+	local local_path="$OBOL_BIN_DIR/$binary_name"
+
+	# Check if local path already exists
+	if [[ -e "$local_path" || -L "$local_path" ]]; then
+		# Check if it's already a symlink to the correct target
+		if [[ -L "$local_path" ]]; then
+			local current_target
+			current_target=$(readlink "$local_path")
+			if [[ "$current_target" == "$global_path" ]]; then
+				# Already correctly symlinked
+				return 0
+			fi
+		fi
+		# Remove existing file/symlink
+		rm -f "$local_path"
 	fi
+
+	# Create symlink
+	if ln -s "$global_path" "$local_path"; then
+		return 0
+	else
+		log_warn "Failed to create symlink for $binary_name"
+		return 1
+	fi
+}
+
+# Remove binary from OBOL_BIN_DIR if it's a broken symlink
+remove_broken_symlink() {
+	local binary_name="$1"
+	local local_path="$OBOL_BIN_DIR/$binary_name"
+
+	# Check if it's a symlink
+	if [[ -L "$local_path" ]]; then
+		# Check if the symlink is broken (target doesn't exist)
+		if [[ ! -e "$local_path" ]]; then
+			rm -f "$local_path"
+			log_info "Removed broken symlink for $binary_name"
+			return 0
+		fi
+	fi
+
 	return 1
 }
 
@@ -356,13 +412,20 @@ install_kubectl() {
 	local arch=$(detect_arch)
 	local current_version=""
 
+	# Remove broken symlink if exists
+	remove_broken_symlink "kubectl"
+
 	# Check for global kubectl first
 	local global_kubectl
 	if global_kubectl=$(check_global_binary "kubectl"); then
 		local global_version
 		global_version=$("$global_kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$KUBECTL_VERSION"; then
-			log_success "kubectl v$global_version already installed at: $global_kubectl"
+			if create_binary_symlink "kubectl" "$global_kubectl"; then
+				log_success "kubectl v$global_version already installed at: $global_kubectl (symlinked)"
+			else
+				log_success "kubectl v$global_version already installed at: $global_kubectl"
+			fi
 			return 0
 		fi
 	fi
@@ -407,13 +470,20 @@ install_helm() {
 	local arch=$(detect_arch)
 	local current_version=""
 
+	# Remove broken symlink if exists
+	remove_broken_symlink "helm"
+
 	# Check for global helm first
 	local global_helm
 	if global_helm=$(check_global_binary "helm"); then
 		local global_version
 		global_version=$("$global_helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELM_VERSION"; then
-			log_success "helm v$global_version already installed at: $global_helm"
+			if create_binary_symlink "helm" "$global_helm"; then
+				log_success "helm v$global_version already installed at: $global_helm (symlinked)"
+			else
+				log_success "helm v$global_version already installed at: $global_helm"
+			fi
 			return 0
 		fi
 	fi
@@ -460,13 +530,20 @@ install_k3d() {
 	local arch=$(detect_arch)
 	local current_version=""
 
+	# Remove broken symlink if exists
+	remove_broken_symlink "k3d"
+
 	# Check for global k3d first
 	local global_k3d
 	if global_k3d=$(check_global_binary "k3d"); then
 		local global_version
 		global_version=$("$global_k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K3D_VERSION"; then
-			log_success "k3d v$global_version already installed at: $global_k3d"
+			if create_binary_symlink "k3d" "$global_k3d"; then
+				log_success "k3d v$global_version already installed at: $global_k3d (symlinked)"
+			else
+				log_success "k3d v$global_version already installed at: $global_k3d"
+			fi
 			return 0
 		fi
 	fi
@@ -515,13 +592,20 @@ install_helmfile() {
 	local arch=$(detect_arch)
 	local current_version=""
 
+	# Remove broken symlink if exists
+	remove_broken_symlink "helmfile"
+
 	# Check for global helmfile first
 	local global_helmfile
 	if global_helmfile=$(check_global_binary "helmfile"); then
 		local global_version
 		global_version=$("$global_helmfile" version 2>/dev/null | sed -n 's/.*Version[[:space:]]*v*\([0-9.]*\).*/\1/p' | head -1 || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELMFILE_VERSION"; then
-			log_success "helmfile v$global_version already installed at: $global_helmfile"
+			if create_binary_symlink "helmfile" "$global_helmfile"; then
+				log_success "helmfile v$global_version already installed at: $global_helmfile (symlinked)"
+			else
+				log_success "helmfile v$global_version already installed at: $global_helmfile"
+			fi
 			return 0
 		fi
 	fi
@@ -628,13 +712,20 @@ install_k9s() {
 	local arch=$(detect_arch)
 	local current_version=""
 
+	# Remove broken symlink if exists
+	remove_broken_symlink "k9s"
+
 	# Check for global k9s first
 	local global_k9s
 	if global_k9s=$(check_global_binary "k9s"); then
 		local global_version
 		global_version=$("$global_k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
 		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K9S_VERSION"; then
-			log_success "k9s v$global_version already installed at: $global_k9s"
+			if create_binary_symlink "k9s" "$global_k9s"; then
+				log_success "k9s v$global_version already installed at: $global_k9s (symlinked)"
+			else
+				log_success "k9s v$global_version already installed at: $global_k9s"
+			fi
 			return 0
 		fi
 	fi
