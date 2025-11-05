@@ -95,7 +95,6 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	l.Info(fmt.Sprintf("Defaults copied to: %s", defaultsDir))
 
-
 	// Store stack ID for later use (stackIDPath already declared above)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
 		return fmt.Errorf("failed to write stack ID: %w", err)
@@ -153,22 +152,10 @@ func Up(cfg *config.Config) error {
 			return fmt.Errorf("failed to start existing cluster: %w", err)
 		}
 
-		l.Info("Deploying default infrastructure with helmfile")
-
-		// Apply defaults using helmfile (handles Helm hooks properly)
-		defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
-		helmfileCmd := exec.CommandWithOutput(
-			filepath.Join(cfg.BinDir, "helmfile"),
-			"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
-			"--kubeconfig", kubeconfigPath,
-			"apply",
-		)
-
-		if err := helmfileCmd.Run(); err != nil {
-			return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+		if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+			return err
 		}
 
-		l.Success("Default infrastructure deployed")
 		l.Success("Stack restarted successfully")
 		l.Success("Stack ID", "id", stackID)
 		return nil
@@ -213,22 +200,9 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	l.Info("Deploying default infrastructure with helmfile")
-
-	// Apply defaults using helmfile (handles Helm hooks properly)
-	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
-	helmfileCmd := exec.CommandWithOutput(
-		filepath.Join(cfg.BinDir, "helmfile"),
-		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
-		"--kubeconfig", kubeconfigPath,
-		"apply",
-	)
-
-	if err := helmfileCmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+	if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+		return err
 	}
-
-	l.Success("Default infrastructure deployed")
 
 	l.Success("Stack started successfully")
 	if stackID != "" {
@@ -388,4 +362,31 @@ func getStackName(cfg *config.Config) string {
 // GetStackID reads the stored stack ID (exported for use in main)
 func GetStackID(cfg *config.Config) string {
 	return getStackID(cfg)
+}
+
+// applyDefaults deploys the default infrastructure using helmfile
+// If deployment fails, the cluster is automatically stopped via Down()
+func applyDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string) error {
+	l.Info("Deploying default infrastructure with helmfile")
+
+	// Apply defaults using helmfile (handles Helm hooks properly)
+	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
+	helmfileCmd := exec.CommandWithOutput(
+		filepath.Join(cfg.BinDir, "helmfile"),
+		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
+		"--kubeconfig", kubeconfigPath,
+		"apply",
+	)
+
+	if err := helmfileCmd.Run(); err != nil {
+		l.Error("Failed to apply defaults helmfile, stopping cluster")
+		// Attempt to stop the cluster to clean up
+		if downErr := Down(cfg); downErr != nil {
+			l.Warn("Failed to stop cluster during cleanup", "error", downErr)
+		}
+		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
+	}
+
+	l.Success("Default infrastructure deployed")
+	return nil
 }
