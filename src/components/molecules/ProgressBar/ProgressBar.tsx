@@ -8,7 +8,7 @@ export interface ProgressBarProps {
 }
 
 const ProgressFill = styled(Box, {
-  height: '2px',
+  height: '$2', // 2px
   borderRadius: '$pill',
   transition: 'width 500ms ease',
 
