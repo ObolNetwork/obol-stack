@@ -38,13 +38,13 @@ config: |-
     httpHostV4: "0.0.0.0"
     listenV6: true
     httpHostV6: "[::]"
-    httpPort: 8545
+    httpPort: 4000
 
   metrics:
     enabled: true
     hostV4: "0.0.0.0"
     hostV6: "[::]"
-    port: 9090
+    port: 4001
 
   projects:
     - id: rpc
@@ -98,7 +98,7 @@ ingress:
   enabled: true
   className: nginx
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/rewrite-target: /rpc/{{ $network }}/$2
     nginx.ingress.kubernetes.io/use-regex: "true"
   hosts:
     - host: obol.stack
@@ -200,16 +200,6 @@ extraPorts: []
 
 # Additional env variables
 extraEnv: []
-
-persistence:
-  enabled: true
-  existingClaim: erpc-{{ $network }}
-  accessModes:
-    - ReadWriteOnce
-  size: 1Gi
-  storageClassName: local-path
-  annotations: {}
-  selector: {}
 
 serviceMonitor:
   enabled: false
