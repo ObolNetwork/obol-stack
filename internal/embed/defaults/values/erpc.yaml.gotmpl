@@ -1,4 +1,12 @@
 {{- $network := .Values.network -}}
+{{- $chainId := 1 -}}  {{/* Default: mainnet */}}
+{{- if eq $network "hoodi" -}}
+  {{- $chainId = 560048 -}}
+{{- else if eq $network "sepolia" -}}
+  {{- $chainId = 11155111 -}}
+{{- else if ne $network "mainnet" -}}
+  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) -}}
+{{- end -}}
 
 # Number of replicas
 replicas: 1
@@ -30,35 +38,20 @@ config: |-
     httpHostV4: "0.0.0.0"
     listenV6: true
     httpHostV6: "[::]"
-    httpPort: {{ .Values.httpPort }}
+    httpPort: 8545
 
   metrics:
     enabled: true
     hostV4: "0.0.0.0"
     hostV6: "[::]"
-    port: {{ .Values.metricsPort }}
+    port: 9090
 
   projects:
     - id: rpc
       networks:
-{{- if eq $network "mainnet" }}
         - architecture: evm
           evm:
-            chainId: 1
-          alias: {{ $network }}
-          failsafe:
-            timeout:
-              duration: 60s
-            retry:
-              maxAttempts: 3
-              delay: 0ms
-            hedge:
-              delay: 500ms
-              maxCount: 1
-{{- else if eq $network "hoodi" }}
-        - architecture: evm
-          evm:
-            chainId: 560048
+            chainId: {{ $chainId }}
           alias: {{ $network }}
           failsafe:
             timeout:
@@ -69,40 +62,13 @@ config: |-
             hedge:
               delay: 500ms
               maxCount: 1
-{{- else if eq $network "sepolia" }}
-        - architecture: evm
-          evm:
-            chainId: 11155111
-          alias: {{ $network }}
-          failsafe:
-            timeout:
-              duration: 30s
-            retry:
-              maxAttempts: 2
-              delay: 100ms
-            hedge:
-              delay: 500ms
-              maxCount: 1
-{{- else }}
-{{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) }}
-{{- end }}
       upstreams:
         # Helios light client upstream
-        - endpoint: http://l1-light-client-helios-{{ $network }}.l1.svc.cluster.local:8545
+        - endpoint: http://helios-{{ $network }}.default.svc.cluster.local:8545
           id: helios-{{ $network }}
           group: fallback
           evm:
-{{- if eq $network "mainnet" }}
-            chainId: 1
-{{- else if eq $network "hoodi" }}
-            chainId: 560048
-{{- else if eq $network "sepolia" }}
-            chainId: 11155111
-{{- end }}
-        # Full node upstream (if available)
-        - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
-          id: l1-full-node
-          nodeType: full
+            chainId: {{ $chainId }}
       cors:
         allowedOrigins:
           - "*"
@@ -120,14 +86,7 @@ config: |-
         maxAge: 3600
 
 # Secret env variables
-secretEnv:
-  ALCHEMY_API_KEY: XXXXXXXXXX
-
-# HTTP port for erpc
-httpPort: 80
-
-# Metrics port for erpc
-metricsPort: 4001
+secretEnv: {}
 
 # Extra args for the erpc container
 extraArgs: []
@@ -144,7 +103,7 @@ ingress:
   hosts:
     - host: obol.stack
       paths:
-        - path: /erpc-{{ $network }}(/|$)(.*)
+        - path: /rpc(/|$)(.*)
           pathType: ImplementationSpecific
 
 service:
