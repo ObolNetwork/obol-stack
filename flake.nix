@@ -30,6 +30,9 @@
 
             # nix
             alejandra
+
+            # Ethereum tooling
+            foundry
           ];
         };
       };
