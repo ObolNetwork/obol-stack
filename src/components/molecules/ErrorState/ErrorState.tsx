@@ -1,81 +1,54 @@
 'use client';
 
 import React from 'react';
-import { Box, Text, Button } from '@obolnetwork/obol-ui';
+import { Box, Text, Button, theme } from '@obolnetwork/obol-ui';
+import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {
-  title?: string;
-  message: string;
   onRetry?: () => void;
-  retryLabel?: string;
-  variant?: 'banner' | 'centered';
-  className?: string;
 }
 
-export const ErrorState: React.FC<ErrorStateProps> = ({
-  title = 'Error',
-  message,
-  onRetry,
-  retryLabel = 'Retry',
-  variant = 'banner',
-  className = '',
-}) => {
-  if (variant === 'centered') {
-    return (
-      <Box
-        className={className}
-        css={{
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          height: '50vh',
-          gap: '$md',
-        }}
-      >
-        <Text
-          css={{ fontSize: '$lg', color: '$red11', fontWeight: '$semibold' }}
-        >
-          {title}
-        </Text>
-        <Text
-          css={{
-            fontSize: '$md',
-            color: '$gray11',
-            textAlign: 'center',
-            maxWidth: '400px',
-          }}
-        >
-          {message}
-        </Text>
-        {onRetry && (
-          <Button onClick={onRetry} variant="outline" size="md">
-            {retryLabel}
-          </Button>
-        )}
-      </Box>
-    );
-  }
-
-  // Banner variant (default)
+export const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => {
   return (
     <Box
-      className={className}
       css={{
-        backgroundColor: '$amber3',
-        border: '1px solid $amber6',
-        borderRadius: '$md',
-        padding: '$sm',
-        marginBottom: '$md',
         display: 'flex',
-        justifyContent: 'space-between',
+        flexDirection: 'column',
         alignItems: 'center',
+        padding: '$lg',
+        borderRadius: '$3',
+        border: '1px solid $bg05',
       }}
     >
-      <Text css={{ color: '$amber11', fontSize: '$sm' }}>{message}</Text>
+      <LowConnection size="s" color={theme.colors.light.value} />
+      <Text
+        css={{
+          fontSize: '$3',
+          color: '$light',
+          textAlign: 'center',
+          fontWeight: '$semibold',
+          lineHeight: '$tall2',
+          marginTop: '$xxxs',
+          marginBottom: '$xxxs',
+        }}
+      >
+        API connection failed. Using cached data
+      </Text>
+      <Text
+        css={{
+          fontSize: '$3',
+          color: '$body',
+          textAlign: 'center',
+          fontWeight: '$medium',
+          lineHeight: '$shorter',
+          marginBottom: '$sm',
+        }}
+      >
+        Error: Failed to fetch
+      </Text>
       {onRetry && (
-        <Button onClick={onRetry} variant="outline" size="sm">
-          {retryLabel}
+        <Button onClick={onRetry} color="secondary" size="md">
+          Retry
         </Button>
       )}
     </Box>

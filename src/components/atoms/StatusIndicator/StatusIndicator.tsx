@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, styled } from '@obolnetwork/obol-ui';
+import { Box, styled, theme } from '@obolnetwork/obol-ui';
 import { Tooltip } from '../Tooltip';
 
 export interface StatusIndicatorProps {
@@ -16,12 +16,12 @@ const StatusContainer = styled(Box, {
   variants: {
     size: {
       sm: {
-        width: '16px',
-        height: '16px',
+        width: '$sm',
+        height: '$sm',
       },
       md: {
-        width: '20px',
-        height: '20px',
+        width: '$md',
+        height: '$md',
       },
     },
   },
@@ -34,11 +34,11 @@ const StatusContainer = styled(Box, {
 const getStatusColors = (status: StatusIndicatorProps['status']) => {
   switch (status) {
     case 'synced':
-      return '#2FE4AB'; // Primary - Obol Green/Mid
+      return theme.colors.obolGreen.value;
     case 'unsynced':
-      return '#97B2B8'; // Text/Body
+      return theme.colors.body.value;
     default:
-      return '#2FE4AB'; // Primary - Obol Green/Mid
+      return theme.colors.obolGreen.value;
   }
 };
 

@@ -1,6 +1,13 @@
-import { Box } from '@obolnetwork/obol-ui';
-import { Icon } from '../../atoms/Icon';
-import { IconName } from '../../atoms/Icon/Icon';
+import * as React from 'react';
+import { Box, theme } from '@obolnetwork/obol-ui';
+import {
+  Healthy,
+  Behind,
+  HighUsage,
+  StalledSync,
+  LowPeer,
+  Bottleneck,
+} from '@/icons';
 
 interface StatusIndicatorProps {
   status:
@@ -16,43 +23,43 @@ interface StatusIndicatorProps {
 const statusConfig = {
   healthy: {
     text: 'Fully Synced & Healthy',
-    icon: 'healthy' as IconName,
+    icon: <Healthy size="s" color={theme.colors.obolGreen.value} />,
     description:
       'Your node is fully caught up, well-connected, and operating within normal resource levels. I can continue to maintain software updates and monitor for any performance drift.',
   },
   behind: {
     text: 'Slightly Behind',
-    icon: 'behind' as IconName,
+    icon: <Behind size="s" color={theme.colors.obolGreen.value} />,
     description:
       'The node is a few dozen blocks behind but recovering steadily. I can adjust peer settings and optimise network configuration to restore full sync speed.',
   },
   'high-usage': {
     text: 'High Resource Usage',
-    icon: 'high-usage' as IconName,
+    icon: <HighUsage size="s" color={theme.colors.obolGreen.value} />,
     description:
       'The node is keeping pace but running close to CPU or memory limits. I can fine-tune client settings and background processes to reduce the load.',
   },
   stalled: {
     text: 'Stalled Sync',
-    icon: 'stalled-sync' as IconName,
+    icon: <StalledSync size="s" color={theme.colors.obolGreen.value} />,
     description:
       'Block height has not advanced for some time, suggesting the sync process is stalled. I can review logs, clear temporary data, and restart processes to restore progress.',
   },
   'low-peers': {
     text: 'Low Peer Count',
-    icon: 'low-peer' as IconName,
+    icon: <LowPeer size="s" color={theme.colors.obolGreen.value} />,
     description:
       'Peer connections are below optimal levels, slowing block propagation. I can adjust firewall rules and peer settings to improve connectivity without changing hardware.',
   },
   'disk-bottleneck': {
     text: 'Disk I/O Bottleneck',
-    icon: 'bottleneck' as IconName,
+    icon: <Bottleneck size="s" color={theme.colors.obolGreen.value} />,
     description:
       'Disk access is slowing database operations, affecting sync performance. I can optimise database settings and enable pruning to reduce I/O demands.',
   },
   'low-disk': {
     text: 'Low Disk Space',
-    icon: 'bottleneck' as IconName, // Using bottleneck icon for now, can be changed later
+    icon: <Bottleneck size="s" color={theme.colors.obolGreen.value} />, // Using bottleneck icon for now, can be changed later
     description:
       'Disk space is critically low, affecting node performance. I can help clean up temporary files and optimize storage usage.',
   },
@@ -64,19 +71,19 @@ export function StatusIndicator({ status }: StatusIndicatorProps) {
   return (
     <Box
       style={{
-        color: '#FFF',
+        color: '$white',
         textAlign: 'center',
         display: 'flex',
         alignItems: 'center',
-        gap: '6px',
+        gap: '$xxs',
         fontFamily: 'DM Sans',
-        fontSize: '16px',
+        fontSize: '$4',
         fontStyle: 'normal',
-        fontWeight: '600',
-        lineHeight: '24px',
+        fontWeight: '$semibold',
+        lineHeight: '$base',
       }}
     >
-      <Icon name={config.icon} size="s" color="#2fe4ab" />
+      {config.icon}
       {config.text}
     </Box>
   );

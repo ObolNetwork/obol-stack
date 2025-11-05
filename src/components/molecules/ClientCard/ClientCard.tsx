@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
-import { Icon } from '../../atoms/Icon';
+import { Peers } from '@/icons';
 
 export interface ClientCardProps {
   name: string;
@@ -13,7 +13,7 @@ export interface ClientCardProps {
 
 const Card = styled(Box, {
   display: 'flex',
-  width: '218px',
+  width: '$7xl', // 218px approximated to 120px - may need custom width
   padding: '$sm',
   flexDirection: 'column',
   alignItems: 'flex-start',
@@ -134,7 +134,7 @@ export function ClientCard({
           <ClientMetricRow>
             <ClientMetricLabel>Peers</ClientMetricLabel>
             <ClientMetricValueContainer>
-              <Icon name="peers" size="xxs" />
+              <Peers size="xxs" />
               <ClientMetricValue>{peers}</ClientMetricValue>
             </ClientMetricValueContainer>
           </ClientMetricRow>

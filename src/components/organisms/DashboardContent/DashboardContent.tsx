@@ -3,10 +3,13 @@ import { NetworkStatus } from '../NetworkStatus';
 import { NodeOverview } from '../NodeOverview';
 import { DashboardData } from '../../../types/dashboard';
 import { AgentSidebar } from '../../molecules/AgentSidebar';
+import { ErrorState } from '../../molecules/ErrorState';
 import { useState } from 'react';
 
 interface DashboardContentProps {
-  data: DashboardData;
+  data: DashboardData | null;
+  error?: string | Error | null;
+  onRetry?: () => void;
 }
 
 const Container = styled(Box, {
@@ -34,25 +37,31 @@ const SectionContainer = styled(Box, {
   gap: '$lg',
 });
 
-export function DashboardContent({ data }: DashboardContentProps) {
+export function DashboardContent({
+  data,
+  error,
+  onRetry,
+}: DashboardContentProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   return (
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
-          {data.chains.map((chain, index) => (
-            <NetworkStatus
-              key={chain.chainName}
-              chainData={chain}
-              defaultExpanded={index === 0}
-            />
-          ))}
-          <NodeOverview data={data.nodeOverview} ports={data.ports} />
+          {error && <ErrorState onRetry={onRetry} />}
+          {data &&
+            data.chains.map((chain, index) => (
+              <NetworkStatus
+                key={chain.chainName}
+                chainData={chain}
+                defaultExpanded={index === 0}
+              />
+            ))}
+          {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
         </SectionContainer>
       </MainSection>
 
-      <AgentSidebar onSidebarToggle={setIsSidebarOpen} data={data} />
+      {data && <AgentSidebar onSidebarToggle={setIsSidebarOpen} data={data} />}
     </Container>
   );
 }
