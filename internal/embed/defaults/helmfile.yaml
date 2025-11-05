@@ -71,7 +71,7 @@ releases:
     version: 0.1.0
     needs:
       - default/ingress-nginx
-      - default/helios
+      - default/erpc
     values:
       - replicaCount: 1
         image:
@@ -92,4 +92,4 @@ releases:
         obol:
           stack:
             enabled: true
-            ethRpcUrl: "http://helios-{{ .Values.network }}.default.svc.cluster.local:8545"
+            ethRpcUrl: "http://erpc.default.svc.cluster.local:4000/rpc/{{ .Values.network }}"
