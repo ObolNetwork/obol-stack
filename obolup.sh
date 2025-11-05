@@ -270,7 +270,8 @@ install_obol_binary() {
 		# Try to get latest release tag from GitHub API
 		local latest_tag
 		if command_exists curl; then
-			latest_tag=$(curl -fsSL https://api.github.com/repos/ObolNetwork/obol-stack/releases/latest 2>/dev/null | grep -oP '"tag_name": "\K(.*)(?=")')
+			# macOS-compatible: use sed instead of grep -oP
+			latest_tag=$(curl -fsSL https://api.github.com/repos/ObolNetwork/obol-stack/releases/latest 2>/dev/null | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p')
 		fi
 
 		# If we got a tag, try to download it
