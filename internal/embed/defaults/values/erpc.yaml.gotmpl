@@ -1,0 +1,266 @@
+{{- $network := .Values.network -}}
+
+# Number of replicas
+replicas: 1
+
+image:
+  repository: ghcr.io/erpc/erpc
+  tag: 0.0.56
+  pullPolicy: IfNotPresent
+
+# Config file
+config: |-
+  logLevel: debug
+
+  database:
+    evmJsonRpcCache:
+      connectors:
+        - id: memory-cache
+          driver: memory
+          memory:
+            maxItems: 10000
+      policies:
+        - network: "*"
+          method: "*"
+          finality: unfinalized
+          connector: memory-cache
+          ttl: 10s
+
+  server:
+    httpHostV4: "0.0.0.0"
+    listenV6: true
+    httpHostV6: "[::]"
+    httpPort: {{ .Values.httpPort }}
+
+  metrics:
+    enabled: true
+    hostV4: "0.0.0.0"
+    hostV6: "[::]"
+    port: {{ .Values.metricsPort }}
+
+  projects:
+    - id: rpc
+      networks:
+{{- if eq $network "mainnet" }}
+        - architecture: evm
+          evm:
+            chainId: 1
+          alias: {{ $network }}
+          failsafe:
+            timeout:
+              duration: 60s
+            retry:
+              maxAttempts: 3
+              delay: 0ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+{{- else if eq $network "hoodi" }}
+        - architecture: evm
+          evm:
+            chainId: 560048
+          alias: {{ $network }}
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+{{- else if eq $network "sepolia" }}
+        - architecture: evm
+          evm:
+            chainId: 11155111
+          alias: {{ $network }}
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+{{- else }}
+{{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) }}
+{{- end }}
+      upstreams:
+        # Helios light client upstream
+        - endpoint: http://l1-light-client-helios-{{ $network }}.l1.svc.cluster.local:8545
+          id: helios-{{ $network }}
+          group: fallback
+          evm:
+{{- if eq $network "mainnet" }}
+            chainId: 1
+{{- else if eq $network "hoodi" }}
+            chainId: 560048
+{{- else if eq $network "sepolia" }}
+            chainId: 11155111
+{{- end }}
+        # Full node upstream (if available)
+        - endpoint: http://l1-full-node-execution.l1.svc.cluster.local:8545
+          id: l1-full-node
+          nodeType: full
+      cors:
+        allowedOrigins:
+          - "*"
+        allowedMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        allowedHeaders:
+          - "*"
+        exposedHeaders:
+          - "X-Request-ID"
+        allowCredentials: true
+        maxAge: 3600
+
+# Secret env variables
+secretEnv:
+  ALCHEMY_API_KEY: XXXXXXXXXX
+
+# HTTP port for erpc
+httpPort: 80
+
+# Metrics port for erpc
+metricsPort: 4001
+
+# Extra args for the erpc container
+extraArgs: []
+
+# Command replacement for the erpc container
+customCommand: []
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+  hosts:
+    - host: obol.stack
+      paths:
+        - path: /erpc-{{ $network }}(/|$)(.*)
+          pathType: ImplementationSpecific
+
+service:
+  type: ClusterIP
+
+# Affinity configuration for pods
+affinity: {}
+
+# Image pull secrets for Docker images
+imagePullSecrets: []
+
+# Annotations for the Deployment
+annotations: {}
+
+# Liveness probe
+livenessProbe:
+  httpGet:
+    path: /healthcheck
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 120
+
+# Readiness probe
+readinessProbe:
+  httpGet:
+    path: /healthcheck
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+# Node selector for pods
+nodeSelector: {}
+
+# Pod labels
+podLabels: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod management policy
+podManagementPolicy: OrderedReady
+
+# Pod priority class
+priorityClassName: null
+
+# Resource requests and limits
+resources: {}
+
+# The security context for pods
+securityContext:
+  fsGroup: 10001
+  runAsGroup: 10001
+  runAsNonRoot: true
+  runAsUser: 10001
+
+# The security context for containers
+containerSecurityContext: {}
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# How long to wait until the pod is forcefully terminated
+terminationGracePeriodSeconds: 30
+
+# Tolerations for pods
+tolerations: []
+
+# Topology Spread Constraints for pods
+topologySpreadConstraints: []
+
+# Define the PodDisruptionBudget spec
+podDisruptionBudget: {}
+
+# Update strategy for the Deployment
+updateStrategy:
+  type: RollingUpdate
+
+# Additional init containers
+initContainers: []
+
+# Additional containers
+extraContainers: []
+
+# Additional volumes
+extraVolumes: []
+
+# Additional volume mounts
+extraVolumeMounts: []
+
+# Additional ports
+extraPorts: []
+
+# Additional env variables
+extraEnv: []
+
+persistence:
+  enabled: false
+  existingClaim: null
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  storageClassName: null
+  annotations: {}
+  selector: {}
+
+serviceMonitor:
+  enabled: true
+  path: /metrics
+  namespace: null
+  labels:
+    release: monitoring
+  annotations: {}
+  interval: 1m
+  scheme: http
+  tlsConfig: {}
+  scrapeTimeout: 30s
+  relabelings: []
