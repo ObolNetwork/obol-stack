@@ -243,12 +243,12 @@ extraPorts: []
 extraEnv: []
 
 persistence:
-  enabled: false
-  existingClaim: null
+  enabled: true
+  existingClaim: erpc-{{ $network }}
   accessModes:
     - ReadWriteOnce
   size: 1Gi
-  storageClassName: null
+  storageClassName: local-path
   annotations: {}
   selector: {}
 

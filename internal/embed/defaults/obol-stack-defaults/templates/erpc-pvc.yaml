@@ -1,0 +1,16 @@
+{{- if .Values.network }}
+---
+# PersistentVolumeClaim for eRPC {{ .Values.network }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: erpc-{{ .Values.network }}
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+{{- end }}
