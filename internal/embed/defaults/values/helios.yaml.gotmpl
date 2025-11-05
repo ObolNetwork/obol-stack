@@ -37,8 +37,11 @@ persistence:
 ingress:
   enabled: true
   className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
   hosts:
-    - host: helios.obol.stack
+    - host: obol.stack
       paths:
-        - path: /
-          pathType: Prefix
+        - path: /helios(/|$)(.*)
+          pathType: ImplementationSpecific
