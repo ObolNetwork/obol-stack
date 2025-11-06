@@ -7,6 +7,10 @@ repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
 
+# Single source of truth: change this to switch networks
+values:
+  - network: mainnet 
+
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
   - name: obol-stack-defaults
@@ -37,6 +41,16 @@ releases:
           admissionWebhooks:
             enabled: false
 
+  # Helios light client
+  - name: helios
+    namespace: default
+    chart: obol/helios
+    version: 0.1.4
+    needs:
+      - default/ingress-nginx
+    values:
+      - ./values/helios.yaml.gotmpl
+
   # Obol Stack frontend
   - name: obol-frontend
     namespace: default
@@ -44,6 +58,7 @@ releases:
     version: 0.1.0
     needs:
       - default/ingress-nginx
+      - default/helios
     values:
       - replicaCount: 1
         image:
@@ -64,4 +79,4 @@ releases:
         obol:
           stack:
             enabled: true
-            ethRpcUrl: "http://rpc.l1.svc.cluster.local/rpc/mainnet"
+            ethRpcUrl: "http://helios-{{ .Values.network }}.default.svc.cluster.local:8545"

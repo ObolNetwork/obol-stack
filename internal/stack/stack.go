@@ -152,7 +152,7 @@ func Up(cfg *config.Config) error {
 			return fmt.Errorf("failed to start existing cluster: %w", err)
 		}
 
-		if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+		if err := syncDefaults(cfg, exec, l, kubeconfigPath); err != nil {
 			return err
 		}
 
@@ -200,7 +200,7 @@ func Up(cfg *config.Config) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	if err := applyDefaults(cfg, exec, l, kubeconfigPath); err != nil {
+	if err := syncDefaults(cfg, exec, l, kubeconfigPath); err != nil {
 		return err
 	}
 
@@ -364,18 +364,18 @@ func GetStackID(cfg *config.Config) string {
 	return getStackID(cfg)
 }
 
-// applyDefaults deploys the default infrastructure using helmfile
+// syncDefaults deploys the default infrastructure using helmfile
 // If deployment fails, the cluster is automatically stopped via Down()
-func applyDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string) error {
+func syncDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string) error {
 	l.Info("Deploying default infrastructure with helmfile")
 
-	// Apply defaults using helmfile (handles Helm hooks properly)
+	// Sync defaults using helmfile (handles Helm hooks properly)
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfileCmd := exec.CommandWithOutput(
 		filepath.Join(cfg.BinDir, "helmfile"),
 		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
 		"--kubeconfig", kubeconfigPath,
-		"apply",
+		"sync",
 	)
 
 	if err := helmfileCmd.Run(); err != nil {
