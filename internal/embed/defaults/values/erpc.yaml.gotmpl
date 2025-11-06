@@ -97,14 +97,11 @@ customCommand: []
 ingress:
   enabled: true
   className: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /rpc/{{ $network }}/$2
-    nginx.ingress.kubernetes.io/use-regex: "true"
   hosts:
     - host: obol.stack
       paths:
-        - path: /rpc(/|$)(.*)
-          pathType: ImplementationSpecific
+        - path: /rpc
+          pathType: Prefix
 
 service:
   type: ClusterIP
