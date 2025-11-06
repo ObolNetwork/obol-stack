@@ -45,7 +45,7 @@ fi
 # Update these versions to upgrade dependencies across all installations
 readonly KUBECTL_VERSION="1.31.0"
 readonly HELM_VERSION="3.16.2"
-readonly K3D_VERSION="5.7.4"
+readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="0.169.1"
 readonly K9S_VERSION="0.32.5"
 readonly HELM_DIFF_VERSION="3.9.11"
@@ -923,7 +923,7 @@ configure_path() {
 		echo ""
 		echo "# Added by Obol Stack installer"
 		echo "$path_export"
-	} >> "$profile"
+	} >>"$profile"
 
 	log_success "Added to PATH in ~/.profile"
 	echo ""
