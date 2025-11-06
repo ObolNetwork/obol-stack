@@ -58,7 +58,7 @@ const ModalContent = styled('div', {
   top: 'calc(100% + 16px)',
   right: 0,
   display: 'flex',
-  width: '$7xl', // 351px approximated to 120px token - may need adjustment
+  width: '351px',
   padding: '$lg',
   flexDirection: 'column',
   alignItems: 'center',

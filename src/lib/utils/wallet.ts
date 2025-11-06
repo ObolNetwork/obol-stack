@@ -1,5 +1,6 @@
 import { WalletClient } from 'viem';
 import { ChainType } from '../../types/dashboard';
+import { config } from '../config/environment';
 
 type AddEthereumChainParameter = {
   chainId: string;
@@ -15,7 +16,7 @@ const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
     chainId: '0x1',
     chainName: 'Ethereum Mainnet',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://rpc.ankr.com/eth'],
+    rpcUrls: [config.erpcUrl + '/mainnet'],
     blockExplorerUrls: ['https://etherscan.io'],
   },
   // Sepolia Testnet
@@ -23,7 +24,7 @@ const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
     chainId: '0xaa36a7',
     chainName: 'Sepolia Testnet',
     nativeCurrency: { name: 'Ethereum', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://rpc.sepolia.org'],
+    rpcUrls: [config.erpcUrl + '/sepolia'],
     blockExplorerUrls: ['https://sepolia.etherscan.io'],
   },
   // Hoodi chain (custom)
@@ -31,7 +32,7 @@ const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
     chainId: '0x88bb0', // 560048
     chainName: 'Hoodi Network',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: ['https://ethereum-hoodi-rpc.publicnode.com'],
+    rpcUrls: [config.erpcUrl + '/hoodi'],
     blockExplorerUrls: ['https://hoodi.etherscan.io'],
   },
   // Aztec Testnet
@@ -43,7 +44,7 @@ const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
       symbol: 'ETH',
       decimals: 18,
     },
-    rpcUrls: ['https://677868.rpc.thirdweb.com'],
+    rpcUrls: [config.erpcUrl + '/aztec'],
     blockExplorerUrls: ['https://explorer.aztec.network'],
   },
 };
@@ -53,8 +54,8 @@ export async function addNetworkToWallet(
   chainName: ChainType
 ) {
   const params = CHAIN_PARAMS[chainName];
-
-  if (!params) {
+  //erpc.default.svc.cluster.local:4000/rpc/{{ .Values.network }}"
+  http: if (!params) {
     throw new Error(
       `Network "${chainName}" is not supported for wallet addition.`
     );
