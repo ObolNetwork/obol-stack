@@ -75,6 +75,12 @@ releases:
     values:
       - replicaCount: 1
         image:
+          environment:
+            - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
+              value: "http://helios-{{ .Values.network }}.default.svc.cluster.local:8545"
+            - name: NEXT_PUBLIC_ERPC_URL
+              value: "http://erpc.default.svc.cluster.local:4000/rpc"
+
           repository: obolnetwork/obol-stack-front-end
           pullPolicy: IfNotPresent
           tag: ""
@@ -89,7 +95,3 @@ releases:
               paths:
                 - path: /
                   pathType: Prefix
-        obol:
-          stack:
-            enabled: true
-            ethRpcUrl: "http://erpc.default.svc.cluster.local:4000/rpc/{{ .Values.network }}"
