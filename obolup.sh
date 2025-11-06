@@ -50,6 +50,9 @@ readonly HELMFILE_VERSION="0.169.1"
 readonly K9S_VERSION="0.32.5"
 readonly HELM_DIFF_VERSION="3.9.11"
 
+# Repository URL for building from source
+readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
+
 # Logging functions
 log_info() {
 	echo -e "${BLUE}==>${NC} $1"
@@ -87,7 +90,7 @@ check_global_binary() {
 			echo "$path"
 			return 0
 		fi
-	done <<< "$all_paths"
+	done <<<"$all_paths"
 
 	return 1
 }
@@ -271,10 +274,12 @@ build_from_source() {
 	tmp_dir=$(mktemp -d)
 	trap "rm -rf '$tmp_dir'" EXIT
 
+	# TODO Perhaps git and golang need to be installed in tmp dir in order to build from source
+
 	log_info "Cloning repository..."
-	if ! git clone --depth 1 --branch "$build_ref" https://github.com/ObolNetwork/obol-stack.git "$tmp_dir" 2>/dev/null; then
+	if ! git clone --depth 1 --branch "$build_ref" "$OBOL_REPO_URL" "$tmp_dir" 2>/dev/null; then
 		# If branch doesn't exist, try as a tag
-		if ! git clone https://github.com/ObolNetwork/obol-stack.git "$tmp_dir" 2>/dev/null; then
+		if ! git clone "$OBOL_REPO_URL" "$tmp_dir" 2>/dev/null; then
 			log_error "Failed to clone repository"
 			return 1
 		fi
@@ -324,10 +329,13 @@ install_obol_binary() {
 		log_info "OBOL_RELEASE=latest: attempting to download latest release..."
 
 		# Try to get latest release tag from GitHub API
-		local latest_tag
+		local latest_tag=""
 		if command_exists curl; then
 			# macOS-compatible: use sed instead of grep -oP
+			# Disable errexit temporarily to handle curl failure gracefully
+			set +e
 			latest_tag=$(curl -fsSL https://api.github.com/repos/ObolNetwork/obol-stack/releases/latest 2>/dev/null | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p')
+			set -e
 		fi
 
 		# If we got a tag, try to download it
@@ -881,25 +889,46 @@ configure_hosts_file() {
 	fi
 }
 
-# Check if OBOL_BIN_DIR is in PATH and print instructions if not
-check_and_print_path_instructions() {
-	# Skip in development mode
-	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
-		return 0
-	fi
+# Configure PATH in ~/.profile
+# This function appends OBOL_BIN_DIR to PATH in the user's ~/.profile file.
+# The ~/.profile file is sourced by login shells and is shell-agnostic (works with bash, zsh, fish, etc.).
+# After adding to ~/.profile, the user must either:
+#   1. Source the file: source ~/.profile
+#   2. Create a new terminal session (new login shell will source ~/.profile automatically)
+configure_path() {
+	local profile="$HOME/.profile"
+	local path_export="export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 
-	# Check if OBOL_BIN_DIR is already in PATH
+	# Check if OBOL_BIN_DIR is already in current PATH
 	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
 		log_success "OBOL_BIN_DIR already in PATH"
 		return 0
 	fi
 
-	# Print instructions to add to PATH
-	log_info "OBOL_BIN_DIR not found in PATH"
+	# Check if already configured in ~/.profile
+	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
+		log_success "OBOL_BIN_DIR already configured in ~/.profile"
+		log_info "Will be available in new shell sessions"
+		return 0
+	fi
+
+	# Add to ~/.profile
+	log_info "Adding OBOL_BIN_DIR to PATH in ~/.profile"
+
+	# Create profile if it doesn't exist
+	touch "$profile"
+
+	# Add PATH export with comment
+	{
+		echo ""
+		echo "# Added by Obol Stack installer"
+		echo "$path_export"
+	} >> "$profile"
+
+	log_success "Added to PATH in ~/.profile"
 	echo ""
-	echo "Add this line to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	log_info "To use immediately, run: source ~/.profile"
+	log_info "Otherwise, it will be available in new shell sessions"
 	echo ""
 }
 
@@ -933,7 +962,7 @@ main() {
 	install_obol_binary
 	install_dependencies
 	configure_hosts_file
-	check_and_print_path_instructions
+	configure_path
 	print_instructions
 
 	echo ""

@@ -18,6 +18,12 @@
           packages = with pkgs; [
             just
 
+            k3d
+            helmfile
+            kubernetes-helm
+            k9s
+            kubectl
+
             # bash
             shellcheck
 
