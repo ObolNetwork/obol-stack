@@ -33,9 +33,7 @@ export const config = {
     process.env.NEXT_PUBLIC_AZTEC_PROVER_AGENT_URL ||
     'http://l2-prover-node-sepolia-agent.aztec-testnet.svc.cluster.local:8080',
 
-  erpcUrl:
-    process.env.NEXT_PUBLIC_ERPC_URL ||
-    'http://erpc.default.svc.cluster.local:4000/rpc/',
+  erpcUrl: process.env.NEXT_PUBLIC_ERPC_URL || 'https://obol.stack/rpc',
 };
 
 export type Config = typeof config;

@@ -54,8 +54,8 @@ export async function addNetworkToWallet(
   chainName: ChainType
 ) {
   const params = CHAIN_PARAMS[chainName];
-  //erpc.default.svc.cluster.local:4000/rpc/{{ .Values.network }}"
-  http: if (!params) {
+
+  if (!params) {
     throw new Error(
       `Network "${chainName}" is not supported for wallet addition.`
     );
