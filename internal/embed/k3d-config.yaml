@@ -25,7 +25,7 @@ ports:
 options:
   k3d:
     wait: true
-    timeout: "100s"
+    timeout: "300s"
     disableLoadbalancer: false
   k3s:
     extraArgs:
