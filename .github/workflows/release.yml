@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Get version information
+        id: version
+        run: |
+          # Get version from tag (remove 'v' prefix)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+
+          # Get git commit (short hash)
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+
+          # Get build time (YYYYMMDDHHMMSS format)
+          BUILD_TIME=$(date -u +"%Y%m%d%H%M%S")
+
+          # Check if repo is dirty
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            GIT_DIRTY="true"
+          else
+            GIT_DIRTY="false"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "git_commit=$GIT_COMMIT" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "git_dirty=$GIT_DIRTY" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          # Build with ldflags (same as obolup.sh)
+          LDFLAGS="-X github.com/ObolNetwork/obol-stack/internal/version.Version=${{ steps.version.outputs.version }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit=${{ steps.version.outputs.git_commit }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=${{ steps.version.outputs.build_time }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=${{ steps.version.outputs.git_dirty }}"
+
+          # Build binary with naming convention from obolup.sh
+          OUTPUT="obol_${{ matrix.goos }}_${{ matrix.goarch }}"
+          go build -ldflags "$LDFLAGS" -o "$OUTPUT" ./cmd/obol
+
+          # Make executable
+          chmod +x "$OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obol_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: obol_${{ matrix.goos }}_${{ matrix.goarch }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Get tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum obol_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/obol_*
+            artifacts/SHA256SUMS
