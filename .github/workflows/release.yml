@@ -1,0 +1,174 @@
+# Release Workflow
+#
+# This workflow builds Go binaries for all platforms supported by obolup.sh and creates GitHub releases.
+#
+# Supported platforms:
+#   - linux/amd64, linux/arm64
+#   - darwin/amd64, darwin/arm64
+#
+# Binary naming convention (matches obolup.sh):
+#   - obol_linux_amd64, obol_linux_arm64
+#   - obol_darwin_amd64, obol_darwin_arm64
+#
+# How to use:
+#
+#   1. Create and push a release tag:
+#      $ git tag v0.1.0
+#      $ git push origin v0.1.0
+#
+#   2. The workflow automatically:
+#      - Builds all 4 binaries with version information
+#      - Creates a GitHub release
+#      - Uploads binaries and SHA256SUMS checksums
+#      - Generates release notes
+#
+#   3. Binaries are available at:
+#      https://github.com/ObolNetwork/obol-stack/releases/download/v0.1.0/obol_linux_amd64
+#
+#   4. Manual trigger (optional):
+#      - Go to Actions tab → Release workflow → Run workflow
+#      - Enter a tag name (e.g., v0.1.0)
+#
+# The obolup.sh script uses these binaries for installation:
+#   - download_release() function expects binaries at the URL format above
+#   - Version information is injected via ldflags (matching obolup.sh build)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Get version information
+        id: version
+        run: |
+          # Get version from tag (remove 'v' prefix)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+
+          # Get git commit (short hash)
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+
+          # Get build time (YYYYMMDDHHMMSS format)
+          BUILD_TIME=$(date -u +"%Y%m%d%H%M%S")
+
+          # Check if repo is dirty
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            GIT_DIRTY="true"
+          else
+            GIT_DIRTY="false"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "git_commit=$GIT_COMMIT" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "git_dirty=$GIT_DIRTY" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          # Build with ldflags (same as obolup.sh)
+          LDFLAGS="-X github.com/ObolNetwork/obol-stack/internal/version.Version=${{ steps.version.outputs.version }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit=${{ steps.version.outputs.git_commit }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=${{ steps.version.outputs.build_time }}"
+          LDFLAGS="$LDFLAGS -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=${{ steps.version.outputs.git_dirty }}"
+
+          # Build binary with naming convention from obolup.sh
+          OUTPUT="obol_${{ matrix.goos }}_${{ matrix.goarch }}"
+          go build -ldflags "$LDFLAGS" -o "$OUTPUT" ./cmd/obol
+
+          # Make executable
+          chmod +x "$OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: obol_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: obol_${{ matrix.goos }}_${{ matrix.goarch }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Get tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum obol_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create Release
+        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/obol_*
+            artifacts/SHA256SUMS
