@@ -96,8 +96,17 @@ GLOBAL OPTIONS:
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "google-api-key",
+								Aliases: []string{"g"},
+								Usage:   "Google API key for Obol Agent (required for AI features)",
+								EnvVars: []string{"GOOGLE_API_KEY"},
+							},
+						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Up(cfg); err != nil {
+							googleAPIKey := c.String("google-api-key")
+							if err := stack.Up(cfg, googleAPIKey); err != nil {
 								stackID := stack.GetStackID(cfg)
 								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
 									StateDir: cfg.StateDir,
