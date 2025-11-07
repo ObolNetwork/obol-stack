@@ -1,0 +1,278 @@
+---
+# Obol Agent Kubernetes Manifest
+# This manifest deploys the Obol AI Agent with namespace-scoped RBAC permissions
+# The agent can read cluster-wide resources (nodes, namespaces) but can only modify
+# resources in specific namespaces: default, ethereum, l1, monitoring
+
+#------------------------------------------------------------------------------
+# ServiceAccount - Identity for the Obol Agent pod
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obol-agent
+  namespace: default
+
+---
+#------------------------------------------------------------------------------
+# ClusterRole - Read-only access to cluster-wide resources
+# Allows the agent to list namespaces and nodes across the entire cluster
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obol-agent-cluster-reader
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]  # Read-only access
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Grants cluster-wide read access to the agent
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obol-agent-cluster-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obol-agent-cluster-reader
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: default
+
+---
+#------------------------------------------------------------------------------
+# Namespace-Scoped Roles
+# These roles grant create/update/patch permissions ONLY in specific namespaces
+# Permissions: get, list, watch, create, update, patch (no delete)
+#------------------------------------------------------------------------------
+
+# Role for 'default' namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-agent-role
+  namespace: default
+rules:
+  - apiGroups: [""]  # Core API group
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]  # Apps API group
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["batch"]  # Batch API group
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]  # Access to pod logs
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-agent-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-agent-role
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: default
+
+---
+# Role for 'ethereum' namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-agent-role
+  namespace: ethereum
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-agent-binding
+  namespace: ethereum
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-agent-role
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: default
+
+---
+# Role for 'l1' namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-agent-role
+  namespace: l1
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-agent-binding
+  namespace: l1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-agent-role
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: default
+
+---
+# Role for 'monitoring' namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-agent-role
+  namespace: monitoring
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-agent-binding
+  namespace: monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-agent-role
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: default
+
+---
+#------------------------------------------------------------------------------
+# Deployment - Obol Agent Application
+# The agent provides AI-powered Kubernetes and Obol cluster management via MCP
+#------------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obol-agent
+  namespace: default
+  labels:
+    app: obol-agent
+spec:
+  replicas: 1  # Single instance deployment
+  selector:
+    matchLabels:
+      app: obol-agent
+  template:
+    metadata:
+      labels:
+        app: obol-agent
+    spec:
+      serviceAccountName: obol-agent  # Uses the ServiceAccount created above for RBAC
+      containers:
+        - name: obol-agent
+          image: us-east4-docker.pkg.dev/prj-d-playgrounds-f0cb/obol-agent/obol-agent-ag-ui:latest
+          imagePullPolicy: Always  # Always pull latest image
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # REQUIRED: Set your Google API key here or use a Secret
+            - name: GOOGLE_API_KEY
+              value: ""  # TODO: Set your API key or reference a Secret
+
+            # PUBLIC_MODE controls Kubernetes MCP access
+            # false = Enable Kubernetes API access (uses RBAC permissions above)
+            # true = Disable Kubernetes API access (for public deployments)
+            - name: PUBLIC_MODE
+              value: "false"
+
+          # Health checks ensure the pod is ready to receive traffic
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+          # Resource limits prevent the agent from consuming too many cluster resources
+          resources:
+            requests:  # Minimum guaranteed resources
+              cpu: 500m      # 0.5 CPU cores
+              memory: 1Gi    # 1 GiB RAM
+            limits:    # Maximum allowed resources
+              cpu: 2000m     # 2 CPU cores
+              memory: 4Gi    # 4 GiB RAM
+
+---
+#------------------------------------------------------------------------------
+# Service - Exposes the Obol Agent within the cluster
+# Access the agent at: http://obol-agent.default.svc.cluster.local:8000
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: obol-agent
+  namespace: default
+  labels:
+    app: obol-agent
+spec:
+  type: ClusterIP  # Internal cluster access only (use Ingress for external access)
+  ports:
+    - port: 8000          # Service port
+      targetPort: http    # Container port name
+      protocol: TCP
+      name: http
+  selector:
+    app: obol-agent  # Routes traffic to pods with this label
