@@ -66,6 +66,10 @@ GLOBAL OPTIONS:
 		Version: version.Full(),
 		Commands: []*cli.Command{
 			// ============================================================
+			// Hidden Bootstrap Command (for installer)
+			// ============================================================
+			bootstrapCommand(cfg),
+			// ============================================================
 			// Obol Stack Lifecycle Commands
 			// ============================================================
 			{

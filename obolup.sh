@@ -1147,16 +1147,65 @@ print_instructions() {
 		log_success "Obol Stack installation complete!"
 	fi
 	echo ""
-	echo "Verify installation:"
-	echo ""
-	echo "  obol version"
-	echo ""
 
-	if [[ "$install_mode" != "upgrade" ]]; then
-		echo "To initialize a cluster, run:"
+	# Check if terminal is interactive for bootstrap prompt
+	if [[ -t 0 ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
 		echo ""
-		echo "  obol cluster init"
-		echo "  obol cluster up"
+		log_info "Would you like to start the cluster now?"
+		echo ""
+		echo "This will:"
+		echo "  • Initialize cluster configuration"
+		echo "  • Start the Obol Stack"
+		echo "  • Open your browser to http://obol.stack"
+		echo ""
+
+		local choice
+		read -p "Start cluster now? [y/N]: " choice
+
+		case "$choice" in
+			[Yy]*)
+				echo ""
+				log_info "Starting bootstrap process..."
+
+				# Run obol bootstrap
+				if "$OBOL_BIN_DIR/obol" bootstrap; then
+					# Bootstrap succeeded, we're done
+					return 0
+				else
+					log_error "Bootstrap failed"
+					echo ""
+					log_info "You can start the cluster manually with:"
+					echo ""
+					echo "  obol stack init"
+					echo "  obol stack up"
+					echo ""
+					return 1
+				fi
+				;;
+			*)
+				# User declined, show manual instructions
+				echo ""
+				log_info "To start the cluster later, run:"
+				echo ""
+				echo "  obol stack init"
+				echo "  obol stack up"
+				echo ""
+				log_info "Then open your browser to: http://obol.stack"
+				echo ""
+				;;
+		esac
+	else
+		# Non-interactive or no binary - show manual instructions
+		echo "Verify installation:"
+		echo ""
+		echo "  obol version"
+		echo ""
+		echo "To start the cluster, run:"
+		echo ""
+		echo "  obol stack init"
+		echo "  obol stack up"
+		echo ""
+		log_info "Then open your browser to: http://obol.stack"
 		echo ""
 	fi
 }
