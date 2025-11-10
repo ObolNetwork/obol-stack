@@ -889,33 +889,82 @@ configure_hosts_file() {
 	fi
 }
 
-# Configure PATH in ~/.profile
-# This function appends OBOL_BIN_DIR to PATH in the user's ~/.profile file.
-# The ~/.profile file is sourced by login shells and is shell-agnostic (works with bash, zsh, fish, etc.).
-# After adding to ~/.profile, the user must either:
-#   1. Source the file: source ~/.profile
-#   2. Create a new terminal session (new login shell will source ~/.profile automatically)
-configure_path() {
-	local profile="$HOME/.profile"
+# Detect appropriate shell profile file (NVM-style detection)
+detect_shell_profile() {
+	local profile=""
+
+	# Check for environment override
+	if [[ -n "${PROFILE:-}" ]] && [[ -f "${PROFILE}" ]]; then
+		echo "${PROFILE}"
+		return 0
+	fi
+
+	# Shell-specific detection based on $SHELL
+	if [[ "${SHELL}" == *"bash"* ]]; then
+		# Bash: prefer .bashrc (interactive shells), fallback to .bash_profile (login shells)
+		if [[ -f "$HOME/.bashrc" ]]; then
+			echo "$HOME/.bashrc"
+			return 0
+		elif [[ -f "$HOME/.bash_profile" ]]; then
+			echo "$HOME/.bash_profile"
+			return 0
+		fi
+	elif [[ "${SHELL}" == *"zsh"* ]]; then
+		# Zsh: prefer .zshrc (interactive), fallback to .zprofile (login)
+		local zdotdir="${ZDOTDIR:-$HOME}"
+		if [[ -f "$zdotdir/.zshrc" ]]; then
+			echo "$zdotdir/.zshrc"
+			return 0
+		elif [[ -f "$zdotdir/.zprofile" ]]; then
+			echo "$zdotdir/.zprofile"
+			return 0
+		fi
+	fi
+
+	# Fallback: scan for first existing file
+	for rc in .profile .bashrc .bash_profile .zprofile .zshrc; do
+		if [[ -f "$HOME/$rc" ]]; then
+			echo "$HOME/$rc"
+			return 0
+		fi
+	done
+
+	# Default: .bashrc for interactive shells (most common)
+	echo "$HOME/.bashrc"
+}
+
+# Print manual PATH configuration instructions
+print_path_instructions() {
+	local profile_file="$1"
+
+	echo ""
+	log_info "Manual setup instructions:"
+	echo ""
+	echo "Add this line to your shell profile ($profile_file):"
+	echo ""
+	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo ""
+	echo "Then reload your profile:"
+	echo ""
+	echo "  source $profile_file"
+	echo ""
+	echo "Or export for current session only:"
+	echo ""
+	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo ""
+}
+
+# Add PATH export to profile file
+add_to_profile() {
+	local profile="$1"
 	local path_export="export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 
-	# Check if OBOL_BIN_DIR is already in current PATH
-	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
-		log_success "OBOL_BIN_DIR already in PATH"
-		return 0
-	fi
+	log_info "Adding to PATH in $profile"
 
-	# Check if already configured in ~/.profile
-	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
-		log_success "OBOL_BIN_DIR already configured in ~/.profile"
-		log_info "Will be available in new shell sessions"
-		return 0
-	fi
+	# Create profile directory if needed
+	mkdir -p "$(dirname "$profile")"
 
-	# Add to ~/.profile
-	log_info "Adding OBOL_BIN_DIR to PATH in ~/.profile"
-
-	# Create profile if it doesn't exist
+	# Create file if it doesn't exist
 	touch "$profile"
 
 	# Add PATH export with comment
@@ -925,11 +974,73 @@ configure_path() {
 		echo "$path_export"
 	} >>"$profile"
 
-	log_success "Added to PATH in ~/.profile"
-	echo ""
-	log_info "To use immediately, run: source ~/.profile"
-	log_info "Otherwise, it will be available in new shell sessions"
-	echo ""
+	log_success "Added to PATH in $profile"
+}
+
+# Configure PATH with shell detection and user consent
+# Detects the appropriate shell profile file based on $SHELL and existing files.
+# In interactive mode, asks user whether to auto-modify or show manual instructions.
+# In non-interactive mode (CI/CD), prints manual instructions only unless OBOL_MODIFY_PATH=yes.
+configure_path() {
+	# Check if OBOL_BIN_DIR is already in current PATH
+	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
+		log_success "OBOL_BIN_DIR already in PATH"
+		return 0
+	fi
+
+	# Detect appropriate profile file
+	local profile
+	profile=$(detect_shell_profile)
+
+	# Check if already configured in detected profile
+	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
+		log_success "OBOL_BIN_DIR already configured in $profile"
+		log_info "Will be available in new shell sessions"
+		return 0
+	fi
+
+	# Interactive terminal: ask for consent
+	if [[ -t 0 ]]; then
+		echo ""
+		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
+		echo ""
+		echo "Detected shell profile: $profile"
+		echo ""
+		echo "Options:"
+		echo "  1. Automatically add to $profile (recommended)"
+		echo "  2. Show manual instructions"
+		echo ""
+
+		local choice
+		read -p "Choose [1/2]: " choice
+
+		case "$choice" in
+			1)
+				add_to_profile "$profile"
+				echo ""
+				log_info "PATH updated for future sessions"
+				log_info "To use immediately in this session, run:"
+				echo ""
+				echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+				echo ""
+				;;
+			2)
+				print_path_instructions "$profile"
+				;;
+			*)
+				print_path_instructions "$profile"
+				;;
+		esac
+	else
+		# Non-interactive: check environment variable override
+		if [[ "${OBOL_MODIFY_PATH:-no}" == "yes" ]]; then
+			add_to_profile "$profile"
+			log_info "Will be available in new shell sessions"
+		else
+			# Default: print instructions for non-interactive contexts
+			print_path_instructions "$profile"
+		fi
+	fi
 }
 
 # Print post-install instructions
