@@ -75,6 +75,15 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+# Detect installation mode (install vs upgrade)
+detect_installation_mode() {
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		echo "upgrade"
+	else
+		echo "install"
+	fi
+}
+
 # Check if binary exists globally in PATH (excluding OBOL_BIN_DIR)
 check_global_binary() {
 	local binary_name="$1"
@@ -314,6 +323,12 @@ build_from_source() {
 
 # Install obol binary
 install_obol_binary() {
+	# Get current version if exists (for upgrade messaging)
+	local current_version=""
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		current_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null | head -1 || echo "")
+	fi
+
 	log_info "Installing obol binary..."
 
 	# Development mode: install wrapper script
@@ -341,6 +356,7 @@ install_obol_binary() {
 		# If we got a tag, try to download it
 		if [[ -n "$latest_tag" ]]; then
 			if download_release "$latest_tag"; then
+				show_version_change "$current_version"
 				return 0
 			fi
 			log_warn "Download failed, falling back to building from source..."
@@ -350,15 +366,92 @@ install_obol_binary() {
 
 		# Fallback: build from source
 		build_from_source "main"
+		show_version_change "$current_version"
 	else
 		# Specific release requested
 		log_info "Attempting to download release: $release"
 		if download_release "$release"; then
+			show_version_change "$current_version"
 			return 0
 		fi
 
 		log_warn "Release $release not found, building from source..."
 		build_from_source "$release"
+		show_version_change "$current_version"
+	fi
+}
+
+# Show version change after upgrade
+show_version_change() {
+	local old_version="$1"
+
+	# Get new version
+	local new_version=""
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		new_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null | head -1 || echo "")
+	fi
+
+	# Show upgrade message if versions are different
+	if [[ -n "$old_version" && -n "$new_version" ]]; then
+		if [[ "$old_version" != "$new_version" ]]; then
+			echo ""
+			log_success "Upgraded: $old_version → $new_version"
+		else
+			echo ""
+			log_success "Already at version: $new_version"
+		fi
+	elif [[ -n "$new_version" ]]; then
+		echo ""
+		log_success "Installed version: $new_version"
+	fi
+}
+
+# Copy bootstrap script to bin directory for easy upgrades
+copy_bootstrap_script() {
+	# Skip in development mode
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		log_info "Development mode: skipping bootstrap script copy"
+		return 0
+	fi
+
+	# Skip if we're already running from OBOL_BIN_DIR (avoid self-copy loop)
+	local script_path
+	script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+	if [[ "$script_path" == "$OBOL_BIN_DIR/"* ]]; then
+		log_info "Already running from OBOL_BIN_DIR, skipping self-copy"
+		return 0
+	fi
+
+	# Check if running from stdin (piped from curl) vs from a file
+	local script_source_url="https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh"
+
+	if [[ ! -f "${BASH_SOURCE[0]}" ]]; then
+		# Running from stdin (curl | bash) - download the script
+		log_info "Downloading bootstrap script to $OBOL_BIN_DIR/obolup.sh..."
+
+		if curl -fsSL "$script_source_url" -o "$OBOL_BIN_DIR/obolup.sh"; then
+			chmod +x "$OBOL_BIN_DIR/obolup.sh"
+			log_success "Bootstrap script installed at $OBOL_BIN_DIR/obolup.sh"
+			log_info "To upgrade in future, run: obolup.sh"
+		else
+			log_warn "Failed to download bootstrap script (non-critical)"
+			log_info "You can manually download it later with:"
+			echo ""
+			echo "  curl -sSL $script_source_url -o $OBOL_BIN_DIR/obolup.sh"
+			echo "  chmod +x $OBOL_BIN_DIR/obolup.sh"
+			echo ""
+		fi
+	else
+		# Running from a file - copy it
+		log_info "Copying bootstrap script to $OBOL_BIN_DIR/obolup.sh..."
+
+		if cp "${BASH_SOURCE[0]}" "$OBOL_BIN_DIR/obolup.sh"; then
+			chmod +x "$OBOL_BIN_DIR/obolup.sh"
+			log_success "Bootstrap script installed at $OBOL_BIN_DIR/obolup.sh"
+			log_info "To upgrade in future, run: obolup.sh"
+		else
+			log_warn "Failed to copy bootstrap script (non-critical)"
+		fi
 	fi
 }
 
@@ -1045,22 +1138,39 @@ configure_path() {
 
 # Print post-install instructions
 print_instructions() {
+	local install_mode="$1"
+
 	echo ""
-	log_success "Obol Stack installation complete!"
+	if [[ "$install_mode" == "upgrade" ]]; then
+		log_success "Obol Stack upgrade complete!"
+	else
+		log_success "Obol Stack installation complete!"
+	fi
 	echo ""
 	echo "Verify installation:"
 	echo ""
 	echo "  obol version"
 	echo ""
-	echo "To initialize a cluster, run:"
-	echo ""
-	echo "  obol stack init"
-	echo "  obol stack up"
-	echo ""
+
+	if [[ "$install_mode" != "upgrade" ]]; then
+		echo "To initialize a cluster, run:"
+		echo ""
+		echo "  obol cluster init"
+		echo "  obol cluster up"
+		echo ""
+	fi
 }
 
 # Main installation flow
 main() {
+	# Prevent recursive installation loops
+	if [[ "${OBOL_INSTALLING:-}" == "true" ]]; then
+		log_error "Installation already in progress (recursive loop detected)"
+		log_error "This usually means obolup.sh was called from within itself"
+		exit 1
+	fi
+	export OBOL_INSTALLING=true
+
 	echo ""
 	echo "╔═══════════════════════════════════════════╗"
 	echo "║                                           ║"
@@ -1069,12 +1179,33 @@ main() {
 	echo "╚═══════════════════════════════════════════╝"
 	echo ""
 
+	# Detect installation mode
+	local install_mode
+	install_mode=$(detect_installation_mode)
+
+	if [[ "$install_mode" == "upgrade" ]]; then
+		log_info "Existing installation detected - upgrading..."
+		# Show current version if available
+		if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+			local current_version
+			current_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null || echo "unknown")
+			if [[ -n "$current_version" ]]; then
+				log_info "Current version: $current_version"
+			fi
+		fi
+	else
+		log_info "Fresh installation starting..."
+	fi
+
+	echo ""
+
 	create_directories
 	install_obol_binary
+	copy_bootstrap_script
 	install_dependencies
 	configure_hosts_file
 	configure_path
-	print_instructions
+	print_instructions "$install_mode"
 
 	echo ""
 	log_success "Setup complete!"
