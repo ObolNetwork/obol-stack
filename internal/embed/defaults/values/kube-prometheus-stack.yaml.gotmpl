@@ -1,0 +1,107 @@
+prometheus:
+  prometheusSpec:
+    # Data retention
+    retention: 15d
+
+    # Security context for local development (relaxed for local-path provisioner)
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      fsGroup: 0
+      runAsNonRoot: false
+
+    # Resource limits for local development
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+    # Persistent storage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    # ServiceMonitor selector - discover all ServiceMonitors (empty selector matches all)
+    serviceMonitorSelector: {}
+
+    # PodMonitor selector - discover all PodMonitors
+    podMonitorSelector: {}
+
+# Grafana configuration
+grafana:
+  enabled: true
+
+  # Admin credentials (change in production!)
+  adminPassword: admin
+
+  # Resource limits
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+  # Persistent storage
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 5Gi
+
+  # Server configuration for path-based routing
+  grafana.ini:
+    server:
+      root_url: "http://obol.stack:8080/grafana"
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: true
+      org_role: Admin
+    auth:
+      disable_login_form: true
+
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - obol.stack
+    path: /grafana
+
+  # Sidecar for automatic dashboard discovery
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+    datasources:
+      enabled: true
+
+# Alertmanager - disabled for local development
+alertmanager:
+  enabled: false
+
+# kube-state-metrics - provides Kubernetes resource metrics
+kubeStateMetrics:
+  enabled: true
+
+# node-exporter - provides hardware/OS metrics
+nodeExporter:
+  enabled: true
+
+# Prometheus Operator
+prometheusOperator:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi

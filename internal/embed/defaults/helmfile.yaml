@@ -8,6 +8,8 @@ repositories:
     url: https://obolnetwork.github.io/helm-charts/
   - name: ethereum
     url: https://ethpandaops.github.io/ethereum-helm-charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
 
 # Single source of truth: change this to switch networks
 values:
@@ -43,6 +45,16 @@ releases:
           tolerations: []
           admissionWebhooks:
             enabled: false
+
+  # Prometheus monitoring stack
+  - name: kube-prometheus-stack
+    namespace: monitoring
+    chart: prometheus-community/kube-prometheus-stack
+    version: 79.4.1
+    needs:
+      - default/ingress-nginx
+    values:
+      - ./values/kube-prometheus-stack.yaml.gotmpl
 
   # Helios light client
   - name: helios
