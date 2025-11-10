@@ -1,0 +1,27 @@
+{{- $network := .Values.network -}}
+
+replicaCount: 1
+
+image:
+  environment:
+    - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
+      value: "http://helios-{{ $network }}.default.svc.cluster.local:8545"
+    - name: NEXT_PUBLIC_ERPC_URL
+      value: "http://erpc.default.svc.cluster.local:4000/rpc"
+
+  repository: obolnetwork/obol-stack-front-end
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: obol.stack
+      paths:
+        - path: /
+          pathType: Prefix
