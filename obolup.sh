@@ -84,6 +84,80 @@ detect_installation_mode() {
 	fi
 }
 
+# Check Docker installation and availability
+check_docker() {
+	log_info "Checking Docker requirements..."
+
+	# Check if docker command exists
+	if ! command_exists docker; then
+		log_error "Docker is not installed"
+		echo ""
+		echo "Obol Stack requires Docker to run k3d clusters."
+		echo ""
+		echo "Install Docker:"
+		echo "  • Ubuntu/Debian: https://docs.docker.com/engine/install/ubuntu/"
+		echo "  • macOS: https://docs.docker.com/desktop/install/mac-install/"
+		echo "  • Other: https://docs.docker.com/engine/install/"
+		echo ""
+		return 1
+	fi
+
+	# Check if Docker daemon is running
+	if ! docker info >/dev/null 2>&1; then
+		log_error "Docker daemon is not running"
+		echo ""
+		echo "Please start the Docker daemon:"
+		echo "  • Linux: sudo systemctl start docker"
+		echo "  • macOS/Windows: Start Docker Desktop application"
+		echo ""
+		echo "Then run this installer again."
+		echo ""
+		return 1
+	fi
+
+	# Check Docker version (require at least 20.10.0 for k3d compatibility)
+	local docker_version
+	docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
+
+	# Extract major.minor version
+	local major minor
+	major=$(echo "$docker_version" | cut -d. -f1)
+	minor=$(echo "$docker_version" | cut -d. -f2)
+
+	if [[ "$major" -lt 20 ]] || { [[ "$major" -eq 20 ]] && [[ "$minor" -lt 10 ]]; }; then
+		log_warn "Docker version $docker_version is older than recommended (20.10.0+)"
+		log_warn "k3d may not work correctly with older Docker versions"
+	fi
+
+	# Check if user can run Docker without sudo (Linux-specific)
+	if [[ "$(uname -s)" == "Linux" ]]; then
+		if ! docker ps >/dev/null 2>&1; then
+			log_warn "Current user cannot run Docker commands"
+			echo ""
+			echo "You may need to add your user to the docker group:"
+			echo "  sudo usermod -aG docker \$USER"
+			echo "  newgrp docker"
+			echo ""
+			echo "Or run commands with sudo."
+			echo ""
+			# Don't fail here - user might be running with sudo
+		fi
+	fi
+
+	# Check Docker networking (ensure bridge network works)
+	if ! docker network ls >/dev/null 2>&1; then
+		log_error "Docker networking is not functional"
+		echo ""
+		echo "Docker networking is required for k3d clusters."
+		echo "Please check your Docker installation."
+		echo ""
+		return 1
+	fi
+
+	log_success "Docker is installed and running (version $docker_version)"
+	return 0
+}
+
 # Check if binary exists globally in PATH (excluding OBOL_BIN_DIR)
 check_global_binary() {
 	local binary_name="$1"
@@ -1108,21 +1182,21 @@ configure_path() {
 		read -p "Choose [1/2]: " choice
 
 		case "$choice" in
-			1)
-				add_to_profile "$profile"
-				echo ""
-				log_info "PATH updated for future sessions"
-				log_info "To use immediately in this session, run:"
-				echo ""
-				echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
-				echo ""
-				;;
-			2)
-				print_path_instructions "$profile"
-				;;
-			*)
-				print_path_instructions "$profile"
-				;;
+		1)
+			add_to_profile "$profile"
+			echo ""
+			log_info "PATH updated for future sessions"
+			log_info "To use immediately in this session, run:"
+			echo ""
+			echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+			echo ""
+			;;
+		2)
+			print_path_instructions "$profile"
+			;;
+		*)
+			print_path_instructions "$profile"
+			;;
 		esac
 	else
 		# Non-interactive: check environment variable override
@@ -1163,36 +1237,36 @@ print_instructions() {
 		read -p "Start cluster now? [y/N]: " choice
 
 		case "$choice" in
-			[Yy]*)
-				echo ""
-				log_info "Starting bootstrap process..."
+		[Yy]*)
+			echo ""
+			log_info "Starting bootstrap process..."
 
-				# Run obol bootstrap
-				if "$OBOL_BIN_DIR/obol" bootstrap; then
-					# Bootstrap succeeded, we're done
-					return 0
-				else
-					log_error "Bootstrap failed"
-					echo ""
-					log_info "You can start the cluster manually with:"
-					echo ""
-					echo "  obol stack init"
-					echo "  obol stack up"
-					echo ""
-					return 1
-				fi
-				;;
-			*)
-				# User declined, show manual instructions
+			# Run obol bootstrap
+			if "$OBOL_BIN_DIR/obol" bootstrap; then
+				# Bootstrap succeeded, we're done
+				return 0
+			else
+				log_error "Bootstrap failed"
 				echo ""
-				log_info "To start the cluster later, run:"
+				log_info "You can start the cluster manually with:"
 				echo ""
 				echo "  obol stack init"
 				echo "  obol stack up"
 				echo ""
-				log_info "Then open your browser to: http://obol.stack"
-				echo ""
-				;;
+				return 1
+			fi
+			;;
+		*)
+			# User declined, show manual instructions
+			echo ""
+			log_info "To start the cluster later, run:"
+			echo ""
+			echo "  obol stack init"
+			echo "  obol stack up"
+			echo ""
+			log_info "Then open your browser to: http://obol.stack"
+			echo ""
+			;;
 		esac
 	else
 		# Non-interactive or no binary - show manual instructions
@@ -1246,6 +1320,11 @@ main() {
 		log_info "Fresh installation starting..."
 	fi
 
+	# Check Docker prerequisites first
+	if ! check_docker; then
+		log_error "Docker requirements not met"
+		exit 1
+	fi
 	echo ""
 
 	create_directories
