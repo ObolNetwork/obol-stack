@@ -15,7 +15,13 @@ NC='\033[0m' # No Color
 # Development mode detection
 if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 	# Get script directory for development mode
-	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Use parameter expansion with default to handle curl | bash case
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	else
+		# Fallback to current directory if BASH_SOURCE not available
+		SCRIPT_DIR="$(pwd)"
+	fi
 	WORKSPACE_DIR="$SCRIPT_DIR/.workspace"
 
 	# Override directories to use local .workspace
@@ -276,7 +282,11 @@ install_dev_wrapper() {
 	log_info "Installing development wrapper script..."
 
 	# Get script directory
-	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	else
+		SCRIPT_DIR="$(pwd)"
+	fi
 
 	# Create wrapper script that uses 'go run'
 	cat >"$OBOL_BIN_DIR/obol" <<'EOF'
@@ -489,17 +499,19 @@ copy_bootstrap_script() {
 	fi
 
 	# Skip if we're already running from OBOL_BIN_DIR (avoid self-copy loop)
-	local script_path
-	script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-	if [[ "$script_path" == "$OBOL_BIN_DIR/"* ]]; then
-		log_info "Already running from OBOL_BIN_DIR, skipping self-copy"
-		return 0
+	local script_path=""
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+		if [[ "$script_path" == "$OBOL_BIN_DIR/"* ]]; then
+			log_info "Already running from OBOL_BIN_DIR, skipping self-copy"
+			return 0
+		fi
 	fi
 
 	# Check if running from stdin (piped from curl) vs from a file
 	local script_source_url="https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh"
 
-	if [[ ! -f "${BASH_SOURCE[0]}" ]]; then
+	if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ ! -f "${BASH_SOURCE[0]}" ]]; then
 		# Running from stdin (curl | bash) - download the script
 		log_info "Downloading bootstrap script to $OBOL_BIN_DIR/obolup.sh..."
 
