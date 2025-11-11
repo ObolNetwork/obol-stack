@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -162,44 +163,30 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("stack not running, use 'obol stack up' first")
-						return err
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
 					// Check if kubectl exists
 					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("kubectl not found", "path", cfg.BinDir)
-						return err
+						return fmt.Errorf("kubectl not found at %s", cfg.BinDir)
 					}
 
-					stackID := stack.GetStackID(cfg)
-
-					// Create logger and executor
-					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-						StateDir: cfg.StateDir,
-						StackID:  stackID,
-					})
-					defer cleanup()
-
-					exec := executor.New(l.Logger)
-					cmd := exec.CommandWithOutput(kubectlPath, c.Args().Slice()...)
-					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
-					cmd.SetStdin(os.Stdin)
+					// Execute kubectl directly with KUBECONFIG set
+					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
 
 					if err := cmd.Run(); err != nil {
-						l.Error("kubectl command failed", "error", err.Error())
+						// Preserve the exit code from kubectl
+						if exitErr, ok := err.(*exec.ExitError); ok {
+							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+								os.Exit(status.ExitStatus())
+							}
+						}
 						return err
 					}
 					return nil
@@ -214,44 +201,30 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("stack not running, use 'obol stack up' first")
-						return err
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					helmPath := filepath.Join(cfg.BinDir, "helm")
 
 					// Check if helm exists
 					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("helm not found", "path", cfg.BinDir)
-						return err
+						return fmt.Errorf("helm not found at %s", cfg.BinDir)
 					}
 
-					stackID := stack.GetStackID(cfg)
-
-					// Create logger and executor
-					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-						StateDir: cfg.StateDir,
-						StackID:  stackID,
-					})
-					defer cleanup()
-
-					exec := executor.New(l.Logger)
-					cmd := exec.CommandWithOutput(helmPath, c.Args().Slice()...)
-					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
-					cmd.SetStdin(os.Stdin)
+					// Execute helm directly with KUBECONFIG set
+					cmd := exec.Command(helmPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
 
 					if err := cmd.Run(); err != nil {
-						l.Error("helm command failed", "error", err.Error())
+						// Preserve the exit code from helm
+						if exitErr, ok := err.(*exec.ExitError); ok {
+							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+								os.Exit(status.ExitStatus())
+							}
+						}
 						return err
 					}
 					return nil
@@ -266,51 +239,34 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("stack not running, use 'obol stack up' first")
-						return err
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
 
 					// Check if helmfile exists
 					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("helmfile not found", "path", cfg.BinDir)
-						return err
+						return fmt.Errorf("helmfile not found at %s", cfg.BinDir)
 					}
 
-					stackID := stack.GetStackID(cfg)
-
-					// Create logger and executor
-					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-						StateDir: cfg.StateDir,
-						StackID:  stackID,
-					})
-					defer cleanup()
-
-					// Set up environment with KUBECONFIG and HELMFILE_FILE_PATH
+					// Execute helmfile directly with KUBECONFIG and HELMFILE_FILE_PATH set
 					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
-					env := append(os.Environ(),
+					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(),
 						fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 						fmt.Sprintf("HELMFILE_FILE_PATH=%s", helmfileConfigPath),
 					)
-
-					exec := executor.New(l.Logger)
-					cmd := exec.CommandWithOutput(helmfilePath, c.Args().Slice()...)
-					cmd.SetEnv(env)
-					cmd.SetStdin(os.Stdin)
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
 
 					if err := cmd.Run(); err != nil {
-						l.Error("helmfile command failed", "error", err.Error())
+						// Preserve the exit code from helmfile
+						if exitErr, ok := err.(*exec.ExitError); ok {
+							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+								os.Exit(status.ExitStatus())
+							}
+						}
 						return err
 					}
 					return nil
@@ -325,44 +281,30 @@ GLOBAL OPTIONS:
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("stack not running, use 'obol stack up' first")
-						return err
+						return fmt.Errorf("stack not running, use 'obol stack up' first")
 					}
 
 					k9sPath := filepath.Join(cfg.BinDir, "k9s")
 
 					// Check if k9s exists
 					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
-						stackID := stack.GetStackID(cfg)
-						l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-							StateDir: cfg.StateDir,
-							StackID:  stackID,
-						})
-						l.Error("k9s not found", "path", cfg.BinDir)
-						return err
+						return fmt.Errorf("k9s not found at %s", cfg.BinDir)
 					}
 
-					stackID := stack.GetStackID(cfg)
-
-					// Create logger and executor
-					l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-						StateDir: cfg.StateDir,
-						StackID:  stackID,
-					})
-					defer cleanup()
-
-					exec := executor.New(l.Logger)
-					cmd := exec.CommandWithOutput(k9sPath, c.Args().Slice()...)
-					cmd.SetEnv(append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath)))
-					cmd.SetStdin(os.Stdin)
+					// Execute k9s directly with KUBECONFIG set
+					cmd := exec.Command(k9sPath, c.Args().Slice()...)
+					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					cmd.Stdin = os.Stdin
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
 
 					if err := cmd.Run(); err != nil {
-						l.Error("k9s command failed", "error", err.Error())
+						// Preserve the exit code from k9s
+						if exitErr, ok := err.(*exec.ExitError); ok {
+							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+								os.Exit(status.ExitStatus())
+							}
+						}
 						return err
 					}
 					return nil
