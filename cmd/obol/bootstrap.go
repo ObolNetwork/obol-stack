@@ -93,7 +93,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 // waitForClusterReady polls the cluster until all critical pods are running
 // and the nginx ingress is responding
 func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
-	timeout := 5 * time.Minute
+	timeout := 20 * time.Minute
 	pollInterval := 3 * time.Second
 	deadline := time.Now().Add(timeout)
 
