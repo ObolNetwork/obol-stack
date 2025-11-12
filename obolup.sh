@@ -1222,6 +1222,96 @@ configure_path() {
 	fi
 }
 
+# Validate Ethereum address (0x followed by 40 hex characters)
+validate_ethereum_address() {
+	local address="$1"
+
+	# Check if address matches pattern: 0x followed by 40 hex characters
+	if [[ "$address" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+# Install dv-pod with user prompts
+install_dv_pod() {
+	log_info "Installing dv-pod..."
+	echo ""
+
+	# Prompt for nickname
+	local nickname=""
+	while [[ -z "$nickname" ]]; do
+		read -p "Enter nickname: " nickname </dev/tty
+		if [[ -z "$nickname" ]]; then
+			log_error "Nickname cannot be empty"
+		fi
+	done
+
+	# Prompt for operator address with validation
+	local operator_address=""
+	while true; do
+		read -p "Enter operator address (Ethereum address): " operator_address </dev/tty
+		if validate_ethereum_address "$operator_address"; then
+			break
+		else
+			log_error "Invalid Ethereum address. Must be in format: 0x followed by 40 hex characters"
+		fi
+	done
+
+	echo ""
+	log_info "Installing dv-pod with nickname: $nickname, operator: $operator_address"
+
+	# Add helm repo
+	if ! "$OBOL_BIN_DIR/obol" helm repo add obol https://obolnetwork.github.io/helm-charts 2>/dev/null; then
+		log_warn "Failed to add helm repo (may already exist)"
+	fi
+
+	# Install dv-pod
+	if "$OBOL_BIN_DIR/obol" helm install my-dv-pod obol/dv-pod \
+		--set charon.dkgSidecar.apiEndpoint=https://obol-api-nonprod-dev.dev.obol.tech \
+		--set network=hoodi \
+		--set charon.operatorAddress="$operator_address" \
+		--set charon.dkgSidecar.image.tag=90a1656 \
+		--set charon.nickname="$nickname" \
+		--set validatorClient.type=prysm \
+		--set validatorClient.config.prysm.acceptTermsOfUse=true \
+		--set centralMonitoring.enabled=true \
+		--set-string centralMonitoring.token='obolkvmusKH1SFvr/ruCzfj/Vlix3E49=59TdIH1BcTLecZabTv9SF=81HbtXucMNjwsJbFW=Z9ND7hD/GYPtz=B?TpWs2sJq9FIz-uN1-4DyR1l6J=HyC=d=Q!-?fHP'; then
+		log_success "dv-pod installed successfully"
+
+		# Wait 3 seconds for secret to be created
+		echo ""
+		log_info "Waiting 3 seconds for secret to be created..."
+		sleep 3
+
+		# Retrieve and display ENR secret
+		echo ""
+		log_info "Retrieving ENR secret..."
+		local enr_secret
+		enr_secret=$("$OBOL_BIN_DIR/obol" kubectl get secret -n default charon-enr-private-key -o jsonpath='{.data.enr}' 2>/dev/null | base64 --decode)
+
+		if [[ -n "$enr_secret" ]]; then
+			echo ""
+			log_success "ENR Secret:"
+			echo "$enr_secret"
+			echo ""
+		else
+			log_warn "Failed to retrieve ENR secret (it may not be ready yet)"
+			echo ""
+			echo "You can retrieve it manually with:"
+			echo ""
+			echo "  obol kubectl get secret -n default charon-enr-private-key -o jsonpath='{.data.enr}' | base64 --decode"
+			echo ""
+		fi
+
+		return 0
+	else
+		log_error "Failed to install dv-pod"
+		return 1
+	fi
+}
+
 # Print post-install instructions
 print_instructions() {
 	local install_mode="$1"
@@ -1255,7 +1345,22 @@ print_instructions() {
 
 			# Run obol bootstrap
 			if "$OBOL_BIN_DIR/obol" bootstrap; then
-				# Bootstrap succeeded, we're done
+				# Bootstrap succeeded, now prompt for dv-pod installation
+				echo ""
+				log_info "Would you like to install dv-pod?"
+				echo ""
+
+				local dv_pod_choice
+				read -p "Install dv-pod? [y/N]: " dv_pod_choice </dev/tty
+
+				case "$dv_pod_choice" in
+				[Yy]*)
+					install_dv_pod
+					;;
+				*)
+					log_info "Skipping dv-pod installation"
+					;;
+				esac
 				return 0
 			else
 				log_error "Bootstrap failed"
