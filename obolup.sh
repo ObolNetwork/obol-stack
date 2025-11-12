@@ -1178,8 +1178,8 @@ configure_path() {
 		return 0
 	fi
 
-	# Interactive terminal: ask for consent
-	if [[ -t 0 ]]; then
+	# Check if we can prompt the user via /dev/tty (works even with curl | bash)
+	if [[ -c /dev/tty ]]; then
 		echo ""
 		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
 		echo ""
@@ -1191,7 +1191,7 @@ configure_path() {
 		echo ""
 
 		local choice
-		read -p "Choose [1/2]: " choice
+		read -p "Choose [1/2]: " choice </dev/tty
 
 		case "$choice" in
 		1)
@@ -1211,7 +1211,7 @@ configure_path() {
 			;;
 		esac
 	else
-		# Non-interactive: check environment variable override
+		# Truly non-interactive (CI/CD, no terminal): check environment variable override
 		if [[ "${OBOL_MODIFY_PATH:-no}" == "yes" ]]; then
 			add_to_profile "$profile"
 			log_info "Will be available in new shell sessions"
