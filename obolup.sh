@@ -1234,8 +1234,8 @@ print_instructions() {
 	fi
 	echo ""
 
-	# Check if terminal is interactive for bootstrap prompt
-	if [[ -t 0 ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty)
+	if [[ -c /dev/tty ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
 		echo ""
 		log_info "Would you like to start the cluster now?"
 		echo ""
@@ -1246,7 +1246,7 @@ print_instructions() {
 		echo ""
 
 		local choice
-		read -p "Start cluster now? [y/N]: " choice
+		read -p "Start cluster now? [y/N]: " choice </dev/tty
 
 		case "$choice" in
 		[Yy]*)
@@ -1281,7 +1281,7 @@ print_instructions() {
 			;;
 		esac
 	else
-		# Non-interactive or no binary - show manual instructions
+		# Truly non-interactive (CI/CD, no terminal) or no binary - show manual instructions
 		echo "Verify installation:"
 		echo ""
 		echo "  obol version"
