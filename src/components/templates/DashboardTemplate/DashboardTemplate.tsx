@@ -1,5 +1,6 @@
 import { Box } from '@obolnetwork/obol-ui';
 import { ReactNode } from 'react';
+import { ToastContainer } from 'react-toastify';
 
 interface DashboardTemplateProps {
   header: ReactNode;
@@ -55,7 +56,15 @@ export function DashboardTemplate({
       >
         {header}
       </Box>
-      <Box css={{ flex: 1 }}>{content}</Box>
+      <Box css={{ flex: 1 }}>
+        {content}
+        <ToastContainer
+          theme="colored"
+          hideProgressBar={true}
+          position="bottom-left"
+          style={{ paddingBottom: 100 }}
+        />
+      </Box>
       {footer && (
         <Box
           css={{
