@@ -6,19 +6,32 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
 // Executor wraps subprocess execution with automatic output logging via slog
 type Executor struct {
 	logger *slog.Logger
+	binDir string // Directory containing obol binaries (added to PATH)
 }
 
 // New creates a new Executor that logs subprocess output via slog
 // The logger should be configured to handle subprocess output appropriately
+// binDir is prepended to PATH for all commands (so tools can find dependencies)
 func New(logger *slog.Logger) *Executor {
 	return &Executor{
 		logger: logger,
+		binDir: "",
+	}
+}
+
+// NewWithBinDir creates an Executor with a custom bin directory
+// The binDir will be prepended to PATH for all subprocess executions
+func NewWithBinDir(logger *slog.Logger, binDir string) *Executor {
+	return &Executor{
+		logger: logger,
+		binDir: binDir,
 	}
 }
 
@@ -74,10 +87,44 @@ func (c *cmdLogger) logComplete() {
 	}
 }
 
+// setupEnv configures the command environment with PATH including binDir
+func (e *Executor) setupEnv(cmd *exec.Cmd) {
+	if e.binDir == "" {
+		return
+	}
+
+	// Get current environment or inherit from parent
+	env := os.Environ()
+
+	// Find and update PATH, or add it if not present
+	pathUpdated := false
+	for i, envVar := range env {
+		if strings.HasPrefix(envVar, "PATH=") {
+			currentPath := strings.TrimPrefix(envVar, "PATH=")
+			// Prepend binDir to PATH if not already present
+			if !strings.Contains(currentPath, e.binDir) {
+				env[i] = "PATH=" + e.binDir + string(os.PathListSeparator) + currentPath
+			}
+			pathUpdated = true
+			break
+		}
+	}
+
+	// If PATH wasn't found, add it
+	if !pathUpdated {
+		env = append(env, "PATH="+e.binDir)
+	}
+
+	cmd.Env = env
+}
+
 // Command creates a new command for use with Output()
 // Only stderr is logged/displayed, stdout is captured by Output()
 func (e *Executor) Command(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
+
+	// Configure PATH to include binDir
+	e.setupEnv(cmd)
 
 	if e.logger != nil {
 		// Capture stderr for display with indentation
@@ -97,6 +144,9 @@ func (e *Executor) Command(name string, args ...string) *exec.Cmd {
 // Output is displayed in real-time with indentation, then logged as a single entry when complete
 func (e *Executor) CommandWithOutput(name string, args ...string) CmdRunner {
 	cmd := exec.Command(name, args...)
+
+	// Configure PATH to include binDir
+	e.setupEnv(cmd)
 
 	if e.logger != nil {
 		// Create command logger to accumulate output

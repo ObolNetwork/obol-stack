@@ -131,7 +131,7 @@ func Up(cfg *config.Config) error {
 	stackName := getStackName(cfg)
 
 	// Create executor for subprocess calls with the logger
-	exec := executor.New(l.Logger)
+	exec := executor.NewWithBinDir(l.Logger, cfg.BinDir)
 	defer exec.Close()
 
 	// Check if cluster already exists using cluster list
@@ -227,7 +227,7 @@ func Down(cfg *config.Config) error {
 	})
 	defer cleanup()
 
-	exec := executor.New(l.Logger)
+	exec := executor.NewWithBinDir(l.Logger, cfg.BinDir)
 	defer exec.Close()
 
 	l.Info("Stopping stack gracefully", "name", stackName, "id", stackID)
@@ -266,7 +266,7 @@ func Purge(cfg *config.Config, force bool) error {
 	defer cleanup()
 
 	// Create executor for subprocess calls
-	exec := executor.New(l.Logger)
+	exec := executor.NewWithBinDir(l.Logger, cfg.BinDir)
 	defer exec.Close()
 
 	// Delete cluster containers
