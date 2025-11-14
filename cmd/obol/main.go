@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/executor"
@@ -44,6 +45,9 @@ COMMANDS:
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
+
+   Obol Agent:
+     agent init      Initialize Obol Agent with Google API key
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -96,17 +100,8 @@ GLOBAL OPTIONS:
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:    "google-api-key",
-								Aliases: []string{"g"},
-								Usage:   "Google API key for Obol Agent (required for AI features)",
-								EnvVars: []string{"GOOGLE_API_KEY"},
-							},
-						},
 						Action: func(c *cli.Context) error {
-							googleAPIKey := c.String("google-api-key")
-							if err := stack.Up(cfg, googleAPIKey); err != nil {
+							if err := stack.Up(cfg); err != nil {
 								stackID := stack.GetStackID(cfg)
 								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
 									StateDir: cfg.StateDir,
@@ -152,6 +147,40 @@ GLOBAL OPTIONS:
 									StackID:  stackID,
 								})
 								l.Error("Failed to purge stack", "error", err.Error())
+								return err
+							}
+							return nil
+						},
+					},
+				},
+			},
+			// ============================================================
+			// Obol Agent Commands
+			// ============================================================
+			{
+				Name:  "agent",
+				Usage: "Manage Obol Agent",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "init",
+						Usage: "Initialize Obol Agent with Google API key",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "google-api-key",
+								Aliases: []string{"g"},
+								Usage:   "Google API key for Obol Agent (required for AI features)",
+								EnvVars: []string{"GOOGLE_API_KEY"},
+							},
+						},
+						Action: func(c *cli.Context) error {
+							googleAPIKey := c.String("google-api-key")
+							if err := agent.Init(cfg, googleAPIKey); err != nil {
+								stackID := stack.GetStackID(cfg)
+								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
+									StateDir: cfg.StateDir,
+									StackID:  stackID,
+								})
+								l.Error("Failed to initialize agent", "error", err.Error())
 								return err
 							}
 							return nil

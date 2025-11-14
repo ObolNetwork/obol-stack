@@ -106,7 +106,7 @@ func Init(cfg *config.Config, force bool) error {
 }
 
 // Up starts the k3d cluster
-func Up(cfg *config.Config, googleAPIKey string) error {
+func Up(cfg *config.Config) error {
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
 
@@ -152,7 +152,7 @@ func Up(cfg *config.Config, googleAPIKey string) error {
 			return fmt.Errorf("failed to start existing cluster: %w", err)
 		}
 
-		if err := syncDefaults(cfg, exec, l, kubeconfigPath, googleAPIKey); err != nil {
+		if err := syncDefaults(cfg, exec, l, kubeconfigPath); err != nil {
 			return err
 		}
 
@@ -200,7 +200,7 @@ func Up(cfg *config.Config, googleAPIKey string) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	if err := syncDefaults(cfg, exec, l, kubeconfigPath, googleAPIKey); err != nil {
+	if err := syncDefaults(cfg, exec, l, kubeconfigPath); err != nil {
 		return err
 	}
 
@@ -366,44 +366,8 @@ func GetStackID(cfg *config.Config) string {
 
 // syncDefaults deploys the default infrastructure using helmfile
 // If deployment fails, the cluster is automatically stopped via Down()
-func syncDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string, googleAPIKey string) error {
+func syncDefaults(cfg *config.Config, exec *executor.Executor, l *logging.Logger, kubeconfigPath string) error {
 	l.Info("Deploying default infrastructure with helmfile")
-
-	// Create Google API Key secret if provided
-	if googleAPIKey != "" {
-		l.Info("Creating Google API key secret for Obol Agent")
-
-		kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-
-		// Create namespace (idempotent)
-		nsCmd := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "create", "namespace", "agent", "--dry-run=client", "-o", "yaml")
-		nsYAML, err := nsCmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to generate namespace manifest: %w", err)
-		}
-		applyNs := exec.CommandWithOutput(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
-		applyNs.SetStdin(strings.NewReader(string(nsYAML)))
-		if err := applyNs.Run(); err != nil {
-			return fmt.Errorf("failed to create agent namespace: %w", err)
-		}
-
-		// Create secret (idempotent)
-		secretCmd := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "create", "secret", "generic", "obol-agent-google-api-key", "--from-literal=GOOGLE_API_KEY="+googleAPIKey, "--namespace=agent", "--dry-run=client", "-o", "yaml")
-		secretYAML, err := secretCmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to generate secret manifest: %w", err)
-		}
-		applySecret := exec.CommandWithOutput(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
-		applySecret.SetStdin(strings.NewReader(string(secretYAML)))
-		if err := applySecret.Run(); err != nil {
-			return fmt.Errorf("failed to create Google API key secret: %w", err)
-		}
-
-		l.Success("Google API key secret created")
-	} else {
-		l.Warn("No Google API key provided - Obol Agent AI features will not work")
-		l.Info("Provide via: obol stack up --google-api-key=<key> or GOOGLE_API_KEY env var")
-	}
 
 	// Sync defaults using helmfile (handles Helm hooks properly)
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
