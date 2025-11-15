@@ -11,7 +11,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: obol-agent
-  namespace: default
+  namespace: agent
 
 ---
 #------------------------------------------------------------------------------
@@ -42,7 +42,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: obol-agent
-    namespace: default
+    namespace: agent
 
 ---
 #------------------------------------------------------------------------------
@@ -56,7 +56,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: obol-agent-role
-  namespace: default
+  namespace: agent
 rules:
   - apiGroups: [""]  # Core API group
     resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
@@ -75,7 +75,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: obol-agent-binding
-  namespace: default
+  namespace: agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -83,7 +83,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: obol-agent
-    namespace: default
+    namespace: agent
 
 ---
 # Role for 'ethereum' namespace
@@ -118,7 +118,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: obol-agent
-    namespace: default
+    namespace: agent
 
 ---
 # Role for 'l1' namespace
@@ -153,7 +153,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: obol-agent
-    namespace: default
+    namespace: agent
 
 ---
 # Role for 'monitoring' namespace
@@ -188,7 +188,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: obol-agent
-    namespace: default
+    namespace: agent
 
 ---
 #------------------------------------------------------------------------------
@@ -199,7 +199,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: obol-agent
-  namespace: default
+  namespace: agent
   labels:
     app: obol-agent
 spec:
@@ -222,9 +222,14 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
-            # REQUIRED: Set your Google API key here or use a Secret
+            # REQUIRED: Google API key from Kubernetes secret
+            # Secret created via: obol stack up --google-api-key=<key>
             - name: GOOGLE_API_KEY
-              value: ""  # TODO: Set your API key or reference a Secret
+              valueFrom:
+                secretKeyRef:
+                  name: obol-agent-google-api-key
+                  key: GOOGLE_API_KEY
+                  optional: true  # Allow deployment even if secret doesn't exist
 
             # PUBLIC_MODE controls Kubernetes MCP access
             # false = Enable Kubernetes API access (uses RBAC permissions above)
@@ -264,7 +269,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: obol-agent
-  namespace: default
+  namespace: agent
   labels:
     app: obol-agent
 spec:
