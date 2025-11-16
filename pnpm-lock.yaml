@@ -9,17 +9,17 @@ importers:
   .:
     dependencies:
       '@ag-ui/client':
-        specifier: ^0.0.39
-        version: 0.0.39
+        specifier: ^0.0.41
+        version: 0.0.41
       '@copilotkit/react-core':
-        specifier: ^1.10.5
-        version: 1.10.5(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+        specifier: ^1.10.6
+        version: 1.10.6(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       '@copilotkit/react-ui':
-        specifier: ^1.10.5
-        version: 1.10.5(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+        specifier: ^1.10.6
+        version: 1.10.6(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       '@copilotkit/runtime':
-        specifier: ^1.10.5
-        version: 1.10.5(@ag-ui/client@0.0.39)(@ag-ui/core@0.0.39)(@ag-ui/encoder@0.0.39)(@ag-ui/proto@0.0.39)(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-bedrock-agent-runtime@3.901.0)(@aws-sdk/client-bedrock-runtime@3.901.0)(@aws-sdk/client-kendra@3.901.0)(@aws-sdk/credential-provider-node@3.901.0)(@browserbasehq/sdk@2.6.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.56.0)(bufferutil@4.0.9)(deepmerge@4.3.1)(dotenv@16.6.1)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(utf-8-validate@5.0.10)(zod@4.1.11))(@ibm-cloud/watsonx-ai@1.6.13)(@smithy/util-utf8@2.3.0)(axios@1.12.2)(fast-xml-parser@5.2.5)(google-auth-library@8.9.0)(ibm-cloud-sdk-core@5.4.3)(ignore@5.3.2)(jsonwebtoken@9.0.2)(lodash@4.17.21)(playwright@1.56.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(weaviate-client@3.9.0)(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+        specifier: ^1.10.6
+        version: 1.10.6(e73707e4980fd2f805e0b26b9fde3c21)
       '@obolnetwork/obol-ui':
         specifier: ^1.1.4
         version: 1.1.6(@playwright/test@1.56.0)(@types/react-dom@19.2.0(@types/react@19.2.0))
@@ -122,17 +122,17 @@ packages:
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
 
-  '@ag-ui/client@0.0.39':
-    resolution: {integrity: sha512-VHusZRv0dBtxqKSh/fcLbS/txUpXuE68/2s8RiMoav1snEDonwPGNjvOdE15WResgnlEWPU5qPuSgPykvt2/+A==}
+  '@ag-ui/client@0.0.41':
+    resolution: {integrity: sha512-aCTuGHm62hjWE0caWhxGAZFSiK42LnORMlYtRhkdIj1Te4eg8LkmpzU6FepQksIk6uBtHNbn82rp0rxpqog7OA==}
 
   '@ag-ui/core@0.0.37':
     resolution: {integrity: sha512-7bmjPn1Ol0Zo00F+MrPr0eOwH4AFZbhmq/ZMhCsrMILtVYBiBLcLU9QFBpBL3Zm9MCHha8b79N7JE2FzwcMaVA==}
 
-  '@ag-ui/core@0.0.39':
-    resolution: {integrity: sha512-T5Hp4oFkQ+H5MynWAvSwrX/rNYJOD+PJ4qPQ0o771oSZQAxoIvDDft47Cx5wRyBNNLXAe1RWqJjfWUUwJFNKqA==}
+  '@ag-ui/core@0.0.41':
+    resolution: {integrity: sha512-yRSh7fweajRGAJxm2IBpC+hfkXleqq0mQOXntMk/UMEgPKWfSRMt7qHL+3mtrGEaeL4fA/rcE41cVSjFDnYSoQ==}
 
-  '@ag-ui/encoder@0.0.39':
-    resolution: {integrity: sha512-6fsoFwPWkStK7Uyj3pwBn7+aQjUWf7pbDTSI43cD53sBLvTr5oEFNnoKOzRfC5UqvHc4JjUIuLKPQyjHRwWg4g==}
+  '@ag-ui/encoder@0.0.41':
+    resolution: {integrity: sha512-eg+NUppqC/VQVIEDGD1slNEaRZ7YNVWAhfamntwyPYQnAugcY+Q14XIbROWsZ7YNipfX0cO5yb1WxFrgv1YZrw==}
 
   '@ag-ui/langgraph@0.0.17':
     resolution: {integrity: sha512-D5MfoJT+jHCnXSTlOP7nLkwu3oJKG6ihcwijzPc7qL91wsVeqry6unRbu90rQHilK3ITvfjmtJn1c+GvQDXP9Q==}
@@ -140,8 +140,8 @@ packages:
       '@ag-ui/client': '>=0.0.38'
       '@ag-ui/core': '>=0.0.38'
 
-  '@ag-ui/proto@0.0.39':
-    resolution: {integrity: sha512-xlj/PzZHkJ3CgoQC5QP9g7DEl/78wUK1+A2rdkoLKoNAMOkM2g6jKw0N88iFIh5GZhtiCNN2wb8XwRWPYx9XQQ==}
+  '@ag-ui/proto@0.0.41':
+    resolution: {integrity: sha512-YlVmS8e53EZuMG68WvjNqzxoa/8NYCy3a8yoWsogPf1iZXa1RZ2WbQTi80xGzUnzluwxGSULlg7m7a1/8eXkkA==}
 
   '@anthropic-ai/sdk@0.27.3':
     resolution: {integrity: sha512-IjLt0gd3L4jlOfilxVXTifn42FnVffMgDC04RJK1KDZpmkBWLv0XC92MVVmkxrFZNS/7l3xWgP/I3nqtX1sQHw==}
@@ -322,32 +322,33 @@ packages:
   '@coinbase/wallet-sdk@4.3.6':
     resolution: {integrity: sha512-4q8BNG1ViL4mSAAvPAtpwlOs1gpC+67eQtgIwNvT3xyeyFFd+guwkc8bcX5rTmQhXpqnhzC4f0obACbP9CqMSA==}
 
-  '@copilotkit/react-core@1.10.5':
-    resolution: {integrity: sha512-CpEiU+oos9P0P3dGwVzreSapYst2CnvFapy2f0PILvmizbzg+drszDwzjJlOcqXGsjKeO7kTvyPICM8x8/6Fsg==}
+  '@copilotkit/react-core@1.10.6':
+    resolution: {integrity: sha512-sdojpntwgOxP8lWRzaFEiWr0g2wDefjQHtve5GPPie+otseFonV88FZjSqIq5LN+q5BIwDOEhCmDjALsGjXvuQ==}
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
       react-dom: ^18 || ^19 || ^19.0.0-rc
 
-  '@copilotkit/react-ui@1.10.5':
-    resolution: {integrity: sha512-LlvUZxjLqcR28FvwN8PEL7B+Nlk1bNrta7g7TRBIJDRtgGUGIoVvesbDbbVQC778RZEC4yf7/T3M4Hyz3JOR5Q==}
+  '@copilotkit/react-ui@1.10.6':
+    resolution: {integrity: sha512-eNIbZKMvBVZqlAR4fqkmZRIYIt8WhwZOxfVJVwMD9nfmWdtatmxrOLecyDiPk/hkq2o/8s2/rubaZSMK6m+GHQ==}
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
 
-  '@copilotkit/runtime-client-gql@1.10.5':
-    resolution: {integrity: sha512-nWtGIB4Lk59PpaHa9wW+fPaIlWAzUVH5GxcRqvX1v3HDcMqc7Eneb+PyPwLVcetxY+1nYkdIl4nacoTm5UVinw==}
+  '@copilotkit/runtime-client-gql@1.10.6':
+    resolution: {integrity: sha512-oLX8mjppVvQCWfquW9A0500hYVNxM4X/mtt76SEvfGUb2KsNQ4j2HOCzpmtm85MeLproC+f9738wLwRueLliZg==}
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
 
-  '@copilotkit/runtime@1.10.5':
-    resolution: {integrity: sha512-nYiDOW1uMRbLjnnFeNcc34qP/dzDww3RNZpnuAunXW4c2K2GeSd+PWeI5FtGAkhS22uKymi4E1WOCz5WBHn1Xg==}
+  '@copilotkit/runtime@1.10.6':
+    resolution: {integrity: sha512-35MdJ6nutC+spgHRJURbanLxBoQCNvVBYD0CBIk4Rv3/Ck8XgZA4lcc+5aGteuERXOPBsYEQjGD4xEPy3QXmGg==}
     peerDependencies:
       '@ag-ui/client': '>=0.0.39'
       '@ag-ui/core': '>=0.0.39'
       '@ag-ui/encoder': '>=0.0.39'
+      '@ag-ui/langgraph': '>=0.0.18'
       '@ag-ui/proto': '>=0.0.39'
 
-  '@copilotkit/shared@1.10.5':
-    resolution: {integrity: sha512-rByAxlhhn7nrV3do2pG+axD83UQTC502CjvOBIu3QkhP/1as9KLgTtKOr6kyY2wlIa7o6jvC+BeVRB/YfbZSBg==}
+  '@copilotkit/shared@1.10.6':
+    resolution: {integrity: sha512-56Rltf4fDBqCpl1ZXARypt5NdE4LTg3tGPPLurZpgPmm31Lv5EAHpfjC7I55vt9A0mXWlTCHtCrpiaAlTyzGJw==}
 
   '@ecies/ciphers@0.2.4':
     resolution: {integrity: sha512-t+iX+Wf5nRKyNzk8dviW3Ikb/280+aEJAnw9YXvCp2tYGPSkMki+NRY+8aNLmVFv3eNtMdvViPNOPxS8SZNP+w==}
@@ -3097,6 +3098,9 @@ packages:
   commander@8.3.0:
     resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
     engines: {node: '>= 12'}
+
+  compare-versions@6.1.1:
+    resolution: {integrity: sha512-4hm4VPpIecmlg59CHXnRDnqGplJFrbLG4aFEl5vl6cK1u76ws3LLvX7ikFnTDl5vo39sjWD6AaDPYodJp/NNHg==}
 
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
@@ -6391,12 +6395,13 @@ snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
 
-  '@ag-ui/client@0.0.39':
+  '@ag-ui/client@0.0.41':
     dependencies:
-      '@ag-ui/core': 0.0.39
-      '@ag-ui/encoder': 0.0.39
-      '@ag-ui/proto': 0.0.39
+      '@ag-ui/core': 0.0.41
+      '@ag-ui/encoder': 0.0.41
+      '@ag-ui/proto': 0.0.41
       '@types/uuid': 10.0.0
+      compare-versions: 6.1.1
       fast-json-patch: 3.1.1
       rxjs: 7.8.1
       untruncate-json: 0.0.1
@@ -6408,20 +6413,20 @@ snapshots:
       rxjs: 7.8.1
       zod: 3.25.76
 
-  '@ag-ui/core@0.0.39':
+  '@ag-ui/core@0.0.41':
     dependencies:
       rxjs: 7.8.1
       zod: 3.25.76
 
-  '@ag-ui/encoder@0.0.39':
+  '@ag-ui/encoder@0.0.41':
     dependencies:
-      '@ag-ui/core': 0.0.39
-      '@ag-ui/proto': 0.0.39
+      '@ag-ui/core': 0.0.41
+      '@ag-ui/proto': 0.0.41
 
-  '@ag-ui/langgraph@0.0.17(@ag-ui/client@0.0.39)(@ag-ui/core@0.0.39)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
+  '@ag-ui/langgraph@0.0.17(@ag-ui/client@0.0.41)(@ag-ui/core@0.0.41)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
     dependencies:
-      '@ag-ui/client': 0.0.39
-      '@ag-ui/core': 0.0.39
+      '@ag-ui/client': 0.0.41
+      '@ag-ui/core': 0.0.41
       '@langchain/core': 0.3.78(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))
       '@langchain/langgraph-sdk': 0.1.9(@langchain/core@0.3.78(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       partial-json: 0.1.7
@@ -6434,9 +6439,9 @@ snapshots:
       - react
       - react-dom
 
-  '@ag-ui/proto@0.0.39':
+  '@ag-ui/proto@0.0.41':
     dependencies:
-      '@ag-ui/core': 0.0.39
+      '@ag-ui/core': 0.0.41
       '@bufbuild/protobuf': 2.9.0
       '@protobuf-ts/protoc': 2.11.1
 
@@ -7037,10 +7042,10 @@ snapshots:
       - utf-8-validate
       - zod
 
-  '@copilotkit/react-core@1.10.5(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
+  '@copilotkit/react-core@1.10.6(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
     dependencies:
-      '@copilotkit/runtime-client-gql': 1.10.5(graphql@16.11.0)(react@19.2.0)
-      '@copilotkit/shared': 1.10.5
+      '@copilotkit/runtime-client-gql': 1.10.6(graphql@16.11.0)(react@19.2.0)
+      '@copilotkit/shared': 1.10.6
       '@scarf/scarf': 1.4.0
       react: 19.2.0
       react-dom: 19.2.0(react@19.2.0)
@@ -7052,11 +7057,11 @@ snapshots:
       - graphql
       - supports-color
 
-  '@copilotkit/react-ui@1.10.5(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
+  '@copilotkit/react-ui@1.10.6(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)':
     dependencies:
-      '@copilotkit/react-core': 1.10.5(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-      '@copilotkit/runtime-client-gql': 1.10.5(graphql@16.11.0)(react@19.2.0)
-      '@copilotkit/shared': 1.10.5
+      '@copilotkit/react-core': 1.10.6(@types/react@19.2.0)(graphql@16.11.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@copilotkit/runtime-client-gql': 1.10.6(graphql@16.11.0)(react@19.2.0)
+      '@copilotkit/shared': 1.10.6
       '@headlessui/react': 2.2.9(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       react: 19.2.0
       react-markdown: 10.1.0(@types/react@19.2.0)(react@19.2.0)
@@ -7071,9 +7076,9 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@copilotkit/runtime-client-gql@1.10.5(graphql@16.11.0)(react@19.2.0)':
+  '@copilotkit/runtime-client-gql@1.10.6(graphql@16.11.0)(react@19.2.0)':
     dependencies:
-      '@copilotkit/shared': 1.10.5
+      '@copilotkit/shared': 1.10.6
       '@urql/core': 5.2.0(graphql@16.11.0)
       react: 19.2.0
       untruncate-json: 0.0.1
@@ -7082,15 +7087,15 @@ snapshots:
       - encoding
       - graphql
 
-  '@copilotkit/runtime@1.10.5(@ag-ui/client@0.0.39)(@ag-ui/core@0.0.39)(@ag-ui/encoder@0.0.39)(@ag-ui/proto@0.0.39)(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-bedrock-agent-runtime@3.901.0)(@aws-sdk/client-bedrock-runtime@3.901.0)(@aws-sdk/client-kendra@3.901.0)(@aws-sdk/credential-provider-node@3.901.0)(@browserbasehq/sdk@2.6.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.56.0)(bufferutil@4.0.9)(deepmerge@4.3.1)(dotenv@16.6.1)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(utf-8-validate@5.0.10)(zod@4.1.11))(@ibm-cloud/watsonx-ai@1.6.13)(@smithy/util-utf8@2.3.0)(axios@1.12.2)(fast-xml-parser@5.2.5)(google-auth-library@8.9.0)(ibm-cloud-sdk-core@5.4.3)(ignore@5.3.2)(jsonwebtoken@9.0.2)(lodash@4.17.21)(playwright@1.56.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(weaviate-client@3.9.0)(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
+  '@copilotkit/runtime@1.10.6(e73707e4980fd2f805e0b26b9fde3c21)':
     dependencies:
-      '@ag-ui/client': 0.0.39
-      '@ag-ui/core': 0.0.39
-      '@ag-ui/encoder': 0.0.39
-      '@ag-ui/langgraph': 0.0.17(@ag-ui/client@0.0.39)(@ag-ui/core@0.0.39)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-      '@ag-ui/proto': 0.0.39
+      '@ag-ui/client': 0.0.41
+      '@ag-ui/core': 0.0.41
+      '@ag-ui/encoder': 0.0.41
+      '@ag-ui/langgraph': 0.0.17(@ag-ui/client@0.0.41)(@ag-ui/core@0.0.41)(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@ag-ui/proto': 0.0.41
       '@anthropic-ai/sdk': 0.57.0
-      '@copilotkit/shared': 1.10.5
+      '@copilotkit/shared': 1.10.6
       '@graphql-yoga/plugin-defer-stream': 3.16.0(graphql-yoga@5.16.0(graphql@16.11.0))(graphql@16.11.0)
       '@langchain/aws': 0.1.15(@langchain/core@0.3.78(openai@4.104.0(ws@8.18.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)))
       '@langchain/community': 0.3.57(24351c4932d8f874b42c3c80c17bbdd3)
@@ -7249,7 +7254,6 @@ snapshots:
       - puppeteer
       - pyodide
       - react
-      - react-dom
       - redis
       - replicate
       - sonix-speech-recognition
@@ -7265,7 +7269,7 @@ snapshots:
       - ws
       - youtubei.js
 
-  '@copilotkit/shared@1.10.5':
+  '@copilotkit/shared@1.10.6':
     dependencies:
       '@ag-ui/core': 0.0.37
       '@segment/analytics-node': 2.3.0
@@ -10945,6 +10949,8 @@ snapshots:
 
   commander@8.3.0: {}
 
+  compare-versions@6.1.1: {}
+
   concat-map@0.0.1: {}
 
   console-table-printer@2.14.6:
@@ -12056,7 +12062,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.2
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.12.2)
+      retry-axios: 2.6.0(axios@1.12.2(debug@4.4.3))
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -13979,7 +13985,7 @@ snapshots:
       onetime: 7.0.0
       signal-exit: 4.1.0
 
-  retry-axios@2.6.0(axios@1.12.2):
+  retry-axios@2.6.0(axios@1.12.2(debug@4.4.3)):
     dependencies:
       axios: 1.12.2(debug@4.4.3)
 

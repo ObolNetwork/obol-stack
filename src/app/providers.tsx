@@ -12,10 +12,15 @@ import '@rainbow-me/rainbowkit/styles.css';
 const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  // Always wrap in WagmiProvider to prevent useConfig errors
   // If WalletConnect is not configured, render without RainbowKit
   if (!isWalletConnectConfigured()) {
     return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <WagmiProvider config={config}>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      </WagmiProvider>
     );
   }
 
