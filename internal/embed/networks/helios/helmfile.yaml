@@ -5,6 +5,14 @@ repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
 
+# Configuration via environment variables
+# Override with: HELIOS_NETWORK, HELIOS_CONSENSUS_RPC, HELIOS_EXECUTION_RPC, HELIOS_CHECKPOINT
+values:
+  - network: {{ env "HELIOS_NETWORK" | default "mainnet" }}
+    consensusRpc: {{ env "HELIOS_CONSENSUS_RPC" | default "http://testing.mainnet.beacon-api.nimbus.team" }}
+    executionRpc: {{ env "HELIOS_EXECUTION_RPC" | default "https://eth.drpc.org" }}
+    checkpoint: {{ env "HELIOS_CHECKPOINT" | default "" }}
+
 releases:
   - name: helios
     namespace: helios
@@ -12,15 +20,15 @@ releases:
     chart: obol/helios
     version: 0.1.4
     values:
-      - fullnameOverride: helios-mainnet
+      - fullnameOverride: helios-{{ .Values.network }}
       - helios:
           rpcBindIp: "0.0.0.0"
           rpcPort: 8545
           strictCheckpointAge: false
-          network: mainnet
-          consensusRpc: "http://testing.mainnet.beacon-api.nimbus.team"
-          executionRpc: "https://eth.drpc.org"
-          checkpoint: ""
+          network: {{ .Values.network }}
+          consensusRpc: {{ .Values.consensusRpc | quote }}
+          executionRpc: {{ .Values.executionRpc | quote }}
+          checkpoint: {{ .Values.checkpoint | quote }}
 
       - persistence:
           enabled: true
