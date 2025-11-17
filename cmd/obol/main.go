@@ -11,7 +11,6 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
@@ -87,47 +86,21 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Init(cfg, c.Bool("force")); err != nil {
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  "",
-								})
-								l.Error("Failed to initialize stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Init(cfg, c.Bool("force"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							if err := stack.Up(cfg); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to start stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Up(cfg)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							if err := stack.Down(cfg); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to stop stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Down(cfg)
 						},
 					},
 					{
@@ -141,16 +114,7 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Purge(cfg, c.Bool("force")); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to purge stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Purge(cfg, c.Bool("force"))
 						},
 					},
 				},

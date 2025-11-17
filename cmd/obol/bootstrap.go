@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/urfave/cli/v2"
 )
@@ -24,62 +23,47 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 		Usage:  "Initialize, start cluster, and open browser (hidden command for installer)",
 		Hidden: true, // Hidden from help output
 		Action: func(c *cli.Context) error {
-			// Get or create stack ID for logging
-			stackID := stack.GetStackID(cfg)
-			if stackID == "" {
-				stackID = "bootstrap"
-			}
-
-			l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-				StateDir: cfg.StateDir,
-				StackID:  stackID,
-			})
-			defer cleanup()
-
-			l.Info("Starting bootstrap process...")
+			fmt.Println("Starting bootstrap process...")
 
 			// Step 1: Initialize stack
-			l.Info("Initializing stack configuration...")
+			fmt.Println("Initializing stack configuration...")
 			if err := stack.Init(cfg, false); err != nil {
 				// Check if it's an "already exists" error - that's okay
 				if !strings.Contains(err.Error(), "already exists") {
-					l.Error("Failed to initialize stack", "error", err.Error())
 					return fmt.Errorf("bootstrap init failed: %w", err)
 				}
-				l.Info("Stack already initialized, continuing...")
+				fmt.Println("Stack already initialized, continuing...")
 			}
-			l.Success("Stack initialized")
+			fmt.Println("Stack initialized")
 
 			// Step 2: Start stack
-			l.Info("Starting Obol Stack...")
+			fmt.Println("Starting Obol Stack...")
 			if err := stack.Up(cfg); err != nil {
-				l.Error("Failed to start stack", "error", err.Error())
 				return fmt.Errorf("bootstrap up failed: %w", err)
 			}
-			l.Success("Stack started")
+			fmt.Println("Stack started")
 
 			// Step 3: Wait for cluster readiness
-			l.Info("Waiting for cluster to be ready...")
-			if err := waitForClusterReady(cfg, l); err != nil {
-				l.Error("Cluster failed to become ready", "error", err.Error())
+			fmt.Println("Waiting for cluster to be ready...")
+			if err := waitForClusterReady(cfg); err != nil {
 				return fmt.Errorf("cluster readiness check failed: %w", err)
 			}
-			l.Success("Cluster is ready")
+			fmt.Println("Cluster is ready")
 
 			// Step 4: Open browser
 			url := "http://obol.stack"
-			l.Info("Opening browser...", "url", url)
+			fmt.Printf("Opening browser to %s...\n", url)
 			if err := openBrowser(url); err != nil {
-				l.Warn("Failed to open browser automatically", "error", err.Error())
-				l.Info(fmt.Sprintf("Please open your browser manually to: %s", url))
+				fmt.Printf("Failed to open browser automatically: %v\n", err)
+				fmt.Printf("Please open your browser manually to: %s\n", url)
 			} else {
-				l.Success(fmt.Sprintf("Browser opened to %s", url))
+				fmt.Printf("Browser opened to %s\n", url)
 			}
 
 			fmt.Println()
-			l.Success("Bootstrap complete! Your Obol Stack is ready.")
+			fmt.Println("Bootstrap complete! Your Obol Stack is ready.")
 			fmt.Println()
-			l.Info("Next steps:")
+			fmt.Println("Next steps:")
 			fmt.Println("  • View cluster: obol kubectl get pods --all-namespaces")
 			fmt.Println("  • Manage cluster: obol k9s")
 			fmt.Println("  • Stop cluster: obol stack down")
@@ -92,7 +76,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 
 // waitForClusterReady polls the cluster until all critical pods are running
 // and the nginx ingress is responding
-func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
+func waitForClusterReady(cfg *config.Config) error {
 	timeout := 20 * time.Minute
 	pollInterval := 3 * time.Second
 	deadline := time.Now().Add(timeout)
@@ -101,7 +85,7 @@ func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
 	// Wait for kubeconfig to exist
-	l.Info("Waiting for kubeconfig...")
+	fmt.Println("Waiting for kubeconfig...")
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(kubeconfigPath); err == nil {
 			break
@@ -114,7 +98,7 @@ func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
 	}
 
 	// Wait for pods to be ready
-	l.Info("Waiting for pods to be ready...")
+	fmt.Println("Waiting for pods to be ready...")
 	podsReady := false
 	for time.Now().Before(deadline) {
 		// Check if all pods in kube-system and default are running/completed
@@ -150,10 +134,10 @@ func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
 		return fmt.Errorf("pods did not become ready within timeout")
 	}
 
-	l.Success("All pods are ready")
+	fmt.Println("All pods are ready")
 
 	// Wait for nginx ingress to respond
-	l.Info("Waiting for ingress to respond...")
+	fmt.Println("Waiting for ingress to respond...")
 	ingressURL := "http://obol.stack:8080"
 	ingressReady := false
 
@@ -178,7 +162,7 @@ func waitForClusterReady(cfg *config.Config, l *logging.Logger) error {
 		return fmt.Errorf("ingress did not respond within timeout")
 	}
 
-	l.Success("Ingress is responding")
+	fmt.Println("Ingress is responding")
 
 	return nil
 }

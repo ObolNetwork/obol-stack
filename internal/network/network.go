@@ -3,13 +3,12 @@ package network
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
-	"github.com/ObolNetwork/obol-stack/internal/executor"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
-	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
 
 // TODO: Network Management System
@@ -30,74 +29,51 @@ import (
 
 // List displays all available networks from the embedded filesystem
 func List(cfg *config.Config) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info("Available networks:")
+	fmt.Println("Available networks:")
 
 	// Get all available networks from embedded FS
 	availableNetworks, err := embed.GetAvailableNetworks()
 	if err != nil {
-		l.Error("Failed to get available networks", "error", err.Error())
 		return fmt.Errorf("failed to get available networks: %w", err)
 	}
 
 	if len(availableNetworks) == 0 {
-		l.Warn("No embedded networks found")
+		fmt.Println("No embedded networks found")
 		return nil
 	}
 
 	// Display each network
 	for _, network := range availableNetworks {
-		l.Info(fmt.Sprintf("  • %s", network))
+		fmt.Printf("  • %s\n", network)
 	}
 
-	l.Info("")
-	l.Info(fmt.Sprintf("Total: %d network(s) available", len(availableNetworks)))
+	fmt.Printf("\nTotal: %d network(s) available\n", len(availableNetworks))
 
 	return nil
 }
 
 // Install deploys a network by extracting it to a temp directory and running helmfile sync
 func Install(cfg *config.Config, network string, overrides map[string]string) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Installing network: %s", network))
+	fmt.Printf("Installing network: %s\n", network)
 
 	// Parse embedded helmfile to get environment variables
 	envVars, err := ParseEmbeddedNetworkEnvVars(network)
 	if err != nil {
-		l.Error("Failed to parse embedded helmfile", "error", err.Error())
 		return fmt.Errorf("failed to parse embedded helmfile: %w", err)
 	}
 
 	// Display configuration and set environment variables
 	if len(envVars) > 0 {
-		l.Info("Configuration:")
+		fmt.Println("Configuration:")
 		for _, envVar := range envVars {
 			value := envVar.DefaultValue
 
 			// Check if there's an override from CLI flags
 			if overrideValue, ok := overrides[envVar.FlagName]; ok {
 				value = overrideValue
-				l.Info(fmt.Sprintf("  %s = %s (from --%s)", envVar.Name, value, envVar.FlagName))
+				fmt.Printf("  %s = %s (from --%s)\n", envVar.Name, value, envVar.FlagName)
 			} else {
-				l.Info(fmt.Sprintf("  %s = %s (default)", envVar.Name, value))
+				fmt.Printf("  %s = %s (default)\n", envVar.Name, value)
 			}
 
 			// Set environment variable in process for helmfile to read
@@ -108,16 +84,14 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	// Create temporary directory for network files
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("obol-network-%s-*", network))
 	if err != nil {
-		l.Error("Failed to create temp directory", "error", err.Error())
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	l.Info(fmt.Sprintf("Extracting network to temporary directory: %s", tmpDir))
+	fmt.Printf("Extracting network to temporary directory: %s\n", tmpDir)
 
 	// Copy embedded network to temp directory
 	if err := embed.CopyNetwork(network, tmpDir); err != nil {
-		l.Error("Failed to copy network", "error", err.Error())
 		return fmt.Errorf("failed to copy network: %w", err)
 	}
 
@@ -125,44 +99,42 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	oldPath := filepath.Join(tmpDir, "helmfile.yaml")
 	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml.gotmpl")
 	if err := os.Rename(oldPath, helmfilePath); err != nil {
-		l.Error("Failed to rename helmfile", "error", err.Error())
 		return fmt.Errorf("failed to rename helmfile: %w", err)
 	}
 
-	l.Info(fmt.Sprintf("Deploying network via helmfile sync"))
+	fmt.Println("Deploying network via helmfile sync")
 
-	// Create executor with binDir for helmfile access
-	exec := executor.NewWithBinDir(l.Logger, cfg.BinDir)
-	cmd := exec.CommandWithOutput("helmfile", "-f", helmfilePath, "sync")
+	// Build helmfile command with PATH including binDir
+	cmd := exec.Command("helmfile", "-f", helmfilePath, "sync")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Set PATH to include binDir so helmfile can be found
+	pathEnv := os.Getenv("PATH")
+	if cfg.BinDir != "" {
+		if !strings.Contains(pathEnv, cfg.BinDir) {
+			pathEnv = cfg.BinDir + string(os.PathListSeparator) + pathEnv
+		}
+	}
+	cmd.Env = append(os.Environ(), "PATH="+pathEnv)
 
 	if err := cmd.Run(); err != nil {
-		l.Error("Helmfile sync failed", "error", err.Error())
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	l.Success(fmt.Sprintf("Network %s installed successfully", network))
+	fmt.Printf("Network %s installed successfully\n", network)
 
 	return nil
 }
 
 // Delete removes the network configuration and cluster resources
 func Delete(cfg *config.Config, network string, force bool) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Deleting network: %s", network))
-	l.Warn("TODO: Implement network deletion")
-	l.Warn("  1. Remove $OBOL_CONFIG_DIR/networks/{network}")
-	l.Warn("  2. Identify and delete associated k8s namespaces")
-	l.Warn("  3. Handle ERPC re-configuration if needed")
-	l.Warn("  4. Confirm cleanup completion")
+	fmt.Printf("Deleting network: %s\n", network)
+	fmt.Println("TODO: Implement network deletion")
+	fmt.Println("  1. Remove $OBOL_CONFIG_DIR/networks/{network}")
+	fmt.Println("  2. Identify and delete associated k8s namespaces")
+	fmt.Println("  3. Handle ERPC re-configuration if needed")
+	fmt.Println("  4. Confirm cleanup completion")
 
 	return nil
 }
