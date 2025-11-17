@@ -1,0 +1,80 @@
+values:
+  # @enum mainnet
+  # @description Blockchain network to deploy
+  - network: {{ env "AZTEC_NETWORK" | default "mainnet" }}
+    # @description Attester private key (hex string)
+    attesterPrivateKey: {{ env "AZTEC_ATTESTER_PRIVATE_KEY" | default "" }}
+    # @description L1 Execution RPC URL
+    l1ExecutionUrl: {{ env "AZTEC_L1_EXECUTION_URL" | default "http://geth-mainnet.l1.svc.cluster.local:8545" }}
+    # @description L1 Consensus RPC URL
+    l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "http://prysm-mainnet.l1.svc.cluster.local:3500" }}
+
+---
+
+repositories:
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
+
+releases:
+  - name: 'aztec-{{ .Values.network }}'
+    namespace: aztec
+    createNamespace: true
+    chart: obol/aztec-node
+    version: 0.2.0
+    values:
+      - fullnameOverride: 'aztec-{{ .Values.network }}'
+        role: sequencer
+        sequencer:
+          attesterPrivateKey: '{{ .Values.attesterPrivateKey }}'
+          feeRecipient: "0x0000000000000000000000000000000000000000000000000000000000000000"
+        network: '{{ .Values.network }}'
+        networkName: '{{ .Values.network }}'
+        image:
+          repository: aztecprotocol/aztec
+          tag: 2.1.5
+          pullPolicy: Always
+        node:
+          replicas: 1
+          logLevel: "info"
+          startCmd:
+            - --node
+            - --archiver
+            - --sequencer
+            - --network
+            - '{{ .Values.network }}'
+          l1ExecutionUrls:
+            - '{{ .Values.l1ExecutionUrl }}'
+          l1ConsensusUrls:
+            - '{{ .Values.l1ConsensusUrl }}'
+          resources:
+            requests:
+              cpu: "4"       
+              memory: "16Gi" 
+            limits:
+              cpu: "8"       
+              memory: "32Gi" 
+          storage:
+            dataDirectory: /data
+            dataStoreMapSize: "134217728"  
+            worldStateMapSize: "134217728"  
+          startupProbe:
+            periodSeconds: 60
+            failureThreshold: 60
+        persistence:
+          enabled: true
+          size: 1000Gi
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          selector: {}
+        hostNetwork: true
+        service:
+          httpPort: 8080
+          p2p:
+            enabled: true
+            nodePortEnabled: false  
+            port: 40400
+            announcePort: 40400
+          admin:
+            enabled: true
+            port: 8081
