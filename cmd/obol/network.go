@@ -84,6 +84,11 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 				usage = fmt.Sprintf("Override %s", envVar.Name)
 			}
 
+			// Mark as required if no default value
+			if envVar.Required {
+				usage = "[REQUIRED] " + usage
+			}
+
 			// Add enum options if available
 			if len(envVar.EnumValues) > 0 {
 				usage += fmt.Sprintf(" [options: %s]", strings.Join(envVar.EnumValues, ", "))
@@ -95,8 +100,9 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			}
 
 			flags = append(flags, &cli.StringFlag{
-				Name:  envVar.FlagName,
-				Usage: usage,
+				Name:     envVar.FlagName,
+				Usage:    usage,
+				Required: envVar.Required,
 			})
 		}
 
