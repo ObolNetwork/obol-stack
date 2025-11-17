@@ -44,23 +44,13 @@ releases:
           admissionWebhooks:
             enabled: false
 
-  # Helios light client
-  - name: helios
-    namespace: default
-    chart: obol/helios
-    version: 0.1.4
-    needs:
-      - default/ingress-nginx
-    values:
-      - ./values/helios.yaml.gotmpl
-
   # eRPC
   - name: erpc
     namespace: default
     chart: ethereum/erpc
     needs:
       - default/obol-stack-defaults
-      - default/helios
+      - default/ingress-nginx
     values:
       - ./values/erpc.yaml.gotmpl
 

@@ -1,0 +1,40 @@
+# Helios Light Client Network
+# Provides an Ethereum light client that can be used as an RPC endpoint
+
+repositories:
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
+
+releases:
+  - name: helios
+    namespace: helios
+    createNamespace: true
+    chart: obol/helios
+    version: 0.1.4
+    values:
+      - fullnameOverride: helios-mainnet
+      - helios:
+          rpcBindIp: "0.0.0.0"
+          rpcPort: 8545
+          strictCheckpointAge: false
+          network: mainnet
+          consensusRpc: "http://testing.mainnet.beacon-api.nimbus.team"
+          executionRpc: "https://eth.drpc.org"
+          checkpoint: ""
+
+      - persistence:
+          enabled: true
+          size: 10Gi
+          storageClass: local-path
+
+      - ingress:
+          enabled: true
+          className: nginx
+          annotations:
+            nginx.ingress.kubernetes.io/rewrite-target: /$2
+            nginx.ingress.kubernetes.io/use-regex: "true"
+          hosts:
+            - host: obol.stack
+              paths:
+                - path: /helios(/|$)(.*)
+                  pathType: ImplementationSpecific
