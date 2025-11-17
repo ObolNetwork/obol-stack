@@ -2,11 +2,12 @@ repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
-# Configuration
+# Configuration via environment variables
+# Override with: ETHEREUM_NETWORK, ETHEREUM_EXECUTION_CLIENT, ETHEREUM_CONSENSUS_CLIENT
 values:
-  - network: mainnet
-    executionClient: reth
-    consensusClient: lighthouse
+  - network: {{ env "ETHEREUM_NETWORK" | default "mainnet" }}
+    executionClient: {{ env "ETHEREUM_EXECUTION_CLIENT" | default "reth" }}
+    consensusClient: {{ env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}
 
 releases:
   # Create PVCs first - before the Ethereum node
