@@ -110,16 +110,54 @@ func Add(cfg *config.Config, network string) error {
 	defer cleanup()
 
 	l.Info(fmt.Sprintf("Adding network: %s", network))
-	l.Warn("TODO: Implement network installation")
-	l.Warn("  1. Validate network exists in internal/embed/networks")
-	l.Warn("  2. Copy internal/embed/networks/{network} to $OBOL_CONFIG_DIR/networks/{network}")
-	l.Warn("  3. Notify user that network is ready for sync")
+
+	// Check if network exists in embedded FS
+	availableNetworks, err := embed.GetAvailableNetworks()
+	if err != nil {
+		l.Error("Failed to get available networks", "error", err.Error())
+		return fmt.Errorf("failed to get available networks: %w", err)
+	}
+
+	found := false
+	for _, n := range availableNetworks {
+		if n == network {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		l.Error(fmt.Sprintf("Network %s not found", network))
+		l.Info("Available networks:")
+		for _, n := range availableNetworks {
+			l.Info(fmt.Sprintf("  • %s", n))
+		}
+		return fmt.Errorf("network %s not found", network)
+	}
+
+	// Check if already installed
+	destDir := filepath.Join(cfg.ConfigDir, "networks", network)
+	if _, err := os.Stat(destDir); err == nil {
+		l.Warn(fmt.Sprintf("Network %s is already installed at %s", network, destDir))
+		return nil
+	}
+
+	// Copy network from embedded FS to config directory
+	l.Info(fmt.Sprintf("Copying network to %s", destDir))
+	if err := embed.CopyNetwork(network, destDir); err != nil {
+		l.Error("Failed to copy network", "error", err.Error())
+		return fmt.Errorf("failed to copy network: %w", err)
+	}
+
+	l.Success(fmt.Sprintf("Network %s added successfully", network))
+	l.Info(fmt.Sprintf("Configuration: %s/helmfile.yaml", destDir))
+	l.Info(fmt.Sprintf("Deploy with: obol network sync %s", network))
 
 	return nil
 }
 
 // Sync deploys the network using helmfile
-func Sync(cfg *config.Config, network string) error {
+func Sync(cfg *config.Config, network string, overrides map[string]string) error {
 	// Get stack ID for logging
 	stackID := stack.GetStackID(cfg)
 
@@ -131,11 +169,44 @@ func Sync(cfg *config.Config, network string) error {
 	defer cleanup()
 
 	l.Info(fmt.Sprintf("Syncing network: %s", network))
-	l.Warn("TODO: Implement network sync")
-	l.Warn("  1. Verify network exists in $OBOL_CONFIG_DIR/networks/{network}")
-	l.Warn("  2. Run: helmfile -f $OBOL_CONFIG_DIR/networks/{network}/helmfile.yaml sync")
-	l.Warn("  3. Handle ERPC re-templating if needed")
-	l.Warn("  4. Report deployment status")
+
+	// Check if network is installed
+	helmfilePath := getNetworkHelmfilePath(cfg.ConfigDir, network)
+	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+		l.Error(fmt.Sprintf("Network %s not installed. Run 'obol network add %s' first", network, network))
+		return fmt.Errorf("network %s not installed", network)
+	}
+
+	// Parse helmfile to get environment variables
+	envVars, err := parseHelmfileEnvVars(helmfilePath)
+	if err != nil {
+		l.Error("Failed to parse helmfile", "error", err.Error())
+		return fmt.Errorf("failed to parse helmfile: %w", err)
+	}
+
+	// Display configuration
+	if len(envVars) > 0 {
+		l.Info("Configuration:")
+		for _, envVar := range envVars {
+			value := envVar.DefaultValue
+
+			// Check if there's an override from CLI flags
+			if overrideValue, ok := overrides[envVar.FlagName]; ok {
+				value = overrideValue
+				l.Info(fmt.Sprintf("  %s = %s (from --%s)", envVar.Name, value, envVar.FlagName))
+			} else {
+				l.Info(fmt.Sprintf("  %s = %s (default)", envVar.Name, value))
+			}
+
+			// Set environment variable for helmfile
+			os.Setenv(envVar.Name, value)
+		}
+	}
+
+	l.Warn("TODO: Execute helmfile sync")
+	l.Warn("  1. Run: helmfile -f " + helmfilePath + " sync")
+	l.Warn("  2. Handle ERPC re-templating if needed")
+	l.Warn("  3. Report deployment status")
 
 	return nil
 }

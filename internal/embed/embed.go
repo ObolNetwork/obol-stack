@@ -83,6 +83,16 @@ func GetAvailableNetworks() ([]string, error) {
 	return networks, nil
 }
 
+// ReadEmbeddedNetworkFile reads a file from an embedded network
+func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
+	path := filepath.Join("networks", networkName, filename)
+	content, err := networksFS.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s from network %s: %w", filename, networkName, err)
+	}
+	return content, nil
+}
+
 // CopyNetwork recursively copies an embedded network to the destination directory
 func CopyNetwork(networkName, destDir string) error {
 	networkPath := filepath.Join("networks", networkName)
