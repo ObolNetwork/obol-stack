@@ -2,18 +2,23 @@ repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
 
+# Configuration
+values:
+  - network: mainnet
+    executionClient: reth
+    consensusClient: lighthouse
+
 releases:
   # Create PVCs first - before the Ethereum node
   - name: ethereum-pvcs
     namespace: ethereum
     createNamespace: true
     chart: .
-    needs: []
     values:
       # Pass only the values needed for PVC creation
-      - executionClient: '{{ .Values.obol.ethereum.execution.client }}'
-        consensusClient: '{{ .Values.obol.ethereum.consensus.client }}'
-        network: '{{ .Values.obol.network }}'
+      - executionClient: '{{ .Values.executionClient }}'
+        consensusClient: '{{ .Values.consensusClient }}'
+        network: '{{ .Values.network }}'
 
   # Ethereum node (execution and consensus clients)
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
@@ -27,7 +32,7 @@ releases:
       # Network and checkpoint sync configuration
       - global:
           main:
-            network: '{{ .Values.obol.network }}'
+            network: '{{ .Values.network }}'
           checkpointSync:
             enabled: true
             addresses:
@@ -36,23 +41,23 @@ releases:
               holesky: https://checkpoint-sync.holesky.ethpandaops.io
               hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
 
-      # Execution client (configured by OBOL_ETHEREUM_EXECUTION_CLIENT env var)
-      - {{ .Values.obol.ethereum.execution.client }}:
+      # Execution client
+      - {{ .Values.executionClient }}:
           enabled: true
           persistence:
             enabled: true
             size: 500Gi
             # Use existing PVC with network/client naming: execution-{client}-{network}
-            existingClaim: execution-{{ .Values.obol.ethereum.execution.client }}-{{ .Values.obol.network }}
+            existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
 
-      # Consensus client (configured by OBOL_ETHEREUM_CONSENSUS_CLIENT env var)
-      - {{ .Values.obol.ethereum.consensus.client }}:
+      # Consensus client
+      - {{ .Values.consensusClient }}:
           enabled: true
           persistence:
             enabled: true
             size: 200Gi
             # Use existing PVC with network/client naming: consensus-{client}-{network}
-            existingClaim: consensus-{{ .Values.obol.ethereum.consensus.client }}-{{ .Values.obol.network }}
+            existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
 
   # Ingress for Ethereum RPC endpoints
   # Wait for nginx ingress controller webhook to be ready
@@ -72,6 +77,6 @@ releases:
             sleep 2
     values:
       # Pass through values for ingress template
-      - executionClient: '{{ .Values.obol.ethereum.execution.client }}'
-        consensusClient: '{{ .Values.obol.ethereum.consensus.client }}'
-        network: '{{ .Values.obol.network }}'
+      - executionClient: '{{ .Values.executionClient }}'
+        consensusClient: '{{ .Values.consensusClient }}'
+        network: '{{ .Values.network }}'
