@@ -99,6 +99,9 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml.gotmpl")
 	fmt.Println("Deploying network via helmfile sync")
 
+	// Get kubeconfig path
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
 	// Build helmfile command with PATH including binDir
 	cmd := exec.Command("helmfile", "-f", helmfilePath, "sync")
 	cmd.Stdout = os.Stdout
@@ -111,7 +114,12 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 			pathEnv = cfg.BinDir + string(os.PathListSeparator) + pathEnv
 		}
 	}
-	cmd.Env = append(os.Environ(), "PATH="+pathEnv)
+
+	// Set environment with PATH and KUBECONFIG
+	cmd.Env = append(os.Environ(),
+		"PATH="+pathEnv,
+		"KUBECONFIG="+kubeconfigPath,
+	)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
