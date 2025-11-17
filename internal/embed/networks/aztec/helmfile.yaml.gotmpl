@@ -16,13 +16,13 @@ repositories:
     url: https://obolnetwork.github.io/helm-charts/
 
 releases:
-  - name: 'aztec-{{ .Values.network }}'
+  - name: aztec-sequencer
     namespace: aztec
     createNamespace: true
     chart: obol/aztec-node
     version: 0.2.0
     values:
-      - fullnameOverride: 'aztec-{{ .Values.network }}'
+      - fullnameOverride: 'aztec-sequencer-{{ .Values.network }}'
         role: sequencer
         sequencer:
           attesterPrivateKey: '{{ .Values.attesterPrivateKey }}'
