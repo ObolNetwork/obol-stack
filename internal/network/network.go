@@ -7,6 +7,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/executor"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
@@ -26,26 +27,6 @@ import (
 //   3. Delete(cfg, network) - Remove network config and associated k8s namespaces
 //
 // See: plan.md for detailed design
-
-// getInstalledNetworks returns a list of installed network names
-func getInstalledNetworks(cfg *config.Config) []string {
-	networksDir := filepath.Join(cfg.ConfigDir, "networks")
-	var installed []string
-
-	// Read installed networks directory if it exists
-	if _, err := os.Stat(networksDir); err == nil {
-		entries, err := os.ReadDir(networksDir)
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					installed = append(installed, entry.Name())
-				}
-			}
-		}
-	}
-
-	return installed
-}
 
 // List displays all available networks from the embedded filesystem
 func List(cfg *config.Config) error {
@@ -73,71 +54,18 @@ func List(cfg *config.Config) error {
 		return nil
 	}
 
-	// Get installed networks
-	installedNetworksList := getInstalledNetworks(cfg)
-	installedNetworksMap := make(map[string]bool)
-	for _, network := range installedNetworksList {
-		installedNetworksMap[network] = true
-	}
-
-	// Display each network with status
+	// Display each network
 	for _, network := range availableNetworks {
-		if installedNetworksMap[network] {
-			l.Info(fmt.Sprintf("  • %s (installed)", network))
-		} else {
-			l.Info(fmt.Sprintf("  • %s", network))
-		}
+		l.Info(fmt.Sprintf("  • %s", network))
 	}
 
 	l.Info("")
-	l.Info(fmt.Sprintf("Total: %d network(s) available, %d installed",
-		len(availableNetworks), len(installedNetworksList)))
+	l.Info(fmt.Sprintf("Total: %d network(s) available", len(availableNetworks)))
 
 	return nil
 }
 
-// ensureNetworkCopied copies an embedded network configuration to the config directory if not present
-func ensureNetworkCopied(cfg *config.Config, network string, l *logging.Logger) error {
-	// Check if network exists in embedded FS
-	availableNetworks, err := embed.GetAvailableNetworks()
-	if err != nil {
-		return fmt.Errorf("failed to get available networks: %w", err)
-	}
-
-	found := false
-	for _, n := range availableNetworks {
-		if n == network {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		l.Error(fmt.Sprintf("Network %s not found", network))
-		l.Info("Available networks:")
-		for _, n := range availableNetworks {
-			l.Info(fmt.Sprintf("  • %s", n))
-		}
-		return fmt.Errorf("network %s not found", network)
-	}
-
-	// Check if already present
-	destDir := filepath.Join(cfg.ConfigDir, "networks", network)
-	if _, err := os.Stat(destDir); err == nil {
-		// Already present, nothing to do
-		return nil
-	}
-
-	// Copy network from embedded FS to config directory
-	l.Info(fmt.Sprintf("Copying network to %s", destDir))
-	if err := embed.CopyNetwork(network, destDir); err != nil {
-		return fmt.Errorf("failed to copy network: %w", err)
-	}
-
-	return nil
-}
-
-// Install copies the network to config directory (if needed) and deploys it using helmfile
+// Install deploys a network by extracting it to a temp directory and running helmfile sync
 func Install(cfg *config.Config, network string, overrides map[string]string) error {
 	// Get stack ID for logging
 	stackID := stack.GetStackID(cfg)
@@ -151,23 +79,14 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 
 	l.Info(fmt.Sprintf("Installing network: %s", network))
 
-	// Ensure network is copied to config directory
-	if err := ensureNetworkCopied(cfg, network, l); err != nil {
-		l.Error("Failed to copy network", "error", err.Error())
-		return err
-	}
-
-	// Get helmfile path
-	helmfilePath := getNetworkHelmfilePath(cfg.ConfigDir, network)
-
-	// Parse helmfile to get environment variables
-	envVars, err := parseHelmfileEnvVars(helmfilePath)
+	// Parse embedded helmfile to get environment variables
+	envVars, err := ParseEmbeddedNetworkEnvVars(network)
 	if err != nil {
-		l.Error("Failed to parse helmfile", "error", err.Error())
-		return fmt.Errorf("failed to parse helmfile: %w", err)
+		l.Error("Failed to parse embedded helmfile", "error", err.Error())
+		return fmt.Errorf("failed to parse embedded helmfile: %w", err)
 	}
 
-	// Display configuration
+	// Display configuration and set environment variables
 	if len(envVars) > 0 {
 		l.Info("Configuration:")
 		for _, envVar := range envVars {
@@ -181,15 +100,47 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 				l.Info(fmt.Sprintf("  %s = %s (default)", envVar.Name, value))
 			}
 
-			// Set environment variable for helmfile
+			// Set environment variable in process for helmfile to read
 			os.Setenv(envVar.Name, value)
 		}
 	}
 
-	l.Warn("TODO: Execute helmfile sync")
-	l.Warn("  1. Run: helmfile -f " + helmfilePath + " sync")
-	l.Warn("  2. Handle ERPC re-templating if needed")
-	l.Warn("  3. Report deployment status")
+	// Create temporary directory for network files
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("obol-network-%s-*", network))
+	if err != nil {
+		l.Error("Failed to create temp directory", "error", err.Error())
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	l.Info(fmt.Sprintf("Extracting network to temporary directory: %s", tmpDir))
+
+	// Copy embedded network to temp directory
+	if err := embed.CopyNetwork(network, tmpDir); err != nil {
+		l.Error("Failed to copy network", "error", err.Error())
+		return fmt.Errorf("failed to copy network: %w", err)
+	}
+
+	// Rename helmfile.yaml to helmfile.yaml.gotmpl (required by helmfile v1 for templating)
+	oldPath := filepath.Join(tmpDir, "helmfile.yaml")
+	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml.gotmpl")
+	if err := os.Rename(oldPath, helmfilePath); err != nil {
+		l.Error("Failed to rename helmfile", "error", err.Error())
+		return fmt.Errorf("failed to rename helmfile: %w", err)
+	}
+
+	l.Info(fmt.Sprintf("Deploying network via helmfile sync"))
+
+	// Create executor with binDir for helmfile access
+	exec := executor.NewWithBinDir(l.Logger, cfg.BinDir)
+	cmd := exec.CommandWithOutput("helmfile", "-f", helmfilePath, "sync")
+
+	if err := cmd.Run(); err != nil {
+		l.Error("Helmfile sync failed", "error", err.Error())
+		return fmt.Errorf("helmfile sync failed: %w", err)
+	}
+
+	l.Success(fmt.Sprintf("Network %s installed successfully", network))
 
 	return nil
 }

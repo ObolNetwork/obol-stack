@@ -2,8 +2,6 @@ package network
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -19,73 +17,6 @@ type EnvVar struct {
 	EnumValues   []string // Valid enum values from @enum
 }
 
-// parseHelmfileEnvVars extracts environment variables from a helmfile
-// It looks for patterns like: {{ env "VAR_NAME" | default "value" }}
-// and extracts @enum and @description annotations from preceding comments
-func parseHelmfileEnvVars(helmfilePath string) ([]EnvVar, error) {
-	content, err := os.ReadFile(helmfilePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read helmfile: %w", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	var envVars []EnvVar
-	seen := make(map[string]bool)
-
-	// Track annotations from preceding comment lines
-	var currentEnum []string
-	var currentDesc string
-
-	for _, line := range lines {
-		// Parse @enum annotation
-		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
-			enumStr := strings.TrimSpace(enumMatch[1])
-			currentEnum = strings.Split(enumStr, ",")
-			for i := range currentEnum {
-				currentEnum[i] = strings.TrimSpace(currentEnum[i])
-			}
-			continue
-		}
-
-		// Parse @description annotation
-		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
-			currentDesc = strings.TrimSpace(descMatch[1])
-			continue
-		}
-
-		// Parse env var line: {{ env "VAR_NAME" | default "value" }}
-		re := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
-		if envMatch := re.FindStringSubmatch(line); envMatch != nil {
-			envName := envMatch[1]
-			defaultValue := envMatch[2]
-
-			// Skip duplicates
-			if seen[envName] {
-				continue
-			}
-			seen[envName] = true
-
-			// Convert env var name to CLI flag name
-			flagName := envVarToFlagName(envName)
-
-			envVar := EnvVar{
-				Name:         envName,
-				DefaultValue: defaultValue,
-				FlagName:     flagName,
-				Description:  currentDesc,
-				EnumValues:   currentEnum,
-			}
-			envVars = append(envVars, envVar)
-
-			// Reset annotations for next variable
-			currentEnum = nil
-			currentDesc = ""
-		}
-	}
-
-	return envVars, nil
-}
-
 // envVarToFlagName converts an environment variable name to a CLI flag name
 // Example: ETHEREUM_NETWORK -> network
 // Example: ETHEREUM_EXECUTION_CLIENT -> execution-client
@@ -99,11 +30,6 @@ func envVarToFlagName(envName string) string {
 	flagName = strings.ReplaceAll(flagName, "_", "-")
 
 	return flagName
-}
-
-// getNetworkHelmfilePath returns the path to a network's helmfile
-func getNetworkHelmfilePath(configDir, network string) string {
-	return filepath.Join(configDir, "networks", network, "helmfile.yaml")
 }
 
 // ParseEmbeddedNetworkEnvVars extracts environment variables from an embedded network helmfile
