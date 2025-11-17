@@ -2,8 +2,11 @@ package network
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
@@ -25,6 +28,26 @@ import (
 //
 // See: plan.md for detailed design
 
+// getInstalledNetworks returns a list of installed network names
+func getInstalledNetworks(cfg *config.Config) []string {
+	networksDir := filepath.Join(cfg.ConfigDir, "networks")
+	var installed []string
+
+	// Read installed networks directory if it exists
+	if _, err := os.Stat(networksDir); err == nil {
+		entries, err := os.ReadDir(networksDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					installed = append(installed, entry.Name())
+				}
+			}
+		}
+	}
+
+	return installed
+}
+
 // List displays all available networks from the embedded filesystem
 func List(cfg *config.Config) error {
 	// Get stack ID for logging
@@ -37,11 +60,39 @@ func List(cfg *config.Config) error {
 	})
 	defer cleanup()
 
-	l.Info("Listing available networks")
-	l.Warn("TODO: Implement network listing")
-	l.Warn("  1. Traverse internal/embed/networks directory")
-	l.Warn("  2. Display each network name")
-	l.Warn("  3. Indicate which networks are already installed")
+	l.Info("Available networks:")
+
+	// Get all available networks from embedded FS
+	availableNetworks, err := embed.GetAvailableNetworks()
+	if err != nil {
+		l.Error("Failed to get available networks", "error", err.Error())
+		return fmt.Errorf("failed to get available networks: %w", err)
+	}
+
+	if len(availableNetworks) == 0 {
+		l.Warn("No embedded networks found")
+		return nil
+	}
+
+	// Get installed networks
+	installedNetworksList := getInstalledNetworks(cfg)
+	installedNetworksMap := make(map[string]bool)
+	for _, network := range installedNetworksList {
+		installedNetworksMap[network] = true
+	}
+
+	// Display each network with status
+	for _, network := range availableNetworks {
+		if installedNetworksMap[network] {
+			l.Info(fmt.Sprintf("  • %s (installed)", network))
+		} else {
+			l.Info(fmt.Sprintf("  • %s", network))
+		}
+	}
+
+	l.Info("")
+	l.Info(fmt.Sprintf("Total: %d network(s) available, %d installed",
+		len(availableNetworks), len(installedNetworksList)))
 
 	return nil
 }

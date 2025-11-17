@@ -325,6 +325,7 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
+			networkCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
