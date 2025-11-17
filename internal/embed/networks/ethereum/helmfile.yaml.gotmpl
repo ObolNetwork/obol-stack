@@ -1,21 +1,21 @@
-repositories:
-  - name: ethereum-helm-charts
-    url: https://ethpandaops.github.io/ethereum-helm-charts
-
 # Configuration via environment variables
 # Override with: ETHEREUM_NETWORK, ETHEREUM_EXECUTION_CLIENT, ETHEREUM_CONSENSUS_CLIENT
 values:
   # @enum mainnet,sepolia,holesky,hoodi
   # @description Blockchain network to deploy
   - network: {{ env "ETHEREUM_NETWORK" | default "mainnet" }}
-
-  # @enum reth,geth,nethermind,besu,erigon,ethereumjs
-  # @description Execution layer client
+    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
+    # @description Execution layer client
     executionClient: {{ env "ETHEREUM_EXECUTION_CLIENT" | default "reth" }}
-
-  # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
-  # @description Consensus layer client
+    # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
+    # @description Consensus layer client
     consensusClient: {{ env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}
+
+---
+
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
   # Create PVCs first - before the Ethereum node

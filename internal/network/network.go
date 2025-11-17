@@ -95,13 +95,8 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 		return fmt.Errorf("failed to copy network: %w", err)
 	}
 
-	// Rename helmfile.yaml to helmfile.yaml.gotmpl (required by helmfile v1 for templating)
-	oldPath := filepath.Join(tmpDir, "helmfile.yaml")
+	// Use .yaml.gotmpl extension so helmfile processes Go templates
 	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml.gotmpl")
-	if err := os.Rename(oldPath, helmfilePath); err != nil {
-		return fmt.Errorf("failed to rename helmfile: %w", err)
-	}
-
 	fmt.Println("Deploying network via helmfile sync")
 
 	// Build helmfile command with PATH including binDir

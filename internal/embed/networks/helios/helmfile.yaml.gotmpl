@@ -1,25 +1,24 @@
 # Helios Light Client Network
 # Provides an Ethereum light client that can be used as an RPC endpoint
 
+# Configuration via environment variables
+# Override with: HELIOS_NETWORK, HELIOS_CONSENSUS_RPC, HELIOS_EXECUTION_RPC, HELIOS_CHECKPOINT
+# @enum mainnet
+# @description Ethereum network (only mainnet supported currently)
+# @description Consensus RPC endpoint URL
+# @description Execution RPC endpoint URL
+# @description Checkpoint block root (must be first slot of epoch)
+values:
+  - network: {{ env "HELIOS_NETWORK" | default "mainnet" }}
+    consensusRpc: {{ env "HELIOS_CONSENSUS_RPC" | default "http://testing.mainnet.beacon-api.nimbus.team" }}
+    executionRpc: {{ env "HELIOS_EXECUTION_RPC" | default "https://eth.drpc.org" }}
+    checkpoint: {{ env "HELIOS_CHECKPOINT" | default "" }}
+
+---
+
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
-
-# Configuration via environment variables
-# Override with: HELIOS_NETWORK, HELIOS_CONSENSUS_RPC, HELIOS_EXECUTION_RPC, HELIOS_CHECKPOINT
-values:
-  # @enum mainnet
-  # @description Ethereum network (only mainnet supported currently)
-  - network: {{ env "HELIOS_NETWORK" | default "mainnet" }}
-
-  # @description Consensus RPC endpoint URL
-    consensusRpc: {{ env "HELIOS_CONSENSUS_RPC" | default "http://testing.mainnet.beacon-api.nimbus.team" }}
-
-  # @description Execution RPC endpoint URL
-    executionRpc: {{ env "HELIOS_EXECUTION_RPC" | default "https://eth.drpc.org" }}
-
-  # @description Checkpoint block root (must be first slot of epoch)
-    checkpoint: {{ env "HELIOS_CHECKPOINT" | default "" }}
 
 releases:
   - name: helios
@@ -28,15 +27,15 @@ releases:
     chart: obol/helios
     version: 0.1.4
     values:
-      - fullnameOverride: helios-{{ .Values.network }}
+      - fullnameOverride: 'helios-{{ .Values.network }}'
       - helios:
           rpcBindIp: "0.0.0.0"
           rpcPort: 8545
           strictCheckpointAge: false
-          network: {{ .Values.network }}
-          consensusRpc: {{ .Values.consensusRpc | quote }}
-          executionRpc: {{ .Values.executionRpc | quote }}
-          checkpoint: {{ .Values.checkpoint | quote }}
+          network: '{{ .Values.network }}'
+          consensusRpc: '{{ .Values.consensusRpc }}'
+          executionRpc: '{{ .Values.executionRpc }}'
+          checkpoint: '{{ .Values.checkpoint }}'
 
       - persistence:
           enabled: true

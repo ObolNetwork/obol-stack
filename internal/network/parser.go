@@ -35,7 +35,7 @@ func envVarToFlagName(envName string) string {
 // ParseEmbeddedNetworkEnvVars extracts environment variables from an embedded network helmfile
 func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 	// Read the embedded helmfile
-	content, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml")
+	content, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml.gotmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read embedded helmfile: %w", err)
 	}
