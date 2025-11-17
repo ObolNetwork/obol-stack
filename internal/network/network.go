@@ -22,9 +22,8 @@ import (
 //
 // Implementation needed:
 //   1. List() - Traverse and display available networks from internal/embed/networks
-//   2. Add(cfg, network) - Copy embedded network to OBOL_CONFIG_DIR/networks
-//   3. Sync(cfg, network) - Deploy network via helmfile sync
-//   4. Delete(cfg, network) - Remove network config and associated k8s namespaces
+//   2. Install(cfg, network, overrides) - Copy embedded network to OBOL_CONFIG_DIR/networks and deploy via helmfile sync
+//   3. Delete(cfg, network) - Remove network config and associated k8s namespaces
 //
 // See: plan.md for detailed design
 
@@ -97,24 +96,11 @@ func List(cfg *config.Config) error {
 	return nil
 }
 
-// Add copies an embedded network configuration to the config directory
-func Add(cfg *config.Config, network string) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Adding network: %s", network))
-
+// ensureNetworkCopied copies an embedded network configuration to the config directory if not present
+func ensureNetworkCopied(cfg *config.Config, network string, l *logging.Logger) error {
 	// Check if network exists in embedded FS
 	availableNetworks, err := embed.GetAvailableNetworks()
 	if err != nil {
-		l.Error("Failed to get available networks", "error", err.Error())
 		return fmt.Errorf("failed to get available networks: %w", err)
 	}
 
@@ -135,29 +121,24 @@ func Add(cfg *config.Config, network string) error {
 		return fmt.Errorf("network %s not found", network)
 	}
 
-	// Check if already installed
+	// Check if already present
 	destDir := filepath.Join(cfg.ConfigDir, "networks", network)
 	if _, err := os.Stat(destDir); err == nil {
-		l.Warn(fmt.Sprintf("Network %s is already installed at %s", network, destDir))
+		// Already present, nothing to do
 		return nil
 	}
 
 	// Copy network from embedded FS to config directory
 	l.Info(fmt.Sprintf("Copying network to %s", destDir))
 	if err := embed.CopyNetwork(network, destDir); err != nil {
-		l.Error("Failed to copy network", "error", err.Error())
 		return fmt.Errorf("failed to copy network: %w", err)
 	}
-
-	l.Success(fmt.Sprintf("Network %s added successfully", network))
-	l.Info(fmt.Sprintf("Configuration: %s/helmfile.yaml", destDir))
-	l.Info(fmt.Sprintf("Deploy with: obol network sync %s", network))
 
 	return nil
 }
 
-// Sync deploys the network using helmfile
-func Sync(cfg *config.Config, network string, overrides map[string]string) error {
+// Install copies the network to config directory (if needed) and deploys it using helmfile
+func Install(cfg *config.Config, network string, overrides map[string]string) error {
 	// Get stack ID for logging
 	stackID := stack.GetStackID(cfg)
 
@@ -168,14 +149,16 @@ func Sync(cfg *config.Config, network string, overrides map[string]string) error
 	})
 	defer cleanup()
 
-	l.Info(fmt.Sprintf("Syncing network: %s", network))
+	l.Info(fmt.Sprintf("Installing network: %s", network))
 
-	// Check if network is installed
-	helmfilePath := getNetworkHelmfilePath(cfg.ConfigDir, network)
-	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-		l.Error(fmt.Sprintf("Network %s not installed. Run 'obol network add %s' first", network, network))
-		return fmt.Errorf("network %s not installed", network)
+	// Ensure network is copied to config directory
+	if err := ensureNetworkCopied(cfg, network, l); err != nil {
+		l.Error("Failed to copy network", "error", err.Error())
+		return err
 	}
+
+	// Get helmfile path
+	helmfilePath := getNetworkHelmfilePath(cfg.ConfigDir, network)
 
 	// Parse helmfile to get environment variables
 	envVars, err := parseHelmfileEnvVars(helmfilePath)

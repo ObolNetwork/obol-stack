@@ -14,53 +14,73 @@ import (
 type EnvVar struct {
 	Name         string
 	DefaultValue string
-	FlagName     string // CLI flag name derived from env var name
+	FlagName     string   // CLI flag name derived from env var name
+	Description  string   // Human-readable description from @description
+	EnumValues   []string // Valid enum values from @enum
 }
 
 // parseHelmfileEnvVars extracts environment variables from a helmfile
 // It looks for patterns like: {{ env "VAR_NAME" | default "value" }}
+// and extracts @enum and @description annotations from preceding comments
 func parseHelmfileEnvVars(helmfilePath string) ([]EnvVar, error) {
 	content, err := os.ReadFile(helmfilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read helmfile: %w", err)
 	}
 
-	// Regex to match: {{ env "VAR_NAME" | default "value" }}
-	// Captures: VAR_NAME and value
-	re := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
-	matches := re.FindAllStringSubmatch(string(content), -1)
-
-	if len(matches) == 0 {
-		return nil, nil
-	}
-
+	lines := strings.Split(string(content), "\n")
 	var envVars []EnvVar
 	seen := make(map[string]bool)
 
-	for _, match := range matches {
-		if len(match) != 3 {
+	// Track annotations from preceding comment lines
+	var currentEnum []string
+	var currentDesc string
+
+	for _, line := range lines {
+		// Parse @enum annotation
+		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
+			enumStr := strings.TrimSpace(enumMatch[1])
+			currentEnum = strings.Split(enumStr, ",")
+			for i := range currentEnum {
+				currentEnum[i] = strings.TrimSpace(currentEnum[i])
+			}
 			continue
 		}
 
-		envName := match[1]
-		defaultValue := match[2]
-
-		// Skip duplicates
-		if seen[envName] {
+		// Parse @description annotation
+		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
+			currentDesc = strings.TrimSpace(descMatch[1])
 			continue
 		}
-		seen[envName] = true
 
-		// Convert env var name to CLI flag name
-		// Example: ETHEREUM_NETWORK -> --network
-		// Example: ETHEREUM_EXECUTION_CLIENT -> --execution-client
-		flagName := envVarToFlagName(envName)
+		// Parse env var line: {{ env "VAR_NAME" | default "value" }}
+		re := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
+		if envMatch := re.FindStringSubmatch(line); envMatch != nil {
+			envName := envMatch[1]
+			defaultValue := envMatch[2]
 
-		envVars = append(envVars, EnvVar{
-			Name:         envName,
-			DefaultValue: defaultValue,
-			FlagName:     flagName,
-		})
+			// Skip duplicates
+			if seen[envName] {
+				continue
+			}
+			seen[envName] = true
+
+			// Convert env var name to CLI flag name
+			flagName := envVarToFlagName(envName)
+
+			envVar := EnvVar{
+				Name:         envName,
+				DefaultValue: defaultValue,
+				FlagName:     flagName,
+				Description:  currentDesc,
+				EnumValues:   currentEnum,
+			}
+			envVars = append(envVars, envVar)
+
+			// Reset annotations for next variable
+			currentEnum = nil
+			currentDesc = ""
+		}
 	}
 
 	return envVars, nil
@@ -94,40 +114,59 @@ func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 		return nil, fmt.Errorf("failed to read embedded helmfile: %w", err)
 	}
 
-	// Regex to match: {{ env "VAR_NAME" | default "value" }}
-	// Captures: VAR_NAME and value
-	re := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
-	matches := re.FindAllStringSubmatch(string(content), -1)
-
-	if len(matches) == 0 {
-		return nil, nil
-	}
-
+	lines := strings.Split(string(content), "\n")
 	var envVars []EnvVar
 	seen := make(map[string]bool)
 
-	for _, match := range matches {
-		if len(match) != 3 {
+	// Track annotations from preceding comment lines
+	var currentEnum []string
+	var currentDesc string
+
+	for _, line := range lines {
+		// Parse @enum annotation
+		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
+			enumStr := strings.TrimSpace(enumMatch[1])
+			currentEnum = strings.Split(enumStr, ",")
+			for i := range currentEnum {
+				currentEnum[i] = strings.TrimSpace(currentEnum[i])
+			}
 			continue
 		}
 
-		envName := match[1]
-		defaultValue := match[2]
-
-		// Skip duplicates
-		if seen[envName] {
+		// Parse @description annotation
+		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
+			currentDesc = strings.TrimSpace(descMatch[1])
 			continue
 		}
-		seen[envName] = true
 
-		// Convert env var name to CLI flag name
-		flagName := envVarToFlagName(envName)
+		// Parse env var line: {{ env "VAR_NAME" | default "value" }}
+		re := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
+		if envMatch := re.FindStringSubmatch(line); envMatch != nil {
+			envName := envMatch[1]
+			defaultValue := envMatch[2]
 
-		envVars = append(envVars, EnvVar{
-			Name:         envName,
-			DefaultValue: defaultValue,
-			FlagName:     flagName,
-		})
+			// Skip duplicates
+			if seen[envName] {
+				continue
+			}
+			seen[envName] = true
+
+			// Convert env var name to CLI flag name
+			flagName := envVarToFlagName(envName)
+
+			envVar := EnvVar{
+				Name:         envName,
+				DefaultValue: defaultValue,
+				FlagName:     flagName,
+				Description:  currentDesc,
+				EnumValues:   currentEnum,
+			}
+			envVars = append(envVars, envVar)
+
+			// Reset annotations for next variable
+			currentEnum = nil
+			currentDesc = ""
+		}
 	}
 
 	return envVars, nil

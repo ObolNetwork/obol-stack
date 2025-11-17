@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -11,8 +12,8 @@ import (
 
 // networkCommand returns the network management command group with dynamic subcommands
 func networkCommand(cfg *config.Config) *cli.Command {
-	// Build sync subcommands dynamically from embedded networks
-	syncSubcommands := buildNetworkSyncCommands(cfg)
+	// Build install subcommands dynamically from embedded networks
+	installSubcommands := buildNetworkInstallCommands(cfg)
 
 	return &cli.Command{
 		Name:  "network",
@@ -26,21 +27,9 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:      "add",
-				Usage:     "Add a network to the stack",
-				ArgsUsage: "<network>",
-				Action: func(c *cli.Context) error {
-					if c.NArg() == 0 {
-						return fmt.Errorf("network name required (e.g., ethereum, helios)")
-					}
-					networkName := c.Args().First()
-					return network.Add(cfg, networkName)
-				},
-			},
-			{
-				Name:        "sync",
-				Usage:       "Deploy network configuration to cluster",
-				Subcommands: syncSubcommands,
+				Name:        "install",
+				Usage:       "Install and deploy network to cluster",
+				Subcommands: installSubcommands,
 				Action: func(c *cli.Context) error {
 					// Show help if no network specified
 					return cli.ShowSubcommandHelp(c)
@@ -69,8 +58,8 @@ func networkCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-// buildNetworkSyncCommands dynamically creates sync subcommands for each embedded network
-func buildNetworkSyncCommands(cfg *config.Config) []*cli.Command {
+// buildNetworkInstallCommands dynamically creates install subcommands for each embedded network
+func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 	// Get all embedded networks
 	networks, err := embed.GetAvailableNetworks()
 	if err != nil {
@@ -89,30 +78,60 @@ func buildNetworkSyncCommands(cfg *config.Config) []*cli.Command {
 		// Build flags from env vars
 		flags := []cli.Flag{}
 		for _, envVar := range envVars {
+			// Build usage string
+			usage := envVar.Description
+			if usage == "" {
+				usage = fmt.Sprintf("Override %s", envVar.Name)
+			}
+
+			// Add enum options if available
+			if len(envVar.EnumValues) > 0 {
+				usage += fmt.Sprintf(" [options: %s]", strings.Join(envVar.EnumValues, ", "))
+			}
+
+			// Add default value
+			if envVar.DefaultValue != "" {
+				usage += fmt.Sprintf(" (default: %s)", envVar.DefaultValue)
+			}
+
 			flags = append(flags, &cli.StringFlag{
 				Name:  envVar.FlagName,
-				Usage: fmt.Sprintf("Override %s (default: %s)", envVar.Name, envVar.DefaultValue),
+				Usage: usage,
 			})
 		}
 
-		// Create the network-specific sync command
+		// Create the network-specific install command
 		netName := networkName // Capture for closure
+		netEnvVars := envVars  // Capture for validation
 		commands = append(commands, &cli.Command{
 			Name:  netName,
-			Usage: fmt.Sprintf("Deploy %s network", netName),
+			Usage: fmt.Sprintf("Install %s network", netName),
 			Flags: flags,
 			Action: func(c *cli.Context) error {
-				// Collect flag values into overrides map
+				// Collect and validate flag values
 				overrides := make(map[string]string)
-				for _, flag := range flags {
-					if stringFlag, ok := flag.(*cli.StringFlag); ok {
-						if value := c.String(stringFlag.Name); value != "" {
-							overrides[stringFlag.Name] = value
+				for _, envVar := range netEnvVars {
+					value := c.String(envVar.FlagName)
+					if value != "" {
+						// Validate enum constraint if defined
+						if len(envVar.EnumValues) > 0 {
+							valid := false
+							for _, enumVal := range envVar.EnumValues {
+								if value == enumVal {
+									valid = true
+									break
+								}
+							}
+							if !valid {
+								return fmt.Errorf("invalid value '%s' for --%s. Valid options: %s",
+									value, envVar.FlagName, strings.Join(envVar.EnumValues, ", "))
+							}
 						}
+						overrides[envVar.FlagName] = value
 					}
 				}
 
-				return network.Sync(cfg, netName, overrides)
+				return network.Install(cfg, netName, overrides)
 			},
 		})
 	}

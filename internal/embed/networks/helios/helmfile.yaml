@@ -8,9 +8,17 @@ repositories:
 # Configuration via environment variables
 # Override with: HELIOS_NETWORK, HELIOS_CONSENSUS_RPC, HELIOS_EXECUTION_RPC, HELIOS_CHECKPOINT
 values:
+  # @enum mainnet
+  # @description Ethereum network (only mainnet supported currently)
   - network: {{ env "HELIOS_NETWORK" | default "mainnet" }}
+
+  # @description Consensus RPC endpoint URL
     consensusRpc: {{ env "HELIOS_CONSENSUS_RPC" | default "http://testing.mainnet.beacon-api.nimbus.team" }}
+
+  # @description Execution RPC endpoint URL
     executionRpc: {{ env "HELIOS_EXECUTION_RPC" | default "https://eth.drpc.org" }}
+
+  # @description Checkpoint block root (must be first slot of epoch)
     checkpoint: {{ env "HELIOS_CHECKPOINT" | default "" }}
 
 releases:
