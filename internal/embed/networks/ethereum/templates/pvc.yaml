@@ -5,7 +5,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: execution-{{ .Values.executionClient }}-{{ .Values.network }}
-  namespace: ethereum
+  namespace: '{{ .Values.namespace }}'
 spec:
   accessModes:
     - ReadWriteOnce
@@ -19,7 +19,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
-  namespace: ethereum
+  namespace: '{{ .Values.namespace }}'
 spec:
   accessModes:
     - ReadWriteOnce
