@@ -8,8 +8,8 @@ values:
     l1ExecutionUrl: {{ env "AZTEC_L1_EXECUTION_URL" | default "" }}
     # @description L1 Consensus RPC URL
     l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "http://prysm-mainnet.l1.svc.cluster.local:3500" }}
-    # Computed L1 Execution URL - uses override or defaults to erpc endpoint
-    l1ExecutionUrlResolved: {{ if (env "AZTEC_L1_EXECUTION_URL") }}{{ env "AZTEC_L1_EXECUTION_URL" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
+    # Computed value: L1 Execution URL - uses override or defaults to erpc endpoint
+    __l1ExecutionUrl: {{ if (env "AZTEC_L1_EXECUTION_URL") }}{{ env "AZTEC_L1_EXECUTION_URL" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
 
 ---
 
@@ -45,7 +45,7 @@ releases:
             - --network
             - '{{ .Values.network }}'
           l1ExecutionUrls:
-            - '{{ .Values.l1ExecutionUrlResolved }}'
+            - '{{ .Values.__l1ExecutionUrl }}'
           l1ConsensusUrls:
             - '{{ .Values.l1ConsensusUrl }}'
           resources:
