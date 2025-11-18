@@ -10,8 +10,6 @@ values:
     # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
     # @description Consensus layer client
     consensusClient: {{ env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}
-    # Computed namespace - hash of network/clients combo
-    namespace: {{ printf "%s-%s-%s" (env "ETHEREUM_NETWORK" | default "mainnet") (env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse") (env "ETHEREUM_EXECUTION_CLIENT" | default "reth") | sha256sum | trunc 12 }}-ethereum
 
 ---
 
@@ -22,7 +20,7 @@ repositories:
 releases:
   # Create PVCs first - before the Ethereum node
   - name: ethereum-pvcs
-    namespace: '{{ .Values.namespace }}'
+    namespace: ethereum
     createNamespace: true
     chart: .
     values:
@@ -30,13 +28,12 @@ releases:
       - executionClient: '{{ .Values.executionClient }}'
         consensusClient: '{{ .Values.consensusClient }}'
         network: '{{ .Values.network }}'
-        namespace: '{{ .Values.namespace }}'
 
   # Ethereum node (execution and consensus clients)
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
   # Depends on ethereum-pvcs to ensure PVCs exist first
   - name: ethereum
-    namespace: '{{ .Values.namespace }}'
+    namespace: ethereum
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     needs: [ethereum-pvcs]
@@ -56,6 +53,7 @@ releases:
       # Execution client
       - {{ .Values.executionClient }}:
           enabled: true
+          nameOverride: execution-{{ .Values.executionClient }}-{{ .Values.network }}
           persistence:
             enabled: true
             size: 500Gi
@@ -65,6 +63,7 @@ releases:
       # Consensus client
       - {{ .Values.consensusClient }}:
           enabled: true
+          nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
           persistence:
             enabled: true
             size: 200Gi
