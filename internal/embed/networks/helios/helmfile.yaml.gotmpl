@@ -12,7 +12,6 @@ values:
   - network: {{ env "HELIOS_NETWORK" | default "mainnet" }}
     consensusRpc: {{ env "HELIOS_CONSENSUS_RPC" | default "http://testing.mainnet.beacon-api.nimbus.team" }}
     executionRpc: {{ env "HELIOS_EXECUTION_RPC" | default "https://eth.drpc.org" }}
-    checkpoint: {{ env "HELIOS_CHECKPOINT" | default "" }}
 
 ---
 
@@ -35,7 +34,6 @@ releases:
           network: '{{ .Values.network }}'
           consensusRpc: '{{ .Values.consensusRpc }}'
           executionRpc: '{{ .Values.executionRpc }}'
-          checkpoint: '{{ .Values.checkpoint }}'
 
       - persistence:
           enabled: true
