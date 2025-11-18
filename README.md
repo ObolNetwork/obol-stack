@@ -22,71 +22,315 @@ package management system.
 > The Obol Stack is alpha software. It is not complete, and it may not be
 > working smoothly. If you encounter an issue that does not appear to be
 > documented, please open a
-> [github issue](http://github.com/obolNetwork/obol-stack/issues) if an
+> [GitHub issue](http://github.com/obolNetwork/obol-stack/issues) if an
 > appropriate one is not already present.
->
-> See [here](./obolup/README.md#supported-architectures) for the latest on OS
-> and architectures supported.
 
-### Pre-requisites
+### Prerequisites
 
-Running the Obol Stack locally requires a [Docker](https://www.docker.com/)
-engine. Install Docker for Linux using one of the options
-[here](https://docs.docker.com/engine/install/). Install Docker Desktop for
-Other Operating Systems [here](https://docs.docker.com/desktop/).
+The Obol Stack requires [Docker](https://www.docker.com/) to run a local Kubernetes cluster. Install Docker:
 
-> [!TIP]
-> If you use Docker Desktop, be sure to go to the settings section, resources
-> tab, and allocate most or all of your CPUs and most of your disk space. The
-> stack won't succeed in syncing a local L1 node if there is not enough
-> available disk space.
+- **Linux**: Follow the [Docker Engine installation guide](https://docs.docker.com/engine/install/)
+- **macOS/Windows**: Install [Docker Desktop](https://docs.docker.com/desktop/)
 
-Once you have Docker installed, the easiest way to bootstrap the stack is to use
-the `obolup` installer. `obolup` keeps your stack running the latest versions of
-its software.
+### Installation
 
-> [!IMPORTANT]
-> This first method of installation is not yet live, for now you must clone the
-> repo and run `obolup` locally, as described in the second installation option.
+The easiest way to install the Obol Stack is using the `obolup` bootstrap installer.
 
-```sh
-# This mode of installation is not yet live, please use the repo clone approach until this message is removed
+Run the installer with:
 
-# Add the `obolup` program to your path
-curl -L https://stack.obol.org | sudo bash
-
-# Reload your terminal, and run `obolup`
-obolup
+```bash
+curl -fsSL https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh | bash
 ```
 
-You can also clone this repo locally and run:
+**What the installer does:**
 
-```sh
-# Clone this repo
-git clone git@github.com:ObolNetwork/obol-stack.git
+1. Verifies Docker is running
+2. Installs the `obol` CLI binary to `~/.local/bin/obol`
+3. Installs required dependencies (kubectl, helm, k3d, helmfile, k9s) to `~/.local/bin/`
+4. Adds `obol.stack` to your `/etc/hosts` file (requires sudo) to enable local domain access
+5. Prompts you to add `~/.local/bin` to your PATH by updating your shell profile
+6. Prompts you to start the cluster and open the Obol application in your browser
 
-# Change to ./obolup subdirectory
+**PATH Configuration:**
+
+The installer will detect your shell (bash/zsh) and ask if you want to automatically add `~/.local/bin` to your PATH. If you choose automatic configuration, it will add this line to your shell profile (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After installation, reload your shell configuration:
+
+```bash
+# For bash
+source ~/.bashrc
+
+# For zsh
+source ~/.zshrc
+```
+
+**Manual PATH Configuration:**
+
+If you prefer to configure PATH manually, add this line to your shell profile:
+
+```bash
+# Add to ~/.bashrc (bash) or ~/.zshrc (zsh)
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then reload your shell or start a new terminal session.
+
+**Using obol without PATH:**
+
+If you haven't added `~/.local/bin` to your PATH, you can always run commands directly:
+
+```bash
+~/.local/bin/obol version
+~/.local/bin/obol stack init
+```
+
+**Verify the installation:**
+
+```bash
+obol version
+```
+
+### Quick Start
+
+Once installed, you can start your local Ethereum stack with three commands:
+
+```bash
+# Initialize the stack configuration
+obol stack init
+
+# Start the Kubernetes cluster
+obol stack up
+
+# View cluster (opens interactive terminal UI)
+obol k9s
+```
+
+The stack will create a local Kubernetes cluster and the Obol Stack frontend will be available at:
+
+- **Obol Stack**: http://obol.stack (or http://localhost if using port 80)
+
+### Managing the Stack
+
+**Start the stack:**
+```bash
+obol stack up
+```
+
+**Stop the stack:**
+```bash
+obol stack down
+```
+
+**View cluster (interactive UI):**
+```bash
+obol k9s
+```
+
+**View cluster logs:**
+```bash
+obol kubectl logs -n <namespace> <pod-name>
+```
+
+**Remove everything (including data):**
+```bash
+obol stack purge -f
+```
+
+> [!WARNING]
+> The `purge` command permanently deletes all cluster data and configuration. The `-f` flag is required to remove persistent volume claims (PVCs) owned by root. Use with caution.
+
+### Working with Kubernetes
+
+The `obol` CLI includes convenient wrappers for common Kubernetes tools. These automatically use the correct cluster configuration:
+
+```bash
+# Kubectl (Kubernetes CLI)
+obol kubectl get pods --all-namespaces
+
+# Helm (Kubernetes package manager)
+obol helm list --all-namespaces
+
+# K9s (interactive cluster manager)
+obol k9s
+
+# Helmfile (declarative Helm releases)
+obol helmfile list
+```
+
+### Troubleshooting
+
+#### Port 80 Already in Use
+
+The Obol Stack is configured to run on ports 80 and 443 by default. If you have another service using these ports, the cluster may fail to start.
+
+**To fix this:**
+
+1. Edit the k3d configuration file:
+   ```bash
+   $EDITOR ~/.config/obol/k3d.yaml
+   ```
+
+2. Find the ports section that looks like this:
+   ```yaml
+   ports:
+     - port: 80:80
+       nodeFilters:
+         - loadbalancer
+     - port: 8080:80
+       nodeFilters:
+         - loadbalancer
+     - port: 443:443
+       nodeFilters:
+         - loadbalancer
+     - port: 8443:443
+       nodeFilters:
+         - loadbalancer
+   ```
+
+3. Remove the `80:80` and `443:443` entries (keep the 8080 and 8443 entries):
+   ```yaml
+   ports:
+     - port: 8080:80
+       nodeFilters:
+         - loadbalancer
+     - port: 8443:443
+       nodeFilters:
+         - loadbalancer
+   ```
+
+4. Restart the cluster:
+   ```bash
+   obol stack down
+   obol stack up
+   ```
+
+After this change, access the Obol Stack frontend using port 8080:
+- **Obol Stack**: http://obol.stack:8080 (or http://localhost:8080)
+
+> [!TIP]
+> If ports 8080 or 8443 are also in use, you can change them to any available port. For example, change `8080:80` to `9090:80` and `8443:443` to `9443:443`. Then access the application at http://obol.stack:9090 or http://localhost:9090
+
+### Where Files Are Stored
+
+The Obol Stack follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) specification:
+
+- **Configuration**: `~/.config/obol/` - Cluster config, kubeconfig, application manifests
+- **Data**: `~/.local/share/obol/` - Persistent volumes and database storage
+- **Binaries**: `~/.local/bin/` - The `obol` CLI and dependencies
+- **Logs**: `~/.local/state/obol/` - Structured logs for debugging
+
+#### Uninstalling Obol Stack
+
+To completely remove the Obol Stack from your system:
+
+**1. Stop and remove the cluster:**
+```bash
+~/.local/bin/obol stack purge -f
+```
+
+> [!NOTE]
+> The `-f` flag is required to remove persistent volume claims (PVCs) that are owned by root. Without this flag, data volumes will remain on your system.
+
+**2. Remove Obol binaries:**
+```bash
+rm -f ~/.local/bin/obol \
+      ~/.local/bin/kubectl \
+      ~/.local/bin/helm \
+      ~/.local/bin/k3d \
+      ~/.local/bin/helmfile \
+      ~/.local/bin/k9s \
+      ~/.local/bin/obolup.sh
+```
+
+**3. Remove Obol directories:**
+```bash
+rm -rf ~/.config/obol \
+       ~/.local/share/obol \
+       ~/.local/state/obol
+```
+
+> [!NOTE]
+> This process removes Obol binaries from `~/.local/bin/`. If you installed kubectl, helm, k3d, helmfile, or k9s separately before installing Obol, make sure not to delete those binaries. The PATH configuration in your shell profile is left unchanged.
+
+### Updating the Stack
+
+To update to the latest version, simply run the installer again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh | bash
+```
+
+The installer will detect your existing installation and upgrade it safely.
+
+### Development Mode
+
+If you're contributing to the Obol Stack or want to run it from source, you can use development mode.
+
+**Setting up development mode:**
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/ObolNetwork/obol-stack.git
+   cd obol-stack
+   ```
+
+2. Run the installer in development mode:
+   ```bash
+   OBOL_DEVELOPMENT=true ./obolup.sh
+   ```
+
+**What development mode does:**
+
+- Uses a local `.workspace/` directory instead of XDG directories (`~/.config/obol`, etc.)
+- Installs a wrapper script that runs the `obol` CLI using `go run` (no compilation needed)
+- Code changes are immediately reflected when you run `obol` commands
+- All cluster data, configuration, and logs are stored in `.workspace/`
+
+**Development workspace structure:**
+
+```
+.workspace/
+├── bin/                         # obol wrapper script and dependencies
+├── config/                      # Cluster configuration
+│   ├── k3d.yaml
+│   ├── .cluster-id
+│   ├── kubeconfig.yaml
+│   └── applications/
+├── data/                        # Persistent volumes
+└── state/                       # Logs
+    └── {cluster-id}/
+        └── 2025-01-15.log
+```
+
+**Making code changes:**
+
+Simply edit the Go source files and run `obol` commands as normal. The wrapper script automatically compiles and runs your changes:
+
+```bash
+# Edit source files
+$EDITOR cmd/obol/main.go
+
+# Run immediately - no build step needed
+obol stack up
+```
+
+**Switching back to production mode:**
+
+First, purge the development cluster to remove root-owned PVCs, then remove the `.workspace/` directory and reinstall:
+
+```bash
+obol stack purge -f
+rm -rf .workspace
 ./obolup.sh
 ```
 
-This will install the `obol` binary in the users `~/.local/bin`. It should be
-available in the users path pending a new terminal session, otherwise run
-`source ~/.profile` to manually export it in the current session.
-
-To initialise a stack
-
-```sh
-obol stack init
-```
-
-This will install the default configuration to `~/.config/obol` which contains a
-series of helmfiles/charts which users can edit to suit their needs.
-
-To spin up the stack:
-
-```sh
-obol stack up
-```
+> [!NOTE]
+> The `obol stack purge -f` command is necessary to remove persistent volume claims (PVCs) owned by root. Without the `-f` flag, these files will remain and may cause issues.
 
 <!-- ## Stack Overview -->
 
