@@ -7,7 +7,7 @@ values:
     # @description L1 Execution RPC URL override (defaults to local erpc endpoint based on network)
     l1ExecutionUrl: {{ env "AZTEC_L1_EXECUTION_URL" | default "" }}
     # @description L1 Consensus RPC URL
-    l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "http://prysm-mainnet.l1.svc.cluster.local:3500" }}
+    l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "https://ethereum-beacon-api.publicnode.com" }}
     # Computed value: L1 Execution URL - uses override or defaults to erpc endpoint
     __l1ExecutionUrl: {{ if (env "AZTEC_L1_EXECUTION_URL") }}{{ env "AZTEC_L1_EXECUTION_URL" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
 
