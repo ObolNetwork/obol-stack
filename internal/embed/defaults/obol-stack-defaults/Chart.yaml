@@ -1,6 +1,0 @@
-apiVersion: v2
-name: obol-stack-defaults
-description: Default infrastructure components for Obol Stack
-type: application
-version: 0.1.0
-appVersion: "1.0"

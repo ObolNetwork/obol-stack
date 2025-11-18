@@ -15,26 +15,26 @@ import (
 //go:embed k3d-config.yaml
 var K3dConfig string
 
-//go:embed all:defaults
-var defaultsFS embed.FS
+//go:embed all:infrastructure
+var infrastructureFS embed.FS
 
 //go:embed all:networks
 var networksFS embed.FS
 
-// CopyDefaults recursively copies all embedded default manifests to the destination directory
+// CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory
 func CopyDefaults(destDir string) error {
-	return fs.WalkDir(defaultsFS, "defaults", func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(infrastructureFS, "infrastructure", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root defaults directory
-		if path == "defaults" {
+		// Skip root infrastructure directory
+		if path == "infrastructure" {
 			return nil
 		}
 
-		// Get relative path within defaults/
-		relPath := strings.TrimPrefix(path, "defaults/")
+		// Get relative path within infrastructure/
+		relPath := strings.TrimPrefix(path, "infrastructure/")
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
@@ -52,7 +52,7 @@ func CopyDefaults(destDir string) error {
 		}
 
 		// Read embedded file
-		data, err := defaultsFS.ReadFile(path)
+		data, err := infrastructureFS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
