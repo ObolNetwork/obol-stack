@@ -132,12 +132,64 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 
 // Delete removes the network configuration and cluster resources
 func Delete(cfg *config.Config, network string, force bool) error {
-	fmt.Printf("Deleting network: %s\n", network)
-	fmt.Println("TODO: Implement network deletion")
-	fmt.Println("  1. Remove $OBOL_CONFIG_DIR/networks/{network}")
-	fmt.Println("  2. Identify and delete associated k8s namespaces")
-	fmt.Println("  3. Handle ERPC re-configuration if needed")
-	fmt.Println("  4. Confirm cleanup completion")
+	networkDir := filepath.Join(cfg.ConfigDir, "networks", network)
 
+	// Check if network is installed
+	if _, err := os.Stat(networkDir); os.IsNotExist(err) {
+		return fmt.Errorf("network %s is not installed", network)
+	}
+
+	if !force {
+		fmt.Printf("Are you sure you want to delete network '%s'? [y/N]: ", network)
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(response) != "y" {
+			return fmt.Errorf("operation cancelled")
+		}
+	}
+
+	fmt.Printf("Deleting network: %s\n", network)
+
+	// 1. Run helmfile destroy
+	fmt.Println("Destroying network resources via helmfile...")
+
+	helmfilePath := filepath.Join(networkDir, "helmfile.yaml.gotmpl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Build helmfile command
+	cmd := exec.Command("helmfile", "-f", helmfilePath, "destroy")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Set PATH and KUBECONFIG
+	pathEnv := os.Getenv("PATH")
+	if cfg.BinDir != "" {
+		if !strings.Contains(pathEnv, cfg.BinDir) {
+			pathEnv = cfg.BinDir + string(os.PathListSeparator) + pathEnv
+		}
+	}
+
+	cmd.Env = append(os.Environ(),
+		"PATH="+pathEnv,
+		"KUBECONFIG="+kubeconfigPath,
+	)
+
+	// We attempt destroy even if it might fail, to proceed to cleanup
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: helmfile destroy failed: %v\n", err)
+		if !force {
+			fmt.Println("Use --force to delete the configuration anyway.")
+			return fmt.Errorf("failed to destroy network resources: %w", err)
+		}
+		fmt.Println("Proceeding with cleanup due to --force...")
+	}
+
+	// 2. Remove network directory
+	fmt.Printf("Removing network configuration: %s\n", networkDir)
+	if err := os.RemoveAll(networkDir); err != nil {
+		return fmt.Errorf("failed to remove network directory: %w", err)
+	}
+
+	fmt.Printf("Network %s deleted successfully\n", network)
 	return nil
 }
