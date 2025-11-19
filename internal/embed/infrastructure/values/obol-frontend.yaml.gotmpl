@@ -5,13 +5,15 @@ replicaCount: 1
 image:
   environment:
     - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
-      value: "http://helios-{{ $network }}.default.svc.cluster.local:8545"
+      value: "http://helios-{{ $network }}.helios.svc.cluster.local:8545"
     - name: NEXT_PUBLIC_ERPC_URL
       value: "http://erpc.default.svc.cluster.local:4000/rpc"
+    - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
+      value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
 
   repository: obolnetwork/obol-stack-front-end
   pullPolicy: IfNotPresent
-  tag: ""
+  tag: "main-b98b361"
 
 service:
   type: ClusterIP

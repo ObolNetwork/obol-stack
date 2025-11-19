@@ -37,23 +37,7 @@ installable application system.
    - Stack package: `internal/stack/stack.go` handles k3d operations
    - Embedded assets: k3d config template and applications in `internal/embed/`
 
-3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
-   - **Console output**: Structured logging with colored symbols and clean
-     formatting
-     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]`
-       Error (red)
-     - `[⚙]` Subprocess execution (magenta) with indented output
-   - **File logging**: Date-based JSON logs at
-     `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
-     - One log file per day, all sessions append to same file
-     - Full structured logs with source info, cluster ID tagging
-   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic
-     logging
-     - Captures and logs all subprocess output via slog
-     - Displays subprocess commands and output with visual hierarchy
-   - See: `internal/logging/handler.go`, `internal/executor/executor.go`
-
-4. **Embedded Applications System** (internal/embed/)
+3. **Embedded Applications System** (internal/embed/)
    - **Dual embed pattern**:
      - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
      - `applicationsFS embed.FS`: Entire applications directory tree
@@ -63,24 +47,6 @@ installable application system.
    - **Installable applications**: Copied to config on-demand via `obol app install`
    - Default apps mounted to k3s manifest directory for automatic deployment
    - See: `internal/embed/embed.go`, `internal/embed/applications/`
-
-3. **Logging & Execution Framework** (internal/logging/, internal/executor/)
-   - **Console output**: Structured logging with colored symbols and clean
-     formatting
-     - `[→]` Info (blue), `[✓]` Success (green), `[!]` Warn (yellow), `[✗]`
-       Error (red)
-     - `[⚙]` Subprocess execution (magenta) with indented output
-   - **File logging**: Date-based JSON logs at
-     `$OBOL_STATE_DIR/{cluster-id}/{date}.log`
-     - One log file per day, all sessions append to same file
-     - Full structured logs with source info, cluster ID tagging
-   - **Executor**: Wraps subprocess calls (k3d, kubectl, etc.) with automatic
-     logging
-     - Captures and logs all subprocess output via slog
-     - Displays subprocess commands and output with visual hierarchy
-   - See: `internal/logging/handler.go`, `internal/executor/executor.go`
-
-4. **Embedded Applications System** (internal/embed/)
    - **Dual embed pattern**:
      - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
      - `applicationsFS embed.FS`: Entire applications directory tree
@@ -238,8 +204,6 @@ obol stack up
    - Removes data directory (persistent volumes)
    - Preserves state directory (logs remain for debugging)
 
-All lifecycle commands use structured logging with stack ID context.
-
 See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
 
 ## Embedded Applications
@@ -314,11 +278,7 @@ See: `internal/embed/applications/README.md` for detailed architecture
    - Removes data directory (persistent volumes)
    - Preserves state directory (logs remain for debugging)
 
-=======
-All lifecycle commands use structured logging with cluster ID context.
-
-=======
-See: `internal/cluster/cluster.go`, `internal/embed/k3d-config.yaml`
+See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
 
 ## Embedded Applications
 
@@ -428,32 +388,15 @@ See: `internal/embed/applications/README.md`, `internal/app/app.go`
    not at `up` time
 5. **k3s auto-apply**: Manifests in `/var/lib/rancher/k3s/server/manifests/`
    automatically applied
-6. **Stack ID context**: All logging requires stack ID via
-   `logging.NewSlogLogger()`
-7. **Subprocess execution**: Use `executor.Executor` for consistent logging and
-   output capture
-8. **Log persistence**: Date-based JSON logs at
-   `$OBOL_STATE_DIR/{stack-id}/{date}.log`
-9. **Purge behavior**: Removes config and data directories, preserves state
-   (logs)
-10. **Development mode**: Set `OBOL_DEVELOPMENT=true` for local `.workspace/`
+6. **Purge behavior**: Removes config and data directories
+7. **Development mode**: Set `OBOL_DEVELOPMENT=true` for local `.workspace/`
     usage
-<<<<<<< HEAD
-11. **Logger wrapper**: Use `logging.Logger` type with embedded `*slog.Logger`
-    to get `Success()` method for success-level logging with green check symbol
-12. **Error logging**: All errors propagated through CLI commands should log via
-    `l.Error()` before returning
-=======
-11. **Application separation**: Default apps auto-deployed during init,
-    installable apps require explicit `obol app install`
-12. **Applyset pattern**: Use `kubectl apply --prune --applyset` with
-    `KUBECTL_APPLYSET=true` for atomic updates and automatic pruning
-13. **Monitoring integration**: Applications self-register via labels:
+8. **Application separation**: Default apps auto-deployed during init,
+    installable networks require explicit `obol network install`
+9. **Network install pattern**: Networks are extracted to temp directory and deployed via helmfile
+10. **Monitoring integration**: Networks self-register via labels:
     - ServiceMonitors: `release: monitoring`
     - Grafana dashboards: `grafana_dashboard: "1"`
-14. **Application structure**: All installable apps need `helmfile.yaml`,
-    `values.yaml`, and `README.md`
->>>>>>> 150adca (updated CLAUDE.md with context)
 
 ### Build System
 
@@ -472,14 +415,9 @@ maintain accuracy and relevance.
 - Bootstrap script: `obolup.sh`
 - CLI entrypoint: `cmd/obol/main.go`
 - Config system: `internal/config/config.go`
-<<<<<<< HEAD
 - Stack management: `internal/stack/stack.go`
-=======
-- Cluster management: `internal/cluster/cluster.go`
+- Network management: `internal/network/network.go`
 - Application management: `internal/app/app.go`
->>>>>>> 150adca (updated CLAUDE.md with context)
-- Logging framework: `internal/logging/handler.go`
-- Subprocess execution: `internal/executor/executor.go`
 - Embedded assets: `internal/embed/embed.go`
 - k3d configuration template: `internal/embed/k3d-config.yaml`
 - Default applications: `internal/embed/applications/default/`

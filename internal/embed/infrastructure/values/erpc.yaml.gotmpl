@@ -62,13 +62,6 @@ config: |-
             hedge:
               delay: 500ms
               maxCount: 1
-      upstreams:
-        # Helios light client upstream
-        - endpoint: http://helios-{{ $network }}.default.svc.cluster.local:8545
-          id: helios-{{ $network }}
-          group: fallback
-          evm:
-            chainId: {{ $chainId }}
       cors:
         allowedOrigins:
           - "*"

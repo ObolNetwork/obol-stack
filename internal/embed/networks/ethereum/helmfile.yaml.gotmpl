@@ -1,0 +1,72 @@
+# Configuration via environment variables
+# Override with: ETHEREUM_NETWORK, ETHEREUM_EXECUTION_CLIENT, ETHEREUM_CONSENSUS_CLIENT
+values:
+  # @enum mainnet,sepolia,holesky,hoodi
+  # @description Blockchain network to deploy
+  - network: {{ env "ETHEREUM_NETWORK" | default "mainnet" }}
+    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
+    # @description Execution layer client
+    executionClient: {{ env "ETHEREUM_EXECUTION_CLIENT" | default "reth" }}
+    # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
+    # @description Consensus layer client
+    consensusClient: {{ env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}
+
+---
+
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+
+releases:
+  # Create PVCs first - before the Ethereum node
+  - name: ethereum-pvcs
+    namespace: ethereum
+    createNamespace: true
+    chart: .
+    values:
+      # Pass only the values needed for PVC creation
+      - executionClient: '{{ .Values.executionClient }}'
+        consensusClient: '{{ .Values.consensusClient }}'
+        network: '{{ .Values.network }}'
+
+  # Ethereum node (execution and consensus clients)
+  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
+  # Depends on ethereum-pvcs to ensure PVCs exist first
+  - name: ethereum
+    namespace: ethereum
+    createNamespace: true
+    chart: ethereum-helm-charts/ethereum-node
+    needs: [ethereum-pvcs]
+    values:
+      # Network and checkpoint sync configuration
+      - global:
+          main:
+            network: '{{ .Values.network }}'
+          checkpointSync:
+            enabled: true
+            addresses:
+              mainnet: https://mainnet-checkpoint-sync.attestant.io
+              sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
+              holesky: https://checkpoint-sync.holesky.ethpandaops.io
+              hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+
+      # Execution client
+      - {{ .Values.executionClient }}:
+          enabled: true
+          nameOverride: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+          persistence:
+            enabled: true
+            size: 500Gi
+            # Use existing PVC with network/client naming: execution-{client}-{network}
+            existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+
+      # Consensus client
+      - {{ .Values.consensusClient }}:
+          enabled: true
+          nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+          persistence:
+            enabled: true
+            size: 200Gi
+            # Use existing PVC with network/client naming: consensus-{client}-{network}
+            existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+
