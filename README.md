@@ -39,7 +39,7 @@ The easiest way to install the Obol Stack is using the `obolup` bootstrap instal
 Run the installer with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh | bash
+bash <(curl -s https://stack.obol.org)
 ```
 
 **What the installer does:**

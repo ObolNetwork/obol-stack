@@ -1,0 +1,7 @@
+name = "obol-installer"
+main = "src/index.js"
+compatibility_date = "2024-11-19"
+
+routes = [
+	{ pattern = "stack.obol.org", custom_domain = true }
+]
