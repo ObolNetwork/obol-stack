@@ -80,11 +80,14 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 			if overrideValue, ok := overrides[envVar.FlagName]; ok {
 				value = overrideValue
 				fmt.Printf("  %s = %s (from --%s)\n", envVar.Name, value, envVar.FlagName)
+			} else if envVar.Required && value == "" {
+				// Required field with no value provided
+				return fmt.Errorf("missing required flag: --%s", envVar.FlagName)
 			} else if value != "" {
 				fmt.Printf("  %s = %s (default)\n", envVar.Name, value)
 			} else {
-				// Required field with no value
-				return fmt.Errorf("missing required flag: --%s", envVar.FlagName)
+				// Optional field with empty default
+				fmt.Printf("  %s = (empty, optional)\n", envVar.Name)
 			}
 
 			// Add to template data using field name (e.g., "Network", "ExecutionClient")
@@ -98,16 +101,31 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 		return fmt.Errorf("failed to read embedded helmfile: %w", err)
 	}
 
-	// Parse and execute the Go template
-	tmpl, err := template.New("helmfile").Parse(string(helmfileContent))
-	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
+	// Split helmfile into sections (separated by ---)
+	// Only template the values section, preserve the rest for Helmfile to process
+	parts := bytes.Split(helmfileContent, []byte("\n---\n"))
+
+	var templatedParts [][]byte
+
+	// Template only the first part (values section)
+	if len(parts) > 0 {
+		tmpl, err := template.New("values").Parse(string(parts[0]))
+		if err != nil {
+			return fmt.Errorf("failed to parse values template: %w", err)
+		}
+
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, templateData); err != nil {
+			return fmt.Errorf("failed to execute values template: %w", err)
+		}
+		templatedParts = append(templatedParts, buf.Bytes())
+
+		// Append remaining parts unchanged (releases, etc.)
+		templatedParts = append(templatedParts, parts[1:]...)
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, templateData); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
+	// Rejoin with ---
+	finalContent := bytes.Join(templatedParts, []byte("\n---\n"))
 
 	// Create deployment directory in config: networks/<network>/<id>/
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
@@ -119,7 +137,7 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 
 	// Write the executed template to helmfile.yaml.gotmpl (keep .gotmpl for Helmfile to process)
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
-	if err := os.WriteFile(helmfilePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(helmfilePath, finalContent, 0644); err != nil {
 		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
 
@@ -130,7 +148,7 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 
 	// Overwrite the helmfile.yaml.gotmpl with our templated version
 	// (CopyNetwork may have copied the original, so we overwrite it)
-	if err := os.WriteFile(helmfilePath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(helmfilePath, finalContent, 0644); err != nil {
 		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
 
