@@ -1,22 +1,6 @@
 # Helios Light Client Network
 # Provides an Ethereum light client that can be used as an RPC endpoint
 
-# Configuration via CLI flags
-# Template fields populated by obol CLI during network installation
-values:
-  # @enum mainnet
-  # @default mainnet
-  # @description Ethereum network (only mainnet supported currently)
-  - network: {{.Network}}
-    # @default http://testing.mainnet.beacon-api.nimbus.team
-    # @description Consensus RPC endpoint URL
-    consensusRpc: {{.ConsensusRpc}}
-    # @default https://eth.drpc.org
-    # @description Execution RPC endpoint URL
-    executionRpc: {{.ExecutionRpc}}
-
----
-
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/

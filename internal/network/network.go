@@ -95,37 +95,22 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 		}
 	}
 
-	// Read the embedded helmfile template
-	helmfileContent, err := embed.ReadEmbeddedNetworkFile(network, "helmfile.yaml.gotmpl")
+	// Read the embedded values template
+	valuesContent, err := embed.ReadEmbeddedNetworkFile(network, "values.yaml.gotmpl")
 	if err != nil {
-		return fmt.Errorf("failed to read embedded helmfile: %w", err)
+		return fmt.Errorf("failed to read embedded values: %w", err)
 	}
 
-	// Split helmfile into sections (separated by ---)
-	// Only template the values section, preserve the rest for Helmfile to process
-	parts := bytes.Split(helmfileContent, []byte("\n---\n"))
-
-	var templatedParts [][]byte
-
-	// Template only the first part (values section)
-	if len(parts) > 0 {
-		tmpl, err := template.New("values").Parse(string(parts[0]))
-		if err != nil {
-			return fmt.Errorf("failed to parse values template: %w", err)
-		}
-
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, templateData); err != nil {
-			return fmt.Errorf("failed to execute values template: %w", err)
-		}
-		templatedParts = append(templatedParts, buf.Bytes())
-
-		// Append remaining parts unchanged (releases, etc.)
-		templatedParts = append(templatedParts, parts[1:]...)
+	// Parse and execute the Go template for values
+	tmpl, err := template.New("values").Parse(string(valuesContent))
+	if err != nil {
+		return fmt.Errorf("failed to parse values template: %w", err)
 	}
 
-	// Rejoin with ---
-	finalContent := bytes.Join(templatedParts, []byte("\n---\n"))
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, templateData); err != nil {
+		return fmt.Errorf("failed to execute values template: %w", err)
+	}
 
 	// Create deployment directory in config: networks/<network>/<id>/
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
@@ -135,26 +120,28 @@ func Install(cfg *config.Config, network string, id string, overrides map[string
 
 	fmt.Printf("Saving configuration to: %s\n", deploymentDir)
 
-	// Write the executed template to helmfile.yaml.gotmpl (keep .gotmpl for Helmfile to process)
-	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
-	if err := os.WriteFile(helmfilePath, finalContent, 0644); err != nil {
-		return fmt.Errorf("failed to write helmfile: %w", err)
+	// Write the templated values.yaml (plain YAML, no more templating)
+	valuesPath := filepath.Join(deploymentDir, "values.yaml")
+	if err := os.WriteFile(valuesPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 
-	// Copy any additional network files (Chart.yaml, templates/, etc.)
+	// Copy network files (helmfile.yaml, Chart.yaml, templates/, etc.)
+	// This will copy helmfile.yaml as-is (no templating)
 	if err := embed.CopyNetwork(network, deploymentDir); err != nil {
 		return fmt.Errorf("failed to copy network files: %w", err)
 	}
 
-	// Overwrite the helmfile.yaml.gotmpl with our templated version
-	// (CopyNetwork may have copied the original, so we overwrite it)
-	if err := os.WriteFile(helmfilePath, finalContent, 0644); err != nil {
-		return fmt.Errorf("failed to write helmfile: %w", err)
-	}
+	// Remove values.yaml.gotmpl if it was copied (we already generated values.yaml)
+	valuesTemplatePath := filepath.Join(deploymentDir, "values.yaml.gotmpl")
+	os.Remove(valuesTemplatePath) // Ignore error if file doesn't exist
 
 	fmt.Printf("\nNetwork configuration saved successfully!\n")
 	fmt.Printf("Deployment: %s/%s\n", network, id)
 	fmt.Printf("Location: %s\n", deploymentDir)
+	fmt.Printf("\nFiles generated:\n")
+	fmt.Printf("  - values.yaml: Configuration values\n")
+	fmt.Printf("  - helmfile.yaml: Deployment definition\n")
 	fmt.Printf("\nTo deploy, run: obol network sync %s/%s\n", network, id)
 
 	return nil

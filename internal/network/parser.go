@@ -130,13 +130,13 @@ func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, stri
 	return enumValues, defaultValue, description, hasDefault
 }
 
-// ParseEmbeddedNetworkEnvVars extracts template fields from an embedded network helmfile
+// ParseEmbeddedNetworkEnvVars extracts template fields from an embedded network values file
 // Now uses Go template parsing instead of regex-based env var detection
 func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
-	// Read the embedded helmfile
-	content, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml.gotmpl")
+	// Read the embedded values template
+	content, err := embed.ReadEmbeddedNetworkFile(networkName, "values.yaml.gotmpl")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read embedded helmfile: %w", err)
+		return nil, fmt.Errorf("failed to read embedded values: %w", err)
 	}
 
 	// Extract template fields using Go template parser

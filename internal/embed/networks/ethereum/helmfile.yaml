@@ -1,21 +1,3 @@
-# Configuration via CLI flags
-# Template fields populated by obol CLI during network installation
-values:
-  # @enum mainnet,sepolia,holesky,hoodi
-  # @default mainnet
-  # @description Blockchain network to deploy
-  - network: {{.Network}}
-    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
-    # @default reth
-    # @description Execution layer client
-    executionClient: {{.ExecutionClient}}
-    # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
-    # @default lighthouse
-    # @description Consensus layer client
-    consensusClient: {{.ConsensusClient}}
-
----
-
 repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
@@ -72,4 +54,3 @@ releases:
             size: 200Gi
             # Use existing PVC with network/client naming: consensus-{client}-{network}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
-
