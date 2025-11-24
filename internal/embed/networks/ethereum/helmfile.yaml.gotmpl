@@ -10,7 +10,8 @@ releases:
     chart: .
     values:
       # Pass only the values needed for PVC creation
-      - executionClient: '{{ .Values.executionClient }}'
+      - id: '{{ .Values.id }}'
+        executionClient: '{{ .Values.executionClient }}'
         consensusClient: '{{ .Values.consensusClient }}'
         network: '{{ .Values.network }}'
 
