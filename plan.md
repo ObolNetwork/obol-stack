@@ -52,5 +52,3 @@ auto-updates erpc?
 
 https://docs.erpc.cloud/config/projects/providers#repository, could be used to
 hit such a service.
-
-TODO Fucking aztec name override
