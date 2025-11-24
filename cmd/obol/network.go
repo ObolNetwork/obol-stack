@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -76,14 +77,17 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 		}
 
 		// Build flags from env vars
-		flags := []cli.Flag{
-			// Add id flag (optional, defaults to petname)
-			&cli.StringFlag{
-				Name:  "id",
-				Usage: fmt.Sprintf("Namespace suffix for this deployment (e.g., 'smart-kodiak' becomes '%s-smart-kodiak', defaults to generated petname)", networkName),
-			},
-		}
+		flags := []cli.Flag{}
 		for _, envVar := range envVars {
+			// Customize id flag description to include network-specific example
+			if envVar.FlagName == "id" {
+				flags = append(flags, &cli.StringFlag{
+					Name:     "id",
+					Usage:    fmt.Sprintf("Namespace suffix for this deployment (e.g., 'smart-kodiak' becomes '%s-smart-kodiak', defaults to generated petname)", networkName),
+					Required: envVar.Required,
+				})
+				continue
+			}
 			// Build usage string
 			usage := envVar.Description
 			if usage == "" {
@@ -120,9 +124,6 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Usage: fmt.Sprintf("Install %s network", netName),
 			Flags: flags,
 			Action: func(c *cli.Context) error {
-				// Get deployment ID (defaults to empty, which triggers petname generation)
-				id := c.String("id")
-
 				// Collect and validate flag values
 				overrides := make(map[string]string)
 				for _, envVar := range netEnvVars {
@@ -130,13 +131,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 					if value != "" {
 						// Validate enum constraint if defined
 						if len(envVar.EnumValues) > 0 {
-							valid := false
-							for _, enumVal := range envVar.EnumValues {
-								if value == enumVal {
-									valid = true
-									break
-								}
-							}
+							valid := slices.Contains(envVar.EnumValues, value)
 							if !valid {
 								return fmt.Errorf("invalid value '%s' for --%s. Valid options: %s",
 									value, envVar.FlagName, strings.Join(envVar.EnumValues, ", "))
@@ -146,7 +141,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 					}
 				}
 
-				return network.Install(cfg, netName, id, overrides)
+				return network.Install(cfg, netName, overrides)
 			},
 		})
 	}

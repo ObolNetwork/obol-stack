@@ -5,7 +5,7 @@ repositories:
 releases:
   # Create PVCs first - before the Ethereum node
   - name: ethereum-pvcs
-    namespace: ethereum
+    namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: .
     values:
@@ -18,7 +18,7 @@ releases:
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
   # Depends on ethereum-pvcs to ensure PVCs exist first
   - name: ethereum
-    namespace: ethereum
+    namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     needs: [ethereum-pvcs]

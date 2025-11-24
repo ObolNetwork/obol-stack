@@ -7,7 +7,7 @@ repositories:
 
 releases:
   - name: helios
-    namespace: helios
+    namespace: helios-{{ .Values.id }}
     createNamespace: true
     chart: obol/helios
     version: 0.1.4

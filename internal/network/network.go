@@ -12,22 +12,6 @@ import (
 	"github.com/dustinkirkland/golang-petname"
 )
 
-// TODO: Network Management System
-//
-// The network system manages blockchain network configurations using embedded helmfiles.
-//
-// Architecture:
-//   - Embedded networks: internal/embed/networks/<network>/helmfile.yaml
-//   - Installed networks: $OBOL_CONFIG_DIR/networks/<network>/helmfile.yaml
-//   - Each network may configure endpoints that are proxied through ERPC
-//
-// Implementation needed:
-//   1. List() - Traverse and display available networks from internal/embed/networks
-//   2. Install(cfg, network, overrides) - Copy embedded network to OBOL_CONFIG_DIR/networks and deploy via helmfile sync
-//   3. Delete(cfg, network) - Remove network config and associated k8s namespaces
-//
-// See: plan.md for detailed design
-
 // List displays all available networks from the embedded filesystem
 func List(cfg *config.Config) error {
 	fmt.Println("Available networks:")
@@ -54,12 +38,14 @@ func List(cfg *config.Config) error {
 }
 
 // Install creates a network configuration by executing Go templates and saving to config directory
-func Install(cfg *config.Config, network string, id string, overrides map[string]string) error {
+func Install(cfg *config.Config, network string, overrides map[string]string) error {
 	fmt.Printf("Installing network: %s\n", network)
 
-	// Generate deployment ID if not provided (use petname)
-	if id == "" {
+	// Generate deployment ID if not provided in overrides (use petname)
+	id, hasId := overrides["id"]
+	if !hasId || id == "" {
 		id = petname.Generate(2, "-")
+		overrides["id"] = id
 		fmt.Printf("Generated deployment ID: %s\n", id)
 	}
 

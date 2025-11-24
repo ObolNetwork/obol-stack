@@ -4,7 +4,7 @@ repositories:
 
 releases:
   - name: aztec-sequencer
-    namespace: aztec
+    namespace: aztec-{{ .Values.id }}
     createNamespace: true
     chart: obol/aztec-node
     version: 0.2.0

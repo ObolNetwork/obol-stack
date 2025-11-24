@@ -1,6 +1,10 @@
 # Configuration via CLI flags
 # Template fields populated by obol CLI during network installation
 
+# @default
+# @description Deployment identifier used as namespace suffix (defaults to generated petname if not provided)
+id: {{.Id}}
+
 # @enum mainnet
 # @default mainnet
 # @description Blockchain network to deploy
