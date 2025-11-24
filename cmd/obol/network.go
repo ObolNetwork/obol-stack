@@ -50,21 +50,14 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "delete",
-				Usage:     "Remove network and clean up cluster resources",
-				ArgsUsage: "<network>",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{
-						Name:    "force",
-						Aliases: []string{"f"},
-						Usage:   "Skip confirmation prompt",
-					},
-				},
+				Usage:     "Remove network deployment and clean up cluster resources",
+				ArgsUsage: "<network>/<id> or <network>-<id>",
 				Action: func(c *cli.Context) error {
 					if c.NArg() == 0 {
-						return fmt.Errorf("network name required (e.g., ethereum, helios)")
+						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
 					}
-					networkName := c.Args().First()
-					return network.Delete(cfg, networkName, c.Bool("force"))
+					deploymentIdentifier := c.Args().First()
+					return network.Delete(cfg, deploymentIdentifier)
 				},
 			},
 		},

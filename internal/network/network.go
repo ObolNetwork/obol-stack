@@ -221,14 +221,104 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 	return nil
 }
 
-// Delete removes the network configuration and cluster resources
-func Delete(cfg *config.Config, network string, force bool) error {
-	fmt.Printf("Deleting network: %s\n", network)
-	fmt.Println("TODO: Implement network deletion")
-	fmt.Println("  1. Remove $OBOL_CONFIG_DIR/networks/{network}")
-	fmt.Println("  2. Identify and delete associated k8s namespaces")
-	fmt.Println("  3. Handle ERPC re-configuration if needed")
-	fmt.Println("  4. Confirm cleanup completion")
+// Delete removes the network deployment configuration and cluster resources
+func Delete(cfg *config.Config, deploymentIdentifier string) error {
+	// Parse deployment identifier (supports both "ethereum/knowing-wahoo" and "ethereum-knowing-wahoo")
+	var networkName, deploymentID string
+
+	// Try slash separator first
+	if strings.Contains(deploymentIdentifier, "/") {
+		parts := strings.SplitN(deploymentIdentifier, "/", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+		}
+		networkName = parts[0]
+		deploymentID = parts[1]
+	} else {
+		// Try to split by first dash that separates network from ID
+		parts := strings.SplitN(deploymentIdentifier, "-", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+		}
+		networkName = parts[0]
+		deploymentID = parts[1]
+	}
+
+	namespaceName := fmt.Sprintf("%s-%s", networkName, deploymentID)
+	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", networkName, deploymentID)
+
+	fmt.Printf("Deleting deployment: %s/%s\n", networkName, deploymentID)
+	fmt.Printf("Namespace: %s\n", namespaceName)
+	fmt.Printf("Config directory: %s\n", deploymentDir)
+
+	// Check if config directory exists
+	configExists := false
+	if _, err := os.Stat(deploymentDir); err == nil {
+		configExists = true
+	}
+
+	// Check if namespace exists in cluster
+	namespaceExists := false
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); err == nil {
+		// Cluster is running, check for namespace
+		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+		if err := cmd.Run(); err == nil {
+			namespaceExists = true
+		}
+	}
+
+	// Display what will be deleted
+	fmt.Println("\nResources to be deleted:")
+	if namespaceExists {
+		fmt.Printf("  ✓ Kubernetes namespace: %s (including all resources)\n", namespaceName)
+	} else {
+		fmt.Printf("  - Kubernetes namespace: %s (not found)\n", namespaceName)
+	}
+	if configExists {
+		fmt.Printf("  ✓ Configuration directory: %s\n", deploymentDir)
+	} else {
+		fmt.Printf("  - Configuration directory: %s (not found)\n", deploymentDir)
+	}
+
+	// Check if there's anything to delete
+	if !namespaceExists && !configExists {
+		return fmt.Errorf("deployment not found: %s", deploymentIdentifier)
+	}
+
+	// Delete Kubernetes namespace
+	if namespaceExists {
+		fmt.Printf("\nDeleting namespace %s...\n", namespaceName)
+		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName, "--force", "--grace-period=0")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to delete namespace: %w", err)
+		}
+		fmt.Println("Namespace deleted successfully")
+	}
+
+	// Delete configuration directory
+	if configExists {
+		fmt.Printf("Deleting configuration directory...\n")
+		if err := os.RemoveAll(deploymentDir); err != nil {
+			return fmt.Errorf("failed to delete config directory: %w", err)
+		}
+		fmt.Println("Configuration deleted successfully")
+
+		// Check if parent network directory is empty and remove it
+		networkDir := filepath.Join(cfg.ConfigDir, "networks", networkName)
+		entries, err := os.ReadDir(networkDir)
+		if err == nil && len(entries) == 0 {
+			os.Remove(networkDir) // Clean up empty network directory
+		}
+	}
+
+	fmt.Printf("\n✓ Deployment %s/%s deleted successfully!\n", networkName, deploymentID)
 
 	return nil
 }
