@@ -76,7 +76,13 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 		}
 
 		// Build flags from env vars
-		flags := []cli.Flag{}
+		flags := []cli.Flag{
+			// Add id flag (optional, defaults to petname)
+			&cli.StringFlag{
+				Name:  "id",
+				Usage: fmt.Sprintf("Namespace suffix for this deployment (e.g., 'smart-kodiak' becomes '%s-smart-kodiak', defaults to generated petname)", networkName),
+			},
+		}
 		for _, envVar := range envVars {
 			// Build usage string
 			usage := envVar.Description
@@ -114,6 +120,9 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Usage: fmt.Sprintf("Install %s network", netName),
 			Flags: flags,
 			Action: func(c *cli.Context) error {
+				// Get deployment ID (defaults to empty, which triggers petname generation)
+				id := c.String("id")
+
 				// Collect and validate flag values
 				overrides := make(map[string]string)
 				for _, envVar := range netEnvVars {
@@ -137,7 +146,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 					}
 				}
 
-				return network.Install(cfg, netName, overrides)
+				return network.Install(cfg, netName, id, overrides)
 			},
 		})
 	}

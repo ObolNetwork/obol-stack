@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/dustinkirkland/golang-petname"
 )
 
 // TODO: Network Management System
@@ -54,9 +53,15 @@ func List(cfg *config.Config) error {
 	return nil
 }
 
-// Install deploys a network by executing Go templates and running helmfile sync
-func Install(cfg *config.Config, network string, overrides map[string]string) error {
+// Install creates a network configuration by executing Go templates and saving to config directory
+func Install(cfg *config.Config, network string, id string, overrides map[string]string) error {
 	fmt.Printf("Installing network: %s\n", network)
+
+	// Generate deployment ID if not provided (use petname)
+	if id == "" {
+		id = petname.Generate(2, "-")
+		fmt.Printf("Generated deployment ID: %s\n", id)
+	}
 
 	// Parse embedded helmfile to get template fields
 	envVars, err := ParseEmbeddedNetworkEnvVars(network)
@@ -104,55 +109,35 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 		return fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	// Create temporary directory for network files
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("obol-network-%s-*", network))
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	fmt.Printf("Preparing network in temporary directory: %s\n", tmpDir)
-
-	// Copy embedded network to temp directory (for any additional files like charts)
-	if err := embed.CopyNetwork(network, tmpDir); err != nil {
-		return fmt.Errorf("failed to copy network: %w", err)
+	// Create deployment directory in config: networks/<network>/<id>/
+	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
+	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	// Write the executed template to helmfile.yaml (not .gotmpl since Go templating is done)
-	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml")
+	fmt.Printf("Saving configuration to: %s\n", deploymentDir)
+
+	// Write the executed template to helmfile.yaml.gotmpl (keep .gotmpl for Helmfile to process)
+	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
 	if err := os.WriteFile(helmfilePath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
 
-	fmt.Println("Deploying network via helmfile sync")
-
-	// Get kubeconfig path
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Build helmfile command with PATH including binDir
-	cmd := exec.Command("helmfile", "-f", helmfilePath, "sync")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	// Set PATH to include binDir so helmfile can be found
-	pathEnv := os.Getenv("PATH")
-	if cfg.BinDir != "" {
-		if !strings.Contains(pathEnv, cfg.BinDir) {
-			pathEnv = cfg.BinDir + string(os.PathListSeparator) + pathEnv
-		}
+	// Copy any additional network files (Chart.yaml, templates/, etc.)
+	if err := embed.CopyNetwork(network, deploymentDir); err != nil {
+		return fmt.Errorf("failed to copy network files: %w", err)
 	}
 
-	// Set environment with PATH and KUBECONFIG
-	cmd.Env = append(os.Environ(),
-		"PATH="+pathEnv,
-		"KUBECONFIG="+kubeconfigPath,
-	)
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("helmfile sync failed: %w", err)
+	// Overwrite the helmfile.yaml.gotmpl with our templated version
+	// (CopyNetwork may have copied the original, so we overwrite it)
+	if err := os.WriteFile(helmfilePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write helmfile: %w", err)
 	}
 
-	fmt.Printf("Network %s installed successfully\n", network)
+	fmt.Printf("\nNetwork configuration saved successfully!\n")
+	fmt.Printf("Deployment: %s/%s\n", network, id)
+	fmt.Printf("Location: %s\n", deploymentDir)
+	fmt.Printf("\nTo deploy, run: obol network sync %s/%s\n", network, id)
 
 	return nil
 }
