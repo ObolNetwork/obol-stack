@@ -227,95 +227,150 @@ type Config struct {
 ```
 networks/
 ├── ethereum/
-│   ├── helmfile.yaml.gotmpl  # Main configuration
-│   ├── Chart.yaml            # Optional local chart
-│   └── templates/            # Optional Kubernetes resources
+│   ├── values.yaml.gotmpl   # Configuration template with annotations
+│   ├── helmfile.yaml        # Deployment logic (pure Helmfile syntax)
+│   ├── Chart.yaml           # Optional local chart
+│   └── templates/           # Optional Kubernetes resources
 ├── helios/
-│   └── helmfile.yaml.gotmpl
+│   ├── values.yaml.gotmpl
+│   └── helmfile.yaml
 └── aztec/
-    └── helmfile.yaml.gotmpl
+    ├── values.yaml.gotmpl
+    └── helmfile.yaml
 ```
 
 ### Two-Stage Templating
 
-**Stage 1: CLI Flag Templating** (Go templates)
+**Stage 1: CLI Flag Templating** (Go templates → values.yaml)
+
+`values.yaml.gotmpl` contains configuration fields with annotations:
 ```yaml
-values:
-  # Annotations parsed at build time for CLI flag generation
-  # @enum mainnet,sepolia,holesky,hoodi
-  # @default mainnet
-  # @description Blockchain network to deploy
-  - network: {{.Network}}
-    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
-    # @default reth
-    executionClient: {{.ExecutionClient}}
-    # Namespace generated at install time
-    namespace: {{.Namespace}}
+# @default
+# @description Deployment identifier used as namespace suffix
+id: {{.Id}}
+
+# @enum mainnet,sepolia,holesky,hoodi
+# @default mainnet
+# @description Blockchain network to deploy
+network: {{.Network}}
+
+# @enum reth,geth,nethermind,besu,erigon,ethereumjs
+# @default reth
+executionClient: {{.ExecutionClient}}
 ```
 
-**Stage 2: Helmfile Templating** (Helm/Go templates)
-- CLI populates Stage 1 templates with flag values
-- Templated helmfile saved to `$CONFIG_DIR/networks/<network>/<namespace>/`
-- Helmfile processes template using `{{ .Values.* }}` syntax
+CLI processes this template and generates `values.yaml`:
+```yaml
+id: knowing-wahoo
+network: mainnet
+executionClient: reth
+```
+
+**Stage 2: Helmfile Templating** (Helmfile processes values)
+
+`helmfile.yaml` references values using Helmfile syntax:
+```yaml
+releases:
+  - name: ethereum-pvcs
+    namespace: ethereum-{{ .Values.id }}  # Dynamic namespace
+    values:
+      - network: '{{ .Values.network }}'
+        executionClient: '{{ .Values.executionClient }}'
+```
+
+When `helmfile sync --state-values-file values.yaml` runs:
+- Reads values from `values.yaml`
+- Substitutes `{{ .Values.* }}` references
 - Generates final Kubernetes YAML
 - Applies to cluster in unique namespace
 
 ### Unique Namespace Pattern
 
 **Namespace generation**:
-- Pattern: `<network>-<petname>`
-- Example: `ethereum-nervous-otter`, `ethereum-happy-panda`
-- Uses `github.com/dustinkirkland/golang-petname`
+- Pattern: `<network>-<id>`
+- ID can be user-specified (`--id prod`) or auto-generated (petname like `knowing-wahoo`)
+- Uses `github.com/dustinkirkland/golang-petname` for auto-generation
+- Examples:
+  - `ethereum-knowing-wahoo` (auto-generated)
+  - `ethereum-prod` (user-specified with `--id prod`)
+  - `helios-united-bison` (auto-generated)
+  - `aztec-staging` (user-specified)
+
+**ID as configuration field**:
+- `id` is a regular field in `values.yaml.gotmpl` (not an out-of-band parameter)
+- Shows in generated `values.yaml` for visibility
+- CLI auto-generates petname if `--id` flag not provided
+- Helmfile enforces namespace: `namespace: {{ .Values.id }}`
 
 **Benefits**:
 1. **Multiple deployments**: Run mainnet + testnet simultaneously
 2. **Isolated resources**: Each deployment has dedicated CPU, memory, storage
 3. **Independent lifecycle**: Update/delete one without affecting others
 4. **Simple cleanup**: Delete namespace removes all resources
+5. **Predictable naming**: User controls ID for production deployments
 
 **Example**:
 ```bash
-# First deployment
+# Auto-generated ID (development)
 obol network install ethereum --network=mainnet
-# Creates: ethereum-nervous-otter namespace
+# Generated deployment ID: knowing-wahoo
+# Creates: ~/.config/obol/networks/ethereum/knowing-wahoo/
+# Namespace: ethereum-knowing-wahoo
 
-# Second deployment (different config)
-obol network install ethereum --network=holesky
-# Creates: ethereum-happy-panda namespace
+# User-specified ID (production)
+obol network install ethereum --id prod --network=mainnet
+# Creates: ~/.config/obol/networks/ethereum/prod/
+# Namespace: ethereum-prod
 
-# Both run simultaneously, isolated from each other
+# Multiple deployments with different configs
+obol network install ethereum --id mainnet-01
+obol network install ethereum --id holesky-test --network=holesky
+# Both run simultaneously, isolated in separate namespaces
 ```
 
 ### Network Configuration Flow
 
-1. **Install**:
+1. **Install** (config generation only):
    ```
    obol network install ethereum --network=holesky --execution-client=geth
         ↓
-   Parse embedded helmfile annotations → generate flags
+   Parse values.yaml.gotmpl → extract field definitions + annotations
         ↓
-   Collect flag values into overrides map
+   Collect CLI flag values into overrides map
         ↓
-   Generate unique namespace (ethereum-nervous-otter)
+   Generate unique ID (auto: knowing-wahoo, or user-specified)
         ↓
-   Template Stage 1: Populate {{.Network}}, {{.ExecutionClient}}, {{.Namespace}}
+   Template values.yaml.gotmpl: Populate {{.Id}}, {{.Network}}, {{.ExecutionClient}}
         ↓
-   Save to: ~/.config/obol/networks/ethereum/nervous-otter/helmfile.yaml.gotmpl
+   Write values.yaml to: ~/.config/obol/networks/ethereum/knowing-wahoo/values.yaml
         ↓
-   Run: helmfile sync -f <saved-helmfile>
+   Copy helmfile.yaml as-is (no templating)
         ↓
-   Helmfile templates Stage 2 and applies to cluster
+   Copy other files (Chart.yaml, templates/)
    ```
 
-2. **Delete**:
+2. **Sync** (deployment - future command):
    ```
-   obol network delete ethereum-nervous-otter
+   obol network sync ethereum/knowing-wahoo
+        ↓
+   Run: helmfile sync --state-values-file values.yaml
+        ↓
+   Helmfile reads values.yaml
+        ↓
+   Substitutes {{ .Values.* }} in helmfile.yaml
+        ↓
+   Deploys to namespace: ethereum-knowing-wahoo
+   ```
+
+3. **Delete**:
+   ```
+   obol network delete ethereum/knowing-wahoo
         ↓
    Delete Kubernetes namespace (removes all resources)
         ↓
    Delete PVCs and persistent data
         ↓
-   Remove: ~/.config/obol/networks/ethereum/nervous-otter/
+   Remove: ~/.config/obol/networks/ethereum/knowing-wahoo/
    ```
 
 ## Directory Structure
@@ -338,14 +393,24 @@ obol network install ethereum --network=holesky
 │       └── obol-frontend.yaml.gotmpl
 └── networks/                      # Installed network deployments
     ├── ethereum/
-    │   ├── nervous-otter/         # First ethereum deployment
-    │   │   └── helmfile.yaml.gotmpl
-    │   └── happy-panda/           # Second ethereum deployment
-    │       └── helmfile.yaml.gotmpl
+    │   ├── knowing-wahoo/         # First ethereum deployment
+    │   │   ├── values.yaml        # Generated config (plain YAML)
+    │   │   ├── helmfile.yaml      # Deployment logic (copied as-is)
+    │   │   ├── Chart.yaml
+    │   │   └── templates/
+    │   └── prod/                  # Second ethereum deployment
+    │       ├── values.yaml
+    │       ├── helmfile.yaml
+    │       ├── Chart.yaml
+    │       └── templates/
     ├── helios/
-    │   └── laughing-elephant/
+    │   └── united-bison/
+    │       ├── values.yaml
+    │       └── helmfile.yaml
     └── aztec/
-        └── clever-fox/
+        └── staging/
+            ├── values.yaml
+            └── helmfile.yaml
 
 ~/.local/bin/                      # Binaries
 ├── obol                           # Obol CLI
@@ -359,10 +424,10 @@ obol network install ethereum --network=holesky
 ~/.local/share/obol/              # Persistent data
 └── <cluster-id>/
     └── networks/
-        ├── ethereum_nervous-otter/   # Blockchain data for first deployment
-        ├── ethereum_happy-panda/     # Blockchain data for second deployment
-        ├── helios_laughing-elephant/
-        └── aztec_clever-fox/
+        ├── ethereum_knowing-wahoo/   # Blockchain data for first deployment
+        ├── ethereum_prod/            # Blockchain data for second deployment
+        ├── helios_united-bison/
+        └── aztec_staging/
 ```
 
 ### Development Layout
