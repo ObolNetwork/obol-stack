@@ -114,8 +114,7 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 
-	// Copy network files (helmfile.yaml, Chart.yaml, templates/, etc.)
-	// This will copy helmfile.yaml as-is (no templating)
+	// Copy network files (helmfile.yaml.gotmpl, Chart.yaml, templates/, etc.)
 	if err := embed.CopyNetwork(network, deploymentDir); err != nil {
 		return fmt.Errorf("failed to copy network files: %w", err)
 	}
@@ -129,7 +128,7 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	fmt.Printf("Location: %s\n", deploymentDir)
 	fmt.Printf("\nFiles generated:\n")
 	fmt.Printf("  - values.yaml: Configuration values\n")
-	fmt.Printf("  - helmfile.yaml: Deployment definition\n")
+	fmt.Printf("  - helmfile.yaml.gotmpl: Deployment definition\n")
 	fmt.Printf("\nTo deploy, run: obol network sync %s/%s\n", network, id)
 
 	return nil
@@ -167,10 +166,14 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
 	}
 
-	// Check if helmfile.yaml exists
-	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+	// Check if helmfile.yaml.gotmpl or helmfile.yaml exists (prefer .gotmpl for Helmfile v1+)
+	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-		return fmt.Errorf("helmfile.yaml not found in deployment directory: %s", deploymentDir)
+		// Fallback to helmfile.yaml for backwards compatibility
+		helmfilePath = filepath.Join(deploymentDir, "helmfile.yaml")
+		if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+			return fmt.Errorf("helmfile.yaml or helmfile.yaml.gotmpl not found in deployment directory: %s", deploymentDir)
+		}
 	}
 
 	// Check if values.yaml exists
@@ -192,10 +195,11 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 	}
 
 	fmt.Printf("Deployment directory: %s\n", deploymentDir)
+	fmt.Printf("Using: %s\n", filepath.Base(helmfilePath))
 	fmt.Printf("Running helmfile sync...\n\n")
 
-	// Execute helmfile sync with state-values-file
-	cmd := exec.Command(helmfileBinary, "sync", "--state-values-file", valuesPath)
+	// Execute helmfile sync with explicit file and state-values-file
+	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync", "--state-values-file", valuesPath)
 	cmd.Dir = deploymentDir // Run in deployment directory
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
