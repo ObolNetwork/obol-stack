@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -129,6 +131,88 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	fmt.Printf("  - values.yaml: Configuration values\n")
 	fmt.Printf("  - helmfile.yaml: Deployment definition\n")
 	fmt.Printf("\nTo deploy, run: obol network sync %s/%s\n", network, id)
+
+	return nil
+}
+
+// Sync deploys or updates a network configuration to the cluster using helmfile
+func Sync(cfg *config.Config, deploymentIdentifier string) error {
+	// Parse deployment identifier (supports both "ethereum/knowing-wahoo" and "ethereum-knowing-wahoo")
+	var networkName, deploymentID string
+
+	// Try slash separator first
+	if strings.Contains(deploymentIdentifier, "/") {
+		parts := strings.SplitN(deploymentIdentifier, "/", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+		}
+		networkName = parts[0]
+		deploymentID = parts[1]
+	} else {
+		// Try to split by first dash that separates network from ID
+		// Network names are expected to be single words (ethereum, helios, aztec)
+		parts := strings.SplitN(deploymentIdentifier, "-", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+		}
+		networkName = parts[0]
+		deploymentID = parts[1]
+	}
+
+	fmt.Printf("Syncing deployment: %s/%s\n", networkName, deploymentID)
+
+	// Locate deployment directory
+	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", networkName, deploymentID)
+	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
+		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
+	}
+
+	// Check if helmfile.yaml exists
+	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
+		return fmt.Errorf("helmfile.yaml not found in deployment directory: %s", deploymentDir)
+	}
+
+	// Check if values.yaml exists
+	valuesPath := filepath.Join(deploymentDir, "values.yaml")
+	if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
+		return fmt.Errorf("values.yaml not found in deployment directory: %s", deploymentDir)
+	}
+
+	// Check if kubeconfig exists (cluster must be running)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	// Get helmfile binary path
+	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
+		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
+	}
+
+	fmt.Printf("Deployment directory: %s\n", deploymentDir)
+	fmt.Printf("Running helmfile sync...\n\n")
+
+	// Execute helmfile sync with state-values-file
+	cmd := exec.Command(helmfileBinary, "sync", "--state-values-file", valuesPath)
+	cmd.Dir = deploymentDir // Run in deployment directory
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+	)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("helmfile sync failed: %w", err)
+	}
+
+	fmt.Printf("\nDeployment synced successfully!\n")
+	fmt.Printf("Namespace: %s-%s\n", networkName, deploymentID)
+	fmt.Printf("\nTo check status: obol kubectl get all -n %s-%s\n", networkName, deploymentID)
+	fmt.Printf("To view logs: obol kubectl logs -n %s-%s <pod-name>\n", networkName, deploymentID)
+	fmt.Printf("To access dashboard: obol k9s -n %s-%s\n", networkName, deploymentID)
 
 	return nil
 }

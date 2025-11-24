@@ -37,6 +37,18 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
+				Name:      "sync",
+				Usage:     "Deploy or update network configuration to cluster",
+				ArgsUsage: "<network>/<id> or <network>-<id>",
+				Action: func(c *cli.Context) error {
+					if c.NArg() == 0 {
+						return fmt.Errorf("deployment identifier required (e.g., ethereum/knowing-wahoo or ethereum-knowing-wahoo)")
+					}
+					deploymentIdentifier := c.Args().First()
+					return network.Sync(cfg, deploymentIdentifier)
+				},
+			},
+			{
 				Name:      "delete",
 				Usage:     "Remove network and clean up cluster resources",
 				ArgsUsage: "<network>",
