@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"text/template"
+	"text/template/parse"
 
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
@@ -18,27 +20,118 @@ type EnvVar struct {
 	Required     bool     // Whether this env var is required (no default value)
 }
 
-// envVarToFlagName converts an environment variable name to a CLI flag name
-// Automatically strips network-specific prefixes (e.g., ETHEREUM_, AZTEC_, HELIOS_)
-// Example: ETHEREUM_NETWORK -> network
-// Example: AZTEC_ATTESTER_PRIVATE_KEY -> attester-private-key
-func envVarToFlagName(envName string) string {
-	// Find the first underscore to detect network prefix pattern
-	// Network-specific env vars follow pattern: NETWORK_NAME_*
-	parts := strings.SplitN(envName, "_", 2)
-	if len(parts) == 2 {
-		// Strip the network prefix (everything before first underscore)
-		envName = parts[1]
+// extractTemplateFields parses a Go template and extracts all field references
+// Returns a map of field names to their line numbers for annotation matching
+func extractTemplateFields(content string) (map[string]int, error) {
+	// Parse the template
+	tmpl, err := template.New("helmfile").Parse(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
 
-	// Convert to lowercase and replace underscores with hyphens
-	flagName := strings.ToLower(envName)
-	flagName = strings.ReplaceAll(flagName, "_", "-")
+	fields := make(map[string]int)
+	lines := strings.Split(content, "\n")
 
-	return flagName
+	// Walk the template AST to find field references
+	var walkNodes func(node parse.Node)
+	walkNodes = func(node parse.Node) {
+		if node == nil {
+			return
+		}
+
+		switch n := node.(type) {
+		case *parse.ListNode:
+			if n != nil {
+				for _, child := range n.Nodes {
+					walkNodes(child)
+				}
+			}
+		case *parse.ActionNode:
+			if n.Pipe != nil {
+				for _, cmd := range n.Pipe.Cmds {
+					for _, arg := range cmd.Args {
+						if field, ok := arg.(*parse.FieldNode); ok {
+							// Extract field name (e.g., .Network -> Network)
+							if len(field.Ident) > 0 {
+								fieldName := field.Ident[0]
+								// Find line number of this field in the content
+								for i, line := range lines {
+									if strings.Contains(line, "{{."+fieldName+"}}") {
+										fields[fieldName] = i
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		case *parse.IfNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.RangeNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.WithNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.TemplateNode:
+			walkNodes(n.Pipe)
+		}
+	}
+
+	// Walk the template tree
+	if tmpl.Tree != nil && tmpl.Tree.Root != nil {
+		walkNodes(tmpl.Tree.Root)
+	}
+
+	return fields, nil
 }
 
-// ParseEmbeddedNetworkEnvVars extracts environment variables from an embedded network helmfile
+// parseAnnotationsFromLines extracts annotations from comment lines preceding a field
+// Returns enum values, default value, description, and whether a default was specified
+func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, string, string, bool) {
+	var enumValues []string
+	var defaultValue string
+	var description string
+	var hasDefault bool
+
+	// Look backwards from the field line to find annotations
+	for i := fieldLineNum - 1; i >= 0; i-- {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Stop if we hit a non-comment line or empty line
+		if !strings.HasPrefix(trimmed, "#") {
+			break
+		}
+
+		// Parse @enum annotation
+		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
+			enumStr := strings.TrimSpace(enumMatch[1])
+			enumValues = strings.Split(enumStr, ",")
+			for j := range enumValues {
+				enumValues[j] = strings.TrimSpace(enumValues[j])
+			}
+		}
+
+		// Parse @default annotation (value is optional, may be empty string)
+		if defaultMatch := regexp.MustCompile(`#\s*@default\s*(.*)`).FindStringSubmatch(line); defaultMatch != nil {
+			defaultValue = strings.TrimSpace(defaultMatch[1])
+			hasDefault = true
+		}
+
+		// Parse @description annotation
+		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
+			description = strings.TrimSpace(descMatch[1])
+		}
+	}
+
+	return enumValues, defaultValue, description, hasDefault
+}
+
+// ParseEmbeddedNetworkEnvVars extracts template fields from an embedded network helmfile
+// Now uses Go template parsing instead of regex-based env var detection
 func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 	// Read the embedded helmfile
 	content, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml.gotmpl")
@@ -46,104 +139,52 @@ func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 		return nil, fmt.Errorf("failed to read embedded helmfile: %w", err)
 	}
 
-	// Generate expected prefix from network name (e.g., "aztec" -> "AZTEC_")
-	networkPrefix := strings.ToUpper(networkName) + "_"
+	// Extract template fields using Go template parser
+	fields, err := extractTemplateFields(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract template fields: %w", err)
+	}
 
 	lines := strings.Split(string(content), "\n")
 	var envVars []EnvVar
-	seen := make(map[string]bool)
 
-	// Track annotations from preceding comment lines
-	var currentEnum []string
-	var currentDesc string
+	// For each field, extract annotations and create EnvVar
+	for fieldName, lineNum := range fields {
+		enumValues, defaultValue, description, hasDefault := parseAnnotationsFromLines(lines, lineNum)
 
-	for _, line := range lines {
-		// Parse @enum annotation
-		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
-			enumStr := strings.TrimSpace(enumMatch[1])
-			currentEnum = strings.Split(enumStr, ",")
-			for i := range currentEnum {
-				currentEnum[i] = strings.TrimSpace(currentEnum[i])
-			}
-			continue
+		// Convert field name to CLI flag name (e.g., ExecutionClient -> execution-client)
+		flagName := fieldNameToFlagName(fieldName)
+
+		// Determine if field is required (no @default annotation)
+		required := !hasDefault
+
+		envVar := EnvVar{
+			Name:         fieldName,
+			DefaultValue: defaultValue,
+			FlagName:     flagName,
+			Description:  description,
+			EnumValues:   enumValues,
+			Required:     required,
 		}
-
-		// Parse @description annotation
-		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
-			currentDesc = strings.TrimSpace(descMatch[1])
-			continue
-		}
-
-		// Parse env var line with default: {{ env "VAR_NAME" | default "value" }}
-		reWithDefault := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
-		if envMatch := reWithDefault.FindStringSubmatch(line); envMatch != nil {
-			envName := envMatch[1]
-			defaultValue := envMatch[2]
-
-			// Only include env vars that match the network prefix
-			if !strings.HasPrefix(envName, networkPrefix) {
-				continue
-			}
-
-			// Skip duplicates
-			if seen[envName] {
-				continue
-			}
-			seen[envName] = true
-
-			// Convert env var name to CLI flag name (strips network prefix)
-			flagName := envVarToFlagName(envName)
-
-			envVar := EnvVar{
-				Name:         envName,
-				DefaultValue: defaultValue,
-				FlagName:     flagName,
-				Description:  currentDesc,
-				EnumValues:   currentEnum,
-				Required:     false, // Has default value, so optional
-			}
-			envVars = append(envVars, envVar)
-
-			// Reset annotations for next variable
-			currentEnum = nil
-			currentDesc = ""
-			continue
-		}
-
-		// Parse required env var line (no default): {{ env "VAR_NAME" }}
-		reRequired := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*}}`)
-		if envMatch := reRequired.FindStringSubmatch(line); envMatch != nil {
-			envName := envMatch[1]
-
-			// Only include env vars that match the network prefix
-			if !strings.HasPrefix(envName, networkPrefix) {
-				continue
-			}
-
-			// Skip duplicates
-			if seen[envName] {
-				continue
-			}
-			seen[envName] = true
-
-			// Convert env var name to CLI flag name (strips network prefix)
-			flagName := envVarToFlagName(envName)
-
-			envVar := EnvVar{
-				Name:         envName,
-				DefaultValue: "",
-				FlagName:     flagName,
-				Description:  currentDesc,
-				EnumValues:   currentEnum,
-				Required:     true, // No default value, so required
-			}
-			envVars = append(envVars, envVar)
-
-			// Reset annotations for next variable
-			currentEnum = nil
-			currentDesc = ""
-		}
+		envVars = append(envVars, envVar)
 	}
 
 	return envVars, nil
+}
+
+// fieldNameToFlagName converts a template field name to a CLI flag name
+// Example: ExecutionClient -> execution-client
+// Example: Network -> network
+func fieldNameToFlagName(fieldName string) string {
+	// Insert hyphen before uppercase letters (except first)
+	var result strings.Builder
+	for i, r := range fieldName {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteRune('-')
+		}
+		result.WriteRune(r)
+	}
+
+	// Convert to lowercase
+	return strings.ToLower(result.String())
 }

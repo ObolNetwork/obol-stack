@@ -1,11 +1,13 @@
 package network
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -52,17 +54,18 @@ func List(cfg *config.Config) error {
 	return nil
 }
 
-// Install deploys a network by extracting it to a temp directory and running helmfile sync
+// Install deploys a network by executing Go templates and running helmfile sync
 func Install(cfg *config.Config, network string, overrides map[string]string) error {
 	fmt.Printf("Installing network: %s\n", network)
 
-	// Parse embedded helmfile to get environment variables
+	// Parse embedded helmfile to get template fields
 	envVars, err := ParseEmbeddedNetworkEnvVars(network)
 	if err != nil {
 		return fmt.Errorf("failed to parse embedded helmfile: %w", err)
 	}
 
-	// Display configuration and set environment variables
+	// Build template data from CLI flags and defaults
+	templateData := make(map[string]string)
 	if len(envVars) > 0 {
 		fmt.Println("Configuration:")
 		for _, envVar := range envVars {
@@ -72,13 +75,33 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 			if overrideValue, ok := overrides[envVar.FlagName]; ok {
 				value = overrideValue
 				fmt.Printf("  %s = %s (from --%s)\n", envVar.Name, value, envVar.FlagName)
-			} else {
+			} else if value != "" {
 				fmt.Printf("  %s = %s (default)\n", envVar.Name, value)
+			} else {
+				// Required field with no value
+				return fmt.Errorf("missing required flag: --%s", envVar.FlagName)
 			}
 
-			// Set environment variable in process for helmfile to read
-			os.Setenv(envVar.Name, value)
+			// Add to template data using field name (e.g., "Network", "ExecutionClient")
+			templateData[envVar.Name] = value
 		}
+	}
+
+	// Read the embedded helmfile template
+	helmfileContent, err := embed.ReadEmbeddedNetworkFile(network, "helmfile.yaml.gotmpl")
+	if err != nil {
+		return fmt.Errorf("failed to read embedded helmfile: %w", err)
+	}
+
+	// Parse and execute the Go template
+	tmpl, err := template.New("helmfile").Parse(string(helmfileContent))
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, templateData); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
 	}
 
 	// Create temporary directory for network files
@@ -88,15 +111,19 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	}
 	defer os.RemoveAll(tmpDir)
 
-	fmt.Printf("Extracting network to temporary directory: %s\n", tmpDir)
+	fmt.Printf("Preparing network in temporary directory: %s\n", tmpDir)
 
-	// Copy embedded network to temp directory
+	// Copy embedded network to temp directory (for any additional files like charts)
 	if err := embed.CopyNetwork(network, tmpDir); err != nil {
 		return fmt.Errorf("failed to copy network: %w", err)
 	}
 
-	// Use .yaml.gotmpl extension so helmfile processes Go templates
-	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml.gotmpl")
+	// Write the executed template to helmfile.yaml (not .gotmpl since Go templating is done)
+	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml")
+	if err := os.WriteFile(helmfilePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write helmfile: %w", err)
+	}
+
 	fmt.Println("Deploying network via helmfile sync")
 
 	// Get kubeconfig path
