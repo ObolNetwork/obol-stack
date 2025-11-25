@@ -144,6 +144,35 @@ obol stack purge -f
 > [!WARNING]
 > The `purge` command permanently deletes all cluster data and configuration. The `-f` flag is required to remove persistent volume claims (PVCs) owned by root. Use with caution.
 
+### Installing Applications
+
+The Obol Stack supports installing decentralized applications on top of your local Kubernetes cluster.
+
+#### Aztec Network
+
+Aztec is a privacy-focused Layer 2 network for Ethereum. To run an Aztec node on the Obol Stack:
+
+```bash
+obol network install aztec \
+  --attester-private-key <YOUR_PRIVATE_KEY> \
+  --l1-execution-url https://geth-prysm-mainnet-1.gcp.obol.tech/ \
+  --l1-consensus-url https://prysm-geth-mainnet-1.gcp.obol.tech/
+```
+
+**What this does:**
+- Deploys an Aztec node in your local Kubernetes cluster
+- Connects to Ethereum mainnet using Obol's public RPC endpoints
+- Configures your node as an attester using the provided private key
+
+**Default L1 RPC endpoints:**
+- **Execution Layer**: `https://geth-prysm-mainnet-1.gcp.obol.tech/` (Geth)
+- **Consensus Layer**: `https://prysm-geth-mainnet-1.gcp.obol.tech/` (Prysm)
+
+These are production-grade, publicly accessible Ethereum nodes provided by Obol.
+
+> [!TIP]
+> You can use your own Ethereum node endpoints by changing the `--l1-execution-url` and `--l1-consensus-url` flags.
+
 ### Working with Kubernetes
 
 The `obol` CLI includes convenient wrappers for common Kubernetes tools. These automatically use the correct cluster configuration:
