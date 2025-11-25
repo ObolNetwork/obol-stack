@@ -2,429 +2,758 @@
 
 ## Project Overview
 
-The Obol Stack is a local Kubernetes-based framework for running decentralized
-Ethereum applications (dApps). It provides a simplified CLI experience for
-managing a k3d cluster with embedded default applications and a planned
-installable application system.
+The Obol Stack is a local Kubernetes-based framework for running blockchain networks. It provides a simplified CLI experience for managing a k3d cluster with dynamically deployable network instances. Each network installation creates a uniquely-namespaced deployment, allowing multiple instances of the same network type to run simultaneously.
 
-## Architecture
+## Architecture Overview
 
-### Core Components
+### Two-Part System
 
-1. **obolup.sh** - Bootstrap installer script
-   - Validates prerequisites (Docker daemon)
-   - Creates XDG-compliant directory structure
-   - Installs the `obol` CLI binary and dependencies with pinned versions:
-     - kubectl, helm, k3d, helmfile, k9s (binaries)
-     - helm-diff plugin (pinned for helm compatibility)
-   - Version constants defined at script top - update to upgrade all
-     installations
-   - Supports two modes:
-     - **Production mode**: Uses XDG Base Directory specification
-       (`~/.config/obol`, `~/.local/share/obol`, `~/.local/state/obol`,
-       `~/.local/bin`)
-     - **Development mode**: Uses local `.workspace/` directory (set via
-       `OBOL_DEVELOPMENT=true`)
-   - Supported platforms: Linux, Darwin
-   - Supported architectures: amd64, arm64
+1. **obolup.sh** - Bootstrap installer that sets up the environment
+2. **obol CLI** - Go-based binary for stack and network management
 
-2. **obol CLI** (cmd/obol/) - Go-based stack management tool
-   - Built with urfave/cli/v2 framework
-   - Commands grouped: stack lifecycle, passthrough k8s tools, utilities
-   - Stack lifecycle: `init`, `up`, `down`, `purge`
-   - Passthrough tools: `kubectl`, `helm`, `helmfile`, `k9s` (auto-set
-     KUBECONFIG)
-   - Stack package: `internal/stack/stack.go` handles k3d operations
-   - Embedded assets: k3d config template and applications in `internal/embed/`
+### Core Design Principles
 
-3. **Embedded Applications System** (internal/embed/)
-   - **Dual embed pattern**:
-     - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
-     - `applicationsFS embed.FS`: Entire applications directory tree
-   - **CopyDefaultApplications()**: Extracts only default apps during cluster init
-   - **GetApplicationsFS()**: Exposes embed.FS for app management operations
-   - **Default applications**: Auto-deployed monitoring stack (Prometheus/Grafana)
-   - **Installable applications**: Copied to config on-demand via `obol app install`
-   - Default apps mounted to k3s manifest directory for automatic deployment
-   - See: `internal/embed/embed.go`, `internal/embed/applications/`
-   - **Dual embed pattern**:
-     - `K3dConfig` string: k3d configuration template with `{{PLACEHOLDERS}}`
-     - `applicationsFS embed.FS`: Entire applications directory tree
-   - **CopyApplications()**: Recursively extracts embedded apps to disk
-   - **Default applications**: Auto-deployed monitoring stack
-     (Prometheus/Grafana)
-   - Applications mounted to k3s manifest directory for automatic application
-   - See: `internal/embed/embed.go`, `internal/embed/applications/`
+1. **Deployment-centric**: Each network installation creates a unique deployment instance with its own namespace
+2. **Local-first**: Runs entirely on local machine using k3d (Kubernetes in Docker)
+3. **XDG-compliant**: Follows Linux filesystem standards for configuration
+4. **Unique namespaces**: Petname-generated IDs prevent naming conflicts (e.g., `ethereum-nervous-otter`)
+5. **Two-stage templating**: CLI flags → Go templates → Helmfile → Kubernetes resources
+6. **Development mode**: Local `.workspace/` directory with `go run` wrapper for rapid development
+
+## Bootstrap Installer: obolup.sh
+
+### Purpose
+
+The bootstrap installer is a self-contained bash script that:
+- Validates prerequisites (Docker daemon)
+- Creates XDG-compliant directory structure
+- Installs the `obol` CLI binary
+- Installs pinned dependency versions (kubectl, helm, k3d, helmfile, k9s)
+- Configures system (PATH, /etc/hosts)
+- Optionally bootstraps the cluster
+
+### Installation Modes
+
+#### Production Mode (Default)
+```bash
+bash <(curl -s https://stack.obol.org)
+```
+
+Uses XDG Base Directory specification:
+- Config: `~/.config/obol/`
+- Data: `~/.local/share/obol/`
+- Binaries: `~/.local/bin/`
+
+#### Development Mode
+```bash
+OBOL_DEVELOPMENT=true ./obolup.sh
+```
+
+Uses local workspace:
+- All files: `.workspace/`
+- Installs wrapper script that runs `go run ./cmd/obol`
+- No compilation needed - changes reflected immediately
+
+### Dependency Management
+
+**Pinned versions** (lines 50-57):
+```bash
+KUBECTL_VERSION="1.31.0"
+HELM_VERSION="3.16.2"
+K3D_VERSION="5.8.3"
+HELMFILE_VERSION="0.169.1"
+K9S_VERSION="0.32.5"
+HELM_DIFF_VERSION="3.9.11"
+```
+
+**Smart installation logic**:
+1. Check for global binary (outside OBOL_BIN_DIR)
+2. If found and version >= pinned version, create symlink
+3. Otherwise, download pinned version to OBOL_BIN_DIR
+4. Handle broken symlinks gracefully
+
+### Binary Installation Strategies
+
+**Development mode** (lines 281-306):
+- Creates wrapper script at `$OBOL_BIN_DIR/obol`
+- Wrapper runs `go run -a ./cmd/obol "$@"`
+- Finds project root automatically
+- No compilation needed
+
+**Production mode** (lines 408-466):
+- Controlled by `OBOL_RELEASE` environment variable
+- `OBOL_RELEASE=latest` (default): Try download latest release, fallback to build from source
+- `OBOL_RELEASE=v0.1.0`: Download specific release
+- Downloads prebuilt binaries from GitHub releases
+- Falls back to building from source if download fails
+
+**Build from source** (lines 361-406):
+- Clones repository
+- Injects version information via ldflags
+- Builds with `go build -ldflags "..." ./cmd/obol`
+
+### System Configuration
+
+**PATH configuration** (lines 1160-1223):
+- Auto-detects shell profile (.bashrc, .zshrc, .bash_profile, etc.)
+- Interactive mode: Prompts user to auto-add or show manual instructions
+- Non-interactive mode: Respects `OBOL_MODIFY_PATH=yes` environment variable
+- Works with `curl | bash` via `/dev/tty` detection
+
+**/etc/hosts configuration** (lines 995-1069):
+- Adds `127.0.0.1 obol.stack` entry
+- Requires sudo privileges
+- Graceful handling: manual instructions if sudo fails
+- Checks existing entries to avoid duplicates
+
+### Bootstrap Flow
+
+**Post-install prompt** (lines 1226-1297):
+- Interactive mode: Offers to start cluster immediately
+- Runs `obol bootstrap` command (hidden command in CLI)
+- Bootstrap command handles `stack init` + `stack up` + browser launch
+- Fallback: Shows manual instructions
+
+## Obol CLI: cmd/obol/main.go
+
+### Architecture
+
+**CLI Framework**: urfave/cli/v2 with custom help template
+
+**Command Structure**:
+```
+obol
+├── stack (lifecycle management)
+│   ├── init
+│   ├── up
+│   ├── down
+│   └── purge
+├── network (deployment management)
+│   ├── list
+│   ├── install
+│   │   ├── ethereum (dynamically generated)
+│   │   ├── helios (dynamically generated)
+│   │   └── aztec (dynamically generated)
+│   └── delete
+├── kubectl (passthrough with KUBECONFIG)
+├── helm (passthrough with KUBECONFIG)
+├── helmfile (passthrough with KUBECONFIG)
+├── k9s (passthrough with KUBECONFIG)
+├── app (future application management)
+├── version
+└── bootstrap (hidden, used by installer)
+```
+
+### Network Command Implementation
+
+**Dynamic subcommand generation** (lines 62-146):
+1. Reads embedded networks from `internal/embed/networks/`
+2. Parses each network's `helmfile.yaml.gotmpl` for environment variable annotations
+3. Generates CLI flags automatically from annotations:
+   ```yaml
+   # @enum mainnet,sepolia,holesky,hoodi
+   # @default mainnet
+   # @description Blockchain network to deploy
+   - network: {{.Network}}
+   ```
+   Becomes: `--network` flag with enum validation and default value
+
+**Network install flow**:
+1. User runs: `obol network install ethereum --network=holesky --execution-client=geth`
+2. CLI collects flag values into `overrides` map
+3. Validates enum constraints
+4. Calls `network.Install(cfg, "ethereum", overrides)`
+5. Network package:
+   - Creates temp directory
+   - Copies embedded network files
+   - Sets environment variables from overrides
+   - Runs `helmfile sync` with environment variables
+   - Cleans up temp directory
+
+### Passthrough Commands
+
+**Pattern** (lines 130-286):
+```go
+{
+    Name:            "kubectl",
+    SkipFlagParsing: true,  // Pass all args directly to kubectl
+    Action: func(c *cli.Context) error {
+        kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+        cmd := exec.Command(kubectlPath, c.Args().Slice()...)
+        cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+        cmd.Stdin = os.Stdin
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+
+        return cmd.Run()
+    },
+}
+```
+
+**Benefits**:
+- User doesn't need to manually set KUBECONFIG
+- Seamless integration with existing kubectl/helm workflows
+- Exit codes preserved from underlying commands
+- Binary location: `$OBOL_BIN_DIR/<tool>`
 
 ### Configuration System
 
-The application follows XDG Base Directory specification with override
-capability:
+**Config package** (`internal/config/config.go`):
+```go
+type Config struct {
+    ConfigDir string  // ~/.config/obol or .workspace/config
+    DataDir   string  // ~/.local/share/obol or .workspace/data
+    BinDir    string  // ~/.local/bin or .workspace/bin
+}
+```
 
-- `OBOL_CONFIG_DIR` - Configuration files (default: `~/.config/obol` or
-  `.workspace/config`)
-- `OBOL_BIN_DIR` - Binary directory (default: `$XDG_BIN_HOME` → `~/.local/bin`
-  or `.workspace/bin`)
-- `XDG_BIN_HOME` - XDG standard for user binaries (default: `~/.local/bin`)
-- `OBOL_DATA_DIR` - Persistent volumes and data (default: `~/.local/share/obol`
-  or `.workspace/data`)
-- `OBOL_STATE_DIR` - Logs and runtime state (default: `~/.local/state/obol` or
-  `.workspace/state`)
-- `OBOL_DEVELOPMENT=true` - Enables local development mode using `.workspace/`
+**Environment variable precedence**:
+1. `OBOL_CONFIG_DIR` (override)
+2. `XDG_CONFIG_HOME/obol` (XDG standard)
+3. `~/.config/obol` (default)
 
-See: `internal/config/config.go`
+**Development mode detection**:
+- `OBOL_DEVELOPMENT=true` switches to `.workspace/` directories
+- No state directory in development mode (logs removed)
 
-### Directory Structure
+## Network Management System
 
-Production layout:
+### Embedded Networks
+
+**Location**: `internal/embed/networks/`
+
+**Structure**:
+```
+networks/
+├── ethereum/
+│   ├── helmfile.yaml.gotmpl  # Main configuration
+│   ├── Chart.yaml            # Optional local chart
+│   └── templates/            # Optional Kubernetes resources
+├── helios/
+│   └── helmfile.yaml.gotmpl
+└── aztec/
+    └── helmfile.yaml.gotmpl
+```
+
+### Two-Stage Templating
+
+**Stage 1: CLI Flag Templating** (Go templates)
+```yaml
+values:
+  # Annotations parsed at build time for CLI flag generation
+  # @enum mainnet,sepolia,holesky,hoodi
+  # @default mainnet
+  # @description Blockchain network to deploy
+  - network: {{.Network}}
+    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
+    # @default reth
+    executionClient: {{.ExecutionClient}}
+    # Namespace generated at install time
+    namespace: {{.Namespace}}
+```
+
+**Stage 2: Helmfile Templating** (Helm/Go templates)
+- CLI populates Stage 1 templates with flag values
+- Templated helmfile saved to `$CONFIG_DIR/networks/<network>/<namespace>/`
+- Helmfile processes template using `{{ .Values.* }}` syntax
+- Generates final Kubernetes YAML
+- Applies to cluster in unique namespace
+
+### Unique Namespace Pattern
+
+**Namespace generation**:
+- Pattern: `<network>-<petname>`
+- Example: `ethereum-nervous-otter`, `ethereum-happy-panda`
+- Uses `github.com/dustinkirkland/golang-petname`
+
+**Benefits**:
+1. **Multiple deployments**: Run mainnet + testnet simultaneously
+2. **Isolated resources**: Each deployment has dedicated CPU, memory, storage
+3. **Independent lifecycle**: Update/delete one without affecting others
+4. **Simple cleanup**: Delete namespace removes all resources
+
+**Example**:
+```bash
+# First deployment
+obol network install ethereum --network=mainnet
+# Creates: ethereum-nervous-otter namespace
+
+# Second deployment (different config)
+obol network install ethereum --network=holesky
+# Creates: ethereum-happy-panda namespace
+
+# Both run simultaneously, isolated from each other
+```
+
+### Network Configuration Flow
+
+1. **Install**:
+   ```
+   obol network install ethereum --network=holesky --execution-client=geth
+        ↓
+   Parse embedded helmfile annotations → generate flags
+        ↓
+   Collect flag values into overrides map
+        ↓
+   Generate unique namespace (ethereum-nervous-otter)
+        ↓
+   Template Stage 1: Populate {{.Network}}, {{.ExecutionClient}}, {{.Namespace}}
+        ↓
+   Save to: ~/.config/obol/networks/ethereum/nervous-otter/helmfile.yaml.gotmpl
+        ↓
+   Run: helmfile sync -f <saved-helmfile>
+        ↓
+   Helmfile templates Stage 2 and applies to cluster
+   ```
+
+2. **Delete**:
+   ```
+   obol network delete ethereum-nervous-otter
+        ↓
+   Delete Kubernetes namespace (removes all resources)
+        ↓
+   Delete PVCs and persistent data
+        ↓
+   Remove: ~/.config/obol/networks/ethereum/nervous-otter/
+   ```
+
+## Directory Structure
+
+### Production Layout
 
 ```
 ~/.config/obol/
-  ├── k3d.yaml                       # Generated k3d config (absolute paths substituted)
-  ├── .cluster-id                    # Petname-generated cluster identifier
-  ├── kubeconfig.yaml                # Exported cluster kubeconfig
-  └── applications/                  # Application configurations
-      ├── default/                   # Auto-deployed (copied during init)
-      │   └── monitoring/            # Prometheus/Grafana stack
-      │       ├── monitoring-stack.yaml
-      │       ├── monitoring-ingress.yaml
-      │       └── README.md
-      └── ethereum/                  # Installable (copied via obol app install)
-          ├── helmfile.yaml
-          ├── values.yaml
-          └── README.md
+├── k3d.yaml                       # Generated k3d config (absolute paths)
+├── .cluster-id                    # Petname-generated cluster identifier
+├── kubeconfig.yaml                # Exported cluster kubeconfig
+├── defaults/                      # Default stack resources (ERPC, frontend)
+│   ├── helmfile.yaml
+│   ├── base/                      # Base Kubernetes resources
+│   │   ├── Chart.yaml
+│   │   └── templates/
+│   │       └── local-path.yaml
+│   └── values/                    # Configuration templates
+│       ├── erpc.yaml.gotmpl
+│       └── obol-frontend.yaml.gotmpl
+└── networks/                      # Installed network deployments
+    ├── ethereum/
+    │   ├── nervous-otter/         # First ethereum deployment
+    │   │   └── helmfile.yaml.gotmpl
+    │   └── happy-panda/           # Second ethereum deployment
+    │       └── helmfile.yaml.gotmpl
+    ├── helios/
+    │   └── laughing-elephant/
+    └── aztec/
+        └── clever-fox/
 
-~/.local/bin/                        # obol binary and dependencies
+~/.local/bin/                      # Binaries
+├── obol                           # Obol CLI
+├── kubectl                        # kubectl (or symlink)
+├── helm                           # helm (or symlink)
+├── k3d                            # k3d (or symlink)
+├── helmfile                       # helmfile (or symlink)
+├── k9s                            # k9s (or symlink)
+└── obolup.sh                      # Bootstrap script copy
 
-~/.local/share/obol/                 # Persistent data (k3d volume mount: /data in nodes)
-
-~/.local/state/obol/                 # Runtime state
-  └── {stack-id}/
-      └── 2025-10-15.log             # Date-based log files (JSON)
+~/.local/share/obol/              # Persistent data
+└── <cluster-id>/
+    └── networks/
+        ├── ethereum_nervous-otter/   # Blockchain data for first deployment
+        ├── ethereum_happy-panda/     # Blockchain data for second deployment
+        ├── helios_laughing-elephant/
+        └── aztec_clever-fox/
 ```
 
-Development layout:
+### Development Layout
 
 ```
 .workspace/
-  ├── bin/                           # Local binaries
-  ├── config/
-  │   ├── k3d.yaml                   # Generated k3d config (absolute paths substituted)
-  │   ├── .stack-id                  # Petname-generated stack identifier
-  │   ├── kubeconfig.yaml            # Exported stack kubeconfig
-  │   └── applications/              # Copied from embedded FS
-  │       └── default/               # Auto-deployed applications
-  │           └── monitoring/        # Prometheus/Grafana stack
-  ├── data/                          # Local persistent data (k3d volume mount: /data)
-  └── state/                         # Local runtime state
-      └── {stack-id}/
-          └── 2025-10-15.log         # Date-based log files (JSON)
+├── bin/
+│   ├── obol                       # Wrapper script (go run)
+│   ├── kubectl
+│   ├── helm
+│   ├── k3d
+│   ├── helmfile
+│   └── k9s
+├── config/
+│   ├── k3d.yaml
+│   ├── .cluster-id
+│   ├── kubeconfig.yaml
+│   ├── defaults/
+│   │   ├── helmfile.yaml
+│   │   ├── base/
+│   │   └── values/
+│   └── networks/
+│       ├── ethereum/
+│       │   └── nervous-otter/
+│       ├── helios/
+│       └── aztec/
+└── data/                          # Persistent volumes
+    └── networks/
+        ├── ethereum_nervous-otter/
+        └── helios_laughing-elephant/
 ```
 
-## Running Locally
+## Stack Lifecycle
 
-### Development Mode
+### Init (`obol stack init`)
 
-When `OBOL_DEVELOPMENT=true`, `./obolup.sh` installs a wrapper script at
-`.workspace/bin/obol` that uses `go run ./cmd/obol`. No compilation needed -
-code changes are immediately reflected.
+**Purpose**: Initialize cluster configuration
 
-**Development cycle:**
+**Operations** (`internal/stack/stack.go`):
+1. Generate unique cluster ID (petname)
+2. Get absolute paths for data and config directories
+3. Read embedded k3d config template
+4. Replace placeholders:
+   - `{{CLUSTER_ID}}` → generated petname
+   - `{{DATA_DIR}}` → absolute path to data directory
+   - `{{CONFIG_DIR}}` → absolute path to config directory
+5. Write resolved `k3d.yaml` to config directory
+6. Copy embedded default applications to `defaults/` directory
+7. Store cluster ID in `.cluster-id` file
+
+**Template placeholders** (from `internal/embed/k3d-config.yaml`):
+- Must use absolute paths (Docker volume mounts requirement)
+- Resolved at init time, not runtime
+- Ensures k3d can find volumes regardless of working directory
+
+### Up (`obol stack up`)
+
+**Purpose**: Start the Kubernetes cluster
+
+**Operations**:
+1. Read cluster ID from `.cluster-id`
+2. Verify k3d.yaml exists
+3. Run: `k3d cluster create --config k3d.yaml`
+4. k3d creates cluster with:
+   - 1 server + 3 agent nodes (fault tolerance)
+   - Volume mounts configured (data, defaults)
+   - Ports exposed: 8080:80, 8443:443
+5. k3s auto-applies manifests from defaults directory
+6. Export kubeconfig: `k3d kubeconfig write <cluster-name> > kubeconfig.yaml`
+
+**k3d configuration highlights**:
+- Image: `rancher/k3s:v1.31.4-k3s1`
+- Container labels: `obol.cluster-id={{CLUSTER_ID}}`
+- Feature gates: `KubeletInUserNamespace=true` (fixes /dev/kmsg issues)
+- Ulimits: `nofile 26677` (prevents "too many open files")
+
+### Down (`obol stack down`)
+
+**Purpose**: Stop the cluster without deleting data
+
+**Operations**:
+1. Read cluster ID
+2. Run: `k3d cluster delete <cluster-name>`
+3. Preserves:
+   - Config directory (k3d.yaml, kubeconfig, network configs)
+   - Data directory (persistent volumes)
+
+### Purge (`obol stack purge`)
+
+**Purpose**: Complete removal of cluster and optionally data
+
+**Operations**:
+1. Run `stack down` to stop cluster
+2. Remove config directory (k3d.yaml, kubeconfig, .cluster-id, networks/)
+3. If `--force` flag: Remove data directory (persistent volumes)
+4. Note: Always preserves binaries in `$OBOL_BIN_DIR`
+
+**Important**: `-f` flag required to remove root-owned PVCs
+
+## Default Stack Resources
+
+### Defaults Namespace
+
+**Location**: `~/.config/obol/defaults/`
+
+**Purpose**: Base resources deployed automatically on `obol stack up`
+
+**Components**:
+- **Base resources**: Local path storage provisioner
+- **ERPC** (planned): Unified RPC load balancer
+- **Obol Frontend** (planned): Web management interface
+
+**Deployment mechanism**:
+- Defaults directory mounted to k3s: `/var/lib/rancher/k3s/server/manifests/defaults/`
+- k3s auto-applies all YAML files on startup
+- Uses k3s HelmChart CRD for Helm deployments
+
+## Network Install Implementation Details
+
+### Annotation Parser
+
+**Location**: `internal/network/network.go` - `ParseEmbeddedNetworkEnvVars()`
+
+**Annotations supported**:
+- `@enum`: Comma-separated valid values
+- `@default`: Default value if flag not provided
+- `@description`: Help text for flag
+
+**Parsing logic**:
+1. Read embedded `helmfile.yaml.gotmpl`
+2. Find `values:` section
+3. Extract environment variable references: `{{ env "VAR_NAME" | default "value" }}`
+4. Parse annotations from comments above each value
+5. Generate `EnvVar` struct with:
+   - Name: Environment variable name (e.g., `ETHEREUM_NETWORK`)
+   - FlagName: CLI flag name (lowercase, dashed, e.g., `network`)
+   - DefaultValue: From `default` pipe or `@default` annotation
+   - EnumValues: From `@enum` annotation
+   - Description: From `@description` annotation
+   - Required: True if no default value
+
+### CLI Flag Generation
+
+**Location**: `cmd/obol/network.go` - `buildNetworkInstallCommands()`
+
+**Process**:
+1. For each embedded network:
+   - Parse helmfile annotations
+   - Build `cli.Flag` for each environment variable
+   - Add enum validation to flag usage
+   - Set Required based on default presence
+2. Create network-specific subcommand: `obol network install <network>`
+3. Attach flags and validation action
+4. Register subcommand dynamically
+
+**Flag naming convention**:
+- Environment variable: `ETHEREUM_EXECUTION_CLIENT`
+- Flag name: `--execution-client`
+- Transformation: Remove network prefix, lowercase, dash-separated
+
+### Install Implementation
+
+**Location**: `internal/network/network.go` - `Install()`
+
+**Current implementation** (temporary, until two-stage templating):
+1. Parse embedded helmfile for environment variables
+2. Display configuration to user (with overrides highlighted)
+3. Create temporary directory: `/tmp/obol-network-<network>-XXXX`
+4. Copy embedded network to temp directory
+5. Set environment variables in process
+6. Run: `helmfile -f <temp-dir>/helmfile.yaml.gotmpl sync`
+7. Helmfile processes template with environment variables
+8. Deploy to cluster
+9. Remove temp directory
+
+**Future implementation** (two-stage templating):
+1. Generate unique namespace (petname)
+2. Parse embedded helmfile
+3. Template Stage 1: Populate `{{.Network}}`, `{{.ExecutionClient}}`, etc. with flag values
+4. Save templated helmfile to: `$CONFIG_DIR/networks/<network>/<namespace>/`
+5. Run: `helmfile sync -f <saved-helmfile>`
+6. Helmfile templates Stage 2 and applies to cluster
+7. User can edit saved helmfile and re-sync later
+
+## Key Implementation Patterns
+
+### Environment Variable Handling
+
+**Consistent pattern**:
+1. Check specific override: `OBOL_CONFIG_DIR`
+2. Check XDG standard: `XDG_CONFIG_HOME`
+3. Use default: `~/.config/obol`
+
+**Development mode override**:
+```bash
+if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+    OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$WORKSPACE_DIR/config}"
+else
+    OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$XDG_CONFIG_HOME/obol}"
+fi
+```
+
+### Binary Discovery
+
+**Three-tier lookup**:
+1. Global binary (outside OBOL_BIN_DIR)
+2. Existing binary in OBOL_BIN_DIR
+3. Download/install to OBOL_BIN_DIR
+
+**Version comparison**:
+- Uses semantic versioning: `version_ge()` function
+- Symlinks to global binary if version sufficient
+- Downloads pinned version otherwise
+
+### Kubeconfig Management
+
+**Automatic configuration**:
+- All passthrough commands auto-set `KUBECONFIG`
+- Path: `$OBOL_CONFIG_DIR/kubeconfig.yaml`
+- Exported on cluster creation
+- User never needs to manually configure
+
+### Error Handling
+
+**Graceful degradation**:
+- Failed dependency installs continue with warnings
+- Bootstrap script copy is non-critical
+- helm-diff plugin failure doesn't block installation
+- PATH configuration falls back to manual instructions
+
+## Development Workflow
+
+### Local Development Cycle
 
 ```bash
-# One-time setup (or when switching to dev mode)
-./obolup.sh
+# One-time setup
+OBOL_DEVELOPMENT=true ./obolup.sh
 
-# Make code changes, then run directly
-obol <command>  # Uses go run under the hood
+# Make code changes
+vim cmd/obol/main.go
+vim internal/network/network.go
+
+# Run immediately (no compilation)
+obol network list
+obol network install ethereum
+
+# All data in .workspace/
+ls .workspace/config/networks/
+ls .workspace/data/networks/
 ```
 
-### Production Mode
+### Adding New Networks
 
-Standard installation for end users:
+**Steps**:
+1. Create `internal/embed/networks/<network-name>/helmfile.yaml.gotmpl`
+2. Add value annotations:
+   ```yaml
+   values:
+     # @enum mainnet,testnet
+     # @default mainnet
+     # @description Network to deploy
+     - network: {{.Network}}
+   ```
+3. Build binary (or use development mode)
+4. CLI automatically generates `obol network install <network-name> --network=<value>`
+
+**Annotations to CLI flags**:
+- Parser runs at startup
+- Flags generated dynamically
+- Help text includes enum options and defaults
+- Validation enforced automatically
+
+### Testing Networks
 
 ```bash
-# Install from latest release or build from source
-OBOL_RELEASE=latest ./obolup.sh
+# List available networks
+obol network list
 
-# Or install specific version
-OBOL_RELEASE=v0.1.0 ./obolup.sh
+# Check generated flags
+obol network install ethereum --help
 
-# Run commands
-obol stack init
-obol stack up
+# Install with specific config
+obol network install ethereum --network=holesky --execution-client=geth
+
+# Verify deployment
+obol kubectl get namespaces | grep ethereum
+obol kubectl get all -n ethereum-<generated-name>
+
+# Check logs
+obol kubectl logs -n ethereum-<generated-name> <pod-name>
+
+# Delete deployment
+obol network delete ethereum-<generated-name> --force
 ```
-
-## Stack Architecture
-
-### k3d Configuration
-
-- **Topology**: 1 server + 3 agent nodes (fault tolerance and pod distribution)
-- **Image**: rancher/k3s:v1.31.4-k3s1
-- **Unique naming**: Each stack gets petname-generated ID (e.g.,
-  `obol-stack-adorable-hippo`)
-- **Container labels**: `obol.cluster-id={{CLUSTER_ID}}` label applied to all
-  containers
-- **Volume mounts**:
-  - Data: `{{DATA_DIR}}:/data` (persistent storage, all nodes)
-  - Applications:
-    `{{CONFIG_DIR}}/applications/default:/var/lib/rancher/k3s/server/manifests/default`
-    (server only)
-- **Ports**: 8080:80, 8443:443 via load balancer
-- **Feature gates**: KubeletInUserNamespace=true (fixes /dev/kmsg permission
-  issues)
-- **Ulimits**: nofile 26677 (prevents "too many open files")
-- **Template placeholders**: `{{CLUSTER_ID}}`, `{{DATA_DIR}}`, `{{CONFIG_DIR}}`
-  replaced during init with absolute paths
-
-### Stack Lifecycle
-
-1. **Init**:
-   - Generates unique stack ID (petname)
-   - Gets absolute paths for data and config directories
-   - Replaces all template placeholders in k3d config
-   - Writes resolved k3d.yaml with absolute paths
-   - Copies embedded applications to `applications/` directory
-   - Stores stack ID in `.stack-id` file
-
-2. **Up**:
-   - Creates k3d cluster using pre-resolved config
-   - k3d mounts applications directory to k3s manifests path
-   - k3s auto-applies all manifests (monitoring stack deployed)
-   - Exports kubeconfig
-
-3. **Down**:
-   - Deletes k3d cluster
-   - Preserves config directory and logs
-
-4. **Purge**:
-   - Stops cluster (via Down)
-   - Removes entire config directory (k3d.yaml, kubeconfig, .stack-id,
-     applications/)
-   - Removes data directory (persistent volumes)
-   - Preserves state directory (logs remain for debugging)
-
-See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
-
-## Embedded Applications
-
-### Default Applications (`internal/embed/applications/default/`)
-
-**Auto-deployed with every cluster:**
-
-- **Monitoring stack** (Prometheus + Grafana via kube-prometheus-stack)
-  - Grafana: `http://grafana.localhost:8080` (anonymous admin access)
-  - Prometheus: `http://prometheus.localhost:8080`
-  - Pre-configured Kubernetes dashboards
-  - Persistent storage: Prometheus (10Gi), Grafana (5Gi)
-  - Resource limits configured for local development
-
-**Deployment mechanism:**
-
-- Applications embedded in binary as `embed.FS`
-- Extracted to disk during `obol stack init`
-- Mounted into k3s at `/var/lib/rancher/k3s/server/manifests/default/`
-- k3s automatically applies manifests on startup
-- Uses k3s HelmChart CRD for Helm chart deployment
-
-**Structure:**
-
-```
-internal/embed/applications/
-├── README.md                    # Architecture and future plans
-└── default/
-    └── monitoring/
-        ├── monitoring-stack.yaml      # HelmChart CRD (kube-prometheus-stack)
-        └── monitoring-ingress.yaml    # Traefik IngressRoutes
-```
-
-### Future: Installable Applications (Planned)
-
-**Not yet implemented:**
-
-- `obol app install <app-name>` - Download application from registry
-- `obol app apply <app-name>` - Deploy using Helmfile + applyset tracking
-- Applyset pattern for atomic updates and automatic pruning
-- Example applications: ethereum (client stacks), charon (DVT)
-
-See: `internal/embed/applications/README.md` for detailed architecture
-
-=======
-
-### Cluster Lifecycle
-
-1. **Init**:
-   - Generates unique cluster ID (petname)
-   - Gets absolute paths for data and config directories
-   - Replaces all template placeholders in k3d config
-   - Writes resolved k3d.yaml with absolute paths
-   - Copies only default applications to `applications/default/` directory
-   - Stores cluster ID in `.cluster-id` file
-
-2. **Up**:
-   - Creates k3d cluster using pre-resolved config
-   - k3d mounts applications directory to k3s manifests path
-   - k3s auto-applies all manifests (monitoring stack deployed)
-   - Exports kubeconfig
-
-3. **Down**:
-   - Deletes k3d cluster
-   - Preserves config directory and logs
-
-4. **Purge**:
-   - Stops cluster (via Down)
-   - Removes entire config directory (k3d.yaml, kubeconfig, .cluster-id,
-     applications/)
-   - Removes data directory (persistent volumes)
-   - Preserves state directory (logs remain for debugging)
-
-See: `internal/stack/stack.go`, `internal/embed/k3d-config.yaml`
-
-## Embedded Applications
-
-### Default Applications (`internal/embed/applications/default/`)
-
-**Auto-deployed with every cluster:**
-
-- **Monitoring stack** (Prometheus + Grafana via kube-prometheus-stack)
-  - Grafana: `http://grafana.localhost:8080` (anonymous admin access)
-  - Prometheus: `http://prometheus.localhost:8080`
-  - Pre-configured Kubernetes dashboards
-  - Persistent storage: Prometheus (10Gi), Grafana (5Gi)
-  - Resource limits configured for local development
-  - **Generic discovery architecture**:
-    - ServiceMonitors: Cross-namespace discovery via `release: monitoring` label
-    - Dashboards: Grafana sidecar discovers ConfigMaps with `grafana_dashboard: "1"` label
-    - Applications self-register, monitoring stack remains application-agnostic
-
-**Deployment mechanism:**
-
-- Default applications embedded in binary as `embed.FS`
-- Extracted to disk during `obol cluster init`
-- Mounted into k3s at `/var/lib/rancher/k3s/server/manifests/default/`
-- k3s automatically applies manifests on startup
-- Uses k3s HelmChart CRD for Helm chart deployment
-
-**Structure:**
-
-```
-internal/embed/applications/
-├── README.md                    # Architecture and future plans
-├── default/
-│   └── monitoring/
-│       ├── monitoring-stack.yaml      # HelmChart CRD (kube-prometheus-stack)
-│       ├── monitoring-ingress.yaml    # Traefik IngressRoutes
-│       └── README.md                  # Generic discovery architecture
-└── ethereum/                          # Installable application
-    ├── helmfile.yaml                  # Helm chart deployment config
-    ├── values.yaml                    # Production-ready defaults
-    └── README.md                      # Configuration guide
-```
-
-### Installable Applications
-
-**Application lifecycle commands:**
-
-```bash
-obol app list                    # List available apps from embedded FS
-obol app install <app-name>      # Copy app to config directory
-obol app edit <app-name>         # Open values.yaml in $EDITOR
-obol app sync <app-name>         # Deploy/update app using applyset
-obol app delete <app-name>       # Remove from cluster and config
-```
-
-<<<<<<< HEAD
-See: `internal/embed/applications/README.md` for detailed architecture
->>>>>>> d06eb3f (updated CLAUDE.md with context)
-=======
-**Deployment pattern (helmfile template + kubectl applyset):**
-
-1. Render manifests: `helmfile template --output-dir /tmp`
-2. Create namespace: `kubectl create namespace <app-name>`
-3. Apply with tracking: `kubectl apply --prune --applyset <app-name> -n <app-name>`
-4. Automatic pruning of resources removed from manifests (enables clean client switching)
-
-**Available applications:**
-
-- **ethereum** - Full Ethereum node with configurable execution/consensus clients
-  - Networks: mainnet, holesky, sepolia
-  - Execution clients: Besu, Erigon, EthereumJS, Geth, Nethermind, Reth (default)
-  - Consensus clients: Grandine, Lighthouse (default), Lodestar, Nimbus, Prysm, Teku
-  - Checkpoint sync enabled (fast initial sync)
-  - Full Prometheus/Grafana integration via discovery labels
-  - Storage: 1TB execution, 200GB consensus (configurable per network)
-
-**Application integration pattern:**
-
-All installable applications follow standard structure:
-- `helmfile.yaml` - Defines Helm chart deployment
-- `values.yaml` - Application configuration (user-editable)
-- `README.md` - Configuration guide and documentation
-- Optional: Dashboard ConfigMaps with `grafana_dashboard: "1"` label
-- Optional: ServiceMonitors with `release: monitoring` label
-
-See: `internal/embed/applications/README.md`, `internal/app/app.go`
->>>>>>> 150adca (updated CLAUDE.md with context)
-
-## Key Design Principles
-
-1. **Local-first**: Runs entirely on local machine using k3d
-2. **Simplified UX**: Abstracts Kubernetes complexity behind simple CLI commands
-3. **XDG-compliant**: Follows Linux filesystem standards for configuration
-4. **Unique stacks**: Petname-generated IDs prevent naming conflicts
-5. **Passthrough pattern**: Wraps k8s tools with auto-configured KUBECONFIG
-6. **Embedded defaults**: Core services bundled in binary, auto-deployed
-7. **Template resolution**: Config values substituted at init time, not runtime
 
 ## Important Notes for Development
 
-1. **Embed pattern**: Use string embed for templates (`K3dConfig`), FS embed for
-   directories (`applicationsFS`)
-2. **Template placeholders**: `{{STACK_ID}}`, `{{DATA_DIR}}`, `{{CONFIG_DIR}}`
-   replaced during init
-3. **Absolute paths required**: Docker volume mounts need absolute paths (use
-   `filepath.Abs()`)
-4. **Config resolution timing**: All template values substituted during `init`,
-   not at `up` time
-5. **k3s auto-apply**: Manifests in `/var/lib/rancher/k3s/server/manifests/`
-   automatically applied
-6. **Purge behavior**: Removes config and data directories
-7. **Development mode**: Set `OBOL_DEVELOPMENT=true` for local `.workspace/`
-    usage
-8. **Application separation**: Default apps auto-deployed during init,
-    installable networks require explicit `obol network install`
-9. **Network install pattern**: Networks are extracted to temp directory and deployed via helmfile
-10. **Monitoring integration**: Networks self-register via labels:
-    - ServiceMonitors: `release: monitoring`
-    - Grafana dashboards: `grafana_dashboard: "1"`
+### Critical Design Constraints
 
-### Build System
+1. **Absolute paths required**: Docker volume mounts need absolute paths (use `filepath.Abs()`)
+2. **Template resolution timing**: All k3d config values substituted during `init`, not at `up` time
+3. **Unique namespaces**: Each deployment must have unique namespace to prevent resource collisions
+4. **Two-stage templating**: Stage 1 (CLI flags) → Stage 2 (Helmfile) separation is critical
+5. **Local source of truth**: Configuration saved to disk enables future updates and management
 
-- **justfile**: Task runner with `install`, `build`, `up`, `down` commands
-- **VERSION**: Semver file (0.0.0) used by `just build` for ldflags
-- **Go build**: Injects version, commit, build time, dirty flag into binary
+### Common Pitfalls
 
-## Updating This File
+1. **Relative paths in k3d config**: Will fail with Docker volume mounts
+2. **Missing absolute path resolution**: k3d.yaml must have absolute paths before cluster creation
+3. **Namespace collisions**: Without unique namespaces, multiple deployments will conflict
+4. **Environment variable hijacking**: Current implementation uses env vars, planned migration to two-stage templating
+5. **Root-owned PVCs**: Kubernetes creates PVCs as root, `-f` flag required to remove them
 
-This file should be updated when crucial architectural changes or important
-information emerges. Always confirm with the user before making updates to
-maintain accuracy and relevance.
+### Future Work
+
+**Two-stage templating migration**:
+- Replace environment variable approach
+- Use Go template execution for Stage 1
+- Save templated helmfile to config directory
+- Enable user editing and re-sync
+- Track: https://github.com/ObolNetwork/obol-stack/issues/<redesign-issue>
+
+**ERPC integration**:
+- Extract to separate helmfile
+- Auto-discover network endpoints
+- Dynamic registration/unregistration
+- Provide unified RPC endpoints
+
+**Network management enhancements**:
+- `obol network list --installed` (show deployed instances)
+- `obol network update <namespace>` (edit and re-sync)
+- `obol network logs <namespace>` (convenient log access)
+- Better namespace discovery and management
 
 ## References
 
-- Bootstrap script: `obolup.sh`
-- CLI entrypoint: `cmd/obol/main.go`
-- Config system: `internal/config/config.go`
-- Stack management: `internal/stack/stack.go`
-- Network management: `internal/network/network.go`
-- Application management: `internal/app/app.go`
-- Embedded assets: `internal/embed/embed.go`
-- k3d configuration template: `internal/embed/k3d-config.yaml`
-- Default applications: `internal/embed/applications/default/`
-- Installable applications: `internal/embed/applications/ethereum/`
-- Application architecture: `internal/embed/applications/README.md`
-- Monitoring architecture: `internal/embed/applications/default/monitoring/README.md`
-- Ethereum application: `internal/embed/applications/ethereum/README.md`
-- Build tasks: `justfile`
-- Version tracking: `VERSION`, `internal/version/version.go`
-- Example manifests: `examples/simple-persistence-test.yaml`
+### Key Files
+
+**Bootstrap and installation**:
+- `obolup.sh` - Bootstrap installer (1356 lines)
+- `cmd/obol/main.go` - CLI entrypoint (379 lines)
+
+**Core systems**:
+- `internal/config/config.go` - Configuration management
+- `internal/stack/stack.go` - Cluster lifecycle
+- `internal/network/network.go` - Network deployment
+- `internal/embed/embed.go` - Embedded asset management
+
+**Embedded assets**:
+- `internal/embed/k3d-config.yaml` - k3d configuration template
+- `internal/embed/networks/` - Network definitions
+  - `ethereum/helmfile.yaml.gotmpl`
+  - `helios/helmfile.yaml.gotmpl`
+  - `aztec/helmfile.yaml.gotmpl`
+- `internal/embed/defaults/` - Default stack resources
+
+**Build and version**:
+- `justfile` - Task runner (install, build, up, down commands)
+- `VERSION` - Semver version file
+- `internal/version/version.go` - Version injection
+
+**Documentation**:
+- `README.md` - User-facing documentation
+- `plan.md` - Network redesign plan
+- `CONTRIBUTING.md` - Contribution guidelines
+
+### External Dependencies
+
+**Required**:
+- Docker 20.10.0+ (daemon must be running)
+- Go 1.21+ (for building from source)
+
+**Installed by obolup.sh**:
+- kubectl 1.31.0
+- helm 3.16.2
+- k3d 5.8.3
+- helmfile 0.169.1
+- k9s 0.32.5
+- helm-diff plugin 3.9.11
+
+**Go dependencies** (key packages):
+- `github.com/urfave/cli/v2` - CLI framework
+- `github.com/dustinkirkland/golang-petname` - Namespace generation
+- Embed uses stdlib `embed` package
+
+## Updating This File
+
+This file should be updated when:
+- Major architectural changes occur
+- New systems or patterns are introduced
+- Implementation details significantly change
+- New workflows or development practices are established
+
+Always confirm with the user before making updates to maintain accuracy and relevance.

@@ -3,16 +3,15 @@
 
 &nbsp;
 
-<h1>The Obol Stack: Decentralised Applications For Ethereum</h1>
+<h1>The Obol Stack: Run Blockchain Networks Locally</h1>
 
 </div>
 
 ## Overview
 
-The Obol Stack is a framework to make it easier to distribute decentralised
-applications (dApps), and easier to install and run them locally. The stack is
-built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a
-package management system.
+The Obol Stack is a framework to make it easier to distribute and run blockchain networks and decentralised applications (dApps) locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
+
+The Obol Stack provides a deployment-centric approach where you can easily install and manage multiple blockchain network instances (Ethereum, Aztec, etc.) with configurable clients and settings. Each network installation creates a unique deployment instance with its own namespace, resources, and configuration - allowing you to run mainnet and testnet side-by-side, or test different client combinations independently.
 
 ![Demo of the Stack Front End](./assets/frontend.gif)
 
@@ -97,7 +96,7 @@ obol version
 
 ### Quick Start
 
-Once installed, you can start your local Ethereum stack with three commands:
+Once installed, you can start your local Ethereum stack with a few commands:
 
 ```bash
 # Initialize the stack configuration
@@ -106,13 +105,134 @@ obol stack init
 # Start the Kubernetes cluster
 obol stack up
 
-# View cluster (opens interactive terminal UI)
+# Install a blockchain network (creates a unique deployment)
+obol network install ethereum
+# This creates a deployment like: ethereum-nervous-otter
+
+# Install another network configuration
+obol network install ethereum --network=holesky
+# This creates a separate deployment like: ethereum-happy-panda
+
+# View cluster resources (opens interactive terminal UI)
 obol k9s
 ```
 
-The stack will create a local Kubernetes cluster and the Obol Stack frontend will be available at:
+The stack will create a local Kubernetes cluster. Each network installation creates a uniquely-namespaced deployment instance, allowing you to run multiple configurations simultaneously.
 
-- **Obol Stack**: http://obol.stack (or http://localhost if using port 80)
+> [!TIP]
+> Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations.
+
+## Managing Networks
+
+The Obol Stack uses a deployment-centric architecture where each network installation creates an isolated deployment instance that can be installed, configured, and removed independently. You can run multiple deployments of the same network type with different configurations.
+
+### List Available Networks
+
+View all network types that can be installed:
+
+```bash
+obol network list
+```
+
+**Available networks:**
+- **ethereum** - Full Ethereum node (execution + consensus clients)
+- **helios** - Lightweight Ethereum client
+- **aztec** - Aztec rollup network
+
+**View installed deployments:**
+
+```bash
+# List all network deployment namespaces
+obol kubectl get namespaces | grep -E "ethereum|helios|aztec"
+
+# View resources in a specific deployment
+obol kubectl get all -n ethereum-nervous-otter
+```
+
+### Install a Network
+
+Install a network with default configuration:
+
+```bash
+obol network install ethereum
+```
+
+Each network installation creates a **unique deployment instance** with:
+1. Network configuration templated and saved to `~/.config/obol/networks/ethereum/<namespace>/`
+2. Resources deployed to a unique Kubernetes namespace (e.g., `ethereum-nervous-otter`)
+3. Isolated persistent storage for blockchain data
+
+**Multiple deployments:**
+
+You can install the same network type multiple times with different configurations. Each deployment is isolated in its own namespace:
+
+```bash
+# Install mainnet with Geth + Prysm
+obol network install ethereum --network=mainnet --execution-client=geth --consensus-client=prysm
+# Creates: ethereum-nervous-otter namespace
+
+# Install Holesky testnet with Reth + Lighthouse
+obol network install ethereum --network=holesky --execution-client=reth --consensus-client=lighthouse
+# Creates: ethereum-laughing-elephant namespace
+
+# Install another Holesky instance for testing
+obol network install ethereum --network=holesky
+# Creates: ethereum-happy-panda namespace
+```
+
+**Ethereum configuration options:**
+- `--network`: Choose network (mainnet, sepolia, holesky, hoodi)
+- `--execution-client`: Choose execution client (reth, geth, nethermind, besu, erigon, ethereumjs)
+- `--consensus-client`: Choose consensus client (lighthouse, prysm, teku, nimbus, lodestar, grandine)
+
+> [!TIP]
+> Use `obol network install <network> --help` to see all available options for a specific network
+
+### Network Architecture
+
+**Unique deployment instances:**
+
+Each network installation creates an isolated deployment with a unique namespace (e.g., `ethereum-nervous-otter`). This allows you to:
+- Run multiple instances of the same network type (e.g., mainnet and testnet)
+- Test different client combinations without conflicts
+- Independently manage, update, and delete deployments
+
+**Per-deployment resources:**
+- **Unique namespace**: All Kubernetes resources isolated (e.g., `ethereum-nervous-otter`, `ethereum-happy-panda`)
+- **Configuration files**: Templated helmfile saved to `~/.config/obol/networks/ethereum/<namespace>/`
+- **Persistent volumes**: Blockchain data stored in `~/.local/share/obol/<cluster-id>/networks/<network>_<namespace>/`
+- **Service endpoints**: Internal cluster DNS per deployment (e.g., `ethereum-rpc.ethereum-nervous-otter.svc.cluster.local`)
+
+**Two-stage templating:**
+1. CLI flags template the helmfile values section with your configuration
+2. Helmfile processes the template and deploys to the cluster
+3. Configuration is saved locally for future updates and management
+
+### Delete a Network Deployment
+
+Remove a specific network deployment instance and clean up all associated resources:
+
+```bash
+# List all deployments to find the namespace
+obol kubectl get namespaces | grep ethereum
+
+# Delete a specific deployment
+obol network delete ethereum-nervous-otter
+
+# Skip confirmation prompt
+obol network delete ethereum-nervous-otter --force
+```
+
+This command will:
+- Remove the deployment configuration from `~/.config/obol/networks/ethereum/<namespace>/`
+- Delete the Kubernetes namespace and all deployed resources
+- Clean up associated persistent volumes and blockchain data
+
+> [!WARNING]
+> Deleting a deployment removes all associated data and resources. Use with caution.
+
+> [!NOTE]
+> You can have multiple deployments of the same network type. Deleting one deployment (e.g., `ethereum-nervous-otter`) does not affect other deployments (e.g., `ethereum-happy-panda`).
 
 ### Managing the Stack
 
@@ -219,10 +339,39 @@ After this change, access the Obol Stack frontend using port 8080:
 
 The Obol Stack follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) specification:
 
-- **Configuration**: `~/.config/obol/` - Cluster config, kubeconfig, application manifests
-- **Data**: `~/.local/share/obol/` - Persistent volumes and database storage
+- **Configuration**: `~/.config/obol/` - Cluster config, kubeconfig, default resources, network deployments
+- **Data**: `~/.local/share/obol/` - Persistent volumes for network blockchain data
 - **Binaries**: `~/.local/bin/` - The `obol` CLI and dependencies
-- **Logs**: `~/.local/state/obol/` - Structured logs for debugging
+
+**Configuration directory structure:**
+
+```
+~/.config/obol/
+├── k3d.yaml                       # Cluster configuration
+├── .cluster-id                    # Unique cluster identifier
+├── kubeconfig.yaml                # Kubernetes access configuration
+├── defaults/                      # Default stack resources
+│   ├── helmfile.yaml              # Base stack configuration
+│   ├── base/                      # Base Kubernetes resources
+│   └── values/                    # Configuration templates (ERPC, frontend)
+└── networks/                      # Installed network deployments
+    ├── ethereum/                  # Ethereum network deployments
+    │   ├── <namespace-1>/         # First deployment instance
+    │   └── <namespace-2>/         # Second deployment instance
+    ├── helios/                    # Helios network deployments
+    └── aztec/                     # Aztec network deployments
+```
+
+**Data directory structure:**
+
+```
+~/.local/share/obol/
+└── <cluster-id>/                  # Per-cluster data
+    └── networks/                  # Network blockchain data
+        ├── ethereum_<namespace>/  # Ethereum deployment instance data
+        ├── helios_<namespace>/    # Helios deployment instance data
+        └── aztec_<namespace>/     # Aztec deployment instance data
+```
 
 #### Uninstalling Obol Stack
 
@@ -289,7 +438,7 @@ If you're contributing to the Obol Stack or want to run it from source, you can 
 - Uses a local `.workspace/` directory instead of XDG directories (`~/.config/obol`, etc.)
 - Installs a wrapper script that runs the `obol` CLI using `go run` (no compilation needed)
 - Code changes are immediately reflected when you run `obol` commands
-- All cluster data, configuration, and logs are stored in `.workspace/`
+- All cluster data and configuration are stored in `.workspace/`
 
 **Development workspace structure:**
 
@@ -300,11 +449,17 @@ If you're contributing to the Obol Stack or want to run it from source, you can 
 │   ├── k3d.yaml
 │   ├── .cluster-id
 │   ├── kubeconfig.yaml
-│   └── applications/
-├── data/                        # Persistent volumes
-└── state/                       # Logs
-    └── {cluster-id}/
-        └── 2025-01-15.log
+│   ├── defaults/                # Default stack resources
+│   │   ├── helmfile.yaml
+│   │   ├── base/
+│   │   └── values/
+│   └── networks/                # Installed network deployments
+│       ├── ethereum/            # Ethereum network deployments
+│       │   ├── <namespace-1>/  # First deployment instance
+│       │   └── <namespace-2>/  # Second deployment instance
+│       ├── helios/
+│       └── aztec/
+└── data/                        # Persistent volumes (network data)
 ```
 
 **Making code changes:**
@@ -319,6 +474,42 @@ $EDITOR cmd/obol/main.go
 obol stack up
 ```
 
+**Network development:**
+
+Networks are embedded in the binary at `internal/embed/networks/`. Each network uses a **two-stage templating** approach:
+
+**Stage 1: CLI flag templating (Go templates)**
+```yaml
+# internal/embed/networks/ethereum/helmfile.yaml.gotmpl
+values:
+  # @enum mainnet,sepolia,holesky,hoodi
+  # @default mainnet
+  # @description Blockchain network to deploy
+  - network: {{.Network}}
+    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
+    # @default reth
+    # @description Execution layer client
+    executionClient: {{.ExecutionClient}}
+    namespace: {{.Namespace}}
+```
+
+**Stage 2: Helmfile templating (Helm values)**
+- CLI flags populate the values section with user choices
+- Templated helmfile is saved to `.workspace/config/networks/<network>/<namespace>/`
+- Helmfile processes the template and deploys resources to the cluster
+
+**Adding a new network:**
+1. Create `internal/embed/networks/<network-name>/helmfile.yaml.gotmpl`
+2. Add annotations in values section: `@enum`, `@default`, `@description`
+3. Use Go template syntax for values: `{{.FlagName}}`
+4. CLI automatically generates `obol network install <network-name>` with flags
+5. Test with `obol network list` and `obol network install <network-name>`
+
+**Benefits of two-stage templating:**
+- Local source of truth: Configuration saved in config directory
+- User can edit and re-sync deployments
+- Clear separation: CLI flags → values, helmfile → Kubernetes resources
+
 **Switching back to production mode:**
 
 First, purge the development cluster to remove root-owned PVCs, then remove the `.workspace/` directory and reinstall:
@@ -332,87 +523,66 @@ rm -rf .workspace
 > [!NOTE]
 > The `obol stack purge -f` command is necessary to remove persistent volume claims (PVCs) owned by root. Without the `-f` flag, these files will remain and may cause issues.
 
-<!-- ## Stack Overview -->
+## Stack Architecture
 
-<!-- The default installation of the Stack configures an Ethereum L1 light client -->
-<!-- (using [Helios](https://github.com/a16z/helios)) and when `--mode=full` is -->
-<!-- passed, the stack syncs an L1 full node. Both sit behind a specialised Ethereum -->
-<!-- load balancer called [eRPC](https://erpc.cloud/). The stack aims to provide a -->
-<!-- high quality L1 RPC for all dApps installed on the stack. The default address -->
-<!-- for this RPC is: -->
+The Obol Stack follows a deployment-centric architecture where each network installation creates an isolated, uniquely-namespaced deployment instance.
 
-<!-- ```bash -->
-<!-- # Obol Stack L1 JSON-RPC for Obol Apps running within the stack -->
-<!-- http://rpc.l1.cluster.svc.local/rpc/mainnet -->
-<!-- http://rpc.l1.cluster.svc.local/rpc/hoodi -->
+### Deployment Isolation
 
-<!-- # Obol Stack L1 Beacon Node API for Obol Apps in the stack that communicate with Ethereum's consensus layer -->
-<!-- http://l1-full-node-beacon.l1.cluster.svc.local:5052 -->
+Each network installation creates a unique deployment instance with:
+- **Unique namespace**: Each deployment gets a generated namespace (e.g., `ethereum-nervous-otter`)
+- **Dedicated resources**: CPU, memory, and storage allocated per deployment
+- **Configuration files**: Templated helmfile stored in `~/.config/obol/networks/<network>/<namespace>/`
+- **Persistent volumes**: Blockchain data stored in `~/.local/share/obol/<cluster-id>/networks/<network>_<namespace>/`
+- **Service endpoints**: Internal cluster DNS unique to each deployment
+- **Independent lifecycle**: Deploy, update, and delete each instance independently
 
-<!-- # Obol Stack L1 JSON-RPC accessible by the host OS -->
-<!-- http://obol.stack/rpc/mainnnet -->
-<!-- http://obol.stack/rpc/hoodi -->
-<!-- ``` -->
+**Benefits of unique namespaces:**
+- Run multiple instances of the same network type (mainnet + testnet)
+- Test different client combinations without conflicts
+- Isolate resources and prevent deployment collisions
+- Simple deletion: remove namespace to clean up all resources
 
-<!-- ### `host` mode -->
+### Default Stack Resources
 
-<!-- By default, the Obol Stack configures itself to be accessible to dApps in your -->
-<!-- web browser, such as wallets and dApps. The stack configures itself on custom -->
-<!-- domain; https://obol.stack/ This behaviour can be disabled by running the stack -->
-<!-- in `--headless` mode. -->
+The stack includes default resources deployed in the `defaults` namespace:
+- **ERPC** (planned): Unified RPC load balancer and proxy
+- **Obol Frontend** (planned): Web interface for stack management
+- **Base resources**: Local path storage provisioner and core services
 
-<!-- > [!INFO] -->
-<!-- > When accessing the Obol Stack from your host OS, your browser may warn you -->
-<!-- > about self-signed HTTPS certificates. This is unavoidable when using custom -->
-<!-- > local web domains. You should click "Accept the risk and continue" to access -->
-<!-- > the stack web page. -->
+Default resources are configured via `~/.config/obol/defaults/helmfile.yaml` and deployed automatically during `obol stack up`.
 
-<!-- ### Installing an Obol App (Helm Chart) -->
+### ERPC Integration (Planned)
 
-<!-- Here's an example of adding on a popular Ethereum sidecar called contributoor, -->
-<!-- built by the EthPandaOps team, which streams data from your full node to their -->
-<!-- backend for analysis and visualisation. -->
+The stack will include [eRPC](https://erpc.cloud/), a specialized Ethereum load balancer that:
+- Provides unified RPC endpoints for all network deployments
+- Automatically discovers and routes requests to deployment endpoints
+- Supports failover and load balancing across multiple clients
+- Can be configured with 3rd party RPC fallbacks
 
-<!-- ```bash -->
-<!-- obol install ethereum/contributooor -->
-<!-- ``` -->
+Network deployments will register their endpoints with ERPC, enabling seamless access to blockchain data across all deployed instances. For example:
+- `http://erpc.defaults.svc.cluster.local/ethereum/mainnet` → routes to mainnet deployment
+- `http://erpc.defaults.svc.cluster.local/ethereum/holesky` → routes to holesky deployment
 
-<!-- ### Adding another Obol App Store -->
+### Advanced Tooling
 
-<!-- The Obol Stack is built on Helm, so you can add your own Helm Chart repository -->
-<!-- easily. -->
+The `obol` CLI wraps standard Kubernetes tools for convenience. For advanced use cases, you can use the underlying tools directly:
 
-<!-- ```bash -->
-<!-- # Add a repository of Helm Charts -->
-<!-- obol repo add ithaca https://github.com/ithacaxyz/obol-charts -->
-<!-- # Install a chart from the new 'App Store' -->
-<!-- obol install ithaca/op-reth -->
-<!-- ``` -->
+```bash
+# Kubernetes CLI - manage pods, services, deployments
+obol kubectl get pods --all-namespaces
 
-<!-- ### Custom deployments -->
+# Helm - manage Helm charts
+obol helm list --all-namespaces
 
-<!-- Each Obol App has a `values.yaml` file with default values. You can customize -->
-<!-- these values by creating your own values file and passing it to the install -->
-<!-- command: -->
+# K9s - interactive cluster manager
+obol k9s
 
-<!-- ```bash -->
-<!-- obol install <app-store-name>/<chart-name> --values custom-values.yaml -->
-<!-- ``` -->
+# Helmfile - declarative Helm releases
+obol helmfile list
+```
 
-<!-- ### Using advanced tooling -->
-
-<!-- The `obol` CLI is intended to be a simple command-line user interface to -->
-<!-- simplify the use of the Obol Stack for non-developers, it is a work in progress, -->
-<!-- and does not cover many advanced use cases that Kubernetes and Helm can offer. -->
-<!-- If you are an experienced Kubernetes user, `obolup` also installs -->
-<!-- [`kubectl`](https://kubernetes.io/docs/reference/kubectl/) and -->
-<!-- [`helm`](https://helm.sh/docs/helm/helm/), such that you can manage your stack -->
-<!-- with the tooling you are used to. -->
-
-<!-- If you encounter node management requirements that an end-user might need but -->
-<!-- cannot achieve with the Obol CLI, instead needing to use `kubectl` or `helm`, -->
-<!-- consider opening a feature request issue on the -->
-<!-- [obol-cli](https://github.com/ObolNetwork/obol-cli/issues) repo. -->
+All commands automatically use the correct cluster configuration (KUBECONFIG).
 
 ## Project Status
 
