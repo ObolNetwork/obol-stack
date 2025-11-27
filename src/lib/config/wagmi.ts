@@ -5,6 +5,7 @@ import {
   coinbaseWallet,
   safeWallet,
   walletConnectWallet,
+  binanceWallet,
 } from '@rainbow-me/rainbowkit/wallets';
 import { defineChain } from 'viem';
 import { createConfig, http } from 'wagmi';
@@ -79,6 +80,7 @@ function getConfig() {
                   coinbaseWallet,
                   safeWallet,
                   walletConnectWallet,
+                  binanceWallet,
                 ],
               },
             ],
