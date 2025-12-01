@@ -50,9 +50,19 @@ releases:
       - {{ .Values.consensusClient }}:
           enabled: true
           nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
-          executionEngineEndpoint: http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
+          extraArgs:
+            - --execution-endpoint=http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
           persistence:
             enabled: true
             size: 200Gi
             # Use existing PVC with network/client naming: consensus-{client}-{network}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+
+  # Ingress for Ethereum node
+  - name: ethereum-ingress
+    namespace: ethereum-{{ .Values.id }}
+    chart: .
+    values:
+      - executionClient: {{ .Values.executionClient }}
+        consensusClient: {{ .Values.consensusClient }}
+        network: {{ .Values.network }}
