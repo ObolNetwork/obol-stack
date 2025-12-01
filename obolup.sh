@@ -50,9 +50,9 @@ fi
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
 readonly KUBECTL_VERSION="1.31.0"
-readonly HELM_VERSION="3.16.2"
+readonly HELM_VERSION="3.19.1"
 readonly K3D_VERSION="5.8.3"
-readonly HELMFILE_VERSION="0.169.1"
+readonly HELMFILE_VERSION="1.2.2"
 readonly K9S_VERSION="0.32.5"
 readonly HELM_DIFF_VERSION="3.9.11"
 
@@ -190,6 +190,21 @@ create_binary_symlink() {
 	local global_path="$2"
 	local local_path="$OBOL_BIN_DIR/$binary_name"
 
+	# Detect and prevent circular symlinks.
+	# This can happen if a global binary path (e.g. from a previous dev install)
+	# already points to the location this script is trying to manage.
+	if [[ -L "$global_path" ]]; then
+		local link_target
+		link_target=$(readlink "$global_path" || echo "") # Handle readlink failure
+
+		if [[ "$link_target" == "$local_path" ]]; then
+			log_warn "Circular symlink detected for $binary_name."
+			log_warn "  $global_path -> $local_path"
+			log_warn "Ignoring global binary to prevent loop. Will install fresh copy."
+			return 1 # Signal failure to prevent using this global binary
+		fi
+	fi
+
 	# Check if local path already exists
 	if [[ -e "$local_path" || -L "$local_path" ]]; then
 		# Check if it's already a symlink to the correct target
@@ -313,8 +328,8 @@ download_release() {
 	# Detect OS and architecture
 	local os arch
 	case "$(uname -s)" in
-	Linux*) os="linux" ;;
-	Darwin*) os="darwin" ;;
+	Linux*) os="linux" ;; 
+	Darwin*) os="darwin" ;; 
 	*)
 		log_error "Unsupported OS: $(uname -s)"
 		return 1
@@ -322,9 +337,9 @@ download_release() {
 	esac
 
 	case "$(uname -m)" in
-	x86_64) arch="amd64" ;;
-	aarch64 | arm64) arch="arm64" ;;
-	*)
+	x86_64) arch="amd64" ;; 
+	aarch64 | arm64) arch="arm64" ;; 
+	*) 
 		log_error "Unsupported architecture: $(uname -m)"
 		return 1
 		;;
@@ -545,10 +560,10 @@ copy_bootstrap_script() {
 detect_platform() {
 	local platform
 	case "$(uname -s)" in
-	Linux*)
+	Linux*) 
 		platform="linux"
 		;;
-	Darwin*)
+	Darwin*) 
 		platform="darwin"
 		;;
 	*)
@@ -563,10 +578,10 @@ detect_platform() {
 detect_arch() {
 	local arch
 	case "$(uname -m)" in
-	x86_64 | amd64)
+	x86_64 | amd64) 
 		arch="amd64"
 		;;
-	aarch64 | arm64)
+	aarch64 | arm64) 
 		arch="arm64"
 		;;
 	*)
@@ -1198,6 +1213,7 @@ configure_path() {
 			add_to_profile "$profile"
 			echo ""
 			log_info "PATH updated for future sessions"
+			echo ""
 			log_info "To use immediately in this session, run:"
 			echo ""
 			echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
@@ -1249,7 +1265,7 @@ print_instructions() {
 		read -p "Start cluster now? [y/N]: " choice </dev/tty
 
 		case "$choice" in
-		[Yy]*)
+		[Yy]*) 
 			echo ""
 			log_info "Starting bootstrap process..."
 

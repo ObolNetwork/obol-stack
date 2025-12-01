@@ -17,14 +17,14 @@ spec:
         pathType: ImplementationSpecific
         backend:
           service:
-            name: ethereum-execution
+            name: ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}
             port:
               number: 8545
       - path: /ethereum/beacon(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
-            name: ethereum-beacon
+            name: ethereum-consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
             port:
               number: 5052
 {{- end }}

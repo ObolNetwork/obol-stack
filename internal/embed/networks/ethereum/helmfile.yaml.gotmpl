@@ -50,6 +50,7 @@ releases:
       - {{ .Values.consensusClient }}:
           enabled: true
           nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+          executionEngineEndpoint: http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
           persistence:
             enabled: true
             size: 200Gi
