@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/dustinkirkland/golang-petname"
+	"gopkg.in/yaml.v3"
 )
 
 // List displays all available networks from the embedded filesystem
@@ -98,6 +99,14 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, templateData); err != nil {
 		return fmt.Errorf("failed to execute values template: %w", err)
+	}
+
+	// Validate that the generated content is valid YAML
+	var yamlCheck interface{}
+	if err := yaml.Unmarshal(buf.Bytes(), &yamlCheck); err != nil {
+		return fmt.Errorf("generated values.yaml contains invalid YAML syntax: %w\n"+
+			"This may be caused by special characters in your input values.\n"+
+			"Generated content:\n%s", err, buf.String())
 	}
 
 	// Create deployment directory in config: networks/<network>/<id>/
