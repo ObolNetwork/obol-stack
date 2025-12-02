@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -36,22 +37,27 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:      "delete",
-				Usage:     "Remove network and clean up cluster resources",
-				ArgsUsage: "<network>",
-				Flags: []cli.Flag{
-					&cli.BoolFlag{
-						Name:    "force",
-						Aliases: []string{"f"},
-						Usage:   "Skip confirmation prompt",
-					},
-				},
+				Name:      "sync",
+				Usage:     "Deploy or update network configuration to cluster",
+				ArgsUsage: "<network>/<id> or <network>-<id>",
 				Action: func(c *cli.Context) error {
 					if c.NArg() == 0 {
-						return fmt.Errorf("network name required (e.g., ethereum, helios)")
+						return fmt.Errorf("deployment identifier required (e.g., ethereum/knowing-wahoo or ethereum-knowing-wahoo)")
 					}
-					networkName := c.Args().First()
-					return network.Delete(cfg, networkName, c.Bool("force"))
+					deploymentIdentifier := c.Args().First()
+					return network.Sync(cfg, deploymentIdentifier)
+				},
+			},
+			{
+				Name:      "delete",
+				Usage:     "Remove network deployment and clean up cluster resources",
+				ArgsUsage: "<network>/<id> or <network>-<id>",
+				Action: func(c *cli.Context) error {
+					if c.NArg() == 0 {
+						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
+					}
+					deploymentIdentifier := c.Args().First()
+					return network.Delete(cfg, deploymentIdentifier)
 				},
 			},
 		},
@@ -68,47 +74,62 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 
 	var commands []*cli.Command
 	for _, networkName := range networks {
-		// Parse the embedded helmfile to get env vars
-		envVars, err := network.ParseEmbeddedNetworkEnvVars(networkName)
+		// Parse the embedded values template to get fields
+		fields, err := network.ParseTemplateFields(networkName)
 		if err != nil {
 			// Skip networks we can't parse
 			continue
 		}
 
-		// Build flags from env vars
-		flags := []cli.Flag{}
-		for _, envVar := range envVars {
+		// Build flags from template fields
+		flags := []cli.Flag{
+			// id flag is always present (special case - not parsed from template)
+			&cli.StringFlag{
+				Name:     "id",
+				Usage:    fmt.Sprintf("Deployment identifier for namespace (e.g., 'my-node' becomes '%s-my-node', defaults to generated petname)", networkName),
+				Required: false,
+			},
+			// force flag to allow overwriting existing deployments
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"f"},
+				Usage:   "Overwrite existing deployment configuration if it already exists",
+			},
+		}
+
+		// Add flags from parsed template fields
+		for _, field := range fields {
 			// Build usage string
-			usage := envVar.Description
+			usage := field.Description
 			if usage == "" {
-				usage = fmt.Sprintf("Override %s", envVar.Name)
+				usage = fmt.Sprintf("Override %s", field.Name)
 			}
 
 			// Mark as required if no default value
-			if envVar.Required {
+			if field.Required {
 				usage = "[REQUIRED] " + usage
 			}
 
 			// Add enum options if available
-			if len(envVar.EnumValues) > 0 {
-				usage += fmt.Sprintf(" [options: %s]", strings.Join(envVar.EnumValues, ", "))
+			if len(field.EnumValues) > 0 {
+				usage += fmt.Sprintf(" [options: %s]", strings.Join(field.EnumValues, ", "))
 			}
 
 			// Add default value
-			if envVar.DefaultValue != "" {
-				usage += fmt.Sprintf(" (default: %s)", envVar.DefaultValue)
+			if field.DefaultValue != "" {
+				usage += fmt.Sprintf(" (default: %s)", field.DefaultValue)
 			}
 
 			flags = append(flags, &cli.StringFlag{
-				Name:     envVar.FlagName,
+				Name:     field.FlagName,
 				Usage:    usage,
-				Required: envVar.Required,
+				Required: field.Required,
 			})
 		}
 
 		// Create the network-specific install command
 		netName := networkName // Capture for closure
-		netEnvVars := envVars  // Capture for validation
+		netFields := fields    // Capture for validation
 		commands = append(commands, &cli.Command{
 			Name:  netName,
 			Usage: fmt.Sprintf("Install %s network", netName),
@@ -116,28 +137,32 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Action: func(c *cli.Context) error {
 				// Collect and validate flag values
 				overrides := make(map[string]string)
-				for _, envVar := range netEnvVars {
-					value := c.String(envVar.FlagName)
+
+				// Collect id flag (special case - not in parsed fields)
+				if idValue := c.String("id"); idValue != "" {
+					overrides["id"] = idValue
+				}
+
+				// Collect parsed template fields
+				for _, field := range netFields {
+					value := c.String(field.FlagName)
 					if value != "" {
 						// Validate enum constraint if defined
-						if len(envVar.EnumValues) > 0 {
-							valid := false
-							for _, enumVal := range envVar.EnumValues {
-								if value == enumVal {
-									valid = true
-									break
-								}
-							}
+						if len(field.EnumValues) > 0 {
+							valid := slices.Contains(field.EnumValues, value)
 							if !valid {
 								return fmt.Errorf("invalid value '%s' for --%s. Valid options: %s",
-									value, envVar.FlagName, strings.Join(envVar.EnumValues, ", "))
+									value, field.FlagName, strings.Join(field.EnumValues, ", "))
 							}
 						}
-						overrides[envVar.FlagName] = value
+						overrides[field.FlagName] = value
 					}
 				}
 
-				return network.Install(cfg, netName, overrides)
+				// Get force flag
+				force := c.Bool("force")
+
+				return network.Install(cfg, netName, overrides, force)
 			},
 		})
 	}

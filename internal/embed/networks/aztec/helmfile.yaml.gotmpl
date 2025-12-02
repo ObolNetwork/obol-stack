@@ -1,25 +1,10 @@
-values:
-  # @enum mainnet
-  # @description Blockchain network to deploy
-  - network: {{ env "AZTEC_NETWORK" | default "mainnet" }}
-    # @description Attester private key (hex string)
-    attesterPrivateKey: {{ env "AZTEC_ATTESTER_PRIVATE_KEY" }}
-    # @description L1 Execution RPC URL override (defaults to local erpc endpoint based on network)
-    l1ExecutionUrl: {{ env "AZTEC_L1_EXECUTION_URL" | default "" }}
-    # @description L1 Consensus RPC URL
-    l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "https://ethereum-beacon-api.publicnode.com" }}
-    # Computed value: L1 Execution URL - uses override or defaults to erpc endpoint
-    __l1ExecutionUrl: {{ if (env "AZTEC_L1_EXECUTION_URL") }}{{ env "AZTEC_L1_EXECUTION_URL" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
-
----
-
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
 
 releases:
   - name: aztec-sequencer
-    namespace: aztec
+    namespace: aztec-{{ .Values.id }}
     createNamespace: true
     chart: obol/aztec-node
     version: 0.2.0
@@ -45,20 +30,20 @@ releases:
             - --network
             - '{{ .Values.network }}'
           l1ExecutionUrls:
-            - '{{ .Values.__l1ExecutionUrl }}'
+            - '{{ if .Values.l1ExecutionUrl }}{{ .Values.l1ExecutionUrl }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ .Values.network }}{{ end }}'
           l1ConsensusUrls:
             - '{{ .Values.l1ConsensusUrl }}'
           resources:
             requests:
-              cpu: "4"       
-              memory: "16Gi" 
+              cpu: "4"
+              memory: "16Gi"
             limits:
-              cpu: "8"       
-              memory: "32Gi" 
+              cpu: "8"
+              memory: "32Gi"
           storage:
             dataDirectory: /data
-            dataStoreMapSize: "134217728"  
-            worldStateMapSize: "134217728"  
+            dataStoreMapSize: "134217728"
+            worldStateMapSize: "134217728"
           startupProbe:
             periodSeconds: 60
             failureThreshold: 60
@@ -74,7 +59,7 @@ releases:
           httpPort: 8080
           p2p:
             enabled: true
-            nodePortEnabled: false  
+            nodePortEnabled: false
             port: 40400
             announcePort: 40400
           admin:

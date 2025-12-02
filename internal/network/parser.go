@@ -3,147 +3,202 @@ package network
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"text/template"
+	"text/template/parse"
 
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
-// EnvVar represents an environment variable with its default value
-type EnvVar struct {
+// TemplateField represents a template field with its configuration
+type TemplateField struct {
 	Name         string
 	DefaultValue string
-	FlagName     string   // CLI flag name derived from env var name
+	FlagName     string   // CLI flag name derived from field name
 	Description  string   // Human-readable description from @description
 	EnumValues   []string // Valid enum values from @enum
-	Required     bool     // Whether this env var is required (no default value)
+	Required     bool     // Whether this field is required (no default value)
 }
 
-// envVarToFlagName converts an environment variable name to a CLI flag name
-// Automatically strips network-specific prefixes (e.g., ETHEREUM_, AZTEC_, HELIOS_)
-// Example: ETHEREUM_NETWORK -> network
-// Example: AZTEC_ATTESTER_PRIVATE_KEY -> attester-private-key
-func envVarToFlagName(envName string) string {
-	// Find the first underscore to detect network prefix pattern
-	// Network-specific env vars follow pattern: NETWORK_NAME_*
-	parts := strings.SplitN(envName, "_", 2)
-	if len(parts) == 2 {
-		// Strip the network prefix (everything before first underscore)
-		envName = parts[1]
-	}
-
-	// Convert to lowercase and replace underscores with hyphens
-	flagName := strings.ToLower(envName)
-	flagName = strings.ReplaceAll(flagName, "_", "-")
-
-	return flagName
-}
-
-// ParseEmbeddedNetworkEnvVars extracts environment variables from an embedded network helmfile
-func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
-	// Read the embedded helmfile
-	content, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml.gotmpl")
+// extractTemplateFields parses a Go template and extracts all field references
+// Returns a map of field names to their line numbers for annotation matching
+func extractTemplateFields(content string) (map[string]int, error) {
+	// Parse the template
+	tmpl, err := template.New("helmfile").Parse(content)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read embedded helmfile: %w", err)
+		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
 
-	// Generate expected prefix from network name (e.g., "aztec" -> "AZTEC_")
-	networkPrefix := strings.ToUpper(networkName) + "_"
+	fields := make(map[string]int)
+	lines := strings.Split(content, "\n")
 
-	lines := strings.Split(string(content), "\n")
-	var envVars []EnvVar
-	seen := make(map[string]bool)
+	// Walk the template AST to find field references
+	var walkNodes func(node parse.Node)
+	walkNodes = func(node parse.Node) {
+		if node == nil {
+			return
+		}
 
-	// Track annotations from preceding comment lines
-	var currentEnum []string
-	var currentDesc string
+		switch n := node.(type) {
+		case *parse.ListNode:
+			if n != nil {
+				for _, child := range n.Nodes {
+					walkNodes(child)
+				}
+			}
+		case *parse.ActionNode:
+			if n.Pipe != nil {
+				for _, cmd := range n.Pipe.Cmds {
+					for _, arg := range cmd.Args {
+						if field, ok := arg.(*parse.FieldNode); ok {
+							// Extract field name (e.g., .Network -> Network)
+							if len(field.Ident) > 0 {
+								fieldName := field.Ident[0]
+								// Find line number of this field in the content
+								for i, line := range lines {
+									if strings.Contains(line, "{{."+fieldName+"}}") {
+										fields[fieldName] = i
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		case *parse.IfNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.RangeNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.WithNode:
+			walkNodes(n.List)
+			walkNodes(n.ElseList)
+		case *parse.TemplateNode:
+			walkNodes(n.Pipe)
+		}
+	}
 
-	for _, line := range lines {
+	// Walk the template tree
+	if tmpl.Tree != nil && tmpl.Tree.Root != nil {
+		walkNodes(tmpl.Tree.Root)
+	}
+
+	return fields, nil
+}
+
+// parseAnnotationsFromLines extracts annotations from comment lines preceding a field
+// Returns enum values, default value, description, and whether a default was specified
+func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, string, string, bool) {
+	var enumValues []string
+	var defaultValue string
+	var description string
+	var hasDefault bool
+
+	// Look backwards from the field line to find annotations
+	for i := fieldLineNum - 1; i >= 0; i-- {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Stop if we hit a non-comment line or empty line
+		if !strings.HasPrefix(trimmed, "#") {
+			break
+		}
+
 		// Parse @enum annotation
 		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
 			enumStr := strings.TrimSpace(enumMatch[1])
-			currentEnum = strings.Split(enumStr, ",")
-			for i := range currentEnum {
-				currentEnum[i] = strings.TrimSpace(currentEnum[i])
+			enumValues = strings.Split(enumStr, ",")
+			for j := range enumValues {
+				enumValues[j] = strings.TrimSpace(enumValues[j])
 			}
-			continue
+		}
+
+		// Parse @default annotation (value is optional, may be empty string)
+		if defaultMatch := regexp.MustCompile(`#\s*@default\s*(.*)`).FindStringSubmatch(line); defaultMatch != nil {
+			defaultValue = strings.TrimSpace(defaultMatch[1])
+			hasDefault = true
 		}
 
 		// Parse @description annotation
 		if descMatch := regexp.MustCompile(`#\s*@description\s+(.+)`).FindStringSubmatch(line); descMatch != nil {
-			currentDesc = strings.TrimSpace(descMatch[1])
-			continue
-		}
-
-		// Parse env var line with default: {{ env "VAR_NAME" | default "value" }}
-		reWithDefault := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*\|\s*default\s+"([^"]*)"\s*}}`)
-		if envMatch := reWithDefault.FindStringSubmatch(line); envMatch != nil {
-			envName := envMatch[1]
-			defaultValue := envMatch[2]
-
-			// Only include env vars that match the network prefix
-			if !strings.HasPrefix(envName, networkPrefix) {
-				continue
-			}
-
-			// Skip duplicates
-			if seen[envName] {
-				continue
-			}
-			seen[envName] = true
-
-			// Convert env var name to CLI flag name (strips network prefix)
-			flagName := envVarToFlagName(envName)
-
-			envVar := EnvVar{
-				Name:         envName,
-				DefaultValue: defaultValue,
-				FlagName:     flagName,
-				Description:  currentDesc,
-				EnumValues:   currentEnum,
-				Required:     false, // Has default value, so optional
-			}
-			envVars = append(envVars, envVar)
-
-			// Reset annotations for next variable
-			currentEnum = nil
-			currentDesc = ""
-			continue
-		}
-
-		// Parse required env var line (no default): {{ env "VAR_NAME" }}
-		reRequired := regexp.MustCompile(`{{\s*env\s+"([^"]+)"\s*}}`)
-		if envMatch := reRequired.FindStringSubmatch(line); envMatch != nil {
-			envName := envMatch[1]
-
-			// Only include env vars that match the network prefix
-			if !strings.HasPrefix(envName, networkPrefix) {
-				continue
-			}
-
-			// Skip duplicates
-			if seen[envName] {
-				continue
-			}
-			seen[envName] = true
-
-			// Convert env var name to CLI flag name (strips network prefix)
-			flagName := envVarToFlagName(envName)
-
-			envVar := EnvVar{
-				Name:         envName,
-				DefaultValue: "",
-				FlagName:     flagName,
-				Description:  currentDesc,
-				EnumValues:   currentEnum,
-				Required:     true, // No default value, so required
-			}
-			envVars = append(envVars, envVar)
-
-			// Reset annotations for next variable
-			currentEnum = nil
-			currentDesc = ""
+			description = strings.TrimSpace(descMatch[1])
 		}
 	}
 
-	return envVars, nil
+	return enumValues, defaultValue, description, hasDefault
+}
+
+// ParseTemplateFields extracts template fields from an embedded network values file
+// Uses Go template parsing to identify field references and their annotations
+func ParseTemplateFields(networkName string) ([]TemplateField, error) {
+	// Read the embedded values template
+	content, err := embed.ReadEmbeddedNetworkFile(networkName, "values.yaml.gotmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded values: %w", err)
+	}
+
+	// Extract template fields using Go template parser
+	fieldMap, err := extractTemplateFields(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract template fields: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+
+	// Create a sorted list of field names by line number for deterministic ordering
+	type fieldWithLine struct {
+		name string
+		line int
+	}
+	sortedFields := make([]fieldWithLine, 0, len(fieldMap))
+	for fieldName, lineNum := range fieldMap {
+		sortedFields = append(sortedFields, fieldWithLine{name: fieldName, line: lineNum})
+	}
+	sort.Slice(sortedFields, func(i, j int) bool {
+		return sortedFields[i].line < sortedFields[j].line
+	})
+
+	// Process fields in order they appear in the file
+	fields := make([]TemplateField, 0, len(sortedFields))
+	for _, f := range sortedFields {
+		enumValues, defaultValue, description, hasDefault := parseAnnotationsFromLines(lines, f.line)
+
+		// Convert field name to CLI flag name (e.g., ExecutionClient -> execution-client)
+		flagName := fieldNameToFlagName(f.name)
+
+		// Determine if field is required (no @default annotation)
+		required := !hasDefault
+
+		field := TemplateField{
+			Name:         f.name,
+			DefaultValue: defaultValue,
+			FlagName:     flagName,
+			Description:  description,
+			EnumValues:   enumValues,
+			Required:     required,
+		}
+		fields = append(fields, field)
+	}
+
+	return fields, nil
+}
+
+// fieldNameToFlagName converts a template field name to a CLI flag name
+// Example: ExecutionClient -> execution-client
+// Example: Network -> network
+func fieldNameToFlagName(fieldName string) string {
+	// Insert hyphen before uppercase letters (except first)
+	var result strings.Builder
+	for i, r := range fieldName {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteRune('-')
+		}
+		result.WriteRune(r)
+	}
+
+	// Convert to lowercase
+	return strings.ToLower(result.String())
 }

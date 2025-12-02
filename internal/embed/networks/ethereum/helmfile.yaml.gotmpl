@@ -1,18 +1,3 @@
-# Configuration via environment variables
-# Override with: ETHEREUM_NETWORK, ETHEREUM_EXECUTION_CLIENT, ETHEREUM_CONSENSUS_CLIENT
-values:
-  # @enum mainnet,sepolia,holesky,hoodi
-  # @description Blockchain network to deploy
-  - network: {{ env "ETHEREUM_NETWORK" | default "mainnet" }}
-    # @enum reth,geth,nethermind,besu,erigon,ethereumjs
-    # @description Execution layer client
-    executionClient: {{ env "ETHEREUM_EXECUTION_CLIENT" | default "reth" }}
-    # @enum lighthouse,prysm,teku,nimbus,lodestar,grandine
-    # @description Consensus layer client
-    consensusClient: {{ env "ETHEREUM_CONSENSUS_CLIENT" | default "lighthouse" }}
-
----
-
 repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
@@ -20,12 +5,13 @@ repositories:
 releases:
   # Create PVCs first - before the Ethereum node
   - name: ethereum-pvcs
-    namespace: ethereum
+    namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: .
     values:
       # Pass only the values needed for PVC creation
-      - executionClient: '{{ .Values.executionClient }}'
+      - id: '{{ .Values.id }}'
+        executionClient: '{{ .Values.executionClient }}'
         consensusClient: '{{ .Values.consensusClient }}'
         network: '{{ .Values.network }}'
 
@@ -33,7 +19,7 @@ releases:
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
   # Depends on ethereum-pvcs to ensure PVCs exist first
   - name: ethereum
-    namespace: ethereum
+    namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     needs: [ethereum-pvcs]
@@ -54,6 +40,18 @@ releases:
       - {{ .Values.executionClient }}:
           enabled: true
           nameOverride: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+          labels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: execution
+            obol.stack/client: {{ .Values.executionClient }}
+          podLabels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: execution
+            obol.stack/client: {{ .Values.executionClient }}
           persistence:
             enabled: true
             size: 500Gi
@@ -64,9 +62,32 @@ releases:
       - {{ .Values.consensusClient }}:
           enabled: true
           nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+          labels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: consensus
+            obol.stack/client: {{ .Values.consensusClient }}
+          podLabels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: consensus
+            obol.stack/client: {{ .Values.consensusClient }}
+          extraArgs:
+            - --execution-endpoint=http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
+            - --network={{ .Values.network }}
           persistence:
             enabled: true
             size: 200Gi
             # Use existing PVC with network/client naming: consensus-{client}-{network}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
 
+  # Ingress for Ethereum node
+  - name: ethereum-ingress
+    namespace: ethereum-{{ .Values.id }}
+    chart: .
+    values:
+      - executionClient: {{ .Values.executionClient }}
+        consensusClient: {{ .Values.consensusClient }}
+        network: {{ .Values.network }}
