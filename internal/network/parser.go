@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -146,20 +147,33 @@ func ParseTemplateFields(networkName string) ([]TemplateField, error) {
 	}
 
 	lines := strings.Split(string(content), "\n")
-	var fields []TemplateField
 
-	// For each field, extract annotations and create TemplateField
+	// Create a sorted list of field names by line number for deterministic ordering
+	type fieldWithLine struct {
+		name string
+		line int
+	}
+	sortedFields := make([]fieldWithLine, 0, len(fieldMap))
 	for fieldName, lineNum := range fieldMap {
-		enumValues, defaultValue, description, hasDefault := parseAnnotationsFromLines(lines, lineNum)
+		sortedFields = append(sortedFields, fieldWithLine{name: fieldName, line: lineNum})
+	}
+	sort.Slice(sortedFields, func(i, j int) bool {
+		return sortedFields[i].line < sortedFields[j].line
+	})
+
+	// Process fields in order they appear in the file
+	fields := make([]TemplateField, 0, len(sortedFields))
+	for _, f := range sortedFields {
+		enumValues, defaultValue, description, hasDefault := parseAnnotationsFromLines(lines, f.line)
 
 		// Convert field name to CLI flag name (e.g., ExecutionClient -> execution-client)
-		flagName := fieldNameToFlagName(fieldName)
+		flagName := fieldNameToFlagName(f.name)
 
 		// Determine if field is required (no @default annotation)
 		required := !hasDefault
 
 		field := TemplateField{
-			Name:         fieldName,
+			Name:         f.name,
 			DefaultValue: defaultValue,
 			FlagName:     flagName,
 			Description:  description,
