@@ -51,35 +51,35 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 		fmt.Printf("Generated deployment ID: %s\n", id)
 	}
 
-	// Parse embedded helmfile to get template fields
-	envVars, err := ParseEmbeddedNetworkEnvVars(network)
+	// Parse embedded values template to get fields
+	fields, err := ParseTemplateFields(network)
 	if err != nil {
-		return fmt.Errorf("failed to parse embedded helmfile: %w", err)
+		return fmt.Errorf("failed to parse embedded values template: %w", err)
 	}
 
 	// Build template data from CLI flags and defaults
 	templateData := make(map[string]string)
-	if len(envVars) > 0 {
+	if len(fields) > 0 {
 		fmt.Println("Configuration:")
-		for _, envVar := range envVars {
-			value := envVar.DefaultValue
+		for _, field := range fields {
+			value := field.DefaultValue
 
 			// Check if there's an override from CLI flags
-			if overrideValue, ok := overrides[envVar.FlagName]; ok {
+			if overrideValue, ok := overrides[field.FlagName]; ok {
 				value = overrideValue
-				fmt.Printf("  %s = %s (from --%s)\n", envVar.Name, value, envVar.FlagName)
-			} else if envVar.Required && value == "" {
+				fmt.Printf("  %s = %s (from --%s)\n", field.Name, value, field.FlagName)
+			} else if field.Required && value == "" {
 				// Required field with no value provided
-				return fmt.Errorf("missing required flag: --%s", envVar.FlagName)
+				return fmt.Errorf("missing required flag: --%s", field.FlagName)
 			} else if value != "" {
-				fmt.Printf("  %s = %s (default)\n", envVar.Name, value)
+				fmt.Printf("  %s = %s (default)\n", field.Name, value)
 			} else {
 				// Optional field with empty default
-				fmt.Printf("  %s = (empty, optional)\n", envVar.Name)
+				fmt.Printf("  %s = (empty, optional)\n", field.Name)
 			}
 
 			// Add to template data using field name (e.g., "Network", "ExecutionClient")
-			templateData[envVar.Name] = value
+			templateData[field.Name] = value
 		}
 	}
 

@@ -10,14 +10,14 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
-// EnvVar represents an environment variable with its default value
-type EnvVar struct {
+// TemplateField represents a template field with its configuration
+type TemplateField struct {
 	Name         string
 	DefaultValue string
-	FlagName     string   // CLI flag name derived from env var name
+	FlagName     string   // CLI flag name derived from field name
 	Description  string   // Human-readable description from @description
 	EnumValues   []string // Valid enum values from @enum
-	Required     bool     // Whether this env var is required (no default value)
+	Required     bool     // Whether this field is required (no default value)
 }
 
 // extractTemplateFields parses a Go template and extracts all field references
@@ -130,9 +130,9 @@ func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, stri
 	return enumValues, defaultValue, description, hasDefault
 }
 
-// ParseEmbeddedNetworkEnvVars extracts template fields from an embedded network values file
-// Now uses Go template parsing instead of regex-based env var detection
-func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
+// ParseTemplateFields extracts template fields from an embedded network values file
+// Uses Go template parsing to identify field references and their annotations
+func ParseTemplateFields(networkName string) ([]TemplateField, error) {
 	// Read the embedded values template
 	content, err := embed.ReadEmbeddedNetworkFile(networkName, "values.yaml.gotmpl")
 	if err != nil {
@@ -140,16 +140,16 @@ func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 	}
 
 	// Extract template fields using Go template parser
-	fields, err := extractTemplateFields(string(content))
+	fieldMap, err := extractTemplateFields(string(content))
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract template fields: %w", err)
 	}
 
 	lines := strings.Split(string(content), "\n")
-	var envVars []EnvVar
+	var fields []TemplateField
 
-	// For each field, extract annotations and create EnvVar
-	for fieldName, lineNum := range fields {
+	// For each field, extract annotations and create TemplateField
+	for fieldName, lineNum := range fieldMap {
 		enumValues, defaultValue, description, hasDefault := parseAnnotationsFromLines(lines, lineNum)
 
 		// Convert field name to CLI flag name (e.g., ExecutionClient -> execution-client)
@@ -158,7 +158,7 @@ func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 		// Determine if field is required (no @default annotation)
 		required := !hasDefault
 
-		envVar := EnvVar{
+		field := TemplateField{
 			Name:         fieldName,
 			DefaultValue: defaultValue,
 			FlagName:     flagName,
@@ -166,10 +166,10 @@ func ParseEmbeddedNetworkEnvVars(networkName string) ([]EnvVar, error) {
 			EnumValues:   enumValues,
 			Required:     required,
 		}
-		envVars = append(envVars, envVar)
+		fields = append(fields, field)
 	}
 
-	return envVars, nil
+	return fields, nil
 }
 
 // fieldNameToFlagName converts a template field name to a CLI flag name

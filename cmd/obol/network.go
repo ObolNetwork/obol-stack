@@ -74,56 +74,56 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 
 	var commands []*cli.Command
 	for _, networkName := range networks {
-		// Parse the embedded helmfile to get env vars
-		envVars, err := network.ParseEmbeddedNetworkEnvVars(networkName)
+		// Parse the embedded values template to get fields
+		fields, err := network.ParseTemplateFields(networkName)
 		if err != nil {
 			// Skip networks we can't parse
 			continue
 		}
 
-		// Build flags from env vars
+		// Build flags from template fields
 		flags := []cli.Flag{}
-		for _, envVar := range envVars {
+		for _, field := range fields {
 			// Customize id flag description to include network-specific example
-			if envVar.FlagName == "id" {
+			if field.FlagName == "id" {
 				flags = append(flags, &cli.StringFlag{
 					Name:     "id",
 					Usage:    fmt.Sprintf("Namespace suffix for this deployment (e.g., 'smart-kodiak' becomes '%s-smart-kodiak', defaults to generated petname)", networkName),
-					Required: envVar.Required,
+					Required: field.Required,
 				})
 				continue
 			}
 			// Build usage string
-			usage := envVar.Description
+			usage := field.Description
 			if usage == "" {
-				usage = fmt.Sprintf("Override %s", envVar.Name)
+				usage = fmt.Sprintf("Override %s", field.Name)
 			}
 
 			// Mark as required if no default value
-			if envVar.Required {
+			if field.Required {
 				usage = "[REQUIRED] " + usage
 			}
 
 			// Add enum options if available
-			if len(envVar.EnumValues) > 0 {
-				usage += fmt.Sprintf(" [options: %s]", strings.Join(envVar.EnumValues, ", "))
+			if len(field.EnumValues) > 0 {
+				usage += fmt.Sprintf(" [options: %s]", strings.Join(field.EnumValues, ", "))
 			}
 
 			// Add default value
-			if envVar.DefaultValue != "" {
-				usage += fmt.Sprintf(" (default: %s)", envVar.DefaultValue)
+			if field.DefaultValue != "" {
+				usage += fmt.Sprintf(" (default: %s)", field.DefaultValue)
 			}
 
 			flags = append(flags, &cli.StringFlag{
-				Name:     envVar.FlagName,
+				Name:     field.FlagName,
 				Usage:    usage,
-				Required: envVar.Required,
+				Required: field.Required,
 			})
 		}
 
 		// Create the network-specific install command
 		netName := networkName // Capture for closure
-		netEnvVars := envVars  // Capture for validation
+		netFields := fields    // Capture for validation
 		commands = append(commands, &cli.Command{
 			Name:  netName,
 			Usage: fmt.Sprintf("Install %s network", netName),
@@ -131,18 +131,18 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Action: func(c *cli.Context) error {
 				// Collect and validate flag values
 				overrides := make(map[string]string)
-				for _, envVar := range netEnvVars {
-					value := c.String(envVar.FlagName)
+				for _, field := range netFields {
+					value := c.String(field.FlagName)
 					if value != "" {
 						// Validate enum constraint if defined
-						if len(envVar.EnumValues) > 0 {
-							valid := slices.Contains(envVar.EnumValues, value)
+						if len(field.EnumValues) > 0 {
+							valid := slices.Contains(field.EnumValues, value)
 							if !valid {
 								return fmt.Errorf("invalid value '%s' for --%s. Valid options: %s",
-									value, envVar.FlagName, strings.Join(envVar.EnumValues, ", "))
+									value, field.FlagName, strings.Join(field.EnumValues, ", "))
 							}
 						}
-						overrides[envVar.FlagName] = value
+						overrides[field.FlagName] = value
 					}
 				}
 
