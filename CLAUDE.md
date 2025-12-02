@@ -547,9 +547,9 @@ obol network install ethereum --id holesky-test --network=holesky
 
 ## Network Install Implementation Details
 
-### Annotation Parser
+### Template Field Parser
 
-**Location**: `internal/network/network.go` - `ParseEmbeddedNetworkEnvVars()`
+**Location**: `internal/network/parser.go` - `ParseTemplateFields()`
 
 **Annotations supported**:
 - `@enum`: Comma-separated valid values
@@ -557,17 +557,16 @@ obol network install ethereum --id holesky-test --network=holesky
 - `@description`: Help text for flag
 
 **Parsing logic**:
-1. Read embedded `helmfile.yaml.gotmpl`
-2. Find `values:` section
-3. Extract environment variable references: `{{ env "VAR_NAME" | default "value" }}`
-4. Parse annotations from comments above each value
-5. Generate `EnvVar` struct with:
-   - Name: Environment variable name (e.g., `ETHEREUM_NETWORK`)
-   - FlagName: CLI flag name (lowercase, dashed, e.g., `network`)
-   - DefaultValue: From `default` pipe or `@default` annotation
+1. Read embedded `values.yaml.gotmpl`
+2. Parse Go template to extract field references (e.g., `{{.Network}}`, `{{.ExecutionClient}}`)
+3. Parse annotations from comments above each field
+4. Generate `TemplateField` struct with:
+   - Name: Template field name (e.g., `Network`, `ExecutionClient`)
+   - FlagName: CLI flag name (lowercase, dashed, e.g., `network`, `execution-client`)
+   - DefaultValue: From `@default` annotation
    - EnumValues: From `@enum` annotation
    - Description: From `@description` annotation
-   - Required: True if no default value
+   - Required: True if no `@default` annotation present
 
 ### CLI Flag Generation
 
@@ -575,8 +574,8 @@ obol network install ethereum --id holesky-test --network=holesky
 
 **Process**:
 1. For each embedded network:
-   - Parse helmfile annotations
-   - Build `cli.Flag` for each environment variable
+   - Parse values template to extract template fields
+   - Build `cli.Flag` for each template field
    - Add enum validation to flag usage
    - Set Required based on default presence
 2. Create network-specific subcommand: `obol network install <network>`
@@ -584,33 +583,25 @@ obol network install ethereum --id holesky-test --network=holesky
 4. Register subcommand dynamically
 
 **Flag naming convention**:
-- Environment variable: `ETHEREUM_EXECUTION_CLIENT`
+- Template field: `ExecutionClient`
 - Flag name: `--execution-client`
-- Transformation: Remove network prefix, lowercase, dash-separated
+- Transformation: Insert hyphens before uppercase letters, lowercase
 
 ### Install Implementation
 
 **Location**: `internal/network/network.go` - `Install()`
 
-**Current implementation** (temporary, until two-stage templating):
-1. Parse embedded helmfile for environment variables
-2. Display configuration to user (with overrides highlighted)
-3. Create temporary directory: `/tmp/obol-network-<network>-XXXX`
-4. Copy embedded network to temp directory
-5. Set environment variables in process
-6. Run: `helmfile -f <temp-dir>/helmfile.yaml.gotmpl sync`
-7. Helmfile processes template with environment variables
-8. Deploy to cluster
-9. Remove temp directory
-
-**Future implementation** (two-stage templating):
-1. Generate unique namespace (petname)
-2. Parse embedded helmfile
-3. Template Stage 1: Populate `{{.Network}}`, `{{.ExecutionClient}}`, etc. with flag values
-4. Save templated helmfile to: `$CONFIG_DIR/networks/<network>/<namespace>/`
-5. Run: `helmfile sync -f <saved-helmfile>`
-6. Helmfile templates Stage 2 and applies to cluster
-7. User can edit saved helmfile and re-sync later
+**Implementation** (two-stage templating):
+1. Generate unique deployment ID (petname or user-specified via `--id`)
+2. Parse embedded values template to extract template fields
+3. Build template data map from CLI flag overrides and defaults
+4. Display configuration to user (showing overrides and defaults)
+5. Execute Go template on `values.yaml.gotmpl` with template data
+6. Write rendered `values.yaml` to: `$CONFIG_DIR/networks/<network>/<id>/values.yaml`
+7. Copy network files (`helmfile.yaml.gotmpl`, `Chart.yaml`, `templates/`) to deployment directory
+8. User runs `obol network sync <network>/<id>` to deploy
+9. Sync command runs: `helmfile sync --state-values-file values.yaml`
+10. Helmfile reads values.yaml, templates Stage 2 (substitutes `{{.Values.*}}`), and applies to cluster
 
 ## Key Implementation Patterns
 
