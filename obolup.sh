@@ -328,8 +328,8 @@ download_release() {
 	# Detect OS and architecture
 	local os arch
 	case "$(uname -s)" in
-	Linux*) os="linux" ;; 
-	Darwin*) os="darwin" ;; 
+	Linux*) os="linux" ;;
+	Darwin*) os="darwin" ;;
 	*)
 		log_error "Unsupported OS: $(uname -s)"
 		return 1
@@ -337,9 +337,9 @@ download_release() {
 	esac
 
 	case "$(uname -m)" in
-	x86_64) arch="amd64" ;; 
-	aarch64 | arm64) arch="arm64" ;; 
-	*) 
+	x86_64) arch="amd64" ;;
+	aarch64 | arm64) arch="arm64" ;;
+	*)
 		log_error "Unsupported architecture: $(uname -m)"
 		return 1
 		;;
@@ -560,10 +560,10 @@ copy_bootstrap_script() {
 detect_platform() {
 	local platform
 	case "$(uname -s)" in
-	Linux*) 
+	Linux*)
 		platform="linux"
 		;;
-	Darwin*) 
+	Darwin*)
 		platform="darwin"
 		;;
 	*)
@@ -578,10 +578,10 @@ detect_platform() {
 detect_arch() {
 	local arch
 	case "$(uname -m)" in
-	x86_64 | amd64) 
+	x86_64 | amd64)
 		arch="amd64"
 		;;
-	aarch64 | arm64) 
+	aarch64 | arm64)
 		arch="arm64"
 		;;
 	*)
@@ -1265,7 +1265,7 @@ print_instructions() {
 		read -p "Start cluster now? [y/N]: " choice </dev/tty
 
 		case "$choice" in
-		[Yy]*) 
+		[Yy]*)
 			echo ""
 			log_info "Starting bootstrap process..."
 
