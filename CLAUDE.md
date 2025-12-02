@@ -245,10 +245,6 @@ networks/
 
 `values.yaml.gotmpl` contains configuration fields with annotations:
 ```yaml
-# @default
-# @description Deployment identifier used as namespace suffix
-id: {{.Id}}
-
 # @enum mainnet,sepolia,holesky,hoodi
 # @default mainnet
 # @description Blockchain network to deploy
@@ -261,10 +257,11 @@ executionClient: {{.ExecutionClient}}
 
 CLI processes this template and generates `values.yaml`:
 ```yaml
-id: knowing-wahoo
 network: mainnet
 executionClient: reth
 ```
+
+**Note**: `id` is NOT in `values.yaml` - it's passed separately via directory structure.
 
 **Stage 2: Helmfile Templating** (Helmfile processes values)
 
@@ -296,10 +293,11 @@ When `helmfile sync --state-values-file values.yaml` runs:
   - `helios-united-bison` (auto-generated)
   - `aztec-staging` (user-specified)
 
-**ID as configuration field**:
-- `id` is a regular field in `values.yaml.gotmpl` (not an out-of-band parameter)
-- Shows in generated `values.yaml` for visibility
+**ID as deployment identifier**:
+- `id` is NOT in `values.yaml` or `values.yaml.gotmpl` (special case)
+- Determined by directory structure: `~/.config/obol/networks/<network>/<id>/`
 - CLI auto-generates petname if `--id` flag not provided
+- Passed to Helmfile via `--state-values-set id=<id>` during sync
 - Helmfile enforces namespace: `namespace: {{ .Values.id }}`
 
 **Benefits**:
@@ -332,34 +330,38 @@ obol network install ethereum --id holesky-test --network=holesky
 
 1. **Install** (config generation only):
    ```
-   obol network install ethereum --network=holesky --execution-client=geth
+   obol network install ethereum --network=holesky --execution-client=geth --id my-node
         ↓
-   Parse values.yaml.gotmpl → extract field definitions + annotations
+   Check if directory exists: ~/.config/obol/networks/ethereum/my-node/ (fail unless --force)
         ↓
-   Collect CLI flag values into overrides map
+   Parse values.yaml.gotmpl → extract field definitions + annotations (sorted by line number)
         ↓
-   Generate unique ID (auto: knowing-wahoo, or user-specified)
+   Collect CLI flag values into overrides map (id collected separately, not as template field)
         ↓
-   Template values.yaml.gotmpl: Populate {{.Id}}, {{.Network}}, {{.ExecutionClient}}
+   Template values.yaml.gotmpl: Populate {{.Network}}, {{.ExecutionClient}} (NOT {{.Id}})
         ↓
-   Write values.yaml to: ~/.config/obol/networks/ethereum/knowing-wahoo/values.yaml
+   Validate YAML syntax of generated content
         ↓
-   Copy helmfile.yaml as-is (no templating)
+   Write values.yaml to: ~/.config/obol/networks/ethereum/my-node/values.yaml
+        ↓
+   Copy helmfile.yaml.gotmpl as-is (no templating)
         ↓
    Copy other files (Chart.yaml, templates/)
    ```
 
-2. **Sync** (deployment - future command):
+2. **Sync** (deployment):
    ```
-   obol network sync ethereum/knowing-wahoo
+   obol network sync ethereum/my-node
         ↓
-   Run: helmfile sync --state-values-file values.yaml
+   Extract id from directory path: "my-node"
         ↓
-   Helmfile reads values.yaml
+   Run: helmfile sync --state-values-file values.yaml --state-values-set id=my-node
         ↓
-   Substitutes {{ .Values.* }} in helmfile.yaml
+   Helmfile reads values.yaml + receives id via --state-values-set
         ↓
-   Deploys to namespace: ethereum-knowing-wahoo
+   Substitutes {{ .Values.* }} in helmfile.yaml.gotmpl (including {{ .Values.id }})
+        ↓
+   Deploys to namespace: ethereum-my-node
    ```
 
 3. **Delete**:
@@ -593,15 +595,39 @@ obol network install ethereum --id holesky-test --network=holesky
 
 **Implementation** (two-stage templating):
 1. Generate unique deployment ID (petname or user-specified via `--id`)
-2. Parse embedded values template to extract template fields
-3. Build template data map from CLI flag overrides and defaults
-4. Display configuration to user (showing overrides and defaults)
-5. Execute Go template on `values.yaml.gotmpl` with template data
-6. Write rendered `values.yaml` to: `$CONFIG_DIR/networks/<network>/<id>/values.yaml`
-7. Copy network files (`helmfile.yaml.gotmpl`, `Chart.yaml`, `templates/`) to deployment directory
-8. User runs `obol network sync <network>/<id>` to deploy
-9. Sync command runs: `helmfile sync --state-values-file values.yaml`
-10. Helmfile reads values.yaml, templates Stage 2 (substitutes `{{.Values.*}}`), and applies to cluster
+2. Check if deployment directory exists (fail unless `--force` flag provided)
+3. Parse embedded values template to extract template fields
+4. Build template data map from CLI flag overrides and defaults (NOT including `id`)
+5. Display configuration to user (showing id from directory, overrides, and defaults)
+6. Execute Go template on `values.yaml.gotmpl` with template data
+7. Validate generated YAML syntax (catch malformed values early)
+8. Write rendered `values.yaml` to: `$CONFIG_DIR/networks/<network>/<id>/values.yaml`
+9. Copy network files (`helmfile.yaml.gotmpl`, `Chart.yaml`, `templates/`) to deployment directory
+10. User runs `obol network sync <network>/<id>` to deploy
+11. Sync command extracts `id` from directory path
+12. Sync runs: `helmfile sync --state-values-file values.yaml --state-values-set id=<id>`
+13. Helmfile reads values.yaml, receives `id` via CLI flag, templates Stage 2 (substitutes `{{.Values.*}}`), and applies to cluster
+
+### Validation and Safety Features
+
+**Deployment Overwrite Protection**:
+- Install command checks if deployment directory already exists
+- Fails with clear error if directory exists: `deployment already exists: ethereum/my-node`
+- User must provide `--force` or `-f` flag to explicitly overwrite
+- Shows warning when overwriting: `⚠️  WARNING: Overwriting existing deployment`
+
+**YAML Syntax Validation**:
+- After template execution, generated YAML is validated before writing to disk
+- Uses `gopkg.in/yaml.v3` to parse and validate syntax
+- Catches malformed values early (e.g., unquoted strings with colons)
+- Error message shows the problematic content and specific syntax error
+- Prevents invalid configuration from being saved or deployed
+
+**Deterministic Field Ordering**:
+- Template fields are parsed from `values.yaml.gotmpl` using Go template AST
+- Fields are sorted by line number before processing
+- Ensures consistent CLI flag ordering in `--help` output
+- Predictable behavior across runs and environments
 
 ## Key Implementation Patterns
 
@@ -729,17 +755,10 @@ obol network delete ethereum-<generated-name> --force
 1. **Relative paths in k3d config**: Will fail with Docker volume mounts
 2. **Missing absolute path resolution**: k3d.yaml must have absolute paths before cluster creation
 3. **Namespace collisions**: Without unique namespaces, multiple deployments will conflict
-4. **Environment variable hijacking**: Current implementation uses env vars, planned migration to two-stage templating
-5. **Root-owned PVCs**: Kubernetes creates PVCs as root, `-f` flag required to remove them
+4. **Root-owned PVCs**: Kubernetes creates PVCs as root, `-f` flag required to remove them
+5. **Special characters in values**: Unquoted YAML special chars (`:`, `[`, `{`) break syntax - caught by validation
 
 ### Future Work
-
-**Two-stage templating migration**:
-- Replace environment variable approach
-- Use Go template execution for Stage 1
-- Save templated helmfile to config directory
-- Enable user editing and re-sync
-- Track: https://github.com/ObolNetwork/obol-stack/issues/<redesign-issue>
 
 **ERPC integration**:
 - Extract to separate helmfile
