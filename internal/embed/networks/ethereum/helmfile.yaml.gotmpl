@@ -40,6 +40,18 @@ releases:
       - {{ .Values.executionClient }}:
           enabled: true
           nameOverride: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+          labels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: execution
+            obol.stack/client: {{ .Values.executionClient }}
+          podLabels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: execution
+            obol.stack/client: {{ .Values.executionClient }}
           persistence:
             enabled: true
             size: 500Gi
@@ -50,6 +62,18 @@ releases:
       - {{ .Values.consensusClient }}:
           enabled: true
           nameOverride: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+          labels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: consensus
+            obol.stack/client: {{ .Values.consensusClient }}
+          podLabels:
+            app.kubernetes.io/part-of: obol.stack
+            obol.stack/chain: ethereum
+            obol.stack/network: {{ .Values.network }}
+            obol.stack/type: consensus
+            obol.stack/client: {{ .Values.consensusClient }}
           extraArgs:
             - --execution-endpoint=http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
             - --network={{ .Values.network }}
