@@ -41,7 +41,7 @@ func List(cfg *config.Config) error {
 }
 
 // Install creates a network configuration by executing Go templates and saving to config directory
-func Install(cfg *config.Config, network string, overrides map[string]string) error {
+func Install(cfg *config.Config, network string, overrides map[string]string, force bool) error {
 	fmt.Printf("Installing network: %s\n", network)
 
 	// Generate deployment ID if not provided in overrides (use petname)
@@ -50,6 +50,20 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 		id = petname.Generate(2, "-")
 		overrides["id"] = id
 		fmt.Printf("Generated deployment ID: %s\n", id)
+	} else {
+		fmt.Printf("Using deployment ID: %s\n", id)
+	}
+
+	// Check if deployment already exists
+	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
+	if _, err := os.Stat(deploymentDir); err == nil {
+		// Directory exists
+		if !force {
+			return fmt.Errorf("deployment already exists: %s/%s\n"+
+				"Directory: %s\n"+
+				"Use --force or -f to overwrite the existing configuration", network, id, deploymentDir)
+		}
+		fmt.Printf("⚠️  WARNING: Overwriting existing deployment at %s\n", deploymentDir)
 	}
 
 	// Parse embedded values template to get fields
@@ -60,28 +74,30 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 
 	// Build template data from CLI flags and defaults
 	templateData := make(map[string]string)
-	if len(fields) > 0 {
-		fmt.Println("Configuration:")
-		for _, field := range fields {
-			value := field.DefaultValue
 
-			// Check if there's an override from CLI flags
-			if overrideValue, ok := overrides[field.FlagName]; ok {
-				value = overrideValue
-				fmt.Printf("  %s = %s (from --%s)\n", field.Name, value, field.FlagName)
-			} else if field.Required && value == "" {
-				// Required field with no value provided
-				return fmt.Errorf("missing required flag: --%s", field.FlagName)
-			} else if value != "" {
-				fmt.Printf("  %s = %s (default)\n", field.Name, value)
-			} else {
-				// Optional field with empty default
-				fmt.Printf("  %s = (empty, optional)\n", field.Name)
-			}
+	fmt.Println("Configuration:")
+	fmt.Printf("  deployment id: %s (from directory structure)\n", id)
 
-			// Add to template data using field name (e.g., "Network", "ExecutionClient")
-			templateData[field.Name] = value
+	// Process parsed fields
+	for _, field := range fields {
+		value := field.DefaultValue
+
+		// Check if there's an override from CLI flags
+		if overrideValue, ok := overrides[field.FlagName]; ok {
+			value = overrideValue
+			fmt.Printf("  %s = %s (from --%s)\n", field.Name, value, field.FlagName)
+		} else if field.Required && value == "" {
+			// Required field with no value provided
+			return fmt.Errorf("missing required flag: --%s", field.FlagName)
+		} else if value != "" {
+			fmt.Printf("  %s = %s (default)\n", field.Name, value)
+		} else {
+			// Optional field with empty default
+			fmt.Printf("  %s = (empty, optional)\n", field.Name)
 		}
+
+		// Add to template data using field name (e.g., "Network", "ExecutionClient")
+		templateData[field.Name] = value
 	}
 
 	// Read the embedded values template
@@ -110,7 +126,7 @@ func Install(cfg *config.Config, network string, overrides map[string]string) er
 	}
 
 	// Create deployment directory in config: networks/<network>/<id>/
-	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
+	// (deploymentDir already defined earlier for existence check)
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
@@ -205,10 +221,13 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 
 	fmt.Printf("Deployment directory: %s\n", deploymentDir)
 	fmt.Printf("Using: %s\n", filepath.Base(helmfilePath))
+	fmt.Printf("Deployment ID: %s (from directory structure)\n", deploymentID)
 	fmt.Printf("Running helmfile sync...\n\n")
 
-	// Execute helmfile sync with explicit file and state-values-file
-	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync", "--state-values-file", valuesPath)
+	// Execute helmfile sync with explicit file, state-values-file, and id from directory structure
+	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync",
+		"--state-values-file", valuesPath,
+		"--state-values-set", fmt.Sprintf("id=%s", deploymentID))
 	cmd.Dir = deploymentDir // Run in deployment directory
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),

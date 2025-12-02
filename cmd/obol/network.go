@@ -82,17 +82,23 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 		}
 
 		// Build flags from template fields
-		flags := []cli.Flag{}
+		flags := []cli.Flag{
+			// id flag is always present (special case - not parsed from template)
+			&cli.StringFlag{
+				Name:     "id",
+				Usage:    fmt.Sprintf("Deployment identifier for namespace (e.g., 'my-node' becomes '%s-my-node', defaults to generated petname)", networkName),
+				Required: false,
+			},
+			// force flag to allow overwriting existing deployments
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"f"},
+				Usage:   "Overwrite existing deployment configuration if it already exists",
+			},
+		}
+
+		// Add flags from parsed template fields
 		for _, field := range fields {
-			// Customize id flag description to include network-specific example
-			if field.FlagName == "id" {
-				flags = append(flags, &cli.StringFlag{
-					Name:     "id",
-					Usage:    fmt.Sprintf("Namespace suffix for this deployment (e.g., 'smart-kodiak' becomes '%s-smart-kodiak', defaults to generated petname)", networkName),
-					Required: field.Required,
-				})
-				continue
-			}
 			// Build usage string
 			usage := field.Description
 			if usage == "" {
@@ -131,6 +137,13 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Action: func(c *cli.Context) error {
 				// Collect and validate flag values
 				overrides := make(map[string]string)
+
+				// Collect id flag (special case - not in parsed fields)
+				if idValue := c.String("id"); idValue != "" {
+					overrides["id"] = idValue
+				}
+
+				// Collect parsed template fields
 				for _, field := range netFields {
 					value := c.String(field.FlagName)
 					if value != "" {
@@ -146,7 +159,10 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 					}
 				}
 
-				return network.Install(cfg, netName, overrides)
+				// Get force flag
+				force := c.Bool("force")
+
+				return network.Install(cfg, netName, overrides, force)
 			},
 		})
 	}
