@@ -21,7 +21,6 @@ const AccordionContainer = styled(Box, {
 const AccordionHeader = styled(Flex, {
   position: 'relative',
   alignItems: 'start',
-  cursor: 'pointer',
   width: '100%',
   transition: 'all 0.2s ease',
 
@@ -49,6 +48,7 @@ const ChevronIcon = styled(Box, {
   // Absolute positioning prevents chevron from pushing content to the left
   // and maintains consistent text alignment regardless of chevron state
   position: 'absolute',
+  cursor: 'pointer',
   top: '0',
   right: '0',
   width: '$md',
@@ -127,9 +127,9 @@ export function Accordion({
 
   return (
     <AccordionContainer className={className}>
-      <AccordionHeader onClick={handleToggle} disabled={disabled}>
+      <AccordionHeader disabled={disabled}>
         <HeaderContent>{header}</HeaderContent>
-        <ChevronIcon expanded={isExpanded} data-chevron>
+        <ChevronIcon expanded={isExpanded} data-chevron onClick={handleToggle}>
           <Up size="s" color={theme.colors.body.value} />
         </ChevronIcon>
       </AccordionHeader>
