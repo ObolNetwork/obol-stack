@@ -13,18 +13,18 @@ spec:
   - host: obol.stack
     http:
       paths:
-      - path: /ethereum/execution(/|$)(.*)
+      - path: /{{ .Release.Namespace }}/execution(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
-            name: ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}
+            name: ethereum-execution
             port:
               number: 8545
-      - path: /ethereum/beacon(/|$)(.*)
+      - path: /{{ .Release.Namespace }}/beacon(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
-            name: ethereum-consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+            name: ethereum-beacon
             port:
               number: 5052
 {{- end }}
