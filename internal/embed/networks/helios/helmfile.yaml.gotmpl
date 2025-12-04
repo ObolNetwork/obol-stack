@@ -4,6 +4,8 @@
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
 
 releases:
   - name: helios
@@ -35,7 +37,7 @@ releases:
           hosts:
             - host: obol.stack
               paths:
-                - path: /helios(/|$)(.*)
+                - path: /helios-{{ .Values.id }}(/|$)(.*)
                   pathType: ImplementationSpecific
 
   # Metadata ConfigMap for frontend discovery
