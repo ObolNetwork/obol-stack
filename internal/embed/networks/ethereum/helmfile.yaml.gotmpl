@@ -65,3 +65,42 @@ releases:
       - executionClient: {{ .Values.executionClient }}
         consensusClient: {{ .Values.consensusClient }}
         network: {{ .Values.network }}
+
+  # Metadata ConfigMap for frontend discovery
+  - name: ethereum-metadata
+    namespace: ethereum-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: ethereum-{{ .Values.id }}-metadata
+              namespace: ethereum-{{ .Values.id }}
+              labels:
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: ethereum
+            data:
+              metadata.json: |
+                {
+                  "network": "{{ .Values.network }}",
+                  "execution": {
+                    "client": "{{ .Values.executionClient }}",
+                    "endpoints": {
+                      "rpc": {
+                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/execution",
+                        "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:8545"
+                      }
+                    }
+                  },
+                  "consensus": {
+                    "client": "{{ .Values.consensusClient }}",
+                    "endpoints": {
+                      "rpc": {
+                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/beacon",
+                        "internal": "http://ethereum-beacon.ethereum-{{ .Values.id }}.svc.cluster.local:5052"
+                      }
+                    }
+                  }
+                }
