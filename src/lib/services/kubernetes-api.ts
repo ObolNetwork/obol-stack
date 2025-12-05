@@ -3,8 +3,17 @@
  * Uses the Kubernetes API directly via service account token
  */
 
+import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import { NODE_MODES, NodeModeType } from '../../types/dashboard';
 import { config } from '../config/environment';
+import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import * as fs from 'fs';
+import {
+  AnyApplicationInstance,
+  BaseApplicationInstance,
+  isValidApp,
+  validateApplicationInstance,
+} from '../models/application-instances';
 
 export interface ServiceModeInfo {
   url: string;
@@ -14,14 +23,97 @@ export interface ServiceModeInfo {
 export class KubernetesAPIClient {
   private baseUrl: string;
   private token?: string;
+  // private kc: KubeConfig;
+  private coreV1Api: ObjectCoreV1Api;
 
   constructor() {
     // When running in a pod, Kubernetes automatically mounts the service account
     // The API server is always available at this address from within the cluster
     this.baseUrl = 'https://kubernetes.default.svc';
 
+    const kc = this.getKubeConfig();
+    this.coreV1Api = kc.makeApiClient(CoreV1Api);
     // In production, read the service account token
     // For now, we'll use a simpler approach with direct service URLs
+  }
+
+  private getKubeConfig(): KubeConfig {
+    const kc = new KubeConfig();
+    if (process.env.KUBERNETES_SERVICE_HOST) {
+      // In-cluster mode: Use service account token
+      console.log('[K8s] Using in-cluster configuration');
+      kc.loadFromCluster();
+    } else {
+      // Local development: Require KUBECONFIG env var
+      if (!process.env.KUBECONFIG) {
+        throw new Error(
+          'KUBECONFIG environment variable is required for local development. ' +
+            'Set it to the path of your kubeconfig file.'
+        );
+      }
+
+      // Check if file exists
+      if (!fs.existsSync(process.env.KUBECONFIG)) {
+        throw new Error(
+          `Kubeconfig file not found at: ${process.env.KUBECONFIG}`
+        );
+      }
+
+      try {
+        kc.loadFromFile(process.env.KUBECONFIG);
+        console.log(`[K8s] Context: ${kc.getCurrentContext()}`);
+      } catch (error) {
+        throw new Error(
+          `Failed to load kubeconfig from ${process.env.KUBECONFIG}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    return kc;
+  }
+
+  async getApplicationInstances(): Promise<AnyApplicationInstance[]> {
+    const response = await this.coreV1Api.listConfigMapForAllNamespaces({
+      labelSelector: 'app.kubernetes.io/part-of=obol.stack',
+    });
+
+    const instances: AnyApplicationInstance[] = [];
+
+    for (const configMap of response.items) {
+      const labels = configMap.metadata?.labels;
+      const app = labels?.['obol.stack/app'];
+      const id = labels?.['obol.stack/id'];
+      const data = configMap.data?.['metadata.json'];
+      const creationTimestamp = configMap.metadata?.creationTimestamp;
+
+      if (app && id && data && creationTimestamp) {
+        // Only process if app is a valid app type
+        if (!isValidApp(app)) {
+          console.warn(`Unknown app type: ${app}, skipping instance ${id}`);
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(data);
+
+          const base: BaseApplicationInstance = {
+            app, // TypeScript now knows app is 'helios' | 'aztec' | 'ethereum'
+            id,
+            creationTimestamp: new Date(creationTimestamp),
+          };
+
+          const validated = validateApplicationInstance(app, parsed, base);
+          instances.push(validated);
+        } catch (error) {
+          console.error(
+            `Failed to parse/validate metadata.json for ${app}/${id}:`,
+            error
+          );
+        }
+      }
+    }
+
+    return instances;
   }
 
   /**
@@ -53,45 +145,45 @@ export class KubernetesAPIClient {
     }
   }
 
-  async getAvailableModes(): Promise<ServiceModeInfo[]> {
-    const modes = [
-      {
-        url: config.fullNodeExecutionUrl,
-        type: NODE_MODES.FULL_MODE,
-      },
-      {
-        url: config.heliosClientUrl,
-        type: NODE_MODES.LIGHT_MODE,
-      },
-      {
-        url: config.aztecFullNodeUrl,
-        type: NODE_MODES.AZTEC_FULLNODE,
-      },
-      {
-        url: config.aztecSequencerUrl,
-        type: NODE_MODES.AZTEC_SEQUENCER,
-      },
-      {
-        url: config.aztecProverNodeUrl,
-        type: NODE_MODES.AZTEC_PROVER,
-      },
-    ];
+  // async getAvailableModes(): Promise<ServiceModeInfo[]> {
+  //   const modes = [
+  //     {
+  //       url: config.fullNodeExecutionUrl,
+  //       type: NODE_MODES.FULL_MODE,
+  //     },
+  //     {
+  //       url: config.heliosClientUrl,
+  //       type: NODE_MODES.LIGHT_MODE,
+  //     },
+  //     {
+  //       url: config.aztecFullNodeUrl,
+  //       type: NODE_MODES.AZTEC_FULLNODE,
+  //     },
+  //     {
+  //       url: config.aztecSequencerUrl,
+  //       type: NODE_MODES.AZTEC_SEQUENCER,
+  //     },
+  //     {
+  //       url: config.aztecProverNodeUrl,
+  //       type: NODE_MODES.AZTEC_PROVER,
+  //     },
+  //   ];
 
-    // Check all modes in parallel
-    const results = await Promise.allSettled(
-      modes.map(service => this.checkServiceHealth(service.url))
-    );
+  //   // Check all modes in parallel
+  //   const results = await Promise.allSettled(
+  //     modes.map(service => this.checkServiceHealth(service.url))
+  //   );
 
-    // Return only the modes that are available
-    const availableModes = modes.filter((service, index) => {
-      const result = results[index];
-      const isAvailable =
-        result.status === 'fulfilled' && result.value === true;
-      return isAvailable;
-    });
+  //   // Return only the modes that are available
+  //   const availableModes = modes.filter((service, index) => {
+  //     const result = results[index];
+  //     const isAvailable =
+  //       result.status === 'fulfilled' && result.value === true;
+  //     return isAvailable;
+  //   });
 
-    return availableModes;
-  }
+  //   return availableModes;
+  // }
 
   /**
    * Check port availability based on known services

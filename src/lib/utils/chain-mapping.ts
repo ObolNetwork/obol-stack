@@ -2,10 +2,10 @@
  * Chain ID to chain information mapping utilities
  */
 
-import { CHAINS, NETWORKS, ChainType, NetworkType } from '@/types/dashboard';
+import { CHAINS, NETWORKS, ChainName, NetworkType } from '@/types/dashboard';
 
 export interface ChainInfo {
-  chainName: ChainType;
+  chainName: ChainName;
   network: NetworkType;
 }
 
@@ -42,9 +42,26 @@ export function getChainInfoFromId(chainId: number): ChainInfo {
 
   // For unknown chains, return a generic mapping
   return {
-    chainName: `chain-${chainId}` as ChainType,
+    chainName: `chain-${chainId}` as ChainName,
     network: NETWORKS.TESTNET, // Default unknown chains to testnet
   };
+}
+
+/**
+ * Get chain information from chain name
+ * @param chainName - The chain name (e.g., 'ethereum', 'sepolia', 'hoodi')
+ * @returns Chain information including name and network type, or null if not found
+ */
+export function getChainInfoFromName(chainName: ChainName): ChainInfo | null {
+  // Search through the chain ID map to find matching chain name
+  for (const chainInfo of Object.values(CHAIN_ID_MAP)) {
+    if (chainInfo.chainName === chainName) {
+      return chainInfo;
+    }
+  }
+
+  // If not found in known chains, return null
+  return null;
 }
 
 /**

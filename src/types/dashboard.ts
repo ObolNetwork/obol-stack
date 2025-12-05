@@ -7,14 +7,14 @@ export const CHAINS = {
 } as const;
 
 // Chain ID to Chain Name mapping
-export const CHAIN_ID_TO_NAME: Record<number, ChainType> = {
+export const CHAIN_ID_TO_NAME: Record<number, ChainName> = {
   1: CHAINS.ETHEREUM,
   11155111: CHAINS.SEPOLIA,
   560048: CHAINS.HOODI,
 } as const;
 
 // Helper function to get chain name by ID
-export const getChainName = (chainId: ChainIdType): ChainType => {
+export const getChainName = (chainId: ChainIdType): ChainName => {
   return CHAIN_ID_TO_NAME[chainId];
 };
 
@@ -27,8 +27,23 @@ export const NODE_MODES = {
   FULL_MODE: 'fullMode',
   LIGHT_MODE: 'lightMode',
   AZTEC_FULLNODE: 'aztec-fullnode',
-  AZTEC_SEQUENCER: 'aztec-sequencer',
-  AZTEC_PROVER: 'aztec-prover',
+} as const;
+
+// App instance types matching application-instances.ts
+export const APP_INSTANCE_TYPES = {
+  HELIOS: 'helios',
+  AZTEC: 'aztec',
+  ETHEREUM: 'ethereum',
+} as const;
+
+export type AppInstanceType =
+  (typeof APP_INSTANCE_TYPES)[keyof typeof APP_INSTANCE_TYPES];
+
+// Mapping from app instance type to node mode
+export const APP_TO_NODE_MODE: Record<AppInstanceType, NodeModeType> = {
+  [APP_INSTANCE_TYPES.HELIOS]: NODE_MODES.LIGHT_MODE,
+  [APP_INSTANCE_TYPES.AZTEC]: NODE_MODES.AZTEC_FULLNODE,
+  [APP_INSTANCE_TYPES.ETHEREUM]: NODE_MODES.FULL_MODE,
 } as const;
 
 export const CLIENT_STATUS = {
@@ -50,7 +65,7 @@ export const PORT_STATUS = {
 
 // Type definitions from constants
 export type ChainIdType = keyof typeof CHAIN_ID_TO_NAME;
-export type ChainType = (typeof CHAINS)[keyof typeof CHAINS];
+export type ChainName = (typeof CHAINS)[keyof typeof CHAINS];
 export type NetworkType = (typeof NETWORKS)[keyof typeof NETWORKS];
 export type NodeModeType = (typeof NODE_MODES)[keyof typeof NODE_MODES];
 export type ClientStatusType =
@@ -67,7 +82,7 @@ export interface ClientInfo {
 }
 
 export interface ChainData {
-  chainName: ChainType;
+  chainName: ChainName;
   network: NetworkType;
   nodeMode: NodeModeType;
   status: ClientStatusType;

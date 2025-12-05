@@ -2,12 +2,12 @@ import React from 'react';
 import { Text, styled, theme } from '@obolnetwork/obol-ui';
 import { WalletClient } from 'viem';
 import { addNetworkToWallet } from '@/lib/utils/wallet';
-import { ChainType } from '@/types/dashboard';
+import { ChainName } from '@/types/dashboard';
 import { AddCircle } from '@/icons';
 import { toast } from 'react-toastify';
 
 export interface AddNetworkButtonProps {
-  chainName: ChainType;
+  chainName: ChainName;
   walletClient?: WalletClient | null;
 }
 

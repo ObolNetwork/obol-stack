@@ -1,5 +1,5 @@
 import { WalletClient } from 'viem';
-import { ChainType } from '../../types/dashboard';
+import { ChainName } from '../../types/dashboard';
 import { config } from '../config/environment';
 
 type AddEthereumChainParameter = {
@@ -10,7 +10,7 @@ type AddEthereumChainParameter = {
   blockExplorerUrls?: string[];
 };
 
-const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
+const CHAIN_PARAMS: Partial<Record<ChainName, AddEthereumChainParameter>> = {
   // Ethereum Mainnet
   ethereum: {
     chainId: '0x1',
@@ -51,7 +51,7 @@ const CHAIN_PARAMS: Partial<Record<ChainType, AddEthereumChainParameter>> = {
 
 export async function addNetworkToWallet(
   walletClient: WalletClient,
-  chainName: ChainType
+  chainName: ChainName
 ) {
   const params = CHAIN_PARAMS[chainName];
 

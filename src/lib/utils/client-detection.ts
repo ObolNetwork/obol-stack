@@ -2,7 +2,12 @@
  * Utility functions for detecting and mapping Ethereum clients
  */
 
-import { NODE_MODES, NodeModeType } from '../../types/dashboard';
+import {
+  APP_TO_NODE_MODE,
+  AppInstanceType,
+  NODE_MODES,
+  NodeModeType,
+} from '../../types/dashboard';
 import { ClientType } from '../services/client-metrics';
 import { config } from '../config/environment';
 
@@ -28,86 +33,47 @@ export function parseVersion(versionString: string): string {
 }
 
 /**
- * Client configuration interface
+ * Get NodeModeType from app instance type
+ * @param appType - The app instance type ('helios' | 'aztec' | 'ethereum')
+ * @returns The corresponding NodeModeType
  */
-export interface ClientConfig {
-  name: string;
-  endpoint: string;
-  type: ClientType;
-  icon: string;
-  beaconUrl?: string;
+export function getNodeModeFromAppInstance(
+  appType: AppInstanceType
+): NodeModeType {
+  return APP_TO_NODE_MODE[appType];
 }
 
 /**
- * Get available clients by mode
- * @param mode - The node mode NodeModeType
- * @returns Array of client configurations with name and endpoint
+ * Client name and icon mapping by app instance type
  */
-export function getClients(mode: NodeModeType): ClientConfig[] {
-  if (mode === NODE_MODES.FULL_MODE) {
-    return [
-      {
-        name: 'Nethermind',
-        endpoint: config.fullNodeExecutionUrl,
-        type: 'execution',
-        icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
-      },
-      {
-        name: 'Nimbus',
-        endpoint: config.fullNodeBeaconUrl,
-        type: 'consensus',
-        icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
-      },
-    ];
-  } else if (mode === NODE_MODES.LIGHT_MODE) {
-    return [
-      {
-        name: 'Helios',
-        endpoint: config.heliosClientUrl,
-        type: 'helios',
-        icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
-      },
-    ];
-  } else if (mode === NODE_MODES.AZTEC_FULLNODE) {
-    return [
-      {
-        name: 'Archiver',
-        endpoint: config.aztecFullNodeUrl,
-        type: 'aztec',
-        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4', // Aztec org avatar
-      },
-    ];
-  } else if (mode === NODE_MODES.AZTEC_SEQUENCER) {
-    return [
-      {
-        name: 'Sequencer',
-        endpoint: config.aztecSequencerUrl,
-        type: 'aztec',
-        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
-      },
-    ];
-  } else if (mode === NODE_MODES.AZTEC_PROVER) {
-    return [
-      {
-        name: 'Prover',
-        endpoint: config.aztecProverNodeUrl,
-        type: 'aztec',
-        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
-      },
-      {
-        name: 'Broker',
-        endpoint: config.aztecProverBrokerUrl,
-        type: 'aztec',
-        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
-      },
-      {
-        name: 'Agent',
-        endpoint: config.aztecProverAgentUrl,
-        type: 'aztec',
-        icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
-      },
-    ];
-  }
+const APP_CLIENT_INFO: Record<ClientType, { name: string; icon: string }> = {
+  helios: {
+    name: 'Helios',
+    icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
+  },
+  aztec: {
+    name: 'Archiver',
+    icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
+  },
+  execution: {
+    name: 'Nethermind',
+    icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
+  },
 
-  return [];
+  consensus: {
+    name: 'Nimbus',
+    icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
+  },
+} as const;
+
+/**
+ * Get client name and icon by app instance type
+ * @param appType - The app instance type ('helios' | 'aztec' | 'ethereum')
+ * @returns Object with name and icon for the client
+ */
+export function getClientInfoByAppType(clientType: ClientType): {
+  name: string;
+  icon: string;
+} {
+  return APP_CLIENT_INFO[clientType];
 }
