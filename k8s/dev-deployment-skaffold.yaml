@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: obol-frontend-obol-app
-  namespace: frontend
+  namespace: obol-frontend
   labels:
     app.kubernetes.io/name: obol-app
     app.kubernetes.io/instance: obol-frontend
@@ -26,17 +26,28 @@ spec:
     spec:
       containers:
         - name: obol-app
-          image: obol-frontend
+          # FIXED: Use the full image reference from the Helm chart values
+          image: obolnetwork/obol-stack-front-end:main-b98b361
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
               name: http
           env:
+            # Development environment variables
             - name: NODE_ENV
               value: 'development'
             - name: PORT
               value: '3000'
             - name: HOSTNAME
               value: '0.0.0.0'
+            # Frontend environment variables from Helm chart values
+            # Note: These use template variables - adjust based on your network
+            - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
+              value: 'http://helios-mainnet.helios.svc.cluster.local:8545'
+            - name: NEXT_PUBLIC_ERPC_URL
+              value: 'http://erpc.default.svc.cluster.local:4000/rpc'
+            - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
+              value: 'http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080'
           resources:
             requests:
               memory: '128Mi'
@@ -72,8 +83,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: obol-frontend-obol-app
-  namespace: frontend
+  name: obol-frontend
+  namespace: obol-frontend
   labels:
     app.kubernetes.io/name: obol-app
     app.kubernetes.io/instance: obol-frontend
