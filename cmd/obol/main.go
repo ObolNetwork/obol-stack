@@ -47,7 +47,7 @@ COMMANDS:
      stack purge     Delete stack config (use --force to also delete data)
 
    Obol Agent:
-     agent init      Initialize Obol Agent with Google API key
+     agent init      Initialize the Obol Agent with an API key
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -163,18 +163,18 @@ GLOBAL OPTIONS:
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize Obol Agent with Google API key",
+						Usage: "Initialize the Obol Agent with an API key",
 						Flags: []cli.Flag{
 							&cli.StringFlag{
-								Name:    "google-api-key",
-								Aliases: []string{"g"},
-								Usage:   "Google API key for Obol Agent (required for AI features)",
-								EnvVars: []string{"GOOGLE_API_KEY"},
+								Name:    "agent-api-key",
+								Aliases: []string{"a"},
+								Usage:   "API key for the Obol Agent",
+								EnvVars: []string{"AGENT_API_KEY"},
 							},
 						},
 						Action: func(c *cli.Context) error {
-							googleAPIKey := c.String("google-api-key")
-							if err := agent.Init(cfg, googleAPIKey); err != nil {
+							agentAPIKey := c.String("agent-api-key")
+							if err := agent.Init(cfg, agentAPIKey); err != nil {
 								stackID := stack.GetStackID(cfg)
 								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
 									StateDir: cfg.StateDir,

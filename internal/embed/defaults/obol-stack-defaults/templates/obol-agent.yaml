@@ -2,7 +2,7 @@
 # Obol Agent Kubernetes Manifest
 # This manifest deploys the Obol AI Agent with namespace-scoped RBAC permissions
 # The agent can read cluster-wide resources (nodes, namespaces) but can only modify
-# resources in specific namespaces: default, ethereum, l1, monitoring
+# resources in specific namespaces: agent, ethereum, monitoring
 
 #------------------------------------------------------------------------------
 # ServiceAccount - Identity for the Obol Agent pod
@@ -121,41 +121,6 @@ subjects:
     namespace: agent
 
 ---
-# Role for 'l1' namespace
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: obol-agent-role
-  namespace: l1
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: obol-agent-binding
-  namespace: l1
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: obol-agent-role
-subjects:
-  - kind: ServiceAccount
-    name: obol-agent
-    namespace: agent
-
----
 # Role for 'monitoring' namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -222,13 +187,13 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
-            # REQUIRED: Google API key from Kubernetes secret
-            # Secret created via: obol stack up --google-api-key=<key>
-            - name: GOOGLE_API_KEY
+            # REQUIRED: Agent API key from Kubernetes secret
+            # Secret created via: obol agent init --agent-api-key=<key>
+            - name: AGENT_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: obol-agent-google-api-key
-                  key: GOOGLE_API_KEY
+                  name: obol-agent-api-key
+                  key: AGENT_API_KEY
                   optional: true  # Allow deployment even if secret doesn't exist
 
             # PUBLIC_MODE controls Kubernetes MCP access
@@ -253,9 +218,6 @@ spec:
 
           # Resource limits prevent the agent from consuming too many cluster resources
           resources:
-            requests:  # Minimum guaranteed resources
-              cpu: 500m      # 0.5 CPU cores
-              memory: 1Gi    # 1 GiB RAM
             limits:    # Maximum allowed resources
               cpu: 2000m     # 2 CPU cores
               memory: 4Gi    # 4 GiB RAM
@@ -263,7 +225,7 @@ spec:
 ---
 #------------------------------------------------------------------------------
 # Service - Exposes the Obol Agent within the cluster
-# Access the agent at: http://obol-agent.default.svc.cluster.local:8000
+# Access the agent at: http://obol-agent.agent.svc.cluster.local:8000
 #------------------------------------------------------------------------------
 apiVersion: v1
 kind: Service
