@@ -1,5 +1,3 @@
-'use client';
-
 import React from 'react';
 import { Box, Text } from '@obolnetwork/obol-ui';
 

@@ -20,14 +20,31 @@ const MainSection = styled(Box, {
   maxWidth: '800px',
   margin: '0 auto',
   width: '100%',
-  transition: 'margin-left 0.3s ease-in-out',
 
-  // Adjust layout when sidebar is present
-  // The CopilotSidebar typically renders with a fixed position
-  // We'll use a CSS approach that detects the sidebar presence
-  '&[data-sidebar-open="true"]': {
-    marginLeft: '0',
-    marginRight: 'auto',
+  '@media (min-width: 1500px) and (max-width: 1900px)': {
+    transition: 'margin 0.3s ease-in-out',
+
+    '&[data-sidebar-open="false"]': {
+      marginLeft: '25%',
+    },
+
+    '&[data-sidebar-open="true"]': {
+      marginLeft: '0px', // smooth animation now works
+    },
+  },
+  '@media (min-width: 1300px) and (max-width: 1500px)': {
+    transition: 'margin 0.3s ease-in-out',
+
+    '&[data-sidebar-open="false"]': {
+      marginLeft: '10%',
+    },
+
+    '&[data-sidebar-open="true"]': {
+      marginLeft: '0px', // smooth animation now works
+    },
+  },
+  '@media (max-width: 1300px)': {
+    marginLeft: '0px',
   },
 });
 

@@ -44,19 +44,7 @@ const CloseButton = styled(Box, {
   },
 });
 
-const ButtonContainer = styled(Box, {
-  position: 'sticky',
-  top: '136px',
-  right: '64px',
-  width: '$5xl',
-  height: '$5xl',
-  aspectRatio: '1/1',
-  flexShrink: 0,
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 0,
-});
+const ButtonContainer = styled(Box, {});
 
 const ButtonImage = styled(Image, {
   width: '100%',

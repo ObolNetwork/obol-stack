@@ -9,7 +9,7 @@ export const config = {
     'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
   heliosClientUrl:
     process.env.NEXT_PUBLIC_HELIOS_CLIENT_URL ||
-    'http://l1-light-client-helios.l1.svc.cluster.local:8545',
+    'http://helios-mainnet.helios.svc.cluster.local:8545',
   fullNodeExecutionUrl:
     process.env.NEXT_PUBLIC_FULL_NODE_EXECUTION_URL ||
     'http://l1-full-node-mainnet-execution.l1.svc.cluster.local:8545',
