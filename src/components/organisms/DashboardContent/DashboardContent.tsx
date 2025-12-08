@@ -60,7 +60,6 @@ export function DashboardContent({
   onRetry,
 }: DashboardContentProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  console.log(data);
   return (
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
