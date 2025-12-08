@@ -6,14 +6,16 @@ A modern monitoring dashboard for Obol Stack and Ethereum node status, built wit
 
 ## Features
 
-- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients (Nethermind, Nimbus)
+- 🎯 **Real-time Monitoring**: Track Ethereum execution and consensus clients (Nethermind, Nimbus, Helios, Aztec)
 - 📊 **System Metrics**: Monitor disk usage, memory, CPU load, and uptime
 - 🌐 **Chain Status**: View network participation, finalization status, and sync progress
 - 🔧 **Port Status**: Monitor P2P, JSON-RPC, Prometheus, and Beacon API ports
+- 🤖 **AI Agent Integration**: Interactive ADK agent with CopilotKit for intelligent assistance
 - 🎨 **Obol UI**: Built with official Obol Design System components
 - 🧩 **Component Architecture**: Atomic design pattern for scalable development
 - ♿ **Accessibility**: Radix UI primitives ensure WCAG compliance
 - 🐳 **Docker Ready**: Containerized for easy deployment
+- ☸️ **Kubernetes Integration**: Native Kubernetes API integration for cluster monitoring
 - 🔒 **Security Hardened**: Production-ready with security best practices
 
 ## Quick Start
@@ -63,14 +65,23 @@ pnpm run start
 
 ### Environment Variables
 
-| Variable                  | Default       | Description                   |
-| ------------------------- | ------------- | ----------------------------- |
-| `NODE_ENV`                | `development` | Application environment       |
-| `PORT`                    | `3000`        | Port to serve the application |
-| `HOSTNAME`                | `0.0.0.0`     | Hostname to bind to           |
-| `NEXT_TELEMETRY_DISABLED` | `1`           | Disable Next.js telemetry     |
+| Variable                                | Default                                                                          | Description                                      |
+| --------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `NODE_ENV`                              | `development`                                                                    | Application environment                          |
+| `PORT`                                  | `3000`                                                                           | Port to serve the application                    |
+| `HOSTNAME`                              | `0.0.0.0`                                                                        | Hostname to bind to                              |
+| `NEXT_TELEMETRY_DISABLED`               | `1`                                                                              | Disable Next.js telemetry                        |
+| `ADK_AGENT_URL`                         | `http://127.0.0.1:8000/`                                                         | Server-side ADK agent URL (for API routes)       |
+| `NEXT_PUBLIC_ADK_AGENT_URL`             | `http://127.0.0.1:8000/`                                                         | Public ADK agent URL (for display/logging)       |
+| `NEXT_PUBLIC_PROMETHEUS_URL`            | `http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090` | Prometheus server URL                            |
+| `NEXT_PUBLIC_ERPC_URL`                  | `https://obol.stack/rpc`                                                         | Ethereum RPC endpoint URL                        |
+| `NEXT_PUBLIC_KUBECONFIG`                | -                                                                                | Path to kubeconfig file (for local development)  |
+| `NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID` | -                                                                                | WalletConnect project ID for wallet integration  |
+| `KUBERNETES_SERVICE_HOST`               | -                                                                                | Auto-detected when running in Kubernetes cluster |
 
 ## Deployment
+
+### Docker Deployment
 
 See [deployment/README.md](deployment/README.md) for detailed deployment instructions including:
 
@@ -79,13 +90,33 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 - SSL/TLS configuration
 - Health checks and monitoring
 
+### Kubernetes Deployment
+
+See [deployment/README.md](deployment/README.md) for Kubernetes deployment with Skaffold:
+
+- Quick deployment with Skaffold
+- Development mode with hot reload
+- Manual deployment steps
+- Port forwarding and access
+
+## Additional Documentation
+
+- **[Development Guide](DEVELOPMENT.md)**: Development setup and guidelines
+- **[Agent Quick Start](QUICKSTART_AGENT.md)**: Quick start guide for ADK agent integration
+- **[Agent Integration](ADK_AGENT_INTEGRATION.md)**: Complete ADK agent integration documentation
+- **[Deployment Guide](deployment/README.md)**: Docker and Kubernetes deployment instructions
+
 ## Development
 
 ### Tech Stack
 
 - **Framework**: Next.js 15.5.2 with React 19
-- **Styling**: Tailwind CSS v4 with custom Obol color system
+- **Styling**: Stitches-based styling system with Obol Design System tokens
 - **Components**: Radix UI primitives for accessibility
+- **AI Agent**: CopilotKit with AG-UI protocol for ADK agent integration
+- **State Management**: TanStack Query (React Query) for server state
+- **Blockchain**: Wagmi + RainbowKit for wallet connectivity
+- **Kubernetes**: @kubernetes/client-node for cluster monitoring
 - **TypeScript**: Full type safety
 - **Architecture**: Atomic Design Pattern
 - **Font**: DM Sans (Obol brand font)
@@ -93,18 +124,31 @@ See [deployment/README.md](deployment/README.md) for detailed deployment instruc
 ### Available Scripts
 
 ```bash
-pnpm run dev              # Development server
+# Development
+pnpm run dev              # Development server with Turbopack
 pnpm run dev:local        # Development server (localhost)
+
+# Production
 pnpm run build            # Production build
-pnpm run start            # Production server
+pnpm run start            # Production server (obol.stack domain)
 pnpm run start:local      # Production server (localhost)
-pnpm run lint             # ESLint
-pnpm run format           # Prettier formatting
+
+# Code Quality
+pnpm run lint             # Run ESLint
+pnpm run lint:fix         # Run ESLint with auto-fix
+pnpm run format           # Format code with Prettier
 pnpm run format:check     # Check Prettier formatting
-pnpm run test:e2e         # Run E2E tests
-pnpm run test:e2e:ui      # Run E2E tests in UI mode
+
+# Testing
+pnpm run test:e2e         # Run all E2E tests
+pnpm run test:e2e:ui      # Run E2E tests in UI mode (recommended)
 pnpm run test:e2e:headed  # Run E2E tests with visible browser
 pnpm run test:e2e:debug   # Debug E2E tests
+pnpm run test:e2e:report  # View test report
+pnpm run test:e2e:codegen # Generate test code
+pnpm run test:e2e:chromium # Run tests in Chromium only
+pnpm run test:e2e:firefox  # Run tests in Firefox only
+pnpm run test:e2e:webkit   # Run tests in WebKit only
 ```
 
 ### Project Structure
@@ -112,24 +156,87 @@ pnpm run test:e2e:debug   # Debug E2E tests
 ```
 src/
 ├── app/
-│   ├── globals.css      # Global styles and resets
-│   ├── layout.tsx       # Root layout with DM Sans font
-│   └── page.tsx         # Main dashboard page
+│   ├── api/
+│   │   ├── copilotkit/          # AI agent API routes
+│   │   │   ├── route.ts         # Main agent communication endpoint
+│   │   │   └── health/          # Agent health check endpoint
+│   │   └── dashboard/           # Dashboard data API
+│   │       └── route.ts         # Dashboard metrics endpoint
+│   ├── globals.css               # Global styles and resets
+│   ├── layout.tsx                # Root layout with CopilotKit provider
+│   ├── page.tsx                  # Main dashboard page
+│   └── providers.tsx             # React Query and Wagmi providers
 ├── components/
-│   ├── atoms/           # Basic building blocks
-│   │   └── Accordion/   # Custom accordion component
-│   ├── molecules/       # Simple combinations of atoms
-│   ├── organisms/       # Complex UI components
-│   │   ├── DashboardHeader/     # Header with logo
-│   │   ├── DashboardContent/    # Main content area
-│   │   └── NetworkStatus/       # Node monitoring component
-│   ├── pages/           # Page-level components
-│   │   └── DashboardPage/       # Main dashboard page
-│   ├── templates/       # Page layout templates
-│   │   └── DashboardTemplate/   # Dashboard layout
-│   └── index.ts         # Component exports
-└── lib/                 # Utilities and helpers
+│   ├── atoms/                    # Basic building blocks
+│   │   ├── Card/                 # Card component
+│   │   ├── StatusIndicator/      # Status indicator dots
+│   │   ├── Tooltip/              # Tooltip component
+│   │   └── ...
+│   ├── molecules/                # Simple combinations of atoms
+│   │   ├── AgentSidebar/         # AI agent chat sidebar
+│   │   ├── ClientCard/           # Client status card
+│   │   ├── WalletConnection/     # Wallet connection UI
+│   │   └── ...
+│   ├── organisms/                # Complex UI components
+│   │   ├── DashboardHeader/      # Header with logo
+│   │   ├── DashboardContent/     # Main content area
+│   │   ├── NetworkStatus/        # Network monitoring component
+│   │   └── NodeOverview/         # System metrics overview
+│   ├── pages/                    # Page-level components
+│   │   └── DashboardPage/        # Main dashboard page
+│   ├── templates/                # Page layout templates
+│   │   └── DashboardTemplate/    # Dashboard layout
+│   └── index.ts                  # Component exports
+├── hooks/
+│   ├── useAgentHealth.ts         # Agent availability hook
+│   ├── useDashboardData.ts       # Dashboard data fetching hook
+│   └── useTokenPrices.ts         # Token price fetching hook
+├── lib/
+│   ├── config/
+│   │   ├── environment.ts        # Environment configuration
+│   │   └── wagmi.ts              # Wagmi wallet configuration
+│   ├── services/
+│   │   ├── client-metrics.ts     # Client metrics aggregation
+│   │   ├── kubernetes-api.ts     # Kubernetes API client
+│   │   └── prometheus.ts         # Prometheus metrics client
+│   └── utils/                    # Utility functions
+└── types/
+    └── dashboard.ts              # TypeScript type definitions
 ```
+
+## AI Agent Integration
+
+The dashboard includes an integrated AI agent powered by Google's Agent Development Kit (ADK) and CopilotKit. The agent provides intelligent assistance for monitoring and managing your Obol Stack.
+
+### Quick Start
+
+1. **Start your ADK agent** (if you have one):
+
+   ```bash
+   # Your ADK agent should be running on http://localhost:8000
+   ```
+
+2. **Configure environment variables** (optional):
+
+   ```bash
+   # .env.local
+   ADK_AGENT_URL=http://127.0.0.1:8000/
+   NEXT_PUBLIC_ADK_AGENT_URL=http://localhost:8000
+   ```
+
+3. **Access the agent**: Click the chat icon in the bottom right corner of the dashboard
+
+### Features
+
+- **Interactive Chat**: Real-time conversation with your ADK agent
+- **Health Detection**: Automatic detection of agent availability
+- **Dynamic Messaging**: Context-aware messages based on agent status
+- **Shared State**: Bidirectional state synchronization between app and agent
+
+### Documentation
+
+- **[Quick Start Guide](QUICKSTART_AGENT.md)**: Get started with the agent integration in 3 steps
+- **[Full Integration Guide](ADK_AGENT_INTEGRATION.md)**: Comprehensive documentation on architecture and features
 
 ## Testing
 
@@ -152,6 +259,14 @@ pnpm test:e2e:debug
 
 # View test report
 pnpm test:e2e:report
+
+# Generate test code
+pnpm test:e2e:codegen
+
+# Run tests for specific browser
+pnpm test:e2e:chromium
+pnpm test:e2e:firefox
+pnpm test:e2e:webkit
 ```
 
 ### Test Coverage
@@ -160,8 +275,6 @@ pnpm test:e2e:report
 - **Accessibility Tests**: Keyboard navigation, ARIA, contrast
 - **Visual Regression Tests**: Screenshot comparisons
 - **API Tests**: Direct endpoint testing
-
-See [TESTING.md](TESTING.md) for detailed testing documentation.
 
 ## Contributing
 
@@ -197,12 +310,18 @@ The dashboard uses the official Obol UI Design System:
 
 ### Data Flow
 
-Currently uses mock data. Future versions will integrate with:
+The dashboard integrates with multiple data sources:
 
-- Ethereum execution client APIs
-- Consensus client APIs
-- System monitoring APIs
-- Charon distributed validator middleware
+- **Prometheus**: System metrics (CPU, memory, disk, uptime)
+- **Kubernetes API**: Application instances, pod status, port monitoring
+- **Client Metrics**: Aggregated metrics from execution and consensus clients
+- **ADK Agent**: AI-powered assistance via AG-UI protocol
+
+### Supported Clients
+
+- **Execution Clients**: Nethermind, Helios
+- **Consensus Clients**: Nimbus
+- **Other**: Aztec clients
 
 ## Security
 

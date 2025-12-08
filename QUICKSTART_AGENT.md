@@ -42,18 +42,32 @@ src/
 ├── app/
 │   ├── api/
 │   │   └── copilotkit/
-│   │       └── route.ts          # ✅ API endpoint for agent communication
+│   │       ├── route.ts          # ✅ API endpoint for agent communication
+│   │       └── health/
+│   │           └── route.ts      # ✅ Health check endpoint
 │   ├── page.tsx                   # ✅ Main dashboard with CopilotSidebar
 │   └── layout.tsx                 # ✅ Updated with CopilotKit provider
+├── components/
+│   └── molecules/
+│       └── AgentSidebar/
+│           └── AgentSidebar.tsx  # ✅ Agent sidebar with dynamic messaging
+└── hooks/
+    └── useAgentHealth.ts          # ✅ Hook for checking agent availability
 ```
 
 ### 🔧 Configuration
 
-The following environment variable has been configured in `.env.local`:
+The following environment variables can be configured in `.env.local`:
 
 ```bash
+# Server-side agent URL (used by API routes, required)
+ADK_AGENT_URL=http://127.0.0.1:8000/
+
+# Public URL for frontend (optional, for display/logging)
 NEXT_PUBLIC_ADK_AGENT_URL=http://localhost:8000
 ```
+
+**Note**: `ADK_AGENT_URL` defaults to `http://127.0.0.1:8000/` if not specified.
 
 ### 🎨 UI Components
 
@@ -62,6 +76,8 @@ The main dashboard page includes:
 - **CopilotSidebar**: Interactive chat interface with Obol branding (opens on demand)
 - **Obol Design System**: Custom styling with Obol green (#2FE4AB)
 - **Integrated Experience**: Agent sidebar overlays the dashboard without disrupting your workflow
+- **Dynamic Messaging**: Shows welcome message when agent is available, or initialization instructions when unavailable
+- **Health Detection**: Automatically detects agent availability on component mount
 
 ## Testing the Integration
 
@@ -80,6 +96,11 @@ Navigate to `http://localhost:3000`
 ### 3. Interact with the Agent
 
 Click the chat icon in the bottom right corner to open the agent sidebar and start chatting with your ADK agent!
+
+**What you'll see**:
+
+- **Agent Available**: Welcome message with agent capabilities
+- **Agent Unavailable**: Instructions to run `obol agent init` to get started
 
 ## Next Steps
 
@@ -137,9 +158,30 @@ useCopilotAction({
    curl http://localhost:8000
    ```
 
-2. Check browser console for errors (F12)
+2. Verify agent health check:
 
-3. Verify the `NEXT_PUBLIC_ADK_AGENT_URL` in `.env.local`
+   ```bash
+   curl http://localhost:3000/api/copilotkit/health
+   ```
+
+   Expected response when agent is available:
+
+   ```json
+   { "available": true, "agentUrl": "http://127.0.0.1:8000/" }
+   ```
+
+3. Check browser console for errors (F12)
+
+4. Verify the `ADK_AGENT_URL` in `.env.local` (server-side variable)
+
+### Agent Shows Initialization Message
+
+If the sidebar shows "Initialize your Obol Agent..." instead of the welcome message:
+
+1. Ensure your ADK agent is running: `curl http://localhost:8000`
+2. Check the health endpoint: `curl http://localhost:3000/api/copilotkit/health`
+3. Verify `ADK_AGENT_URL` matches your agent's actual URL
+4. Check network connectivity between frontend server and agent
 
 ### CORS Issues
 
