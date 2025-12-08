@@ -15,7 +15,13 @@ NC='\033[0m' # No Color
 # Development mode detection
 if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 	# Get script directory for development mode
-	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Use parameter expansion with default to handle curl | bash case
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	else
+		# Fallback to current directory if BASH_SOURCE not available
+		SCRIPT_DIR="$(pwd)"
+	fi
 	WORKSPACE_DIR="$SCRIPT_DIR/.workspace"
 
 	# Override directories to use local .workspace
@@ -44,9 +50,9 @@ fi
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
 readonly KUBECTL_VERSION="1.31.0"
-readonly HELM_VERSION="3.16.2"
+readonly HELM_VERSION="3.19.1"
 readonly K3D_VERSION="5.8.3"
-readonly HELMFILE_VERSION="0.169.1"
+readonly HELMFILE_VERSION="1.2.2"
 readonly K9S_VERSION="0.32.5"
 readonly HELM_DIFF_VERSION="3.9.11"
 
@@ -75,6 +81,89 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+# Detect installation mode (install vs upgrade)
+detect_installation_mode() {
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		echo "upgrade"
+	else
+		echo "install"
+	fi
+}
+
+# Check Docker installation and availability
+check_docker() {
+	log_info "Checking Docker requirements..."
+
+	# Check if docker command exists
+	if ! command_exists docker; then
+		log_error "Docker is not installed"
+		echo ""
+		echo "Obol Stack requires Docker to run k3d clusters."
+		echo ""
+		echo "Install Docker:"
+		echo "  • Ubuntu/Debian: https://docs.docker.com/engine/install/ubuntu/"
+		echo "  • macOS: https://docs.docker.com/desktop/install/mac-install/"
+		echo "  • Other: https://docs.docker.com/engine/install/"
+		echo ""
+		return 1
+	fi
+
+	# Check if Docker daemon is running
+	if ! docker info >/dev/null 2>&1; then
+		log_error "Docker daemon is not running"
+		echo ""
+		echo "Please start the Docker daemon:"
+		echo "  • Linux: sudo systemctl start docker"
+		echo "  • macOS/Windows: Start Docker Desktop application"
+		echo ""
+		echo "Then run this installer again."
+		echo ""
+		return 1
+	fi
+
+	# Check Docker version (require at least 20.10.0 for k3d compatibility)
+	local docker_version
+	docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
+
+	# Extract major.minor version
+	local major minor
+	major=$(echo "$docker_version" | cut -d. -f1)
+	minor=$(echo "$docker_version" | cut -d. -f2)
+
+	if [[ "$major" -lt 20 ]] || { [[ "$major" -eq 20 ]] && [[ "$minor" -lt 10 ]]; }; then
+		log_warn "Docker version $docker_version is older than recommended (20.10.0+)"
+		log_warn "k3d may not work correctly with older Docker versions"
+	fi
+
+	# Check if user can run Docker without sudo (Linux-specific)
+	if [[ "$(uname -s)" == "Linux" ]]; then
+		if ! docker ps >/dev/null 2>&1; then
+			log_warn "Current user cannot run Docker commands"
+			echo ""
+			echo "You may need to add your user to the docker group:"
+			echo "  sudo usermod -aG docker \$USER"
+			echo "  newgrp docker"
+			echo ""
+			echo "Or run commands with sudo."
+			echo ""
+			# Don't fail here - user might be running with sudo
+		fi
+	fi
+
+	# Check Docker networking (ensure bridge network works)
+	if ! docker network ls >/dev/null 2>&1; then
+		log_error "Docker networking is not functional"
+		echo ""
+		echo "Docker networking is required for k3d clusters."
+		echo "Please check your Docker installation."
+		echo ""
+		return 1
+	fi
+
+	log_success "Docker is installed and running (version $docker_version)"
+	return 0
+}
+
 # Check if binary exists globally in PATH (excluding OBOL_BIN_DIR)
 check_global_binary() {
 	local binary_name="$1"
@@ -100,6 +189,21 @@ create_binary_symlink() {
 	local binary_name="$1"
 	local global_path="$2"
 	local local_path="$OBOL_BIN_DIR/$binary_name"
+
+	# Detect and prevent circular symlinks.
+	# This can happen if a global binary path (e.g. from a previous dev install)
+	# already points to the location this script is trying to manage.
+	if [[ -L "$global_path" ]]; then
+		local link_target
+		link_target=$(readlink "$global_path" || echo "") # Handle readlink failure
+
+		if [[ "$link_target" == "$local_path" ]]; then
+			log_warn "Circular symlink detected for $binary_name."
+			log_warn "  $global_path -> $local_path"
+			log_warn "Ignoring global binary to prevent loop. Will install fresh copy."
+			return 1 # Signal failure to prevent using this global binary
+		fi
+	fi
 
 	# Check if local path already exists
 	if [[ -e "$local_path" || -L "$local_path" ]]; then
@@ -193,7 +297,11 @@ install_dev_wrapper() {
 	log_info "Installing development wrapper script..."
 
 	# Get script directory
-	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	else
+		SCRIPT_DIR="$(pwd)"
+	fi
 
 	# Create wrapper script that uses 'go run'
 	cat >"$OBOL_BIN_DIR/obol" <<'EOF'
@@ -314,6 +422,12 @@ build_from_source() {
 
 # Install obol binary
 install_obol_binary() {
+	# Get current version if exists (for upgrade messaging)
+	local current_version=""
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		current_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null | head -1 || echo "")
+	fi
+
 	log_info "Installing obol binary..."
 
 	# Development mode: install wrapper script
@@ -341,6 +455,7 @@ install_obol_binary() {
 		# If we got a tag, try to download it
 		if [[ -n "$latest_tag" ]]; then
 			if download_release "$latest_tag"; then
+				show_version_change "$current_version"
 				return 0
 			fi
 			log_warn "Download failed, falling back to building from source..."
@@ -350,15 +465,94 @@ install_obol_binary() {
 
 		# Fallback: build from source
 		build_from_source "main"
+		show_version_change "$current_version"
 	else
 		# Specific release requested
 		log_info "Attempting to download release: $release"
 		if download_release "$release"; then
+			show_version_change "$current_version"
 			return 0
 		fi
 
 		log_warn "Release $release not found, building from source..."
 		build_from_source "$release"
+		show_version_change "$current_version"
+	fi
+}
+
+# Show version change after upgrade
+show_version_change() {
+	local old_version="$1"
+
+	# Get new version
+	local new_version=""
+	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		new_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null | head -1 || echo "")
+	fi
+
+	# Show upgrade message if versions are different
+	if [[ -n "$old_version" && -n "$new_version" ]]; then
+		if [[ "$old_version" != "$new_version" ]]; then
+			echo ""
+			log_success "Upgraded: $old_version → $new_version"
+		else
+			echo ""
+			log_success "Already at version: $new_version"
+		fi
+	elif [[ -n "$new_version" ]]; then
+		echo ""
+		log_success "Installed version: $new_version"
+	fi
+}
+
+# Copy bootstrap script to bin directory for easy upgrades
+copy_bootstrap_script() {
+	# Skip in development mode
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		log_info "Development mode: skipping bootstrap script copy"
+		return 0
+	fi
+
+	# Skip if we're already running from OBOL_BIN_DIR (avoid self-copy loop)
+	local script_path=""
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+		if [[ "$script_path" == "$OBOL_BIN_DIR/"* ]]; then
+			log_info "Already running from OBOL_BIN_DIR, skipping self-copy"
+			return 0
+		fi
+	fi
+
+	# Check if running from stdin (piped from curl) vs from a file
+	local script_source_url="https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh"
+
+	if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ ! -f "${BASH_SOURCE[0]}" ]]; then
+		# Running from stdin (curl | bash) - download the script
+		log_info "Downloading bootstrap script to $OBOL_BIN_DIR/obolup.sh..."
+
+		if curl -fsSL "$script_source_url" -o "$OBOL_BIN_DIR/obolup.sh"; then
+			chmod +x "$OBOL_BIN_DIR/obolup.sh"
+			log_success "Bootstrap script installed at $OBOL_BIN_DIR/obolup.sh"
+			log_info "To upgrade in future, run: obolup.sh"
+		else
+			log_warn "Failed to download bootstrap script (non-critical)"
+			log_info "You can manually download it later with:"
+			echo ""
+			echo "  curl -sSL $script_source_url -o $OBOL_BIN_DIR/obolup.sh"
+			echo "  chmod +x $OBOL_BIN_DIR/obolup.sh"
+			echo ""
+		fi
+	else
+		# Running from a file - copy it
+		log_info "Copying bootstrap script to $OBOL_BIN_DIR/obolup.sh..."
+
+		if cp "${BASH_SOURCE[0]}" "$OBOL_BIN_DIR/obolup.sh"; then
+			chmod +x "$OBOL_BIN_DIR/obolup.sh"
+			log_success "Bootstrap script installed at $OBOL_BIN_DIR/obolup.sh"
+			log_info "To upgrade in future, run: obolup.sh"
+		else
+			log_warn "Failed to copy bootstrap script (non-critical)"
+		fi
 	fi
 }
 
@@ -889,33 +1083,82 @@ configure_hosts_file() {
 	fi
 }
 
-# Configure PATH in ~/.profile
-# This function appends OBOL_BIN_DIR to PATH in the user's ~/.profile file.
-# The ~/.profile file is sourced by login shells and is shell-agnostic (works with bash, zsh, fish, etc.).
-# After adding to ~/.profile, the user must either:
-#   1. Source the file: source ~/.profile
-#   2. Create a new terminal session (new login shell will source ~/.profile automatically)
-configure_path() {
-	local profile="$HOME/.profile"
+# Detect appropriate shell profile file (NVM-style detection)
+detect_shell_profile() {
+	local profile=""
+
+	# Check for environment override
+	if [[ -n "${PROFILE:-}" ]] && [[ -f "${PROFILE}" ]]; then
+		echo "${PROFILE}"
+		return 0
+	fi
+
+	# Shell-specific detection based on $SHELL
+	if [[ "${SHELL}" == *"bash"* ]]; then
+		# Bash: prefer .bashrc (interactive shells), fallback to .bash_profile (login shells)
+		if [[ -f "$HOME/.bashrc" ]]; then
+			echo "$HOME/.bashrc"
+			return 0
+		elif [[ -f "$HOME/.bash_profile" ]]; then
+			echo "$HOME/.bash_profile"
+			return 0
+		fi
+	elif [[ "${SHELL}" == *"zsh"* ]]; then
+		# Zsh: prefer .zshrc (interactive), fallback to .zprofile (login)
+		local zdotdir="${ZDOTDIR:-$HOME}"
+		if [[ -f "$zdotdir/.zshrc" ]]; then
+			echo "$zdotdir/.zshrc"
+			return 0
+		elif [[ -f "$zdotdir/.zprofile" ]]; then
+			echo "$zdotdir/.zprofile"
+			return 0
+		fi
+	fi
+
+	# Fallback: scan for first existing file
+	for rc in .profile .bashrc .bash_profile .zprofile .zshrc; do
+		if [[ -f "$HOME/$rc" ]]; then
+			echo "$HOME/$rc"
+			return 0
+		fi
+	done
+
+	# Default: .bashrc for interactive shells (most common)
+	echo "$HOME/.bashrc"
+}
+
+# Print manual PATH configuration instructions
+print_path_instructions() {
+	local profile_file="$1"
+
+	echo ""
+	log_info "Manual setup instructions:"
+	echo ""
+	echo "Add this line to your shell profile ($profile_file):"
+	echo ""
+	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo ""
+	echo "Then reload your profile:"
+	echo ""
+	echo "  source $profile_file"
+	echo ""
+	echo "Or export for current session only:"
+	echo ""
+	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo ""
+}
+
+# Add PATH export to profile file
+add_to_profile() {
+	local profile="$1"
 	local path_export="export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 
-	# Check if OBOL_BIN_DIR is already in current PATH
-	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
-		log_success "OBOL_BIN_DIR already in PATH"
-		return 0
-	fi
+	log_info "Adding to PATH in $profile"
 
-	# Check if already configured in ~/.profile
-	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
-		log_success "OBOL_BIN_DIR already configured in ~/.profile"
-		log_info "Will be available in new shell sessions"
-		return 0
-	fi
+	# Create profile directory if needed
+	mkdir -p "$(dirname "$profile")"
 
-	# Add to ~/.profile
-	log_info "Adding OBOL_BIN_DIR to PATH in ~/.profile"
-
-	# Create profile if it doesn't exist
+	# Create file if it doesn't exist
 	touch "$profile"
 
 	# Add PATH export with comment
@@ -925,31 +1168,160 @@ configure_path() {
 		echo "$path_export"
 	} >>"$profile"
 
-	log_success "Added to PATH in ~/.profile"
-	echo ""
-	log_info "To use immediately, run: source ~/.profile"
-	log_info "Otherwise, it will be available in new shell sessions"
-	echo ""
+	log_success "Added to PATH in $profile"
+}
+
+# Configure PATH with shell detection and user consent
+# Detects the appropriate shell profile file based on $SHELL and existing files.
+# In interactive mode, asks user whether to auto-modify or show manual instructions.
+# In non-interactive mode (CI/CD), prints manual instructions only unless OBOL_MODIFY_PATH=yes.
+configure_path() {
+	# Check if OBOL_BIN_DIR is already in current PATH
+	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
+		log_success "OBOL_BIN_DIR already in PATH"
+		return 0
+	fi
+
+	# Detect appropriate profile file
+	local profile
+	profile=$(detect_shell_profile)
+
+	# Check if already configured in detected profile
+	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
+		log_success "OBOL_BIN_DIR already configured in $profile"
+		log_info "Will be available in new shell sessions"
+		return 0
+	fi
+
+	# Check if we can prompt the user via /dev/tty (works even with curl | bash)
+	if [[ -c /dev/tty ]]; then
+		echo ""
+		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
+		echo ""
+		echo "Detected shell profile: $profile"
+		echo ""
+		echo "Options:"
+		echo "  1. Automatically add to $profile (recommended)"
+		echo "  2. Show manual instructions"
+		echo ""
+
+		local choice
+		read -p "Choose [1/2]: " choice </dev/tty
+
+		case "$choice" in
+		1)
+			add_to_profile "$profile"
+			echo ""
+			log_info "PATH updated for future sessions"
+			echo ""
+			log_info "To use immediately in this session, run:"
+			echo ""
+			echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+			echo ""
+			;;
+		2)
+			print_path_instructions "$profile"
+			;;
+		*)
+			print_path_instructions "$profile"
+			;;
+		esac
+	else
+		# Truly non-interactive (CI/CD, no terminal): check environment variable override
+		if [[ "${OBOL_MODIFY_PATH:-no}" == "yes" ]]; then
+			add_to_profile "$profile"
+			log_info "Will be available in new shell sessions"
+		else
+			# Default: print instructions for non-interactive contexts
+			print_path_instructions "$profile"
+		fi
+	fi
 }
 
 # Print post-install instructions
 print_instructions() {
+	local install_mode="$1"
+
 	echo ""
-	log_success "Obol Stack installation complete!"
+	if [[ "$install_mode" == "upgrade" ]]; then
+		log_success "Obol Stack upgrade complete!"
+	else
+		log_success "Obol Stack installation complete!"
+	fi
 	echo ""
-	echo "Verify installation:"
-	echo ""
-	echo "  obol version"
-	echo ""
-	echo "To initialize a cluster, run:"
-	echo ""
-	echo "  obol stack init"
-	echo "  obol stack up"
-	echo ""
+
+	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty)
+	if [[ -c /dev/tty ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+		echo ""
+		log_info "Would you like to start the cluster now?"
+		echo ""
+		echo "This will:"
+		echo "  • Initialize cluster configuration"
+		echo "  • Start the Obol Stack"
+		echo "  • Open your browser to http://obol.stack"
+		echo ""
+
+		local choice
+		read -p "Start cluster now? [y/N]: " choice </dev/tty
+
+		case "$choice" in
+		[Yy]*)
+			echo ""
+			log_info "Starting bootstrap process..."
+
+			# Run obol bootstrap
+			if "$OBOL_BIN_DIR/obol" bootstrap; then
+				# Bootstrap succeeded, we're done
+				return 0
+			else
+				log_error "Bootstrap failed"
+				echo ""
+				log_info "You can start the cluster manually with:"
+				echo ""
+				echo "  obol stack init"
+				echo "  obol stack up"
+				echo ""
+				return 1
+			fi
+			;;
+		*)
+			# User declined, show manual instructions
+			echo ""
+			log_info "To start the cluster later, run:"
+			echo ""
+			echo "  obol stack init"
+			echo "  obol stack up"
+			echo ""
+			log_info "Then open your browser to: http://obol.stack"
+			echo ""
+			;;
+		esac
+	else
+		# Truly non-interactive (CI/CD, no terminal) or no binary - show manual instructions
+		echo "Verify installation:"
+		echo ""
+		echo "  obol version"
+		echo ""
+		echo "To start the cluster, run:"
+		echo ""
+		echo "  obol stack init"
+		echo "  obol stack up"
+		echo ""
+		log_info "Then open your browser to: http://obol.stack"
+		echo ""
+	fi
 }
 
 # Main installation flow
 main() {
+	# Prevent recursive installation loops
+	if [[ "${OBOL_INSTALLING:-}" == "true" ]]; then
+		log_error "Installation already in progress (recursive loop detected)"
+		log_error "This usually means obolup.sh was called from within itself"
+		exit 1
+	fi
+	export OBOL_INSTALLING=true
+
 	echo ""
 	echo "╔═══════════════════════════════════════════╗"
 	echo "║                                           ║"
@@ -958,12 +1330,38 @@ main() {
 	echo "╚═══════════════════════════════════════════╝"
 	echo ""
 
+	# Detect installation mode
+	local install_mode
+	install_mode=$(detect_installation_mode)
+
+	if [[ "$install_mode" == "upgrade" ]]; then
+		log_info "Existing installation detected - upgrading..."
+		# Show current version if available
+		if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+			local current_version
+			current_version=$("$OBOL_BIN_DIR/obol" version 2>/dev/null || echo "unknown")
+			if [[ -n "$current_version" ]]; then
+				log_info "Current version: $current_version"
+			fi
+		fi
+	else
+		log_info "Fresh installation starting..."
+	fi
+
+	# Check Docker prerequisites first
+	if ! check_docker; then
+		log_error "Docker requirements not met"
+		exit 1
+	fi
+	echo ""
+
 	create_directories
 	install_obol_binary
+	copy_bootstrap_script
 	install_dependencies
 	configure_hosts_file
 	configure_path
-	print_instructions
+	print_instructions "$install_mode"
 
 	echo ""
 	log_success "Setup complete!"

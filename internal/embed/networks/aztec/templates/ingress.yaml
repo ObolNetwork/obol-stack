@@ -1,0 +1,23 @@
+{{- if eq .Release.Name "aztec-ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aztec
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: obol.stack
+    http:
+      paths:
+      - path: /{{ .Release.Namespace }}(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: l2-sequencer-node-{{ .Values.id }}-node
+            port:
+              number: 8080
+{{- end }}

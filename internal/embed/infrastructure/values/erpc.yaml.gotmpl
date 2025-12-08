@@ -1,0 +1,205 @@
+{{- $network := .Values.network -}}
+{{- $chainId := 1 -}}  {{/* Default: mainnet */}}
+{{- if eq $network "hoodi" -}}
+  {{- $chainId = 560048 -}}
+{{- else if eq $network "sepolia" -}}
+  {{- $chainId = 11155111 -}}
+{{- else if ne $network "mainnet" -}}
+  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) -}}
+{{- end -}}
+
+# Number of replicas
+replicas: 1
+
+image:
+  repository: ghcr.io/erpc/erpc
+  tag: 0.0.56
+  pullPolicy: IfNotPresent
+
+# Config file
+config: |-
+  logLevel: debug
+
+  database:
+    evmJsonRpcCache:
+      connectors:
+        - id: memory-cache
+          driver: memory
+          memory:
+            maxItems: 10000
+      policies:
+        - network: "*"
+          method: "*"
+          finality: unfinalized
+          connector: memory-cache
+          ttl: 10s
+
+  server:
+    httpHostV4: "0.0.0.0"
+    listenV6: true
+    httpHostV6: "[::]"
+    httpPort: 4000
+
+  metrics:
+    enabled: true
+    hostV4: "0.0.0.0"
+    hostV6: "[::]"
+    port: 4001
+
+  projects:
+    - id: rpc
+      networks:
+        - architecture: evm
+          evm:
+            chainId: {{ $chainId }}
+          alias: {{ $network }}
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+      cors:
+        allowedOrigins:
+          - "*"
+        allowedMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        allowedHeaders:
+          - "*"
+        exposedHeaders:
+          - "X-Request-ID"
+        allowCredentials: true
+        maxAge: 3600
+
+# Secret env variables
+secretEnv: {}
+
+# Extra args for the erpc container
+extraArgs: []
+
+# Command replacement for the erpc container
+customCommand: []
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: obol.stack
+      paths:
+        - path: /rpc
+          pathType: Prefix
+
+service:
+  type: ClusterIP
+
+# Affinity configuration for pods
+affinity: {}
+
+# Image pull secrets for Docker images
+imagePullSecrets: []
+
+# Annotations for the Deployment
+annotations: {}
+
+# Liveness probe
+livenessProbe:
+  httpGet:
+    path: /healthcheck
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 120
+
+# Readiness probe
+readinessProbe:
+  httpGet:
+    path: /healthcheck
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+# Node selector for pods
+nodeSelector: {}
+
+# Pod labels
+podLabels: {}
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod management policy
+podManagementPolicy: OrderedReady
+
+# Pod priority class
+priorityClassName: null
+
+# Resource requests and limits
+resources: {}
+
+# The security context for pods
+securityContext:
+  fsGroup: 10001
+  runAsGroup: 10001
+  runAsNonRoot: true
+  runAsUser: 10001
+
+# The security context for containers
+containerSecurityContext: {}
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# How long to wait until the pod is forcefully terminated
+terminationGracePeriodSeconds: 30
+
+# Tolerations for pods
+tolerations: []
+
+# Topology Spread Constraints for pods
+topologySpreadConstraints: []
+
+# Define the PodDisruptionBudget spec
+podDisruptionBudget: {}
+
+# Update strategy for the Deployment
+updateStrategy:
+  type: RollingUpdate
+
+# Additional init containers
+initContainers: []
+
+# Additional containers
+extraContainers: []
+
+# Additional volumes
+extraVolumes: []
+
+# Additional volume mounts
+extraVolumeMounts: []
+
+# Additional ports
+extraPorts: []
+
+# Additional env variables
+extraEnv: []
+
+serviceMonitor:
+  enabled: false
+  path: /metrics
+  namespace: null
+  labels:
+    release: monitoring
+  annotations: {}
+  interval: 1m
+  scheme: http
+  tlsConfig: {}
+  scrapeTimeout: 30s
+  relabelings: []

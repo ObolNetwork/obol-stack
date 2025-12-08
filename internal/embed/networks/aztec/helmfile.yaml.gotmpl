@@ -1,0 +1,102 @@
+repositories:
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
+
+releases:
+  - name: aztec-sequencer
+    namespace: aztec-{{ .Values.id }}
+    createNamespace: true
+    chart: obol/aztec-node
+    version: 0.2.0
+    values:
+      - role: sequencer
+        sequencer:
+          attesterPrivateKey: '{{ .Values.attesterPrivateKey }}'
+          feeRecipient: "0x0000000000000000000000000000000000000000000000000000000000000000"
+        network: '{{ .Values.network }}'
+        networkName: '{{ .Values.id }}'
+        image:
+          repository: aztecprotocol/aztec
+          tag: 2.1.5
+          pullPolicy: Always
+        node:
+          replicas: 1
+          logLevel: "info"
+          startCmd:
+            - --node
+            - --archiver
+            - --sequencer
+            - --network
+            - '{{ .Values.network }}'
+          l1ExecutionUrls:
+            - '{{ if .Values.l1ExecutionUrl }}{{ .Values.l1ExecutionUrl }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ .Values.network }}{{ end }}'
+          l1ConsensusUrls:
+            - '{{ .Values.l1ConsensusUrl }}'
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+          storage:
+            dataDirectory: /data
+            dataStoreMapSize: "134217728"
+            worldStateMapSize: "134217728"
+          startupProbe:
+            periodSeconds: 60
+            failureThreshold: 60
+        persistence:
+          enabled: true
+          size: 1000Gi
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          selector: {}
+        hostNetwork: true
+        service:
+          httpPort: 8080
+          p2p:
+            enabled: true
+            nodePortEnabled: false
+            port: 40400
+            announcePort: 40400
+          admin:
+            enabled: true
+            port: 8081
+
+  # Ingress for Aztec node
+  - name: aztec-ingress
+    namespace: aztec-{{ .Values.id }}
+    chart: .
+    values:
+      - id: {{ .Values.id }}
+
+  # Metadata ConfigMap for frontend discovery
+  - name: aztec-metadata
+    namespace: aztec-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: aztec-{{ .Values.id }}-metadata
+              namespace: aztec-{{ .Values.id }}
+              labels:
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: aztec
+            data:
+              metadata.json: |
+                {
+                  "network": "{{ .Values.network }}",
+                  "endpoints": {
+                    "rpc": {
+                      "external": "http://obol.stack/aztec-{{ .Values.id }}",
+                      "internal": "http://l2-sequencer-node-{{ .Values.id }}-node.aztec-{{ .Values.id }}.svc.cluster.local:8080"
+                    }
+                  }
+                }

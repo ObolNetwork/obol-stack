@@ -1,0 +1,108 @@
+repositories:
+  - name: ethereum-helm-charts
+    url: https://ethpandaops.github.io/ethereum-helm-charts
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
+
+releases:
+  # Create PVCs first - before the Ethereum node
+  - name: ethereum-pvcs
+    namespace: ethereum-{{ .Values.id }}
+    createNamespace: true
+    chart: .
+    values:
+      # Pass only the values needed for PVC creation
+      - id: '{{ .Values.id }}'
+        executionClient: '{{ .Values.executionClient }}'
+        consensusClient: '{{ .Values.consensusClient }}'
+        network: '{{ .Values.network }}'
+
+  # Ethereum node (execution and consensus clients)
+  # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
+  # Depends on ethereum-pvcs to ensure PVCs exist first
+  - name: ethereum
+    namespace: ethereum-{{ .Values.id }}
+    createNamespace: true
+    chart: ethereum-helm-charts/ethereum-node
+    needs: [ethereum-pvcs]
+    values:
+      # Network and checkpoint sync configuration
+      - global:
+          main:
+            network: '{{ .Values.network }}'
+          checkpointSync:
+            enabled: true
+            addresses:
+              mainnet: https://mainnet-checkpoint-sync.attestant.io
+              sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
+              holesky: https://checkpoint-sync.holesky.ethpandaops.io
+              hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+
+      # Execution client
+      - {{ .Values.executionClient }}:
+          enabled: true
+          persistence:
+            enabled: true
+            size: 500Gi
+            # Use existing PVC with network/client naming: execution-{client}-{network}
+            existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+
+      # Consensus client
+      - {{ .Values.consensusClient }}:
+          enabled: true
+          extraArgs:
+            - --execution-endpoint=http://ethereum-execution-{{ .Values.executionClient }}-{{ .Values.network }}:8551
+            - --network={{ .Values.network }}
+          persistence:
+            enabled: true
+            size: 200Gi
+            # Use existing PVC with network/client naming: consensus-{client}-{network}
+            existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+
+  # Ingress for Ethereum node
+  - name: ethereum-ingress
+    namespace: ethereum-{{ .Values.id }}
+    chart: .
+    values:
+      - executionClient: {{ .Values.executionClient }}
+        consensusClient: {{ .Values.consensusClient }}
+        network: {{ .Values.network }}
+
+  # Metadata ConfigMap for frontend discovery
+  - name: ethereum-metadata
+    namespace: ethereum-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: ethereum-{{ .Values.id }}-metadata
+              namespace: ethereum-{{ .Values.id }}
+              labels:
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: ethereum
+            data:
+              metadata.json: |
+                {
+                  "network": "{{ .Values.network }}",
+                  "execution": {
+                    "client": "{{ .Values.executionClient }}",
+                    "endpoints": {
+                      "rpc": {
+                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/execution",
+                        "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:8545"
+                      }
+                    }
+                  },
+                  "consensus": {
+                    "client": "{{ .Values.consensusClient }}",
+                    "endpoints": {
+                      "rpc": {
+                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/beacon",
+                        "internal": "http://ethereum-beacon.ethereum-{{ .Values.id }}.svc.cluster.local:5052"
+                      }
+                    }
+                  }
+                }

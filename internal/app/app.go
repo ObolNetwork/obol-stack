@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
-	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
 
 // TODO: Application Installation System
@@ -27,80 +25,40 @@ import (
 
 // Install scaffolds a new application directory
 func Install(cfg *config.Config, chart string, repo string, valuesOverride string) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Installing application: %s/%s", repo, chart))
-	l.Warn("TODO: Implement application scaffolding")
-	l.Warn("  1. Validate chart exists in repo")
-	l.Warn("  2. Create: $OBOL_CONFIG_DIR/applications/{repo}/{chart}/")
-	l.Warn("  3. Generate helmfile.yaml referencing chart")
-	l.Warn("  4. Generate values.yaml with sane defaults")
+	fmt.Printf("Installing application: %s/%s\n", repo, chart)
+	fmt.Println("TODO: Implement application scaffolding")
+	fmt.Println("  1. Validate chart exists in repo")
+	fmt.Println("  2. Create: $OBOL_CONFIG_DIR/applications/{repo}/{chart}/")
+	fmt.Println("  3. Generate helmfile.yaml referencing chart")
+	fmt.Println("  4. Generate values.yaml with sane defaults")
 
 	return nil
 }
 
 // Edit opens an application file in the user's editor
 func Edit(cfg *config.Config, appPath string) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Editing application: %s", appPath))
-	l.Warn("TODO: Implement editor integration")
+	fmt.Printf("Editing application: %s\n", appPath)
+	fmt.Println("TODO: Implement editor integration")
 
 	return nil
 }
 
 // Sync deploys the application using helmfile
 func Sync(cfg *config.Config, appPath string) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Syncing application: %s", appPath))
-	l.Warn("TODO: Implement helmfile sync")
-	l.Warn("  1. Run: helmfile -f $OBOL_CONFIG_DIR/helmfile.yaml sync")
-	l.Warn("  2. Or: helmfile -f {appPath}/helmfile.yaml sync")
+	fmt.Printf("Syncing application: %s\n", appPath)
+	fmt.Println("TODO: Implement helmfile sync")
+	fmt.Println("  1. Run: helmfile -f $OBOL_CONFIG_DIR/helmfile.yaml sync")
+	fmt.Println("  2. Or: helmfile -f {appPath}/helmfile.yaml sync")
 
 	return nil
 }
 
 // Delete removes the application and cluster resources
 func Delete(cfg *config.Config, appPath string, force bool) error {
-	// Get stack ID for logging
-	stackID := stack.GetStackID(cfg)
-
-	// Create logger
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	l.Info(fmt.Sprintf("Deleting application: %s", appPath))
-	l.Warn("TODO: Implement application deletion")
-	l.Warn("  1. Remove $OBOL_CONFIG_DIR/applications/{repo}/{chart}/")
-	l.Warn("  2. Run: kubectl delete namespace {chart}")
+	fmt.Printf("Deleting application: %s\n", appPath)
+	fmt.Println("TODO: Implement application deletion")
+	fmt.Println("  1. Remove $OBOL_CONFIG_DIR/applications/{repo}/{chart}/")
+	fmt.Println("  2. Run: kubectl delete namespace {chart}")
 
 	return nil
 }

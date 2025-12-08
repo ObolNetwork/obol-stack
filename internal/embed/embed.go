@@ -15,29 +15,26 @@ import (
 //go:embed k3d-config.yaml
 var K3dConfig string
 
-//go:embed helmfile.yaml
-var HelmfileTemplate string
+//go:embed all:infrastructure
+var infrastructureFS embed.FS
 
-//go:embed all:charts
-var chartsFS embed.FS
+//go:embed all:networks
+var networksFS embed.FS
 
-//go:embed all:defaults
-var defaultsFS embed.FS
-
-// CopyCharts recursively copies all embedded charts to the destination directory
-func CopyCharts(destDir string) error {
-	return fs.WalkDir(chartsFS, "charts", func(path string, d fs.DirEntry, err error) error {
+// CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory
+func CopyDefaults(destDir string) error {
+	return fs.WalkDir(infrastructureFS, "infrastructure", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root charts directory
-		if path == "charts" {
+		// Skip root infrastructure directory
+		if path == "infrastructure" {
 			return nil
 		}
 
-		// Get relative path within charts/
-		relPath := strings.TrimPrefix(path, "charts/")
+		// Get relative path within infrastructure/
+		relPath := strings.TrimPrefix(path, "infrastructure/")
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
@@ -55,7 +52,7 @@ func CopyCharts(destDir string) error {
 		}
 
 		// Read embedded file
-		data, err := chartsFS.ReadFile(path)
+		data, err := infrastructureFS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
@@ -69,20 +66,55 @@ func CopyCharts(destDir string) error {
 	})
 }
 
-// CopyDefaults recursively copies all embedded default manifests to the destination directory
-func CopyDefaults(destDir string) error {
-	return fs.WalkDir(defaultsFS, "defaults", func(path string, d fs.DirEntry, err error) error {
+// GetAvailableNetworks returns a list of all embedded network names
+func GetAvailableNetworks() ([]string, error) {
+	entries, err := fs.ReadDir(networksFS, "networks")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded networks directory: %w", err)
+	}
+
+	var networks []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			networks = append(networks, entry.Name())
+		}
+	}
+
+	return networks, nil
+}
+
+// ReadEmbeddedNetworkFile reads a file from an embedded network
+func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
+	path := filepath.Join("networks", networkName, filename)
+	content, err := networksFS.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s from network %s: %w", filename, networkName, err)
+	}
+	return content, nil
+}
+
+// CopyNetwork recursively copies an embedded network to the destination directory
+func CopyNetwork(networkName, destDir string) error {
+	networkPath := filepath.Join("networks", networkName)
+
+	// Check if network exists in embedded FS
+	_, err := fs.Stat(networksFS, networkPath)
+	if err != nil {
+		return fmt.Errorf("network %s not found in embedded filesystem: %w", networkName, err)
+	}
+
+	return fs.WalkDir(networksFS, networkPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip root defaults directory
-		if path == "defaults" {
+		// Skip root network directory
+		if path == networkPath {
 			return nil
 		}
 
-		// Get relative path within defaults/
-		relPath := strings.TrimPrefix(path, "defaults/")
+		// Get relative path within networks/<network>/
+		relPath := strings.TrimPrefix(path, networkPath+"/")
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
@@ -100,7 +132,7 @@ func CopyDefaults(destDir string) error {
 		}
 
 		// Read embedded file
-		data, err := defaultsFS.ReadFile(path)
+		data, err := networksFS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
