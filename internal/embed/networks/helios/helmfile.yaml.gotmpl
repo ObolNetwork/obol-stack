@@ -4,6 +4,8 @@
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
 
 releases:
   - name: helios
@@ -35,5 +37,32 @@ releases:
           hosts:
             - host: obol.stack
               paths:
-                - path: /helios(/|$)(.*)
+                - path: /helios-{{ .Values.id }}(/|$)(.*)
                   pathType: ImplementationSpecific
+
+  # Metadata ConfigMap for frontend discovery
+  - name: helios-metadata
+    namespace: helios-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: helios-{{ .Values.id }}-metadata
+              namespace: helios-{{ .Values.id }}
+              labels:
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: helios
+            data:
+              metadata.json: |
+                {
+                  "network": "{{ .Values.network }}",
+                  "endpoints": {
+                    "rpc": {
+                      "external": "http://obol.stack/helios-{{ .Values.id }}",
+                      "internal": "http://helios-{{ .Values.network }}.helios-{{ .Values.id }}.svc.cluster.local:8545"
+                    }
+                  }
+                }

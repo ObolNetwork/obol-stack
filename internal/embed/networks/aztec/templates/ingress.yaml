@@ -1,8 +1,8 @@
-{{- if eq .Release.Name "ethereum-ingress" }}
+{{- if eq .Release.Name "aztec-ingress" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ethereum
+  name: aztec
   namespace: {{ .Release.Namespace }}
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /$2
@@ -13,18 +13,11 @@ spec:
   - host: obol.stack
     http:
       paths:
-      - path: /{{ .Release.Namespace }}/execution(/|$)(.*)
+      - path: /{{ .Release.Namespace }}(/|$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
-            name: ethereum-execution
+            name: l2-sequencer-node-{{ .Values.id }}-node
             port:
-              number: 8545
-      - path: /{{ .Release.Namespace }}/beacon(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: ethereum-beacon
-            port:
-              number: 5052
+              number: 8080
 {{- end }}
