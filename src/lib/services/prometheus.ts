@@ -26,7 +26,7 @@ export class PrometheusClient {
   /**
    * Execute a Prometheus query
    */
-  async query(query: string): Promise<PrometheusResponse> {
+  private async query(query: string): Promise<PrometheusResponse> {
     const url = `${this.baseUrl}/api/v1/query`;
     const params = new URLSearchParams({ query });
 
@@ -38,36 +38,6 @@ export class PrometheusClient {
 
     if (!response.ok) {
       throw new Error(`Prometheus query failed: ${response.statusText}`);
-    }
-
-    return response.json();
-  }
-
-  /**
-   * Execute a Prometheus range query
-   */
-  async queryRange(
-    query: string,
-    start: Date,
-    end: Date,
-    step: string = '60s'
-  ): Promise<PrometheusResponse> {
-    const url = `${this.baseUrl}/api/v1/query_range`;
-    const params = new URLSearchParams({
-      query,
-      start: Math.floor(start.getTime() / 1000).toString(),
-      end: Math.floor(end.getTime() / 1000).toString(),
-      step,
-    });
-
-    const response = await fetch(`${url}?${params}`, {
-      headers: {
-        Accept: 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Prometheus range query failed: ${response.statusText}`);
     }
 
     return response.json();

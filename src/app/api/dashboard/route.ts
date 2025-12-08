@@ -78,13 +78,20 @@ export async function GET() {
       const clients: ClientInfo[] = [];
 
       if (isEthereumInstance(instance)) {
+        const executionUrl = config.isInCluster
+          ? instance.execution.endpoints.rpc.internal
+          : instance.execution.endpoints.rpc.external;
         const executionClient = (await clientMetrics.getMetrics(
           'execution',
-          instance.execution.endpoints.rpc.external
+          executionUrl
         )) as ExecutionClientMetrics;
+
+        const consensusUrl = config.isInCluster
+          ? instance.consensus.endpoints.rpc.internal
+          : instance.consensus.endpoints.rpc.external;
         const consensusClient = (await clientMetrics.getMetrics(
           'consensus',
-          instance.consensus.endpoints.rpc.external
+          consensusUrl
         )) as ConsensusClientMetrics;
 
         const executionClientName = instance.execution.client;
@@ -92,7 +99,7 @@ export async function GET() {
         clients.push({
           name: executionClientName as ClientNameType,
           version: parseVersion(executionClient.version),
-          peers: executionClient.peers,
+          peers: executionClient.peers || 0,
           status: !executionClient.syncing
             ? CLIENT_STATUS.SYNCED
             : CLIENT_STATUS.SYNCING,
@@ -106,7 +113,7 @@ export async function GET() {
         clients.push({
           name: consensusClientName as ClientNameType,
           version: parseVersion(consensusClient.version),
-          peers: consensusClient.peers,
+          peers: consensusClient.peers || 0,
           status: !consensusClient.syncing
             ? CLIENT_STATUS.SYNCED
             : CLIENT_STATUS.SYNCING,
@@ -119,14 +126,17 @@ export async function GET() {
         participation = consensusClient.participation || 0;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
+        const appUrl = config.isInCluster
+          ? instance.endpoints.rpc.internal
+          : instance.endpoints.rpc.external;
         const result = (await clientMetrics.getMetrics(
           appType as ClientType,
-          instance.endpoints.rpc.external
+          appUrl
         )) as HeliosClientMetrics | AztecClientMetrics;
         clients.push({
           name: appType as ClientNameType,
           version: parseVersion(result.version),
-          peers: result.peers,
+          peers: result.peers || 0,
           status: !result.syncing
             ? CLIENT_STATUS.SYNCED
             : CLIENT_STATUS.SYNCING,
