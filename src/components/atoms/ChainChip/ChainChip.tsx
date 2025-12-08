@@ -38,8 +38,8 @@ const StyledChainChip = styled(Box, {
         color: '$light',
       },
       aztecSequencer: {
-        background: 'rgba(217, 238, 243, 0.20)',
-        color: '$light',
+        background: 'rgba(212, 255, 40, 0.20)',
+        color: '#D4FF28',
       },
       hoodi: {
         border: '1px solid $bg05',

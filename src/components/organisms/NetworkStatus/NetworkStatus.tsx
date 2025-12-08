@@ -29,6 +29,13 @@ const CardTitle = styled(Text, {
   marginLeft: '$xxxs',
 });
 
+const CardSubtitle = styled(Text, {
+  fontSize: '$3',
+  fontWeight: '$medium',
+  color: '$body',
+  marginRight: '$xxxs',
+  marginLeft: '$xxxs',
+});
 const NetworkContent = styled(Box, {
   paddingTop: '$2xl',
 });
@@ -113,6 +120,7 @@ export function NetworkStatus({
         <CardTitle>
           {appData.app.charAt(0).toUpperCase() + appData.app.slice(1)}
         </CardTitle>
+        <CardSubtitle>{appData.appId}</CardSubtitle>
 
         <ChainChip variant={appData.chainName} />
 
