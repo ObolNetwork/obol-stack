@@ -49,22 +49,22 @@ const ChevronIcon = styled(Box, {
   // and maintains consistent text alignment regardless of chevron state
   position: 'absolute',
   cursor: 'pointer',
-  top: '0',
+  top: '50%',
   right: '0',
-  width: '$md',
-  height: '$md',
+  width: '$lg',
+  height: '$lg',
   transition: 'transform 0.3s ease',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   transformOrigin: 'center',
   // Up icon points up by default, so rotate 180deg when collapsed to point down
-  transform: 'rotate(180deg)',
+  transform: 'translateY(-50%) rotate(180deg)',
 
   variants: {
     expanded: {
       true: {
-        transform: 'rotate(0deg)',
+        transform: 'translateY(-50%) rotate(0deg)',
       },
     },
   },
