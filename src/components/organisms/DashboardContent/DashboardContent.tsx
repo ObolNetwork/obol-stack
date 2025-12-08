@@ -43,17 +43,17 @@ export function DashboardContent({
   onRetry,
 }: DashboardContentProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
+  console.log(data);
   return (
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
           {error && <ErrorState onRetry={onRetry} />}
           {data &&
-            data.chains.map((chain, index) => (
+            data.apps.map((app, index) => (
               <NetworkStatus
-                key={chain.chainName}
-                chainData={chain}
+                key={app.appId}
+                appData={app}
                 defaultExpanded={index === 0}
               />
             ))}

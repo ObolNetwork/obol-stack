@@ -1,9 +1,8 @@
 // Enums and Constants
 export const CHAINS = {
-  ETHEREUM: 'ethereum',
+  ETHEREUM: 'mainnet',
   SEPOLIA: 'sepolia',
   HOODI: 'hoodi',
-  AZTEC: 'aztec',
 } as const;
 
 // Chain ID to Chain Name mapping
@@ -18,15 +17,10 @@ export const getChainName = (chainId: ChainIdType): ChainName => {
   return CHAIN_ID_TO_NAME[chainId];
 };
 
-export const NETWORKS = {
-  MAINNET: 'mainnet',
-  TESTNET: 'testnet',
-} as const;
-
 export const NODE_MODES = {
   FULL_MODE: 'fullMode',
   LIGHT_MODE: 'lightMode',
-  AZTEC_FULLNODE: 'aztec-fullnode',
+  AZTEC_SEQUENCER: 'aztecSequencer',
 } as const;
 
 // App instance types matching application-instances.ts
@@ -42,7 +36,7 @@ export type AppInstanceType =
 // Mapping from app instance type to node mode
 export const APP_TO_NODE_MODE: Record<AppInstanceType, NodeModeType> = {
   [APP_INSTANCE_TYPES.HELIOS]: NODE_MODES.LIGHT_MODE,
-  [APP_INSTANCE_TYPES.AZTEC]: NODE_MODES.AZTEC_FULLNODE,
+  [APP_INSTANCE_TYPES.AZTEC]: NODE_MODES.AZTEC_SEQUENCER,
   [APP_INSTANCE_TYPES.ETHEREUM]: NODE_MODES.FULL_MODE,
 } as const;
 
@@ -58,6 +52,23 @@ export const CLIENT_ROLES = {
   VALIDATOR: 'validator',
 } as const;
 
+export const CLIENT_NAMES = {
+  RETH: 'reth',
+  GETH: 'geth',
+  NETHERMIND: 'nethermind',
+  BESU: 'besu',
+  ERIGON: 'erigon',
+  ETHEREUMJS: 'ethereumjs',
+  LIGHTHOUSE: 'lighthouse',
+  PRYSM: 'prysm',
+  TEKU: 'teku',
+  NIMBUS: 'nimbus',
+  LODESTAR: 'lodestar',
+  GRANDINE: 'grandine',
+  AZTEC: 'aztec',
+  HELIOS: 'helios',
+} as const;
+
 export const PORT_STATUS = {
   OPEN: 'open',
   CLOSED: 'closed',
@@ -66,24 +77,27 @@ export const PORT_STATUS = {
 // Type definitions from constants
 export type ChainIdType = keyof typeof CHAIN_ID_TO_NAME;
 export type ChainName = (typeof CHAINS)[keyof typeof CHAINS];
-export type NetworkType = (typeof NETWORKS)[keyof typeof NETWORKS];
 export type NodeModeType = (typeof NODE_MODES)[keyof typeof NODE_MODES];
 export type ClientStatusType =
   (typeof CLIENT_STATUS)[keyof typeof CLIENT_STATUS];
 export type ClientRoleType = (typeof CLIENT_ROLES)[keyof typeof CLIENT_ROLES];
+export type ClientNameType = (typeof CLIENT_NAMES)[keyof typeof CLIENT_NAMES];
 export type PortStatusType = (typeof PORT_STATUS)[keyof typeof PORT_STATUS];
 
 export interface ClientInfo {
-  name: string;
+  name: ClientNameType;
   version: string;
   peers: number;
   status: ClientStatusType;
   icon?: string; // URL to client icon
+  externalUrl?: string;
+  internalUrl?: string;
 }
 
-export interface ChainData {
+export interface AppData {
   chainName: ChainName;
-  network: NetworkType;
+  app: AppInstanceType;
+  appId: string;
   nodeMode: NodeModeType;
   status: ClientStatusType;
   blocks: number;
@@ -94,7 +108,7 @@ export interface ChainData {
 }
 
 export interface DashboardData {
-  chains: ChainData[];
+  apps: AppData[];
   nodeOverview: {
     diskUsage: {
       value: number;

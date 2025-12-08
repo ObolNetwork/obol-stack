@@ -44,27 +44,27 @@ export class KubernetesAPIClient {
       console.log('[K8s] Using in-cluster configuration');
       kc.loadFromCluster();
     } else {
-      // Local development: Require KUBECONFIG env var
-      if (!process.env.KUBECONFIG) {
+      // Local development: Require NEXT_PUBLIC_KUBECONFIG env var
+      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
         throw new Error(
-          'KUBECONFIG environment variable is required for local development. ' +
+          'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
             'Set it to the path of your kubeconfig file.'
         );
       }
 
       // Check if file exists
-      if (!fs.existsSync(process.env.KUBECONFIG)) {
+      if (!fs.existsSync(process.env.NEXT_PUBLIC_KUBECONFIG)) {
         throw new Error(
-          `Kubeconfig file not found at: ${process.env.KUBECONFIG}`
+          `Kubeconfig file not found at: ${process.env.NEXT_PUBLIC_KUBECONFIG}`
         );
       }
 
       try {
-        kc.loadFromFile(process.env.KUBECONFIG);
+        kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
         console.log(`[K8s] Context: ${kc.getCurrentContext()}`);
       } catch (error) {
         throw new Error(
-          `Failed to load kubeconfig from ${process.env.KUBECONFIG}: ${error instanceof Error ? error.message : 'Unknown error'}`
+          `Failed to load kubeconfig from ${process.env.NEXT_PUBLIC_KUBECONFIG}: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
       }
     }

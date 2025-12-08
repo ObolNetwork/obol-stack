@@ -2,7 +2,13 @@ import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
 
 export interface ChainChipProps {
-  variant?: 'fullMode' | 'lightMode' | 'testnet' | 'mainnet';
+  variant?:
+    | 'fullMode'
+    | 'lightMode'
+    | 'aztecSequencer'
+    | 'hoodi'
+    | 'sepolia'
+    | 'mainnet';
   className?: string;
 }
 
@@ -31,7 +37,16 @@ const StyledChainChip = styled(Box, {
         background: 'rgba(217, 238, 243, 0.20)',
         color: '$light',
       },
-      testnet: {
+      aztecSequencer: {
+        background: 'rgba(217, 238, 243, 0.20)',
+        color: '$light',
+      },
+      hoodi: {
+        border: '1px solid $bg05',
+        background: '$bg02',
+        color: '$light',
+      },
+      sepolia: {
         border: '1px solid $bg05',
         background: '$bg02',
         color: '$light',
@@ -54,10 +69,14 @@ const getChipText = (variant: ChainChipProps['variant']) => {
       return 'Full Mode';
     case 'lightMode':
       return 'Light Mode';
-    case 'testnet':
-      return 'Testnet';
+    case 'hoodi':
+      return 'Hoodi';
+    case 'sepolia':
+      return 'Sepolia';
     case 'mainnet':
       return 'Mainnet';
+    case 'aztecSequencer':
+      return 'Sequencer';
     default:
       return 'Mainnet';
   }

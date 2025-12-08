@@ -30,17 +30,17 @@ export function determineNodeStatus(data: DashboardData): NodeStatus {
   }
 
   // Handle case when no chains are available
-  if (data.chains.length === 0) {
+  if (data.apps.length === 0) {
     return 'stalled'; // No chains means no sync possible
   }
 
   // Check for stalled sync (not syncing and not on chain tip)
   const isStalled =
-    !data.chains.some(chain =>
-      chain.clients.some(client => client.status === 'syncing')
+    !data.apps.some(app =>
+      app.clients.some(client => client.status === 'syncing')
     ) &&
-    data.chains.some(chain =>
-      chain.clients.some(client => client.status === 'error')
+    data.apps.some(app =>
+      app.clients.some(client => client.status === 'error')
     );
 
   if (isStalled) {
@@ -56,8 +56,8 @@ export function determineNodeStatus(data: DashboardData): NodeStatus {
   }
 
   // Check for low peer count (< threshold)
-  const hasLowPeers = data.chains.some(chain =>
-    chain.clients.some(
+  const hasLowPeers = data.apps.some(app =>
+    app.clients.some(
       client => (client.peers || 0) < STATUS_THRESHOLDS.PEERS_LOW
     )
   );
@@ -69,8 +69,8 @@ export function determineNodeStatus(data: DashboardData): NodeStatus {
   // Check for slightly behind (syncing but behind by < 1000 blocks)
   // This would need to be calculated based on current block height vs expected
   // For now, we'll assume if syncing is true, it's either healthy or behind
-  const isSyncing = data.chains.some(chain =>
-    chain.clients.some(client => client.status === 'syncing')
+  const isSyncing = data.apps.some(app =>
+    app.clients.some(client => client.status === 'syncing')
   );
 
   if (isSyncing) {

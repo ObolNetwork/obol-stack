@@ -31,7 +31,6 @@ export const HeliosInstanceDataSchema = Type.Object({
     Type.Literal(CHAINS.ETHEREUM),
     Type.Literal(CHAINS.SEPOLIA),
     Type.Literal(CHAINS.HOODI),
-    Type.Literal(CHAINS.AZTEC),
   ]),
   endpoints: Type.Object({
     rpc: RpcEndpointSchema,
@@ -43,7 +42,6 @@ export const AztecInstanceDataSchema = Type.Object({
     Type.Literal(CHAINS.ETHEREUM),
     Type.Literal(CHAINS.SEPOLIA),
     Type.Literal(CHAINS.HOODI),
-    Type.Literal(CHAINS.AZTEC),
   ]),
   endpoints: Type.Object({
     rpc: RpcEndpointSchema,
@@ -55,7 +53,6 @@ export const EthereumInstanceDataSchema = Type.Object({
     Type.Literal(CHAINS.ETHEREUM),
     Type.Literal(CHAINS.SEPOLIA),
     Type.Literal(CHAINS.HOODI),
-    Type.Literal(CHAINS.AZTEC),
   ]),
   execution: Type.Object({
     client: Type.String(),

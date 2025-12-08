@@ -2,40 +2,28 @@ import { NextResponse } from 'next/server';
 import { PrometheusClient } from '@/lib/services/prometheus';
 import { KubernetesAPIClient } from '@/lib/services/kubernetes-api';
 import {
+  AztecClientMetrics,
   ClientMetricsService,
   ClientType,
+  ConsensusClientMetrics,
+  ExecutionClientMetrics,
+  HeliosClientMetrics,
 } from '@/lib/services/client-metrics';
 import { config } from '@/lib/config/environment';
 import {
   DashboardData,
-  ChainData,
+  AppData,
   ClientInfo,
   CLIENT_STATUS,
   PORT_STATUS,
+  ClientNameType,
 } from '@/types/dashboard';
 import {
-  getClientInfoByAppType,
+  getClientIcon,
   getNodeModeFromAppInstance,
   parseVersion,
 } from '@/lib/utils/client-detection';
-import { getChainInfoFromName } from '@/lib/utils/chain-mapping';
 import { isEthereumInstance } from '@/lib/models/application-instances';
-
-async function fetchClientMetrics(
-  clientType: ClientType,
-  endpoint: string,
-  clientMetrics: ClientMetricsService
-): Promise<ClientInfo> {
-  const result = await clientMetrics.getMetrics(clientType, endpoint);
-  const client = getClientInfoByAppType(clientType);
-  return {
-    name: client.name,
-    version: parseVersion(result.version),
-    peers: result.peers || 0,
-    status: !result.syncing ? CLIENT_STATUS.SYNCED : CLIENT_STATUS.SYNCING,
-    icon: client.icon,
-  };
-}
 
 export async function GET() {
   try {
@@ -79,11 +67,9 @@ export async function GET() {
       },
     };
 
-    // Build chains
-    const chains: ChainData[] = [];
+    // Build apps
+    const apps: AppData[] = [];
     for (const instance of instances) {
-      const chainInfo = getChainInfoFromName(instance.network);
-      if (!chainInfo) continue;
       const nodeMode = getNodeModeFromAppInstance(instance.app);
 
       let blockHeight = 0;
@@ -92,38 +78,71 @@ export async function GET() {
       const clients: ClientInfo[] = [];
 
       if (isEthereumInstance(instance)) {
-        const [executionClient, consensusClient] = await Promise.all([
-          fetchClientMetrics(
-            'execution',
-            instance.execution.endpoints.rpc.external,
-            clientMetrics
-          ),
-          fetchClientMetrics(
-            'consensus',
-            instance.consensus.endpoints.rpc.external,
-            clientMetrics
-          ),
-        ]);
-        clients.push(executionClient, consensusClient);
-        blockHeight = instance.execution ? executionClient.peers : 0; // Example, replace with actual metric
-        finalizedEpoch = instance.consensus ? consensusClient.peers : 0; // Example
-        participation = instance.consensus ? consensusClient.peers : 0; // Example
+        const executionClient = (await clientMetrics.getMetrics(
+          'execution',
+          instance.execution.endpoints.rpc.external
+        )) as ExecutionClientMetrics;
+        const consensusClient = (await clientMetrics.getMetrics(
+          'consensus',
+          instance.consensus.endpoints.rpc.external
+        )) as ConsensusClientMetrics;
+
+        const executionClientName = instance.execution.client;
+
+        clients.push({
+          name: executionClientName as ClientNameType,
+          version: parseVersion(executionClient.version),
+          peers: executionClient.peers,
+          status: !executionClient.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(executionClientName as ClientNameType),
+          externalUrl: instance.execution.endpoints.rpc.external,
+          internalUrl: instance.execution.endpoints.rpc.internal,
+        });
+
+        const consensusClientName = instance.consensus.client;
+
+        clients.push({
+          name: consensusClientName as ClientNameType,
+          version: parseVersion(consensusClient.version),
+          peers: consensusClient.peers,
+          status: !consensusClient.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(consensusClientName as ClientNameType),
+          externalUrl: instance.consensus.endpoints.rpc.external,
+          internalUrl: instance.consensus.endpoints.rpc.internal,
+        });
+        blockHeight = executionClient.blockNumber || 0;
+        finalizedEpoch = consensusClient.finalizedEpoch || 0;
+        participation = consensusClient.participation || 0;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
-        const client = await fetchClientMetrics(
+        const result = (await clientMetrics.getMetrics(
           appType as ClientType,
-          instance.endpoints.rpc.internal,
-          clientMetrics
-        );
-        clients.push(client);
-        blockHeight = client.peers; // Example, replace with actual metric
-        finalizedEpoch = client.peers;
-        participation = client.peers;
+          instance.endpoints.rpc.external
+        )) as HeliosClientMetrics | AztecClientMetrics;
+        clients.push({
+          name: appType as ClientNameType,
+          version: parseVersion(result.version),
+          peers: result.peers,
+          status: !result.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(appType as ClientNameType),
+          externalUrl: instance.endpoints.rpc.external,
+          internalUrl: instance.endpoints.rpc.internal,
+        });
+        blockHeight = result.blockNumber || 0;
+        finalizedEpoch = result.finalizedEpoch || 0;
+        participation = result.participation || 0;
       }
 
-      chains.push({
-        chainName: chainInfo.chainName,
-        network: chainInfo.network,
+      apps.push({
+        chainName: instance.network,
+        app: instance.app,
+        appId: instance.id,
         nodeMode,
         status: CLIENT_STATUS.SYNCED,
         blocks: blockHeight,
@@ -164,7 +183,7 @@ export async function GET() {
     };
 
     return NextResponse.json({
-      chains,
+      apps,
       nodeOverview,
       ports: portInfo,
     } as DashboardData);
@@ -173,7 +192,7 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        chains: [],
+        apps: [],
         nodeOverview: {
           diskUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
           memoryUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },

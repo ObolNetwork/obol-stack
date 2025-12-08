@@ -6,13 +6,13 @@ import { StatusIndicator } from '../../atoms/StatusIndicator';
 import { Accordion } from '../../molecules/Accordion';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
-import { ChainData } from '../../../types/dashboard';
-import { ChainIcon } from '../../atoms/ChainIcon';
+import { AppData } from '../../../types/dashboard';
 import { useWalletClient } from 'wagmi';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
+import { AppIcon } from '../../atoms/AppIcon';
 
 export interface NetworkStatusProps {
-  chainData: ChainData;
+  appData: AppData;
   defaultExpanded?: boolean;
 }
 
@@ -94,7 +94,7 @@ const ClientsContainer = styled(Box, {
 });
 
 export function NetworkStatus({
-  chainData,
+  appData,
   defaultExpanded = true,
 }: NetworkStatusProps) {
   const { data: walletClient } = useWalletClient();
@@ -107,34 +107,29 @@ export function NetworkStatus({
       }}
     >
       <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
-        {/* Network Icon */}
-        {<ChainIcon chain={chainData.chainName} size={24} />}
+        {/* App Icon */}
+        {<AppIcon app={appData.app} size={24} />}
 
         <CardTitle>
-          {chainData.chainName.charAt(0).toUpperCase() +
-            chainData.chainName.slice(1)}
+          {appData.app.charAt(0).toUpperCase() + appData.app.slice(1)}
         </CardTitle>
 
-        <ChainChip
-          variant={chainData.network === 'mainnet' ? 'mainnet' : 'testnet'}
-        />
+        <ChainChip variant={appData.chainName} />
 
-        <ChainChip
-          variant={chainData.nodeMode === 'fullMode' ? 'fullMode' : 'lightMode'}
-        />
+        <ChainChip variant={appData.nodeMode} />
       </Flex>
 
       <Flex css={{ alignItems: 'center', gap: '$xxs', width: 'auto' }}>
         <AddNetworkButton
-          chainName={chainData.chainName}
+          chainName={appData.chainName}
           walletClient={walletClient}
         />
 
         <StatusIndicator
           status={
-            chainData.status === 'syncing'
+            appData.status === 'syncing'
               ? 'unsynced'
-              : (chainData.status as 'synced' | 'unsynced')
+              : (appData.status as 'synced' | 'unsynced')
           }
           size="md"
         />
@@ -156,44 +151,38 @@ export function NetworkStatus({
           <MetricsGrid>
             <MetricItem>
               <MetricLabel>BLOCK HEIGHT</MetricLabel>
-              <MetricValue>{chainData.blocks.toLocaleString()}</MetricValue>
+              <MetricValue>{appData.blocks.toLocaleString()}</MetricValue>
             </MetricItem>
-            {chainData.nodeMode === 'fullMode' && (
+            {appData.nodeMode === 'fullMode' && (
               <MetricItem>
                 <MetricLabel>FINALIZED EPOCH</MetricLabel>
-                <MetricValue>
-                  {chainData.finalized.toLocaleString()}
-                </MetricValue>
+                <MetricValue>{appData.finalized.toLocaleString()}</MetricValue>
               </MetricItem>
             )}
             <MetricItem>
               <MetricLabel>NODE MODE</MetricLabel>
               <MetricValue css={{ fontFamily: 'inherit' }}>
-                {chainData.nodeMode === 'fullMode'
+                {appData.nodeMode === 'fullMode'
                   ? 'Full Node'
-                  : chainData.nodeMode === 'lightMode'
+                  : appData.nodeMode === 'lightMode'
                     ? 'Light Node'
-                    : chainData.nodeMode === 'aztec-fullnode'
-                      ? 'Full Node (Archiver)'
-                      : chainData.nodeMode === 'aztec-sequencer'
-                        ? 'Sequencer'
-                        : chainData.nodeMode === 'aztec-prover'
-                          ? 'Prover'
-                          : 'Unknown'}
+                    : appData.nodeMode === 'aztecSequencer'
+                      ? 'Sequencer'
+                      : 'Unknown'}
               </MetricValue>
             </MetricItem>
-            {chainData.nodeMode === 'fullMode' && (
+            {appData.nodeMode === 'fullMode' && (
               <MetricItem>
                 <MetricLabel>PARTICIPATION</MetricLabel>
                 <MetricValue>
-                  <ParticipationNumber value={chainData.participation} />
+                  <ParticipationNumber value={appData.participation} />
                 </MetricValue>
               </MetricItem>
             )}
           </MetricsGrid>
 
           {/* Embedded Client Components - only show for networks that have clients */}
-          {chainData.clients && chainData.clients.length > 0 && (
+          {appData.clients && appData.clients.length > 0 && (
             <ClientsSection>
               <Text
                 css={{
@@ -210,13 +199,13 @@ export function NetworkStatus({
                 CLIENTS
               </Text>
               <ClientsContainer>
-                {chainData.clients.map(client => (
+                {appData.clients.map(client => (
                   <ClientCard
                     key={client.name}
                     name={client.name}
                     version={client.version}
                     peers={
-                      chainData.nodeMode === 'fullMode' ? client.peers : null
+                      appData.nodeMode === 'fullMode' ? client.peers : null
                     }
                     status={client.status}
                     icon={client.icon}

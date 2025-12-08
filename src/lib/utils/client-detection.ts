@@ -5,11 +5,9 @@
 import {
   APP_TO_NODE_MODE,
   AppInstanceType,
-  NODE_MODES,
+  ClientNameType,
   NodeModeType,
 } from '../../types/dashboard';
-import { ClientType } from '../services/client-metrics';
-import { config } from '../config/environment';
 
 /**
  * Parse version string to extract version number
@@ -44,36 +42,30 @@ export function getNodeModeFromAppInstance(
 }
 
 /**
- * Client name and icon mapping by app instance type
+ * Client icon mapping by client name
  */
-const APP_CLIENT_INFO: Record<ClientType, { name: string; icon: string }> = {
-  helios: {
-    name: 'Helios',
-    icon: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
-  },
-  aztec: {
-    name: 'Archiver',
-    icon: 'https://avatars.githubusercontent.com/u/47395224?s=200&v=4',
-  },
-  execution: {
-    name: 'Nethermind',
-    icon: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
-  },
-
-  consensus: {
-    name: 'Nimbus',
-    icon: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
-  },
+const CLIENT_ICONS: Partial<Record<ClientNameType, string>> = {
+  reth: 'https://avatars.githubusercontent.com/u/97369466?s=48&v=4',
+  geth: 'https://avatars.githubusercontent.com/u/6250754?s=200&v=4',
+  nethermind: 'https://avatars.githubusercontent.com/u/43478154?s=200&v=4',
+  besu: 'https://avatars.githubusercontent.com/u/7657900?s=48&v=4',
+  erigon: 'https://avatars.githubusercontent.com/u/66788158?s=48&v=4',
+  ethereumjs: 'https://avatars.githubusercontent.com/u/16297473?s=200&v=4',
+  lighthouse: 'https://avatars.githubusercontent.com/u/22672004?s=48&v=4',
+  prysm: 'https://avatars.githubusercontent.com/u/35349758?s=200&v=4',
+  teku: 'https://avatars.githubusercontent.com/u/10818037?s=48&v=4',
+  nimbus: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
+  lodestar: 'https://avatars.githubusercontent.com/u/27474093?s=48&v=4',
+  grandine: 'https://avatars.githubusercontent.com/u/53257991?s=48&v=4',
+  aztec: 'https://avatars.githubusercontent.com/u/45291733?s=200&v=4',
+  helios: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
 } as const;
 
 /**
- * Get client name and icon by app instance type
- * @param appType - The app instance type ('helios' | 'aztec' | 'ethereum')
- * @returns Object with name and icon for the client
+ * Get client icon URL by client name
+ * @param clientName - The client name (ClientNameType)
+ * @returns Icon URL string, or empty string if not found
  */
-export function getClientInfoByAppType(clientType: ClientType): {
-  name: string;
-  icon: string;
-} {
-  return APP_CLIENT_INFO[clientType];
+export function getClientIcon(clientName: ClientNameType): string {
+  return CLIENT_ICONS[clientName] || '';
 }
