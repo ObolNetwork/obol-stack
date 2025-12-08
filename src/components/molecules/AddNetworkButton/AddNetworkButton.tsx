@@ -79,7 +79,7 @@ export function AddNetworkButton({
         ? 'Adding network...'
         : 'Add network to wallet';
 
-  const isDisabled = isLoading || isSuccess || isError;
+  const isDisabled = isLoading || isSuccess || isError || !walletClient;
 
   return (
     <StyledButton
