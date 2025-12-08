@@ -1,10 +1,12 @@
 import React from 'react';
-import { Text, styled, theme } from '@obolnetwork/obol-ui';
+import { styled, theme } from '@obolnetwork/obol-ui';
 import { WalletClient } from 'viem';
 import { addNetworkToWallet } from '@/lib/utils/wallet';
 import { ChainName } from '@/types/dashboard';
 import { AddCircle } from '@/icons';
+import { CheckIcon } from '@radix-ui/react-icons';
 import { toast } from 'react-toastify';
+import { Tooltip } from '@/components/atoms/Tooltip';
 
 export interface AddNetworkButtonProps {
   chainName: ChainName;
@@ -13,20 +15,11 @@ export interface AddNetworkButtonProps {
 
 const StyledButton = styled('div', {
   display: 'flex',
-  width: 'max-content ',
+  width: 'max-content',
   alignItems: 'center',
-  gap: '$xxxs',
+  justifyContent: 'center',
   cursor: 'pointer',
   color: '$light',
-});
-
-const ButtonLabel = styled(Text, {
-  width: 'max-content',
-  fontFamily: '$fonts$body',
-  fontSize: '$3',
-  fontWeight: '$semibold',
-  lineHeight: '10px',
-  color: 'inherit',
 });
 
 export function AddNetworkButton({
@@ -63,33 +56,44 @@ export function AddNetworkButton({
       setIsLoading(false);
     }
   };
-  const color = isError
-    ? theme.colors.test.value
-    : isSuccess
-      ? theme.colors.obolGreen.value
-      : isLoading
-        ? theme.colors.body.value
-        : theme.colors.obolGreen.value;
+  const color = !walletClient
+    ? theme.colors.body.value
+    : isError
+      ? theme.colors.test.value
+      : isSuccess
+        ? theme.colors.obolGreen.value
+        : isLoading
+          ? theme.colors.body.value
+          : theme.colors.obolGreen.value;
 
-  const label = isError
-    ? 'Error adding network'
-    : isSuccess
-      ? 'Network added to wallet'
-      : isLoading
-        ? 'Adding network...'
-        : 'Add network to wallet';
+  const label = !walletClient
+    ? 'Wallet not connected'
+    : isError
+      ? 'Error adding network'
+      : isSuccess
+        ? 'Network added to wallet'
+        : isLoading
+          ? 'Adding network...'
+          : 'Add network to wallet';
 
   const isDisabled = isLoading || isSuccess || isError || !walletClient;
 
   return (
-    <StyledButton
-      onClick={handleClick}
-      css={{ cursor: isDisabled ? 'default' : 'pointer' }}
-    >
-      {!isSuccess && <AddCircle size="s" color={color} />}
-      <ButtonLabel as="span" css={{ color }}>
-        {label}
-      </ButtonLabel>
-    </StyledButton>
+    <Tooltip content={label} side="top">
+      <StyledButton
+        onClick={handleClick}
+        css={{ cursor: isDisabled ? 'default' : 'pointer' }}
+      >
+        {isSuccess ? (
+          <CheckIcon
+            width={24}
+            height={24}
+            color={theme.colors.obolGreen.value}
+          />
+        ) : (
+          <AddCircle size="s" color={color} />
+        )}
+      </StyledButton>
+    </Tooltip>
   );
 }

@@ -12,7 +12,7 @@ type AddEthereumChainParameter = {
 
 const CHAIN_PARAMS: Partial<Record<ChainName, AddEthereumChainParameter>> = {
   // Ethereum Mainnet
-  ethereum: {
+  mainnet: {
     chainId: '0x1',
     chainName: 'Ethereum Mainnet',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
@@ -34,18 +34,6 @@ const CHAIN_PARAMS: Partial<Record<ChainName, AddEthereumChainParameter>> = {
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: [config.erpcUrl + '/hoodi'],
     blockExplorerUrls: ['https://hoodi.etherscan.io'],
-  },
-  // Aztec Testnet
-  aztec: {
-    chainId: '0xa4ef4', // Hex for 677868
-    chainName: 'Aztec Testnet',
-    nativeCurrency: {
-      name: 'Ether',
-      symbol: 'ETH',
-      decimals: 18,
-    },
-    rpcUrls: [config.erpcUrl + '/aztec'],
-    blockExplorerUrls: ['https://explorer.aztec.network'],
   },
 };
 
