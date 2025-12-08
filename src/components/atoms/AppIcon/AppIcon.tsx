@@ -8,7 +8,7 @@ export interface AppIconProps {
   className?: string;
 }
 
-const EthereumIcon = ({ size = 32 }: { size: number }) => (
+const EthereumIcon = ({ size = 32 }: { size?: number }) => (
   <svg
     width={size}
     height={size}
@@ -45,7 +45,7 @@ const EthereumIcon = ({ size = 32 }: { size: number }) => (
   </svg>
 );
 
-const AztecIcon = ({ size = 32 }: { size: number }) => (
+const AztecIcon = ({ size = 32 }: { size?: number }) => (
   <svg
     width={size}
     height={size}
@@ -73,7 +73,7 @@ const AztecIcon = ({ size = 32 }: { size: number }) => (
   </svg>
 );
 
-const HeliosIcon = ({ size = 32 }: { size: number }) => (
+const HeliosIcon = () => (
   <Box
     css={{
       width: '$lg',
@@ -91,7 +91,7 @@ const HeliosIcon = ({ size = 32 }: { size: number }) => (
 
 const appIcons: Record<
   AppInstanceType,
-  React.ComponentType<{ size: number }>
+  React.ComponentType<{ size?: number }>
 > = {
   ethereum: EthereumIcon,
   aztec: AztecIcon,
@@ -110,6 +110,3 @@ export function AppIcon({ app, size = 32, className }: AppIconProps) {
     </div>
   );
 }
-
-// Export individual icons for direct use if needed
-export { EthereumIcon, AztecIcon };

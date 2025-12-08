@@ -52,7 +52,7 @@ src/
 The following environment variable has been configured in `.env.local`:
 
 ```bash
-ADK_AGENT_URL=http://localhost:8000
+NEXT_PUBLIC_ADK_AGENT_URL=http://localhost:8000
 ```
 
 ### 🎨 UI Components
@@ -139,7 +139,7 @@ useCopilotAction({
 
 2. Check browser console for errors (F12)
 
-3. Verify the `ADK_AGENT_URL` in `.env.local`
+3. Verify the `NEXT_PUBLIC_ADK_AGENT_URL` in `.env.local`
 
 ### CORS Issues
 

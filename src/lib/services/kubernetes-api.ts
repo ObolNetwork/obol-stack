@@ -4,8 +4,7 @@
  */
 
 import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
-import { NODE_MODES, NodeModeType } from '../../types/dashboard';
-import { config } from '../config/environment';
+import { NodeModeType } from '../../types/dashboard';
 import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
 import * as fs from 'fs';
 import {

@@ -87,7 +87,7 @@ The main dashboard interface with integrated ADK agent:
 Add to your `.env.local`:
 
 ```bash
-ADK_AGENT_URL=http://localhost:8000
+NEXT_PUBLIC_ADK_AGENT_URL=http://localhost:8000
 ```
 
 This configures the endpoint where your FastAPI ADK agent is running.
