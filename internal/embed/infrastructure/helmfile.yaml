@@ -54,6 +54,14 @@ releases:
     values:
       - ./values/erpc.yaml.gotmpl
 
+  # Obol Agent
+  - name: obol-agent
+    namespace: agent
+    chart: ./obol-agent
+    createNamespace: true
+    needs:
+      - kube-system/base
+
   # Obol Stack frontend
   - name: obol-frontend
     namespace: obol-frontend
