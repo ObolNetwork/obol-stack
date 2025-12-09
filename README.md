@@ -109,9 +109,15 @@ obol stack up
 obol network install ethereum
 # This creates a deployment like: ethereum-nervous-otter
 
+# Deploy the network to the cluster
+obol network sync ethereum/nervous-otter
+
 # Install another network configuration
 obol network install ethereum --network=holesky
 # This creates a separate deployment like: ethereum-happy-panda
+
+# Deploy the second network
+obol network sync ethereum/happy-panda
 
 # View cluster resources (opens interactive terminal UI)
 obol k9s
@@ -120,7 +126,10 @@ obol k9s
 The stack will create a local Kubernetes cluster. Each network installation creates a uniquely-namespaced deployment instance, allowing you to run multiple configurations simultaneously.
 
 > [!TIP]
-> Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations.
+> Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations. After installation, deploy to the cluster with `obol network sync <network>/<id>`.
+
+> [!TIP]
+> You can also install arbitrary Helm charts as applications using `obol app install <chart-url>`. Find charts at [Artifact Hub](https://artifacthub.io).
 
 ## Managing Networks
 
@@ -159,8 +168,25 @@ obol network install ethereum
 
 Each network installation creates a **unique deployment instance** with:
 1. Network configuration templated and saved to `~/.config/obol/networks/ethereum/<namespace>/`
-2. Resources deployed to a unique Kubernetes namespace (e.g., `ethereum-nervous-otter`)
+2. Configuration files ready to be deployed to the cluster
 3. Isolated persistent storage for blockchain data
+
+### Sync a Network
+
+After installing a network configuration, deploy it to the cluster:
+
+```bash
+# Deploy the network to the cluster
+obol network sync ethereum/<namespace>
+
+# Or use the namespace format
+obol network sync ethereum-nervous-otter
+```
+
+The sync command:
+- Reads the configuration from `~/.config/obol/networks/<network>/<namespace>/`
+- Executes helmfile to deploy resources to a unique Kubernetes namespace
+- Creates isolated persistent storage for blockchain data
 
 **Multiple deployments:**
 
@@ -169,15 +195,24 @@ You can install the same network type multiple times with different configuratio
 ```bash
 # Install mainnet with Geth + Prysm
 obol network install ethereum --network=mainnet --execution-client=geth --consensus-client=prysm
-# Creates: ethereum-nervous-otter namespace
+# Creates configuration: ethereum-nervous-otter
+
+# Deploy to cluster
+obol network sync ethereum/nervous-otter
 
 # Install Holesky testnet with Reth + Lighthouse
 obol network install ethereum --network=holesky --execution-client=reth --consensus-client=lighthouse
-# Creates: ethereum-laughing-elephant namespace
+# Creates configuration: ethereum-laughing-elephant
+
+# Deploy Holesky to cluster
+obol network sync ethereum/laughing-elephant
 
 # Install another Holesky instance for testing
 obol network install ethereum --network=holesky
-# Creates: ethereum-happy-panda namespace
+# Creates configuration: ethereum-happy-panda
+
+# Deploy second Holesky instance
+obol network sync ethereum/happy-panda
 ```
 
 **Ethereum configuration options:**
@@ -203,10 +238,11 @@ Each network installation creates an isolated deployment with a unique namespace
 - **Persistent volumes**: Blockchain data stored in `~/.local/share/obol/<cluster-id>/networks/<network>_<namespace>/`
 - **Service endpoints**: Internal cluster DNS per deployment (e.g., `ethereum-rpc.ethereum-nervous-otter.svc.cluster.local`)
 
-**Two-stage templating:**
-1. CLI flags template the helmfile values section with your configuration
-2. Helmfile processes the template and deploys to the cluster
-3. Configuration is saved locally for future updates and management
+**Install and Sync workflow:**
+1. **Install**: `obol network install` generates configuration files locally from CLI flags
+2. **Customize**: Edit values and templates in `~/.config/obol/networks/<network>/<id>/` (optional)
+3. **Sync**: `obol network sync` deploys the configuration to the cluster using helmfile
+4. **Update**: Modify configuration and re-sync to update the deployment
 
 ### Delete a Network Deployment
 
@@ -233,6 +269,103 @@ This command will:
 
 > [!NOTE]
 > You can have multiple deployments of the same network type. Deleting one deployment (e.g., `ethereum-nervous-otter`) does not affect other deployments (e.g., `ethereum-happy-panda`).
+
+## Managing Applications
+
+The Obol Stack supports installing arbitrary Helm charts as managed applications. Each application installation creates an isolated deployment with its own namespace, similar to network deployments.
+
+### Install an Application
+
+Install any Helm chart by providing a direct HTTPS URL to a chart `.tgz` file:
+
+```bash
+# Install Redis from Bitnami
+obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz
+
+# Install PostgreSQL with custom name and ID
+obol app install https://charts.bitnami.com/bitnami/postgresql-15.0.0.tgz --name mydb --id production
+```
+
+Find chart URLs at [Artifact Hub](https://artifacthub.io).
+
+**What happens during installation:**
+1. Downloads the chart files locally to `~/.config/obol/applications/<app>/<id>/`
+2. Extracts chart templates, values, and metadata
+3. Generates a helmfile.yaml for deployment
+4. Saves installation metadata
+
+**Installation options:**
+- `--name`: Application name (defaults to chart name)
+- `--version`: Chart version (defaults to latest)
+- `--id`: Deployment ID (defaults to generated petname)
+- `--force` or `-f`: Overwrite existing deployment
+
+### Sync an Application
+
+After installing an application, deploy it to the cluster:
+
+```bash
+# Deploy the application
+obol app sync postgresql/eager-fox
+
+# Check status
+obol kubectl get all -n postgresql-eager-fox
+```
+
+The sync command:
+- Reads configuration from `~/.config/obol/applications/<app>/<id>/`
+- Executes helmfile to deploy resources
+- Creates unique namespace: `<app>-<id>`
+
+### List Applications
+
+View all installed applications:
+
+```bash
+# Simple list
+obol app list
+
+# Detailed information
+obol app list --verbose
+```
+
+### Delete an Application
+
+Remove an application deployment and its cluster resources:
+
+```bash
+# Delete with confirmation prompt
+obol app delete postgresql/eager-fox
+
+# Skip confirmation
+obol app delete postgresql/eager-fox --force
+```
+
+This command will:
+- Remove the Kubernetes namespace and all deployed resources
+- Delete the configuration directory and chart files
+
+### Customize Applications
+
+After installation, you can modify the chart files directly:
+
+```bash
+# Edit application values
+$EDITOR ~/.config/obol/applications/postgresql/eager-fox/values.yaml
+
+# Modify templates
+$EDITOR ~/.config/obol/applications/postgresql/eager-fox/templates/statefulset.yaml
+
+# Re-deploy with changes
+obol app sync postgresql/eager-fox
+```
+
+**Local files:**
+- `Chart.yaml`: Chart metadata
+- `values.yaml`: Configuration values (edit to customize)
+- `templates/`: Kubernetes resource templates
+- `helmfile.yaml`: Deployment definition
+- `metadata.yaml`: Installation metadata
 
 ### Managing the Stack
 
@@ -354,12 +487,22 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 │   ├── helmfile.yaml              # Base stack configuration
 │   ├── base/                      # Base Kubernetes resources
 │   └── values/                    # Configuration templates (ERPC, frontend)
-└── networks/                      # Installed network deployments
-    ├── ethereum/                  # Ethereum network deployments
-    │   ├── <namespace-1>/         # First deployment instance
-    │   └── <namespace-2>/         # Second deployment instance
-    ├── helios/                    # Helios network deployments
-    └── aztec/                     # Aztec network deployments
+├── networks/                      # Installed network deployments
+│   ├── ethereum/                  # Ethereum network deployments
+│   │   ├── <namespace-1>/         # First deployment instance
+│   │   └── <namespace-2>/         # Second deployment instance
+│   ├── helios/                    # Helios network deployments
+│   └── aztec/                     # Aztec network deployments
+└── applications/                  # Installed application deployments
+    ├── redis/                     # Redis deployments
+    │   └── <id>/                  # Deployment instance
+    │       ├── Chart.yaml         # Chart metadata
+    │       ├── values.yaml        # Configuration values
+    │       ├── helmfile.yaml      # Deployment definition
+    │       ├── metadata.yaml      # Installation metadata
+    │       └── templates/         # Kubernetes resources
+    └── postgresql/                # PostgreSQL deployments
+        └── <id>/                  # Deployment instance
 ```
 
 **Data directory structure:**
@@ -453,12 +596,15 @@ If you're contributing to the Obol Stack or want to run it from source, you can 
 │   │   ├── helmfile.yaml
 │   │   ├── base/
 │   │   └── values/
-│   └── networks/                # Installed network deployments
-│       ├── ethereum/            # Ethereum network deployments
-│       │   ├── <namespace-1>/  # First deployment instance
-│       │   └── <namespace-2>/  # Second deployment instance
-│       ├── helios/
-│       └── aztec/
+│   ├── networks/                # Installed network deployments
+│   │   ├── ethereum/            # Ethereum network deployments
+│   │   │   ├── <namespace-1>/  # First deployment instance
+│   │   │   └── <namespace-2>/  # Second deployment instance
+│   │   ├── helios/
+│   │   └── aztec/
+│   └── applications/            # Installed application deployments
+│       ├── redis/
+│       └── postgresql/
 └── data/                        # Persistent volumes (network data)
 ```
 
