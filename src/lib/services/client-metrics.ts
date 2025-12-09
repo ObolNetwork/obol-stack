@@ -186,7 +186,7 @@ export class ClientMetricsService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          method: 'node_getL2Tips',
+          method: 'pxe_getNodeInfo',
           params: [],
           id: 67,
         }),
@@ -333,7 +333,6 @@ export class ClientMetricsService {
     try {
       const resp = await fetch(`${beaconUrl}/eth/v1/validator/participation`);
       const data = await resp.json();
-      console.log('data', data);
       return data.data?.globalParticipationRate
         ? parseFloat(data.data.globalParticipationRate)
         : fallback;

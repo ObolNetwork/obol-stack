@@ -5,6 +5,7 @@ import { StatusIndicator } from './StatusIndicator';
 import { determineNodeStatus } from './statusLogic';
 import { DashboardData } from '../../../types/dashboard';
 import { useCoAgent } from '@copilotkit/react-core';
+import { useAgentHealth } from '@/hooks/useAgentHealth';
 
 // Styled Components
 const HeaderContainer = styled(Box, {
@@ -50,6 +51,7 @@ const ButtonImage = styled(Image, {
   width: '100%',
   height: '100%',
   objectFit: 'contain',
+  cursor: 'pointer',
 });
 
 interface HeaderProps {
@@ -105,6 +107,12 @@ export function AgentSidebar({ onSidebarToggle, data }: AgentSidebarProps) {
   useCoAgent({
     name: 'obol_agent',
   });
+
+  const { isAvailable: isAgentConfigured } = useAgentHealth();
+  const initialMessage = isAgentConfigured
+    ? "👋 Hi! I'm your Obol ADK Agent.\n\nI can help you with:\n- Monitoring your Obol Stack\n- Understanding node metrics\n- Troubleshooting issues\n- Explaining system status\n\nHow can I assist you today?"
+    : 'Initialize your Obol Agent by running `obol agent init` in your command line interface to get started.';
+
   return (
     <CopilotSidebar
       Header={() => <Header data={data} />}
@@ -114,8 +122,7 @@ export function AgentSidebar({ onSidebarToggle, data }: AgentSidebarProps) {
       onSetOpen={onSidebarToggle}
       labels={{
         title: 'Obol Assistant',
-        initial:
-          "👋 Hi! I'm your Obol ADK Agent.\n\nI can help you with:\n- Monitoring your Obol Stack\n- Understanding node metrics\n- Troubleshooting issues\n- Explaining system status\n\nHow can I assist you today?",
+        initial: initialMessage,
       }}
     />
   );

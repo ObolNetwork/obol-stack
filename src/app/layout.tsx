@@ -1,4 +1,3 @@
-'use client';
 import { DM_Sans } from 'next/font/google';
 import './globals.css';
 import { CopilotKit } from '@copilotkit/react-core';
@@ -20,7 +19,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={dmSans.variable}>
+      <body className={dmSans.variable} style={{ backgroundColor: '#091011' }}>
         <Providers>
           <CopilotKit runtimeUrl="/api/copilotkit" agent="obol_agent">
             {children}

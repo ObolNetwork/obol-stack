@@ -2,160 +2,168 @@ import { NextResponse } from 'next/server';
 import { PrometheusClient } from '@/lib/services/prometheus';
 import { KubernetesAPIClient } from '@/lib/services/kubernetes-api';
 import {
+  AztecClientMetrics,
   ClientMetricsService,
+  ClientType,
   ConsensusClientMetrics,
   ExecutionClientMetrics,
   HeliosClientMetrics,
-  AztecClientMetrics,
 } from '@/lib/services/client-metrics';
 import { config } from '@/lib/config/environment';
 import {
   DashboardData,
-  ChainData,
+  AppData,
   ClientInfo,
   CLIENT_STATUS,
   PORT_STATUS,
-  NETWORKS,
-  CHAINS,
+  ClientNameType,
 } from '@/types/dashboard';
-import { getClients, parseVersion } from '@/lib/utils/client-detection';
-import { ChainInfo, getChainInfoFromId } from '@/lib/utils/chain-mapping';
+import {
+  getClientIcon,
+  getNodeModeFromAppInstance,
+  parseVersion,
+} from '@/lib/utils/client-detection';
+import { isEthereumInstance } from '@/lib/models/application-instances';
 
 export async function GET() {
   try {
-    // Initialize service clients
     const prometheus = new PrometheusClient(config.prometheusUrl);
     const k8s = new KubernetesAPIClient();
     const clientMetrics = new ClientMetricsService();
 
-    // Fetch all metrics in parallel
-    const [
-      systemMetrics,
-      // ethereumMetrics, // Commented out - eRPC doesn't recognize 'hoodi'
-      availableModes,
-      portStatus,
-    ] = await Promise.allSettled([
+    const [systemMetrics, portStatus, appInstances] = await Promise.allSettled([
       prometheus.getSystemMetrics(),
-      k8s.getAvailableModes(),
-      // erpc.getNetworkMetrics('hoodi'), // We get this data from ClientMetricsService instead
       k8s.checkPorts(),
+      k8s.getApplicationInstances(),
     ]);
 
-    // Process system metrics
+    const instances =
+      appInstances.status === 'fulfilled' ? appInstances.value : [];
+
+    // Node overview
     const system =
       systemMetrics.status === 'fulfilled' ? systemMetrics.value : null;
     const nodeOverview = {
       diskUsage: system
         ? {
-            value: Math.round(system.disk.used / (1024 * 1024 * 1024)),
-            total: Math.round(system.disk.total / (1024 * 1024 * 1024)),
+            value: Math.round(system.disk.used / 1024 ** 3),
+            total: Math.round(system.disk.total / 1024 ** 3),
             percentage: Math.round(system.disk.percentage),
             unit: 'GB',
           }
-        : {
-            value: 0,
-            total: 0,
-            percentage: 0,
-            unit: 'GB',
-          },
+        : { value: 0, total: 0, percentage: 0, unit: 'GB' },
       memoryUsage: system
         ? {
-            value: Math.round(system.memory.used / (1024 * 1024 * 1024)),
-            total: Math.round(system.memory.total / (1024 * 1024 * 1024)),
+            value: Math.round(system.memory.used / 1024 ** 3),
+            total: Math.round(system.memory.total / 1024 ** 3),
             percentage: Math.round(system.memory.percentage),
             unit: 'GB',
           }
-        : {
-            value: 0,
-            total: 0,
-            percentage: 0,
-            unit: 'GB',
-          },
-      cpuLoad: {
-        percentage: system ? Math.round(system.cpu.usage) : 19,
-      },
+        : { value: 0, total: 0, percentage: 0, unit: 'GB' },
+      cpuLoad: { percentage: system ? Math.round(system.cpu.usage) : 0 },
       uptime: {
-        hours: system ? Math.floor(system.uptime / 3600) : 76,
-        status: 'online',
+        hours: system ? Math.floor(system.uptime / 3600) : 0,
+        status: system ? 'online' : 'offline',
       },
     };
 
-    // Build chains array
-    const chains: ChainData[] = [];
+    // Build apps
+    const apps: AppData[] = [];
+    for (const instance of instances) {
+      const nodeMode = getNodeModeFromAppInstance(instance.app);
 
-    if (availableModes.status === 'fulfilled') {
-      for (const mode of availableModes.value) {
-        let blockHeight = 0;
-        let finalizedEpoch = 0;
-        let chainInfo: ChainInfo = {
-          chainName: CHAINS.ETHEREUM,
-          network: NETWORKS.MAINNET,
-        };
-        let participation = 0;
-        const chainClients = getClients(mode.type);
+      let blockHeight = 0;
+      let finalizedEpoch = 0;
+      let participation = 0;
+      const clients: ClientInfo[] = [];
 
-        const clients: ClientInfo[] = [];
+      if (isEthereumInstance(instance)) {
+        const executionUrl = config.isInCluster
+          ? instance.execution.endpoints.rpc.internal
+          : instance.execution.endpoints.rpc.external;
+        const executionClient = (await clientMetrics.getMetrics(
+          'execution',
+          executionUrl
+        )) as ExecutionClientMetrics;
 
-        for (const client of chainClients) {
-          const result = await clientMetrics.getMetrics(
-            client.type,
-            client.endpoint
-          );
+        const consensusUrl = config.isInCluster
+          ? instance.consensus.endpoints.rpc.internal
+          : instance.consensus.endpoints.rpc.external;
+        const consensusClient = (await clientMetrics.getMetrics(
+          'consensus',
+          consensusUrl
+        )) as ConsensusClientMetrics;
 
-          if (client.type === 'execution') {
-            blockHeight = (result as ExecutionClientMetrics).blockNumber || 0;
-            chainInfo = getChainInfoFromId(
-              (result as ExecutionClientMetrics).chainId
-            );
-          } else if (client.type === 'helios') {
-            blockHeight = (result as HeliosClientMetrics).blockNumber || 0;
-            chainInfo = getChainInfoFromId(
-              (result as HeliosClientMetrics).chainId
-            );
-            finalizedEpoch =
-              (result as HeliosClientMetrics).finalizedEpoch || 0;
-            participation = (result as HeliosClientMetrics).participation || 0;
-          } else if (client.type === 'consensus') {
-            finalizedEpoch =
-              (result as ConsensusClientMetrics).finalizedEpoch || 0;
-            participation =
-              (result as ConsensusClientMetrics).participation || 0;
-          } else if (client.type === 'aztec') {
-            // Handle Aztec metrics
-            blockHeight = (result as AztecClientMetrics).blockNumber || 0;
-            finalizedEpoch = (result as AztecClientMetrics).finalizedEpoch || 0;
-            participation = (result as AztecClientMetrics).participation || 0;
-            // Override chain info for Aztec nodes
-            chainInfo = {
-              chainName: CHAINS.AZTEC,
-              network: NETWORKS.TESTNET, // Aztec testnet runs on Sepolia
-            };
-          }
-          clients.push({
-            name: client.name,
-            version: parseVersion(result.version),
-            peers: result.peers || 0,
-            status: !result.syncing
-              ? CLIENT_STATUS.SYNCED
-              : CLIENT_STATUS.SYNCING,
-            icon: client.icon,
-          });
-        }
-        chains.push({
-          chainName: chainInfo.chainName,
-          network: chainInfo.network,
-          nodeMode: mode.type,
-          status: CLIENT_STATUS.SYNCED,
-          blocks: blockHeight,
-          finalized: finalizedEpoch,
-          participation: participation,
-          clients: clients,
-          distance: 0,
+        const executionClientName = instance.execution.client;
+
+        clients.push({
+          name: executionClientName as ClientNameType,
+          version: parseVersion(executionClient.version),
+          peers: executionClient.peers || 0,
+          status: !executionClient.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(executionClientName as ClientNameType),
+          externalUrl: instance.execution.endpoints.rpc.external,
+          internalUrl: instance.execution.endpoints.rpc.internal,
         });
+
+        const consensusClientName = instance.consensus.client;
+
+        clients.push({
+          name: consensusClientName as ClientNameType,
+          version: parseVersion(consensusClient.version),
+          peers: consensusClient.peers || 0,
+          status: !consensusClient.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(consensusClientName as ClientNameType),
+          externalUrl: instance.consensus.endpoints.rpc.external,
+          internalUrl: instance.consensus.endpoints.rpc.internal,
+        });
+        blockHeight = executionClient.blockNumber || 0;
+        finalizedEpoch = consensusClient.finalizedEpoch || 0;
+        participation = consensusClient.participation || 0;
+      } else {
+        const appType = instance.app; // 'helios' | 'aztec'
+        const appUrl = config.isInCluster
+          ? instance.endpoints.rpc.internal
+          : instance.endpoints.rpc.external;
+        const result = (await clientMetrics.getMetrics(
+          appType as ClientType,
+          appUrl
+        )) as HeliosClientMetrics | AztecClientMetrics;
+        clients.push({
+          name: appType as ClientNameType,
+          version: parseVersion(result.version),
+          peers: result.peers || 0,
+          status: !result.syncing
+            ? CLIENT_STATUS.SYNCED
+            : CLIENT_STATUS.SYNCING,
+          icon: getClientIcon(appType as ClientNameType),
+          externalUrl: instance.endpoints.rpc.external,
+          internalUrl: instance.endpoints.rpc.internal,
+        });
+        blockHeight = result.blockNumber || 0;
+        finalizedEpoch = result.finalizedEpoch || 0;
+        participation = result.participation || 0;
       }
+
+      apps.push({
+        chainName: instance.network,
+        app: instance.app,
+        appId: instance.id,
+        nodeMode,
+        status: CLIENT_STATUS.SYNCED,
+        blocks: blockHeight,
+        finalized: finalizedEpoch,
+        participation,
+        clients,
+        distance: 0,
+      });
     }
 
-    // Process port status
+    // Port info
     const ports = portStatus.status === 'fulfilled' ? portStatus.value : [];
     const portInfo = {
       p2p: {
@@ -184,49 +192,31 @@ export async function GET() {
       },
     };
 
-    // Construct the dashboard response
-    const dashboardData: DashboardData = {
-      chains,
+    return NextResponse.json({
+      apps,
       nodeOverview,
       ports: portInfo,
-    };
-
-    return NextResponse.json(dashboardData);
+    } as DashboardData);
   } catch (error) {
     console.error('Failed to fetch dashboard data:', error);
 
-    // Return empty data structure - frontend will show N/A
-    const emptyData: DashboardData = {
-      chains: [],
-      nodeOverview: {
-        diskUsage: {
-          value: 0,
-          total: 0,
-          percentage: 0,
-          unit: 'GB',
+    return NextResponse.json(
+      {
+        apps: [],
+        nodeOverview: {
+          diskUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
+          memoryUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
+          cpuLoad: { percentage: 0 },
+          uptime: { hours: 0, status: 'offline' },
         },
-        memoryUsage: {
-          value: 0,
-          total: 0,
-          percentage: 0,
-          unit: 'GB',
+        ports: {
+          p2p: { port: 30303, status: 'closed' },
+          jsonRpc: { port: 8545, status: 'closed' },
+          prometheus: { port: 9090, status: 'closed' },
+          beaconApi: { port: 5052, status: 'closed' },
         },
-        cpuLoad: {
-          percentage: 0,
-        },
-        uptime: {
-          hours: 0,
-          status: 'offline',
-        },
-      },
-      ports: {
-        p2p: { port: 30303, status: 'closed' },
-        jsonRpc: { port: 8545, status: 'closed' },
-        prometheus: { port: 9090, status: 'closed' },
-        beaconApi: { port: 5052, status: 'closed' },
-      },
-    };
-
-    return NextResponse.json(emptyData, { status: 503 });
+      } as DashboardData,
+      { status: 503 }
+    );
   }
 }

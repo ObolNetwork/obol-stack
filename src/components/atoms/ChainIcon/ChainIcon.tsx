@@ -1,8 +1,8 @@
 import React from 'react';
-import { ChainType } from '../../../types/dashboard';
+import { ChainName } from '../../../types/dashboard';
 
 export interface ChainIconProps {
-  chain: ChainType;
+  chain: ChainName;
   size?: number;
   className?: string;
 }
@@ -72,11 +72,10 @@ const AztecIcon = ({ size = 32 }: { size: number }) => (
   </svg>
 );
 
-const chainIcons: Record<ChainType, React.ComponentType<{ size: number }>> = {
-  ethereum: EthereumIcon,
+const chainIcons: Record<ChainName, React.ComponentType<{ size: number }>> = {
+  mainnet: EthereumIcon,
   sepolia: EthereumIcon, // Use Ethereum icon for Sepolia
   hoodi: EthereumIcon, // Use Ethereum icon for Hoodi
-  aztec: AztecIcon, // Use Aztec icon for Aztec L2
 };
 
 export function ChainIcon({ chain, size = 32, className }: ChainIconProps) {

@@ -123,7 +123,9 @@ export function ClientCard({
             />
           )}
           <ClientDetails>
-            <ClientName>{name}</ClientName>
+            <ClientName>
+              {name.charAt(0).toUpperCase() + name.slice(1).toLowerCase()}
+            </ClientName>
             <ClientVersion>{version}</ClientVersion>
           </ClientDetails>
         </ClientInfo>

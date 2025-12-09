@@ -24,7 +24,7 @@ export const POST = async (req: NextRequest) => {
   console.log('[CopilotKit Route] Incoming request to /api/copilotkit');
   console.log(
     '[CopilotKit Route] Agent URL:',
-    process.env.ADK_AGENT_URL || 'http://127.0.0.1:8000/'
+    process.env.NEXT_PUBLIC_ADK_AGENT_URL || 'http://127.0.0.1:8000/'
   );
 
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({

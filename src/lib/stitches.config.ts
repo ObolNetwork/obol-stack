@@ -1,15 +1,6 @@
 import { createStitches } from '@stitches/react';
 
-export const {
-  styled,
-  css,
-  globalCss,
-  keyframes,
-  getCssText,
-  theme,
-  createTheme,
-  config,
-} = createStitches({
+export const { styled } = createStitches({
   theme: {
     colors: {
       // Missing color tokens for percentage chips
@@ -21,5 +12,3 @@ export const {
     },
   },
 });
-
-export type CSS = Parameters<typeof css>[0];
