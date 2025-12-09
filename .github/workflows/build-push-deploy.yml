@@ -63,7 +63,7 @@ jobs:
             # tag event
             type=ref,event=tag
             # short sha
-            type=sha,prefix={{branch}}-
+            type=sha
           labels: |
             org.opencontainers.image.title=Obol Stack Front End
             org.opencontainers.image.description=Monitoring dashboard for Obol Stack and Ethereum node status
