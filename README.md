@@ -129,7 +129,7 @@ The stack will create a local Kubernetes cluster. Each network installation crea
 > Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations. After installation, deploy to the cluster with `obol network sync <network>/<id>`.
 
 > [!TIP]
-> You can also install arbitrary Helm charts as applications using `obol app install <chart-url>`. Find charts at [Artifact Hub](https://artifacthub.io).
+> You can also install arbitrary Helm charts as applications using `obol app install <chart>`. Find charts at [Artifact Hub](https://artifacthub.io).
 
 ## Managing Networks
 
@@ -276,23 +276,32 @@ The Obol Stack supports installing arbitrary Helm charts as managed applications
 
 ### Install an Application
 
-Install any Helm chart by providing a direct HTTPS URL to a chart `.tgz` file:
+Install any Helm chart using one of the supported reference formats:
 
 ```bash
-# Install Redis from Bitnami
+# Install using repo/chart format (resolved via ArtifactHub)
+obol app install bitnami/redis
+obol app install bitnami/postgresql@15.0.0
+
+# Install using direct URL
 obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz
 
-# Install PostgreSQL with custom name and ID
-obol app install https://charts.bitnami.com/bitnami/postgresql-15.0.0.tgz --name mydb --id production
+# Install with custom name and ID
+obol app install bitnami/postgresql --name mydb --id production
 ```
 
-Find chart URLs at [Artifact Hub](https://artifacthub.io).
+Find charts at [Artifact Hub](https://artifacthub.io).
+
+**Supported chart reference formats:**
+- `repo/chart` - Resolved via ArtifactHub (e.g., `bitnami/redis`)
+- `repo/chart@version` - Specific version (e.g., `bitnami/redis@19.0.0`)
+- `https://.../*.tgz` - Direct URL to chart archive
 
 **What happens during installation:**
-1. Downloads the chart files locally to `~/.config/obol/applications/<app>/<id>/`
-2. Extracts chart templates, values, and metadata
-3. Generates a helmfile.yaml for deployment
-4. Saves installation metadata
+1. Resolves the chart reference (via ArtifactHub for repo/chart format)
+2. Fetches default values from the chart
+3. Generates helmfile.yaml that references the chart remotely
+4. Saves configuration to `~/.config/obol/applications/<app>/<id>/`
 
 **Installation options:**
 - `--name`: Application name (defaults to chart name)
@@ -347,25 +356,19 @@ This command will:
 
 ### Customize Applications
 
-After installation, you can modify the chart files directly:
+After installation, you can modify the values file to customize your deployment:
 
 ```bash
 # Edit application values
 $EDITOR ~/.config/obol/applications/postgresql/eager-fox/values.yaml
-
-# Modify templates
-$EDITOR ~/.config/obol/applications/postgresql/eager-fox/templates/statefulset.yaml
 
 # Re-deploy with changes
 obol app sync postgresql/eager-fox
 ```
 
 **Local files:**
-- `Chart.yaml`: Chart metadata
+- `helmfile.yaml`: Deployment configuration (references chart remotely)
 - `values.yaml`: Configuration values (edit to customize)
-- `templates/`: Kubernetes resource templates
-- `helmfile.yaml`: Deployment definition
-- `metadata.yaml`: Installation metadata
 
 ### Managing the Stack
 
@@ -496,11 +499,8 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 └── applications/                  # Installed application deployments
     ├── redis/                     # Redis deployments
     │   └── <id>/                  # Deployment instance
-    │       ├── Chart.yaml         # Chart metadata
-    │       ├── values.yaml        # Configuration values
-    │       ├── helmfile.yaml      # Deployment definition
-    │       ├── metadata.yaml      # Installation metadata
-    │       └── templates/         # Kubernetes resources
+    │       ├── helmfile.yaml      # Deployment configuration
+    │       └── values.yaml        # Configuration values
     └── postgresql/                # PostgreSQL deployments
         └── <id>/                  # Deployment instance
 ```
