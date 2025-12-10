@@ -49,6 +49,12 @@ COMMANDS:
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
 
+   App Management:
+     app install     Install a Helm chart as an application
+     app list        List installed applications
+     app sync        Deploy application to cluster
+     app delete      Remove application and cluster resources
+
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
      helm            Run helm with stack kubeconfig (passthrough)
