@@ -1,41 +1,70 @@
 package app
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Metadata stores information about an installed application
-type Metadata struct {
-	ChartURL    string    `yaml:"chartUrl"`             // Chart download URL
-	ChartName   string    `yaml:"chartName"`            // Extracted chart name
-	Version     string    `yaml:"version"`              // Chart version
-	InstalledAt time.Time `yaml:"installedAt"`          // Installation timestamp
-	UpdatedAt   time.Time `yaml:"updatedAt,omitempty"`  // Last update timestamp
+// HelmfileInfo holds parsed information from a helmfile.yaml
+type HelmfileInfo struct {
+	ChartRef string // Original chart reference (from comment)
+	Chart    string // Chart field value
+	Version  string // Chart version
 }
 
-// SaveMetadata writes metadata to the deployment directory
-func SaveMetadata(dir string, meta *Metadata) error {
-	data, err := yaml.Marshal(meta)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "metadata.yaml"), data, 0644)
-}
-
-// LoadMetadata reads metadata from a deployment directory
-func LoadMetadata(dir string) (*Metadata, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "metadata.yaml"))
+// ParseHelmfile extracts chart information from a helmfile.yaml
+func ParseHelmfile(dir string) (*HelmfileInfo, error) {
+	helmfilePath := filepath.Join(dir, "helmfile.yaml")
+	data, err := os.ReadFile(helmfilePath)
 	if err != nil {
 		return nil, err
 	}
 
-	var meta Metadata
-	if err := yaml.Unmarshal(data, &meta); err != nil {
-		return nil, err
+	info := &HelmfileInfo{}
+
+	// Extract original reference from first comment line
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "# Installed from: ") {
+			info.ChartRef = strings.TrimPrefix(line, "# Installed from: ")
+			// Remove any trailing annotation like "(resolved via ArtifactHub)"
+			if idx := strings.Index(info.ChartRef, " ("); idx != -1 {
+				info.ChartRef = info.ChartRef[:idx]
+			}
+			break
+		}
 	}
-	return &meta, nil
+
+	// Parse YAML structure to get chart and version
+	var helmfile struct {
+		Releases []struct {
+			Chart   string `yaml:"chart"`
+			Version string `yaml:"version"`
+		} `yaml:"releases"`
+	}
+	if err := yaml.Unmarshal(data, &helmfile); err != nil {
+		return info, nil // Return partial info if YAML parsing fails
+	}
+
+	if len(helmfile.Releases) > 0 {
+		info.Chart = helmfile.Releases[0].Chart
+		info.Version = helmfile.Releases[0].Version
+	}
+
+	return info, nil
+}
+
+// GetHelmfileModTime returns the modification time of helmfile.yaml
+func GetHelmfileModTime(dir string) (modTime string, err error) {
+	helmfilePath := filepath.Join(dir, "helmfile.yaml")
+	stat, err := os.Stat(helmfilePath)
+	if err != nil {
+		return "", err
+	}
+	return stat.ModTime().Format("2006-01-02 15:04:05"), nil
 }

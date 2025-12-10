@@ -307,18 +307,22 @@ GLOBAL OPTIONS:
 					{
 						Name:      "install",
 						Usage:     "Install a Helm chart as an application",
-						ArgsUsage: "<chart>",
+						ArgsUsage: "<chart-reference>",
 						Description: `Install a Helm chart as a managed application.
 
-The chart files are downloaded locally to the deployment directory,
-allowing you to modify templates and values directly.
-
-Provide a direct HTTPS URL to a chart .tgz file.
-Find chart URLs at https://artifacthub.io
+Supported chart reference formats:
+  repo/chart          Resolved via ArtifactHub (e.g., bitnami/redis)
+  repo/chart@version  Specific version (e.g., bitnami/redis@19.0.0)
+  https://.../*.tgz   Direct URL to chart archive
+  oci://...           OCI registry reference
 
 Examples:
+  obol app install bitnami/redis
+  obol app install bitnami/postgresql@15.0.0
   obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz
-  obol app install https://charts.bitnami.com/bitnami/postgresql-15.0.0.tgz --name mydb --id production`,
+  obol app install oci://registry-1.docker.io/bitnamicharts/redis --name mydb --id production
+
+Find charts at https://artifacthub.io`,
 						Flags: []cli.Flag{
 							&cli.StringFlag{
 								Name:  "name",
@@ -340,10 +344,12 @@ Examples:
 						},
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("chart URL required\n\n" +
+								return fmt.Errorf("chart reference required\n\n" +
 									"Examples:\n" +
+									"  obol app install bitnami/redis\n" +
+									"  obol app install bitnami/postgresql@15.0.0\n" +
 									"  obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz\n" +
-									"  obol app install https://charts.bitnami.com/bitnami/postgresql-15.0.0.tgz\n\n" +
+									"  obol app install oci://registry-1.docker.io/bitnamicharts/redis\n\n" +
 									"Find charts at https://artifacthub.io")
 							}
 							chartRef := c.Args().First()
