@@ -146,16 +146,7 @@ GLOBAL OPTIONS:
 						},
 						Action: func(c *cli.Context) error {
 							agentAPIKey := c.String("agent-api-key")
-							if err := agent.Init(cfg, agentAPIKey); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to initialize agent", "error", err.Error())
-								return err
-							}
-							return nil
+							return agent.Init(cfg, agentAPIKey)
 						},
 					},
 				},

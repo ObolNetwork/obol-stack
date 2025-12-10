@@ -110,7 +110,7 @@ obol network install ethereum
 # This creates a deployment like: ethereum-nervous-otter
 
 # Install another network configuration
-obol network install ethereum --network=holesky
+obol network install ethereum --network=hoodi
 # This creates a separate deployment like: ethereum-happy-panda
 
 # View cluster resources (opens interactive terminal UI)
@@ -120,7 +120,7 @@ obol k9s
 The stack will create a local Kubernetes cluster. Each network installation creates a uniquely-namespaced deployment instance, allowing you to run multiple configurations simultaneously.
 
 > [!TIP]
-> Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations.
+> Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=hoodi --execution-client=geth`) to create different deployment configurations.
 
 ## Managing Networks
 
@@ -171,17 +171,17 @@ You can install the same network type multiple times with different configuratio
 obol network install ethereum --network=mainnet --execution-client=geth --consensus-client=prysm
 # Creates: ethereum-nervous-otter namespace
 
-# Install Holesky testnet with Reth + Lighthouse
-obol network install ethereum --network=holesky --execution-client=reth --consensus-client=lighthouse
+# Install Hoodi testnet with Reth + Lighthouse
+obol network install ethereum --network=hoodi --execution-client=reth --consensus-client=lighthouse
 # Creates: ethereum-laughing-elephant namespace
 
-# Install another Holesky instance for testing
-obol network install ethereum --network=holesky
+# Install another Hoodi instance for testing
+obol network install ethereum --network=hoodi
 # Creates: ethereum-happy-panda namespace
 ```
 
 **Ethereum configuration options:**
-- `--network`: Choose network (mainnet, sepolia, holesky, hoodi)
+- `--network`: Choose network (mainnet, sepolia, hoodi)
 - `--execution-client`: Choose execution client (reth, geth, nethermind, besu, erigon, ethereumjs)
 - `--consensus-client`: Choose consensus client (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
@@ -562,7 +562,7 @@ The stack will include [eRPC](https://erpc.cloud/), a specialized Ethereum load 
 
 Network deployments will register their endpoints with ERPC, enabling seamless access to blockchain data across all deployed instances. For example:
 - `http://erpc.defaults.svc.cluster.local/ethereum/mainnet` → routes to mainnet deployment
-- `http://erpc.defaults.svc.cluster.local/ethereum/holesky` → routes to holesky deployment
+- `http://erpc.defaults.svc.cluster.local/ethereum/hoodi` → routes to hoodi deployment
 
 ### Advanced Tooling
 

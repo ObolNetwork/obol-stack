@@ -2,8 +2,17 @@
 # Obol Agent Kubernetes Manifest
 # This manifest deploys the Obol AI Agent with namespace-scoped RBAC permissions
 # The agent can read cluster-wide resources (nodes, namespaces) but can only modify
-# resources in specific namespaces: agent, ethereum, monitoring
+# resources in specific namespaces: agent (and others via dynamic bindings)
 
+#------------------------------------------------------------------------------
+# Namespace - Ensure the agent namespace exists
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent
+
+---
 #------------------------------------------------------------------------------
 # ServiceAccount - Identity for the Obol Agent pod
 #------------------------------------------------------------------------------
@@ -46,12 +55,9 @@ subjects:
 
 ---
 #------------------------------------------------------------------------------
-# Namespace-Scoped Roles
-# These roles grant create/update/patch permissions ONLY in specific namespaces
-# Permissions: get, list, watch, create, update, patch (no delete)
+# Role for 'agent' namespace
+# Grants create/update/patch permissions within the agent's own namespace
 #------------------------------------------------------------------------------
-
-# Role for 'default' namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -70,82 +76,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]  # Access to pod logs
     verbs: ["get"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: obol-agent-binding
   namespace: agent
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: obol-agent-role
-subjects:
-  - kind: ServiceAccount
-    name: obol-agent
-    namespace: agent
-
----
-# Role for 'ethereum' namespace
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: obol-agent-role
-  namespace: ethereum
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: obol-agent-binding
-  namespace: ethereum
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: obol-agent-role
-subjects:
-  - kind: ServiceAccount
-    name: obol-agent
-    namespace: agent
-
----
-# Role for 'monitoring' namespace
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: obol-agent-role
-  namespace: monitoring
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: obol-agent-binding
-  namespace: monitoring
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

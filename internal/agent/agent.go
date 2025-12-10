@@ -2,13 +2,13 @@ package agent
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/executor"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
 
@@ -31,24 +31,26 @@ func Init(cfg *config.Config, agentAPIKey string) error {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
 
-	// Create logger and executor
-	l, cleanup := logging.NewSlogLogger(logging.LoggerConfig{
-		StateDir: cfg.StateDir,
-		StackID:  stackID,
-	})
-	defer cleanup()
-
-	exec := executor.New(l.Logger)
-	defer exec.Close()
+	// If no API key provided via flag, try to read from stdin
+	if agentAPIKey == "" {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			// Data is being piped to stdin
+			data, err := io.ReadAll(os.Stdin)
+			if err == nil {
+				agentAPIKey = strings.TrimSpace(string(data))
+			}
+		}
+	}
 
 	// Validate Agent API key was provided
 	if agentAPIKey == "" {
-		l.Error("Agent API key required")
 		return fmt.Errorf("agent API key required via --agent-api-key flag or AGENT_API_KEY environment variable. Navigate to https://aistudio.google.com/api-keys to create an API key for your Obol Agent")
 	}
 
-	l.Info("Initializing Obol Agent")
-	l.Info("Creating API key secret for Obol Agent")
+	fmt.Println("Initializing Obol Agent")
+	fmt.Printf("Stack ID: %s\n", stackID)
+	fmt.Println("Creating API key secret for Obol Agent")
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
@@ -58,8 +60,11 @@ func Init(cfg *config.Config, agentAPIKey string) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate namespace manifest: %w", err)
 	}
-	applyNs := exec.CommandWithOutput(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
-	applyNs.SetStdin(strings.NewReader(string(nsYAML)))
+
+	applyNs := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
+	applyNs.Stdin = strings.NewReader(string(nsYAML))
+	applyNs.Stdout = os.Stdout
+	applyNs.Stderr = os.Stderr
 	if err := applyNs.Run(); err != nil {
 		return fmt.Errorf("failed to create agent namespace: %w", err)
 	}
@@ -70,14 +75,17 @@ func Init(cfg *config.Config, agentAPIKey string) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate secret manifest: %w", err)
 	}
-	applySecret := exec.CommandWithOutput(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
-	applySecret.SetStdin(strings.NewReader(string(secretYAML)))
+
+	applySecret := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
+	applySecret.Stdin = strings.NewReader(string(secretYAML))
+	applySecret.Stdout = os.Stdout
+	applySecret.Stderr = os.Stderr
 	if err := applySecret.Run(); err != nil {
 		return fmt.Errorf("failed to create Agent API key secret: %w", err)
 	}
 
-	l.Success("Agent API key secret created")
-	l.Success("Obol Agent initialized successfully")
+	fmt.Println("Agent API key secret created")
+	fmt.Println("Obol Agent initialized successfully")
 
 	return nil
 }
