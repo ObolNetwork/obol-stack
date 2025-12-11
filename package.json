@@ -4,13 +4,11 @@
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "next dev --turbopack",
-    "dev:local": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start --hostname obol.stack",
-    "start:local": "next start",
-    "lint": "next lint",
-    "lint:fix": "next lint --fix",
+    "dev": "node scripts/generateVersionEnv.js && pnpm run lint && next dev --turbopack",
+    "build": "node scripts/generateVersionEnv.js && next build",
+    "start": "next start",
+    "lint": "eslint . --ext .js,.ts,.tsx",
+    "lint:fix": "eslint . --ext .js,.ts,.tsx --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",
@@ -62,6 +60,7 @@
     "husky": "^9",
     "lint-staged": "^16",
     "prettier": "^3",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
   },
   "lint-staged": {

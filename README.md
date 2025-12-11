@@ -78,6 +78,63 @@ pnpm run start
 | `NEXT_PUBLIC_KUBECONFIG`                | -                                                                                | Path to kubeconfig file (for local development)  |
 | `NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID` | -                                                                                | WalletConnect project ID for wallet integration  |
 | `KUBERNETES_SERVICE_HOST`               | -                                                                                | Auto-detected when running in Kubernetes cluster |
+| `NEXT_PUBLIC_FEATURE_*`                 | -                                                                                | Feature flags (see Feature Flags section)        |
+
+### Feature Flags
+
+Feature flags allow you to enable/disable features without deploying new code. Flags are defined in `src/lib/config/featureFlags.ts` and can be controlled via environment variables.
+
+**Usage:**
+
+1. **Define a flag** in `src/lib/config/featureFlags.ts`:
+
+   ```typescript
+   export const featureFlags = {
+     showTagVersionAndShaCommit:
+       process.env.NEXT_PUBLIC_FEATURE_TAG_VERSION_SHA_COMMIT === 'true',
+   } as const;
+   ```
+
+2. **Enable via environment variable**:
+
+   ```bash
+   NEXT_PUBLIC_FEATURE_TAG_VERSION_SHA_COMMIT=true
+   ```
+
+3. **Use in components or server-side code**:
+
+   ```tsx
+   import { isFeatureEnabled } from '@/lib/config/featureFlags';
+
+   function MyComponent() {
+     const isTagVersionEnabled = isFeatureEnabled('showTagVersionAndShaCommit');
+
+     if (isTagVersionEnabled) {
+       return <TagVersionDisplay />;
+     }
+
+     return null;
+   }
+   ```
+
+   Or access directly from the `featureFlags` object:
+
+   ```tsx
+   import { featureFlags } from '@/lib/config/featureFlags';
+
+   function MyComponent() {
+     if (featureFlags.showTagVersionAndShaCommit) {
+       return <TagVersionDisplay />;
+     }
+
+     return null;
+   }
+   ```
+
+**Available Functions:**
+
+- `isFeatureEnabled(flagName)` - Check if a feature flag is enabled
+- `featureFlags` - Direct access to all feature flags object
 
 ## Deployment
 
