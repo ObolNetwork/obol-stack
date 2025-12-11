@@ -9,6 +9,8 @@ export const config = {
     'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
   erpcUrl: process.env.NEXT_PUBLIC_ERPC_URL || 'https://obol.stack/rpc',
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
+  commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',
+  tagVersion: process.env.NEXT_PUBLIC_TAG_VERSION || 'local',
 };
 
 export type Config = typeof config;

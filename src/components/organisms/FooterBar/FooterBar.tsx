@@ -1,10 +1,12 @@
 import React from 'react';
-import { Box, Flex, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import {
   FileTextIcon,
   GitHubLogoIcon,
   DiscordLogoIcon,
 } from '@radix-ui/react-icons';
+import { isFeatureEnabled } from '@/lib/config/featureFlags';
+import { config } from '../../../lib/config/environment';
 
 export interface FooterBarProps {
   className?: string;
@@ -44,6 +46,8 @@ const IconWrapper = styled(Box, {
 });
 
 export function FooterBar({ className }: FooterBarProps) {
+  const showVersionInfo = isFeatureEnabled('showTagVersionAndShaCommit');
+
   // TODO: Implement diagnostics export
   // const handleExportDiagnostics = () => {
   //
@@ -58,7 +62,46 @@ export function FooterBar({ className }: FooterBarProps) {
 
   return (
     <StyledFooter className={className} as="footer">
-      <Flex css={{ alignItems: 'center', gap: '$sm', width: 'fit-content' }}>
+      <Flex css={{ alignItems: 'center', gap: '$sm', width: 'max-content' }}>
+        {showVersionInfo && (
+          <Flex
+            css={{
+              alignContent: 'center',
+              gap: '$xxs',
+            }}
+          >
+            <Text
+              css={{
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: '$3',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Version info:
+            </Text>
+            <Flex as="span">
+              <StyledLink
+                data-testid="version-tag-info"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Version info"
+                href={`https://github.com/ObolNetwork/obol-stack-front-end/releases/tag/${config.tagVersion}`}
+              >
+                {`${config.tagVersion}   -`}
+              </StyledLink>
+              <StyledLink
+                data-testid="version-commit-info"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Version info"
+                href={`https://github.com/ObolNetwork/obol-stack-front-end/commit/${config.commitSha}`}
+              >
+                {config.commitSha}
+              </StyledLink>
+            </Flex>
+          </Flex>
+        )}
         {/* <StyledButton onClick={handleExportDiagnostics}>
           <IconWrapper>
             <DownloadIcon />
