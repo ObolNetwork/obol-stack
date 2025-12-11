@@ -67,7 +67,7 @@ jobs:
             # short sha
             type=sha
             # Additionally, add 'latest' tag for release tags (v*)
-            type=raw,value=latest,enable=github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=Obol Stack Front End
             org.opencontainers.image.description=Monitoring dashboard for Obol Stack and Ethereum node status
