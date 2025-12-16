@@ -200,19 +200,13 @@ obol network install ethereum --network=mainnet --execution-client=geth --consen
 # Deploy to cluster
 obol network sync ethereum/nervous-otter
 
-Install Holesky testnet with Reth + Lighthouse
-obol network install ethereum --network=holesky --execution-client=reth --consensus-client=lighthouse
-# Creates configuration: ethereum-laughing-elephant
+# Install Hoodi testnet with Reth + Lighthouse
+obol network install ethereum --network=hoodi --execution-client=reth --consensus-client=lighthouse
+# Creates: ethereum-laughing-elephant namespace
 
-# Deploy Holesky to cluster
-obol network sync ethereum/laughing-elephant
-
-# Install another Holesky instance for testing
-obol network install ethereum --network=holesky
-# Creates configuration: ethereum-happy-panda
-
-# Deploy second Holesky instance
-obol network sync ethereum/happy-panda
+# Install another Hoodi instance for testing
+obol network install ethereum --network=hoodi
+# Creates: ethereum-happy-panda namespace
 ```
 
 **Ethereum configuration options:**
