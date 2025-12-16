@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
@@ -43,7 +44,8 @@ COMMANDS:
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
-
+   Obol Agent:
+     agent init      Initialize the Obol Agent with an API key
    Network Management:
      network list    List available networks
      network install Install and deploy network to cluster
@@ -125,6 +127,31 @@ GLOBAL OPTIONS:
 						},
 						Action: func(c *cli.Context) error {
 							return stack.Purge(cfg, c.Bool("force"))
+						},
+					},
+				},
+			},
+			// ============================================================
+			// Obol Agent Commands
+			// ============================================================
+			{
+				Name:  "agent",
+				Usage: "Manage Obol Agent",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "init",
+						Usage: "Initialize the Obol Agent with an API key",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "agent-api-key",
+								Aliases: []string{"a"},
+								Usage:   "API key for the Obol Agent",
+								EnvVars: []string{"AGENT_API_KEY"},
+							},
+						},
+						Action: func(c *cli.Context) error {
+							agentAPIKey := c.String("agent-api-key")
+							return agent.Init(cfg, agentAPIKey)
 						},
 					},
 				},

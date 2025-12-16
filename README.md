@@ -113,7 +113,7 @@ obol network install ethereum
 obol network sync ethereum/nervous-otter
 
 # Install another network configuration
-obol network install ethereum --network=holesky
+obol network install ethereum --network=hoodi
 # This creates a separate deployment like: ethereum-happy-panda
 
 # Deploy the second network
@@ -200,23 +200,17 @@ obol network install ethereum --network=mainnet --execution-client=geth --consen
 # Deploy to cluster
 obol network sync ethereum/nervous-otter
 
-# Install Holesky testnet with Reth + Lighthouse
-obol network install ethereum --network=holesky --execution-client=reth --consensus-client=lighthouse
-# Creates configuration: ethereum-laughing-elephant
+# Install Hoodi testnet with Reth + Lighthouse
+obol network install ethereum --network=hoodi --execution-client=reth --consensus-client=lighthouse
+# Creates: ethereum-laughing-elephant namespace
 
-# Deploy Holesky to cluster
-obol network sync ethereum/laughing-elephant
-
-# Install another Holesky instance for testing
-obol network install ethereum --network=holesky
-# Creates configuration: ethereum-happy-panda
-
-# Deploy second Holesky instance
-obol network sync ethereum/happy-panda
+# Install another Hoodi instance for testing
+obol network install ethereum --network=hoodi
+# Creates: ethereum-happy-panda namespace
 ```
 
 **Ethereum configuration options:**
-- `--network`: Choose network (mainnet, sepolia, holesky, hoodi)
+- `--network`: Choose network (mainnet, sepolia, hoodi)
 - `--execution-client`: Choose execution client (reth, geth, nethermind, besu, erigon, ethereumjs)
 - `--consensus-client`: Choose consensus client (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
@@ -708,7 +702,7 @@ The stack will include [eRPC](https://erpc.cloud/), a specialized Ethereum load 
 
 Network deployments will register their endpoints with ERPC, enabling seamless access to blockchain data across all deployed instances. For example:
 - `http://erpc.defaults.svc.cluster.local/ethereum/mainnet` → routes to mainnet deployment
-- `http://erpc.defaults.svc.cluster.local/ethereum/holesky` → routes to holesky deployment
+- `http://erpc.defaults.svc.cluster.local/ethereum/hoodi` → routes to hoodi deployment
 
 ### Advanced Tooling
 

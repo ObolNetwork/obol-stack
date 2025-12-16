@@ -151,7 +151,7 @@ obol
 2. Parses each network's `helmfile.yaml.gotmpl` for environment variable annotations
 3. Generates CLI flags automatically from annotations:
    ```yaml
-   # @enum mainnet,sepolia,holesky,hoodi
+   # @enum mainnet,sepolia,hoodi
    # @default mainnet
    # @description Blockchain network to deploy
    - network: {{.Network}}
@@ -159,7 +159,7 @@ obol
    Becomes: `--network` flag with enum validation and default value
 
 **Network install flow**:
-1. User runs: `obol network install ethereum --network=holesky --execution-client=geth`
+1. User runs: `obol network install ethereum --network=hoodi --execution-client=geth`
 2. CLI collects flag values into `overrides` map
 3. Validates enum constraints
 4. Calls `network.Install(cfg, "ethereum", overrides)`
@@ -245,7 +245,7 @@ networks/
 
 `values.yaml.gotmpl` contains configuration fields with annotations:
 ```yaml
-# @enum mainnet,sepolia,holesky,hoodi
+# @enum mainnet,sepolia,hoodi
 # @default mainnet
 # @description Blockchain network to deploy
 network: {{.Network}}
@@ -322,7 +322,7 @@ obol network install ethereum --id prod --network=mainnet
 
 # Multiple deployments with different configs
 obol network install ethereum --id mainnet-01
-obol network install ethereum --id holesky-test --network=holesky
+obol network install ethereum --id hoodi-test --network=hoodi
 # Both run simultaneously, isolated in separate namespaces
 ```
 
@@ -330,7 +330,7 @@ obol network install ethereum --id holesky-test --network=holesky
 
 1. **Install** (config generation only):
    ```
-   obol network install ethereum --network=holesky --execution-client=geth --id my-node
+   obol network install ethereum --network=hoodi --execution-client=geth --id my-node
         ↓
    Check if directory exists: ~/.config/obol/networks/ethereum/my-node/ (fail unless --force)
         ↓
@@ -727,7 +727,7 @@ obol network list
 obol network install ethereum --help
 
 # Install with specific config
-obol network install ethereum --network=holesky --execution-client=geth
+obol network install ethereum --network=hoodi --execution-client=geth
 
 # Verify deployment
 obol kubectl get namespaces | grep ethereum
