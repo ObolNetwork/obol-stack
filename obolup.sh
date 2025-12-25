@@ -1272,10 +1272,9 @@ install_dv_pod() {
 		--set charon.dkgSidecar.apiEndpoint=https://obol-api-nonprod-dev.dev.obol.tech \
 		--set network=hoodi \
 		--set charon.operatorAddress="$operator_address" \
-		--set charon.dkgSidecar.image.tag=90a1656 \
+		--set charon.dkgSidecar.image.tag=latest \
 		--set charon.nickname="$nickname" \
 		--set validatorClient.type=prysm \
-		--set validatorClient.config.prysm.acceptTermsOfUse=true \
 		--set centralMonitoring.enabled=true \
 		--set-string centralMonitoring.token='obolkvmusKH1SFvr/ruCzfj/Vlix3E49=59TdIH1BcTLecZabTv9SF=81HbtXucMNjwsJbFW=Z9ND7hD/GYPtz=B?TpWs2sJq9FIz-uN1-4DyR1l6J=HyC=d=Q!-?fHP'; then
 		log_success "dv-pod installed successfully"
