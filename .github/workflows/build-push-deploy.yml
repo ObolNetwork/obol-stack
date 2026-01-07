@@ -114,10 +114,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read  # Permission to read repository content
-      security-events: write
-      packages: read  # Permission to read packages from ghcr.io
-      actions: read  # Permission to read workflow run information
+      contents: read
+      packages: read
+      actions: read
     steps:
       - name: Login to GitHub Container Registry
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
@@ -126,14 +125,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (Table output)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:next
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
 
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee # v3.28.0
+      - name: Run Trivy vulnerability scanner (JSON for artifact)
+        if: always()
+        uses: aquasecurity/trivy-action@master
         with:
-          sarif_file: 'trivy-results.sarif'
+          image-ref: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:next
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy scan results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-security-scan
+          path: trivy-results.json
+          retention-days: 30
