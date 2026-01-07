@@ -43,7 +43,7 @@
     "react-dom": "^19.1.1",
     "react-toastify": "^11.0.5",
     "value": "link:@sinclair/typebox/value",
-    "viem": "^2.37.9",
+    "viem": "^2.42.1",
     "wagmi": "^2.17.5"
   },
   "devDependencies": {
