@@ -4,6 +4,9 @@ import { CopilotKit } from '@copilotkit/react-core';
 import '@copilotkit/react-ui/styles.css';
 import { Providers } from './providers';
 
+// Force dynamic rendering - RainbowKit accesses localStorage during static generation
+export const dynamic = 'force-dynamic';
+
 const dmSans = DM_Sans({
   variable: '--font-dm-sans',
   subsets: ['latin'],
