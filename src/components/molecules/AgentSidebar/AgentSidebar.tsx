@@ -6,6 +6,7 @@ import { determineNodeStatus } from './statusLogic';
 import { DashboardData } from '../../../types/dashboard';
 import { useCoAgent } from '@copilotkit/react-core';
 import { useAgentHealth } from '@/hooks/useAgentHealth';
+import { useEffect } from 'react';
 
 // Styled Components
 const HeaderContainer = styled(Box, {
@@ -56,11 +57,19 @@ const ButtonImage = styled(Image, {
 
 interface HeaderProps {
   data: DashboardData;
+  defaultOpen?: boolean;
 }
 
-const Header = ({ data }: HeaderProps) => {
+const Header = ({ data, defaultOpen }: HeaderProps) => {
   const status = determineNodeStatus(data);
   const { setOpen } = useChatContext();
+
+  // Sync sidebar state when defaultOpen changes (e.g., from URL hash)
+  useEffect(() => {
+    if (defaultOpen !== undefined) {
+      setOpen(defaultOpen);
+    }
+  }, [defaultOpen, setOpen]);
 
   const handleClose = () => {
     setOpen(false);
@@ -101,9 +110,14 @@ const Button = () => {
 interface AgentSidebarProps {
   onSidebarToggle: (isOpen: boolean) => void;
   data: DashboardData;
+  defaultOpen?: boolean;
 }
 
-export function AgentSidebar({ onSidebarToggle, data }: AgentSidebarProps) {
+export function AgentSidebar({
+  onSidebarToggle,
+  data,
+  defaultOpen,
+}: AgentSidebarProps) {
   useCoAgent({
     name: 'obol_agent',
   });
@@ -115,9 +129,9 @@ export function AgentSidebar({ onSidebarToggle, data }: AgentSidebarProps) {
 
   return (
     <CopilotSidebar
-      Header={() => <Header data={data} />}
+      Header={() => <Header data={data} defaultOpen={defaultOpen} />}
       Button={Button}
-      defaultOpen={false}
+      defaultOpen={defaultOpen ?? false}
       clickOutsideToClose={true}
       onSetOpen={onSidebarToggle}
       labels={{

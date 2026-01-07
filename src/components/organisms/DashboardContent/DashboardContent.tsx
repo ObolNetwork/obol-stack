@@ -5,6 +5,7 @@ import { DashboardData } from '../../../types/dashboard';
 import { AgentSidebar } from '../../molecules/AgentSidebar';
 import { ErrorState } from '../../molecules/ErrorState';
 import { useState } from 'react';
+import { useAnchorHash } from '../../../hooks/useAnchorHash';
 
 interface DashboardContentProps {
   data: DashboardData | null;
@@ -59,7 +60,9 @@ export function DashboardContent({
   error,
   onRetry,
 }: DashboardContentProps) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const { hasHash } = useAnchorHash({ hash: '#agent' });
+  const [isSidebarOpen, setIsSidebarOpen] = useState(hasHash);
+
   return (
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
@@ -77,7 +80,13 @@ export function DashboardContent({
         </SectionContainer>
       </MainSection>
 
-      {data && <AgentSidebar onSidebarToggle={setIsSidebarOpen} data={data} />}
+      {data && (
+        <AgentSidebar
+          onSidebarToggle={setIsSidebarOpen}
+          data={data}
+          defaultOpen={hasHash}
+        />
+      )}
     </Container>
   );
 }
