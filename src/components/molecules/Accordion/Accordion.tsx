@@ -49,7 +49,7 @@ const ChevronIcon = styled(Box, {
   // and maintains consistent text alignment regardless of chevron state
   position: 'absolute',
   cursor: 'pointer',
-  top: '50%',
+  top: '10px',
   right: '0',
   width: '$lg',
   height: '$lg',
