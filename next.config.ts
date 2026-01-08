@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Set Turbopack root to silence lockfile warning
+  turbopack: {
+    root: process.cwd(),
+  },
+  
   // Configure for custom domain
   async rewrites() {
     return [
