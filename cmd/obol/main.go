@@ -6,12 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 
+	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/logging"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
@@ -45,6 +44,18 @@ COMMANDS:
      stack up        Start the Obol Stack
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
+   Obol Agent:
+     agent init      Initialize the Obol Agent with an API key
+   Network Management:
+     network list    List available networks
+     network install Install and deploy network to cluster
+     network delete  Remove network and clean up cluster resources
+
+   App Management:
+     app install     Install a Helm chart as an application
+     app list        List installed applications
+     app sync        Deploy application to cluster
+     app delete      Remove application and cluster resources
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -87,47 +98,21 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Init(cfg, c.Bool("force")); err != nil {
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  "",
-								})
-								l.Error("Failed to initialize stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Init(cfg, c.Bool("force"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							if err := stack.Up(cfg); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to start stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Up(cfg)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							if err := stack.Down(cfg); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to stop stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Down(cfg)
 						},
 					},
 					{
@@ -141,16 +126,32 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							if err := stack.Purge(cfg, c.Bool("force")); err != nil {
-								stackID := stack.GetStackID(cfg)
-								l, _ := logging.NewSlogLogger(logging.LoggerConfig{
-									StateDir: cfg.StateDir,
-									StackID:  stackID,
-								})
-								l.Error("Failed to purge stack", "error", err.Error())
-								return err
-							}
-							return nil
+							return stack.Purge(cfg, c.Bool("force"))
+						},
+					},
+				},
+			},
+			// ============================================================
+			// Obol Agent Commands
+			// ============================================================
+			{
+				Name:  "agent",
+				Usage: "Manage Obol Agent",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "init",
+						Usage: "Initialize the Obol Agent with an API key",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "agent-api-key",
+								Aliases: []string{"a"},
+								Usage:   "API key for the Obol Agent",
+								EnvVars: []string{"AGENT_API_KEY"},
+							},
+						},
+						Action: func(c *cli.Context) error {
+							agentAPIKey := c.String("agent-api-key")
+							return agent.Init(cfg, agentAPIKey)
 						},
 					},
 				},
@@ -325,6 +326,7 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
+			networkCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
@@ -332,56 +334,93 @@ GLOBAL OPTIONS:
 					{
 						Name:      "install",
 						Usage:     "Install a Helm chart as an application",
-						ArgsUsage: "<chart-url> [--values <override.yaml>]",
+						ArgsUsage: "<chart-reference>",
+						Description: `Install a Helm chart as a managed application.
+
+Supported chart reference formats:
+  repo/chart          Resolved via ArtifactHub (e.g., bitnami/redis)
+  repo/chart@version  Specific version (e.g., bitnami/redis@19.0.0)
+  https://.../*.tgz   Direct URL to chart archive
+  oci://...           OCI registry reference
+
+Examples:
+  obol app install bitnami/redis
+  obol app install bitnami/postgresql@15.0.0
+  obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz
+  obol app install oci://registry-1.docker.io/bitnamicharts/redis --name mydb --id production
+
+Find charts at https://artifacthub.io`,
 						Flags: []cli.Flag{
 							&cli.StringFlag{
-								Name:    "values",
-								Aliases: []string{"v"},
-								Usage:   "Path to values override file",
+								Name:  "name",
+								Usage: "Application name (defaults to chart name)",
+							},
+							&cli.StringFlag{
+								Name:  "version",
+								Usage: "Chart version (defaults to latest)",
+							},
+							&cli.StringFlag{
+								Name:  "id",
+								Usage: "Deployment ID (defaults to generated petname)",
+							},
+							&cli.BoolFlag{
+								Name:    "force",
+								Aliases: []string{"f"},
+								Usage:   "Overwrite existing deployment",
 							},
 						},
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("chart URL required (e.g., obol/ethereum or ethereum-helm-charts/ethereum-node)")
+								return fmt.Errorf("chart reference required\n\n" +
+									"Examples:\n" +
+									"  obol app install bitnami/redis\n" +
+									"  obol app install bitnami/postgresql@15.0.0\n" +
+									"  obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz\n" +
+									"  obol app install oci://registry-1.docker.io/bitnamicharts/redis\n\n" +
+									"Find charts at https://artifacthub.io")
 							}
-							chartURL := c.Args().First()
-							valuesOverride := c.String("values")
-							// Parse chart URL: repo/chart -> repo and chart
-							parts := strings.SplitN(chartURL, "/", 2)
-							if len(parts) != 2 {
-								return fmt.Errorf("invalid chart URL format, use: <repo>/<chart>")
+							chartRef := c.Args().First()
+							opts := app.InstallOptions{
+								Name:    c.String("name"),
+								Version: c.String("version"),
+								ID:      c.String("id"),
+								Force:   c.Bool("force"),
 							}
-							return app.Install(cfg, parts[1], parts[0], valuesOverride)
-						},
-					},
-					{
-						Name:      "edit",
-						Usage:     "Edit application helmfile or values",
-						ArgsUsage: "<app-path>",
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
-								return fmt.Errorf("application path required (e.g., obol/ethereum)")
-							}
-							appPath := c.Args().First()
-							return app.Edit(cfg, appPath)
+							return app.Install(cfg, chartRef, opts)
 						},
 					},
 					{
 						Name:      "sync",
-						Usage:     "Deploy application to cluster via helmfile",
-						ArgsUsage: "<app-path>",
+						Usage:     "Deploy application to cluster",
+						ArgsUsage: "<app>/<id>",
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application path required (e.g., obol/ethereum)")
+								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							appPath := c.Args().First()
-							return app.Sync(cfg, appPath)
+							return app.Sync(cfg, c.Args().First())
+						},
+					},
+					{
+						Name:  "list",
+						Usage: "List installed applications",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "verbose",
+								Aliases: []string{"v"},
+								Usage:   "Show detailed information",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							opts := app.ListOptions{
+								Verbose: c.Bool("verbose"),
+							}
+							return app.List(cfg, opts)
 						},
 					},
 					{
 						Name:      "delete",
-						Usage:     "Remove application and clean up cluster resources",
-						ArgsUsage: "<app-path>",
+						Usage:     "Remove application and cluster resources",
+						ArgsUsage: "<app>/<id>",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
@@ -391,10 +430,9 @@ GLOBAL OPTIONS:
 						},
 						Action: func(c *cli.Context) error {
 							if c.NArg() == 0 {
-								return fmt.Errorf("application path required (e.g., obol/ethereum)")
+								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							appPath := c.Args().First()
-							return app.Delete(cfg, appPath, c.Bool("force"))
+							return app.Delete(cfg, c.Args().First(), c.Bool("force"))
 						},
 					},
 				},

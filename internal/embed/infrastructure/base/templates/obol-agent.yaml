@@ -1,0 +1,182 @@
+---
+# Obol Agent Kubernetes Manifest
+# This manifest deploys the Obol AI Agent with namespace-scoped RBAC permissions
+# The agent can read cluster-wide resources (nodes, namespaces) but can only modify
+# resources in specific namespaces: agent (and others via dynamic bindings)
+
+#------------------------------------------------------------------------------
+# Namespace - Ensure the agent namespace exists
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent
+
+---
+#------------------------------------------------------------------------------
+# ServiceAccount - Identity for the Obol Agent pod
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obol-agent
+  namespace: agent
+
+---
+#------------------------------------------------------------------------------
+# ClusterRole - Read-only access to cluster-wide resources
+# Allows the agent to list namespaces and nodes across the entire cluster
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obol-agent-cluster-reader
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]  # Read-only access
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Grants cluster-wide read access to the agent
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obol-agent-cluster-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obol-agent-cluster-reader
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: agent
+
+---
+#------------------------------------------------------------------------------
+# Role for 'agent' namespace
+# Grants create/update/patch permissions within the agent's own namespace
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-agent-role
+  namespace: agent
+rules:
+  - apiGroups: [""]  # Core API group
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["apps"]  # Apps API group
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["batch"]  # Batch API group
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]  # Access to pod logs
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-agent-binding
+  namespace: agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-agent-role
+subjects:
+  - kind: ServiceAccount
+    name: obol-agent
+    namespace: agent
+
+---
+#------------------------------------------------------------------------------
+# Deployment - Obol Agent Application
+# The agent provides AI-powered Kubernetes and Obol cluster management via MCP
+#------------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obol-agent
+  namespace: agent
+  labels:
+    app: obol-agent
+spec:
+  replicas: 1  # Single instance deployment
+  selector:
+    matchLabels:
+      app: obol-agent
+  template:
+    metadata:
+      labels:
+        app: obol-agent
+    spec:
+      serviceAccountName: obol-agent  # Uses the ServiceAccount created above for RBAC
+      containers:
+        - name: obol-agent
+          image: us-east4-docker.pkg.dev/prj-d-playgrounds-f0cb/obol-agent/obol-agent-ag-ui:latest
+          imagePullPolicy: Always  # Always pull latest image
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # REQUIRED: Agent API key from Kubernetes secret
+            # Secret created via: obol agent init --agent-api-key=<key>
+            - name: AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: obol-agent-api-key
+                  key: AGENT_API_KEY
+                  optional: true  # Allow deployment even if secret doesn't exist
+
+            # PUBLIC_MODE controls Kubernetes MCP access
+            # false = Enable Kubernetes API access (uses RBAC permissions above)
+            # true = Disable Kubernetes API access (for public deployments)
+            - name: PUBLIC_MODE
+              value: "false"
+
+          # Health checks ensure the pod is ready to receive traffic
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+          # Resource limits prevent the agent from consuming too many cluster resources
+          resources:
+            limits:    # Maximum allowed resources
+              cpu: 2000m     # 2 CPU cores
+              memory: 4Gi    # 4 GiB RAM
+
+---
+#------------------------------------------------------------------------------
+# Service - Exposes the Obol Agent within the cluster
+# Access the agent at: http://obol-agent.agent.svc.cluster.local:8000
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: obol-agent
+  namespace: agent
+  labels:
+    app: obol-agent
+spec:
+  type: ClusterIP  # Internal cluster access only (use Ingress for external access)
+  ports:
+    - port: 8000          # Service port
+      targetPort: http    # Container port name
+      protocol: TCP
+      name: http
+  selector:
+    app: obol-agent  # Routes traffic to pods with this label

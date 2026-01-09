@@ -1,0 +1,18 @@
+# Configuration via CLI flags
+# Template fields populated by obol CLI during network installation
+
+# @enum mainnet
+# @default mainnet
+# @description Blockchain network to deploy
+network: {{.Network}}
+
+# @description Attester private key (hex string)
+attesterPrivateKey: {{.AttesterPrivateKey}}
+
+# @default ""
+# @description L1 Execution RPC URL (defaults to ERPC: http://erpc.erpc.svc.cluster.local:4000/rpc/{network})
+l1ExecutionUrl: {{.L1ExecutionUrl}}
+
+# @default https://ethereum-beacon-api.publicnode.com
+# @description L1 Consensus RPC URL
+l1ConsensusUrl: {{.L1ConsensusUrl}}

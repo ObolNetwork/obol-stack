@@ -15,16 +15,16 @@ values:
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
-  - name: obol-stack-defaults
-    namespace: default
-    chart: ./obol-stack-defaults
+  - name: base
+    namespace: kube-system
+    chart: ./base
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
 
   # Nginx ingress controller (upstream chart)
   - name: ingress-nginx
-    namespace: default
+    namespace: ingress-nginx
     chart: ingress-nginx/ingress-nginx
     version: 4.13.3
     values:
@@ -44,33 +44,23 @@ releases:
           admissionWebhooks:
             enabled: false
 
-  # Helios light client
-  - name: helios
-    namespace: default
-    chart: obol/helios
-    version: 0.1.4
-    needs:
-      - default/ingress-nginx
-    values:
-      - ./values/helios.yaml.gotmpl
-
   # eRPC
   - name: erpc
-    namespace: default
+    namespace: erpc
     chart: ethereum/erpc
     needs:
-      - default/obol-stack-defaults
-      - default/helios
+      - kube-system/base
+      - ingress-nginx/ingress-nginx
     values:
       - ./values/erpc.yaml.gotmpl
 
   # Obol Stack frontend
   - name: obol-frontend
-    namespace: default
+    namespace: obol-frontend
     chart: obol/obol-app
     version: 0.1.0
     needs:
-      - default/ingress-nginx
-      - default/erpc
+      - ingress-nginx/ingress-nginx
+      - erpc/erpc
     values:
       - ./values/obol-frontend.yaml.gotmpl

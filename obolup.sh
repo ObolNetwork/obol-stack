@@ -50,9 +50,9 @@ fi
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
 readonly KUBECTL_VERSION="1.31.0"
-readonly HELM_VERSION="3.16.2"
+readonly HELM_VERSION="3.19.1"
 readonly K3D_VERSION="5.8.3"
-readonly HELMFILE_VERSION="0.169.1"
+readonly HELMFILE_VERSION="1.2.2"
 readonly K9S_VERSION="0.32.5"
 readonly HELM_DIFF_VERSION="3.9.11"
 
@@ -189,6 +189,21 @@ create_binary_symlink() {
 	local binary_name="$1"
 	local global_path="$2"
 	local local_path="$OBOL_BIN_DIR/$binary_name"
+
+	# Detect and prevent circular symlinks.
+	# This can happen if a global binary path (e.g. from a previous dev install)
+	# already points to the location this script is trying to manage.
+	if [[ -L "$global_path" ]]; then
+		local link_target
+		link_target=$(readlink "$global_path" || echo "") # Handle readlink failure
+
+		if [[ "$link_target" == "$local_path" ]]; then
+			log_warn "Circular symlink detected for $binary_name."
+			log_warn "  $global_path -> $local_path"
+			log_warn "Ignoring global binary to prevent loop. Will install fresh copy."
+			return 1 # Signal failure to prevent using this global binary
+		fi
+	fi
 
 	# Check if local path already exists
 	if [[ -e "$local_path" || -L "$local_path" ]]; then
@@ -1198,6 +1213,7 @@ configure_path() {
 			add_to_profile "$profile"
 			echo ""
 			log_info "PATH updated for future sessions"
+			echo ""
 			log_info "To use immediately in this session, run:"
 			echo ""
 			echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
