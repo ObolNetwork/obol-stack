@@ -49,12 +49,12 @@ fi
 
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
-readonly KUBECTL_VERSION="1.31.0"
-readonly HELM_VERSION="3.19.1"
+readonly KUBECTL_VERSION="1.35.0"
+readonly HELM_VERSION="3.19.4"
 readonly K3D_VERSION="5.8.3"
-readonly HELMFILE_VERSION="1.2.2"
-readonly K9S_VERSION="0.32.5"
-readonly HELM_DIFF_VERSION="3.9.11"
+readonly HELMFILE_VERSION="1.2.3"
+readonly K9S_VERSION="0.50.18"
+readonly HELM_DIFF_VERSION="3.14.1"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
