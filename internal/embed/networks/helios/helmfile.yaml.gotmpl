@@ -28,17 +28,42 @@ releases:
           size: 10Gi
           storageClass: local-path
 
+      # Disable legacy Ingress - using Gateway API HTTPRoute instead
       - ingress:
-          enabled: true
-          className: nginx
-          annotations:
-            nginx.ingress.kubernetes.io/rewrite-target: /$2
-            nginx.ingress.kubernetes.io/use-regex: "true"
-          hosts:
-            - host: obol.stack
-              paths:
-                - path: /helios-{{ .Values.id }}(/|$)(.*)
-                  pathType: ImplementationSpecific
+          enabled: false
+
+  # HTTPRoute for Helios RPC endpoint
+  - name: helios-httproute
+    namespace: helios-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            metadata:
+              name: helios
+              namespace: helios-{{ .Values.id }}
+            spec:
+              parentRefs:
+                - name: traefik-gateway
+                  namespace: traefik
+                  sectionName: web
+              hostnames:
+                - obol.stack
+              rules:
+                - matches:
+                    - path:
+                        type: PathPrefix
+                        value: /helios-{{ .Values.id }}
+                  filters:
+                    - type: URLRewrite
+                      urlRewrite:
+                        path:
+                          type: ReplacePrefixMatch
+                          replacePrefixMatch: /
+                  backendRefs:
+                    - name: helios-{{ .Values.network }}
+                      port: 8545
 
   # Metadata ConfigMap for frontend discovery
   - name: helios-metadata

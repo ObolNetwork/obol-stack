@@ -35,10 +35,6 @@ options:
       - arg: --kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true
         nodeFilters:
           - server:*
-      # Disable Traefik to use nginx instead
-      - arg: --disable=traefik
-        nodeFilters:
-          - server:*
       # Disable local-storage addon (we provide our own config)
       - arg: --disable=local-storage
         nodeFilters:

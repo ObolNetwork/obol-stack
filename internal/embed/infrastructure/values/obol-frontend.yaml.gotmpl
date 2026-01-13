@@ -19,11 +19,6 @@ service:
   type: ClusterIP
   port: 3000
 
+# Disable legacy Ingress - using Gateway API HTTPRoute instead
 ingress:
-  enabled: true
-  className: "nginx"
-  hosts:
-    - host: obol.stack
-      paths:
-        - path: /
-          pathType: Prefix
+  enabled: false

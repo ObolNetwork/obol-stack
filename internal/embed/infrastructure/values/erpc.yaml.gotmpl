@@ -87,14 +87,9 @@ extraArgs: []
 # Command replacement for the erpc container
 customCommand: []
 
+# Disable legacy Ingress - using Gateway API HTTPRoute instead
 ingress:
-  enabled: true
-  className: nginx
-  hosts:
-    - host: obol.stack
-      paths:
-        - path: /rpc
-          pathType: Prefix
+  enabled: false
 
 service:
   type: ClusterIP
