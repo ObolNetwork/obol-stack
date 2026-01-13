@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@playwright/test": "^1.56.0",
+    "@playwright/test": "^1.57.0",
     "@types/dompurify": "^3.2.0",
     "@types/node": "^25.0.2",
     "@types/react": "^19",
