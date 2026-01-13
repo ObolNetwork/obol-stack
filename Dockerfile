@@ -1,7 +1,7 @@
-FROM node:24-alpine AS base
+FROM node:25-alpine AS base
 
-# Enable corepack for pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install corepack (removed from Node.js 25 default distribution) and enable pnpm
+RUN npm install -g --force corepack && corepack enable && corepack prepare pnpm@latest --activate
 
 # Build arguments
 ARG VERSION=unknown
