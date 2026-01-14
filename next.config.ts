@@ -15,7 +15,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  
+
   // Configure hostname
   async headers() {
     return [
@@ -34,9 +34,12 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  
+
   // Output configuration for standalone deployment
   output: 'standalone',
+
+  // Externalize pino and thread-stream to avoid bundling test files
+  serverExternalPackages: ['pino', 'thread-stream'],
 };
 
 export default nextConfig;

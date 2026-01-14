@@ -9,8 +9,8 @@
     "build": "next build",
     "start": "next start --hostname obol.stack",
     "start:local": "next start",
-    "lint": "next lint",
-    "lint:fix": "next lint --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",
@@ -38,16 +38,19 @@
     "@stitches/react": "^1.2.8",
     "@tanstack/react-query": "^5.90.2",
     "dompurify": "^3.3.1",
-    "next": "15.5.7",
+    "next": "16.0.10",
+    "pino": "^10.1.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-toastify": "^11.0.5",
+    "shiki": "^3.21.0",
+    "thread-stream": "^4.0.0",
     "value": "link:@sinclair/typebox/value",
     "viem": "^2.42.1",
     "wagmi": "^2.19.5"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3",
+    "@next/eslint-plugin-next": "^16.1.1",
     "@playwright/test": "^1.57.0",
     "@types/dompurify": "^3.2.0",
     "@types/node": "^25.0.2",
@@ -56,9 +59,11 @@
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
     "eslint": "^9",
-    "eslint-config-next": "15.5.2",
+    "eslint-config-next": "16.0.10",
     "eslint-config-prettier": "^10",
     "eslint-plugin-prettier": "^5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "husky": "^9",
     "lint-staged": "^16",
     "prettier": "^3",
@@ -72,5 +77,11 @@
     "*.{json,css,scss,md}": [
       "prettier --write"
     ]
+  },
+  "pnpm": {
+    "overrides": {
+      "pino": "^10.1.1",
+      "thread-stream": "^4.0.0"
+    }
   }
 }
