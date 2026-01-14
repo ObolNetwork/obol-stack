@@ -20,6 +20,19 @@ The Obol Stack is a local Kubernetes-based framework for running blockchain netw
 5. **Two-stage templating**: CLI flags → Go templates → Helmfile → Kubernetes resources
 6. **Development mode**: Local `.workspace/` directory with `go run` wrapper for rapid development
 
+### Routing and Gateway API
+
+Obol Stack uses Traefik with the Kubernetes Gateway API for HTTP routing.
+
+- Controller: Traefik Helm chart (`traefik` namespace)
+- GatewayClass: `traefik`
+- Gateway: `traefik-gateway` in `traefik` namespace
+- HTTPRoute patterns:
+  - `/` → `obol-frontend`
+  - `/rpc` → `erpc`
+  - `/ethereum-<id>/execution` and `/ethereum-<id>/beacon`
+  - `/aztec-<id>` and `/helios-<id>`
+
 ## Bootstrap Installer: obolup.sh
 
 ### Purpose

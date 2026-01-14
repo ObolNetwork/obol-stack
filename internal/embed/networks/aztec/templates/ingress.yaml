@@ -15,8 +15,11 @@ spec:
   rules:
     - matches:
         - path:
-            type: PathPrefix
+            type: Exact
             value: /{{ .Release.Namespace }}
+        - path:
+            type: PathPrefix
+            value: /{{ .Release.Namespace }}/
       filters:
         - type: URLRewrite
           urlRewrite:

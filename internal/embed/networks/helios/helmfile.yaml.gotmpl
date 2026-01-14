@@ -53,8 +53,11 @@ releases:
               rules:
                 - matches:
                     - path:
-                        type: PathPrefix
+                        type: Exact
                         value: /helios-{{ .Values.id }}
+                    - path:
+                        type: PathPrefix
+                        value: /helios-{{ .Values.id }}/
                   filters:
                     - type: URLRewrite
                       urlRewrite:

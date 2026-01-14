@@ -20,6 +20,19 @@
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "ObolNetwork/obol-stack-front-end",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Gateway API release version",
+      "matchStrings": [
+        "gatewayApiVersion:\\s*[\"']?(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)[\"']?"
+      ],
+      "fileMatch": [
+        "^internal/embed/infrastructure/helmfile\\.yaml$"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "kubernetes-sigs/gateway-api",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
