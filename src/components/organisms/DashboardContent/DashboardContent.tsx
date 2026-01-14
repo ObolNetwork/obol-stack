@@ -76,7 +76,9 @@ export function DashboardContent({
                 defaultExpanded={index === 0}
               />
             ))}
-          {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
+          {data && (
+            <NodeOverview data={data.nodeOverview} ports={data.ports} />
+          )}
         </SectionContainer>
       </MainSection>
 
