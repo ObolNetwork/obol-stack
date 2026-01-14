@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
@@ -56,6 +57,11 @@ COMMANDS:
      app list        List installed applications
      app sync        Deploy application to cluster
      app delete      Remove application and cluster resources
+
+   Tunnel Management:
+     tunnel status   Show tunnel status and public URL
+     tunnel restart  Restart tunnel to get a new URL
+     tunnel logs     View cloudflared logs
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -152,6 +158,43 @@ GLOBAL OPTIONS:
 						Action: func(c *cli.Context) error {
 							agentAPIKey := c.String("agent-api-key")
 							return agent.Init(cfg, agentAPIKey)
+						},
+					},
+				},
+			},
+			// ============================================================
+			// Tunnel Management Commands
+			// ============================================================
+			{
+				Name:  "tunnel",
+				Usage: "Manage Cloudflare tunnel for public access",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "status",
+						Usage: "Show tunnel status and public URL",
+						Action: func(c *cli.Context) error {
+							return tunnel.Status(cfg)
+						},
+					},
+					{
+						Name:  "restart",
+						Usage: "Restart the tunnel to get a new URL",
+						Action: func(c *cli.Context) error {
+							return tunnel.Restart(cfg)
+						},
+					},
+					{
+						Name:  "logs",
+						Usage: "View cloudflared logs",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "follow",
+								Aliases: []string{"f"},
+								Usage:   "Follow log output",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return tunnel.Logs(cfg, c.Bool("follow"))
 						},
 					},
 				},

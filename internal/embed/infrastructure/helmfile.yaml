@@ -119,6 +119,13 @@ releases:
           dashboard:
             enabled: false
 
+  # Cloudflare Tunnel (quick tunnel mode for public access)
+  - name: cloudflared
+    namespace: traefik
+    chart: ./cloudflared
+    needs:
+      - traefik/traefik
+
   # eRPC
   - name: erpc
     namespace: erpc
