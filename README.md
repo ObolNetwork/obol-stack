@@ -155,23 +155,42 @@ Aztec is a privacy-focused Layer 2 network for Ethereum. To run an Aztec node on
 ```bash
 obol network install aztec \
   --attester-private-key <YOUR_PRIVATE_KEY> \
-  --l1-execution-url https://geth-prysm-mainnet-1.gcp.obol.tech/ \
-  --l1-consensus-url https://prysm-geth-mainnet-1.gcp.obol.tech/
+  --l1-execution-urls https://el-1.example.com/ \
+  --l1-consensus-urls https://cl-1.example.com/
 ```
 
 **What this does:**
 - Deploys an Aztec node in your local Kubernetes cluster
-- Connects to Ethereum mainnet using Obol's public RPC endpoints
+- Connects to Ethereum mainnet using the specified L1 RPC endpoints
 - Configures your node as an attester using the provided private key
 
-**Default L1 RPC endpoints:**
-- **Execution Layer**: `https://geth-prysm-mainnet-1.gcp.obol.tech/` (Geth)
-- **Consensus Layer**: `https://prysm-geth-mainnet-1.gcp.obol.tech/` (Prysm)
+**L1 RPC endpoints:**
 
-These are production-grade, publicly accessible Ethereum nodes provided by Obol.
+The Aztec node requires connections to Ethereum L1 for both the execution layer (EL) and consensus layer (CL). You can provide multiple URLs (comma-separated) for redundancy:
 
-> [!TIP]
-> You can use your own Ethereum node endpoints by changing the `--l1-execution-url` and `--l1-consensus-url` flags.
+| Flag | Description |
+|------|-------------|
+| `--l1-execution-urls` | Comma-separated list of L1 Execution RPC URLs |
+| `--l1-consensus-urls` | Comma-separated list of L1 Consensus RPC URLs |
+
+**Example EL-CL pairs:**
+
+| Provider | Execution Layer (EL) | Consensus Layer (CL) |
+|----------|---------------------|---------------------|
+| Provider A | `https://el-1.example.com/` | `https://cl-1.example.com/` |
+| Provider B | `https://el-2.example.com/` | `https://cl-2.example.com/` |
+
+**Example with multiple endpoints for redundancy:**
+
+```bash
+obol network install aztec \
+  --attester-private-key <YOUR_PRIVATE_KEY> \
+  --l1-execution-urls "https://el-1.example.com/,https://el-2.example.com/" \
+  --l1-consensus-urls "https://cl-1.example.com/,https://cl-2.example.com/"
+```
+
+> [!NOTE]
+> If `--l1-execution-urls` is not provided, the stack defaults to using the internal ERPC endpoint.
 
 ### Working with Kubernetes
 

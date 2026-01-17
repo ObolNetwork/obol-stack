@@ -4,12 +4,12 @@ values:
   - network: {{ env "AZTEC_NETWORK" | default "mainnet" }}
     # @description Attester private key (hex string)
     attesterPrivateKey: {{ env "AZTEC_ATTESTER_PRIVATE_KEY" }}
-    # @description L1 Execution RPC URL override (defaults to local erpc endpoint based on network)
-    l1ExecutionUrl: {{ env "AZTEC_L1_EXECUTION_URL" | default "" }}
-    # @description L1 Consensus RPC URL
-    l1ConsensusUrl: {{ env "AZTEC_L1_CONSENSUS_URL" | default "https://ethereum-beacon-api.publicnode.com" }}
-    # Computed value: L1 Execution URL - uses override or defaults to erpc endpoint
-    __l1ExecutionUrl: {{ if (env "AZTEC_L1_EXECUTION_URL") }}{{ env "AZTEC_L1_EXECUTION_URL" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
+    # @description Comma-separated list of L1 Execution RPC URLs (defaults to local erpc endpoint based on network)
+    l1ExecutionUrls: {{ env "AZTEC_L1_EXECUTION_URLS" | default "" }}
+    # @description Comma-separated list of L1 Consensus RPC URLs
+    l1ConsensusUrls: {{ env "AZTEC_L1_CONSENSUS_URLS" | default "https://ethereum-beacon-api.publicnode.com" }}
+    # Computed value: L1 Execution URLs - uses override or defaults to erpc endpoint
+    __l1ExecutionUrls: {{ if (env "AZTEC_L1_EXECUTION_URLS") }}{{ env "AZTEC_L1_EXECUTION_URLS" }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ env "AZTEC_NETWORK" | default "mainnet" }}{{ end }}
 
 ---
 
@@ -45,9 +45,13 @@ releases:
             - --network
             - '{{ .Values.network }}'
           l1ExecutionUrls:
-            - '{{ .Values.__l1ExecutionUrl }}'
+            {{- range $url := splitList "," .Values.__l1ExecutionUrls }}
+            - '{{ $url | trim }}'
+            {{- end }}
           l1ConsensusUrls:
-            - '{{ .Values.l1ConsensusUrl }}'
+            {{- range $url := splitList "," .Values.l1ConsensusUrls }}
+            - '{{ $url | trim }}'
+            {{- end }}
           resources:
             requests:
               cpu: "4"       
