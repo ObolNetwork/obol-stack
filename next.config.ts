@@ -6,39 +6,39 @@ const nextConfig: NextConfig = {
     root: process.cwd(),
   },
   
-  // Configure for custom domain
+  webpack: (config) => {
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      "@react-native-async-storage/async-storage": false,
+    };
+    return config;
+  },
+
   async rewrites() {
     return [
       {
-        source: '/monitoring/:path*',
-        destination: 'http://monitoring.obol.stack/:path*',
+        source: "/monitoring/:path*",
+        destination: "http://monitoring.obol.stack/:path*",
       },
     ];
   },
 
-  // Configure hostname
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: "/(.*)",
         headers: [
-          {
-            key: 'X-Frame-Options',
-            value: 'DENY',
-          },
-          {
-            key: 'X-Content-Type-Options',
-            value: 'nosniff',
-          },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       },
     ];
   },
 
-  // Output configuration for standalone deployment
-  output: 'standalone',
+  output: "standalone",
 
-  // Externalize pino and thread-stream to avoid bundling test files
+  // Externalize server-only packages
   serverExternalPackages: ['pino', 'thread-stream'],
 };
 
