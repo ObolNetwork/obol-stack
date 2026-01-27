@@ -58,12 +58,12 @@ Uses local workspace:
 
 **Pinned versions** (lines 50-57):
 ```bash
-KUBECTL_VERSION="1.31.0"
-HELM_VERSION="3.16.2"
+KUBECTL_VERSION="1.35.0"
+HELM_VERSION="3.19.4"
 K3D_VERSION="5.8.3"
-HELMFILE_VERSION="0.169.1"
-K9S_VERSION="0.32.5"
-HELM_DIFF_VERSION="3.9.11"
+HELMFILE_VERSION="1.2.3"
+K9S_VERSION="0.50.18"
+HELM_DIFF_VERSION="3.14.1"
 ```
 
 **Smart installation logic**:
@@ -811,12 +811,12 @@ obol network delete ethereum-<generated-name> --force
 - Go 1.21+ (for building from source)
 
 **Installed by obolup.sh**:
-- kubectl 1.31.0
-- helm 3.16.2
+- kubectl 1.35.0
+- helm 3.19.4
 - k3d 5.8.3
-- helmfile 0.169.1
-- k9s 0.32.5
-- helm-diff plugin 3.9.11
+- helmfile 1.2.3
+- k9s 0.50.18
+- helm-diff plugin 3.14.1
 
 **Go dependencies** (key packages):
 - `github.com/urfave/cli/v2` - CLI framework
