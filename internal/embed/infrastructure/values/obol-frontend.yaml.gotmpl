@@ -1,15 +1,29 @@
 {{- $network := .Values.network -}}
+{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 
 replicaCount: 1
+
+serviceAccount:
+  name: obol-frontend
 
 image:
   environment:
     - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
       value: "http://helios-{{ $network }}.helios.svc.cluster.local:8545"
     - name: NEXT_PUBLIC_ERPC_URL
-      value: "http://erpc.default.svc.cluster.local:4000/rpc"
+      value: "{{ printf \"https://%s/rpc\" $publicDomain }}"
     - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
       value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
+    - name: BETTER_AUTH_SECRET
+      value: "{{ env \"BETTER_AUTH_SECRET\" }}"
+    - name: BETTER_AUTH_URL
+      value: "{{ printf \"https://%s\" $publicDomain }}"
+    - name: OBOL_GOOGLE_CLIENT_ID
+      value: "{{ env \"OBOL_GOOGLE_CLIENT_ID\" }}"
+    - name: OBOL_GOOGLE_CLIENT_SECRET
+      value: "{{ env \"OBOL_GOOGLE_CLIENT_SECRET\" }}"
+    - name: OBOL_AUTH_DB_PATH
+      value: "/data/auth.sqlite"
 
   repository: obolnetwork/obol-stack-front-end
   pullPolicy: Always
@@ -18,6 +32,17 @@ image:
 service:
   type: ClusterIP
   port: 3000
+
+podSecurityContext:
+  fsGroup: 1001
+
+volumes:
+  - name: auth-db
+    emptyDir: {}
+
+volumeMounts:
+  - name: auth-db
+    mountPath: /data
 
 # Disable legacy Ingress - using Gateway API HTTPRoute instead
 ingress:

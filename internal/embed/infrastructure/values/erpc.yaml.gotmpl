@@ -1,4 +1,5 @@
 {{- $network := .Values.network -}}
+{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 {{- $chainId := 1 -}}  {{/* Default: mainnet */}}
 {{- if eq $network "hoodi" -}}
   {{- $chainId = 560048 -}}
@@ -48,6 +49,14 @@ config: |-
 
   projects:
     - id: rpc
+      upstreams:
+        - id: nodecore
+          endpoint: https://rpc.nodecore.io
+          evm:
+            chainId: {{ $chainId }}
+          jsonRpc:
+            headers:
+              X-Nodecore-Token: "${OBOL_OAUTH_TOKEN}"
       networks:
         - architecture: evm
           evm:
@@ -79,7 +88,11 @@ config: |-
         maxAge: 3600
 
 # Secret env variables
-secretEnv: {}
+secretEnv:
+  OBOL_OAUTH_TOKEN:
+    secretKeyRef:
+      name: obol-oauth-token
+      key: token
 
 # Extra args for the erpc container
 extraArgs: []
@@ -101,7 +114,8 @@ affinity: {}
 imagePullSecrets: []
 
 # Annotations for the Deployment
-annotations: {}
+annotations:
+  secret.reloader.stakater.com/reload: "obol-oauth-token"
 
 # Liveness probe
 livenessProbe:
@@ -126,7 +140,8 @@ nodeSelector: {}
 podLabels: {}
 
 # Pod annotations
-podAnnotations: {}
+podAnnotations:
+  secret.reloader.stakater.com/reload: "obol-oauth-token"
 
 # Pod management policy
 podManagementPolicy: OrderedReady

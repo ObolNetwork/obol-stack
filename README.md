@@ -394,6 +394,35 @@ obol stack purge -f
 > [!WARNING]
 > The `purge` command permanently deletes all cluster data and configuration. The `-f` flag is required to remove persistent volume claims (PVCs) owned by root. Use with caution.
 
+### Dashboard Authentication (Better Auth)
+
+The dashboard UI is protected behind login when configured. RPC endpoints under `/rpc/*` remain unauthenticated (the x402 payment flow is handled separately).
+
+**Required environment variables (set before `obol stack up`):**
+
+- `STACK_PUBLIC_DOMAIN` (defaults to `obol.stack`; set to your Cloudflare tunnel hostname for internet exposure)
+- `BETTER_AUTH_SECRET` (min 32 chars)
+- `OBOL_GOOGLE_CLIENT_ID`
+- `OBOL_GOOGLE_CLIENT_SECRET`
+
+**Google OAuth redirect URI:**
+
+Register this in Google Cloud Console:
+
+```text
+https://<STACK_PUBLIC_DOMAIN>/api/auth/callback/google
+```
+
+**Nodecore token refresh (for eRPC upstream header injection):**
+
+Create/update the Secret `erpc/nodecore-oauth-refresh` with:
+
+- `client_id`
+- `client_secret`
+- `refresh_token`
+
+The in-cluster CronJob refreshes a short-lived Google `id_token` and writes it into `erpc/obol-oauth-token`, which eRPC uses to inject `X-Nodecore-Token` on upstream requests.
+
 ### Working with Kubernetes
 
 The `obol` CLI includes convenient wrappers for common Kubernetes tools. These automatically use the correct cluster configuration:
