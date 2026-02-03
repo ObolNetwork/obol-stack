@@ -6,7 +6,7 @@
   - obol agent
   - skeleton out the cmd
   - this should have a dummy manifest which templates a config map secret
-  - obol agent init, gets the secret from google account
+  - OKR-1: default LLM flow is llms.py -> Ollama Cloud (no API key copy/paste)
 
 - frontend (default)
 - erpc, helios (default)
