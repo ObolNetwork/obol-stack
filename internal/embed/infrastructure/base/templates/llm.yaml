@@ -190,24 +190,19 @@ spec:
               mountPath: /data
       containers:
         - name: llmspy
-          # NOTE: We install `llms.py` at runtime to avoid coupling Obol Stack to a
-          # specific upstream container image. If/when llmspy publishes an official
-          # image, we can switch to it for faster cold starts.
-          image: python:3.12-slim
+          # Official LLMSpy container image (published by upstream).
+          # Pin a specific version for reproducibility.
+          image: ghcr.io/servicestack/llms:v2.0.30
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
-          # llms.py uses `~/.llms/llms.json` by default; in the container, that's
-          # /home/llms/.llms/llms.json (from upstream docker docs).
           command:
             - sh
             - -c
             - |
               set -eu
-              python -m pip install --no-cache-dir --upgrade pip
-              python -m pip install --no-cache-dir llms
               llms --config /home/llms/.llms/llms.json --serve 8000
           env:
             # Avoid surprises if the image changes its default HOME.
@@ -217,15 +212,13 @@ spec:
             - name: llmspy-home
               mountPath: /home/llms/.llms
           readinessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 2
           livenessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
