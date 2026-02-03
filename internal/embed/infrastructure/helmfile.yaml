@@ -5,6 +5,8 @@
 repositories:
   - name: traefik
     url: https://traefik.github.io/charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
   - name: ethereum
@@ -15,6 +17,7 @@ repositories:
 # Single source of truth: change this to switch networks
 values:
   - network: mainnet
+  - gatewayApiVersion: v1.4.1
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -25,12 +28,39 @@ releases:
       - dataDir: /data
       - network: "{{ .Values.network }}"
 
+  # Monitoring stack (Prometheus operator + Prometheus)
+  - name: monitoring
+    namespace: monitoring
+    createNamespace: true
+    chart: prometheus-community/kube-prometheus-stack
+    version: 79.5.0
+    values:
+      - ./values/monitoring.yaml.gotmpl
+
+  # Gateway API CRDs (applied from upstream release)
+  - name: gateway-api-crds
+    namespace: gateway-system
+    createNamespace: true
+    chart: bedag/raw
+    values:
+      - resources: []
+    hooks:
+      - events: ["presync"]
+        showlogs: true
+        command: kubectl
+        args:
+          - apply
+          - -f
+          - https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ .Values.gatewayApiVersion }}/standard-install.yaml
+
   # Traefik ingress controller with Gateway API support
   - name: traefik
     namespace: traefik
     createNamespace: true
     chart: traefik/traefik
     version: 38.0.2
+    needs:
+      - gateway-system/gateway-api-crds
     values:
       # Gateway API provider configuration
       - providers:
@@ -169,5 +199,5 @@ releases:
                         type: PathPrefix
                         value: /
                   backendRefs:
-                    - name: obol-frontend
+                    - name: obol-frontend-obol-app
                       port: 3000
