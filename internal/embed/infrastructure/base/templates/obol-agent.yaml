@@ -139,6 +139,24 @@ spec:
             - name: PUBLIC_MODE
               value: "false"
 
+            # OKR-1: Default LLM backend via llms.py + Ollama Cloud
+            #
+            # The Obol Stack agent is provider-agnostic:
+            # - `llms.py` (LLMSpy) exposes an OpenAI-compatible API at /v1
+            # - LLMSpy forwards to Ollama (in-cluster), which can run `*:cloud` models
+            #
+            # Important: Ollama Cloud requires a one-time "connect" of the pod identity
+            # (public key derived from /root/.ollama/id_ed25519). We persist that key
+            # in the `llm/ollama-home` PVC so upgrades/restarts don't require re-connect.
+            - name: LLM_BACKEND
+              value: "llmspy"
+            - name: LLM_MODEL
+              value: "glm-4.7:cloud"
+            - name: OPENAI_API_BASE
+              value: "http://llmspy.llm.svc.cluster.local:8000/v1"
+            - name: OPENAI_API_KEY
+              value: "ollama"
+
           # Health checks ensure the pod is ready to receive traffic
           livenessProbe:
             httpGet:

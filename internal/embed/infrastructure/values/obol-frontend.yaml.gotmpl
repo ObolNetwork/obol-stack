@@ -25,6 +25,16 @@ image:
     - name: OBOL_AUTH_DB_PATH
       value: "/data/auth.sqlite"
 
+    # Obol Agent (ADK) in-cluster URL for CopilotKit runtime
+    - name: ADK_AGENT_URL
+      value: "http://obol-agent.agent.svc.cluster.local:8000/"
+    - name: NEXT_PUBLIC_ADK_AGENT_URL
+      value: "http://obol-agent.agent.svc.cluster.local:8000/"
+
+    # Ollama in-cluster URL (used by dashboard to surface Ollama Cloud connect URL)
+    - name: OLLAMA_URL
+      value: "http://ollama.llm.svc.cluster.local:11434"
+
   repository: obolnetwork/obol-stack-front-end
   pullPolicy: Always
   tag: "latest"
