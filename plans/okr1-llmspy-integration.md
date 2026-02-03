@@ -112,6 +112,10 @@ We will manage this in-cluster using:
 - ConfigMap for `llms.json`
 - Volume mount to `/home/llms/.llms` (likely `emptyDir`; no secrets required for Ollama)
 
+Runtime:
+- Prefer the upstream-published container image for reproducibility:
+  - `ghcr.io/servicestack/llms:v2.0.30` (pinned)
+
 Key config points (concrete based on llms.py docs):
 - Only one enabled provider: `ollama`
 - `providers.ollama.type = "OllamaProvider"`
