@@ -199,11 +199,12 @@ spec:
               containerPort: 8000
               protocol: TCP
           command:
-            - sh
-            - -c
-            - |
-              set -eu
-              llms --config /home/llms/.llms/llms.json --serve 8000
+            - llms
+          args:
+            - --config
+            - /home/llms/.llms/llms.json
+            - --serve
+            - "8000"
           env:
             # Avoid surprises if the image changes its default HOME.
             - name: HOME
