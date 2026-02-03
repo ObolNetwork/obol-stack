@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cloudflared
+description: Cloudflare Tunnel for public access
+type: application
+version: 0.1.0
+appVersion: "2024.12.2"
