@@ -1,0 +1,20 @@
+mode: auto
+
+image:
+  repository: cloudflare/cloudflared
+  tag: "2024.12.2"
+
+metrics:
+  address: "0.0.0.0:2000"
+
+quickTunnel:
+  url: "http://traefik.traefik.svc.cluster.local:80"
+
+remoteManaged:
+  tokenSecretName: "cloudflared-tunnel-token"
+  tokenSecretKey: "TUNNEL_TOKEN"
+
+localManaged:
+  secretName: "cloudflared-local-credentials"
+  configMapName: "cloudflared-local-config"
+  tunnelIDKey: "tunnel_id"

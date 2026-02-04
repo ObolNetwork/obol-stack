@@ -13,46 +13,62 @@ import (
 )
 
 const (
-	tunnelNamespace  = "traefik"
+	tunnelNamespace     = "traefik"
 	tunnelLabelSelector = "app.kubernetes.io/name=cloudflared"
+
+	// cloudflared-tunnel-token is created by `obol tunnel provision`.
+	tunnelTokenSecretName = "cloudflared-tunnel-token"
+	tunnelTokenSecretKey  = "TUNNEL_TOKEN"
 )
 
-// Status displays the current tunnel status and URL
+// Status displays the current tunnel status and URL.
 func Status(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	// Check if kubeconfig exists
+	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("stack not running, use 'obol stack up' first")
 	}
 
-	// Check pod status first
+	st, _ := loadTunnelState(cfg)
+
+	// Check pod status first.
 	podStatus, err := getPodStatus(kubectlPath, kubeconfigPath)
 	if err != nil {
-		printStatusBox("quick", "not deployed", "", time.Now())
+		mode, url := tunnelModeAndURL(st)
+		printStatusBox(mode, "not deployed", url, time.Now())
 		fmt.Println("\nTroubleshooting:")
 		fmt.Println("  - Start the stack: obol stack up")
 		return nil
 	}
 
-	// Try to get tunnel URL from logs
-	url, err := GetTunnelURL(cfg)
-	if err != nil {
-		printStatusBox("quick", podStatus, "(not available)", time.Now())
-		fmt.Println("\nTroubleshooting:")
-		fmt.Println("  - Check logs: obol tunnel logs")
-		fmt.Println("  - Restart tunnel: obol tunnel restart")
-		return nil
+	statusLabel := podStatus
+	if podStatus == "running" {
+		statusLabel = "active"
 	}
 
-	printStatusBox("quick", "active", url, time.Now())
+	mode, url := tunnelModeAndURL(st)
+	if mode == "quick" {
+		// Quick tunnels only: try to get URL from logs.
+		u, err := GetTunnelURL(cfg)
+		if err != nil {
+			printStatusBox(mode, podStatus, "(not available)", time.Now())
+			fmt.Println("\nTroubleshooting:")
+			fmt.Println("  - Check logs: obol tunnel logs")
+			fmt.Println("  - Restart tunnel: obol tunnel restart")
+			return nil
+		}
+		url = u
+	}
+
+	printStatusBox(mode, statusLabel, url, time.Now())
 	fmt.Printf("\nTest with: curl %s/\n", url)
 
 	return nil
 }
 
-// GetTunnelURL parses cloudflared logs to extract the quick tunnel URL
+// GetTunnelURL parses cloudflared logs to extract the quick tunnel URL.
 func GetTunnelURL(cfg *config.Config) (string, error) {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -69,27 +85,25 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 		return "", fmt.Errorf("failed to get tunnel logs: %w", err)
 	}
 
-	// Parse URL from logs (quick tunnel uses cfargotunnel.com)
-	re := regexp.MustCompile(`https://[a-z0-9-]+\.cfargotunnel\.com`)
-	matches := re.FindString(string(output))
-	if matches == "" {
-		// Also try trycloudflare.com as fallback
-		re = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
-		matches = re.FindString(string(output))
-	}
-	if matches == "" {
-		return "", fmt.Errorf("tunnel URL not found in logs")
+	if url, ok := parseQuickTunnelURL(string(output)); ok {
+		return url, nil
 	}
 
-	return matches, nil
+	// Back-compat: allow cfargotunnel.com to be detected too.
+	re := regexp.MustCompile(`https://[a-z0-9-]+\.cfargotunnel\.com`)
+	if url := re.FindString(string(output)); url != "" {
+		return url, nil
+	}
+
+	return "", fmt.Errorf("tunnel URL not found in logs")
 }
 
-// Restart restarts the cloudflared deployment to get a new tunnel URL
+// Restart restarts the cloudflared deployment.
 func Restart(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	// Check if kubeconfig exists
+	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("stack not running, use 'obol stack up' first")
 	}
@@ -109,17 +123,17 @@ func Restart(cfg *config.Config) error {
 	}
 
 	fmt.Println("\nTunnel restarting...")
-	fmt.Println("Run 'obol tunnel status' to see the new URL once ready (may take 10-30 seconds).")
+	fmt.Println("Run 'obol tunnel status' to see the URL once ready (may take 10-30 seconds).")
 
 	return nil
 }
 
-// Logs displays cloudflared logs
+// Logs displays cloudflared logs.
 func Logs(cfg *config.Config, follow bool) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	// Check if kubeconfig exists
+	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("stack not running, use 'obol stack up' first")
 	}
@@ -142,7 +156,7 @@ func Logs(cfg *config.Config, follow bool) error {
 	return cmd.Run()
 }
 
-// getPodStatus returns the status of the cloudflared pod
+// getPodStatus returns the status of the cloudflared pod.
 func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
@@ -164,7 +178,7 @@ func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
 	return strings.ToLower(status), nil
 }
 
-// printStatusBox prints a formatted status box
+// printStatusBox prints a formatted status box.
 func printStatusBox(mode, status, url string, lastUpdated time.Time) {
 	fmt.Println()
 	fmt.Println("Cloudflare Tunnel Status")
@@ -174,4 +188,13 @@ func printStatusBox(mode, status, url string, lastUpdated time.Time) {
 	fmt.Printf("URL:          %s\n", url)
 	fmt.Printf("Last Updated: %s\n", lastUpdated.Format(time.RFC3339))
 	fmt.Println(strings.Repeat("─", 50))
+}
+
+func parseQuickTunnelURL(logs string) (string, bool) {
+	// Quick tunnel logs print a random *.trycloudflare.com URL.
+	re := regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
+	if url := re.FindString(logs); url != "" {
+		return url, true
+	}
+	return "", false
 }
