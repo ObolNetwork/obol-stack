@@ -166,8 +166,6 @@ releases:
                 - name: traefik-gateway
                   namespace: traefik
                   sectionName: web
-              hostnames:
-                - "{{ $publicDomain }}"
               rules:
                 - matches:
                     - path:
@@ -208,8 +206,6 @@ releases:
                 - name: traefik-gateway
                   namespace: traefik
                   sectionName: web
-              hostnames:
-                - "{{ $publicDomain }}"
               rules:
                 - matches:
                     - path:
