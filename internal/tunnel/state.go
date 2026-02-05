@@ -10,7 +10,7 @@ import (
 )
 
 type tunnelState struct {
-	Mode       string    `json:"mode"` // "quick" or "dns"
+	Mode       string    `json:"mode"` // "quick", "local", "remote" (or legacy: "dns")
 	Hostname   string    `json:"hostname"`
 	AccountID  string    `json:"account_id,omitempty"`
 	ZoneID     string    `json:"zone_id,omitempty"`
@@ -55,8 +55,21 @@ func saveTunnelState(cfg *config.Config, st *tunnelState) error {
 }
 
 func tunnelModeAndURL(st *tunnelState) (mode, url string) {
-	if st != nil && st.Hostname != "" {
-		return "dns", "https://" + st.Hostname
+	if st == nil {
+		return "quick", ""
 	}
-	return "quick", ""
+
+	if st.Hostname != "" {
+		url = "https://" + st.Hostname
+	}
+
+	if st.Mode != "" {
+		return st.Mode, url
+	}
+
+	// Back-compat for older state files that only populated Hostname.
+	if st.Hostname != "" {
+		return "dns", url
+	}
+	return "quick", url
 }

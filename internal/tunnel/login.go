@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"bytes"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -32,9 +31,9 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 	}
 
 	// Stack must be running so we can write secrets/config to the cluster.
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	kubeconfigPath, err := requireRunningStack(cfg)
+	if err != nil {
+		return err
 	}
 
 	stackID := getStackID(cfg)
@@ -43,9 +42,13 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 	}
 	tunnelName := fmt.Sprintf("obol-stack-%s", stackID)
 
-	cloudflaredPath, err := exec.LookPath("cloudflared")
-	if err != nil {
-		return fmt.Errorf("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
+	cloudflaredPath := filepath.Join(cfg.BinDir, "cloudflared")
+	if _, err := os.Stat(cloudflaredPath); err != nil {
+		var lookErr error
+		cloudflaredPath, lookErr = exec.LookPath("cloudflared")
+		if lookErr != nil {
+			return fmt.Errorf("cloudflared not found. Install it and ensure it's in PATH (or place it in %s)", cfg.BinDir)
+		}
 	}
 
 	fmt.Println("Authenticating cloudflared (browser)...")
@@ -100,11 +103,14 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return err
 	}
 
-	st, _ := loadTunnelState(cfg)
+	st, err := loadTunnelState(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to read tunnel state: %w", err)
+	}
 	if st == nil {
 		st = &tunnelState{}
 	}
-	st.Mode = "dns"
+	st.Mode = "local"
 	st.Hostname = hostname
 	st.TunnelID = tunnelID
 	st.TunnelName = tunnelName
@@ -136,29 +142,24 @@ func parseFirstUUID(s string) (string, error) {
 
 func applyLocalManagedK8sResources(cfg *config.Config, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
 	// Secret: account certificate + tunnel credentials (locally-managed tunnel requires origincert).
-	secretYAML, err := buildLocalManagedSecretYAML(hostname, certPEM, credJSON)
+	secretYAML, err := buildLocalManagedSecretYAML(certPEM, credJSON)
 	if err != nil {
 		return err
 	}
-	if err := kubectlApply(cfg, kubeconfigPath, secretYAML); err != nil {
+	if err := kubectlApplyManifest(cfg, kubeconfigPath, secretYAML); err != nil {
 		return err
 	}
 
 	// ConfigMap: config.yml + tunnel_id used for command arg expansion.
 	cfgYAML := buildLocalManagedConfigYAML(hostname, tunnelID)
-	if err := kubectlApply(cfg, kubeconfigPath, cfgYAML); err != nil {
+	if err := kubectlApplyManifest(cfg, kubeconfigPath, cfgYAML); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-const (
-	localManagedSecretName    = "cloudflared-local-credentials"
-	localManagedConfigMapName = "cloudflared-local-config"
-)
-
-func buildLocalManagedSecretYAML(hostname string, certPEM, credJSON []byte) ([]byte, error) {
+func buildLocalManagedSecretYAML(certPEM, credJSON []byte) ([]byte, error) {
 	certB64 := base64.StdEncoding.EncodeToString(certPEM)
 	credB64 := base64.StdEncoding.EncodeToString(credJSON)
 
@@ -172,7 +173,6 @@ data:
   cert.pem: %s
   credentials.json: %s
 `, localManagedSecretName, tunnelNamespace, certB64, credB64)
-	_ = hostname // reserved for future labels/annotations
 	return []byte(secret), nil
 }
 
@@ -190,24 +190,8 @@ data:
 
     ingress:
       - hostname: %s
-        service: http://traefik.traefik.svc.cluster.local:80
+        service: %s
       - service: http_status:404
-`, localManagedConfigMapName, tunnelNamespace, tunnelID, tunnelID, hostname)
+`, localManagedConfigMapName, tunnelNamespace, tunnelID, tunnelID, hostname, tunnelServiceURL)
 	return []byte(cfg)
-}
-
-func kubectlApply(cfg *config.Config, kubeconfigPath string, manifest []byte) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-
-	cmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"apply", "-f", "-",
-	)
-	cmd.Stdin = bytes.NewReader(manifest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("kubectl apply failed: %w", err)
-	}
-	return nil
 }

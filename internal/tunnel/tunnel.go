@@ -12,26 +12,19 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
-const (
-	tunnelNamespace     = "traefik"
-	tunnelLabelSelector = "app.kubernetes.io/name=cloudflared"
-
-	// cloudflared-tunnel-token is created by `obol tunnel provision`.
-	tunnelTokenSecretName = "cloudflared-tunnel-token"
-	tunnelTokenSecretKey  = "TUNNEL_TOKEN"
-)
-
 // Status displays the current tunnel status and URL.
 func Status(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Check if kubeconfig exists.
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	kubeconfigPath, err := requireRunningStack(cfg)
+	if err != nil {
+		return err
 	}
 
-	st, _ := loadTunnelState(cfg)
+	st, err := loadTunnelState(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to read tunnel state: %v\n", err)
+		st = nil
+	}
 
 	// Check pod status first.
 	podStatus, err := getPodStatus(kubectlPath, kubeconfigPath)
@@ -71,7 +64,7 @@ func Status(cfg *config.Config) error {
 // GetTunnelURL parses cloudflared logs to extract the quick tunnel URL.
 func GetTunnelURL(cfg *config.Config) (string, error) {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubeconfigPath := stackKubeconfigPath(cfg)
 
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
@@ -101,11 +94,9 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 // Restart restarts the cloudflared deployment.
 func Restart(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Check if kubeconfig exists.
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	kubeconfigPath, err := requireRunningStack(cfg)
+	if err != nil {
+		return err
 	}
 
 	fmt.Println("Restarting cloudflared tunnel...")
@@ -131,11 +122,9 @@ func Restart(cfg *config.Config) error {
 // Logs displays cloudflared logs.
 func Logs(cfg *config.Config, follow bool) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Check if kubeconfig exists.
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	kubeconfigPath, err := requireRunningStack(cfg)
+	if err != nil {
+		return err
 	}
 
 	args := []string{

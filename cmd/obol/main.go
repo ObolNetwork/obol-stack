@@ -59,9 +59,11 @@ COMMANDS:
      app delete      Remove application and cluster resources
 
    Tunnel Management:
-     tunnel status   Show tunnel status and public URL
-     tunnel restart  Restart tunnel to get a new URL
-     tunnel logs     View cloudflared logs
+     tunnel status    Show tunnel status and public URL
+     tunnel login     Authenticate and create persistent tunnel (browser)
+     tunnel provision Provision persistent tunnel (API token)
+     tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel logs      View cloudflared logs
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)

@@ -1,7 +1,7 @@
 package tunnel
 
 import (
-	"bytes"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,9 +41,9 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 	}
 
 	// Stack must be running so we can store the tunnel token in-cluster.
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	kubeconfigPath, err := requireRunningStack(cfg)
+	if err != nil {
+		return err
 	}
 
 	stackID := getStackID(cfg)
@@ -55,7 +55,10 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 	client := newCloudflareClient(opts.APIToken)
 
 	// Try to reuse existing local state to keep the same tunnel ID.
-	st, _ := loadTunnelState(cfg)
+	st, err := loadTunnelState(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to read tunnel state: %w", err)
+	}
 	if st != nil && st.AccountID == opts.AccountID && st.ZoneID == opts.ZoneID && st.TunnelID != "" && st.TunnelName != "" {
 		tunnelName = st.TunnelName
 	}
@@ -88,7 +91,7 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		tunnelToken = t.Token
 	}
 
-	if err := client.UpdateTunnelConfiguration(opts.AccountID, tunnelID, hostname, "http://traefik.traefik.svc.cluster.local:80"); err != nil {
+	if err := client.UpdateTunnelConfiguration(opts.AccountID, tunnelID, hostname, tunnelServiceURL); err != nil {
 		return err
 	}
 
@@ -108,7 +111,7 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 	if st == nil {
 		st = &tunnelState{}
 	}
-	st.Mode = "dns"
+	st.Mode = "remote"
 	st.Hostname = hostname
 	st.AccountID = opts.AccountID
 	st.ZoneID = opts.ZoneID
@@ -146,32 +149,22 @@ func normalizeHostname(s string) string {
 }
 
 func applyTunnelTokenSecret(cfg *config.Config, kubeconfigPath, token string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	secretYAML := buildRemoteManagedSecretYAML(token)
+	return kubectlApplyManifest(cfg, kubeconfigPath, secretYAML)
+}
 
-	createCmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"-n", tunnelNamespace,
-		"create", "secret", "generic", tunnelTokenSecretName,
-		fmt.Sprintf("--from-literal=%s=%s", tunnelTokenSecretKey, token),
-		"--dry-run=client",
-		"-o", "yaml",
-	)
-	out, err := createCmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to create secret manifest: %w", err)
-	}
-
-	applyCmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"apply", "-f", "-",
-	)
-	applyCmd.Stdin = bytes.NewReader(out)
-	applyCmd.Stdout = os.Stdout
-	applyCmd.Stderr = os.Stderr
-	if err := applyCmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply tunnel token secret: %w", err)
-	}
-	return nil
+func buildRemoteManagedSecretYAML(token string) []byte {
+	tokenB64 := base64.StdEncoding.EncodeToString([]byte(token))
+	secret := fmt.Sprintf(`apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: %s
+type: Opaque
+data:
+  %s: %s
+`, tunnelTokenSecretName, tunnelNamespace, tunnelTokenSecretKey, tokenB64)
+	return []byte(secret)
 }
 
 func helmUpgradeCloudflared(cfg *config.Config, kubeconfigPath string) error {
