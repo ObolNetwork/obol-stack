@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
 
 type LoginOptions struct {
@@ -36,7 +37,7 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return err
 	}
 
-	stackID := getStackID(cfg)
+	stackID := stack.GetStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack not initialized, run 'obol stack init' first")
 	}

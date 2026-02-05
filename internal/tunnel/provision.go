@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 )
 
 // ProvisionOptions configures `obol tunnel provision`.
@@ -46,7 +47,7 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		return err
 	}
 
-	stackID := getStackID(cfg)
+	stackID := stack.GetStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack not initialized, run 'obol stack init' first")
 	}
