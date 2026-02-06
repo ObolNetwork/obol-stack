@@ -1,4 +1,4 @@
-{{- $network := .Values.network -}}
+{{- $network := env "STACK_NETWORK" | default "mainnet" -}}
 {{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 {{- $chainId := 1 -}}  {{/* Default: mainnet */}}
 {{- if eq $network "hoodi" -}}
@@ -87,12 +87,18 @@ config: |-
         allowCredentials: true
         maxAge: 3600
 
-# Secret env variables
-secretEnv:
-  OBOL_OAUTH_TOKEN:
-    secretKeyRef:
-      name: obol-oauth-token
-      key: token
+# Secret env variables (chart expects flat string map, e.g. KEY: "value")
+# The OBOL_OAUTH_TOKEN is injected from a Kubernetes secret via extraEnv instead
+secretEnv: {}
+
+# Inject the OAuth token from the Kubernetes secret
+extraEnv:
+  - name: OBOL_OAUTH_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: obol-oauth-token
+        key: token
+        optional: true
 
 # Extra args for the erpc container
 extraArgs: []

@@ -15,6 +15,9 @@ import (
 //go:embed k3d-config.yaml
 var K3dConfig string
 
+//go:embed k3s-config.yaml
+var K3sConfig string
+
 //go:embed all:infrastructure
 var infrastructureFS embed.FS
 

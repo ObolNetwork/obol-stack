@@ -1,7 +1,10 @@
 # Helmfile for Obol Stack default infrastructure
 # Orchestrates core infrastructure components deployed with every stack
 # Uses Traefik with Gateway API for routing (replaces nginx-ingress)
-{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
+{{ $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
+{{- $dataDir := env "STACK_DATA_DIR" | default "/data" -}}
+{{- $network := env "STACK_NETWORK" | default "mainnet" -}}
+{{- $gatewayApiVersion := "v1.4.1" }}
 
 repositories:
   - name: traefik
@@ -17,19 +20,14 @@ repositories:
   - name: stakater
     url: https://stakater.github.io/stakater-charts
 
-# Single source of truth: change this to switch networks
-values:
-  - network: mainnet
-  - gatewayApiVersion: v1.4.1
-
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
   - name: base
     namespace: kube-system
     chart: ./base
     values:
-      - dataDir: /data
-      - network: "{{ .Values.network }}"
+      - dataDir: '{{ $dataDir }}'
+      - network: "{{ $network }}"
 
   # Monitoring stack (Prometheus operator + Prometheus)
   - name: monitoring
@@ -54,7 +52,7 @@ releases:
         args:
           - apply
           - -f
-          - https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ .Values.gatewayApiVersion }}/standard-install.yaml
+          - https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ $gatewayApiVersion }}/standard-install.yaml
 
   # Traefik ingress controller with Gateway API support
   - name: traefik
