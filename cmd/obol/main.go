@@ -52,6 +52,9 @@ COMMANDS:
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
 
+   Inference (x402 Pay-Per-Request):
+     inference serve  Start the x402 inference gateway
+
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
@@ -59,9 +62,11 @@ COMMANDS:
      app delete      Remove application and cluster resources
 
    Tunnel Management:
-     tunnel status   Show tunnel status and public URL
-     tunnel restart  Restart tunnel to get a new URL
-     tunnel logs     View cloudflared logs
+     tunnel status    Show tunnel status and public URL
+     tunnel login     Authenticate and create persistent tunnel (browser)
+     tunnel provision Provision persistent tunnel (API token)
+     tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel logs      View cloudflared logs
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -425,6 +430,7 @@ GLOBAL OPTIONS:
 				},
 			},
 			networkCommand(cfg),
+			inferenceCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
