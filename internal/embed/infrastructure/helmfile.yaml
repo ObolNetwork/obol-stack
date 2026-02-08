@@ -156,8 +156,6 @@ releases:
                 - name: traefik-gateway
                   namespace: traefik
                   sectionName: web
-              hostnames:
-                - obol.stack
               rules:
                 - matches:
                     - path:
@@ -198,8 +196,6 @@ releases:
                 - name: traefik-gateway
                   namespace: traefik
                   sectionName: web
-              hostnames:
-                - obol.stack
               rules:
                 - matches:
                     - path:

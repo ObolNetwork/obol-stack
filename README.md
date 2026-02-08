@@ -125,6 +125,24 @@ obol k9s
 
 The stack will create a local Kubernetes cluster. Each network installation creates a uniquely-namespaced deployment instance, allowing you to run multiple configurations simultaneously.
 
+## Public Access (Cloudflare Tunnel)
+
+By default, the stack deploys a Cloudflare Tunnel connector in “quick tunnel” mode, which provides a random public URL. Check it with:
+
+```bash
+obol tunnel status
+```
+
+To use a persistent hostname instead:
+
+- Browser login flow (requires `cloudflared` installed locally, e.g. `brew install cloudflared` on macOS):
+  - `obol tunnel login --hostname stack.example.com`
+- API-driven provisioning:
+  - `obol tunnel provision --hostname stack.example.com --account-id ... --zone-id ... --api-token ...`
+  - Or set `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN`.
+
+Note: the stack ID (used in tunnel naming) is preserved across `obol stack init --force`. Use `obol stack purge` to reset it.
+
 > [!TIP]
 > Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations. After installation, deploy to the cluster with `obol network sync <network>/<id>`.
 
