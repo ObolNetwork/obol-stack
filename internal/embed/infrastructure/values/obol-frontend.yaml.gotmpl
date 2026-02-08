@@ -11,17 +11,17 @@ image:
     - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
       value: "http://helios-{{ $network }}.helios.svc.cluster.local:8545"
     - name: NEXT_PUBLIC_ERPC_URL
-      value: "{{ printf \"https://%s/rpc\" $publicDomain }}"
+      value: "https://{{ $publicDomain }}/rpc"
     - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
       value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
     - name: BETTER_AUTH_SECRET
-      value: "{{ env \"BETTER_AUTH_SECRET\" }}"
+      value: {{ env "BETTER_AUTH_SECRET" | default "" | quote }}
     - name: BETTER_AUTH_URL
-      value: "{{ printf \"https://%s\" $publicDomain }}"
+      value: "https://{{ $publicDomain }}"
     - name: OBOL_GOOGLE_CLIENT_ID
-      value: "{{ env \"OBOL_GOOGLE_CLIENT_ID\" }}"
+      value: {{ env "OBOL_GOOGLE_CLIENT_ID" | default "" | quote }}
     - name: OBOL_GOOGLE_CLIENT_SECRET
-      value: "{{ env \"OBOL_GOOGLE_CLIENT_SECRET\" }}"
+      value: {{ env "OBOL_GOOGLE_CLIENT_SECRET" | default "" | quote }}
     - name: OBOL_AUTH_DB_PATH
       value: "/data/auth.sqlite"
 

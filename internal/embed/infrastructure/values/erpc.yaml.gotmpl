@@ -87,12 +87,17 @@ config: |-
         allowCredentials: true
         maxAge: 3600
 
-# Secret env variables
-secretEnv:
-  OBOL_OAUTH_TOKEN:
-    secretKeyRef:
-      name: obol-oauth-token
-      key: token
+# Secret env variables (chart-managed secret for inline values)
+secretEnv: {}
+
+# Extra env variables (reference external obol-oauth-token secret)
+extraEnv:
+  - name: OBOL_OAUTH_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: obol-oauth-token
+        key: token
+        optional: true
 
 # Extra args for the erpc container
 extraArgs: []
@@ -198,8 +203,7 @@ extraVolumeMounts: []
 # Additional ports
 extraPorts: []
 
-# Additional env variables
-extraEnv: []
+# Additional env variables (defined above with OBOL_OAUTH_TOKEN)
 
 serviceMonitor:
   enabled: false

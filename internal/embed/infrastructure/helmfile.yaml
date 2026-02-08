@@ -1,7 +1,6 @@
 # Helmfile for Obol Stack default infrastructure
 # Orchestrates core infrastructure components deployed with every stack
 # Uses Traefik with Gateway API for routing (replaces nginx-ingress)
-{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 
 repositories:
   - name: traefik
