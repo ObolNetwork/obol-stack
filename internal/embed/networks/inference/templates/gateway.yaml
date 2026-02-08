@@ -1,0 +1,211 @@
+{{- if eq .Release.Name "inference-core" }}
+---
+# Ollama inference runtime
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: ollama
+    app.kubernetes.io/part-of: obol.stack
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_MODELS
+              value: /models
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /api/version
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+      volumes:
+        - name: ollama-models
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: ollama
+spec:
+  type: ClusterIP
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+      protocol: TCP
+
+---
+# x402 inference gateway
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: {{ .Release.Namespace }}
+data:
+  UPSTREAM_URL: "http://ollama.{{ .Release.Namespace }}.svc.cluster.local:11434"
+  LISTEN_ADDR: ":{{ .Values.gatewayPort }}"
+  PRICE_PER_REQUEST: "{{ .Values.pricePerRequest }}"
+  WALLET_ADDRESS: "{{ .Values.walletAddress }}"
+  CHAIN: "{{ .Values.chain }}"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: inference-gateway
+    app.kubernetes.io/part-of: obol.stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-gateway
+  template:
+    metadata:
+      labels:
+        app: inference-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: ghcr.io/obolnetwork/inference-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: {{ .Values.gatewayPort }}
+              protocol: TCP
+          args:
+            - --listen=:{{ .Values.gatewayPort }}
+            - --upstream=http://ollama.{{ .Release.Namespace }}.svc.cluster.local:11434
+            - --wallet={{ .Values.walletAddress }}
+            - --price={{ .Values.pricePerRequest }}
+            - --chain={{ .Values.chain }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: inference-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: inference-gateway
+  ports:
+    - name: http
+      port: {{ .Values.gatewayPort }}
+      targetPort: http
+      protocol: TCP
+
+---
+# HTTPRoute for external access via Traefik Gateway API
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: inference-gateway
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  hostnames:
+    - obol.stack
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /{{ .Release.Namespace }}/v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /v1
+      backendRefs:
+        - name: inference-gateway
+          port: {{ .Values.gatewayPort }}
+    - matches:
+        - path:
+            type: Exact
+            value: /{{ .Release.Namespace }}/health
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /health
+      backendRefs:
+        - name: inference-gateway
+          port: {{ .Values.gatewayPort }}
+{{- end }}

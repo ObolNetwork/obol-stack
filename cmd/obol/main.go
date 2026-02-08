@@ -52,6 +52,9 @@ COMMANDS:
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
 
+   Inference (x402 Pay-Per-Request):
+     inference serve  Start the x402 inference gateway
+
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
@@ -59,9 +62,11 @@ COMMANDS:
      app delete      Remove application and cluster resources
 
    Tunnel Management:
-     tunnel status   Show tunnel status and public URL
-     tunnel restart  Restart tunnel to get a new URL
-     tunnel logs     View cloudflared logs
+     tunnel status    Show tunnel status and public URL
+     tunnel login     Authenticate and create persistent tunnel (browser)
+     tunnel provision Provision persistent tunnel (API token)
+     tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel logs      View cloudflared logs
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -177,8 +182,63 @@ GLOBAL OPTIONS:
 						},
 					},
 					{
+						Name:  "login",
+						Usage: "Authenticate via browser and create a locally-managed tunnel (no API token)",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "hostname",
+								Aliases:  []string{"H"},
+								Usage:    "Public hostname to route (e.g. stack.example.com)",
+								Required: true,
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return tunnel.Login(cfg, tunnel.LoginOptions{
+								Hostname: c.String("hostname"),
+							})
+						},
+					},
+					{
+						Name:  "provision",
+						Usage: "Provision a persistent (DNS-routed) Cloudflare Tunnel",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "hostname",
+								Aliases:  []string{"H"},
+								Usage:    "Public hostname to route (e.g. stack.example.com)",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:    "account-id",
+								Aliases: []string{"a"},
+								Usage:   "Cloudflare account ID (or set CLOUDFLARE_ACCOUNT_ID)",
+								EnvVars: []string{"CLOUDFLARE_ACCOUNT_ID"},
+							},
+							&cli.StringFlag{
+								Name:    "zone-id",
+								Aliases: []string{"z"},
+								Usage:   "Cloudflare zone ID for the hostname (or set CLOUDFLARE_ZONE_ID)",
+								EnvVars: []string{"CLOUDFLARE_ZONE_ID"},
+							},
+							&cli.StringFlag{
+								Name:    "api-token",
+								Aliases: []string{"t"},
+								Usage:   "Cloudflare API token (or set CLOUDFLARE_API_TOKEN)",
+								EnvVars: []string{"CLOUDFLARE_API_TOKEN"},
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return tunnel.Provision(cfg, tunnel.ProvisionOptions{
+								Hostname:  c.String("hostname"),
+								AccountID: c.String("account-id"),
+								ZoneID:    c.String("zone-id"),
+								APIToken:  c.String("api-token"),
+							})
+						},
+					},
+					{
 						Name:  "restart",
-						Usage: "Restart the tunnel to get a new URL",
+						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
 						Action: func(c *cli.Context) error {
 							return tunnel.Restart(cfg)
 						},
@@ -370,6 +430,7 @@ GLOBAL OPTIONS:
 				},
 			},
 			networkCommand(cfg),
+			inferenceCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
