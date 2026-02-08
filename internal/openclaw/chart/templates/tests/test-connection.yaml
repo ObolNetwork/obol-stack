@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "openclaw.fullname" . }}-test-connection
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: tcp-check
+      image: busybox:1.36.1
+      command:
+        - sh
+        - -c
+        - |
+          echo "Testing TCP connection to {{ include "openclaw.fullname" . }}:{{ .Values.service.port }}..."
+          for i in $(seq 1 10); do
+            if nc -z {{ include "openclaw.fullname" . }} {{ .Values.service.port }} 2>/dev/null; then
+              echo "Connection successful!"
+              exit 0
+            fi
+            echo "Attempt $i/10 failed, retrying in 3s..."
+            sleep 3
+          done
+          echo "Connection failed after 10 attempts"
+          exit 1

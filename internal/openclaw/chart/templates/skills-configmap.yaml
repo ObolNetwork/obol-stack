@@ -1,0 +1,11 @@
+{{- if and .Values.skills.enabled .Values.skills.createDefault (not .Values.skills.configMapName) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openclaw.fullname" . }}-skills
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+data: {}
+{{- end }}

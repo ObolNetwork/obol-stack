@@ -17,4 +17,3 @@ func getStackID(cfg *config.Config) string {
 	}
 	return strings.TrimSpace(string(data))
 }
-

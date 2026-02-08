@@ -52,6 +52,14 @@ COMMANDS:
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
 
+   OpenClaw (AI Agent):
+     openclaw up      Create and deploy an OpenClaw instance
+     openclaw sync    Deploy or update an instance
+     openclaw token   Retrieve gateway token
+     openclaw list    List instances
+     openclaw delete  Remove instance and cluster resources
+     openclaw skills  Manage skills (sync from local dir)
+
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
@@ -425,6 +433,7 @@ GLOBAL OPTIONS:
 				},
 			},
 			networkCommand(cfg),
+			openclawCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
