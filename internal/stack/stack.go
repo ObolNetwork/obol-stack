@@ -77,8 +77,13 @@ func Init(cfg *config.Config, force bool) error {
 	fmt.Printf("K3d config saved to: %s\n", k3dConfigPath)
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
+	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
+	// k3d uses host.k3d.internal; bare k3s would use the node's gateway IP.
+	ollamaHost := "host.k3d.internal"
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	if err := embed.CopyDefaults(defaultsDir); err != nil {
+	if err := embed.CopyDefaults(defaultsDir, map[string]string{
+		"{{OLLAMA_HOST}}": ollamaHost,
+	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
 	fmt.Printf("Defaults copied to: %s\n", defaultsDir)

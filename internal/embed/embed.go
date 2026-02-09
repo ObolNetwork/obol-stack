@@ -21,8 +21,10 @@ var infrastructureFS embed.FS
 //go:embed all:networks
 var networksFS embed.FS
 
-// CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory
-func CopyDefaults(destDir string) error {
+// CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory.
+// The replacements map is applied to every file: each key (e.g. "{{OLLAMA_HOST}}") is replaced
+// with its value. Pass nil for a verbatim copy.
+func CopyDefaults(destDir string, replacements map[string]string) error {
 	return fs.WalkDir(infrastructureFS, "infrastructure", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -57,8 +59,14 @@ func CopyDefaults(destDir string) error {
 			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
 		}
 
+		// Apply placeholder replacements
+		content := string(data)
+		for placeholder, value := range replacements {
+			content = strings.ReplaceAll(content, placeholder, value)
+		}
+
 		// Write to destination
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
+		if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 
