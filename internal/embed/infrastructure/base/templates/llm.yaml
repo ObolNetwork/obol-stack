@@ -2,104 +2,25 @@
 # LLM foundation services (OKR-1)
 #
 # This deploys:
-# - Ollama (as the upstream LLM runtime)
+# - An ExternalName Service "ollama" that resolves to the host's Ollama server
 # - llms.py (LLMSpy) as an OpenAI-compatible gateway / router over providers
 #
 # Design notes:
-# - We default to Ollama Cloud (`glm-4.7:cloud`) to avoid requiring local GPU/VRAM.
-# - We persist Ollama's identity keypair at `/root/.ollama/id_ed25519` so the
-#   Ollama Cloud "connect" binding survives pod restarts/upgrades.
-# - Model cache is kept on `emptyDir` (ephemeral) per product decision.
+# - No in-cluster Ollama is deployed; the host is expected to run Ollama
+#   (or another OpenAI-compatible server) on port 11434.
+# - The ollama Service abstracts host resolution:
+#     k3d  → host.k3d.internal
+#     k3s  → resolved at stack init via node IP
+# - LLMSpy and all consumers reference ollama.llm.svc.cluster.local:11434,
+#   which the ExternalName Service routes to the host.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: llm
 
 ---
-# Persist Ollama identity (Ollama Cloud connect uses the public key derived from this keypair).
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ollama-home
-  namespace: llm
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 256Mi
-
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama
-  namespace: llm
-  labels:
-    app: ollama
-spec:
-  replicas: 1
-  # Ollama uses a ReadWriteOnce PVC; avoid surging a second pod during updates.
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: ollama
-  template:
-    metadata:
-      labels:
-        app: ollama
-    spec:
-      containers:
-        - name: ollama
-          image: ollama/ollama:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 11434
-              protocol: TCP
-          env:
-            # Store model blobs (including any cloud model stubs/cache) in an ephemeral volume.
-            - name: OLLAMA_MODELS
-              value: /models
-            # Explicitly bind the HTTP API to all interfaces in-cluster.
-            - name: OLLAMA_HOST
-              value: 0.0.0.0:11434
-          volumeMounts:
-            # Persist identity + config (e.g. ~/.ollama/id_ed25519) for Ollama Cloud connect.
-            - name: ollama-home
-              mountPath: /root/.ollama
-            - name: ollama-models
-              mountPath: /models
-          readinessProbe:
-            httpGet:
-              path: /api/version
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 2
-          livenessProbe:
-            httpGet:
-              path: /api/version
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 2
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 8000m
-              memory: 24Gi
-      volumes:
-        - name: ollama-home
-          persistentVolumeClaim:
-            claimName: ollama-home
-        - name: ollama-models
-          emptyDir: {}
-
----
+# ExternalName Service: routes ollama.llm.svc.cluster.local → host Ollama.
+# The externalName is resolved during `obol stack init` via the {{OLLAMA_HOST}} placeholder.
 apiVersion: v1
 kind: Service
 metadata:
@@ -108,18 +29,16 @@ metadata:
   labels:
     app: ollama
 spec:
-  type: ClusterIP
-  selector:
-    app: ollama
+  type: ExternalName
+  externalName: {{OLLAMA_HOST}}
   ports:
     - name: http
       port: 11434
-      targetPort: http
       protocol: TCP
 
 ---
 # llms.py v3 configuration for Obol Stack:
-# - Only enable the Ollama provider (in-cluster)
+# - Only enable the Ollama provider (host machine via ollama Service)
 # - Default model is glm-4.7-flash
 apiVersion: v1
 kind: ConfigMap
