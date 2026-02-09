@@ -90,8 +90,8 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              cpu: 2000m
-              memory: 4Gi
+              cpu: 8000m
+              memory: 24Gi
       volumes:
         - name: ollama-home
           persistentVolumeClaim:
