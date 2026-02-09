@@ -29,6 +29,10 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
+      # obol-agent is disabled by default (image not publicly available).
+      # Set obolAgent.enabled=true to deploy it.
+      - obolAgent:
+          enabled: false
 
   # Monitoring stack (Prometheus operator + Prometheus)
   - name: monitoring

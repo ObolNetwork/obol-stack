@@ -1,8 +1,12 @@
+{{- if .Values.obolAgent.enabled }}
 ---
 # Obol Agent Kubernetes Manifest
 # This manifest deploys the Obol AI Agent with namespace-scoped RBAC permissions
 # The agent can read cluster-wide resources (nodes, namespaces) but can only modify
 # resources in specific namespaces: agent (and others via dynamic bindings)
+#
+# To enable the obol-agent, set obolAgent.enabled=true in the base chart values
+# (infrastructure helmfile.yaml → base release → values).
 
 #------------------------------------------------------------------------------
 # Namespace - Ensure the agent namespace exists
@@ -198,3 +202,4 @@ spec:
       name: http
   selector:
     app: obol-agent  # Routes traffic to pods with this label
+{{- end }}
