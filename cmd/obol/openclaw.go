@@ -33,9 +33,10 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				},
 				Action: func(c *cli.Context) error {
 					return openclaw.Up(cfg, openclaw.UpOptions{
-						ID:    c.String("id"),
-						Force: c.Bool("force"),
-						Sync:  !c.Bool("no-sync"),
+						ID:          c.String("id"),
+						Force:       c.Bool("force"),
+						Sync:        !c.Bool("no-sync"),
+						Interactive: true,
 					})
 				},
 			},

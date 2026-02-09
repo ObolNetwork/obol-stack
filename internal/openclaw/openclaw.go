@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"bufio"
 	"bytes"
 	"embed"
 	"encoding/base64"
@@ -30,14 +31,29 @@ var chartFS embed.FS
 
 // UpOptions contains options for the up command
 type UpOptions struct {
-	ID    string // Deployment ID (empty = generate petname)
-	Force bool   // Overwrite existing deployment
-	Sync  bool   // Also run helmfile sync after install
+	ID          string // Deployment ID (empty = generate petname)
+	Force       bool   // Overwrite existing deployment
+	Sync        bool   // Also run helmfile sync after install
+	Interactive bool   // true = prompt for provider choice; false = silent defaults
+	IsDefault   bool   // true = use fixed ID "default", idempotent on re-run
+}
+
+// SetupDefault deploys a default OpenClaw instance as part of stack setup.
+// It is idempotent: if a "default" deployment already exists, it re-syncs.
+func SetupDefault(cfg *config.Config) error {
+	return Up(cfg, UpOptions{
+		ID:        "default",
+		Sync:      true,
+		IsDefault: true,
+	})
 }
 
 // Up creates and optionally deploys an OpenClaw instance
 func Up(cfg *config.Config, opts UpOptions) error {
 	id := opts.ID
+	if opts.IsDefault {
+		id = "default"
+	}
 	if id == "" {
 		id = petname.Generate(2, "-")
 		fmt.Printf("Generated deployment ID: %s\n", id)
@@ -46,13 +62,42 @@ func Up(cfg *config.Config, opts UpOptions) error {
 	}
 
 	deploymentDir := deploymentPath(cfg, id)
+
+	// Idempotent re-run for default deployment: just re-sync
+	if opts.IsDefault && !opts.Force {
+		if _, err := os.Stat(deploymentDir); err == nil {
+			fmt.Println("Default OpenClaw instance already configured, re-syncing...")
+			if opts.Sync {
+				return doSync(cfg, id)
+			}
+			return nil
+		}
+	}
+
 	if _, err := os.Stat(deploymentDir); err == nil {
-		if !opts.Force {
+		if !opts.Force && !opts.IsDefault {
 			return fmt.Errorf("deployment already exists: %s/%s\n"+
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite", appName, id, deploymentDir)
 		}
 		fmt.Printf("WARNING: Overwriting existing deployment at %s\n", deploymentDir)
+	}
+
+	// Detect existing ~/.openclaw config
+	imported, err := DetectExistingConfig()
+	if err != nil {
+		fmt.Printf("Warning: failed to read existing config: %v\n", err)
+	}
+	if imported != nil {
+		PrintImportSummary(imported)
+	}
+
+	// Interactive setup: prompt for provider choice
+	if opts.Interactive {
+		imported, err = interactiveSetup(imported)
+		if err != nil {
+			return fmt.Errorf("interactive setup failed: %w", err)
+		}
 	}
 
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
@@ -77,10 +122,10 @@ func Up(cfg *config.Config, opts UpOptions) error {
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 
-	// Write Obol Stack overlay values (httpRoute, Ollama, eRPC, skills)
+	// Write Obol Stack overlay values (httpRoute, provider config, eRPC, skills)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	overlay := generateOverlayValues(hostname)
+	overlay := generateOverlayValues(hostname, imported)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -101,7 +146,7 @@ func Up(cfg *config.Config, opts UpOptions) error {
 	fmt.Printf("\nFiles created:\n")
 	fmt.Printf("  - chart/            Embedded OpenClaw Helm chart\n")
 	fmt.Printf("  - values.yaml       Chart defaults (edit to customize)\n")
-	fmt.Printf("  - values-obol.yaml  Obol Stack defaults (httpRoute, Ollama, eRPC)\n")
+	fmt.Printf("  - values-obol.yaml  Obol Stack defaults (httpRoute, providers, eRPC)\n")
 	fmt.Printf("  - helmfile.yaml     Deployment configuration\n")
 
 	if opts.Sync {
@@ -437,17 +482,22 @@ func copyEmbeddedChart(destDir string) error {
 	})
 }
 
-// generateOverlayValues creates the Obol Stack-specific values overlay
-func generateOverlayValues(hostname string) string {
-	return fmt.Sprintf(`# Obol Stack overlay values for OpenClaw
+// generateOverlayValues creates the Obol Stack-specific values overlay.
+// If imported is non-nil, provider/channel config from the import is used
+// instead of the default Ollama configuration.
+func generateOverlayValues(hostname string, imported *ImportResult) string {
+	var b strings.Builder
+
+	b.WriteString(`# Obol Stack overlay values for OpenClaw
 # This file contains stack-specific defaults. Edit to customize.
 
 # Enable Gateway API HTTPRoute for stack routing
 httpRoute:
   enabled: true
   hostnames:
-    - %s
-  parentRefs:
+`)
+	b.WriteString(fmt.Sprintf("    - %s\n", hostname))
+	b.WriteString(`  parentRefs:
     - name: traefik-gateway
       namespace: traefik
       sectionName: web
@@ -460,18 +510,34 @@ serviceAccount:
 rbac:
   create: true
 
+`)
+
+	// Provider and agent model configuration
+	importedOverlay := TranslateToOverlayYAML(imported)
+	if importedOverlay != "" {
+		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
+		b.WriteString(importedOverlay)
+	} else {
+		b.WriteString(`# Route agent traffic to in-cluster Ollama
+openclaw:
+  agentModel: ollama/glm-4.7-flash
+
 # Default model provider: in-cluster Ollama
 models:
   ollama:
     enabled: true
     baseUrl: http://ollama.llm.svc.cluster.local:11434/v1
+    api: openai-completions
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
       - id: glm-4.7-flash
-        name: glm-4.7-flash
+        name: GLM-4.7 Flash
 
-# eRPC integration
+`)
+	}
+
+	b.WriteString(`# eRPC integration
 erpc:
   url: http://erpc.erpc.svc.cluster.local:4000/rpc
 
@@ -483,7 +549,78 @@ skills:
 # Agent init Job (enable to bootstrap workspace on first deploy)
 initJob:
   enabled: false
-`, hostname)
+`)
+
+	return b.String()
+}
+
+// interactiveSetup prompts the user for provider configuration.
+// If imported is non-nil, offers to use the detected config.
+func interactiveSetup(imported *ImportResult) (*ImportResult, error) {
+	reader := bufio.NewReader(os.Stdin)
+
+	if imported != nil {
+		fmt.Print("\nUse detected configuration? [Y/n]: ")
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(strings.ToLower(line))
+		if line == "" || line == "y" || line == "yes" {
+			fmt.Println("Using detected configuration.")
+			return imported, nil
+		}
+	}
+
+	fmt.Println("\nSelect a model provider:")
+	fmt.Println("  [1] Ollama (default, runs in-cluster)")
+	fmt.Println("  [2] OpenAI")
+	fmt.Println("  [3] Anthropic")
+	fmt.Print("\nChoice [1]: ")
+
+	line, _ := reader.ReadString('\n')
+	choice := strings.TrimSpace(line)
+	if choice == "" {
+		choice = "1"
+	}
+
+	switch choice {
+	case "1":
+		// Ollama defaults — return nil so generateOverlayValues uses built-in defaults
+		fmt.Println("Using Ollama (in-cluster) as default provider.")
+		return nil, nil
+	case "2":
+		return promptForProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "", "gpt-4o", "GPT-4o")
+	case "3":
+		return promptForProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+	default:
+		fmt.Printf("Unknown choice '%s', using Ollama defaults.\n", choice)
+		return nil, nil
+	}
+}
+
+// promptForProvider asks for an API key and builds an ImportResult for a single provider
+func promptForProvider(reader *bufio.Reader, name, display, baseURL, api, modelID, modelName string) (*ImportResult, error) {
+	fmt.Printf("\n%s API key: ", display)
+	apiKey, _ := reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s API key is required", display)
+	}
+
+	agentModel := fmt.Sprintf("%s/%s", name, modelID)
+
+	return &ImportResult{
+		AgentModel: agentModel,
+		Providers: []ImportedProvider{
+			{
+				Name:    name,
+				BaseURL: baseURL,
+				API:     api,
+				APIKey:  apiKey,
+				Models: []ImportedModel{
+					{ID: modelID, Name: modelName},
+				},
+			},
+		},
+	}, nil
 }
 
 // generateHelmfile creates a helmfile.yaml referencing the local chart

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -352,6 +353,14 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 	}
 
 	fmt.Println("Default infrastructure deployed")
+
+	// Deploy default OpenClaw instance (non-fatal on failure)
+	fmt.Println("Setting up default OpenClaw instance...")
+	if err := openclaw.SetupDefault(cfg); err != nil {
+		fmt.Printf("Warning: failed to set up default OpenClaw: %v\n", err)
+		fmt.Println("You can manually set up OpenClaw later with: obol openclaw up")
+	}
+
 	return nil
 }
 
