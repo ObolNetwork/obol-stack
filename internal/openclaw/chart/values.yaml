@@ -13,7 +13,8 @@ image:
 
   # -- Override the container command (ENTRYPOINT)
   command:
-    - openclaw
+    - node
+    - openclaw.mjs
   # -- Override the container args (CMD)
   args:
     - gateway
@@ -54,7 +55,8 @@ initJob:
     tag: ""
     pullPolicy: IfNotPresent
   command:
-    - openclaw
+    - node
+    - openclaw.mjs
     - agent
     - init
   args: []
@@ -142,6 +144,8 @@ config:
 openclaw:
   stateDir: /data/.openclaw
   workspaceDir: /data/.openclaw/workspace
+  # -- Default agent model (provider/model). Set to route agent traffic to a specific provider.
+  agentModel: ""
 
   gateway:
     mode: local
@@ -179,17 +183,17 @@ models:
         name: GPT-4o
   ollama:
     enabled: true
-    # -- OpenAI-compatible base URL for Ollama
-    baseUrl: http://ollama.llm.svc.cluster.local:11434/v1
-    # -- OpenClaw provider API type (optional; omit to let OpenClaw auto-detect)
-    api: ""
+    # -- OpenAI-compatible base URL (via LLMSpy gateway)
+    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    # -- OpenClaw provider API type (openai-completions for Ollama)
+    api: openai-completions
     # -- Env var used for provider API key interpolation in openclaw.json
     apiKeyEnvVar: OLLAMA_API_KEY
     # -- Value set for the apiKey env var (not a secret for Ollama)
     apiKeyValue: ollama-local
     models:
       - id: glm-4.7-flash
-        name: glm-4.7-flash
+        name: GLM-4.7 Flash
 
 # -- Chat channel integrations
 # Tokens are stored in the chart Secret and injected as env vars.

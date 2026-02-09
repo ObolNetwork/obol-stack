@@ -90,8 +90,8 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              cpu: 2000m
-              memory: 4Gi
+              cpu: 8000m
+              memory: 24Gi
       volumes:
         - name: ollama-home
           persistentVolumeClaim:
@@ -118,9 +118,9 @@ spec:
       protocol: TCP
 
 ---
-# llms.py configuration for Obol Stack:
-# - Only enable the Ollama provider
-# - Default model is `glm-4.7:cloud` (cloud-first)
+# llms.py v3 configuration for Obol Stack:
+# - Only enable the Ollama provider (in-cluster)
+# - Default model is glm-4.7-flash
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -129,25 +129,33 @@ metadata:
 data:
   llms.json: |
     {
+      "version": 3,
       "defaults": {
         "headers": {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "User-Agent": "llmspy.org/3.0"
         },
         "text": {
-          "model": "glm-4.7:cloud",
+          "model": "glm-4.7-flash",
           "messages": [
-            { "role": "user", "content": "" }
+            { "role": "user", "content": [{ "type": "text", "text": "" }] }
           ]
         }
       },
       "providers": {
         "ollama": {
-          "enabled": true,
-          "type": "OllamaProvider",
-          "base_url": "http://ollama.llm.svc.cluster.local:11434",
-          "models": {},
-          "all_models": true
+          "enabled": true
         }
+      }
+    }
+  providers.json: |
+    {
+      "ollama": {
+        "id": "ollama",
+        "npm": "ollama",
+        "api": "http://ollama.llm.svc.cluster.local:11434",
+        "models": {},
+        "all_models": true
       }
     }
 
@@ -182,6 +190,7 @@ spec:
               set -eu
               mkdir -p /data
               cp /config/llms.json /data/llms.json
+              cp /config/providers.json /data/providers.json
           volumeMounts:
             - name: llmspy-config
               mountPath: /config
@@ -192,7 +201,7 @@ spec:
         - name: llmspy
           # Official LLMSpy container image (published by upstream).
           # Pin a specific version for reproducibility.
-          image: ghcr.io/servicestack/llms:v2.0.30
+          image: ghcr.io/servicestack/llms:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -240,6 +249,8 @@ spec:
             items:
               - key: llms.json
                 path: llms.json
+              - key: providers.json
+                path: providers.json
         - name: llmspy-home
           emptyDir: {}
 
