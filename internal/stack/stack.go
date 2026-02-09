@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/nanobot"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -354,11 +355,20 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 
 	fmt.Println("Default infrastructure deployed")
 
-	// Deploy default OpenClaw instance (non-fatal on failure)
-	fmt.Println("Setting up default OpenClaw instance...")
-	if err := openclaw.SetupDefault(cfg); err != nil {
-		fmt.Printf("Warning: failed to set up default OpenClaw: %v\n", err)
-		fmt.Println("You can manually set up OpenClaw later with: obol openclaw up")
+	// Deploy default application instances (non-fatal on failure)
+	for _, setup := range []struct {
+		name string
+		fn   func(*config.Config) error
+		cmd  string
+	}{
+		{"OpenClaw", openclaw.SetupDefault, "obol openclaw up"},
+		{"Nanobot", nanobot.SetupDefault, "obol nanobot up"},
+	} {
+		fmt.Printf("Setting up default %s instance...\n", setup.name)
+		if err := setup.fn(cfg); err != nil {
+			fmt.Printf("Warning: failed to set up default %s: %v\n", setup.name, err)
+			fmt.Printf("You can manually set up %s later with: %s\n", setup.name, setup.cmd)
+		}
 	}
 
 	return nil

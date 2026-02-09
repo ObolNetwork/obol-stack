@@ -1,0 +1,15 @@
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail "nanobot: replicaCount must be 1 (Nanobot stores state on disk and should not be scaled horizontally)" -}}
+{{- end -}}
+
+{{- if and .Values.secrets.existingSecret .Values.secrets.create -}}
+{{- fail "nanobot: secrets.existingSecret is set; set secrets.create=false" -}}
+{{- end -}}
+
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.create) -}}
+{{- fail "nanobot: set secrets.existingSecret or enable secrets.create" -}}
+{{- end -}}
+
+{{- if and .Values.httpRoute.enabled (eq (len .Values.httpRoute.hostnames) 0) -}}
+{{- fail "nanobot: httpRoute.enabled is true but httpRoute.hostnames is empty" -}}
+{{- end -}}

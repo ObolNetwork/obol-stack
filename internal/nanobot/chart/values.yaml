@@ -1,0 +1,215 @@
+# Default values for nanobot.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- Number of replicas (Nanobot should run as a single instance)
+replicaCount: 1
+
+# -- Nanobot image repository, pull policy, and tag version
+image:
+  repository: ghcr.io/obolnetwork/nanobot
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+  # -- Override the container command (ENTRYPOINT)
+  command: []
+  # -- Override the container args (CMD)
+  args:
+    - gateway
+
+  # -- Additional environment variables for the container
+  env: []
+  # - name: FOO
+  #   value: bar
+
+# -- Credentials to fetch images from private registry
+imagePullSecrets: []
+
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full resource name
+fullnameOverride: ""
+
+# -- Create a ServiceAccount for Nanobot
+serviceAccount:
+  create: true
+  automount: false
+  annotations: {}
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  fsGroup: 1000
+
+# -- Container security context
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 18790
+
+# -- Kubernetes Ingress (optional; not used in Obol Stack which uses Gateway API)
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -- Gateway API HTTPRoute (recommended for Obol Stack / Traefik Gateway API)
+httpRoute:
+  enabled: false
+  annotations: {}
+  # -- Hostnames for routing (required when enabled)
+  hostnames: []
+  # - nanobot-myid.obol.stack
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  pathPrefix: /
+
+# -- Persistence settings for Nanobot state directory
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  mountPath: /data
+
+# -- Nanobot state/workspace settings (paths should be inside persistence.mountPath)
+nanobot:
+  stateDir: /data/.nanobot
+  workspaceDir: /data/.nanobot/workspace
+  # -- Default agent model (provider/model). Set to route agent traffic to a specific provider.
+  agentModel: ""
+
+  gateway:
+    host: "0.0.0.0"
+    port: 18790
+
+# -- Model provider configuration
+# Each provider is independently toggled. At least one must be enabled.
+# API keys are stored in the chart Secret and injected as env vars.
+providers:
+  anthropic:
+    enabled: false
+    baseUrl: https://api.anthropic.com/v1
+    apiKeyEnvVar: ANTHROPIC_API_KEY
+    apiKeyValue: ""
+  openai:
+    enabled: false
+    baseUrl: https://api.openai.com/v1
+    apiKeyEnvVar: OPENAI_API_KEY
+    apiKeyValue: ""
+  openrouter:
+    enabled: false
+    baseUrl: https://openrouter.ai/api/v1
+    apiKeyEnvVar: OPENROUTER_API_KEY
+    apiKeyValue: ""
+  ollama:
+    enabled: true
+    baseUrl: http://ollama.llm.svc.cluster.local:11434/v1
+    apiKeyEnvVar: OLLAMA_API_KEY
+    apiKeyValue: ollama-local
+
+# -- Chat channel integrations
+# Tokens are stored in the chart Secret and injected as env vars.
+channels:
+  telegram:
+    enabled: false
+    token: ""
+  discord:
+    enabled: false
+    token: ""
+
+# -- Configuration for the Nanobot config file (config.json)
+config:
+  # -- Use an existing ConfigMap instead of creating one
+  existingConfigMap: ""
+  # -- ConfigMap key / filename
+  key: config.json
+  # -- Optional raw JSON configuration (overrides generated config when set)
+  content: ""
+
+# -- Nanobot secrets (one Secret per instance)
+secrets:
+  # -- Use an existing secret instead of creating one
+  existingSecret: ""
+  # -- Create the secret when existingSecret is not set
+  create: true
+  # -- Override the created Secret name
+  name: ""
+
+  gatewayToken:
+    # -- Secret key name + env var name for gateway token
+    key: NANOBOT_GATEWAY_TOKEN
+    # -- Explicit token value. If empty, a token is generated and persisted across upgrades.
+    value: ""
+
+  # -- Extra Secret names to load via envFrom
+  extraEnvFromSecrets: []
+
+# -- Resource requests and limits
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+# -- Startup probe (tcpSocket)
+startupProbe:
+  enabled: true
+  periodSeconds: 5
+  failureThreshold: 30
+  timeoutSeconds: 3
+
+# -- Liveness probe (tcpSocket)
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Readiness probe (tcpSocket)
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Additional volumes
+extraVolumes: []
+# -- Additional volume mounts
+extraVolumeMounts: []
+# -- Additional environment variables
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

@@ -1,27 +1,27 @@
 package openclaw
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/ObolNetwork/obol-stack/internal/providers"
 )
 
-// ImportResult holds the parsed configuration from ~/.openclaw/openclaw.json
+// ImportResult holds the parsed configuration from ~/.openclaw/openclaw.json.
+// This is an OpenClaw-specific wrapper around providers.DetectedConfig.
 type ImportResult struct {
-	Providers []ImportedProvider
+	Providers  []ImportedProvider
 	AgentModel string
-	Channels  ImportedChannels
+	Channels   ImportedChannels
 }
 
 // ImportedProvider represents a model provider extracted from openclaw.json
 type ImportedProvider struct {
-	Name       string
-	BaseURL    string
-	API        string
-	APIKey     string // literal only; empty if env-var reference
-	Models     []ImportedModel
+	Name    string
+	BaseURL string
+	API     string
+	APIKey  string // literal only; empty if env-var reference
+	Models  []ImportedModel
 }
 
 // ImportedModel represents a model entry
@@ -53,79 +53,32 @@ type ImportedSlack struct {
 	AppToken string
 }
 
-// openclawConfig mirrors the relevant parts of ~/.openclaw/openclaw.json
-type openclawConfig struct {
-	Models struct {
-		Providers map[string]openclawProvider `json:"providers"`
-	} `json:"models"`
-	Agents struct {
-		Defaults struct {
-			Model struct {
-				Primary string `json:"primary"`
-			} `json:"model"`
-		} `json:"defaults"`
-	} `json:"agents"`
-	Channels struct {
-		Telegram *struct {
-			BotToken string `json:"botToken"`
-		} `json:"telegram"`
-		Discord *struct {
-			BotToken string `json:"botToken"`
-		} `json:"discord"`
-		Slack *struct {
-			BotToken string `json:"botToken"`
-			AppToken string `json:"appToken"`
-		} `json:"slack"`
-	} `json:"channels"`
-}
-
-type openclawProvider struct {
-	BaseURL string           `json:"baseUrl"`
-	API     string           `json:"api"`
-	APIKey  string           `json:"apiKey"`
-	Models  []openclawModel  `json:"models"`
-}
-
-type openclawModel struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// DetectExistingConfig checks for ~/.openclaw/openclaw.json and parses it.
-// Returns nil (not an error) if the file does not exist.
+// DetectExistingConfig checks for configuration from all known sources.
+// Uses providers.DetectAll() to merge ~/.openclaw, ~/.nanobot, and env vars.
+// Returns nil (not an error) if no config is found.
 func DetectExistingConfig() (*ImportResult, error) {
-	home, err := os.UserHomeDir()
+	detected, err := providers.DetectAll()
 	if err != nil {
+		return nil, err
+	}
+	if detected == nil {
 		return nil, nil
 	}
+	return fromDetectedConfig(detected), nil
+}
 
-	configPath := filepath.Join(home, ".openclaw", "openclaw.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read %s: %w", configPath, err)
-	}
-
-	var cfg openclawConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %w", configPath, err)
-	}
-
+// fromDetectedConfig converts providers.DetectedConfig to ImportResult.
+func fromDetectedConfig(cfg *providers.DetectedConfig) *ImportResult {
 	result := &ImportResult{
-		AgentModel: cfg.Agents.Defaults.Model.Primary,
+		AgentModel: cfg.AgentModel,
 	}
 
-	for name, p := range cfg.Models.Providers {
+	for _, p := range cfg.Providers {
 		ip := ImportedProvider{
-			Name:    name,
+			Name:    p.Name,
 			BaseURL: p.BaseURL,
 			API:     p.API,
-		}
-		// Only import literal API keys, skip env-var references like ${...}
-		if p.APIKey != "" && !isEnvVarRef(p.APIKey) {
-			ip.APIKey = p.APIKey
+			APIKey:  p.APIKey,
 		}
 		for _, m := range p.Models {
 			ip.Models = append(ip.Models, ImportedModel{ID: m.ID, Name: m.Name})
@@ -133,26 +86,20 @@ func DetectExistingConfig() (*ImportResult, error) {
 		result.Providers = append(result.Providers, ip)
 	}
 
-	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "" && !isEnvVarRef(cfg.Channels.Telegram.BotToken) {
+	if cfg.Channels.Telegram != nil {
 		result.Channels.Telegram = &ImportedTelegram{BotToken: cfg.Channels.Telegram.BotToken}
 	}
-	if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" && !isEnvVarRef(cfg.Channels.Discord.BotToken) {
+	if cfg.Channels.Discord != nil {
 		result.Channels.Discord = &ImportedDiscord{BotToken: cfg.Channels.Discord.BotToken}
 	}
 	if cfg.Channels.Slack != nil {
-		botToken := cfg.Channels.Slack.BotToken
-		appToken := cfg.Channels.Slack.AppToken
-		if botToken != "" && !isEnvVarRef(botToken) {
-			result.Channels.Slack = &ImportedSlack{
-				BotToken: botToken,
-			}
-			if appToken != "" && !isEnvVarRef(appToken) {
-				result.Channels.Slack.AppToken = appToken
-			}
+		result.Channels.Slack = &ImportedSlack{
+			BotToken: cfg.Channels.Slack.BotToken,
+			AppToken: cfg.Channels.Slack.AppToken,
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 // TranslateToOverlayYAML maps imported config fields to chart values YAML fragment.
@@ -229,7 +176,7 @@ func PrintImportSummary(result *ImportResult) {
 		return
 	}
 
-	fmt.Println("Detected existing OpenClaw configuration (~/.openclaw/openclaw.json):")
+	fmt.Println("Detected existing configuration:")
 	if len(result.Providers) > 0 {
 		fmt.Printf("  Providers: ")
 		names := make([]string, 0, len(result.Providers))
@@ -250,9 +197,4 @@ func PrintImportSummary(result *ImportResult) {
 	if result.Channels.Slack != nil {
 		fmt.Println("  Slack: configured")
 	}
-}
-
-// isEnvVarRef returns true if the value looks like an environment variable reference (${...})
-func isEnvVarRef(s string) bool {
-	return strings.Contains(s, "${")
 }

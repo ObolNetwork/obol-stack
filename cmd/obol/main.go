@@ -60,6 +60,13 @@ COMMANDS:
      openclaw delete  Remove instance and cluster resources
      openclaw skills  Manage skills (sync from local dir)
 
+   Nanobot (AI Agent):
+     nanobot up       Create and deploy a Nanobot instance
+     nanobot sync     Deploy or update an instance
+     nanobot token    Retrieve gateway token
+     nanobot list     List instances
+     nanobot delete   Remove instance and cluster resources
+
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway
 
@@ -439,6 +446,7 @@ GLOBAL OPTIONS:
 			},
 			networkCommand(cfg),
 			openclawCommand(cfg),
+			nanobotCommand(cfg),
 			inferenceCommand(cfg),
 			{
 				Name:  "app",
