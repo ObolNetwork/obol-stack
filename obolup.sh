@@ -990,6 +990,80 @@ install_k9s() {
 	fi
 }
 
+# Install openclaw CLI
+# Unlike other tools, openclaw has no standalone binary downloads.
+# It's distributed as an npm package, so we install it locally into
+# OBOL_BIN_DIR using npm --prefix to keep it workspace-contained.
+install_openclaw() {
+	# Remove broken symlink if exists
+	remove_broken_symlink "openclaw"
+
+	# Check for global openclaw first (same pattern as kubectl, helm, etc.)
+	local global_openclaw
+	if global_openclaw=$(check_global_binary "openclaw"); then
+		if create_binary_symlink "openclaw" "$global_openclaw"; then
+			log_success "openclaw already installed at: $global_openclaw (symlinked)"
+		else
+			log_success "openclaw already installed at: $global_openclaw"
+		fi
+		return 0
+	fi
+
+	# Check if already in OBOL_BIN_DIR
+	if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
+		log_success "openclaw already installed"
+		return 0
+	fi
+
+	log_info "Installing openclaw CLI..."
+
+	# Require Node.js 22+ and npm
+	if ! command_exists npm; then
+		log_warn "npm not found — cannot install openclaw CLI"
+		echo ""
+		echo "  Install Node.js 22+ first, then re-run obolup.sh"
+		echo "  Or install manually: npm install -g openclaw"
+		echo ""
+		return 1
+	fi
+
+	local node_major
+	node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+	if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
+		log_warn "Node.js 22+ required for openclaw (found: v${node_major:-none})"
+		echo ""
+		echo "  Upgrade Node.js, then re-run obolup.sh"
+		echo "  Or install manually: npm install -g openclaw"
+		echo ""
+		return 1
+	fi
+
+	# Install into OBOL_BIN_DIR using npm --prefix so the package lives
+	# alongside the other managed binaries (works for both production
+	# ~/.local/bin and development .workspace/bin layouts).
+	local npm_prefix="$OBOL_BIN_DIR/.openclaw-npm"
+	log_info "Installing openclaw via npm into $OBOL_BIN_DIR..."
+
+	if npm install --prefix "$npm_prefix" openclaw 2>&1; then
+		# Create a wrapper script in OBOL_BIN_DIR that invokes the local install.
+		# npm --prefix puts the .bin stubs in node_modules/.bin/ which handle
+		# the correct entry point (openclaw.mjs) automatically.
+		cat > "$OBOL_BIN_DIR/openclaw" <<WRAPPER
+#!/usr/bin/env bash
+exec "$npm_prefix/node_modules/.bin/openclaw" "\$@"
+WRAPPER
+		chmod +x "$OBOL_BIN_DIR/openclaw"
+		log_success "openclaw installed at $OBOL_BIN_DIR/openclaw"
+		return 0
+	fi
+
+	log_warn "Failed to install openclaw CLI"
+	echo ""
+	echo "  Install manually: npm install -g openclaw"
+	echo ""
+	return 1
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -1002,6 +1076,7 @@ install_dependencies() {
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
+	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
 
 	echo ""
 	log_success "Dependencies check complete"

@@ -3,9 +3,11 @@ module github.com/ObolNetwork/obol-stack
 go 1.25.1
 
 require (
+	github.com/creack/pty/v2 v2.0.1
 	github.com/dustinkirkland/golang-petname v0.0.0-20240428194347-eebcea082ee0
 	github.com/mark3labs/x402-go v0.13.0
 	github.com/urfave/cli/v2 v2.27.7
+	golang.org/x/term v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -39,6 +41,5 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
-	golang.org/x/term v0.36.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )

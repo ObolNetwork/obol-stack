@@ -88,6 +88,56 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
+				Name:      "setup",
+				Usage:     "Run the OpenClaw onboard wizard for a deployed instance",
+				ArgsUsage: "<id>",
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "port",
+						Usage: "Local port for port-forward (0 = auto)",
+						Value: 0,
+					},
+				},
+				Action: func(c *cli.Context) error {
+					if c.NArg() == 0 {
+						return fmt.Errorf("instance ID required (e.g., obol openclaw setup default)")
+					}
+					return openclaw.Setup(cfg, c.Args().First(), openclaw.SetupOptions{
+						Port: c.Int("port"),
+					})
+				},
+			},
+			{
+				Name:      "dashboard",
+				Usage:     "Open the OpenClaw dashboard in a browser",
+				ArgsUsage: "<id>",
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "port",
+						Usage: "Local port for port-forward (0 = auto)",
+						Value: 0,
+					},
+					&cli.BoolFlag{
+						Name:  "no-browser",
+						Usage: "Print URL without opening browser",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					if c.NArg() == 0 {
+						return fmt.Errorf("instance ID required (e.g., obol openclaw dashboard default)")
+					}
+					noBrowser := c.Bool("no-browser")
+					return openclaw.Dashboard(cfg, c.Args().First(), openclaw.DashboardOptions{
+						Port:      c.Int("port"),
+						NoBrowser: noBrowser,
+					}, func(url string) {
+						if !noBrowser {
+							openBrowser(url)
+						}
+					})
+				},
+			},
+			{
 				Name:      "skills",
 				Usage:     "Manage OpenClaw skills",
 				Subcommands: []*cli.Command{

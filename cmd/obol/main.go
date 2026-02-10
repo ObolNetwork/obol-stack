@@ -53,12 +53,14 @@ COMMANDS:
      network delete  Remove network and clean up cluster resources
 
    OpenClaw (AI Agent):
-     openclaw up      Create and deploy an OpenClaw instance
-     openclaw sync    Deploy or update an instance
-     openclaw token   Retrieve gateway token
-     openclaw list    List instances
-     openclaw delete  Remove instance and cluster resources
-     openclaw skills  Manage skills (sync from local dir)
+     openclaw up        Create and deploy an OpenClaw instance
+     openclaw setup     Run the onboard wizard for a deployed instance
+     openclaw dashboard Open the dashboard in a browser
+     openclaw sync      Deploy or update an instance
+     openclaw token     Retrieve gateway token
+     openclaw list      List instances
+     openclaw delete    Remove instance and cluster resources
+     openclaw skills    Manage skills (sync from local dir)
 
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway

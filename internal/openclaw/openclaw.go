@@ -3,25 +3,37 @@ package openclaw
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/creack/pty/v2"
 	"github.com/dustinkirkland/golang-petname"
+	"golang.org/x/term"
 )
 
 const (
 	appName       = "openclaw"
 	defaultDomain = "obol.stack"
 )
+
+// ansiRe matches ANSI escape sequences (CSI and OSC).
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\`)
+
+func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 // Embed the OpenClaw Helm chart from the shared charts directory.
 // The chart source lives in internal/embed/charts/openclaw/ and is
@@ -297,13 +309,13 @@ func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int)
 	return "", fmt.Errorf("timed out waiting for pod in namespace %s", namespace)
 }
 
-// Token retrieves the gateway token for an OpenClaw instance from the cluster
-func Token(cfg *config.Config, id string) error {
+// getToken retrieves the gateway token for an OpenClaw instance as a string.
+func getToken(cfg *config.Config, id string) (string, error) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return "", fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
@@ -317,7 +329,7 @@ func Token(cfg *config.Config, id string) error {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to get secret: %w\n%s", err, stderr.String())
+		return "", fmt.Errorf("failed to get secret: %w\n%s", err, stderr.String())
 	}
 
 	var secretList struct {
@@ -326,25 +338,334 @@ func Token(cfg *config.Config, id string) error {
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &secretList); err != nil {
-		return fmt.Errorf("failed to parse secret: %w", err)
+		return "", fmt.Errorf("failed to parse secret: %w", err)
 	}
 
 	if len(secretList.Items) == 0 {
-		return fmt.Errorf("no secrets found in namespace %s. Is OpenClaw deployed?", namespace)
+		return "", fmt.Errorf("no secrets found in namespace %s. Is OpenClaw deployed?", namespace)
 	}
 
 	for _, item := range secretList.Items {
 		if encoded, ok := item.Data["OPENCLAW_GATEWAY_TOKEN"]; ok {
 			decoded, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
-				return fmt.Errorf("failed to decode token: %w", err)
+				return "", fmt.Errorf("failed to decode token: %w", err)
 			}
-			fmt.Printf("%s\n", string(decoded))
-			return nil
+			return string(decoded), nil
 		}
 	}
 
-	return fmt.Errorf("OPENCLAW_GATEWAY_TOKEN not found in namespace %s secrets", namespace)
+	return "", fmt.Errorf("OPENCLAW_GATEWAY_TOKEN not found in namespace %s secrets", namespace)
+}
+
+// Token retrieves the gateway token for an OpenClaw instance and prints it.
+func Token(cfg *config.Config, id string) error {
+	token, err := getToken(cfg, id)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", token)
+	return nil
+}
+
+// findOpenClawBinary locates the openclaw CLI binary.
+// Search order: PATH, then cfg.BinDir.
+func findOpenClawBinary(cfg *config.Config) (string, error) {
+	if p, err := exec.LookPath("openclaw"); err == nil {
+		return p, nil
+	}
+	candidate := filepath.Join(cfg.BinDir, "openclaw")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate, nil
+	}
+	return "", fmt.Errorf("openclaw CLI not found.\n\nInstall with one of:\n  obolup.sh                                    (re-run bootstrap installer)\n  curl -fsSL https://openclaw.ai/install.sh | bash\n  npm install -g openclaw                      (requires Node.js 22+)")
+}
+
+// portForwarder manages a background kubectl port-forward process.
+type portForwarder struct {
+	cmd       *exec.Cmd
+	localPort int
+	done      chan error
+	cancel    context.CancelFunc
+}
+
+// startPortForward launches kubectl port-forward in the background and waits
+// until it reports the forwarding address on stdout.
+func startPortForward(cfg *config.Config, namespace string, localPort int) (*portForwarder, error) {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	portArg := fmt.Sprintf("%d:18789", localPort)
+	if localPort == 0 {
+		portArg = ":18789"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",
+		fmt.Sprintf("svc/%s", appName), portArg, "-n", namespace)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	// kubectl prints "Forwarding from ..." to stdout (not stderr)
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to start port-forward: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	// Parse the "Forwarding from 127.0.0.1:<port>" line from stdout
+	parsedPort := make(chan int, 1)
+	parseErr := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// kubectl prints: "Forwarding from 127.0.0.1:<port> -> 18789"
+			if strings.Contains(line, "Forwarding from") {
+				parts := strings.Split(line, ":")
+				if len(parts) >= 2 {
+					portPart := strings.Fields(parts[len(parts)-1])[0]
+					var p int
+					if _, err := fmt.Sscanf(portPart, "%d", &p); err == nil {
+						parsedPort <- p
+						// Continue draining to prevent pipe blocking
+						io.Copy(io.Discard, stdoutPipe)
+						return
+					}
+				}
+			}
+		}
+		parseErr <- fmt.Errorf("port-forward exited without reporting a local port")
+	}()
+
+	select {
+	case p := <-parsedPort:
+		return &portForwarder{cmd: cmd, localPort: p, done: done, cancel: cancel}, nil
+	case err := <-parseErr:
+		cancel()
+		return nil, err
+	case err := <-done:
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("port-forward process exited unexpectedly: %w", err)
+		}
+		return nil, fmt.Errorf("port-forward process exited unexpectedly")
+	case <-time.After(30 * time.Second):
+		cancel()
+		return nil, fmt.Errorf("timed out waiting for port-forward to become ready")
+	}
+}
+
+// Stop terminates the port-forward process gracefully.
+func (pf *portForwarder) Stop() {
+	pf.cancel()
+	select {
+	case <-pf.done:
+	case <-time.After(5 * time.Second):
+		if pf.cmd.Process != nil {
+			pf.cmd.Process.Kill()
+		}
+	}
+}
+
+// SetupOptions contains options for the setup command.
+type SetupOptions struct {
+	Port int // local port override (0 = auto-select)
+}
+
+// Setup runs the OpenClaw onboard wizard against a deployed instance.
+// It port-forwards to the gateway WebSocket and invokes the native openclaw CLI.
+func Setup(cfg *config.Config, id string, opts SetupOptions) error {
+	deploymentDir := deploymentPath(cfg, id)
+	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
+		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
+	}
+
+	openclawBin, err := findOpenClawBinary(cfg)
+	if err != nil {
+		return err
+	}
+
+	token, err := getToken(cfg, id)
+	if err != nil {
+		return err
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	fmt.Printf("Starting port-forward to %s...\n", namespace)
+
+	pf, err := startPortForward(cfg, namespace, opts.Port)
+	if err != nil {
+		return fmt.Errorf("port-forward failed: %w", err)
+	}
+	defer pf.Stop()
+
+	fmt.Printf("Port-forward active: localhost:%d -> %s:18789\n\n", pf.localPort, namespace)
+
+	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
+	cmd := exec.Command(openclawBin, "onboard",
+		"--mode", "remote",
+		"--remote-url", wsURL,
+		"--remote-token", token)
+
+	// Start in a PTY so the wizard gets a real terminal (colors, selectors).
+	// We intercept PTY output to detect completion because the Node.js
+	// process hangs after remote-mode (@clack/prompts leaves stdin open).
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("openclaw onboard failed to start: %w", err)
+	}
+
+	// ptyClosed tracks whether we have already closed ptmx to avoid double-close.
+	ptyClosed := false
+	closePTY := func() {
+		if !ptyClosed {
+			ptyClosed = true
+			ptmx.Close()
+		}
+	}
+	defer closePTY()
+
+	if sz, err := pty.GetsizeFull(os.Stdin); err == nil {
+		_ = pty.Setsize(ptmx, sz)
+	}
+
+	// Raw mode: forward keystrokes to the PTY without line-buffering.
+	oldState, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
+	if rawErr == nil {
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+
+	// Catch signals so we restore the terminal even on interrupt.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		closePTY()
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	// Forward keystrokes from stdin to the PTY. This goroutine will
+	// unblock and return once ptmx is closed (write returns error).
+	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
+
+	// Relay PTY -> stdout, watching for the completion marker.
+	// We keep a sliding window of the last 512 bytes to avoid O(n^2) scans.
+	// ANSI escape sequences are stripped before matching because @clack/prompts
+	// renders with cursor movement and color codes in TTY mode.
+	const markerWindowSize = 512
+	const marker = "Remote gateway configured"
+	var window bytes.Buffer
+	buf := make([]byte, 4096)
+	completed := false
+	for {
+		n, readErr := ptmx.Read(buf)
+		if n > 0 {
+			os.Stdout.Write(buf[:n])
+			window.Write(buf[:n])
+			// Trim window to a sliding tail to keep stripANSI cheap.
+			if window.Len() > markerWindowSize*2 {
+				tail := window.Bytes()[window.Len()-markerWindowSize:]
+				window.Reset()
+				window.Write(tail)
+			}
+			if strings.Contains(stripANSI(window.String()), marker) {
+				completed = true
+				break
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+
+	// Clean shutdown sequence:
+	//  1. Close the PTY master. This causes:
+	//     - The io.Copy(ptmx, os.Stdin) goroutine to return (write to closed fd).
+	//     - The child process to receive SIGHUP.
+	//  2. Kill the child process to be certain it is dead.
+	//  3. Wait to reap the zombie. With the PTY closed, this returns promptly.
+	closePTY()
+	if cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	_ = cmd.Wait()
+
+	if completed {
+		fmt.Printf("\r\nSetup complete! Open dashboard: obol openclaw dashboard %s\r\n", id)
+	}
+	return nil
+}
+
+// DashboardOptions contains options for the dashboard command.
+type DashboardOptions struct {
+	Port      int
+	NoBrowser bool
+}
+
+// Dashboard port-forwards to the OpenClaw instance and opens the web dashboard.
+// The onReady callback is invoked with the dashboard URL; the CLI layer uses it
+// to open a browser.
+func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady func(url string)) error {
+	deploymentDir := deploymentPath(cfg, id)
+	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
+		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
+	}
+
+	token, err := getToken(cfg, id)
+	if err != nil {
+		return err
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	fmt.Printf("Starting port-forward to %s...\n", namespace)
+
+	pf, err := startPortForward(cfg, namespace, opts.Port)
+	if err != nil {
+		return fmt.Errorf("port-forward failed: %w", err)
+	}
+	defer pf.Stop()
+
+	dashboardURL := fmt.Sprintf("http://localhost:%d/#token=%s", pf.localPort, token)
+	fmt.Printf("Port-forward active: localhost:%d -> %s:18789\n", pf.localPort, namespace)
+	fmt.Printf("\nDashboard URL: %s\n", dashboardURL)
+	fmt.Printf("Gateway token: %s\n", token)
+	fmt.Printf("\nPress Ctrl+C to stop.\n")
+
+	if onReady != nil {
+		onReady(dashboardURL)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case <-sigCh:
+		fmt.Printf("\nShutting down...\n")
+	case err := <-pf.done:
+		if err != nil {
+			return fmt.Errorf("port-forward died unexpectedly: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // List displays installed OpenClaw instances
