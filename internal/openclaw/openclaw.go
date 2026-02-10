@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/dustinkirkland/golang-petname"
@@ -68,7 +69,15 @@ func Up(cfg *config.Config, opts UpOptions) error {
 		if _, err := os.Stat(deploymentDir); err == nil {
 			fmt.Println("Default OpenClaw instance already configured, re-syncing...")
 			if opts.Sync {
-				return doSync(cfg, id)
+				if err := doSync(cfg, id); err != nil {
+					return err
+				}
+				// Import workspace on re-sync too
+				imported, _ := DetectExistingConfig()
+				if imported != nil && imported.WorkspaceDir != "" {
+					copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+				}
+				return nil
 			}
 			return nil
 		}
@@ -92,11 +101,15 @@ func Up(cfg *config.Config, opts UpOptions) error {
 		PrintImportSummary(imported)
 	}
 
-	// Interactive setup: prompt for provider choice
+	// Interactive setup: auto-skip prompts when existing config has providers
 	if opts.Interactive {
-		imported, err = interactiveSetup(imported)
-		if err != nil {
-			return fmt.Errorf("interactive setup failed: %w", err)
+		if imported != nil && len(imported.Providers) > 0 {
+			fmt.Println("\nUsing detected configuration from ~/.openclaw/")
+		} else {
+			imported, err = interactiveSetup(imported)
+			if err != nil {
+				return fmt.Errorf("interactive setup failed: %w", err)
+			}
 		}
 	}
 
@@ -151,7 +164,14 @@ func Up(cfg *config.Config, opts UpOptions) error {
 
 	if opts.Sync {
 		fmt.Printf("\nDeploying to cluster...\n\n")
-		return doSync(cfg, id)
+		if err := doSync(cfg, id); err != nil {
+			return err
+		}
+		// Copy workspace files into the pod after sync succeeds
+		if imported != nil && imported.WorkspaceDir != "" {
+			copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+		}
+		return nil
 	}
 
 	fmt.Printf("\nTo deploy: obol openclaw sync %s\n", id)
@@ -212,6 +232,69 @@ func doSync(cfg *config.Config, id string) error {
 	fmt.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789\n", namespace)
 
 	return nil
+}
+
+// copyWorkspaceToPod copies the local workspace directory into the OpenClaw pod's PVC.
+// This is non-fatal: failures print a warning and continue.
+func copyWorkspaceToPod(cfg *config.Config, id, workspaceDir string) {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	fmt.Printf("\nImporting workspace from %s...\n", workspaceDir)
+
+	// Wait for pod to be ready
+	podName, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 60)
+	if err != nil {
+		fmt.Printf("Warning: could not find ready pod, skipping workspace import: %v\n", err)
+		return
+	}
+
+	// kubectl cp <src>/. <pod>:/data/.openclaw/workspace/ -n <namespace>
+	dest := fmt.Sprintf("%s:/data/.openclaw/workspace/", podName)
+	src := workspaceDir + "/."
+	cmd := exec.Command(kubectlBinary, "cp", src, dest, "-n", namespace)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: workspace copy failed: %v\n%s", err, stderr.String())
+		return
+	}
+
+	fmt.Printf("Imported workspace into pod %s\n", podName)
+}
+
+// waitForPod polls for a Running pod matching the openclaw label and returns its name.
+// Returns an error if no ready pod is found within timeoutSec seconds.
+func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int) (string, error) {
+	labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s", appName)
+
+	for i := 0; i < timeoutSec; i += 3 {
+		cmd := exec.Command(kubectlBinary, "get", "pods",
+			"-n", namespace,
+			"-l", labelSelector,
+			"-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}",
+		)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Run()
+
+		podName := strings.TrimSpace(stdout.String())
+		if podName != "" {
+			// If multiple pods, take the first
+			if idx := strings.Index(podName, " "); idx > 0 {
+				podName = podName[:idx]
+			}
+			return podName, nil
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+	return "", fmt.Errorf("timed out waiting for pod in namespace %s", namespace)
 }
 
 // Token retrieves the gateway token for an OpenClaw instance from the cluster

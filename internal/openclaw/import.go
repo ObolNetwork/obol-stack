@@ -10,9 +10,10 @@ import (
 
 // ImportResult holds the parsed configuration from ~/.openclaw/openclaw.json
 type ImportResult struct {
-	Providers []ImportedProvider
-	AgentModel string
-	Channels  ImportedChannels
+	Providers    []ImportedProvider
+	AgentModel   string
+	Channels     ImportedChannels
+	WorkspaceDir string // path to ~/.openclaw/workspace/ if it exists and contains marker files
 }
 
 // ImportedProvider represents a model provider extracted from openclaw.json
@@ -63,6 +64,7 @@ type openclawConfig struct {
 			Model struct {
 				Primary string `json:"primary"`
 			} `json:"model"`
+			Workspace string `json:"workspace"`
 		} `json:"defaults"`
 	} `json:"agents"`
 	Channels struct {
@@ -116,6 +118,9 @@ func DetectExistingConfig() (*ImportResult, error) {
 	result := &ImportResult{
 		AgentModel: cfg.Agents.Defaults.Model.Primary,
 	}
+
+	// Detect workspace directory
+	result.WorkspaceDir = detectWorkspace(home, cfg.Agents.Defaults.Workspace)
 
 	for name, p := range cfg.Models.Providers {
 		ip := ImportedProvider{
@@ -229,7 +234,7 @@ func PrintImportSummary(result *ImportResult) {
 		return
 	}
 
-	fmt.Println("Detected existing OpenClaw configuration (~/.openclaw/openclaw.json):")
+	fmt.Println("Detected existing OpenClaw installation (~/.openclaw/):")
 	if len(result.Providers) > 0 {
 		fmt.Printf("  Providers: ")
 		names := make([]string, 0, len(result.Providers))
@@ -250,6 +255,56 @@ func PrintImportSummary(result *ImportResult) {
 	if result.Channels.Slack != nil {
 		fmt.Println("  Slack: configured")
 	}
+	if result.WorkspaceDir != "" {
+		files := detectWorkspaceFiles(result.WorkspaceDir)
+		fmt.Printf("  Workspace: %s (%s)\n", result.WorkspaceDir, strings.Join(files, ", "))
+	}
+}
+
+// workspaceMarkers are files that indicate a valid OpenClaw workspace
+var workspaceMarkers = []string{"SOUL.md", "AGENTS.md", "IDENTITY.md"}
+
+// detectWorkspace checks for an OpenClaw workspace directory and returns
+// its path if it exists and contains at least one marker file.
+func detectWorkspace(home, configWorkspace string) string {
+	// Use custom workspace path from config if set
+	wsDir := configWorkspace
+	if wsDir == "" {
+		wsDir = filepath.Join(home, ".openclaw", "workspace")
+	}
+
+	info, err := os.Stat(wsDir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+
+	// Verify at least one marker file exists
+	for _, marker := range workspaceMarkers {
+		if _, err := os.Stat(filepath.Join(wsDir, marker)); err == nil {
+			return wsDir
+		}
+	}
+
+	return ""
+}
+
+// detectWorkspaceFiles returns the names of workspace files that exist
+func detectWorkspaceFiles(wsDir string) []string {
+	candidates := []string{
+		"SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md",
+		"TOOLS.md", "MEMORY.md",
+	}
+	var found []string
+	for _, name := range candidates {
+		if _, err := os.Stat(filepath.Join(wsDir, name)); err == nil {
+			found = append(found, name)
+		}
+	}
+	// Check for memory/ directory
+	if info, err := os.Stat(filepath.Join(wsDir, "memory")); err == nil && info.IsDir() {
+		found = append(found, "memory/")
+	}
+	return found
 }
 
 // isEnvVarRef returns true if the value looks like an environment variable reference (${...})

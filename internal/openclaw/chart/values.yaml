@@ -9,7 +9,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/obolnetwork/openclaw
   pullPolicy: IfNotPresent
-  tag: "2026.2.3"
+  tag: "2026.2.9"
 
   # -- Override the container command (ENTRYPOINT)
   command:
