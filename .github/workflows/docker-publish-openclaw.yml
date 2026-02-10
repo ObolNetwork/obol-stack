@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      - integration-okr-1 # TODO: remove after testing — limit to main only
+      - feat/openclaw-ci   # TODO: remove after testing — limit to main only
     paths:
       - 'internal/openclaw/OPENCLAW_VERSION'
   workflow_dispatch:
