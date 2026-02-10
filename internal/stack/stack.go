@@ -345,6 +345,7 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 		"--kubeconfig", kubeconfigPath,
 		"sync",
 	)
+	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	helmfileCmd.Stdout = os.Stdout
 	helmfileCmd.Stderr = os.Stderr
 

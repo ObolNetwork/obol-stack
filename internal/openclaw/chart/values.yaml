@@ -9,14 +9,16 @@ replicaCount: 1
 image:
   repository: ghcr.io/obolnetwork/openclaw
   pullPolicy: IfNotPresent
-  tag: "v2026.2.3"
+  tag: "2026.2.3"
 
   # -- Override the container command (ENTRYPOINT)
   command:
-    - openclaw
+    - node
   # -- Override the container args (CMD)
   args:
+    - openclaw.mjs
     - gateway
+    - --allow-unconfigured
 
   # -- Additional environment variables for the container
   env: []
@@ -54,7 +56,8 @@ initJob:
     tag: ""
     pullPolicy: IfNotPresent
   command:
-    - openclaw
+    - node
+    - openclaw.mjs
     - agent
     - init
   args: []

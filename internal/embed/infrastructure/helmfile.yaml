@@ -43,30 +43,13 @@ releases:
     values:
       - ./values/monitoring.yaml.gotmpl
 
-  # Gateway API CRDs (applied from upstream release)
-  - name: gateway-api-crds
-    namespace: gateway-system
-    createNamespace: true
-    chart: bedag/raw
-    values:
-      - resources: []
-    hooks:
-      - events: ["presync"]
-        showlogs: true
-        command: kubectl
-        args:
-          - apply
-          - -f
-          - https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ .Values.gatewayApiVersion }}/standard-install.yaml
-
   # Traefik ingress controller with Gateway API support
+  # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
   - name: traefik
     namespace: traefik
     createNamespace: true
     chart: traefik/traefik
     version: 38.0.2
-    needs:
-      - gateway-system/gateway-api-crds
     values:
       # Gateway API provider configuration
       - providers:
