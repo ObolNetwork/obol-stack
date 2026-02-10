@@ -105,7 +105,7 @@ jobs:
           echo "Scanning latest pushed image"
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@915b19bbe73b92421caafd48a29a70a5d22ba401 # v0.30.0
+        uses: aquasecurity/trivy-action@22438a435773de8c97dc0958cc0b823c45b064ac # master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           format: 'sarif'
@@ -113,7 +113,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@c36620d31ac7c881962c3d9dd939c40ec9434f2b # v3.28.0
+        uses: github/codeql-action/upload-sarif@b13d724d35ff0a814e21683638ed68ed34cf53d1 # main
         with:
           sarif_file: 'trivy-results.sarif'
         if: always()
