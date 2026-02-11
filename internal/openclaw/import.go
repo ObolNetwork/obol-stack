@@ -18,11 +18,13 @@ type ImportResult struct {
 
 // ImportedProvider represents a model provider extracted from openclaw.json
 type ImportedProvider struct {
-	Name       string
-	BaseURL    string
-	API        string
-	APIKey     string // literal only; empty if env-var reference
-	Models     []ImportedModel
+	Name         string
+	BaseURL      string
+	API          string
+	APIKey       string // literal only; empty if env-var reference
+	APIKeyEnvVar string // env var name for apiKey interpolation (e.g. OLLAMA_API_KEY)
+	Models       []ImportedModel
+	Disabled     bool // when true, emit only enabled: false (used to override chart defaults)
 }
 
 // ImportedModel represents a model entry
@@ -126,7 +128,7 @@ func DetectExistingConfig() (*ImportResult, error) {
 		ip := ImportedProvider{
 			Name:    name,
 			BaseURL: p.BaseURL,
-			API:     p.API,
+			API:     sanitizeModelAPI(p.API),
 		}
 		// Only import literal API keys, skip env-var references like ${...}
 		if p.APIKey != "" && !isEnvVarRef(p.APIKey) {
@@ -177,12 +179,24 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 		b.WriteString("models:\n")
 		for _, p := range result.Providers {
 			b.WriteString(fmt.Sprintf("  %s:\n", p.Name))
+			if p.Disabled {
+				b.WriteString("    enabled: false\n")
+				continue
+			}
 			b.WriteString("    enabled: true\n")
 			if p.BaseURL != "" {
 				b.WriteString(fmt.Sprintf("    baseUrl: %s\n", p.BaseURL))
 			}
+			// Always emit api to override any stale base chart value.
+			// Empty string makes the Helm template omit it from JSON,
+			// letting OpenClaw auto-detect the protocol.
 			if p.API != "" {
 				b.WriteString(fmt.Sprintf("    api: %s\n", p.API))
+			} else {
+				b.WriteString("    api: \"\"\n")
+			}
+			if p.APIKeyEnvVar != "" {
+				b.WriteString(fmt.Sprintf("    apiKeyEnvVar: %s\n", p.APIKeyEnvVar))
 			}
 			if p.APIKey != "" {
 				b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", p.APIKey))
@@ -305,6 +319,28 @@ func detectWorkspaceFiles(wsDir string) []string {
 		found = append(found, "memory/")
 	}
 	return found
+}
+
+// validModelAPIs is the set of values accepted by OpenClaw's ModelApiSchema (Zod enum).
+// Any other value will be rejected at startup. When the api field is omitted,
+// OpenClaw auto-detects the protocol from the provider name / baseUrl.
+var validModelAPIs = map[string]bool{
+	"openai-completions":      true,
+	"openai-responses":        true,
+	"anthropic-messages":      true,
+	"google-generative-ai":    true,
+	"github-copilot":          true,
+	"bedrock-converse-stream": true,
+}
+
+// sanitizeModelAPI returns api unchanged if it is a valid OpenClaw ModelApi enum
+// value, or "" (omit) if it is unrecognised. This prevents invalid values
+// imported from ~/.openclaw/openclaw.json from crashing the gateway.
+func sanitizeModelAPI(api string) string {
+	if validModelAPIs[api] {
+		return api
+	}
+	return ""
 }
 
 // isEnvVarRef returns true if the value looks like an environment variable reference (${...})

@@ -89,22 +89,13 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "setup",
-				Usage:     "Run the OpenClaw onboard wizard for a deployed instance",
+				Usage:     "Reconfigure model providers for a deployed instance",
 				ArgsUsage: "<id>",
-				Flags: []cli.Flag{
-					&cli.IntFlag{
-						Name:  "port",
-						Usage: "Local port for port-forward (0 = auto)",
-						Value: 0,
-					},
-				},
 				Action: func(c *cli.Context) error {
 					if c.NArg() == 0 {
 						return fmt.Errorf("instance ID required (e.g., obol openclaw setup default)")
 					}
-					return openclaw.Setup(cfg, c.Args().First(), openclaw.SetupOptions{
-						Port: c.Int("port"),
-					})
+					return openclaw.Setup(cfg, c.Args().First(), openclaw.SetupOptions{})
 				},
 			},
 			{
@@ -138,8 +129,8 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:      "skills",
-				Usage:     "Manage OpenClaw skills",
+				Name:  "skills",
+				Usage: "Manage OpenClaw skills",
 				Subcommands: []*cli.Command{
 					{
 						Name:      "sync",
@@ -159,6 +150,39 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 							return openclaw.SkillsSync(cfg, c.Args().First(), c.String("from"))
 						},
 					},
+				},
+			},
+			{
+				Name:            "cli",
+				Usage:           "Run openclaw CLI commands against a deployed instance",
+				ArgsUsage:       "<id> [-- <openclaw args...>]",
+				SkipFlagParsing: true,
+				Action: func(c *cli.Context) error {
+					args := c.Args().Slice()
+					if len(args) == 0 {
+						return fmt.Errorf("instance ID required\n\nUsage:\n" +
+							"  obol openclaw cli <id> -- <openclaw command>\n\n" +
+							"Examples:\n" +
+							"  obol openclaw cli default -- gateway health\n" +
+							"  obol openclaw cli default -- gateway call config.get\n" +
+							"  obol openclaw cli default -- doctor")
+					}
+
+					id := args[0]
+					// Everything after "--" is the openclaw command
+					var openclawArgs []string
+					for i, arg := range args[1:] {
+						if arg == "--" {
+							openclawArgs = args[i+2:]
+							break
+						}
+					}
+					if len(openclawArgs) == 0 && len(args) > 1 {
+						// No "--" separator found; treat remaining args as openclaw command
+						openclawArgs = args[1:]
+					}
+
+					return openclaw.CLI(cfg, id, openclawArgs)
 				},
 			},
 		},

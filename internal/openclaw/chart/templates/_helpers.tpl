@@ -148,9 +148,14 @@ Render openclaw.json as strict JSON. If config.content is provided, it is used v
   "http" (dict "endpoints" (dict "chatCompletions" (dict "enabled" .Values.openclaw.gateway.http.endpoints.chatCompletions.enabled)))
 -}}
 
+{{- $agentDefaults := dict "workspace" .Values.openclaw.workspaceDir -}}
+{{- if .Values.openclaw.agentModel -}}
+{{- $_ := set $agentDefaults "model" (dict "primary" .Values.openclaw.agentModel) -}}
+{{- end -}}
+
 {{- $cfg := dict
   "gateway" $gateway
-  "agents" (dict "defaults" (dict "workspace" .Values.openclaw.workspaceDir))
+  "agents" (dict "defaults" $agentDefaults)
 -}}
 
 {{- if .Values.skills.enabled -}}

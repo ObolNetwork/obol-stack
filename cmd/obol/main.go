@@ -54,13 +54,17 @@ COMMANDS:
 
    OpenClaw (AI Agent):
      openclaw up        Create and deploy an OpenClaw instance
-     openclaw setup     Run the onboard wizard for a deployed instance
+     openclaw setup     Reconfigure model providers for a deployed instance
      openclaw dashboard Open the dashboard in a browser
+     openclaw cli       Run openclaw CLI against a deployed instance
      openclaw sync      Deploy or update an instance
      openclaw token     Retrieve gateway token
      openclaw list      List instances
      openclaw delete    Remove instance and cluster resources
      openclaw skills    Manage skills (sync from local dir)
+
+   LLM Gateway:
+     llm configure      Configure cloud AI provider in llmspy gateway
 
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway
@@ -442,6 +446,7 @@ GLOBAL OPTIONS:
 			networkCommand(cfg),
 			openclawCommand(cfg),
 			inferenceCommand(cfg),
+			llmCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",

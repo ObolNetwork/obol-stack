@@ -14,26 +14,29 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/creack/pty/v2"
+	"github.com/ObolNetwork/obol-stack/internal/llm"
 	"github.com/dustinkirkland/golang-petname"
-	"golang.org/x/term"
 )
+
+// CloudProviderInfo holds the cloud provider selection from interactive setup.
+// This is used to configure llmspy with the API key separately from the
+// OpenClaw overlay (which routes through llmspy).
+type CloudProviderInfo struct {
+	Name    string // "anthropic" or "openai"
+	APIKey  string
+	ModelID string // e.g. "claude-sonnet-4-5-20250929"
+	Display string // e.g. "Claude Sonnet 4.5"
+}
 
 const (
 	appName       = "openclaw"
 	defaultDomain = "obol.stack"
 )
-
-// ansiRe matches ANSI escape sequences (CSI and OSC).
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x1b]*\x1b\\`)
-
-func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 // Embed the OpenClaw Helm chart from the shared charts directory.
 // The chart source lives in internal/embed/charts/openclaw/ and is
@@ -118,9 +121,17 @@ func Up(cfg *config.Config, opts UpOptions) error {
 		if imported != nil && len(imported.Providers) > 0 {
 			fmt.Println("\nUsing detected configuration from ~/.openclaw/")
 		} else {
-			imported, err = interactiveSetup(imported)
+			var cloudProvider *CloudProviderInfo
+			imported, cloudProvider, err = interactiveSetup(imported)
 			if err != nil {
 				return fmt.Errorf("interactive setup failed: %w", err)
+			}
+			// Push cloud API key to llmspy if a cloud provider was selected
+			if cloudProvider != nil {
+				if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+					fmt.Printf("Warning: failed to configure llmspy: %v\n", llmErr)
+					fmt.Println("You can configure it later with: obol llm configure")
+				}
 			}
 		}
 	}
@@ -483,132 +494,72 @@ func (pf *portForwarder) Stop() {
 
 // SetupOptions contains options for the setup command.
 type SetupOptions struct {
-	Port int // local port override (0 = auto-select)
+	Port int // kept for backward compat; currently unused
 }
 
-// Setup runs the OpenClaw onboard wizard against a deployed instance.
-// It port-forwards to the gateway WebSocket and invokes the native openclaw CLI.
-func Setup(cfg *config.Config, id string, opts SetupOptions) error {
+// Setup reconfigures model providers for a deployed OpenClaw instance.
+// It runs the interactive provider prompt, regenerates the overlay values,
+// and syncs via helmfile so the pod picks up the new configuration.
+func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
 	}
 
-	openclawBin, err := findOpenClawBinary(cfg)
+	// Always show the provider prompt — that's the whole point of setup.
+	imported, cloudProvider, err := interactiveSetup(nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("setup failed: %w", err)
 	}
 
-	token, err := getToken(cfg, id)
+	// Push cloud API key to llmspy if a cloud provider was selected
+	if cloudProvider != nil {
+		if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+			fmt.Printf("Warning: failed to configure llmspy: %v\n", llmErr)
+			fmt.Println("You can configure it later with: obol llm configure")
+		}
+	}
+
+	// Re-copy the embedded chart so the deployment dir picks up any chart fixes
+	// (e.g. corrected default values, template changes) from the current binary.
+	chartDir := filepath.Join(deploymentDir, "chart")
+	if err := copyEmbeddedChart(chartDir); err != nil {
+		return fmt.Errorf("failed to update chart: %w", err)
+	}
+
+	// Write updated base values.yaml from the embedded chart defaults
+	defaultValues, err := chartFS.ReadFile("chart/values.yaml")
 	if err != nil {
+		return fmt.Errorf("failed to read chart defaults: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values.yaml"), defaultValues, 0644); err != nil {
+		return fmt.Errorf("failed to write values.yaml: %w", err)
+	}
+
+	// Regenerate overlay values with the selected provider
+	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
+	overlay := generateOverlayValues(hostname, imported)
+	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
+		return fmt.Errorf("failed to write overlay values: %w", err)
+	}
+
+	fmt.Printf("\nApplying configuration...\n\n")
+	if err := doSync(cfg, id); err != nil {
 		return err
 	}
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	fmt.Printf("Starting port-forward to %s...\n", namespace)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
-	pf, err := startPortForward(cfg, namespace, opts.Port)
-	if err != nil {
-		return fmt.Errorf("port-forward failed: %w", err)
-	}
-	defer pf.Stop()
-
-	fmt.Printf("Port-forward active: localhost:%d -> %s:18789\n\n", pf.localPort, namespace)
-
-	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
-	cmd := exec.Command(openclawBin, "onboard",
-		"--mode", "remote",
-		"--remote-url", wsURL,
-		"--remote-token", token)
-
-	// Start in a PTY so the wizard gets a real terminal (colors, selectors).
-	// We intercept PTY output to detect completion because the Node.js
-	// process hangs after remote-mode (@clack/prompts leaves stdin open).
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		return fmt.Errorf("openclaw onboard failed to start: %w", err)
-	}
-
-	// ptyClosed tracks whether we have already closed ptmx to avoid double-close.
-	ptyClosed := false
-	closePTY := func() {
-		if !ptyClosed {
-			ptyClosed = true
-			ptmx.Close()
-		}
-	}
-	defer closePTY()
-
-	if sz, err := pty.GetsizeFull(os.Stdin); err == nil {
-		_ = pty.Setsize(ptmx, sz)
-	}
-
-	// Raw mode: forward keystrokes to the PTY without line-buffering.
-	oldState, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
-	if rawErr == nil {
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
-	}
-
-	// Catch signals so we restore the terminal even on interrupt.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-	go func() {
-		<-sigCh
-		closePTY()
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
-
-	// Forward keystrokes from stdin to the PTY. This goroutine will
-	// unblock and return once ptmx is closed (write returns error).
-	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
-
-	// Relay PTY -> stdout, watching for the completion marker.
-	// We keep a sliding window of the last 512 bytes to avoid O(n^2) scans.
-	// ANSI escape sequences are stripped before matching because @clack/prompts
-	// renders with cursor movement and color codes in TTY mode.
-	const markerWindowSize = 512
-	const marker = "Remote gateway configured"
-	var window bytes.Buffer
-	buf := make([]byte, 4096)
-	completed := false
-	for {
-		n, readErr := ptmx.Read(buf)
-		if n > 0 {
-			os.Stdout.Write(buf[:n])
-			window.Write(buf[:n])
-			// Trim window to a sliding tail to keep stripANSI cheap.
-			if window.Len() > markerWindowSize*2 {
-				tail := window.Bytes()[window.Len()-markerWindowSize:]
-				window.Reset()
-				window.Write(tail)
-			}
-			if strings.Contains(stripANSI(window.String()), marker) {
-				completed = true
-				break
-			}
-		}
-		if readErr != nil {
-			break
-		}
-	}
-
-	// Clean shutdown sequence:
-	//  1. Close the PTY master. This causes:
-	//     - The io.Copy(ptmx, os.Stdin) goroutine to return (write to closed fd).
-	//     - The child process to receive SIGHUP.
-	//  2. Kill the child process to be certain it is dead.
-	//  3. Wait to reap the zombie. With the PTY closed, this returns promptly.
-	closePTY()
-	if cmd.Process != nil {
-		cmd.Process.Kill()
-	}
-	_ = cmd.Wait()
-
-	if completed {
-		fmt.Printf("\r\nSetup complete! Open dashboard: obol openclaw dashboard %s\r\n", id)
+	fmt.Printf("\nWaiting for pod to be ready...\n")
+	if _, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 90); err != nil {
+		fmt.Printf("Warning: pod not ready yet: %v\n", err)
+		fmt.Println("The deployment may still be rolling out. Check with: obol kubectl get pods -n", namespace)
+	} else {
+		fmt.Printf("\n✓ Setup complete!\n")
+		fmt.Printf("  Open dashboard: obol openclaw dashboard %s\n", id)
 	}
 	return nil
 }
@@ -852,6 +803,125 @@ func SkillsSync(cfg *config.Config, id, skillsDir string) error {
 	return nil
 }
 
+// remoteCapableCommands lists openclaw subcommands that support --url and --token flags.
+var remoteCapableCommands = map[string]bool{
+	"gateway": true,
+	"acp":     true,
+	"browser": true,
+	"logs":    true,
+}
+
+// CLI runs an openclaw CLI command against a deployed instance.
+// Commands that support --url/--token are executed locally with a port-forward;
+// others are executed via kubectl exec into the pod.
+func CLI(cfg *config.Config, id string, args []string) error {
+	deploymentDir := deploymentPath(cfg, id)
+	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
+		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	if len(args) == 0 {
+		return fmt.Errorf("no openclaw command specified\n\nExamples:\n" +
+			"  obol openclaw cli %s -- gateway health\n" +
+			"  obol openclaw cli %s -- gateway call config.get\n" +
+			"  obol openclaw cli %s -- doctor", id, id, id)
+	}
+
+	// Determine if the command supports --url/--token (remote-capable)
+	firstArg := args[0]
+	if remoteCapableCommands[firstArg] {
+		return cliViaPortForward(cfg, id, namespace, args)
+	}
+	return cliViaKubectlExec(cfg, namespace, args)
+}
+
+// cliViaPortForward runs an openclaw command locally with port-forward + --url/--token.
+func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) error {
+	openclawBinary, err := findOpenClawBinary(cfg)
+	if err != nil {
+		return err
+	}
+
+	token, err := getToken(cfg, id)
+	if err != nil {
+		return fmt.Errorf("failed to get gateway token: %w", err)
+	}
+
+	pf, err := startPortForward(cfg, namespace, 0)
+	if err != nil {
+		return fmt.Errorf("port-forward failed: %w", err)
+	}
+	defer pf.Stop()
+
+	// Append --url and --token to the args
+	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
+	fullArgs := append(args, "--url", wsURL, "--token", token)
+
+	cmd := exec.Command(openclawBinary, fullArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Handle signals to clean up port-forward
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		<-sigCh
+		pf.Stop()
+	}()
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				os.Exit(status.ExitStatus())
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// cliViaKubectlExec runs an openclaw command inside the pod via kubectl exec.
+func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) error {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Build: kubectl exec -it -n <ns> deploy/openclaw -- node openclaw.mjs <args>
+	// The pod runs `node openclaw.mjs` (no standalone binary in PATH).
+	execArgs := []string{
+		"exec", "-it",
+		"-n", namespace,
+		"deploy/openclaw",
+		"--",
+		"node", "openclaw.mjs",
+	}
+	execArgs = append(execArgs, args...)
+
+	cmd := exec.Command(kubectlBinary, execArgs...)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				os.Exit(status.ExitStatus())
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 // deploymentPath returns the path to a deployment directory
 func deploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
@@ -922,16 +992,15 @@ rbac:
 		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
 		b.WriteString(importedOverlay)
 	} else {
-		b.WriteString(`# Route agent traffic to in-cluster Ollama
+		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
   agentModel: ollama/glm-4.7-flash
 
-# Default model provider: in-cluster Ollama
+# Default model provider: in-cluster Ollama (routed through llmspy)
 models:
   ollama:
     enabled: true
-    baseUrl: http://ollama.llm.svc.cluster.local:11434/v1
-    api: openai-completions
+    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
@@ -960,7 +1029,9 @@ initJob:
 
 // interactiveSetup prompts the user for provider configuration.
 // If imported is non-nil, offers to use the detected config.
-func interactiveSetup(imported *ImportResult) (*ImportResult, error) {
+// Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
+// when a cloud provider was selected (so the caller can configure llmspy).
+func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	if imported != nil {
@@ -969,7 +1040,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, error) {
 		line = strings.TrimSpace(strings.ToLower(line))
 		if line == "" || line == "y" || line == "yes" {
 			fmt.Println("Using detected configuration.")
-			return imported, nil
+			return imported, nil, nil
 		}
 	}
 
@@ -989,19 +1060,30 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, error) {
 	case "1":
 		// Ollama defaults — return nil so generateOverlayValues uses built-in defaults
 		fmt.Println("Using Ollama (in-cluster) as default provider.")
-		return nil, nil
+		return nil, nil, nil
 	case "2":
-		return promptForProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "", "gpt-4o", "GPT-4o")
+		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-4o", "GPT-4o")
+		if err != nil {
+			return nil, nil, err
+		}
+		result := buildLLMSpyRoutedOverlay(cloud)
+		return result, cloud, nil
 	case "3":
-		return promptForProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+		if err != nil {
+			return nil, nil, err
+		}
+		result := buildLLMSpyRoutedOverlay(cloud)
+		return result, cloud, nil
 	default:
 		fmt.Printf("Unknown choice '%s', using Ollama defaults.\n", choice)
-		return nil, nil
+		return nil, nil, nil
 	}
 }
 
-// promptForProvider asks for an API key and builds an ImportResult for a single provider
-func promptForProvider(reader *bufio.Reader, name, display, baseURL, api, modelID, modelName string) (*ImportResult, error) {
+// promptForCloudProvider asks for an API key and returns cloud provider info.
+// The actual overlay (ImportResult) is built separately via buildLLMSpyRoutedOverlay.
+func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string) (*CloudProviderInfo, error) {
 	fmt.Printf("\n%s API key: ", display)
 	apiKey, _ := reader.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)
@@ -1009,22 +1091,35 @@ func promptForProvider(reader *bufio.Reader, name, display, baseURL, api, modelI
 		return nil, fmt.Errorf("%s API key is required", display)
 	}
 
-	agentModel := fmt.Sprintf("%s/%s", name, modelID)
+	return &CloudProviderInfo{
+		Name:    name,
+		APIKey:  apiKey,
+		ModelID: modelID,
+		Display: modelName,
+	}, nil
+}
 
+// buildLLMSpyRoutedOverlay creates an ImportResult that routes a cloud model
+// through the llmspy proxy. OpenClaw sees a single "ollama" provider pointing
+// at llmspy, with the cloud model in its model list. The actual cloud providers
+// are disabled in OpenClaw — llmspy handles the routing.
+func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 	return &ImportResult{
-		AgentModel: agentModel,
+		AgentModel: cloud.ModelID,
 		Providers: []ImportedProvider{
 			{
-				Name:    name,
-				BaseURL: baseURL,
-				API:     api,
-				APIKey:  apiKey,
+				Name:         "ollama",
+				BaseURL:      "http://llmspy.llm.svc.cluster.local:8000/v1",
+				APIKeyEnvVar: "OLLAMA_API_KEY",
+				APIKey:       "ollama-local",
 				Models: []ImportedModel{
-					{ID: modelID, Name: modelName},
+					{ID: cloud.ModelID, Name: cloud.Display},
 				},
 			},
+			{Name: "anthropic", Disabled: true},
+			{Name: "openai", Disabled: true},
 		},
-	}, nil
+	}
 }
 
 // generateHelmfile creates a helmfile.yaml referencing the local chart

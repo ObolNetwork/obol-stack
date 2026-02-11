@@ -145,6 +145,8 @@ config:
 openclaw:
   stateDir: /data/.openclaw
   workspaceDir: /data/.openclaw/workspace
+  # -- Default agent model (e.g. "anthropic/claude-sonnet-4-5-20250929"). Empty = use provider default.
+  agentModel: ""
 
   gateway:
     mode: local
@@ -164,7 +166,7 @@ models:
   anthropic:
     enabled: false
     baseUrl: https://api.anthropic.com/v1
-    api: anthropic
+    api: ""
     apiKeyEnvVar: ANTHROPIC_API_KEY
     # -- API key value (stored in Secret). Leave empty to provide via extraEnvFromSecrets.
     apiKeyValue: ""
@@ -182,8 +184,8 @@ models:
         name: GPT-4o
   ollama:
     enabled: true
-    # -- OpenAI-compatible base URL for Ollama
-    baseUrl: http://ollama.llm.svc.cluster.local:11434/v1
+    # -- OpenAI-compatible base URL for Ollama (routed through llmspy global proxy)
+    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
     # -- OpenClaw provider API type (optional; omit to let OpenClaw auto-detect)
     api: ""
     # -- Env var used for provider API key interpolation in openclaw.json
