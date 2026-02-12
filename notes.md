@@ -9,7 +9,7 @@
   - OKR-1: default LLM flow is llms.py -> Ollama Cloud (no API key copy/paste)
 
 - frontend (default)
-- erpc, helios (default)
+- erpc (default)
 - obol agent workings (default)
 
 - monitoring

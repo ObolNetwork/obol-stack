@@ -163,14 +163,13 @@ obol network list
 
 **Available networks:**
 - **ethereum** - Full Ethereum node (execution + consensus clients)
-- **helios** - Lightweight Ethereum client
 - **aztec** - Aztec rollup network
 
 **View installed deployments:**
 
 ```bash
 # List all network deployment namespaces
-obol kubectl get namespaces | grep -E "ethereum|helios|aztec"
+obol kubectl get namespaces | grep -E "ethereum|aztec"
 
 # View resources in a specific deployment
 obol kubectl get all -n ethereum-nervous-otter
@@ -535,7 +534,6 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 │   ├── ethereum/                  # Ethereum network deployments
 │   │   ├── <namespace-1>/         # First deployment instance
 │   │   └── <namespace-2>/         # Second deployment instance
-│   ├── helios/                    # Helios network deployments
 │   └── aztec/                     # Aztec network deployments
 └── applications/                  # Installed application deployments
     ├── redis/                     # Redis deployments
@@ -553,7 +551,6 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 └── <cluster-id>/                  # Per-cluster data
     └── networks/                  # Network blockchain data
         ├── ethereum_<namespace>/  # Ethereum deployment instance data
-        ├── helios_<namespace>/    # Helios deployment instance data
         └── aztec_<namespace>/     # Aztec deployment instance data
 ```
 
@@ -641,7 +638,6 @@ If you're contributing to the Obol Stack or want to run it from source, you can 
 │   │   ├── ethereum/            # Ethereum network deployments
 │   │   │   ├── <namespace-1>/  # First deployment instance
 │   │   │   └── <namespace-2>/  # Second deployment instance
-│   │   ├── helios/
 │   │   └── aztec/
 │   └── applications/            # Installed application deployments
 │       ├── redis/
