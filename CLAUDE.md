@@ -581,7 +581,7 @@ The stack uses a two-tier architecture for LLM routing. A cluster-wide proxy (ll
 | `llm` | Namespace | Dedicated namespace for LLM infrastructure |
 | `llmspy-config` | ConfigMap | `llms.json` (provider enable/disable) + `providers.json` (provider definitions) |
 | `llms-secrets` | Secret | Cloud API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) — empty by default |
-| `llmspy` | Deployment | `ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.2`, port 8000 |
+| `llmspy` | Deployment | `ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.1`, port 8000 |
 | `llmspy` | Service (ClusterIP) | `llmspy.llm.svc.cluster.local:8000` |
 | `ollama` | Service (ExternalName) | Routes to host Ollama via `{{OLLAMA_HOST}}` placeholder |
 
