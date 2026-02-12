@@ -49,6 +49,13 @@ rbac:
   # -- Extra rules to append to the generated Role (list of PolicyRule objects)
   extraRules: []
 
+# -- Grant obol-frontend cross-namespace read access (secrets, configmaps, pods)
+# Required for the dashboard to discover instances, read gateway tokens, and check health
+frontendAccess:
+  enabled: true
+  serviceAccountName: obol-frontend
+  namespace: obol-frontend
+
 # -- One-shot init Job (runs once to bootstrap workspace/personality)
 initJob:
   # -- Enable a one-shot post-install bootstrap Job. Requires persistence.enabled=true.

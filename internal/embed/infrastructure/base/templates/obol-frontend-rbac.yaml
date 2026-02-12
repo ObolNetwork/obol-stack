@@ -1,0 +1,33 @@
+{{- if .Values.obolFrontend.enabled }}
+---
+#------------------------------------------------------------------------------
+# ClusterRole - Read-only access to namespaces for OpenClaw instance discovery
+# The frontend lists namespaces matching openclaw-* to discover running instances
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obol-frontend-cluster-reader
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Grants the obol-frontend ServiceAccount cluster-wide
+# namespace listing so it can discover OpenClaw instances
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obol-frontend-cluster-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obol-frontend-cluster-reader
+subjects:
+  - kind: ServiceAccount
+    name: obol-frontend
+    namespace: obol-frontend
+{{- end }}

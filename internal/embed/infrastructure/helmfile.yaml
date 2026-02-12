@@ -33,6 +33,9 @@ releases:
       # Set obolAgent.enabled=true to deploy it.
       - obolAgent:
           enabled: false
+      # obol-frontend RBAC for OpenClaw instance discovery
+      - obolFrontend:
+          enabled: true
 
   # Monitoring stack (Prometheus operator + Prometheus)
   - name: monitoring

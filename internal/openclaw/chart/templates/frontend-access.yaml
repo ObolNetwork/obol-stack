@@ -1,0 +1,41 @@
+{{- if .Values.frontendAccess.enabled -}}
+#------------------------------------------------------------------------------
+# Role - Grants obol-frontend read access to this OpenClaw namespace
+# Required for instance health checks, gateway token retrieval, and model config
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-frontend-access
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+
+---
+#------------------------------------------------------------------------------
+# RoleBinding - Binds the obol-frontend ServiceAccount to the Role above
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-frontend-access
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-frontend-access
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.frontendAccess.serviceAccountName }}
+    namespace: {{ .Values.frontendAccess.namespace }}
+{{- end }}
