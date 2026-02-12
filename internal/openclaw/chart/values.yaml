@@ -40,6 +40,7 @@ serviceAccount:
   # Set to true when rbac.create is true so the agent can access the K8s API.
   automount: false
   annotations: {}
+  # -- ServiceAccount name. Required when serviceAccount.create=false and rbac.create=true.
   name: ""
 
 # -- RBAC for the ServiceAccount (read-only access to namespace resources)
@@ -50,6 +51,7 @@ rbac:
 
 # -- One-shot init Job (runs once to bootstrap workspace/personality)
 initJob:
+  # -- Enable a one-shot post-install bootstrap Job. Requires persistence.enabled=true.
   enabled: false
   image:
     repository: ghcr.io/obolnetwork/openclaw
@@ -160,7 +162,7 @@ openclaw:
           enabled: true
 
 # -- Model provider configuration
-# Each provider is independently toggled. At least one must be enabled.
+# Each provider is independently toggled. All providers may be disabled.
 # API keys are stored in the chart Secret and injected as env vars.
 models:
   anthropic:
@@ -256,7 +258,7 @@ secrets:
     # -- Secret key name + env var name for the gateway API authentication token.
     # This token is required to access OpenClaw's HTTP gateway (chat/completions endpoint and dashboard).
     key: OPENCLAW_GATEWAY_TOKEN
-    # -- Explicit token value (discouraged). If empty, a token is auto-generated and persisted across upgrades.
+    # -- Explicit token value. Required for token auth unless using secrets.existingSecret.
     value: ""
 
   # -- Extra Secret names to load via envFrom (for provider/channel keys, etc.)

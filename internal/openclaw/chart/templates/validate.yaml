@@ -10,10 +10,23 @@
 {{- fail "openclaw: set secrets.existingSecret or enable secrets.create" -}}
 {{- end -}}
 
+{{- $gatewayToken := include "openclaw.gatewayTokenValue" . | trim -}}
+{{- if and (eq .Values.openclaw.gateway.auth.mode "token") .Values.secrets.create (not .Values.secrets.existingSecret) (eq $gatewayToken "") -}}
+{{- fail "openclaw: token auth is enabled; set secrets.gatewayToken.value or use secrets.existingSecret" -}}
+{{- end -}}
+
 {{- if and .Values.httpRoute.enabled (eq (len .Values.httpRoute.hostnames) 0) -}}
 {{- fail "openclaw: httpRoute.enabled is true but httpRoute.hostnames is empty" -}}
 {{- end -}}
 
 {{- if and .Values.skills.enabled (eq .Values.skills.configMapName "") (not .Values.skills.createDefault) -}}
 {{- fail "openclaw: skills.enabled is true but no skills.configMapName or skills.createDefault" -}}
+{{- end -}}
+
+{{- if and .Values.rbac.create (not .Values.serviceAccount.create) (eq (.Values.serviceAccount.name | trim) "") -}}
+{{- fail "openclaw: rbac.create=true with serviceAccount.create=false requires serviceAccount.name" -}}
+{{- end -}}
+
+{{- if and .Values.initJob.enabled (not .Values.persistence.enabled) -}}
+{{- fail "openclaw: initJob.enabled requires persistence.enabled=true" -}}
 {{- end -}}

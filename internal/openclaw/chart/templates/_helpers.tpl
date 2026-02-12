@@ -119,11 +119,7 @@ Compute (or reuse) the gateway token value.
   {{- $data := index $existing "data" -}}
   {{- if and $data (hasKey $data $key) -}}
     {{- index $data $key | b64dec -}}
-  {{- else -}}
-    {{- randAlphaNum 48 -}}
   {{- end -}}
-{{- else -}}
-  {{- randAlphaNum 48 -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
