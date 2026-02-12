@@ -1136,14 +1136,14 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			fmt.Println("Using Ollama (in-cluster) as default provider.")
 			return nil, nil, nil
 		case "2":
-			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-4o", "GPT-4o")
+			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
 			result := buildLLMSpyRoutedOverlay(cloud)
 			return result, cloud, nil
 		case "3":
-			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1169,14 +1169,14 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	switch choice {
 	case "1":
-		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-4o", "GPT-4o")
+		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
 	case "2":
-		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}

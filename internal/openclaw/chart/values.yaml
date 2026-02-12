@@ -173,6 +173,8 @@ models:
     models:
       - id: claude-sonnet-4-5-20250929
         name: Claude Sonnet 4.5
+      - id: claude-opus-4-6
+        name: Claude Opus 4.6
   openai:
     enabled: false
     baseUrl: https://api.openai.com/v1
@@ -180,8 +182,8 @@ models:
     apiKeyEnvVar: OPENAI_API_KEY
     apiKeyValue: ""
     models:
-      - id: gpt-4o
-        name: GPT-4o
+      - id: gpt-5.2
+        name: GPT-5.2
   ollama:
     enabled: true
     # -- OpenAI-compatible base URL for Ollama (routed through llmspy global proxy)
@@ -218,7 +220,9 @@ channels:
     # -- Slack App-Level Token (xapp-...)
     appToken: ""
 
-# -- Skills injection from a ConfigMap archive (created by an external tool; e.g. `obol openclaw skills sync`)
+# -- Skills injection from a ConfigMap archive (created by an external tool; e.g. `obol openclaw skills sync`).
+# The archive is extracted to `extractDir` by a busybox init container and wired into OpenClaw
+# via `skills.load.extraDirs` in _helpers.tpl. Note: ConfigMap total size is limited to ~1 MB by Kubernetes.
 skills:
   enabled: false
   # -- Create a default empty skills ConfigMap when configMapName is not set.
@@ -249,9 +253,10 @@ secrets:
   name: ""
 
   gatewayToken:
-    # -- Secret key name + env var name for gateway token
+    # -- Secret key name + env var name for the gateway API authentication token.
+    # This token is required to access OpenClaw's HTTP gateway (chat/completions endpoint and dashboard).
     key: OPENCLAW_GATEWAY_TOKEN
-    # -- Explicit token value (discouraged). If empty, a token is generated and persisted across upgrades.
+    # -- Explicit token value (discouraged). If empty, a token is auto-generated and persisted across upgrades.
     value: ""
 
   # -- Extra Secret names to load via envFrom (for provider/channel keys, etc.)

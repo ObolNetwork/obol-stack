@@ -58,19 +58,19 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "openai",
 		APIKey:  "sk-open-test",
-		ModelID: "gpt-4o",
-		Display: "GPT-4o",
+		ModelID: "gpt-5.2",
+		Display: "GPT-5.2",
 	}
 
 	result := buildLLMSpyRoutedOverlay(cloud)
 
-	if result.AgentModel != "gpt-4o" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "gpt-4o")
+	if result.AgentModel != "gpt-5.2" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "gpt-5.2")
 	}
 
 	ollama := result.Providers[0]
-	if len(ollama.Models) != 1 || ollama.Models[0].ID != "gpt-4o" {
-		t.Errorf("ollama model = %v, want gpt-4o", ollama.Models)
+	if len(ollama.Models) != 1 || ollama.Models[0].ID != "gpt-5.2" {
+		t.Errorf("ollama model = %v, want gpt-5.2", ollama.Models)
 	}
 }
 
