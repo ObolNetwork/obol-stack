@@ -15,42 +15,50 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 
 	result := buildLLMSpyRoutedOverlay(cloud)
 
-	// Check agent model uses bare model ID (no provider/ prefix)
-	if result.AgentModel != "claude-sonnet-4-5-20250929" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "claude-sonnet-4-5-20250929")
+	// Check agent model uses llmspy/ prefix for correct OpenClaw provider routing
+	if result.AgentModel != "llmspy/claude-sonnet-4-5-20250929" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "llmspy/claude-sonnet-4-5-20250929")
 	}
 
-	// Check 3 providers: ollama (enabled), anthropic (disabled), openai (disabled)
-	if len(result.Providers) != 3 {
-		t.Fatalf("len(Providers) = %d, want 3", len(result.Providers))
+	// Check 4 providers: llmspy (enabled), ollama (disabled), anthropic (disabled), openai (disabled)
+	if len(result.Providers) != 4 {
+		t.Fatalf("len(Providers) = %d, want 4", len(result.Providers))
 	}
 
-	ollama := result.Providers[0]
-	if ollama.Name != "ollama" || ollama.Disabled {
-		t.Errorf("ollama: name=%q disabled=%v, want ollama/false", ollama.Name, ollama.Disabled)
+	llmspy := result.Providers[0]
+	if llmspy.Name != "llmspy" || llmspy.Disabled {
+		t.Errorf("llmspy: name=%q disabled=%v, want llmspy/false", llmspy.Name, llmspy.Disabled)
 	}
-	if ollama.BaseURL != "http://llmspy.llm.svc.cluster.local:8000/v1" {
-		t.Errorf("ollama.BaseURL = %q", ollama.BaseURL)
+	if llmspy.BaseURL != "http://llmspy.llm.svc.cluster.local:8000/v1" {
+		t.Errorf("llmspy.BaseURL = %q", llmspy.BaseURL)
 	}
-	if ollama.APIKeyEnvVar != "OLLAMA_API_KEY" {
-		t.Errorf("ollama.APIKeyEnvVar = %q, want OLLAMA_API_KEY", ollama.APIKeyEnvVar)
+	if llmspy.APIKeyEnvVar != "LLMSPY_API_KEY" {
+		t.Errorf("llmspy.APIKeyEnvVar = %q, want LLMSPY_API_KEY", llmspy.APIKeyEnvVar)
 	}
-	if ollama.APIKey != "ollama-local" {
-		t.Errorf("ollama.APIKey = %q, want ollama-local", ollama.APIKey)
+	if llmspy.APIKey != "llmspy-default" {
+		t.Errorf("llmspy.APIKey = %q, want llmspy-default", llmspy.APIKey)
 	}
-	if ollama.API != "openai-completions" {
-		t.Errorf("ollama.API = %q, want openai-completions", ollama.API)
+	if llmspy.API != "openai-completions" {
+		t.Errorf("llmspy.API = %q, want openai-completions", llmspy.API)
 	}
-	if len(ollama.Models) != 1 || ollama.Models[0].ID != "claude-sonnet-4-5-20250929" {
-		t.Errorf("ollama.Models = %v", ollama.Models)
+	if len(llmspy.Models) != 1 || llmspy.Models[0].ID != "claude-sonnet-4-5-20250929" {
+		t.Errorf("llmspy.Models = %v", llmspy.Models)
 	}
 
-	// anthropic and openai should be disabled
-	if !result.Providers[1].Disabled || result.Providers[1].Name != "anthropic" {
-		t.Errorf("anthropic: disabled=%v name=%q", result.Providers[1].Disabled, result.Providers[1].Name)
+	// ollama, anthropic and openai should be disabled
+	for _, idx := range []int{1, 2, 3} {
+		if !result.Providers[idx].Disabled {
+			t.Errorf("Providers[%d] (%s) should be disabled", idx, result.Providers[idx].Name)
+		}
 	}
-	if !result.Providers[2].Disabled || result.Providers[2].Name != "openai" {
-		t.Errorf("openai: disabled=%v name=%q", result.Providers[2].Disabled, result.Providers[2].Name)
+	if result.Providers[1].Name != "ollama" {
+		t.Errorf("Providers[1].Name = %q, want ollama", result.Providers[1].Name)
+	}
+	if result.Providers[2].Name != "anthropic" {
+		t.Errorf("Providers[2].Name = %q, want anthropic", result.Providers[2].Name)
+	}
+	if result.Providers[3].Name != "openai" {
+		t.Errorf("Providers[3].Name = %q, want openai", result.Providers[3].Name)
 	}
 }
 
@@ -64,13 +72,13 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 
 	result := buildLLMSpyRoutedOverlay(cloud)
 
-	if result.AgentModel != "gpt-5.2" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "gpt-5.2")
+	if result.AgentModel != "llmspy/gpt-5.2" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "llmspy/gpt-5.2")
 	}
 
-	ollama := result.Providers[0]
-	if len(ollama.Models) != 1 || ollama.Models[0].ID != "gpt-5.2" {
-		t.Errorf("ollama model = %v, want gpt-5.2", ollama.Models)
+	llmspy := result.Providers[0]
+	if len(llmspy.Models) != 1 || llmspy.Models[0].ID != "gpt-5.2" {
+		t.Errorf("llmspy model = %v, want gpt-5.2", llmspy.Models)
 	}
 }
 
@@ -84,23 +92,26 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 	result := buildLLMSpyRoutedOverlay(cloud)
 	yaml := TranslateToOverlayYAML(result)
 
-	// Agent model should be the bare model ID
-	if !strings.Contains(yaml, "agentModel: claude-sonnet-4-5-20250929") {
+	// Agent model should have llmspy/ prefix
+	if !strings.Contains(yaml, "agentModel: llmspy/claude-sonnet-4-5-20250929") {
 		t.Errorf("YAML missing agentModel, got:\n%s", yaml)
 	}
 
-	// ollama should be enabled with llmspy baseUrl
+	// llmspy should be enabled with llmspy baseUrl
+	if !strings.Contains(yaml, "llmspy:\n    enabled: true") {
+		t.Errorf("YAML missing enabled llmspy provider, got:\n%s", yaml)
+	}
 	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
 		t.Errorf("YAML missing llmspy baseUrl, got:\n%s", yaml)
 	}
 
-	// apiKeyEnvVar should be set
-	if !strings.Contains(yaml, "apiKeyEnvVar: OLLAMA_API_KEY") {
+	// apiKeyEnvVar should be LLMSPY_API_KEY
+	if !strings.Contains(yaml, "apiKeyEnvVar: LLMSPY_API_KEY") {
 		t.Errorf("YAML missing apiKeyEnvVar, got:\n%s", yaml)
 	}
 
-	// apiKeyValue should be ollama-local
-	if !strings.Contains(yaml, "apiKeyValue: ollama-local") {
+	// apiKeyValue should be llmspy-default
+	if !strings.Contains(yaml, "apiKeyValue: llmspy-default") {
 		t.Errorf("YAML missing apiKeyValue, got:\n%s", yaml)
 	}
 
@@ -109,12 +120,15 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML missing api: openai-completions, got:\n%s", yaml)
 	}
 
-	// Cloud model should appear in ollama's model list
+	// Cloud model should appear in llmspy's model list
 	if !strings.Contains(yaml, "- id: claude-sonnet-4-5-20250929") {
 		t.Errorf("YAML missing cloud model ID, got:\n%s", yaml)
 	}
 
-	// anthropic and openai should be disabled
+	// ollama, anthropic and openai should be disabled
+	if !strings.Contains(yaml, "ollama:\n    enabled: false") {
+		t.Errorf("YAML missing disabled ollama, got:\n%s", yaml)
+	}
 	if !strings.Contains(yaml, "anthropic:\n    enabled: false") {
 		t.Errorf("YAML missing disabled anthropic, got:\n%s", yaml)
 	}
