@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -56,7 +58,39 @@ type OnboardOptions struct {
 
 // SetupDefault deploys a default OpenClaw instance as part of stack setup.
 // It is idempotent: if a "default" deployment already exists, it re-syncs.
+// When Ollama is not detected on the host and no existing ~/.openclaw config
+// is found, it skips provider setup gracefully so the user can configure
+// later with `obol openclaw setup`.
 func SetupDefault(cfg *config.Config) error {
+	// Check whether the default deployment already exists (re-sync path).
+	// If it does, proceed unconditionally — the overlay was already written.
+	deploymentDir := deploymentPath(cfg, "default")
+	if _, err := os.Stat(deploymentDir); err == nil {
+		// Existing deployment — always re-sync regardless of Ollama status.
+		return Onboard(cfg, OnboardOptions{
+			ID:        "default",
+			Sync:      true,
+			IsDefault: true,
+		})
+	}
+
+	// Check if there is an existing ~/.openclaw config with providers
+	imported, _ := DetectExistingConfig()
+	hasImportedProviders := imported != nil && len(imported.Providers) > 0
+
+	// If no imported providers, check Ollama availability for the default overlay
+	if !hasImportedProviders {
+		ollamaAvailable := detectOllama()
+		if ollamaAvailable {
+			fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+		} else {
+			fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
+			fmt.Println("  Skipping default OpenClaw provider setup.")
+			fmt.Println("  Run 'obol openclaw setup default' to configure a provider later.")
+			return nil
+		}
+	}
+
 	return Onboard(cfg, OnboardOptions{
 		ID:        "default",
 		Sync:      true,
@@ -1027,6 +1061,38 @@ initJob:
 	return b.String()
 }
 
+// ollamaEndpoint returns the base URL where host Ollama should be reachable.
+// It respects the OLLAMA_HOST environment variable, falling back to http://localhost:11434.
+func ollamaEndpoint() string {
+	if host := os.Getenv("OLLAMA_HOST"); host != "" {
+		// OLLAMA_HOST may be just "host:port" or a full URL.
+		if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+			host = "http://" + host
+		}
+		return strings.TrimRight(host, "/")
+	}
+	return "http://localhost:11434"
+}
+
+// detectOllama checks whether Ollama is reachable on the host machine by
+// hitting the /api/tags endpoint with a short timeout. Returns true if the
+// server responds with HTTP 200.
+func detectOllama() bool {
+	endpoint := ollamaEndpoint()
+	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
+	if err != nil {
+		return false
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(tagsURL)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 // interactiveSetup prompts the user for provider configuration.
 // If imported is non-nil, offers to use the detected config.
 // Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
@@ -1044,10 +1110,55 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		}
 	}
 
+	// Detect Ollama on the host to decide whether to offer it as an option
+	ollamaAvailable := detectOllama()
+	if ollamaAvailable {
+		fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+	} else {
+		fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
+	}
+
+	if ollamaAvailable {
+		fmt.Println("\nSelect a model provider:")
+		fmt.Println("  [1] Ollama (default, runs in-cluster)")
+		fmt.Println("  [2] OpenAI")
+		fmt.Println("  [3] Anthropic")
+		fmt.Print("\nChoice [1]: ")
+
+		line, _ := reader.ReadString('\n')
+		choice := strings.TrimSpace(line)
+		if choice == "" {
+			choice = "1"
+		}
+
+		switch choice {
+		case "1":
+			fmt.Println("Using Ollama (in-cluster) as default provider.")
+			return nil, nil, nil
+		case "2":
+			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-4o", "GPT-4o")
+			if err != nil {
+				return nil, nil, err
+			}
+			result := buildLLMSpyRoutedOverlay(cloud)
+			return result, cloud, nil
+		case "3":
+			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+			if err != nil {
+				return nil, nil, err
+			}
+			result := buildLLMSpyRoutedOverlay(cloud)
+			return result, cloud, nil
+		default:
+			fmt.Printf("Unknown choice '%s', using Ollama defaults.\n", choice)
+			return nil, nil, nil
+		}
+	}
+
+	// Ollama not available — only offer cloud providers
 	fmt.Println("\nSelect a model provider:")
-	fmt.Println("  [1] Ollama (default, runs in-cluster)")
-	fmt.Println("  [2] OpenAI")
-	fmt.Println("  [3] Anthropic")
+	fmt.Println("  [1] OpenAI")
+	fmt.Println("  [2] Anthropic")
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')
@@ -1058,17 +1169,13 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	switch choice {
 	case "1":
-		// Ollama defaults — return nil so generateOverlayValues uses built-in defaults
-		fmt.Println("Using Ollama (in-cluster) as default provider.")
-		return nil, nil, nil
-	case "2":
 		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-4o", "GPT-4o")
 		if err != nil {
 			return nil, nil, err
 		}
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
-	case "3":
+	case "2":
 		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
 		if err != nil {
 			return nil, nil, err
@@ -1076,8 +1183,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
 	default:
-		fmt.Printf("Unknown choice '%s', using Ollama defaults.\n", choice)
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("unknown choice '%s'; please select a valid provider", choice)
 	}
 }
 
