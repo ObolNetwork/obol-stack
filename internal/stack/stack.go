@@ -5,10 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -78,8 +80,12 @@ func Init(cfg *config.Config, force bool) error {
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
 	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
-	// k3d uses host.k3d.internal; bare k3s would use the node's gateway IP.
+	// On macOS (Docker Desktop), host.docker.internal resolves to the host.
+	// On Linux (native Docker), host.k3d.internal is added by k3d.
 	ollamaHost := "host.k3d.internal"
+	if runtime.GOOS == "darwin" {
+		ollamaHost = "host.docker.internal"
+	}
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}": ollamaHost,
@@ -344,6 +350,7 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 		"--kubeconfig", kubeconfigPath,
 		"sync",
 	)
+	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	helmfileCmd.Stdout = os.Stdout
 	helmfileCmd.Stderr = os.Stderr
 
@@ -357,6 +364,14 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 	}
 
 	fmt.Println("Default infrastructure deployed")
+
+	// Deploy default OpenClaw instance (non-fatal on failure)
+	fmt.Println("Setting up default OpenClaw instance...")
+	if err := openclaw.SetupDefault(cfg); err != nil {
+		fmt.Printf("Warning: failed to set up default OpenClaw: %v\n", err)
+		fmt.Println("You can manually set up OpenClaw later with: obol openclaw up")
+	}
+
 	return nil
 }
 

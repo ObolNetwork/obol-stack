@@ -1,0 +1,187 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openclaw.fullname" . }}
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "openclaw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "openclaw.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "openclaw.serviceAccountName" . }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName | quote }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.skills.enabled }}
+      initContainers:
+        - name: extract-skills
+          image: "{{ .Values.skills.initContainer.image.repository }}:{{ .Values.skills.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.skills.initContainer.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              mkdir -p {{ .Values.skills.extractDir | quote }}
+              if [ -f /skills/{{ .Values.skills.archiveKey }} ]; then
+                rm -rf {{ .Values.skills.extractDir | quote }}/*
+                tar -xzf /skills/{{ .Values.skills.archiveKey }} -C {{ .Values.skills.extractDir | quote }}
+                echo "Skills extracted successfully"
+              else
+                echo "No skills archive found, skipping extraction"
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            - name: skills-archive
+              mountPath: /skills
+              readOnly: true
+      {{- end }}
+      containers:
+        - name: openclaw
+          image: "{{ include "openclaw.image" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.image.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.image.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: OPENCLAW_CONFIG_PATH
+              value: "/etc/openclaw/{{ .Values.config.key }}"
+            - name: OPENCLAW_STATE_DIR
+              value: {{ .Values.openclaw.stateDir | quote }}
+            - name: ERPC_URL
+              value: {{ .Values.erpc.url | quote }}
+            {{- /* Inject non-secret provider API key values (e.g. Ollama placeholder) */ -}}
+            {{- range $name := list "anthropic" "openai" "ollama" }}
+            {{- $p := index $.Values.models $name }}
+            {{- if and $p.enabled $p.apiKeyValue (not (has $name (list "anthropic" "openai"))) }}
+            - name: {{ $p.apiKeyEnvVar }}
+              value: {{ $p.apiKeyValue | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.image.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "openclaw.secretsName" . }}
+            {{- range .Values.secrets.extraEnvFromSecrets }}
+            - secretRef:
+                name: {{ . | quote }}
+            {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openclaw
+              readOnly: true
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "openclaw.configMapName" . }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "openclaw.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.skills.enabled }}
+        - name: skills-archive
+          configMap:
+            name: {{ include "openclaw.skillsConfigMapName" . }}
+            optional: true
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

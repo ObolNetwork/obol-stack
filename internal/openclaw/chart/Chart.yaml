@@ -1,0 +1,20 @@
+apiVersion: v2
+name: openclaw
+description: OpenClaw gateway deployment (agent runtime) for Kubernetes.
+type: application
+version: 0.1.0
+appVersion: "2026.2.9"
+kubeVersion: ">=1.26.0-0"
+
+home: https://docs.openclaw.ai
+sources:
+  - https://docs.openclaw.ai
+maintainers:
+  - name: Obol Platform Team
+    email: platform@obol.tech
+keywords:
+  - openclaw
+  - agent
+  - ai
+  - gateway
+  - obol

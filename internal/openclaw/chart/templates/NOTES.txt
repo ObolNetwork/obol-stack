@@ -1,0 +1,33 @@
+OpenClaw is now installed.
+
+Namespace: {{ .Release.Namespace }}
+Service: {{ include "openclaw.fullname" . }}
+Port: {{ .Values.service.port }}
+
+Gateway token:
+  kubectl get secret -n {{ .Release.Namespace }} {{ include "openclaw.secretsName" . }} -o jsonpath='{.data.{{ .Values.secrets.gatewayToken.key }}}' | base64 --decode
+
+{{- if .Values.httpRoute.enabled }}
+
+HTTPRoute is enabled. Access OpenClaw at:
+{{- range .Values.httpRoute.hostnames }}
+  http://{{ . }}
+{{- end }}
+
+{{- else if .Values.ingress.enabled }}
+
+Ingress is enabled. Access OpenClaw at:
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+
+{{- else }}
+
+Port-forward for local access:
+  export POD_NAME=$(kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "openclaw.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  kubectl -n {{ .Release.Namespace }} port-forward $POD_NAME 18789:{{ .Values.service.port }}
+  open http://127.0.0.1:18789
+
+{{- end }}

@@ -38,7 +38,8 @@ spec:
 
 ---
 # llms.py v3 configuration for Obol Stack:
-# - Only enable the Ollama provider (host machine via ollama Service)
+# - Ollama provider enabled by default (host machine via ollama Service)
+# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol llm configure`)
 # - Default model is glm-4.7-flash
 apiVersion: v1
 kind: ConfigMap
@@ -64,6 +65,12 @@ data:
       "providers": {
         "ollama": {
           "enabled": true
+        },
+        "anthropic": {
+          "enabled": false
+        },
+        "openai": {
+          "enabled": false
         }
       }
     }
@@ -75,8 +82,33 @@ data:
         "api": "http://ollama.llm.svc.cluster.local:11434",
         "models": {},
         "all_models": true
+      },
+      "anthropic": {
+        "id": "anthropic",
+        "api_key": "$ANTHROPIC_API_KEY",
+        "models": {},
+        "all_models": true
+      },
+      "openai": {
+        "id": "openai",
+        "api_key": "$OPENAI_API_KEY",
+        "models": {},
+        "all_models": true
       }
     }
+
+---
+# Secret for cloud provider API keys. Empty by default; patched imperatively
+# via `obol llm configure` or `obol openclaw setup`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llms-secrets
+  namespace: llm
+type: Opaque
+stringData:
+  ANTHROPIC_API_KEY: ""
+  OPENAI_API_KEY: ""
 
 ---
 apiVersion: apps/v1
@@ -110,6 +142,7 @@ spec:
               mkdir -p /data
               cp /config/llms.json /data/llms.json
               cp /config/providers.json /data/providers.json
+              chmod 666 /data/llms.json /data/providers.json
           volumeMounts:
             - name: llmspy-config
               mountPath: /config
@@ -118,9 +151,9 @@ spec:
               mountPath: /data
       containers:
         - name: llmspy
-          # Official LLMSpy container image (published by upstream).
+          # Obol fork of LLMSpy with smart routing extension.
           # Pin a specific version for reproducibility.
-          image: ghcr.io/servicestack/llms:latest
+          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.2
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -133,6 +166,10 @@ spec:
             - /home/llms/.llms/llms.json
             - --serve
             - "8000"
+          envFrom:
+            - secretRef:
+                name: llms-secrets
+                optional: true
           env:
             # Avoid surprises if the image changes its default HOME.
             - name: HOME

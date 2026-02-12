@@ -1,0 +1,64 @@
+{{- if .Values.initJob.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openclaw.fullname" . }}-init
+  labels:
+    {{- include "openclaw.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "openclaw.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "openclaw.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: init
+          {{- $tag := .Values.initJob.image.tag | default .Values.image.tag | default .Chart.AppVersion }}
+          image: "{{ .Values.initJob.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.initJob.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.initJob.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.initJob.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: OPENCLAW_STATE_DIR
+              value: {{ .Values.openclaw.stateDir | quote }}
+            {{- with .Values.initJob.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.initJob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "openclaw.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

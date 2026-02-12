@@ -1,0 +1,19 @@
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail "openclaw: replicaCount must be 1 (OpenClaw stores state on disk and should not be scaled horizontally)" -}}
+{{- end -}}
+
+{{- if and .Values.secrets.existingSecret .Values.secrets.create -}}
+{{- fail "openclaw: secrets.existingSecret is set; set secrets.create=false" -}}
+{{- end -}}
+
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.create) -}}
+{{- fail "openclaw: set secrets.existingSecret or enable secrets.create" -}}
+{{- end -}}
+
+{{- if and .Values.httpRoute.enabled (eq (len .Values.httpRoute.hostnames) 0) -}}
+{{- fail "openclaw: httpRoute.enabled is true but httpRoute.hostnames is empty" -}}
+{{- end -}}
+
+{{- if and .Values.skills.enabled (eq .Values.skills.configMapName "") (not .Values.skills.createDefault) -}}
+{{- fail "openclaw: skills.enabled is true but no skills.configMapName or skills.createDefault" -}}
+{{- end -}}

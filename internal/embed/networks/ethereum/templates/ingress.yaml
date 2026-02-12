@@ -15,11 +15,8 @@ spec:
   rules:
     - matches:
         - path:
-            type: Exact
-            value: /{{ .Release.Namespace }}/execution
-        - path:
             type: PathPrefix
-            value: /{{ .Release.Namespace }}/execution/
+            value: /{{ .Release.Namespace }}/execution
       filters:
         - type: URLRewrite
           urlRewrite:
@@ -46,11 +43,8 @@ spec:
   rules:
     - matches:
         - path:
-            type: Exact
-            value: /{{ .Release.Namespace }}/beacon
-        - path:
             type: PathPrefix
-            value: /{{ .Release.Namespace }}/beacon/
+            value: /{{ .Release.Namespace }}/beacon
       filters:
         - type: URLRewrite
           urlRewrite:
