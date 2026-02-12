@@ -53,7 +53,7 @@ COMMANDS:
      network delete  Remove network and clean up cluster resources
 
    OpenClaw (AI Agent):
-     openclaw up        Create and deploy an OpenClaw instance
+     openclaw onboard   Create and deploy an OpenClaw instance
      openclaw setup     Reconfigure model providers for a deployed instance
      openclaw dashboard Open the dashboard in a browser
      openclaw cli       Run openclaw CLI against a deployed instance

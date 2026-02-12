@@ -38,6 +38,9 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 	if ollama.APIKey != "ollama-local" {
 		t.Errorf("ollama.APIKey = %q, want ollama-local", ollama.APIKey)
 	}
+	if ollama.API != "openai-completions" {
+		t.Errorf("ollama.API = %q, want openai-completions", ollama.API)
+	}
 	if len(ollama.Models) != 1 || ollama.Models[0].ID != "claude-sonnet-4-5-20250929" {
 		t.Errorf("ollama.Models = %v", ollama.Models)
 	}
@@ -99,6 +102,11 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 	// apiKeyValue should be ollama-local
 	if !strings.Contains(yaml, "apiKeyValue: ollama-local") {
 		t.Errorf("YAML missing apiKeyValue, got:\n%s", yaml)
+	}
+
+	// api should be openai-completions (llmspy is OpenAI-compatible)
+	if !strings.Contains(yaml, "api: openai-completions") {
+		t.Errorf("YAML missing api: openai-completions, got:\n%s", yaml)
 	}
 
 	// Cloud model should appear in ollama's model list

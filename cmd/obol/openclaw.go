@@ -14,7 +14,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 		Usage: "Manage OpenClaw AI agent instances",
 		Subcommands: []*cli.Command{
 			{
-				Name:  "up",
+				Name:  "onboard",
 				Usage: "Create and deploy an OpenClaw instance",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
@@ -32,7 +32,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(c *cli.Context) error {
-					return openclaw.Up(cfg, openclaw.UpOptions{
+					return openclaw.Onboard(cfg, openclaw.OnboardOptions{
 						ID:          c.String("id"),
 						Force:       c.Bool("force"),
 						Sync:        !c.Bool("no-sync"),
