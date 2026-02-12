@@ -1,11 +1,13 @@
 import { Box, styled } from '@obolnetwork/obol-ui';
 import { NetworkStatus } from '../NetworkStatus';
 import { NodeOverview } from '../NodeOverview';
+import { OpenClawList } from '../OpenClawList';
 import { DashboardData } from '../../../types/dashboard';
-import { AgentSidebar } from '../../molecules/AgentSidebar';
+import { OpenClawChatSidebar } from '../../molecules/OpenClawChatSidebar';
 import { ErrorState } from '../../molecules/ErrorState';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
+import type { OpenClawInstance } from '@/types/openclaw';
 
 interface DashboardContentProps {
   data: DashboardData | null;
@@ -62,11 +64,24 @@ export function DashboardContent({
 }: DashboardContentProps) {
   const { hasHash } = useAnchorHash({ hash: '#agent' });
   const [isSidebarOpen, setIsSidebarOpen] = useState(hasHash);
+  const [chatInstance, setChatInstance] = useState<OpenClawInstance | null>(
+    null
+  );
+
+  const handleInstanceSelect = (instance: OpenClawInstance) => {
+    setIsSidebarOpen(true);
+    setChatInstance(instance);
+  };
+
+  const handleChatClose = () => {
+    setChatInstance(null);
+  };
 
   return (
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
+          <OpenClawList onInstanceSelect={handleInstanceSelect} />
           {error && <ErrorState onRetry={onRetry} />}
           {data &&
             data.apps.map((app, index) => (
@@ -80,13 +95,12 @@ export function DashboardContent({
         </SectionContainer>
       </MainSection>
 
-      {data && (
-        <AgentSidebar
-          onSidebarToggle={setIsSidebarOpen}
-          data={data}
-          defaultOpen={hasHash}
-        />
-      )}
+      <OpenClawChatSidebar
+        isSidebarOpen={isSidebarOpen}
+        instance={chatInstance}
+        onClose={handleChatClose}
+        onSidebarToggle={setIsSidebarOpen}
+      />
     </Container>
   );
 }

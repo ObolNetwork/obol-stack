@@ -9,12 +9,13 @@ export { Tooltip } from './atoms/Tooltip';
 // Molecules
 export { Accordion } from './molecules/Accordion';
 export { AddNetworkButton } from './molecules/AddNetworkButton';
-export { AgentSidebar } from './molecules/AgentSidebar';
 export { ClientCard } from './molecules/ClientCard';
 export { ErrorState } from './molecules/ErrorState';
 export { LoadingState } from './molecules/LoadingState';
 export { ParticipationNumber } from './molecules/ParticipationNumber';
 export { ProgressBar } from './molecules/ProgressBar';
+export { OpenClawChatSidebar } from './molecules/OpenClawChatSidebar';
+export { OpenClawInstanceCard } from './molecules/OpenClawInstanceCard';
 export { WalletConnection } from './molecules/WalletConnection';
 export { WalletModal } from './molecules/WalletModal';
 
@@ -27,6 +28,7 @@ export { DashboardContent } from './organisms/DashboardContent';
 export { FooterBar } from './organisms/FooterBar';
 export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
 export { NodeOverview } from './organisms/NodeOverview';
+export { OpenClawList } from './organisms/OpenClawList';
 
 // Pages
 export { DashboardPage } from './pages/DashboardPage';
