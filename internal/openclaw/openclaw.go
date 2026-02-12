@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,14 +36,10 @@ type CloudProviderInfo struct {
 const (
 	appName       = "openclaw"
 	defaultDomain = "obol.stack"
+	// chartVersion pins the openclaw Helm chart version from the obol repo.
+	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
+	chartVersion = "0.1.0"
 )
-
-// Embed the OpenClaw Helm chart from the shared charts directory.
-// The chart source lives in internal/embed/charts/openclaw/ and is
-// referenced here so the openclaw package owns its own chart lifecycle.
-//
-//go:embed all:chart
-var chartFS embed.FS
 
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
@@ -174,24 +168,6 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	// Copy embedded chart to deployment/chart/
-	chartDir := filepath.Join(deploymentDir, "chart")
-	if err := copyEmbeddedChart(chartDir); err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to copy chart: %w", err)
-	}
-
-	// Write values.yaml from the embedded chart defaults
-	defaultValues, err := chartFS.ReadFile("chart/values.yaml")
-	if err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to read chart defaults: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values.yaml"), defaultValues, 0644); err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to write values.yaml: %w", err)
-	}
-
 	// Write Obol Stack overlay values (httpRoute, provider config, eRPC, skills)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
@@ -201,7 +177,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
-	// Generate helmfile.yaml referencing local chart
+	// Generate helmfile.yaml referencing obol/openclaw from the published Helm repo
 	helmfileContent := generateHelmfile(id, namespace)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
@@ -214,10 +190,8 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("  Hostname:   %s\n", hostname)
 	fmt.Printf("  Location:   %s\n", deploymentDir)
 	fmt.Printf("\nFiles created:\n")
-	fmt.Printf("  - chart/            Embedded OpenClaw Helm chart\n")
-	fmt.Printf("  - values.yaml       Chart defaults (edit to customize)\n")
-	fmt.Printf("  - values-obol.yaml  Obol Stack defaults (httpRoute, providers, eRPC)\n")
-	fmt.Printf("  - helmfile.yaml     Deployment configuration\n")
+	fmt.Printf("  - values-obol.yaml  Obol Stack overlay (httpRoute, providers, eRPC)\n")
+	fmt.Printf("  - helmfile.yaml     Deployment configuration (chart: obol/openclaw v%s)\n", chartVersion)
 
 	if opts.Sync {
 		fmt.Printf("\nDeploying to cluster...\n\n")
@@ -554,20 +528,11 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 		}
 	}
 
-	// Re-copy the embedded chart so the deployment dir picks up any chart fixes
-	// (e.g. corrected default values, template changes) from the current binary.
-	chartDir := filepath.Join(deploymentDir, "chart")
-	if err := copyEmbeddedChart(chartDir); err != nil {
-		return fmt.Errorf("failed to update chart: %w", err)
-	}
-
-	// Write updated base values.yaml from the embedded chart defaults
-	defaultValues, err := chartFS.ReadFile("chart/values.yaml")
-	if err != nil {
-		return fmt.Errorf("failed to read chart defaults: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values.yaml"), defaultValues, 0644); err != nil {
-		return fmt.Errorf("failed to write values.yaml: %w", err)
+	// Regenerate helmfile to pick up any chart version bumps
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	helmfileContent := generateHelmfile(id, namespace)
+	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
 
 	// Regenerate overlay values with the selected provider
@@ -583,7 +548,6 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 		return err
 	}
 
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
@@ -961,35 +925,6 @@ func deploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
 }
 
-// copyEmbeddedChart extracts the embedded chart FS to destDir
-func copyEmbeddedChart(destDir string) error {
-	return fs.WalkDir(chartFS, "chart", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == "chart" {
-			return nil
-		}
-
-		relPath := strings.TrimPrefix(path, "chart/")
-		destPath := filepath.Join(destDir, relPath)
-
-		if d.IsDir() {
-			return os.MkdirAll(destPath, 0755)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			return err
-		}
-
-		data, err := chartFS.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to read embedded %s: %w", path, err)
-		}
-		return os.WriteFile(destPath, data, 0644)
-	})
-}
-
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
@@ -1229,18 +1164,22 @@ func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 	}
 }
 
-// generateHelmfile creates a helmfile.yaml referencing the local chart
+// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.
 func generateHelmfile(id, namespace string) string {
 	return fmt.Sprintf(`# OpenClaw instance: %s
 # Managed by obol openclaw
+
+repositories:
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
 
 releases:
   - name: openclaw
     namespace: %s
     createNamespace: true
-    chart: ./chart
+    chart: obol/openclaw
+    version: %s
     values:
-      - values.yaml
       - values-obol.yaml
-`, id, namespace)
+`, id, namespace, chartVersion)
 }
