@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -79,8 +80,12 @@ func Init(cfg *config.Config, force bool) error {
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
 	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
-	// k3d uses host.k3d.internal; bare k3s would use the node's gateway IP.
+	// On macOS (Docker Desktop), host.docker.internal resolves to the host.
+	// On Linux (native Docker), host.k3d.internal is added by k3d.
 	ollamaHost := "host.k3d.internal"
+	if runtime.GOOS == "darwin" {
+		ollamaHost = "host.docker.internal"
+	}
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}": ollamaHost,

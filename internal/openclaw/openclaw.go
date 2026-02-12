@@ -45,8 +45,8 @@ const (
 //go:embed all:chart
 var chartFS embed.FS
 
-// UpOptions contains options for the up command
-type UpOptions struct {
+// OnboardOptions contains options for the onboard command
+type OnboardOptions struct {
 	ID          string // Deployment ID (empty = generate petname)
 	Force       bool   // Overwrite existing deployment
 	Sync        bool   // Also run helmfile sync after install
@@ -57,15 +57,15 @@ type UpOptions struct {
 // SetupDefault deploys a default OpenClaw instance as part of stack setup.
 // It is idempotent: if a "default" deployment already exists, it re-syncs.
 func SetupDefault(cfg *config.Config) error {
-	return Up(cfg, UpOptions{
+	return Onboard(cfg, OnboardOptions{
 		ID:        "default",
 		Sync:      true,
 		IsDefault: true,
 	})
 }
 
-// Up creates and optionally deploys an OpenClaw instance
-func Up(cfg *config.Config, opts UpOptions) error {
+// Onboard creates and optionally deploys an OpenClaw instance
+func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	id := opts.ID
 	if opts.IsDefault {
 		id = "default"
@@ -1110,6 +1110,7 @@ func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 			{
 				Name:         "ollama",
 				BaseURL:      "http://llmspy.llm.svc.cluster.local:8000/v1",
+				API:          "openai-completions",
 				APIKeyEnvVar: "OLLAMA_API_KEY",
 				APIKey:       "ollama-local",
 				Models: []ImportedModel{

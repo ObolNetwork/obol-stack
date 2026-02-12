@@ -186,8 +186,8 @@ models:
     enabled: true
     # -- OpenAI-compatible base URL for Ollama (routed through llmspy global proxy)
     baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
-    # -- OpenClaw provider API type (optional; omit to let OpenClaw auto-detect)
-    api: ""
+    # -- OpenClaw provider API type. Set to "openai-completions" because llmspy exposes an OpenAI-compatible chat/completions endpoint.
+    api: "openai-completions"
     # -- Env var used for provider API key interpolation in openclaw.json
     apiKeyEnvVar: OLLAMA_API_KEY
     # -- Value set for the apiKey env var (not a secret for Ollama)
