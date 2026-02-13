@@ -227,7 +227,7 @@ obol network install ethereum --network=hoodi
 ```
 
 **Ethereum configuration options:**
-- `--network`: Choose network (mainnet, sepolia, hoodi)
+- `--network`: Choose network (mainnet, hoodi)
 - `--execution-client`: Choose execution client (reth, geth, nethermind, besu, erigon, ethereumjs)
 - `--consensus-client`: Choose consensus client (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
@@ -665,7 +665,7 @@ Networks are embedded in the binary at `internal/embed/networks/`. Each network 
 ```yaml
 # internal/embed/networks/ethereum/helmfile.yaml.gotmpl
 values:
-  # @enum mainnet,sepolia,holesky,hoodi
+  # @enum mainnet,hoodi
   # @default mainnet
   # @description Blockchain network to deploy
   - network: {{.Network}}
