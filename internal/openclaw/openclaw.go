@@ -965,11 +965,27 @@ rbac:
 	importedOverlay := TranslateToOverlayYAML(imported)
 	if importedOverlay != "" {
 		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
+		// Inject gateway controlUi settings for Traefik reverse proxy.
+		// allowInsecureAuth is required because the browser accesses OpenClaw via
+		// http://<instance>.obol.stack (non-localhost HTTP), where crypto.subtle is
+		// unavailable. Without it, the gateway rejects with 1008 "requires HTTPS or
+		// localhost (secure context)". Token auth is still enforced.
+		if strings.Contains(importedOverlay, "openclaw:\n") {
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n", 1)
+		} else {
+			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n\n")
+		}
 		b.WriteString(importedOverlay)
 	} else {
 		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
   agentModel: ollama/glm-4.7-flash
+  gateway:
+    # Allow control UI over HTTP behind Traefik (local dev stack).
+    # Required: browser on non-localhost HTTP has no crypto.subtle,
+    # so device identity is unavailable. Token auth is still enforced.
+    controlUi:
+      allowInsecureAuth: true
 
 # Default model provider: in-cluster Ollama (routed through llmspy)
 models:

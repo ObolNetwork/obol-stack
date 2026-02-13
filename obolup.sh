@@ -1156,6 +1156,11 @@ configure_hosts_file() {
 	if ! check_hosts_file; then
 		update_hosts_file
 	fi
+
+	# Note: wildcard *.obol.stack DNS is handled by a local DNS resolver
+	# that starts automatically with 'obol stack up'. The /etc/hosts entry
+	# above provides baseline resolution for the root domain (obol.stack).
+	log_info "Wildcard *.obol.stack DNS will be configured on first 'obol stack up'"
 }
 
 # Detect appropriate shell profile file (NVM-style detection)
