@@ -108,17 +108,35 @@ check_docker() {
 		return 1
 	fi
 
-	# Check if Docker daemon is running
+	# Check if Docker daemon is running; try to start it automatically on Linux
 	if ! docker info >/dev/null 2>&1; then
-		log_error "Docker daemon is not running"
-		echo ""
-		echo "Please start the Docker daemon:"
-		echo "  • Linux: sudo systemctl start docker"
-		echo "  • macOS/Windows: Start Docker Desktop application"
-		echo ""
-		echo "Then run this installer again."
-		echo ""
-		return 1
+		if [[ "$(uname -s)" == "Linux" ]]; then
+			log_warn "Docker daemon is not running — attempting to start..."
+			# Try systemd first (apt/yum installs), then snap
+			if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
+				sudo systemctl start docker 2>/dev/null && sleep 2
+			elif snap list docker >/dev/null 2>&1; then
+				sudo snap start docker 2>/dev/null && sleep 3
+			fi
+		fi
+
+		# Re-check after start attempt
+		if ! docker info >/dev/null 2>&1; then
+			log_error "Docker daemon is not running"
+			echo ""
+			echo "Please start the Docker daemon:"
+			if [[ "$(uname -s)" == "Linux" ]]; then
+				echo "  • systemd:  sudo systemctl start docker"
+				echo "  • snap:     sudo snap start docker"
+			else
+				echo "  • macOS/Windows: Start Docker Desktop application"
+			fi
+			echo ""
+			echo "Then run this installer again."
+			echo ""
+			return 1
+		fi
+		log_success "Docker daemon started"
 	fi
 
 	# Check Docker version (require at least 20.10.0 for k3d compatibility)
