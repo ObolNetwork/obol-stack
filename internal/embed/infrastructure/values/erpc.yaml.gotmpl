@@ -3,11 +3,16 @@
 {{- $chainId := 1 -}}  {{/* Default: mainnet */}}
 {{- if eq $network "hoodi" -}}
   {{- $chainId = 560048 -}}
-{{- else if eq $network "sepolia" -}}
-  {{- $chainId = 11155111 -}}
 {{- else if ne $network "mainnet" -}}
-  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) -}}
+  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi" $network) -}}
 {{- end -}}
+{{/*
+  erpc.gcp.obol.tech — internal, rate-limited eRPC gateway hosted by Obol.
+  The Basic Auth credential below is knowingly included in the obol-stack source.
+  This endpoint is rate-limited and serves only as a convenience RPC proxy for
+  local stack users; exposing it carries less risk than running fully unprotected.
+*/}}
+{{- $erpcGcpAuth := "obol:svXELzJDXQPrmgA3AopiWZWm" -}} {{/* gitleaks:allow */}}
 
 # Number of replicas
 replicas: 1
@@ -50,13 +55,10 @@ config: |-
   projects:
     - id: rpc
       upstreams:
-        - id: nodecore
-          endpoint: https://rpc.nodecore.io
+        - id: erpc-gcp
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/{{ $network }}/evm/{{ $chainId }}
           evm:
             chainId: {{ $chainId }}
-          jsonRpc:
-            headers:
-              X-Nodecore-Token: "${OBOL_OAUTH_TOKEN}"
       networks:
         - architecture: evm
           evm:
@@ -90,14 +92,8 @@ config: |-
 # Secret env variables (chart-managed secret for inline values)
 secretEnv: {}
 
-# Extra env variables (reference external obol-oauth-token secret)
-extraEnv:
-  - name: OBOL_OAUTH_TOKEN
-    valueFrom:
-      secretKeyRef:
-        name: obol-oauth-token
-        key: token
-        optional: true
+# Extra env variables
+extraEnv: []
 
 # Extra args for the erpc container
 extraArgs: []
@@ -119,8 +115,7 @@ affinity: {}
 imagePullSecrets: []
 
 # Annotations for the Deployment
-annotations:
-  secret.reloader.stakater.com/reload: "obol-oauth-token"
+annotations: {}
 
 # Liveness probe
 livenessProbe:
@@ -145,8 +140,7 @@ nodeSelector: {}
 podLabels: {}
 
 # Pod annotations
-podAnnotations:
-  secret.reloader.stakater.com/reload: "obol-oauth-token"
+podAnnotations: {}
 
 # Pod management policy
 podManagementPolicy: OrderedReady
@@ -203,7 +197,7 @@ extraVolumeMounts: []
 # Additional ports
 extraPorts: []
 
-# Additional env variables (defined above with OBOL_OAUTH_TOKEN)
+# Additional env variables
 
 serviceMonitor:
   enabled: false
