@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import {
   Box,
   Flex,
@@ -115,7 +116,15 @@ export function OpenClawInstanceCard({
         ? 'error'
         : 'unknown';
 
-  const dashboardUrl = `http://${instance.namespace}.obol.stack`; // TODO: confirm this url
+  const [token, setToken] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`/api/openclaw/token?id=${instance.id}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => setToken(data?.token ?? null))
+      .catch(() => {});
+  }, [instance.id]);
+
+  const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
     <CardContainer>

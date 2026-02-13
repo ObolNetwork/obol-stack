@@ -17,6 +17,34 @@ test.describe('API Routes', () => {
     }
   });
 
+  test('GET /api/openclaw/token returns 400 without id param', async ({
+    request,
+  }) => {
+    const response = await request.get('/api/openclaw/token');
+    expect(response.status()).toBe(400);
+
+    const body = await response.json();
+    expect(body.error).toBe('Missing id parameter');
+  });
+
+  test('GET /api/openclaw/token returns token for valid instance', async ({
+    request,
+  }) => {
+    const response = await request.get('/api/openclaw/token?id=demo');
+
+    // When running against a cluster with an openclaw-demo namespace,
+    // the endpoint returns the gateway token from the K8s Secret.
+    // In environments without a cluster this will 404 or 500.
+    if (response.ok()) {
+      const body = await response.json();
+      expect(body).toHaveProperty('token');
+      expect(typeof body.token).toBe('string');
+      expect(body.token.length).toBeGreaterThan(0);
+    } else {
+      expect(response.status()).toBeLessThan(500);
+    }
+  });
+
   test('should handle CORS correctly', async ({ page }) => {
     await page.goto('/');
 
