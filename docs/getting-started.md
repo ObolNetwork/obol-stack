@@ -84,10 +84,10 @@ obol kubectl run -n llm inference-test --rm -it --restart=Never \
   curl -s --max-time 120 -X POST \
     http://llmspy.llm.svc.cluster.local:8000/v1/chat/completions \
     -H "Content-Type: application/json" \
-    -d '{"model":"glm-4.7-flash","messages":[{"role":"user","content":"Say hello in one word"}],"max_tokens":10}'
+    -d '{"model":"gpt-oss:120b-cloud","messages":[{"role":"user","content":"Say hello in one word"}],"max_tokens":10}'
 ```
 
-Replace `glm-4.7-flash` with whatever model you have loaded in Ollama.
+Replace `gpt-oss:120b-cloud` with whatever model you have loaded in Ollama.
 
 > [!NOTE]
 > The first request may be slow while the model loads into memory.

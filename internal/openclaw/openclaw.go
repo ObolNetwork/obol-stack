@@ -979,7 +979,7 @@ rbac:
 	} else {
 		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
-  agentModel: ollama/glm-4.7-flash
+  agentModel: ollama/gpt-oss:120b-cloud
   gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
     # Required: browser on non-localhost HTTP has no crypto.subtle,
@@ -995,8 +995,8 @@ models:
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
-      - id: glm-4.7-flash
-        name: GLM-4.7 Flash
+      - id: gpt-oss:120b-cloud
+        name: GPT-OSS 120B Cloud
 
 `)
 	}

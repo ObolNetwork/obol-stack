@@ -40,7 +40,7 @@ spec:
 # llms.py v3 configuration for Obol Stack:
 # - Ollama provider enabled by default (host machine via ollama Service)
 # - Anthropic and OpenAI providers available (disabled by default; enabled via `obol llm configure`)
-# - Default model is glm-4.7-flash
+# - Default model is gpt-oss:120b-cloud (Ollama cloud)
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -56,7 +56,7 @@ data:
           "User-Agent": "llmspy.org/3.0"
         },
         "text": {
-          "model": "glm-4.7-flash",
+          "model": "gpt-oss:120b-cloud",
           "messages": [
             { "role": "user", "content": [{ "type": "text", "text": "" }] }
           ]
