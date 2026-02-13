@@ -35,6 +35,7 @@ releases:
     createNamespace: true
     chart: prometheus-community/kube-prometheus-stack
     version: 79.5.0
+    timeout: 600
     values:
       - ./values/monitoring.yaml.gotmpl
 

@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -131,8 +130,6 @@ func (b *K3sBackend) Up(cfg *config.Config, stackID string) ([]byte, error) {
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	// Set process group so we can clean up child processes
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
@@ -207,14 +204,18 @@ func (b *K3sBackend) Down(cfg *config.Config, stackID string) error {
 
 	fmt.Printf("Stopping k3s (pid: %d)...\n", pid)
 
-	// Send SIGTERM to the process group for clean shutdown (negative PID = process group)
-	pgid := fmt.Sprintf("-%d", pid)
-	stopCmd := exec.Command("sudo", "kill", "-TERM", pgid)
+	// Send SIGTERM to the sudo/k3s process only (not the process group).
+	// Using negative PID (process group kill) is unsafe here because the saved PID
+	// is the sudo wrapper, whose process group can include unrelated system processes
+	// like systemd-logind — killing those crashes the desktop session.
+	// sudo forwards SIGTERM to k3s, which handles its own child process cleanup.
+	pidStr := strconv.Itoa(pid)
+	stopCmd := exec.Command("sudo", "kill", "-TERM", pidStr)
 	stopCmd.Stdout = os.Stdout
 	stopCmd.Stderr = os.Stderr
 	if err := stopCmd.Run(); err != nil {
-		fmt.Printf("SIGTERM to process group failed, sending SIGKILL: %v\n", err)
-		exec.Command("sudo", "kill", "-9", pgid).Run()
+		fmt.Printf("SIGTERM failed, sending SIGKILL: %v\n", err)
+		exec.Command("sudo", "kill", "-9", pidStr).Run()
 	}
 
 	// Wait for process to exit (up to 30 seconds)
@@ -226,7 +227,8 @@ func (b *K3sBackend) Down(cfg *config.Config, stackID string) error {
 		time.Sleep(1 * time.Second)
 	}
 
-	// Run k3s-killall.sh if available (cleans up containerd/iptables)
+	// Clean up orphaned k3s child processes (containerd-shim, etc.)
+	// Use k3s-killall.sh if available, otherwise kill containerd shims directly.
 	killallPath := "/usr/local/bin/k3s-killall.sh"
 	if _, err := os.Stat(killallPath); err == nil {
 		fmt.Println("Running k3s cleanup...")
@@ -234,6 +236,14 @@ func (b *K3sBackend) Down(cfg *config.Config, stackID string) error {
 		cleanCmd.Stdout = os.Stdout
 		cleanCmd.Stderr = os.Stderr
 		cleanCmd.Run()
+	} else {
+		// k3s-killall.sh not installed (binary-only install via obolup).
+		// Kill orphaned containerd-shim processes that use the k3s socket.
+		fmt.Println("Cleaning up k3s child processes...")
+		exec.Command("sudo", "pkill", "-TERM", "-f", "containerd-shim.*k3s").Run()
+		time.Sleep(2 * time.Second)
+		// Force-kill any that survived SIGTERM
+		exec.Command("sudo", "pkill", "-KILL", "-f", "containerd-shim.*k3s").Run()
 	}
 
 	b.removePidFile(cfg)

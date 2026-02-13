@@ -97,8 +97,15 @@ check "stack down" $OBOL stack down
 check "PID file cleaned up" test ! -f .workspace/config/.k3s.pid
 check "config preserved after down" test -f .workspace/config/.stack-id
 log "  Waiting for API server to become unreachable..."
-sleep 5
-check_fail "kubectl unreachable after down" $OBOL kubectl get nodes --no-headers
+API_DOWN=false
+for i in $(seq 1 15); do
+    if ! $OBOL kubectl get nodes --no-headers 2>/dev/null; then
+        API_DOWN=true
+        break
+    fi
+    sleep 2
+done
+check "kubectl unreachable after down" test "$API_DOWN" = "true"
 
 # --- TEST 8: stack down again (already stopped) ---
 log ""
