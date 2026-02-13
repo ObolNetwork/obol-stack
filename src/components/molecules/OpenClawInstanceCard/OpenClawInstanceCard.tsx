@@ -9,9 +9,11 @@ import {
   styled,
   OpenInNew,
 } from '@obolnetwork/obol-ui';
-import { ExternalLinkIcon } from '@radix-ui/react-icons';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
-import { useOpenClawStatus } from '../../../hooks/useOpenClaw';
+import {
+  useOpenClawStatus,
+  useOpenClawToken,
+} from '../../../hooks/useOpenClaw';
 import type { OpenClawInstance } from '@/types/openclaw';
 
 interface OpenClawInstanceCardProps {
@@ -115,7 +117,9 @@ export function OpenClawInstanceCard({
         ? 'error'
         : 'unknown';
 
-  const dashboardUrl = `http://${instance.namespace}.obol.stack`; // TODO: confirm this url
+  const { token } = useOpenClawToken(instance.id);
+
+  const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
     <CardContainer>

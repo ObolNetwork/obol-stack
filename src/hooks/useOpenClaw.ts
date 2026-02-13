@@ -75,3 +75,25 @@ export function useOpenClawStatus(id: string) {
 
   return { status, loading, error, refetch: fetchStatus };
 }
+
+export function useOpenClawToken(instanceId: string) {
+  const [token, setToken] = useState<string | null>(null);
+
+  const fetchToken = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/openclaw/token?id=${instanceId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setToken(data?.token ?? null);
+      }
+    } catch {
+      setToken(null);
+    }
+  }, [instanceId]);
+
+  useEffect(() => {
+    fetchToken();
+  }, [fetchToken]);
+
+  return { token };
+}
