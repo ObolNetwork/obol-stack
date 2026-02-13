@@ -85,15 +85,13 @@ data:
       },
       "anthropic": {
         "id": "anthropic",
-        "api_key": "$ANTHROPIC_API_KEY",
-        "models": {},
-        "all_models": true
+        "npm": "@ai-sdk/anthropic",
+        "api_key": "$ANTHROPIC_API_KEY"
       },
       "openai": {
         "id": "openai",
-        "api_key": "$OPENAI_API_KEY",
-        "models": {},
-        "all_models": true
+        "npm": "openai",
+        "api_key": "$OPENAI_API_KEY"
       }
     }
 
@@ -129,20 +127,38 @@ spec:
         app: llmspy
     spec:
       initContainers:
-        # Seed ~/.llms/llms.json from the ConfigMap. llms.py also writes runtime
-        # state (e.g. analytics) under ~/.llms, so we keep the directory writable.
+        # Seed ~/.llms/ from the ConfigMap + package defaults.
+        # llms.json is taken from the ConfigMap (controls which providers are enabled).
+        # providers.json is taken from the llmspy package (has full model definitions)
+        # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
         - name: seed-config
-          image: busybox:1.36.1
+          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.4
           imagePullPolicy: IfNotPresent
           command:
-            - sh
+            - python3
             - -c
             - |
-              set -eu
-              mkdir -p /data
-              cp /config/llms.json /data/llms.json
-              cp /config/providers.json /data/providers.json
-              chmod 666 /data/llms.json /data/providers.json
+              import json, os, shutil
+              os.makedirs('/data', exist_ok=True)
+              # Copy llms.json from ConfigMap (provider enabled/disabled state)
+              shutil.copy2('/config/llms.json', '/data/llms.json')
+              # Start with package providers.json (has full model definitions)
+              import llms
+              pkg_dir = os.path.dirname(llms.__file__)
+              with open(os.path.join(pkg_dir, 'providers.json')) as f:
+                  providers = json.load(f)
+              # Merge ConfigMap overrides (Ollama endpoint, API key refs)
+              with open('/config/providers.json') as f:
+                  overrides = json.load(f)
+              for pid, pcfg in overrides.items():
+                  if pid in providers:
+                      providers[pid].update(pcfg)
+                  else:
+                      providers[pid] = pcfg
+              with open('/data/providers.json', 'w') as f:
+                  json.dump(providers, f, indent=2)
+              os.chmod('/data/llms.json', 0o666)
+              os.chmod('/data/providers.json', 0o666)
           volumeMounts:
             - name: llmspy-config
               mountPath: /config
