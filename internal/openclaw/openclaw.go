@@ -1163,25 +1163,27 @@ func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelN
 }
 
 // buildLLMSpyRoutedOverlay creates an ImportResult that routes a cloud model
-// through the llmspy proxy. OpenClaw sees a "llmspy" provider pointing at the
-// cluster-wide llmspy gateway, with the cloud model in its model list. The
-// actual cloud providers (and default ollama) are disabled in OpenClaw — llmspy
-// handles upstream routing based on the bare model ID.
+// through the llmspy proxy. OpenClaw sees an "ollama" provider pointing at the
+// cluster-wide llmspy gateway, with the cloud model in its model list. We reuse
+// the "ollama" provider name because the remote Helm chart only iterates a
+// hardcoded list (ollama, anthropic, openai) — using a custom name would cause
+// the provider to be silently dropped from the rendered config.
+// The actual cloud providers are disabled in OpenClaw — llmspy handles upstream
+// routing based on the bare model ID.
 func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 	return &ImportResult{
-		AgentModel: "llmspy/" + cloud.ModelID,
+		AgentModel: "ollama/" + cloud.ModelID,
 		Providers: []ImportedProvider{
 			{
-				Name:         "llmspy",
+				Name:         "ollama",
 				BaseURL:      "http://llmspy.llm.svc.cluster.local:8000/v1",
 				API:          "openai-completions",
-				APIKeyEnvVar: "LLMSPY_API_KEY",
-				APIKey:       "llmspy-default",
+				APIKeyEnvVar: "OLLAMA_API_KEY",
+				APIKey:       "ollama-local",
 				Models: []ImportedModel{
 					{ID: cloud.ModelID, Name: cloud.Display},
 				},
 			},
-			{Name: "ollama", Disabled: true},
 			{Name: "anthropic", Disabled: true},
 			{Name: "openai", Disabled: true},
 		},
