@@ -1,6 +1,39 @@
 import type { NextConfig } from "next";
+import { execSync } from "child_process";
+
+function git(cmd: string): string {
+  try {
+    return execSync(cmd, { stdio: ["pipe", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+const commitSha =
+  git("git rev-parse --short HEAD") ||
+  process.env.NEXT_PUBLIC_COMMIT_SHA ||
+  process.env.NEXT_PUBLIC_GITCOMMIT ||
+  "local";
+
+const tagVersion =
+  git("git describe --tags --abbrev=0") ||
+  process.env.NEXT_PUBLIC_TAG_VERSION ||
+  process.env.NEXT_PUBLIC_VERSION ||
+  "local";
+
+const buildTime =
+  process.env.NEXT_PUBLIC_BUILD_TIME ||
+  process.env.NEXT_PUBLIC_BUILDTIME ||
+  new Date().toISOString();
 
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_COMMIT_SHA: commitSha,
+    NEXT_PUBLIC_TAG_VERSION: tagVersion,
+    NEXT_PUBLIC_BUILD_TIME: buildTime,
+  },
   // Set Turbopack root to silence lockfile warning
   turbopack: {
     root: process.cwd(),

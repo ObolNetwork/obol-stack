@@ -99,6 +99,19 @@ export function FooterBar({ className }: FooterBarProps) {
               >
                 {config.commitSha}
               </StyledLink>
+              {config.buildTime && (
+                <Text
+                  data-testid="version-build-time"
+                  css={{
+                    fontSize: '$3',
+                    whiteSpace: 'nowrap',
+                    opacity: 0.7,
+                    paddingLeft: '$xxs',
+                  }}
+                >
+                  {`(${new Date(config.buildTime).toLocaleDateString()})`}
+                </Text>
+              )}
             </Flex>
           </Flex>
         )}
