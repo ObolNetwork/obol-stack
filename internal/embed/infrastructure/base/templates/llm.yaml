@@ -153,7 +153,7 @@ spec:
         - name: llmspy
           # Obol fork of LLMSpy with smart routing extension.
           # Pin a specific version for reproducibility.
-          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.1
+          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

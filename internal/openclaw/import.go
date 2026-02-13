@@ -143,7 +143,7 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 		if p.APIKey != "" && !isEnvVarRef(p.APIKey) {
 			ip.APIKey = p.APIKey
 		} else if p.APIKey != "" {
-			fmt.Printf("  Note: provider '%s' uses env-var reference %s (will need manual configuration)\n", name, p.APIKey)
+			fmt.Printf("  Note: provider '%s' uses an env-var reference for its API key (will need manual configuration)\n", name)
 		}
 		for _, m := range p.Models {
 			ip.Models = append(ip.Models, ImportedModel{ID: m.ID, Name: m.Name})
