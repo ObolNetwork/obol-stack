@@ -156,12 +156,12 @@ openclaw:
     # -- Trusted proxy IPs for secure context detection behind a reverse proxy (e.g. Traefik).
     # OpenClaw uses exact IP matching (no CIDR support).
     trustedProxies: []
-    # -- Control UI settings for running behind a reverse proxy
+    # -- Control UI settings for running behind a reverse proxy.
+    # allowInsecureAuth permits token-only auth when the browser lacks crypto.subtle
+    # (non-localhost HTTP). Device auth is naturally skipped (browser can't provide it).
     controlUi:
       # -- Allow control UI over HTTP (required when behind a non-TLS proxy like Traefik in dev)
       allowInsecureAuth: false
-      # -- Disable device authentication for control UI (not recommended)
-      dangerouslyDisableDeviceAuth: false
     auth:
       mode: token
 
