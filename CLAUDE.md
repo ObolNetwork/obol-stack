@@ -616,14 +616,14 @@ The stack uses a two-tier architecture for LLM routing. A cluster-wide proxy (ll
 When a cloud provider is selected during setup, two things happen simultaneously:
 
 1. **Global tier**: `llm.ConfigureLLMSpy()` patches the cluster-wide llmspy gateway with the API key and enables the provider
-2. **Instance tier**: `buildLLMSpyRoutedOverlay()` creates an overlay where a single "ollama" provider points at llmspy, the cloud model is listed under that provider, and `api` is set to `openai-completions`
+2. **Instance tier**: `buildLLMSpyRoutedOverlay()` creates an overlay where a "llmspy" provider points at the llmspy gateway, the cloud model is listed under that provider with a `llmspy/` prefix, and `api` is set to `openai-completions`. The default "ollama" provider is disabled.
 
 **Result**: The application never talks directly to cloud APIs. All traffic is routed through llmspy.
 
 **Data flow**:
 ```
 Application (openclaw.json)
-  │ model: "ollama/claude-sonnet-4-5-20250929"
+  │ model: "llmspy/claude-sonnet-4-5-20250929"
   │ api: "openai-completions"
   │ baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
   │
@@ -636,23 +636,27 @@ llmspy (llm namespace, port 8000)
 Anthropic API (or Ollama, OpenAI — depending on provider)
 ```
 
-**Overlay example** (`values-obol.yaml`):
+**Overlay example** (`values-obol.yaml` for cloud provider path):
 ```yaml
 models:
-  ollama:
+  llmspy:
     enabled: true
     baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
     api: openai-completions
-    apiKeyEnvVar: OLLAMA_API_KEY
-    apiKeyValue: ollama-local
+    apiKeyEnvVar: LLMSPY_API_KEY
+    apiKeyValue: llmspy-default
     models:
       - id: claude-sonnet-4-5-20250929
         name: Claude Sonnet 4.5
+  ollama:
+    enabled: false
   anthropic:
     enabled: false
   openai:
     enabled: false
 ```
+
+**Note**: The default Ollama path (no cloud provider) still uses the "ollama" provider name pointing at llmspy, since it genuinely routes Ollama model traffic.
 
 ### Summary Table
 
@@ -663,7 +667,7 @@ models:
 | **Config storage** | ConfigMap `llmspy-config` | ConfigMap `<release>-config` |
 | **Secrets** | Secret `llms-secrets` | Secret `<release>-secrets` |
 | **Configure via** | `obol llm configure` | `obol openclaw setup <id>` |
-| **Providers** | Real (Ollama, Anthropic, OpenAI) | Virtual: everything appears as "ollama" pointing at llmspy |
+| **Providers** | Real (Ollama, Anthropic, OpenAI) | Cloud: "llmspy" virtual provider; Default: "ollama" pointing at llmspy |
 | **API field** | N/A (provider-native) | Must be `openai-completions` for llmspy routing |
 
 ### Key Source Files
@@ -972,3 +976,12 @@ This file should be updated when:
 - New workflows or development practices are established
 
 Always confirm with the user before making updates to maintain accuracy and relevance.
+
+## Related Codebases (External Resources)
+
+| Resource | Path | Description |
+|----------|------|-------------|
+| obol-stack-front-end | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-front-end` | Next.js web dashboard |
+| obol-stack-docs | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-docs` | MkDocs documentation site |
+| OpenClaw | `/Users/bussyjd/Development/Obol_Workbench/openclaw` | OpenClaw AI assistant (upstream) |
+| llmspy | `/Users/bussyjd/Development/R&D/llmspy` | LLM proxy/router (upstream) |

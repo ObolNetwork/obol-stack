@@ -102,7 +102,12 @@ func DetectExistingConfig() (*ImportResult, error) {
 	if err != nil {
 		return nil, nil
 	}
+	return detectExistingConfigAt(home)
+}
 
+// detectExistingConfigAt reads and parses openclaw.json from the given home directory.
+// Extracted from DetectExistingConfig for testability.
+func detectExistingConfigAt(home string) (*ImportResult, error) {
 	configPath := filepath.Join(home, ".openclaw", "openclaw.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -125,14 +130,20 @@ func DetectExistingConfig() (*ImportResult, error) {
 	result.WorkspaceDir = detectWorkspace(home, cfg.Agents.Defaults.Workspace)
 
 	for name, p := range cfg.Models.Providers {
+		sanitized := sanitizeModelAPI(p.API)
+		if p.API != "" && sanitized == "" {
+			fmt.Printf("  Note: unknown API type '%s' for provider '%s', will auto-detect\n", p.API, name)
+		}
 		ip := ImportedProvider{
 			Name:    name,
 			BaseURL: p.BaseURL,
-			API:     sanitizeModelAPI(p.API),
+			API:     sanitized,
 		}
 		// Only import literal API keys, skip env-var references like ${...}
 		if p.APIKey != "" && !isEnvVarRef(p.APIKey) {
 			ip.APIKey = p.APIKey
+		} else if p.APIKey != "" {
+			fmt.Printf("  Note: provider '%s' uses env-var reference %s (will need manual configuration)\n", name, p.APIKey)
 		}
 		for _, m := range p.Models {
 			ip.Models = append(ip.Models, ImportedModel{ID: m.ID, Name: m.Name})
@@ -140,11 +151,19 @@ func DetectExistingConfig() (*ImportResult, error) {
 		result.Providers = append(result.Providers, ip)
 	}
 
-	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "" && !isEnvVarRef(cfg.Channels.Telegram.BotToken) {
-		result.Channels.Telegram = &ImportedTelegram{BotToken: cfg.Channels.Telegram.BotToken}
+	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.BotToken != "" {
+		if !isEnvVarRef(cfg.Channels.Telegram.BotToken) {
+			result.Channels.Telegram = &ImportedTelegram{BotToken: cfg.Channels.Telegram.BotToken}
+		} else {
+			fmt.Printf("  Note: Telegram bot token uses env-var reference (will need manual configuration)\n")
+		}
 	}
-	if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" && !isEnvVarRef(cfg.Channels.Discord.BotToken) {
-		result.Channels.Discord = &ImportedDiscord{BotToken: cfg.Channels.Discord.BotToken}
+	if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
+		if !isEnvVarRef(cfg.Channels.Discord.BotToken) {
+			result.Channels.Discord = &ImportedDiscord{BotToken: cfg.Channels.Discord.BotToken}
+		} else {
+			fmt.Printf("  Note: Discord bot token uses env-var reference (will need manual configuration)\n")
+		}
 	}
 	if cfg.Channels.Slack != nil {
 		botToken := cfg.Channels.Slack.BotToken
@@ -155,7 +174,11 @@ func DetectExistingConfig() (*ImportResult, error) {
 			}
 			if appToken != "" && !isEnvVarRef(appToken) {
 				result.Channels.Slack.AppToken = appToken
+			} else if appToken != "" {
+				fmt.Printf("  Note: Slack app token uses env-var reference (will need manual configuration)\n")
 			}
+		} else if botToken != "" {
+			fmt.Printf("  Note: Slack bot token uses env-var reference (will need manual configuration)\n")
 		}
 	}
 
@@ -299,6 +322,8 @@ func detectWorkspace(home, configWorkspace string) string {
 		}
 	}
 
+	// Directory exists but has no marker files
+	fmt.Printf("  Note: workspace at %s has no marker files (SOUL.md, AGENTS.md, IDENTITY.md)\n", wsDir)
 	return ""
 }
 

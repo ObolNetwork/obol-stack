@@ -174,7 +174,7 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 		deploymentID = parts[1]
 	} else {
 		// Try to split by first dash that separates network from ID
-		// Network names are expected to be single words (ethereum, helios, aztec)
+		// Network names are expected to be single words (ethereum, aztec)
 		parts := strings.SplitN(deploymentIdentifier, "-", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
