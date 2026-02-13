@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { OpenClawInstanceCard } from '../../molecules/OpenClawInstanceCard';
 import { useOpenClawInstances } from '../../../hooks/useOpenClaw';

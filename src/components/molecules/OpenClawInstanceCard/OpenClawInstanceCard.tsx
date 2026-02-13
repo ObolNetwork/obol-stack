@@ -1,6 +1,5 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import {
   Box,
   Flex,
@@ -10,9 +9,11 @@ import {
   styled,
   OpenInNew,
 } from '@obolnetwork/obol-ui';
-import { ExternalLinkIcon } from '@radix-ui/react-icons';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
-import { useOpenClawStatus } from '../../../hooks/useOpenClaw';
+import {
+  useOpenClawStatus,
+  useOpenClawToken,
+} from '../../../hooks/useOpenClaw';
 import type { OpenClawInstance } from '@/types/openclaw';
 
 interface OpenClawInstanceCardProps {
@@ -116,13 +117,7 @@ export function OpenClawInstanceCard({
         ? 'error'
         : 'unknown';
 
-  const [token, setToken] = useState<string | null>(null);
-  useEffect(() => {
-    fetch(`/api/openclaw/token?id=${instance.id}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => setToken(data?.token ?? null))
-      .catch(() => {});
-  }, [instance.id]);
+  const { token } = useOpenClawToken(instance.id);
 
   const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
