@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	petname "github.com/dustinkirkland/golang-petname"
@@ -143,6 +144,13 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 
+		// Ensure DNS resolver is running for wildcard *.obol.stack
+		if err := dns.EnsureRunning(); err != nil {
+			fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
+		} else if err := dns.ConfigureSystemResolver(); err != nil {
+			fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
+		}
+
 		fmt.Println("Stack restarted successfully")
 		fmt.Printf("Stack ID: %s\n", stackID)
 		return nil
@@ -189,6 +197,13 @@ func Up(cfg *config.Config) error {
 
 	if err := syncDefaults(cfg, kubeconfigPath); err != nil {
 		return err
+	}
+
+	// Ensure DNS resolver is running for wildcard *.obol.stack
+	if err := dns.EnsureRunning(); err != nil {
+		fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
+	} else if err := dns.ConfigureSystemResolver(); err != nil {
+		fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
 	}
 
 	fmt.Println("Stack started successfully")
@@ -266,6 +281,10 @@ func Purge(cfg *config.Config, force bool) error {
 			fmt.Println("Cluster containers deleted")
 		}
 	}
+
+	// Stop DNS resolver and remove system resolver config
+	dns.Stop()
+	dns.RemoveSystemResolver()
 
 	// Remove stack config directory
 	stackConfigDir := filepath.Join(cfg.ConfigDir)
