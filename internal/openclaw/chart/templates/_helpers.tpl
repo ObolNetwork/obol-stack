@@ -143,6 +143,19 @@ Render openclaw.json as strict JSON. If config.content is provided, it is used v
   "auth" $gatewayAuth
   "http" (dict "endpoints" (dict "chatCompletions" (dict "enabled" .Values.openclaw.gateway.http.endpoints.chatCompletions.enabled)))
 -}}
+{{- if .Values.openclaw.gateway.trustedProxies -}}
+{{- $_ := set $gateway "trustedProxies" .Values.openclaw.gateway.trustedProxies -}}
+{{- end -}}
+{{- if or .Values.openclaw.gateway.controlUi.allowInsecureAuth .Values.openclaw.gateway.controlUi.dangerouslyDisableDeviceAuth -}}
+{{- $controlUi := dict -}}
+{{- if .Values.openclaw.gateway.controlUi.allowInsecureAuth -}}
+{{- $_ := set $controlUi "allowInsecureAuth" true -}}
+{{- end -}}
+{{- if .Values.openclaw.gateway.controlUi.dangerouslyDisableDeviceAuth -}}
+{{- $_ := set $controlUi "dangerouslyDisableDeviceAuth" true -}}
+{{- end -}}
+{{- $_ := set $gateway "controlUi" $controlUi -}}
+{{- end -}}
 
 {{- $agentDefaults := dict "workspace" .Values.openclaw.workspaceDir -}}
 {{- if .Values.openclaw.agentModel -}}
