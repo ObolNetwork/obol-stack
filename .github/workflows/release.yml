@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@89d709d423dc495668cd762a18dd4a070611be3f # v4.1.0
+        uses: actions/setup-node@dda4788290998366da86b6a4f497909644397bb2 # v4.1.0
         with:
           node-version: '22'
 
@@ -33,7 +33,7 @@ jobs:
           echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -51,7 +51,7 @@ jobs:
         run: |
           # Get the previous tag
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
+
           # Generate changelog
           if [ -n "$PREVIOUS_TAG" ]; then
             echo "## Changes since $PREVIOUS_TAG" > CHANGELOG.md
@@ -60,7 +60,7 @@ jobs:
             echo "## Initial Release" > CHANGELOG.md
             git log --oneline --no-merges >> CHANGELOG.md
           fi
-          
+
           # Set output for use in release
           {
             echo 'changelog<<EOF'

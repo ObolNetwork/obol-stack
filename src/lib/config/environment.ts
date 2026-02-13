@@ -8,6 +8,7 @@ export const config = {
     process.env.NEXT_PUBLIC_PROMETHEUS_URL ||
     'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
   erpcUrl: process.env.NEXT_PUBLIC_ERPC_URL || 'https://obol.stack/rpc',
+  openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
   commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',
   tagVersion: process.env.NEXT_PUBLIC_TAG_VERSION || 'local',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useDisconnect } from 'wagmi';
 import { Box, Button, Flex, Text, styled, Image } from '@obolnetwork/obol-ui';
@@ -69,6 +69,22 @@ export function WalletConnection() {
         openConnectModal,
         authenticationStatus,
         mounted,
+      }: {
+        account?: {
+          address: string;
+          displayName: string;
+          ensAvatar?: string;
+          ensName?: string;
+        } | null;
+        chain?: {
+          id: number;
+          name?: string;
+          unsupported?: boolean;
+        } | null;
+        openChainModal: () => void;
+        openConnectModal: () => void;
+        authenticationStatus?: 'loading' | 'unauthenticated' | 'authenticated';
+        mounted: boolean;
       }) => {
         const ready = mounted && authenticationStatus !== 'loading';
         const connected =

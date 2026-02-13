@@ -1,82 +1,82 @@
-FROM node:24-alpine AS base
+# -------------------------------
+# Base image
+# -------------------------------
+FROM node:25-alpine AS base
 
-# Enable corepack for pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install corepack (needed for pnpm)
+RUN npm install -g --force corepack \
+    && corepack enable \
+    && corepack prepare pnpm@latest --activate
 
-# Build arguments
-ARG VERSION=unknown
-ARG BUILDTIME=unknown
-ARG GITCOMMIT=unknown
-
-# Install dependencies only when needed
-FROM base AS deps
-# Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
-RUN apk add --no-cache libc6-compat
 WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Install dependencies based on the preferred package manager
+# -------------------------------
+# Dependencies layer (cached)
+# -------------------------------
+FROM base AS deps
+
+# Needed for some native modules
+RUN apk add --no-cache libc6-compat
+
+# Copy only package files for caching
 COPY package.json pnpm-lock.yaml* ./
+
+# Install dependencies
 RUN pnpm install --frozen-lockfile || pnpm install --force
 
-# Rebuild the source code only when needed
+# -------------------------------
+# Builder
+# -------------------------------
 FROM base AS builder
+
 WORKDIR /app
+
+# Copy node_modules from deps (layer caching)
 COPY --from=deps /app/node_modules ./node_modules
+
+# Copy the rest of the app
 COPY . .
 
-# Pass build args as environment variables for Next.js
+# Build args for metadata
 ARG VERSION
 ARG BUILDTIME
 ARG GITCOMMIT
 ARG NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID
-ARG NEXT_PUBLIC_PROMETHEUS_URL
 ENV NEXT_PUBLIC_VERSION=$VERSION
 ENV NEXT_PUBLIC_BUILDTIME=$BUILDTIME
 ENV NEXT_PUBLIC_GITCOMMIT=$GITCOMMIT
 ENV NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=$NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID
-ENV NEXT_PUBLIC_PROMETHEUS_URL=$NEXT_PUBLIC_PROMETHEUS_URL
 
-# Build the application
+# Build the Next.js app
 RUN pnpm run build
 
-# Production image, copy all the files and run next
+# -------------------------------
+# Production runner
+# -------------------------------
 FROM base AS runner
+
 WORKDIR /app
 
-ENV NODE_ENV=production
-# Disable Next.js telemetry
-ENV NEXT_TELEMETRY_DISABLED=1
+# Add non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
-# Add build metadata as environment variables
-ARG VERSION
-ARG BUILDTIME
-ARG GITCOMMIT
-ENV VERSION=$VERSION
-ENV BUILDTIME=$BUILDTIME
-ENV GITCOMMIT=$GITCOMMIT
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-COPY --from=builder /app/public ./public
-
-# Set the correct permission for prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Automatically leverage output traces to reduce image size
-# https://nextjs.org/docs/advanced-features/output-file-tracing
+# Copy only the necessary build output, set ownership directly
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Ensure ownership recursively (in case any files/folders are missing ownership)
+RUN chown -R nextjs:nodejs .next ./.next/static ./public
 
 USER nextjs
 
 EXPOSE 3000
-
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV NEXT_PUBLIC_HOSTNAME="0.0.0.0"
 
-# server.js is created by next build from the standalone output
-# https://nextjs.org/docs/pages/api-reference/next-config-js/output
+# Run the Next.js standalone server
 CMD ["node", "server.js"]

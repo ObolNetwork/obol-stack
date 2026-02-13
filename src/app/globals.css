@@ -14,19 +14,6 @@ body {
     Droid Sans,
     Helvetica Neue,
     sans-serif;
-  --copilot-kit-background-color: #091011;
-  --copilot-kit-primary-color: #182d32;
-  --copilot-kit-contrast-color: #e1e9eb;
-  --copilot-kit-input-background-color: #111f22;
-  --copilot-kit-secondary-color: #b8c5c7;
-  --copilot-kit-secondary-contrast-color: #e1e9eb; /* Body text color */
-  --copilot-kit-separator-color: transparent; /* Input border color */
-  --copilot-kit-muted-color: #6b7a7d;
-  --copilot-kit-error-background: #091011;
-  --copilot-kit-error-border: #c33;
-  --copilot-kit-error-text: #ff6b6b;
-  --copilot-kit-dev-console-bg: #0f1a1b;
-  --copilot-kit-dev-console-text: #fff;
 }
 
 a {
@@ -36,54 +23,4 @@ a {
 
 * {
   box-sizing: border-box;
-}
-
-/* CopilotKitSidebar styles */
-.copilotKitSidebar {
-  z-index: 30 !important;
-  position: fixed !important;
-  bottom: auto !important;
-  right: auto !important;
-  top: 136px !important;
-  right: 64px !important;
-  .copilotKitWindow {
-    border-left: 1px solid #2d4d53;
-  }
-  @media (max-width: 1100px) {
-    top: 20px !important;
-    right: 250px !important;
-  }
-}
-
-.copilotKitInput {
-  min-height: 24px !important;
-  padding: 12px 16px 12px 12px;
-  display: flex !important;
-}
-
-/* Higher specificity to override CopilotKit styles */
-.copilotKitMessage.copilotKitAssistantMessage {
-  margin-bottom: 24px !important;
-  padding: 12px 16px !important;
-  align-items: flex-start !important;
-  gap: 8px !important;
-  align-self: stretch !important;
-  /* Body/Medium */
-  font-family: 'DM Sans';
-  font-size: 16px !important;
-  font-style: normal !important;
-  font-weight: 400 !important;
-  line-height: 24px !important; /* 150% */
-
-  border-radius: 0 8px 8px 8px !important;
-  background: #222829 !important;
-  margin-bottom: 40px !important;
-}
-
-.copilotKitMessage.copilotKitAssistantMessage .copilotKitMessageControls {
-  padding: 20px 0 0 !important;
-}
-
-.copilotKitMessageControlButton {
-  color: #e1e9eb !important;
 }

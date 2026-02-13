@@ -27,7 +27,7 @@ spec:
       containers:
         - name: obol-app
           # FIXED: Use the full image reference from the Helm chart values
-          image: obolnetwork/obol-stack-front-end:main-b98b361
+          image: obol-frontend
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -48,6 +48,10 @@ spec:
               value: 'http://erpc.default.svc.cluster.local:4000/rpc'
             - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
               value: 'http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080'
+            - name: ADK_AGENT_URL
+              value: 'https://obol-agent-ag-ui-1057544642515.us-east4.run.app'
+            - name: NEXT_PUBLIC_ADK_AGENT_URL
+              value: 'https://obol-agent-ag-ui-1057544642515.us-east4.run.app'
           resources:
             requests:
               memory: '128Mi'

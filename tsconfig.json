@@ -1,23 +1,20 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
+    "types": ["node"],
+    "plugins": [{ "name": "next" }],
     "paths": {
       "ObolNetwork/*": ["./src/*"],
       "@/*": ["./src/*"]
@@ -28,7 +25,9 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "scripts/generateVersionEnv.js"
+    "scripts/generateVersionEnv.js",
+    ".next/dev/types/**/*.ts",
+    "next.config.ts"
   ],
   "exclude": ["node_modules"]
 }
