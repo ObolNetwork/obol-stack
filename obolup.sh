@@ -55,6 +55,7 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
+readonly MKCERT_VERSION="1.4.4"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -1064,6 +1065,47 @@ WRAPPER
 	return 1
 }
 
+# Install mkcert (local CA for TLS certificates)
+install_mkcert() {
+	local platform=$(detect_platform)
+	local arch=$(detect_arch)
+
+	# Remove broken symlink if exists
+	remove_broken_symlink "mkcert"
+
+	# Check for global mkcert first
+	local global_mkcert
+	if global_mkcert=$(check_global_binary "mkcert"); then
+		if create_binary_symlink "mkcert" "$global_mkcert"; then
+			log_success "mkcert already installed at: $global_mkcert (symlinked)"
+		else
+			log_success "mkcert already installed at: $global_mkcert"
+		fi
+		return 0
+	fi
+
+	# Check if already in OBOL_BIN_DIR
+	if [[ -f "$OBOL_BIN_DIR/mkcert" ]]; then
+		log_success "mkcert already installed"
+		return 0
+	fi
+
+	log_info "Installing mkcert v$MKCERT_VERSION..."
+
+	# Download mkcert binary
+	local download_url="https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-${platform}-${arch}"
+
+	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/mkcert.tmp"; then
+		chmod +x "$OBOL_BIN_DIR/mkcert.tmp"
+		mv "$OBOL_BIN_DIR/mkcert.tmp" "$OBOL_BIN_DIR/mkcert"
+		log_success "mkcert v$MKCERT_VERSION installed"
+	else
+		log_error "Failed to download mkcert"
+		rm -f "$OBOL_BIN_DIR/mkcert.tmp"
+		return 1
+	fi
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -1077,6 +1119,7 @@ install_dependencies() {
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
+	install_mkcert || log_warn "mkcert installation failed (TLS will be unavailable)"
 
 	echo ""
 	log_success "Dependencies check complete"

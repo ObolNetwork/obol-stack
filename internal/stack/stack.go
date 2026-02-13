@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	oboltls "github.com/ObolNetwork/obol-stack/internal/tls"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -94,6 +95,27 @@ func Init(cfg *config.Config, force bool) error {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
 	fmt.Printf("Defaults copied to: %s\n", defaultsDir)
+
+	// Generate TLS certificates for *.obol.stack (if mkcert is available)
+	if oboltls.MkcertAvailable(cfg.BinDir) {
+		fmt.Println("Generating TLS certificates for *.obol.stack...")
+		if err := oboltls.GenerateCerts(cfg.BinDir, cfg.ConfigDir); err != nil {
+			fmt.Printf("Warning: TLS cert generation failed: %v\n", err)
+			fmt.Println("Stack will use HTTP-only mode")
+		} else {
+			fmt.Println("TLS certificates generated (trusted by OS)")
+		}
+	} else {
+		fmt.Println("mkcert not found — TLS disabled (install via obolup.sh to enable)")
+	}
+
+	// Patch the defaults helmfile to enable TLS if certs were generated
+	if oboltls.CertsExist(cfg.ConfigDir) {
+		helmfilePath := filepath.Join(defaultsDir, "helmfile.yaml")
+		if err := enableHelmfileTLS(helmfilePath); err != nil {
+			fmt.Printf("Warning: failed to enable TLS in helmfile: %v\n", err)
+		}
+	}
 
 	// Store stack ID for later use (stackIDPath already declared above)
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
@@ -384,6 +406,17 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 
 	fmt.Println("Default infrastructure deployed")
 
+	// Create TLS Secret in traefik namespace (if certs exist)
+	if oboltls.CertsExist(cfg.ConfigDir) {
+		fmt.Println("Creating TLS Secret for Traefik...")
+		if err := oboltls.EnsureK8sSecret(cfg.BinDir, cfg.ConfigDir, kubeconfigPath); err != nil {
+			fmt.Printf("Warning: TLS Secret creation failed: %v\n", err)
+			fmt.Println("HTTPS will be unavailable until the Secret is created")
+		} else {
+			fmt.Println("TLS Secret created — HTTPS available on port 8443")
+		}
+	}
+
 	// Deploy default OpenClaw instance (non-fatal on failure)
 	fmt.Println("Setting up default OpenClaw instance...")
 	if err := openclaw.SetupDefault(cfg); err != nil {
@@ -412,4 +445,54 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 		return nil
 	}
 	return os.WriteFile(helmfilePath, []byte(updated), 0644)
+}
+
+// enableHelmfileTLS patches the defaults helmfile to enable TLS on the Traefik
+// websecure port and add a websecure Gateway listener with certificateRefs.
+// Also adds websecure parentRef to infrastructure HTTPRoutes (erpc, obol-frontend).
+func enableHelmfileTLS(helmfilePath string) error {
+	data, err := os.ReadFile(helmfilePath)
+	if err != nil {
+		return err
+	}
+	s := string(data)
+
+	// Patch 1: Enable TLS on websecure port
+	tlsOld := "enabled: false  # TLS termination disabled for local dev"
+	tlsNew := "enabled: true  # TLS termination via mkcert"
+	if strings.Contains(s, tlsOld) {
+		s = strings.Replace(s, tlsOld, tlsNew, 1)
+	}
+
+	// Patch 2: Add websecure Gateway listener after the web listener block.
+	// Find the end of the web listener's namespacePolicy block and insert websecure.
+	webListenerEnd := "              namespacePolicy:\n                from: All\n"
+	websecureListener := webListenerEnd +
+		"            websecure:\n" +
+		"              port: 8443\n" +
+		"              protocol: HTTPS\n" +
+		"              certificateRefs:\n" +
+		"                - name: obol-stack-tls\n" +
+		"              namespacePolicy:\n" +
+		"                from: All\n"
+	if strings.Contains(s, webListenerEnd) && !strings.Contains(s, "protocol: HTTPS") {
+		// Only the first occurrence (the Gateway listeners block, not the ports block)
+		s = strings.Replace(s, webListenerEnd, websecureListener, 1)
+	}
+
+	// Patch 3: Add websecure parentRef to infrastructure HTTPRoutes.
+	// Each route has "sectionName: web" — add a second parentRef for websecure.
+	webRef := "                  sectionName: web\n"
+	dualRef := webRef +
+		"                - name: traefik-gateway\n" +
+		"                  namespace: traefik\n" +
+		"                  sectionName: websecure\n"
+	if strings.Contains(s, webRef) && !strings.Contains(s, "sectionName: websecure") {
+		s = strings.ReplaceAll(s, webRef, dualRef)
+	}
+
+	if s == string(data) {
+		return nil // No changes needed
+	}
+	return os.WriteFile(helmfilePath, []byte(s), 0644)
 }

@@ -127,7 +127,7 @@ func TestGenerateOverlayValues_OllamaDefault(t *testing.T) {
 	// When imported is nil, generateOverlayValues should use Ollama defaults
 	yaml := generateOverlayValues("openclaw-default.obol.stack", nil)
 
-	if !strings.Contains(yaml, "agentModel: ollama/glm-4.7-flash") {
+	if !strings.Contains(yaml, "agentModel: ollama/gpt-oss:20b-cloud") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {

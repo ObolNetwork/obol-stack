@@ -12,6 +12,7 @@ import (
 type ImportResult struct {
 	Providers    []ImportedProvider
 	AgentModel   string
+	GatewayToken string // gateway.remote.token from openclaw.json
 	Channels     ImportedChannels
 	WorkspaceDir string // path to ~/.openclaw/workspace/ if it exists and contains marker files
 }
@@ -69,6 +70,11 @@ type openclawConfig struct {
 			Workspace string `json:"workspace"`
 		} `json:"defaults"`
 	} `json:"agents"`
+	Gateway struct {
+		Remote struct {
+			Token string `json:"token"`
+		} `json:"remote"`
+	} `json:"gateway"`
 	Channels struct {
 		Telegram *struct {
 			BotToken string `json:"botToken"`
@@ -118,7 +124,8 @@ func DetectExistingConfig() (*ImportResult, error) {
 	}
 
 	result := &ImportResult{
-		AgentModel: cfg.Agents.Defaults.Model.Primary,
+		AgentModel:   cfg.Agents.Defaults.Model.Primary,
+		GatewayToken: cfg.Gateway.Remote.Token,
 	}
 
 	// Detect workspace directory

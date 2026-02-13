@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/llm"
+	oboltls "github.com/ObolNetwork/obol-stack/internal/tls"
 	"github.com/dustinkirkland/golang-petname"
 )
 
@@ -282,7 +284,7 @@ func doSync(cfg *config.Config, id string) error {
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	fmt.Printf("\n✓ OpenClaw synced successfully!\n")
 	fmt.Printf("  Namespace: %s\n", namespace)
-	fmt.Printf("  URL:       http://%s\n", hostname)
+	fmt.Printf("  URL:       %s\n", instanceURL(cfg, hostname))
 	fmt.Printf("\nRetrieve gateway token:\n")
 	fmt.Printf("  obol openclaw token %s\n", id)
 	fmt.Printf("\nPort-forward fallback:\n")
@@ -686,7 +688,7 @@ func List(cfg *config.Config) error {
 		hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 		fmt.Printf("  %s\n", id)
 		fmt.Printf("    Namespace: %s\n", namespace)
-		fmt.Printf("    URL:       http://%s\n", hostname)
+		fmt.Printf("    URL:       %s\n", instanceURL(cfg, hostname))
 		fmt.Println()
 		count++
 	}
@@ -956,6 +958,15 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 	return nil
 }
 
+// instanceURL returns the URL for an OpenClaw instance, using HTTPS on port 8443
+// when TLS certs are available, or HTTP (default port) otherwise.
+func instanceURL(cfg *config.Config, hostname string) string {
+	if oboltls.CertsExist(cfg.ConfigDir) {
+		return fmt.Sprintf("https://%s:8443", hostname)
+	}
+	return fmt.Sprintf("http://%s", hostname)
+}
+
 // deploymentPath returns the path to a deployment directory
 func deploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
@@ -1009,6 +1020,9 @@ httpRoute:
     - name: traefik-gateway
       namespace: traefik
       sectionName: web
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: websecure
 
 # SA needs API token mount for K8s read access
 serviceAccount:
@@ -1019,6 +1033,20 @@ rbac:
   create: true
 
 `)
+
+	// Gateway token: import from existing config or generate a new one
+	token := ""
+	if imported != nil && imported.GatewayToken != "" {
+		token = imported.GatewayToken
+	} else {
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err == nil {
+			token = base64.RawURLEncoding.EncodeToString(tokenBytes)
+		}
+	}
+	if token != "" {
+		b.WriteString(fmt.Sprintf("secrets:\n  gatewayToken:\n    value: %s\n\n", token))
+	}
 
 	// Provider and agent model configuration
 	importedOverlay := TranslateToOverlayYAML(imported)
@@ -1038,7 +1066,7 @@ rbac:
 	} else {
 		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
-  agentModel: ollama/glm-4.7-flash
+  agentModel: ollama/gpt-oss:20b-cloud
   gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
     # Required: browser on non-localhost HTTP has no crypto.subtle,
@@ -1054,8 +1082,8 @@ models:
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
-      - id: glm-4.7-flash
-        name: GLM-4.7 Flash
+      - id: gpt-oss:20b-cloud
+        name: GPT-OSS 20B
 
 `)
 	}
