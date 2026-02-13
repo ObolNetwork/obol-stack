@@ -69,7 +69,10 @@ func SetupDefault(cfg *config.Config) error {
 	}
 
 	// Check if there is an existing ~/.openclaw config with providers
-	imported, _ := DetectExistingConfig()
+	imported, importErr := DetectExistingConfig()
+	if importErr != nil {
+		fmt.Printf("  Warning: could not read existing config: %v\n", importErr)
+	}
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
 	// If no imported providers, check Ollama availability for the default overlay
@@ -116,7 +119,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 					return err
 				}
 				// Import workspace on re-sync too
-				imported, _ := DetectExistingConfig()
+				imported, importErr := DetectExistingConfig()
+				if importErr != nil {
+					fmt.Printf("Warning: could not read existing config: %v\n", importErr)
+				}
 				if imported != nil && imported.WorkspaceDir != "" {
 					copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
 				}
