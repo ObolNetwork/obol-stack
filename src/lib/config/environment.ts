@@ -10,6 +10,9 @@ export const config = {
   erpcUrl: process.env.NEXT_PUBLIC_ERPC_URL || 'https://obol.stack/rpc',
   openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
+  commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',
+  tagVersion: process.env.NEXT_PUBLIC_TAG_VERSION || 'local',
+  buildTime: process.env.NEXT_PUBLIC_BUILD_TIME || '',
 };
 
 export type Config = typeof config;

@@ -27,10 +27,7 @@ test.describe('Visual Regression Tests', () => {
     });
   });
 
-  test.skip('should match homepage on mobile', async ({
-    page,
-    browserName,
-  }) => {
+  test.skip('should match homepage on mobile', async ({ page }) => {
     // Skip this test entirely due to inconsistent mobile browser rendering and CI environment
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto('/');
