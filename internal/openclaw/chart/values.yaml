@@ -153,6 +153,15 @@ openclaw:
   gateway:
     mode: local
     bind: lan
+    # -- Trusted proxy IPs for secure context detection behind a reverse proxy (e.g. Traefik).
+    # OpenClaw uses exact IP matching (no CIDR support).
+    trustedProxies: []
+    # -- Control UI settings for running behind a reverse proxy
+    controlUi:
+      # -- Allow control UI over HTTP (required when behind a non-TLS proxy like Traefik in dev)
+      allowInsecureAuth: false
+      # -- Disable device authentication for control UI (not recommended)
+      dangerouslyDisableDeviceAuth: false
     auth:
       mode: token
 

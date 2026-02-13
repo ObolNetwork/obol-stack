@@ -1024,11 +1024,22 @@ rbac:
 	importedOverlay := TranslateToOverlayYAML(imported)
 	if importedOverlay != "" {
 		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
+		// Inject gateway proxy settings into the openclaw: section for Traefik.
+		if strings.Contains(importedOverlay, "openclaw:\n") {
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n", 1)
+		} else {
+			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n\n")
+		}
 		b.WriteString(importedOverlay)
 	} else {
 		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
   agentModel: ollama/glm-4.7-flash
+  gateway:
+    # Allow control UI over HTTP behind Traefik (local dev stack)
+    controlUi:
+      allowInsecureAuth: true
+      dangerouslyDisableDeviceAuth: true
 
 # Default model provider: in-cluster Ollama (routed through llmspy)
 models:

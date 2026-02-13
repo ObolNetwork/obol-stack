@@ -200,3 +200,39 @@ releases:
                   backendRefs:
                     - name: obol-frontend-obol-app
                       port: 3000
+
+  # Obol Frontend RBAC (OpenClaw instance discovery via Kubernetes API)
+  - name: obol-frontend-rbac
+    namespace: obol-frontend
+    chart: bedag/raw
+    needs:
+      - obol-frontend/obol-frontend
+    values:
+      - resources:
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: obol-frontend-openclaw-discovery
+              labels:
+                app.kubernetes.io/name: obol-frontend
+            rules:
+              - apiGroups: [""]
+                resources: ["namespaces"]
+                verbs: ["get", "list"]
+              - apiGroups: [""]
+                resources: ["pods", "configmaps", "secrets"]
+                verbs: ["get", "list"]
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: obol-frontend-openclaw-discovery
+              labels:
+                app.kubernetes.io/name: obol-frontend
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: obol-frontend-openclaw-discovery
+            subjects:
+              - kind: ServiceAccount
+                name: obol-frontend
+                namespace: obol-frontend
