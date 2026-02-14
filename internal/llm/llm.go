@@ -25,6 +25,13 @@ var providerEnvKeys = map[string]string{
 	"openai":    "OPENAI_API_KEY",
 }
 
+// ProviderStatus captures effective global llmspy provider state.
+type ProviderStatus struct {
+	Enabled   bool
+	HasAPIKey bool
+	APIKeyEnv string
+}
+
 // ConfigureLLMSpy enables a cloud provider in the llmspy gateway.
 // It patches the llms-secrets Secret with the API key, enables the provider
 // in the llmspy-config ConfigMap, and restarts the deployment.
@@ -74,6 +81,73 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	}
 
 	return nil
+}
+
+// GetProviderStatus reads llmspy ConfigMap + Secret and returns global provider status.
+func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	llmsRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
+	if err != nil {
+		return nil, err
+	}
+	var llmsConfig map[string]interface{}
+	if err := json.Unmarshal([]byte(llmsRaw), &llmsConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse llms.json from ConfigMap: %w", err)
+	}
+
+	status := make(map[string]ProviderStatus)
+	if providers, ok := llmsConfig["providers"].(map[string]interface{}); ok {
+		for name, raw := range providers {
+			enabled := false
+			if p, ok := raw.(map[string]interface{}); ok {
+				if v, ok := p["enabled"].(bool); ok {
+					enabled = v
+				}
+			}
+			keyEnv := providerEnvKeys[name]
+			status[name] = ProviderStatus{
+				Enabled:   enabled,
+				HasAPIKey: name == "ollama",
+				APIKeyEnv: keyEnv,
+			}
+		}
+	}
+
+	secretRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+		"get", "secret", secretName, "-n", namespace, "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	var secret struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(secretRaw), &secret); err != nil {
+		return nil, fmt.Errorf("failed to parse llms secret: %w", err)
+	}
+
+	for provider, envKey := range providerEnvKeys {
+		st := status[provider]
+		st.APIKeyEnv = envKey
+		if v, ok := secret.Data[envKey]; ok && strings.TrimSpace(v) != "" {
+			st.HasAPIKey = true
+		}
+		status[provider] = st
+	}
+
+	if _, ok := status["ollama"]; !ok {
+		status["ollama"] = ProviderStatus{
+			Enabled:   true,
+			HasAPIKey: true,
+		}
+	}
+
+	return status, nil
 }
 
 // enableProviderInConfigMap reads the llmspy-config ConfigMap, parses llms.json,
@@ -149,4 +223,21 @@ func kubectl(binary, kubeconfig string, args ...string) error {
 		return err
 	}
 	return nil
+}
+
+func kubectlOutput(binary, kubeconfig string, args ...string) (string, error) {
+	cmd := exec.Command(binary, args...)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return "", fmt.Errorf("%w: %s", err, errMsg)
+		}
+		return "", err
+	}
+	return stdout.String(), nil
 }

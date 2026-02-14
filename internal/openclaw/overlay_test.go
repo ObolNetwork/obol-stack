@@ -108,9 +108,9 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML missing apiKeyEnvVar, got:\n%s", yaml)
 	}
 
-	// apiKeyValue should be ollama-local
-	if !strings.Contains(yaml, "apiKeyValue: ollama-local") {
-		t.Errorf("YAML missing apiKeyValue, got:\n%s", yaml)
+	// apiKeyValue should not be emitted; secrets are injected via env vars.
+	if strings.Contains(yaml, "apiKeyValue:") {
+		t.Errorf("YAML should not contain apiKeyValue literals, got:\n%s", yaml)
 	}
 
 	// api should be openai-completions (llmspy is OpenAI-compatible)
@@ -134,13 +134,83 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 
 func TestGenerateOverlayValues_OllamaDefault(t *testing.T) {
 	// When imported is nil, generateOverlayValues should use Ollama defaults
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil)
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false)
 
 	if !strings.Contains(yaml, "agentModel: ollama/gpt-oss:120b-cloud") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
 		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
+	}
+}
+
+func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true)
+	if !strings.Contains(yaml, "extraEnvFromSecrets") {
+		t.Errorf("overlay missing extraEnvFromSecrets, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "openclaw-user-secrets") {
+		t.Errorf("overlay missing external secret ref, got:\n%s", yaml)
+	}
+}
+
+func TestCollectSensitiveData_StripsLiterals(t *testing.T) {
+	imported := &ImportResult{
+		Providers: []ImportedProvider{
+			{
+				Name:         "openai",
+				APIKey:       "sk-test",
+				APIKeyEnvVar: "OPENAI_API_KEY",
+			},
+		},
+		Channels: ImportedChannels{
+			Telegram: &ImportedTelegram{BotToken: "tg-token"},
+		},
+	}
+
+	data := collectSensitiveData(imported)
+	if data["OPENAI_API_KEY"] != "sk-test" {
+		t.Fatalf("missing OPENAI_API_KEY in extracted data: %+v", data)
+	}
+	if data["TELEGRAM_BOT_TOKEN"] != "tg-token" {
+		t.Fatalf("missing TELEGRAM_BOT_TOKEN in extracted data: %+v", data)
+	}
+	if imported.Providers[0].APIKey != "" {
+		t.Fatalf("provider API key was not stripped from overlay data")
+	}
+	if imported.Channels.Telegram.BotToken != "" {
+		t.Fatalf("telegram token was not stripped from overlay data")
+	}
+}
+
+func TestBuildDirectProviderOverlay_OpenAI(t *testing.T) {
+	result := buildDirectProviderOverlay(
+		"openai",
+		"https://api.openai.com/v1",
+		"openai-completions",
+		"OPENAI_API_KEY",
+		"gpt-5.2",
+		"GPT-5.2",
+		"sk-open-test",
+	)
+
+	if result.AgentModel != "openai/gpt-5.2" {
+		t.Fatalf("AgentModel = %q, want openai/gpt-5.2", result.AgentModel)
+	}
+	foundEnabled := false
+	for _, p := range result.Providers {
+		if p.Name == "openai" {
+			foundEnabled = true
+			if p.Disabled {
+				t.Fatalf("openai provider should be enabled")
+			}
+			if p.APIKeyEnvVar != "OPENAI_API_KEY" {
+				t.Fatalf("openai APIKeyEnvVar = %q", p.APIKeyEnvVar)
+			}
+		}
+	}
+	if !foundEnabled {
+		t.Fatalf("openai provider not found in overlay")
 	}
 }
 

@@ -84,10 +84,10 @@ type openclawConfig struct {
 }
 
 type openclawProvider struct {
-	BaseURL string           `json:"baseUrl"`
-	API     string           `json:"api"`
-	APIKey  string           `json:"apiKey"`
-	Models  []openclawModel  `json:"models"`
+	BaseURL string          `json:"baseUrl"`
+	API     string          `json:"api"`
+	APIKey  string          `json:"apiKey"`
+	Models  []openclawModel `json:"models"`
 }
 
 type openclawModel struct {
@@ -135,15 +135,20 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 			fmt.Printf("  Note: unknown API type '%s' for provider '%s', will auto-detect\n", p.API, name)
 		}
 		ip := ImportedProvider{
-			Name:    name,
-			BaseURL: p.BaseURL,
-			API:     sanitized,
+			Name:         name,
+			BaseURL:      p.BaseURL,
+			API:          sanitized,
+			APIKeyEnvVar: defaultProviderAPIKeyEnvVar(name),
 		}
-		// Only import literal API keys, skip env-var references like ${...}
+		// Import either a literal key (for secret extraction) or env-var reference.
 		if p.APIKey != "" && !isEnvVarRef(p.APIKey) {
 			ip.APIKey = p.APIKey
 		} else if p.APIKey != "" {
-			fmt.Printf("  Note: provider '%s' uses an env-var reference for its API key (will need manual configuration)\n", name)
+			if envVar, ok := extractEnvVarName(p.APIKey); ok {
+				ip.APIKeyEnvVar = envVar
+			} else {
+				fmt.Printf("  Note: provider '%s' uses an env-var reference for its API key (will need manual configuration)\n", name)
+			}
 		}
 		for _, m := range p.Models {
 			ip.Models = append(ip.Models, ImportedModel{ID: m.ID, Name: m.Name})
@@ -221,9 +226,6 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 			if p.APIKeyEnvVar != "" {
 				b.WriteString(fmt.Sprintf("    apiKeyEnvVar: %s\n", p.APIKeyEnvVar))
 			}
-			if p.APIKey != "" {
-				b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", p.APIKey))
-			}
 			if len(p.Models) > 0 {
 				b.WriteString("    models:\n")
 				for _, m := range p.Models {
@@ -244,20 +246,14 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 		if result.Channels.Telegram != nil {
 			b.WriteString("  telegram:\n")
 			b.WriteString("    enabled: true\n")
-			b.WriteString(fmt.Sprintf("    botToken: %s\n", result.Channels.Telegram.BotToken))
 		}
 		if result.Channels.Discord != nil {
 			b.WriteString("  discord:\n")
 			b.WriteString("    enabled: true\n")
-			b.WriteString(fmt.Sprintf("    botToken: %s\n", result.Channels.Discord.BotToken))
 		}
 		if result.Channels.Slack != nil {
 			b.WriteString("  slack:\n")
 			b.WriteString("    enabled: true\n")
-			b.WriteString(fmt.Sprintf("    botToken: %s\n", result.Channels.Slack.BotToken))
-			if result.Channels.Slack.AppToken != "" {
-				b.WriteString(fmt.Sprintf("    appToken: %s\n", result.Channels.Slack.AppToken))
-			}
 		}
 		b.WriteString("\n")
 	}
@@ -366,6 +362,46 @@ func sanitizeModelAPI(api string) string {
 		return api
 	}
 	return ""
+}
+
+func defaultProviderAPIKeyEnvVar(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "ollama":
+		return "OLLAMA_API_KEY"
+	default:
+		var out []rune
+		for _, r := range strings.ToUpper(provider) {
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				out = append(out, r)
+			} else {
+				out = append(out, '_')
+			}
+		}
+		s := strings.Trim(string(out), "_")
+		if s == "" {
+			return "MODEL_API_KEY"
+		}
+		return s + "_API_KEY"
+	}
+}
+
+func extractEnvVarName(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "${") || !strings.HasSuffix(s, "}") {
+		return "", false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(s, "${"), "}")
+	if body == "" {
+		return "", false
+	}
+	if i := strings.Index(body, ":"); i > 0 {
+		body = body[:i]
+	}
+	return body, body != ""
 }
 
 // isEnvVarRef returns true if the value looks like an environment variable reference (${...})

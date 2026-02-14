@@ -28,6 +28,44 @@ func TestIsEnvVarRef(t *testing.T) {
 	}
 }
 
+func TestExtractEnvVarName(t *testing.T) {
+	tests := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"${OPENAI_API_KEY}", "OPENAI_API_KEY", true},
+		{"${OPENAI_API_KEY:default}", "OPENAI_API_KEY", true},
+		{"OPENAI_API_KEY", "", false},
+		{"${}", "", false},
+	}
+
+	for _, tt := range tests {
+		got, ok := extractEnvVarName(tt.in)
+		if ok != tt.wantOK || got != tt.want {
+			t.Errorf("extractEnvVarName(%q) = (%q, %v), want (%q, %v)", tt.in, got, ok, tt.want, tt.wantOK)
+		}
+	}
+}
+
+func TestDefaultProviderAPIKeyEnvVar(t *testing.T) {
+	tests := []struct {
+		provider string
+		want     string
+	}{
+		{"anthropic", "ANTHROPIC_API_KEY"},
+		{"openai", "OPENAI_API_KEY"},
+		{"ollama", "OLLAMA_API_KEY"},
+		{"my-provider", "MY_PROVIDER_API_KEY"},
+	}
+
+	for _, tt := range tests {
+		if got := defaultProviderAPIKeyEnvVar(tt.provider); got != tt.want {
+			t.Errorf("defaultProviderAPIKeyEnvVar(%q) = %q, want %q", tt.provider, got, tt.want)
+		}
+	}
+}
+
 func TestSanitizeModelAPI(t *testing.T) {
 	// All valid values should pass through unchanged
 	valid := []string{
@@ -212,7 +250,6 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 		"anthropic:\n    enabled: true",
 		"baseUrl: https://api.anthropic.com/v1",
 		"api: anthropic-messages",
-		"apiKeyValue: sk-ant-test",
 		"- id: claude-opus-4-6",
 		"name: Claude Opus 4.6",
 	}
@@ -267,13 +304,18 @@ func TestTranslateToOverlayYAML_Channels(t *testing.T) {
 	got := TranslateToOverlayYAML(result)
 
 	checks := []string{
-		"telegram:\n    enabled: true\n    botToken: 123456:ABC",
-		"discord:\n    enabled: true\n    botToken: MTIz...",
-		"slack:\n    enabled: true\n    botToken: xoxb-test\n    appToken: xapp-test",
+		"telegram:\n    enabled: true",
+		"discord:\n    enabled: true",
+		"slack:\n    enabled: true",
 	}
 	for _, check := range checks {
 		if !strings.Contains(got, check) {
 			t.Errorf("YAML missing %q, got:\n%s", check, got)
+		}
+	}
+	for _, unexpected := range []string{"botToken:", "appToken:"} {
+		if strings.Contains(got, unexpected) {
+			t.Errorf("YAML should not contain %q, got:\n%s", unexpected, got)
 		}
 	}
 }
@@ -391,6 +433,9 @@ func TestDetectExistingConfigAt_ValidConfig(t *testing.T) {
 	if p.API != "anthropic-messages" {
 		t.Errorf("Provider.API = %q, want %q", p.API, "anthropic-messages")
 	}
+	if p.APIKeyEnvVar != "ANTHROPIC_API_KEY" {
+		t.Errorf("Provider.APIKeyEnvVar = %q, want %q", p.APIKeyEnvVar, "ANTHROPIC_API_KEY")
+	}
 	if len(p.Models) != 1 || p.Models[0].ID != "claude-opus-4-6" {
 		t.Errorf("Provider.Models = %v", p.Models)
 	}
@@ -422,6 +467,9 @@ func TestDetectExistingConfigAt_EnvVarKeySkipped(t *testing.T) {
 	}
 	if result.Providers[0].APIKey != "" {
 		t.Errorf("Provider.APIKey = %q, want empty (env-var should be skipped)", result.Providers[0].APIKey)
+	}
+	if result.Providers[0].APIKeyEnvVar != "OPENAI_API_KEY" {
+		t.Errorf("Provider.APIKeyEnvVar = %q, want OPENAI_API_KEY", result.Providers[0].APIKeyEnvVar)
 	}
 }
 
