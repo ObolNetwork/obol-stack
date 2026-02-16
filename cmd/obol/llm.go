@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -44,6 +45,39 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					}
 
 					return llm.ConfigureLLMSpy(cfg, provider, apiKey)
+				},
+			},
+			{
+				Name:  "status",
+				Usage: "Show global llmspy provider status",
+				Action: func(c *cli.Context) error {
+					status, err := llm.GetProviderStatus(cfg)
+					if err != nil {
+						return err
+					}
+
+					providers := make([]string, 0, len(status))
+					for name := range status {
+						providers = append(providers, name)
+					}
+					sort.Strings(providers)
+
+					fmt.Println("Global llmspy providers:")
+					fmt.Println()
+					fmt.Printf("  %-12s %-8s %-10s %s\n", "PROVIDER", "ENABLED", "API KEY", "ENV VAR")
+					for _, name := range providers {
+						s := status[name]
+						key := "n/a"
+						if s.APIKeyEnv != "" {
+							if s.HasAPIKey {
+								key = "set"
+							} else {
+								key = "missing"
+							}
+						}
+						fmt.Printf("  %-12s %-8t %-10s %s\n", name, s.Enabled, key, s.APIKeyEnv)
+					}
+					return nil
 				},
 			},
 		},

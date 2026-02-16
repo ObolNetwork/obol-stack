@@ -34,8 +34,10 @@ type CloudProviderInfo struct {
 }
 
 const (
-	appName       = "openclaw"
-	defaultDomain = "obol.stack"
+	appName                 = "openclaw"
+	defaultDomain           = "obol.stack"
+	userSecretsFileName     = "values-obol.secrets.json"
+	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.0"
@@ -163,8 +165,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 			// Push cloud API key to llmspy if a cloud provider was selected
 			if cloudProvider != nil {
 				if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-					fmt.Printf("Warning: failed to configure llmspy: %v\n", llmErr)
-					fmt.Println("You can configure it later with: obol llm configure")
+					return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 				}
 			}
 		}
@@ -177,7 +178,12 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	// Write Obol Stack overlay values (httpRoute, provider config, eRPC, skills)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	overlay := generateOverlayValues(hostname, imported)
+	secretData := collectSensitiveData(imported)
+	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
+	}
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -198,6 +204,9 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("\nFiles created:\n")
 	fmt.Printf("  - values-obol.yaml  Obol Stack overlay (httpRoute, providers, eRPC)\n")
 	fmt.Printf("  - helmfile.yaml     Deployment configuration (chart: obol/openclaw v%s)\n", chartVersion)
+	if len(secretData) > 0 {
+		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
+	}
 
 	if opts.Sync {
 		fmt.Printf("\nDeploying to cluster...\n\n")
@@ -240,6 +249,11 @@ func doSync(cfg *config.Config, id string) error {
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
 	}
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	if err := applyUserSecretsIfPresent(cfg, namespace, deploymentDir); err != nil {
+		return fmt.Errorf("failed to sync OpenClaw user secrets: %w", err)
+	}
 
 	fmt.Printf("Syncing OpenClaw: %s/%s\n", appName, id)
 	fmt.Printf("Deployment directory: %s\n", deploymentDir)
@@ -258,7 +272,6 @@ func doSync(cfg *config.Config, id string) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	fmt.Printf("\n✓ OpenClaw synced successfully!\n")
 	fmt.Printf("  Namespace: %s\n", namespace)
@@ -268,6 +281,101 @@ func doSync(cfg *config.Config, id string) error {
 	fmt.Printf("\nPort-forward fallback:\n")
 	fmt.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789\n", namespace)
 
+	return nil
+}
+
+func writeUserSecretsFile(deploymentDir string, secretData map[string]string) error {
+	path := filepath.Join(deploymentDir, userSecretsFileName)
+	if len(secretData) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+
+	payload, err := json.MarshalIndent(secretData, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0600)
+}
+
+func loadUserSecretsFile(deploymentDir string) (map[string]string, error) {
+	path := filepath.Join(deploymentDir, userSecretsFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var out map[string]string
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", userSecretsFileName, err)
+	}
+	return out, nil
+}
+
+func applyUserSecretsIfPresent(cfg *config.Config, namespace, deploymentDir string) error {
+	secretData, err := loadUserSecretsFile(deploymentDir)
+	if err != nil {
+		return err
+	}
+	if len(secretData) == 0 {
+		return nil
+	}
+
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	if err := ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace); err != nil {
+		return err
+	}
+
+	manifest := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]string{
+			"name":      userSecretsK8sSecretRef,
+			"namespace": namespace,
+		},
+		"type":       "Opaque",
+		"stringData": secretData,
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(kubectlBinary, "apply", "-f", "-")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	cmd.Stdin = bytes.NewReader(raw)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w\n%s", err, stderr.String())
+	}
+	return nil
+}
+
+func ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace string) error {
+	getCmd := exec.Command(kubectlBinary, "get", "namespace", namespace)
+	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if err := getCmd.Run(); err == nil {
+		return nil
+	}
+
+	createCmd := exec.Command(kubectlBinary, "create", "namespace", namespace)
+	createCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var stderr bytes.Buffer
+	createCmd.Stderr = &stderr
+	if err := createCmd.Run(); err != nil {
+		if strings.Contains(stderr.String(), "AlreadyExists") {
+			return nil
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
 	return nil
 }
 
@@ -529,8 +637,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	// Push cloud API key to llmspy if a cloud provider was selected
 	if cloudProvider != nil {
 		if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-			fmt.Printf("Warning: failed to configure llmspy: %v\n", llmErr)
-			fmt.Println("You can configure it later with: obol llm configure")
+			return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 		}
 	}
 
@@ -543,7 +650,11 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 
 	// Regenerate overlay values with the selected provider
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-	overlay := generateOverlayValues(hostname, imported)
+	secretData := collectSensitiveData(imported)
+	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
+		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
+	}
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0)
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -827,9 +938,9 @@ func CLI(cfg *config.Config, id string, args []string) error {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	if len(args) == 0 {
-		return fmt.Errorf("no openclaw command specified\n\nExamples:\n" +
-			"  obol openclaw cli %s -- gateway health\n" +
-			"  obol openclaw cli %s -- gateway call config.get\n" +
+		return fmt.Errorf("no openclaw command specified\n\nExamples:\n"+
+			"  obol openclaw cli %s -- gateway health\n"+
+			"  obol openclaw cli %s -- gateway call config.get\n"+
 			"  obol openclaw cli %s -- doctor", id, id, id)
 	}
 
@@ -934,7 +1045,7 @@ func deploymentPath(cfg *config.Config, id string) string {
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
-func generateOverlayValues(hostname string, imported *ImportResult) string {
+func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool) string {
 	var b strings.Builder
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
@@ -988,6 +1099,8 @@ openclaw:
       allowInsecureAuth: true
 
 # Default model provider: in-cluster Ollama (routed through llmspy)
+# apiKeyValue is a dummy placeholder — Ollama does not require auth.
+# It is safe to inline here (unlike real cloud keys, which go to secrets).
 models:
   ollama:
     enabled: true
@@ -1014,6 +1127,15 @@ skills:
 initJob:
   enabled: false
 `)
+
+	if useExternalSecrets {
+		b.WriteString(`
+# Load instance-local credentials (provider/channel tokens) from a dedicated Secret
+secrets:
+  extraEnvFromSecrets:
+    - ` + userSecretsK8sSecretRef + `
+`)
+	}
 
 	return b.String()
 }
@@ -1077,9 +1199,12 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	if ollamaAvailable {
 		fmt.Println("\nSelect a model provider:")
-		fmt.Println("  [1] Ollama (default, runs in-cluster)")
-		fmt.Println("  [2] OpenAI")
-		fmt.Println("  [3] Anthropic")
+		fmt.Println("  [1] Global Ollama via llmspy (default)")
+		fmt.Println("  [2] Global OpenAI via llmspy")
+		fmt.Println("  [3] Global Anthropic via llmspy")
+		fmt.Println("  [4] Direct OpenAI (instance override)")
+		fmt.Println("  [5] Direct Anthropic (instance override)")
+		fmt.Println("  [6] Custom OpenAI-compatible endpoint (instance override)")
 		fmt.Print("\nChoice [1]: ")
 
 		line, _ := reader.ReadString('\n')
@@ -1090,7 +1215,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 		switch choice {
 		case "1":
-			fmt.Println("Using Ollama (in-cluster) as default provider.")
+			fmt.Println("Using global Ollama route via llmspy.")
 			return nil, nil, nil
 		case "2":
 			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
@@ -1106,16 +1231,37 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			}
 			result := buildLLMSpyRoutedOverlay(cloud)
 			return result, cloud, nil
+		case "4":
+			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+			if err != nil {
+				return nil, nil, err
+			}
+			return result, nil, nil
+		case "5":
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+			if err != nil {
+				return nil, nil, err
+			}
+			return result, nil, nil
+		case "6":
+			result, err := promptForCustomProvider(reader)
+			if err != nil {
+				return nil, nil, err
+			}
+			return result, nil, nil
 		default:
-			fmt.Printf("Unknown choice '%s', using Ollama defaults.\n", choice)
+			fmt.Printf("Unknown choice '%s', using global Ollama route.\n", choice)
 			return nil, nil, nil
 		}
 	}
 
-	// Ollama not available — only offer cloud providers
+	// Ollama not available — offer cloud/global and direct overrides
 	fmt.Println("\nSelect a model provider:")
-	fmt.Println("  [1] OpenAI")
-	fmt.Println("  [2] Anthropic")
+	fmt.Println("  [1] Global OpenAI via llmspy")
+	fmt.Println("  [2] Global Anthropic via llmspy")
+	fmt.Println("  [3] Direct OpenAI (instance override)")
+	fmt.Println("  [4] Direct Anthropic (instance override)")
+	fmt.Println("  [5] Custom OpenAI-compatible endpoint (instance override)")
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')
@@ -1139,6 +1285,24 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		}
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
+	case "3":
+		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+		if err != nil {
+			return nil, nil, err
+		}
+		return result, nil, nil
+	case "4":
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+		if err != nil {
+			return nil, nil, err
+		}
+		return result, nil, nil
+	case "5":
+		result, err := promptForCustomProvider(reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		return result, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown choice '%s'; please select a valid provider", choice)
 	}
@@ -1160,6 +1324,89 @@ func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelN
 		ModelID: modelID,
 		Display: modelName,
 	}, nil
+}
+
+// promptForDirectProvider asks for direct-provider settings for an instance-local override.
+func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaultBaseURL, defaultAPI, defaultAPIKeyEnvVar, defaultModelID, defaultModelName string) (*ImportResult, error) {
+	fmt.Printf("\n%s API key (instance-local): ", display)
+	apiKey, _ := reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s API key is required", display)
+	}
+
+	fmt.Printf("%s model ID [%s]: ", display, defaultModelID)
+	modelID, _ := reader.ReadString('\n')
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		modelID = defaultModelID
+	}
+
+	fmt.Printf("%s model display name [%s]: ", display, defaultModelName)
+	modelName, _ := reader.ReadString('\n')
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = defaultModelName
+	}
+
+	fmt.Printf("%s base URL [%s]: ", display, defaultBaseURL)
+	baseURL, _ := reader.ReadString('\n')
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+
+	return buildDirectProviderOverlay(providerName, baseURL, defaultAPI, defaultAPIKeyEnvVar, modelID, modelName, apiKey), nil
+}
+
+// promptForCustomProvider asks for an OpenAI-compatible custom endpoint override.
+func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
+	fmt.Printf("\nCustom base URL (OpenAI-compatible, e.g. https://example.com/v1): ")
+	baseURL, _ := reader.ReadString('\n')
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return nil, fmt.Errorf("custom base URL is required")
+	}
+
+	fmt.Printf("Custom model ID: ")
+	modelID, _ := reader.ReadString('\n')
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil, fmt.Errorf("custom model ID is required")
+	}
+
+	fmt.Printf("Custom model display name [%s]: ", modelID)
+	modelName, _ := reader.ReadString('\n')
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = modelID
+	}
+
+	fmt.Printf("Custom API type [openai-completions]: ")
+	apiType, _ := reader.ReadString('\n')
+	apiType = strings.TrimSpace(apiType)
+	if apiType == "" {
+		apiType = "openai-completions"
+	}
+
+	fmt.Printf("API key env var [OPENAI_API_KEY]: ")
+	apiKeyEnvVar, _ := reader.ReadString('\n')
+	apiKeyEnvVar = strings.TrimSpace(apiKeyEnvVar)
+	if apiKeyEnvVar == "" {
+		apiKeyEnvVar = "OPENAI_API_KEY"
+	}
+
+	fmt.Printf("API key (optional, leave empty to configure later): ")
+	apiKey, _ := reader.ReadString('\n')
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		fmt.Println("  Note: no API key provided; set it later via the OpenClaw user secret.")
+	}
+
+	// Custom endpoints use the "openai" slot because the Helm chart only iterates
+	// a hardcoded provider list (ollama, anthropic, openai). Any other name would
+	// be silently dropped. OpenAI-compatible is the most generic fit.
+	return buildDirectProviderOverlay("openai", baseURL, apiType, apiKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
 // buildLLMSpyRoutedOverlay creates an ImportResult that routes a cloud model
@@ -1188,6 +1435,92 @@ func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 			{Name: "openai", Disabled: true},
 		},
 	}
+}
+
+// buildDirectProviderOverlay creates an instance-local direct provider configuration.
+// Provider name must be one of anthropic/openai/ollama due current chart constraints.
+func buildDirectProviderOverlay(providerName, baseURL, api, apiKeyEnvVar, modelID, modelName, apiKey string) *ImportResult {
+	var agentPrefix string
+	switch providerName {
+	case "anthropic":
+		agentPrefix = "anthropic"
+	case "openai":
+		agentPrefix = "openai"
+	default:
+		agentPrefix = providerName
+	}
+
+	providers := []ImportedProvider{
+		{Name: "anthropic", Disabled: providerName != "anthropic"},
+		{Name: "openai", Disabled: providerName != "openai"},
+		{Name: "ollama", Disabled: providerName != "ollama"},
+	}
+	for i := range providers {
+		if providers[i].Name != providerName {
+			continue
+		}
+		providers[i].Disabled = false
+		providers[i].BaseURL = baseURL
+		providers[i].API = api
+		providers[i].APIKeyEnvVar = apiKeyEnvVar
+		providers[i].APIKey = apiKey
+		providers[i].Models = []ImportedModel{{ID: modelID, Name: modelName}}
+	}
+
+	return &ImportResult{
+		AgentModel: agentPrefix + "/" + modelID,
+		Providers:  providers,
+	}
+}
+
+// collectSensitiveData extracts literal secrets from imported config and strips
+// them from the in-memory overlay data so values-obol.yaml does not persist them.
+// NOTE: This mutates imported in-place (zeroes APIKey/BotToken fields). The caller
+// must call this BEFORE generating the overlay YAML.
+func collectSensitiveData(imported *ImportResult) map[string]string {
+	if imported == nil {
+		return nil
+	}
+
+	secretData := make(map[string]string)
+
+	for i := range imported.Providers {
+		p := &imported.Providers[i]
+		if p.APIKey == "" {
+			continue
+		}
+		envVar := p.APIKeyEnvVar
+		if envVar == "" {
+			envVar = defaultProviderAPIKeyEnvVar(p.Name)
+			p.APIKeyEnvVar = envVar
+		}
+		secretData[envVar] = p.APIKey
+		p.APIKey = ""
+	}
+
+	if imported.Channels.Telegram != nil && imported.Channels.Telegram.BotToken != "" {
+		secretData["TELEGRAM_BOT_TOKEN"] = imported.Channels.Telegram.BotToken
+		imported.Channels.Telegram.BotToken = ""
+	}
+	if imported.Channels.Discord != nil && imported.Channels.Discord.BotToken != "" {
+		secretData["DISCORD_BOT_TOKEN"] = imported.Channels.Discord.BotToken
+		imported.Channels.Discord.BotToken = ""
+	}
+	if imported.Channels.Slack != nil {
+		if imported.Channels.Slack.BotToken != "" {
+			secretData["SLACK_BOT_TOKEN"] = imported.Channels.Slack.BotToken
+			imported.Channels.Slack.BotToken = ""
+		}
+		if imported.Channels.Slack.AppToken != "" {
+			secretData["SLACK_APP_TOKEN"] = imported.Channels.Slack.AppToken
+			imported.Channels.Slack.AppToken = ""
+		}
+	}
+
+	if len(secretData) == 0 {
+		return nil
+	}
+	return secretData
 }
 
 // generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.

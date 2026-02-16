@@ -65,6 +65,7 @@ COMMANDS:
 
    LLM Gateway:
      llm configure      Configure cloud AI provider in llmspy gateway
+     llm status         Show global llmspy provider status
 
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway
