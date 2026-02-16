@@ -162,7 +162,7 @@ GLOBAL OPTIONS:
 			// ============================================================
 			{
 				Name:  "agent",
-				Usage: "Manage Obol Agent",
+				Usage: "Manage your Obol Agent",
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
