@@ -68,14 +68,14 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					for _, name := range providers {
 						s := status[name]
 						key := "n/a"
-						if s.APIKeyEnv != "" {
+						if s.EnvVar != "" {
 							if s.HasAPIKey {
 								key = "set"
 							} else {
 								key = "missing"
 							}
 						}
-						fmt.Printf("  %-12s %-8t %-10s %s\n", name, s.Enabled, key, s.APIKeyEnv)
+						fmt.Printf("  %-12s %-8t %-10s %s\n", name, s.Enabled, key, s.EnvVar)
 					}
 					return nil
 				},
