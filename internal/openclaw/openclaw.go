@@ -1150,32 +1150,37 @@ rbac:
 
 `)
 
+	// Gateway settings shared by all overlay paths.
+	// trustedProxies: k3s uses a deterministic pod CIDR (10.42.0.0/16). Traefik
+	// forwards requests to OpenClaw from within this range, so we trust the
+	// entire CIDR. Without this, OpenClaw rejects proxy headers and the control
+	// UI / WebSocket connections fail.
+	// controlUi.allowInsecureAuth: the browser accesses OpenClaw via
+	// http://<instance>.obol.stack (non-localhost HTTP), where crypto.subtle is
+	// unavailable. Without it the gateway rejects with 1008 "requires HTTPS or
+	// localhost (secure context)". Token auth is still enforced.
+	const gatewayBlock = `  gateway:
+    trustedProxies:
+      - "10.42.0.0/16"
+    controlUi:
+      allowInsecureAuth: true
+`
+
 	// Provider and agent model configuration
 	importedOverlay := TranslateToOverlayYAML(imported)
 	if importedOverlay != "" {
 		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
-		// Inject gateway controlUi settings for Traefik reverse proxy.
-		// allowInsecureAuth is required because the browser accesses OpenClaw via
-		// http://<instance>.obol.stack (non-localhost HTTP), where crypto.subtle is
-		// unavailable. Without it, the gateway rejects with 1008 "requires HTTPS or
-		// localhost (secure context)". Token auth is still enforced.
 		if strings.Contains(importedOverlay, "openclaw:\n") {
-			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n", 1)
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n"+gatewayBlock, 1)
 		} else {
-			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n\n")
+			b.WriteString("openclaw:\n" + gatewayBlock + "\n")
 		}
 		b.WriteString(importedOverlay)
 	} else {
 		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
 openclaw:
   agentModel: ollama/gpt-oss:120b-cloud
-  gateway:
-    # Allow control UI over HTTP behind Traefik (local dev stack).
-    # Required: browser on non-localhost HTTP has no crypto.subtle,
-    # so device identity is unavailable. Token auth is still enforced.
-    controlUi:
-      allowInsecureAuth: true
-
+` + gatewayBlock + `
 # Default model provider: in-cluster Ollama (routed through llmspy)
 # apiKeyValue is a dummy placeholder — Ollama does not require auth.
 # It is safe to inline here (unlike real cloud keys, which go to secrets).
