@@ -112,7 +112,9 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 			}
 			keyEnv := providerEnvKeys[name]
 			status[name] = ProviderStatus{
-				Enabled:   enabled,
+				Enabled: enabled,
+				// Ollama needs no API key, so it's always considered "has key".
+				// Cloud providers are updated below from the actual K8s Secret.
 				HasAPIKey: name == "ollama",
 				APIKeyEnv: keyEnv,
 			}

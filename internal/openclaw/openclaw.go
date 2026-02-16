@@ -1099,6 +1099,8 @@ openclaw:
       allowInsecureAuth: true
 
 # Default model provider: in-cluster Ollama (routed through llmspy)
+# apiKeyValue is a dummy placeholder — Ollama does not require auth.
+# It is safe to inline here (unlike real cloud keys, which go to secrets).
 models:
   ollama:
     enabled: true
@@ -1401,6 +1403,9 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 		fmt.Println("  Note: no API key provided; set it later via the OpenClaw user secret.")
 	}
 
+	// Custom endpoints use the "openai" slot because the Helm chart only iterates
+	// a hardcoded provider list (ollama, anthropic, openai). Any other name would
+	// be silently dropped. OpenAI-compatible is the most generic fit.
 	return buildDirectProviderOverlay("openai", baseURL, apiType, apiKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
@@ -1470,6 +1475,8 @@ func buildDirectProviderOverlay(providerName, baseURL, api, apiKeyEnvVar, modelI
 
 // collectSensitiveData extracts literal secrets from imported config and strips
 // them from the in-memory overlay data so values-obol.yaml does not persist them.
+// NOTE: This mutates imported in-place (zeroes APIKey/BotToken fields). The caller
+// must call this BEFORE generating the overlay YAML.
 func collectSensitiveData(imported *ImportResult) map[string]string {
 	if imported == nil {
 		return nil
