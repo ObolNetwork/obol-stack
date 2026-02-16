@@ -132,7 +132,7 @@ spec:
         # providers.json is taken from the llmspy package (has full model definitions)
         # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
         - name: seed-config
-          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.4
+          image: ghcr.io/obolnetwork/llms:3.0.33-obol.1
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -169,7 +169,7 @@ spec:
         - name: llmspy
           # Obol fork of LLMSpy with smart routing extension.
           # Pin a specific version for reproducibility.
-          image: ghcr.io/obolnetwork/llms:3.0.32-obol.1-rc.4
+          image: ghcr.io/obolnetwork/llms:3.0.33-obol.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
