@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,11 @@ import (
 	"github.com/dustinkirkland/golang-petname"
 )
 
+// openclawVersion is the pinned upstream OpenClaw version (e.g. "v2026.2.9").
+//
+//go:embed OPENCLAW_VERSION
+var openclawVersion string
+
 // CloudProviderInfo holds the cloud provider selection from interactive setup.
 // This is used to configure llmspy with the API key separately from the
 // OpenClaw overlay (which routes through llmspy).
@@ -38,6 +44,7 @@ const (
 	defaultDomain           = "obol.stack"
 	userSecretsFileName     = "values-obol.secrets.json"
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
+	imageRegistry           = "ghcr.io/obolnetwork/openclaw"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.0"
@@ -229,6 +236,67 @@ func Sync(cfg *config.Config, id string) error {
 	return doSync(cfg, id)
 }
 
+// imageTag returns the container image tag for the pinned OpenClaw version
+// (e.g. "2026.2.9"). The semver 'v' prefix is stripped because
+// docker/metadata-action's {{version}} pattern omits it.
+func imageTag() string {
+	// Strip comment lines (the file has a renovate header)
+	for _, line := range strings.Split(openclawVersion, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return strings.TrimPrefix(line, "v")
+		}
+	}
+	return ""
+}
+
+// imageRef returns the full container image reference for the pinned OpenClaw version
+// (e.g. "ghcr.io/obolnetwork/openclaw:2026.2.9").
+func imageRef() string {
+	return fmt.Sprintf("%s:%s", imageRegistry, imageTag())
+}
+
+// importImageToK3d pre-loads the OpenClaw container image into the k3d cluster
+// from the host Docker daemon. This avoids the kubelet pulling ~1 GB from GHCR
+// on every deploy, which can take 10+ minutes on slower connections.
+// Failures are non-fatal: the kubelet will fall back to pulling from the registry.
+func importImageToK3d(cfg *config.Config) {
+	stackIDPath := filepath.Join(cfg.ConfigDir, ".stack-id")
+	stackIDBytes, err := os.ReadFile(stackIDPath)
+	if err != nil {
+		// No stack ID means no cluster — skip silently.
+		return
+	}
+	clusterName := fmt.Sprintf("obol-stack-%s", strings.TrimSpace(string(stackIDBytes)))
+	ref := imageRef()
+
+	// Check if the image already exists locally in Docker.
+	inspectCmd := exec.Command("docker", "image", "inspect", ref)
+	if inspectCmd.Run() != nil {
+		// Image not cached locally — pull it (uses Docker layer cache).
+		fmt.Printf("Pulling %s (first time may take a minute)...\n", ref)
+		pullCmd := exec.Command("docker", "pull", ref)
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if err := pullCmd.Run(); err != nil {
+			fmt.Printf("Warning: docker pull failed, kubelet will pull from registry: %v\n", err)
+			return
+		}
+	}
+
+	// Import from host Docker into k3d (fast local transfer).
+	fmt.Printf("Importing %s into k3d cluster...\n", ref)
+	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+	importCmd := exec.Command(k3dBinary, "image", "import", ref, "--cluster", clusterName)
+	importCmd.Stdout = os.Stdout
+	importCmd.Stderr = os.Stderr
+	if err := importCmd.Run(); err != nil {
+		fmt.Printf("Warning: k3d image import failed, kubelet will pull from registry: %v\n", err)
+		return
+	}
+	fmt.Printf("Image pre-loaded into cluster\n")
+}
+
 func doSync(cfg *config.Config, id string) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
@@ -250,6 +318,9 @@ func doSync(cfg *config.Config, id string) error {
 		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
 	}
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	// Pre-load the OpenClaw image into k3d to avoid slow registry pulls.
+	importImageToK3d(cfg)
 
 	if err := applyUserSecretsIfPresent(cfg, namespace, deploymentDir); err != nil {
 		return fmt.Errorf("failed to sync OpenClaw user secrets: %w", err)
@@ -1050,6 +1121,13 @@ func generateOverlayValues(hostname string, imported *ImportResult, useExternalS
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
 # This file contains stack-specific defaults. Edit to customize.
+
+# Pin the image tag to match the embedded OPENCLAW_VERSION.
+# imagePullPolicy=IfNotPresent avoids re-pulling the ~1 GB image when it has
+# already been imported into the k3d cluster via 'k3d image import'.
+image:
+  tag: ` + imageTag() + `
+  pullPolicy: IfNotPresent
 
 # Enable Gateway API HTTPRoute for stack routing
 httpRoute:
