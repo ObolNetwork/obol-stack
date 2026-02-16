@@ -1523,8 +1523,30 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 	return secretData
 }
 
-// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.
+// generateHelmfile creates a helmfile.yaml for an OpenClaw instance.
+// In development mode (OBOL_DEVELOPMENT=true), if ../helm-charts/charts/openclaw
+// exists relative to the working directory, the helmfile references that local chart
+// directly — no repository or version pin. This allows iterating on chart changes
+// without publishing a release.
+// In production mode the helmfile always references the published obol/openclaw chart.
 func generateHelmfile(id, namespace string) string {
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		if localChart := resolveLocalChart("helm-charts", "charts", "openclaw"); localChart != "" {
+			fmt.Printf("  → Dev mode: using local chart at %s\n", localChart)
+			return fmt.Sprintf(`# OpenClaw instance: %s
+# Managed by obol openclaw (dev mode — local chart)
+
+releases:
+  - name: openclaw
+    namespace: %s
+    createNamespace: true
+    chart: %s
+    values:
+      - values-obol.yaml
+`, id, namespace, localChart)
+		}
+	}
+
 	return fmt.Sprintf(`# OpenClaw instance: %s
 # Managed by obol openclaw
 
@@ -1541,4 +1563,23 @@ releases:
     values:
       - values-obol.yaml
 `, id, namespace, chartVersion)
+}
+
+// resolveLocalChart looks for a sibling chart directory relative to the working
+// directory (e.g. ../helm-charts/charts/openclaw). Returns the absolute path if
+// found, empty string otherwise.
+func resolveLocalChart(pathParts ...string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(append([]string{cwd, ".."}, pathParts...)...)
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return ""
+	}
+	return abs
 }

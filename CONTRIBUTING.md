@@ -27,6 +27,28 @@ Or build a binary directly:
 just build
 ```
 
+## Local Chart Development
+
+When `OBOL_DEVELOPMENT=true`, the CLI automatically detects sibling chart repositories and uses them instead of the published Helm charts. This lets you iterate on chart changes without waiting for a release cycle.
+
+Clone [ObolNetwork/helm-charts](https://github.com/ObolNetwork/helm-charts) next to this repo:
+
+```
+ObolNetwork/
+├── obol-stack/        ← this repo
+└── helm-charts/       ← chart repo (auto-detected)
+    └── charts/
+        └── openclaw/
+```
+
+When you run `obol openclaw onboard` (or any command that generates a helmfile), the CLI resolves `../helm-charts/charts/openclaw` and points the helmfile at it directly. You'll see:
+
+```
+→ Dev mode: using local chart at /path/to/helm-charts/charts/openclaw
+```
+
+In production mode (`OBOL_DEVELOPMENT` unset), the published chart from `obolnetwork.github.io/helm-charts` is always used.
+
 ## Project Layout
 
 ```

@@ -831,6 +831,10 @@ ls .workspace/config/networks/
 ls .workspace/data/networks/
 ```
 
+### Local Chart Development
+
+When `OBOL_DEVELOPMENT=true`, the CLI auto-detects sibling chart repositories. If `../helm-charts/charts/openclaw` exists relative to the working directory, `generateHelmfile()` produces a helmfile that references the local chart path directly (no repository fetch, no version pin). This allows iterating on chart changes in `../helm-charts/` without publishing a release. In production mode the published `obol/openclaw` chart is always used.
+
 ### Adding New Networks
 
 **Steps**:
