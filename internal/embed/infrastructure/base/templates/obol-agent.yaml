@@ -98,8 +98,9 @@ subjects:
 
 ---
 #------------------------------------------------------------------------------
-# Deployment - Obol Agent Application
-# The agent provides AI-powered Kubernetes and Obol cluster management via MCP
+# Deployment - Obol Agent
+# Lightweight sidecar that keeps the agent namespace healthy.
+# The main agent logic is managed via `obol openclaw`.
 #------------------------------------------------------------------------------
 apiVersion: apps/v1
 kind: Deployment
@@ -109,7 +110,7 @@ metadata:
   labels:
     app: obol-agent
 spec:
-  replicas: 1  # Single instance deployment
+  replicas: 1
   selector:
     matchLabels:
       app: obol-agent
@@ -118,68 +119,19 @@ spec:
       labels:
         app: obol-agent
     spec:
-      serviceAccountName: obol-agent  # Uses the ServiceAccount created above for RBAC
+      serviceAccountName: obol-agent
       containers:
         - name: obol-agent
-          image: us-east4-docker.pkg.dev/prj-d-playgrounds-f0cb/obol-agent/obol-agent-ag-ui:latest
-          imagePullPolicy: Always  # Always pull latest image
-          ports:
-            - name: http
-              containerPort: 8000
-              protocol: TCP
-          env:
-            # REQUIRED: Agent API key from Kubernetes secret
-            # Secret created via: obol agent init --agent-api-key=<key>
-            - name: AGENT_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: obol-agent-api-key
-                  key: AGENT_API_KEY
-                  optional: true  # Allow deployment even if secret doesn't exist
-
-            # PUBLIC_MODE controls Kubernetes MCP access
-            # false = Enable Kubernetes API access (uses RBAC permissions above)
-            # true = Disable Kubernetes API access (for public deployments)
-            - name: PUBLIC_MODE
-              value: "false"
-
-            # OKR-1: Default LLM backend via llms.py + Ollama Cloud
-            #
-            # The Obol Stack agent is provider-agnostic:
-            # - `llms.py` (LLMSpy) exposes an OpenAI-compatible API at /v1
-            # - LLMSpy forwards to Ollama (in-cluster), which can run `*:cloud` models
-            #
-            # Important: Ollama Cloud requires a one-time "connect" of the pod identity
-            # (public key derived from /root/.ollama/id_ed25519). We persist that key
-            # in the `llm/ollama-home` PVC so upgrades/restarts don't require re-connect.
-            - name: LLM_BACKEND
-              value: "llmspy"
-            - name: LLM_MODEL
-              value: "glm-4.7:cloud"
-            - name: OPENAI_API_BASE
-              value: "http://llmspy.llm.svc.cluster.local:8000/v1"
-            - name: OPENAI_API_KEY
-              value: "ollama"
-
-          # Health checks ensure the pod is ready to receive traffic
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 5
-
-          # Resource limits prevent the agent from consuming too many cluster resources
+          image: busybox:1.37
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Use 'obol openclaw' to control your Obol Agent"
+              while true; do sleep 3600; done
           resources:
-            limits:    # Maximum allowed resources
-              cpu: 2000m     # 2 CPU cores
-              memory: 4Gi    # 4 GiB RAM
+            limits:
+              cpu: 10m
+              memory: 16Mi
 
 ---
 #------------------------------------------------------------------------------
