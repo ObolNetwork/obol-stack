@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     // Get model from config
     const configInfo = await openclawClient.getConfigInfo(namespace);
-    const model = configInfo.model || 'ollama/glm-4.7-flash';
+    const model = configInfo.model || 'ollama/gpt-oss:120b-cloud';
 
     // Forward request to OpenClaw
     const openclawResponse = await fetch(`${url}/v1/chat/completions`, {
