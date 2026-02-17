@@ -1232,7 +1232,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			result := buildLLMSpyRoutedOverlay(cloud)
 			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1286,7 +1286,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}

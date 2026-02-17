@@ -206,10 +206,8 @@ func Up(cfg *config.Config) error {
 		fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
 	}
 
-	fmt.Println("Stack started successfully")
-	fmt.Printf("Stack ID: %s\n", stackID)
-	fmt.Printf("export KUBECONFIG=%s\n", kubeconfigPath)
-	fmt.Printf("Kubeconfig saved: %s\n", kubeconfigPath)
+	fmt.Printf("\nStack ID: %s\n", stackID)
+	fmt.Printf("\nStack started successfully.\nVisit http://obol.stack in your browser to get started.\nTry setting up an agent with `obol agent init` next.\n")
 	return nil
 }
 
