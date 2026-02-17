@@ -20,7 +20,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/llm"
-	"github.com/dustinkirkland/golang-petname"
+	petname "github.com/dustinkirkland/golang-petname"
 )
 
 // CloudProviderInfo holds the cloud provider selection from interactive setup.
@@ -1199,12 +1199,12 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	if ollamaAvailable {
 		fmt.Println("\nSelect a model provider:")
-		fmt.Println("  [1] Global Ollama via llmspy (default)")
-		fmt.Println("  [2] Global OpenAI via llmspy")
-		fmt.Println("  [3] Global Anthropic via llmspy")
-		fmt.Println("  [4] Direct OpenAI (instance override)")
-		fmt.Println("  [5] Direct Anthropic (instance override)")
-		fmt.Println("  [6] Custom OpenAI-compatible endpoint (instance override)")
+		fmt.Println("  [1] Local Ollama via the Obol model gateway (default)")
+		fmt.Println("  [2] Anthropic API key via the Obol model gateway")
+		fmt.Println("  [3] OpenAI API key via the Obol model gateway")
+		fmt.Println("  [4] Direct Anthropic API key to the Openclaw gateway")
+		fmt.Println("  [5] Direct OpenAI API key to Openclaw gateway")
+		fmt.Println("  [6] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 		fmt.Print("\nChoice [1]: ")
 
 		line, _ := reader.ReadString('\n')
@@ -1218,27 +1218,27 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			fmt.Println("Using global Ollama route via llmspy.")
 			return nil, nil, nil
 		case "2":
-			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
-			if err != nil {
-				return nil, nil, err
-			}
-			result := buildLLMSpyRoutedOverlay(cloud)
-			return result, cloud, nil
-		case "3":
 			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
 			result := buildLLMSpyRoutedOverlay(cloud)
 			return result, cloud, nil
+		case "3":
+			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
+			if err != nil {
+				return nil, nil, err
+			}
+			result := buildLLMSpyRoutedOverlay(cloud)
+			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
 			return result, nil, nil
 		case "5":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1256,12 +1256,12 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 	}
 
 	// Ollama not available — offer cloud/global and direct overrides
-	fmt.Println("\nSelect a model provider:")
-	fmt.Println("  [1] Global OpenAI via llmspy")
-	fmt.Println("  [2] Global Anthropic via llmspy")
-	fmt.Println("  [3] Direct OpenAI (instance override)")
-	fmt.Println("  [4] Direct Anthropic (instance override)")
-	fmt.Println("  [5] Custom OpenAI-compatible endpoint (instance override)")
+	fmt.Println("\nSelect a remote model provider:")
+	fmt.Println("  [1] Anthropic API key via the Obol model gateway")
+	fmt.Println("  [2] OpenAI API key via the Obol model gateway")
+	fmt.Println("  [3] Direct Anthropic API key to the Openclaw gateway")
+	fmt.Println("  [4] Direct OpenAI API key to Openclaw gateway")
+	fmt.Println("  [5] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')
@@ -1272,27 +1272,27 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	switch choice {
 	case "1":
-		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
-		if err != nil {
-			return nil, nil, err
-		}
-		result := buildLLMSpyRoutedOverlay(cloud)
-		return result, cloud, nil
-	case "2":
 		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
+	case "2":
+		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
+		if err != nil {
+			return nil, nil, err
+		}
+		result := buildLLMSpyRoutedOverlay(cloud)
+		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
 		return result, nil, nil
 	case "4":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1304,7 +1304,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		}
 		return result, nil, nil
 	default:
-		return nil, nil, fmt.Errorf("unknown choice '%s'; please select a valid provider", choice)
+		return nil, nil, fmt.Errorf("unknown choice '%s'; please select a valid model provider", choice)
 	}
 }
 
