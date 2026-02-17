@@ -21,7 +21,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	"github.com/dustinkirkland/golang-petname"
+	petname "github.com/dustinkirkland/golang-petname"
 )
 
 // openclawVersion is the pinned upstream OpenClaw version (e.g. "v2026.2.9").
@@ -88,9 +88,9 @@ func SetupDefault(cfg *config.Config) error {
 	if !hasImportedProviders {
 		ollamaAvailable := detectOllama()
 		if ollamaAvailable {
-			fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+			fmt.Printf("  ✓ Local Ollama detected at %s\n", ollamaEndpoint())
 		} else {
-			fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
+			fmt.Printf("  ⚠ Local Ollama not detected on host (%s)\n", ollamaEndpoint())
 			fmt.Println("  Skipping default OpenClaw provider setup.")
 			fmt.Println("  Run 'obol openclaw setup default' to configure a provider later.")
 			return nil
@@ -112,9 +112,9 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	}
 	if id == "" {
 		id = petname.Generate(2, "-")
-		fmt.Printf("Generated deployment ID: %s\n", id)
+		fmt.Printf("Generated a new name for this agent: %s\n", id)
 	} else {
-		fmt.Printf("Using deployment ID: %s\n", id)
+		fmt.Printf("Using an existing agent name: %s\n", id)
 	}
 
 	deploymentDir := deploymentPath(cfg, id)
@@ -224,6 +224,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		if imported != nil && imported.WorkspaceDir != "" {
 			copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
 		}
+		fmt.Printf("\nNow its time to give your agent some configuration.\nOpen http://%s and do some of the following:\n", hostname)
+		fmt.Printf("  - Chat with your agent and ensure they can read from the built-in Ethereum RPC\n")
+		fmt.Printf("  - Setup a messenger integration such that you can reach them from anywhere\n")
+		fmt.Printf("  - Start testing and adding new skills\n")
 		return nil
 	}
 
@@ -1263,7 +1267,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 	reader := bufio.NewReader(os.Stdin)
 
 	if imported != nil {
-		fmt.Print("\nUse detected configuration? [Y/n]: ")
+		fmt.Print("\nUse the detected configuration? [Y/n]: ")
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(strings.ToLower(line))
 		if line == "" || line == "y" || line == "yes" {
@@ -1275,19 +1279,19 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 	// Detect Ollama on the host to decide whether to offer it as an option
 	ollamaAvailable := detectOllama()
 	if ollamaAvailable {
-		fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+		fmt.Printf("\n✓ Local Ollama detected at %s\n", ollamaEndpoint())
 	} else {
-		fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
+		fmt.Printf("\n⚠ Local Ollama not detected on host (%s)\n", ollamaEndpoint())
 	}
 
 	if ollamaAvailable {
 		fmt.Println("\nSelect a model provider:")
-		fmt.Println("  [1] Global Ollama via model gateway (default)")
-		fmt.Println("  [2] Global OpenAI via model gateway")
-		fmt.Println("  [3] Global Anthropic via model gateway")
-		fmt.Println("  [4] Direct OpenAI (instance override)")
-		fmt.Println("  [5] Direct Anthropic (instance override)")
-		fmt.Println("  [6] Custom OpenAI-compatible endpoint (instance override)")
+		fmt.Println("  [1] Local Ollama via the Obol model gateway (default)")
+		fmt.Println("  [2] OpenAI API key via the Obol model gateway")
+		fmt.Println("  [3] Anthropic API key via the Obol model gateway")
+		fmt.Println("  [4] Direct OpenAI API key to Openclaw gateway")
+		fmt.Println("  [5] Direct Anthropic API key to the Openclaw gateway")
+		fmt.Println("  [6] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 		fmt.Print("\nChoice [1]: ")
 
 		line, _ := reader.ReadString('\n')
@@ -1339,12 +1343,12 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 	}
 
 	// Ollama not available — offer cloud/global and direct overrides
-	fmt.Println("\nSelect a model provider:")
-	fmt.Println("  [1] Global OpenAI via model gateway")
-	fmt.Println("  [2] Global Anthropic via model gateway")
-	fmt.Println("  [3] Direct OpenAI (instance override)")
-	fmt.Println("  [4] Direct Anthropic (instance override)")
-	fmt.Println("  [5] Custom OpenAI-compatible endpoint (instance override)")
+	fmt.Println("\nSelect a remote model provider:")
+	fmt.Println("  [1] OpenAI API key via the Obol model gateway")
+	fmt.Println("  [2] Anthropic API key via the Obol model gateway")
+	fmt.Println("  [3] Direct OpenAI API key to Openclaw gateway")
+	fmt.Println("  [4] Direct Anthropic API key to the Openclaw gateway")
+	fmt.Println("  [5] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')

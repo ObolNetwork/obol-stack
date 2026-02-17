@@ -3,15 +3,17 @@
 
 &nbsp;
 
-<h1>The Obol Stack: Run Blockchain Networks Locally</h1>
+<h1>The Obol Stack: Where agents deploy their infrastructure</h1>
 
 </div>
 
 ## Overview
 
-The Obol Stack is a framework to make it easier to distribute and run blockchain networks and decentralised applications (dApps) locally. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
+The Obol Stack is a framework for AI agents to run decentralised infrastructure decentralised applications (dApps) locally to their runtime. The stack is built on [Kubernetes](https://kubernetes.io), with [Helm](https://helm.sh/) as a package management system.
 
-The Obol Stack provides a deployment-centric approach where you can easily install and manage multiple blockchain network instances (Ethereum, Aztec, etc.) with configurable clients and settings. Each network installation creates a unique deployment instance with its own namespace, resources, and configuration - allowing you to run mainnet and testnet side-by-side, or test different client combinations independently.
+The Obol Stack provides an Agent with the ability to reliably sync or connect to many blockchain networks (Ethereum, Aztec, etc.), as well as the skills to interact with them effectively and securely.
+
+Obol Agents can deploy and self-host their own services, and even make them available to the public internet through [EIP-8004](https://eips.ethereum.org/EIPS/eip-8004) and cloudflare [tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/), while monetising them with [x402](https://www.x402.org/) web servers.
 
 ![Demo of the Stack Front End](./assets/frontend.gif)
 
