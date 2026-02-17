@@ -1,90 +1,83 @@
-# Contributing to Blockchain Helm Charts
+# Contributing to the Obol Stack
 
-Thank you for considering contributing to this project! This document provides guidelines to help you contribute effectively.
+## What This Repo Is
 
-## Getting Started
+Obol Stack is a Go CLI (`obol`) and bootstrap installer (`obolup.sh`) that manages a local Kubernetes cluster (k3d) for running blockchain networks. It is **not** a Helm chart repository — charts live in [ObolNetwork/helm-charts](https://github.com/ObolNetwork/helm-charts).
 
-### Prerequisites
+## Prerequisites
 
-- Kubernetes knowledge
-- Helm chart development experience
-- Understanding of the specific blockchain client you're creating/modifying a chart for
+- Go 1.25+
+- Docker (running)
 
-### Development Environment
+That's it. The bootstrap installer handles everything else (kubectl, helm, k3d, helmfile, k9s).
 
-1. Install [Helm](https://helm.sh/docs/intro/install/)
-2. Install [kubectl](https://kubernetes.io/docs/tasks/tools/)
-3. Set up a Kubernetes environment (minikube, kind, or a cloud provider)
-
-## Chart Development Guidelines
-
-### Chart Structure
-
-Each chart should follow this structure:
-```
-charts/<blockchain-client>/
-├── Chart.yaml
-├── values.yaml
-├── templates/
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml (if needed)
-│   ├── pvc.yaml (if needed)
-│   └── NOTES.txt
-├── OWNERS (maintainers list)
-└── README.md (chart-specific documentation)
-```
-
-### Requirements
-
-- Charts must be compatible with Helm 3
-- Include comprehensive documentation
-- Provide sensible defaults in values.yaml
-- Include proper Kubernetes resource requests and limits
-- Follow security best practices
-
-### Values.yaml
-
-- Group related values logically
-- Add comments explaining the purpose of values
-- Include sensible defaults that work out-of-the-box
-- Provide examples for custom configurations
-
-## Pull Request Process
-
-1. Fork the repository
-2. Create a new branch for your changes
-3. Make your changes following the chart development guidelines
-4. Test your charts thoroughly
-5. Submit a pull request
-6. Address review comments
-
-### Pull Request Checklist
-
-- [ ] Chart version updated according to semantic versioning
-- [ ] Chart README.md updated with any new values or changes
-- [ ] Chart has been tested and verified to work
-- [ ] `helm lint` passes without warnings
-- [ ] `helm template` generates valid Kubernetes resources
-
-## Testing Your Chart
+## Development Setup
 
 ```bash
-# Lint the chart
-helm lint charts/your-chart
+# Development mode — uses .workspace/, no compilation needed
+OBOL_DEVELOPMENT=true ./obolup.sh
 
-# Render the templates
-helm template charts/your-chart
-
-# Install the chart in a test environment
-helm install test-release charts/your-chart --dry-run
+# Code changes take effect immediately via `go run`
+obol network list
 ```
 
-## Code of Conduct
+Or build a binary directly:
 
-Please respect other contributors and maintain a positive environment for everyone.
+```bash
+just build
+```
 
-## Thank You
+## Local Chart Development
 
-Your contributions help make this project better for everyone!
+When `OBOL_DEVELOPMENT=true`, the CLI automatically detects sibling chart repositories and uses them instead of the published Helm charts. This lets you iterate on chart changes without waiting for a release cycle.
+
+Clone [ObolNetwork/helm-charts](https://github.com/ObolNetwork/helm-charts) next to this repo:
+
+```
+ObolNetwork/
+├── obol-stack/        ← this repo
+└── helm-charts/       ← chart repo (auto-detected)
+    └── charts/
+        └── openclaw/
+```
+
+When you run `obol openclaw onboard` (or any command that generates a helmfile), the CLI resolves `../helm-charts/charts/openclaw` and points the helmfile at it directly. You'll see:
+
+```
+→ Dev mode: using local chart at /path/to/helm-charts/charts/openclaw
+```
+
+In production mode (`OBOL_DEVELOPMENT` unset), the published chart from `obolnetwork.github.io/helm-charts` is always used.
+
+## Project Layout
+
+```
+cmd/obol/          CLI entrypoint (urfave/cli/v2)
+internal/
+  config/          XDG-compliant configuration
+  stack/           Cluster lifecycle (init, up, down, purge)
+  network/         Network deployment (install, sync, delete)
+  openclaw/        OpenClaw AI assistant integration
+  model/           Model provider management (llmspy gateway)
+  embed/           Embedded assets (k3d config, network definitions, infrastructure)
+  version/         Build version injection
+obolup.sh          Bootstrap installer
+```
+
+## Adding a New Network
+
+1. Create `internal/embed/networks/<name>/values.yaml.gotmpl` with annotated fields
+2. Create `internal/embed/networks/<name>/helmfile.yaml` with deployment logic
+3. The CLI auto-generates flags from the template annotations — no CLI code changes needed
+
+## Running Tests
+
+```bash
+go test ./...
+```
+
+## Pull Requests
+
+1. Create a branch
+2. Make changes, ensure `go test ./...` passes
+3. Submit a PR against `main`

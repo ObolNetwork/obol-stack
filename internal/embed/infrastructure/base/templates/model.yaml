@@ -1,5 +1,5 @@
 ---
-# LLM foundation services (OKR-1)
+# Model foundation services (OKR-1)
 #
 # This deploys:
 # - An ExternalName Service "ollama" that resolves to the host's Ollama server
@@ -11,21 +11,21 @@
 # - The ollama Service abstracts host resolution:
 #     k3d  → host.k3d.internal
 #     k3s  → resolved at stack init via node IP
-# - LLMSpy and all consumers reference ollama.llm.svc.cluster.local:11434,
+# - LLMSpy and all consumers reference ollama.model.svc.cluster.local:11434,
 #   which the ExternalName Service routes to the host.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: llm
+  name: model
 
 ---
-# ExternalName Service: routes ollama.llm.svc.cluster.local → host Ollama.
+# ExternalName Service: routes ollama.model.svc.cluster.local → host Ollama.
 # The externalName is resolved during `obol stack init` via the {{OLLAMA_HOST}} placeholder.
 apiVersion: v1
 kind: Service
 metadata:
   name: ollama
-  namespace: llm
+  namespace: model
   labels:
     app: ollama
 spec:
@@ -39,13 +39,13 @@ spec:
 ---
 # llms.py v3 configuration for Obol Stack:
 # - Ollama provider enabled by default (host machine via ollama Service)
-# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol llm configure`)
+# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol model configure`)
 # - Default model is gpt-oss:120b-cloud (Ollama cloud)
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: llmspy-config
-  namespace: llm
+  namespace: model
 data:
   llms.json: |
     {
@@ -79,7 +79,7 @@ data:
       "ollama": {
         "id": "ollama",
         "npm": "ollama",
-        "api": "http://ollama.llm.svc.cluster.local:11434",
+        "api": "http://ollama.model.svc.cluster.local:11434",
         "models": {},
         "all_models": true
       },
@@ -97,12 +97,12 @@ data:
 
 ---
 # Secret for cloud provider API keys. Empty by default; patched imperatively
-# via `obol llm configure` or `obol openclaw setup`.
+# via `obol model configure` or `obol openclaw setup`.
 apiVersion: v1
 kind: Secret
 metadata:
   name: llms-secrets
-  namespace: llm
+  namespace: model
 type: Opaque
 stringData:
   ANTHROPIC_API_KEY: ""
@@ -113,7 +113,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llmspy
-  namespace: llm
+  namespace: model
   labels:
     app: llmspy
 spec:
@@ -231,7 +231,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: llmspy
-  namespace: llm
+  namespace: model
   labels:
     app: llmspy
 spec:

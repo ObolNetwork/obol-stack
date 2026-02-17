@@ -8,18 +8,18 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/llm"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/urfave/cli/v2"
 )
 
-func llmCommand(cfg *config.Config) *cli.Command {
+func modelCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "llm",
-		Usage: "Manage LLM providers (llmspy universal proxy)",
+		Name:  "model",
+		Usage: "Manage model providers",
 		Subcommands: []*cli.Command{
 			{
 				Name:  "configure",
-				Usage: "Configure a cloud AI provider in the llmspy gateway",
+				Usage: "Configure a cloud AI provider in the model gateway",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "provider",
@@ -28,7 +28,7 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					&cli.StringFlag{
 						Name:    "api-key",
 						Usage:   "API key for the provider",
-						EnvVars: []string{"LLM_API_KEY"},
+						EnvVars: []string{"MODEL_API_KEY"},
 					},
 				},
 				Action: func(c *cli.Context) error {
@@ -38,20 +38,20 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					// Interactive mode if flags not provided
 					if provider == "" || apiKey == "" {
 						var err error
-						provider, apiKey, err = promptLLMConfig()
+						provider, apiKey, err = promptModelConfig()
 						if err != nil {
 							return err
 						}
 					}
 
-					return llm.ConfigureLLMSpy(cfg, provider, apiKey)
+					return model.ConfigureProvider(cfg, provider, apiKey)
 				},
 			},
 			{
 				Name:  "status",
-				Usage: "Show global llmspy provider status",
+				Usage: "Show global model provider status",
 				Action: func(c *cli.Context) error {
-					status, err := llm.GetProviderStatus(cfg)
+					status, err := model.GetProviderStatus(cfg)
 					if err != nil {
 						return err
 					}
@@ -62,7 +62,7 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					}
 					sort.Strings(providers)
 
-					fmt.Println("Global llmspy providers:")
+					fmt.Println("Global model providers:")
 					fmt.Println()
 					fmt.Printf("  %-12s %-8s %-10s %s\n", "PROVIDER", "ENABLED", "API KEY", "ENV VAR")
 					for _, name := range providers {
@@ -84,8 +84,8 @@ func llmCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-// promptLLMConfig interactively asks the user for provider and API key.
-func promptLLMConfig() (string, string, error) {
+// promptModelConfig interactively asks the user for provider and API key.
+func promptModelConfig() (string, string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("Select a provider:")
