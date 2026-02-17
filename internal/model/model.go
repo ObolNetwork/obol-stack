@@ -29,7 +29,7 @@ var providerEnvKeys = map[string]string{
 type ProviderStatus struct {
 	Enabled   bool
 	HasAPIKey bool
-	APIKeyEnv string
+	EnvVar    string // environment variable name (e.g. ANTHROPIC_API_KEY)
 }
 
 // ConfigureProvider enables a cloud provider in the model gateway.
@@ -116,7 +116,7 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 				// Ollama needs no API key, so it's always considered "has key".
 				// Cloud providers are updated below from the actual K8s Secret.
 				HasAPIKey: name == "ollama",
-				APIKeyEnv: keyEnv,
+				EnvVar: keyEnv,
 			}
 		}
 	}
@@ -135,7 +135,7 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 
 	for provider, envKey := range providerEnvKeys {
 		st := status[provider]
-		st.APIKeyEnv = envKey
+		st.EnvVar = envKey
 		if v, ok := secret.Data[envKey]; ok && strings.TrimSpace(v) != "" {
 			st.HasAPIKey = true
 		}
