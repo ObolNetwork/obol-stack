@@ -58,7 +58,7 @@ releases:
   - name: obol-frontend
     namespace: obol-frontend
     chart: obol/obol-app
-    version: 0.1.0
+    version: 0.1.5
     needs:
       - ingress-nginx/ingress-nginx
       - erpc/erpc
