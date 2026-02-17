@@ -5,10 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -77,8 +80,17 @@ func Init(cfg *config.Config, force bool) error {
 	fmt.Printf("K3d config saved to: %s\n", k3dConfigPath)
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
+	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
+	// On macOS (Docker Desktop), host.docker.internal resolves to the host.
+	// On Linux (native Docker), host.k3d.internal is added by k3d.
+	ollamaHost := "host.k3d.internal"
+	if runtime.GOOS == "darwin" {
+		ollamaHost = "host.docker.internal"
+	}
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	if err := embed.CopyDefaults(defaultsDir); err != nil {
+	if err := embed.CopyDefaults(defaultsDir, map[string]string{
+		"{{OLLAMA_HOST}}": ollamaHost,
+	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
 	fmt.Printf("Defaults copied to: %s\n", defaultsDir)
@@ -132,6 +144,13 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 
+		// Ensure DNS resolver is running for wildcard *.obol.stack
+		if err := dns.EnsureRunning(); err != nil {
+			fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
+		} else if err := dns.ConfigureSystemResolver(); err != nil {
+			fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
+		}
+
 		fmt.Println("Stack restarted successfully")
 		fmt.Printf("Stack ID: %s\n", stackID)
 		return nil
@@ -180,10 +199,15 @@ func Up(cfg *config.Config) error {
 		return err
 	}
 
-	fmt.Println("Stack started successfully")
-	fmt.Printf("Stack ID: %s\n", stackID)
-	fmt.Printf("export KUBECONFIG=%s\n", kubeconfigPath)
-	fmt.Printf("Kubeconfig saved: %s\n", kubeconfigPath)
+	// Ensure DNS resolver is running for wildcard *.obol.stack
+	if err := dns.EnsureRunning(); err != nil {
+		fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
+	} else if err := dns.ConfigureSystemResolver(); err != nil {
+		fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
+	}
+
+	fmt.Printf("\nStack ID: %s\n", stackID)
+	fmt.Printf("\nStack started successfully.\nVisit http://obol.stack in your browser to get started.\nTry setting up an agent with `obol agent init` next.\n")
 	return nil
 }
 
@@ -256,6 +280,10 @@ func Purge(cfg *config.Config, force bool) error {
 		}
 	}
 
+	// Stop DNS resolver and remove system resolver config
+	dns.Stop()
+	dns.RemoveSystemResolver()
+
 	// Remove stack config directory
 	stackConfigDir := filepath.Join(cfg.ConfigDir)
 	if err := os.RemoveAll(stackConfigDir); err != nil {
@@ -321,12 +349,25 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 
 	// Sync defaults using helmfile (handles Helm hooks properly)
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
+	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
+
+	// Compatibility migration: older defaults pinned HTTPRoutes to `obol.stack` via
+	// `spec.hostnames`. This breaks public access for:
+	// - quick tunnels (random *.trycloudflare.com host)
+	// - user-provided DNS hostnames (e.g. agent.example.com)
+	// Removing hostnames makes routes match all hostnames while preserving existing
+	// path-based routing.
+	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
+		fmt.Printf("Warning: failed to migrate defaults helmfile hostnames: %v\n", err)
+	}
+
 	helmfileCmd := exec.Command(
 		filepath.Join(cfg.BinDir, "helmfile"),
-		"--file", filepath.Join(defaultsHelmfilePath, "helmfile.yaml"),
+		"--file", helmfilePath,
 		"--kubeconfig", kubeconfigPath,
 		"sync",
 	)
+	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	helmfileCmd.Stdout = os.Stdout
 	helmfileCmd.Stderr = os.Stderr
 
@@ -340,5 +381,33 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 	}
 
 	fmt.Println("Default infrastructure deployed")
+
+	// Deploy default OpenClaw instance (non-fatal on failure)
+	fmt.Println("Setting up default OpenClaw instance...")
+	if err := openclaw.SetupDefault(cfg); err != nil {
+		fmt.Printf("Warning: failed to set up default OpenClaw: %v\n", err)
+		fmt.Println("You can manually set up OpenClaw later with: obol openclaw up")
+	}
+
 	return nil
+}
+
+func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
+	data, err := os.ReadFile(helmfilePath)
+	if err != nil {
+		return err
+	}
+
+	// Only removes the legacy default single-hostname block; if users customized their
+	// helmfile with different hostnames, we leave it alone.
+	needle := "              hostnames:\n                - obol.stack\n"
+	s := string(data)
+	if !strings.Contains(s, needle) {
+		return nil
+	}
+	updated := strings.ReplaceAll(s, needle, "")
+	if updated == s {
+		return nil
+	}
+	return os.WriteFile(helmfilePath, []byte(updated), 0644)
 }

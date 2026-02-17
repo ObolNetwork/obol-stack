@@ -1,29 +1,57 @@
 {{- $network := .Values.network -}}
+{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 
 replicaCount: 1
 
+serviceAccount:
+  name: obol-frontend
+
 image:
   environment:
-    - name: NEXT_PUBLIC_HELIOS_CLIENT_URL
-      value: "http://helios-{{ $network }}.helios.svc.cluster.local:8545"
     - name: NEXT_PUBLIC_ERPC_URL
-      value: "http://erpc.default.svc.cluster.local:4000/rpc"
+      value: "https://{{ $publicDomain }}/rpc"
     - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
       value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
+    - name: BETTER_AUTH_SECRET
+      value: {{ env "BETTER_AUTH_SECRET" | default "" | quote }}
+    - name: BETTER_AUTH_URL
+      value: "https://{{ $publicDomain }}"
+    - name: OBOL_GOOGLE_CLIENT_ID
+      value: {{ env "OBOL_GOOGLE_CLIENT_ID" | default "" | quote }}
+    - name: OBOL_GOOGLE_CLIENT_SECRET
+      value: {{ env "OBOL_GOOGLE_CLIENT_SECRET" | default "" | quote }}
+    - name: OBOL_AUTH_DB_PATH
+      value: "/data/auth.sqlite"
+
+    # Obol Agent (ADK) in-cluster URL for CopilotKit runtime
+    - name: ADK_AGENT_URL
+      value: "http://obol-agent.agent.svc.cluster.local:8000/"
+    - name: NEXT_PUBLIC_ADK_AGENT_URL
+      value: "http://obol-agent.agent.svc.cluster.local:8000/"
+
+    # Ollama in-cluster URL (used by dashboard to surface Ollama Cloud connect URL)
+    - name: OLLAMA_URL
+      value: "http://ollama.llm.svc.cluster.local:11434"
 
   repository: obolnetwork/obol-stack-front-end
-  pullPolicy: Always
-  tag: "v0.1.4"
+  pullPolicy: IfNotPresent
+  tag: "v0.1.5"
 
 service:
   type: ClusterIP
   port: 3000
 
+podSecurityContext:
+  fsGroup: 1001
+
+volumes:
+  - name: auth-db
+    emptyDir: {}
+
+volumeMounts:
+  - name: auth-db
+    mountPath: /data
+
+# Disable legacy Ingress - using Gateway API HTTPRoute instead
 ingress:
-  enabled: true
-  className: "nginx"
-  hosts:
-    - host: obol.stack
-      paths:
-        - path: /
-          pathType: Prefix
+  enabled: false

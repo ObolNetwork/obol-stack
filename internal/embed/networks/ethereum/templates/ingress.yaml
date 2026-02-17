@@ -1,30 +1,57 @@
 {{- if eq .Release.Name "ethereum-ingress" }}
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# HTTPRoute for Ethereum execution client RPC
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
-  name: ethereum
+  name: ethereum-execution
   namespace: {{ .Release.Namespace }}
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
-    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
-  ingressClassName: nginx
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  hostnames:
+    - obol.stack
   rules:
-  - host: obol.stack
-    http:
-      paths:
-      - path: /{{ .Release.Namespace }}/execution(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: ethereum-execution
-            port:
-              number: 8545
-      - path: /{{ .Release.Namespace }}/beacon(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: ethereum-beacon
-            port:
-              number: 5052
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /{{ .Release.Namespace }}/execution
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: ethereum-execution
+          port: 8545
+---
+# HTTPRoute for Ethereum beacon client RPC
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ethereum-beacon
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  hostnames:
+    - obol.stack
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /{{ .Release.Namespace }}/beacon
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: ethereum-beacon
+          port: 5052
 {{- end }}

@@ -1,23 +1,32 @@
 {{- if eq .Release.Name "aztec-ingress" }}
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# HTTPRoute for Aztec sequencer node RPC
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: aztec
   namespace: {{ .Release.Namespace }}
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
-    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
-  ingressClassName: nginx
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  hostnames:
+    - obol.stack
   rules:
-  - host: obol.stack
-    http:
-      paths:
-      - path: /{{ .Release.Namespace }}(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: l2-sequencer-node-{{ .Values.id }}-node
-            port:
-              number: 8080
+    - matches:
+        - path:
+            type: Exact
+            value: /{{ .Release.Namespace }}
+        - path:
+            type: PathPrefix
+            value: /{{ .Release.Namespace }}/
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: l2-sequencer-node-{{ .Values.id }}-node
+          port: 8080
 {{- end }}

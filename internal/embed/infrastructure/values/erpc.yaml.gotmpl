@@ -1,12 +1,18 @@
 {{- $network := .Values.network -}}
+{{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
 {{- $chainId := 1 -}}  {{/* Default: mainnet */}}
 {{- if eq $network "hoodi" -}}
   {{- $chainId = 560048 -}}
-{{- else if eq $network "sepolia" -}}
-  {{- $chainId = 11155111 -}}
 {{- else if ne $network "mainnet" -}}
-  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi, sepolia" $network) -}}
+  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi" $network) -}}
 {{- end -}}
+{{/*
+  erpc.gcp.obol.tech — internal, rate-limited eRPC gateway hosted by Obol.
+  The Basic Auth credential below is knowingly included in the obol-stack source.
+  This endpoint is rate-limited and serves only as a convenience RPC proxy for
+  local stack users; exposing it carries less risk than running fully unprotected.
+*/}}
+{{- $erpcGcpAuth := "obol:svXELzJDXQPrmgA3AopiWZWm" -}} {{/* gitleaks:allow */}}
 
 # Number of replicas
 replicas: 1
@@ -48,6 +54,11 @@ config: |-
 
   projects:
     - id: rpc
+      upstreams:
+        - id: erpc-gcp
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/{{ $network }}/evm/{{ $chainId }}
+          evm:
+            chainId: {{ $chainId }}
       networks:
         - architecture: evm
           evm:
@@ -78,8 +89,11 @@ config: |-
         allowCredentials: true
         maxAge: 3600
 
-# Secret env variables
+# Secret env variables (chart-managed secret for inline values)
 secretEnv: {}
+
+# Extra env variables
+extraEnv: []
 
 # Extra args for the erpc container
 extraArgs: []
@@ -87,14 +101,9 @@ extraArgs: []
 # Command replacement for the erpc container
 customCommand: []
 
+# Disable legacy Ingress - using Gateway API HTTPRoute instead
 ingress:
-  enabled: true
-  className: nginx
-  hosts:
-    - host: obol.stack
-      paths:
-        - path: /rpc
-          pathType: Prefix
+  enabled: false
 
 service:
   type: ClusterIP
@@ -189,7 +198,6 @@ extraVolumeMounts: []
 extraPorts: []
 
 # Additional env variables
-extraEnv: []
 
 serviceMonitor:
   enabled: false

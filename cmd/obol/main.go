@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
@@ -45,17 +46,42 @@ COMMANDS:
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
    Obol Agent:
-     agent init      Initialize the Obol Agent with an API key
+     agent init      Initialize the Obol Agent
    Network Management:
      network list    List available networks
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
+
+   OpenClaw (AI Agent):
+     openclaw onboard   Create and deploy an OpenClaw instance
+     openclaw setup     Reconfigure model providers for a deployed instance
+     openclaw dashboard Open the dashboard in a browser
+     openclaw cli       Run openclaw CLI against a deployed instance
+     openclaw sync      Deploy or update an instance
+     openclaw token     Retrieve gateway token
+     openclaw list      List instances
+     openclaw delete    Remove instance and cluster resources
+     openclaw skills    Manage skills (sync from local dir)
+
+   LLM Gateway:
+     llm configure      Configure cloud AI provider in llmspy gateway
+     llm status         Show global llmspy provider status
+
+   Inference (x402 Pay-Per-Request):
+     inference serve  Start the x402 inference gateway
 
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
      app sync        Deploy application to cluster
      app delete      Remove application and cluster resources
+
+   Tunnel Management:
+     tunnel status    Show tunnel status and public URL
+     tunnel login     Authenticate and create persistent tunnel (browser)
+     tunnel provision Provision persistent tunnel (API token)
+     tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel logs      View cloudflared logs
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -140,18 +166,101 @@ GLOBAL OPTIONS:
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize the Obol Agent with an API key",
+						Usage: "Initialize the Obol Agent",
+						Action: func(c *cli.Context) error {
+							return agent.Init(cfg)
+						},
+					},
+				},
+			},
+			// ============================================================
+			// Tunnel Management Commands
+			// ============================================================
+			{
+				Name:  "tunnel",
+				Usage: "Manage Cloudflare tunnel for public access",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "status",
+						Usage: "Show tunnel status and public URL",
+						Action: func(c *cli.Context) error {
+							return tunnel.Status(cfg)
+						},
+					},
+					{
+						Name:  "login",
+						Usage: "Authenticate via browser and create a locally-managed tunnel (no API token)",
 						Flags: []cli.Flag{
 							&cli.StringFlag{
-								Name:    "agent-api-key",
-								Aliases: []string{"a"},
-								Usage:   "API key for the Obol Agent",
-								EnvVars: []string{"AGENT_API_KEY"},
+								Name:     "hostname",
+								Aliases:  []string{"H"},
+								Usage:    "Public hostname to route (e.g. stack.example.com)",
+								Required: true,
 							},
 						},
 						Action: func(c *cli.Context) error {
-							agentAPIKey := c.String("agent-api-key")
-							return agent.Init(cfg, agentAPIKey)
+							return tunnel.Login(cfg, tunnel.LoginOptions{
+								Hostname: c.String("hostname"),
+							})
+						},
+					},
+					{
+						Name:  "provision",
+						Usage: "Provision a persistent (DNS-routed) Cloudflare Tunnel",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "hostname",
+								Aliases:  []string{"H"},
+								Usage:    "Public hostname to route (e.g. stack.example.com)",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:    "account-id",
+								Aliases: []string{"a"},
+								Usage:   "Cloudflare account ID (or set CLOUDFLARE_ACCOUNT_ID)",
+								EnvVars: []string{"CLOUDFLARE_ACCOUNT_ID"},
+							},
+							&cli.StringFlag{
+								Name:    "zone-id",
+								Aliases: []string{"z"},
+								Usage:   "Cloudflare zone ID for the hostname (or set CLOUDFLARE_ZONE_ID)",
+								EnvVars: []string{"CLOUDFLARE_ZONE_ID"},
+							},
+							&cli.StringFlag{
+								Name:    "api-token",
+								Aliases: []string{"t"},
+								Usage:   "Cloudflare API token (or set CLOUDFLARE_API_TOKEN)",
+								EnvVars: []string{"CLOUDFLARE_API_TOKEN"},
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return tunnel.Provision(cfg, tunnel.ProvisionOptions{
+								Hostname:  c.String("hostname"),
+								AccountID: c.String("account-id"),
+								ZoneID:    c.String("zone-id"),
+								APIToken:  c.String("api-token"),
+							})
+						},
+					},
+					{
+						Name:  "restart",
+						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
+						Action: func(c *cli.Context) error {
+							return tunnel.Restart(cfg)
+						},
+					},
+					{
+						Name:  "logs",
+						Usage: "View cloudflared logs",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "follow",
+								Aliases: []string{"f"},
+								Usage:   "Follow log output",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return tunnel.Logs(cfg, c.Bool("follow"))
 						},
 					},
 				},
@@ -327,6 +436,9 @@ GLOBAL OPTIONS:
 				},
 			},
 			networkCommand(cfg),
+			openclawCommand(cfg),
+			inferenceCommand(cfg),
+			llmCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",

@@ -108,17 +108,35 @@ check_docker() {
 		return 1
 	fi
 
-	# Check if Docker daemon is running
+	# Check if Docker daemon is running; try to start it automatically on Linux
 	if ! docker info >/dev/null 2>&1; then
-		log_error "Docker daemon is not running"
-		echo ""
-		echo "Please start the Docker daemon:"
-		echo "  • Linux: sudo systemctl start docker"
-		echo "  • macOS/Windows: Start Docker Desktop application"
-		echo ""
-		echo "Then run this installer again."
-		echo ""
-		return 1
+		if [[ "$(uname -s)" == "Linux" ]]; then
+			log_warn "Docker daemon is not running — attempting to start..."
+			# Try systemd first (apt/yum installs), then snap
+			if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
+				sudo systemctl start docker 2>/dev/null && sleep 2
+			elif snap list docker >/dev/null 2>&1; then
+				sudo snap start docker 2>/dev/null && sleep 3
+			fi
+		fi
+
+		# Re-check after start attempt
+		if ! docker info >/dev/null 2>&1; then
+			log_error "Docker daemon is not running"
+			echo ""
+			echo "Please start the Docker daemon:"
+			if [[ "$(uname -s)" == "Linux" ]]; then
+				echo "  • systemd:  sudo systemctl start docker"
+				echo "  • snap:     sudo snap start docker"
+			else
+				echo "  • macOS/Windows: Start Docker Desktop application"
+			fi
+			echo ""
+			echo "Then run this installer again."
+			echo ""
+			return 1
+		fi
+		log_success "Docker daemon started"
 	fi
 
 	# Check Docker version (require at least 20.10.0 for k3d compatibility)
@@ -990,6 +1008,80 @@ install_k9s() {
 	fi
 }
 
+# Install openclaw CLI
+# Unlike other tools, openclaw has no standalone binary downloads.
+# It's distributed as an npm package, so we install it locally into
+# OBOL_BIN_DIR using npm --prefix to keep it workspace-contained.
+install_openclaw() {
+	# Remove broken symlink if exists
+	remove_broken_symlink "openclaw"
+
+	# Check for global openclaw first (same pattern as kubectl, helm, etc.)
+	local global_openclaw
+	if global_openclaw=$(check_global_binary "openclaw"); then
+		if create_binary_symlink "openclaw" "$global_openclaw"; then
+			log_success "openclaw already installed at: $global_openclaw (symlinked)"
+		else
+			log_success "openclaw already installed at: $global_openclaw"
+		fi
+		return 0
+	fi
+
+	# Check if already in OBOL_BIN_DIR
+	if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
+		log_success "openclaw already installed"
+		return 0
+	fi
+
+	log_info "Installing openclaw CLI..."
+
+	# Require Node.js 22+ and npm
+	if ! command_exists npm; then
+		log_warn "npm not found — cannot install openclaw CLI"
+		echo ""
+		echo "  Install Node.js 22+ first, then re-run obolup.sh"
+		echo "  Or install manually: npm install -g openclaw"
+		echo ""
+		return 1
+	fi
+
+	local node_major
+	node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+	if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
+		log_warn "Node.js 22+ required for openclaw (found: v${node_major:-none})"
+		echo ""
+		echo "  Upgrade Node.js, then re-run obolup.sh"
+		echo "  Or install manually: npm install -g openclaw"
+		echo ""
+		return 1
+	fi
+
+	# Install into OBOL_BIN_DIR using npm --prefix so the package lives
+	# alongside the other managed binaries (works for both production
+	# ~/.local/bin and development .workspace/bin layouts).
+	local npm_prefix="$OBOL_BIN_DIR/.openclaw-npm"
+	log_info "Installing openclaw via npm into $OBOL_BIN_DIR..."
+
+	if npm install --prefix "$npm_prefix" openclaw 2>&1; then
+		# Create a wrapper script in OBOL_BIN_DIR that invokes the local install.
+		# npm --prefix puts the .bin stubs in node_modules/.bin/ which handle
+		# the correct entry point (openclaw.mjs) automatically.
+		cat > "$OBOL_BIN_DIR/openclaw" <<WRAPPER
+#!/usr/bin/env bash
+exec "$npm_prefix/node_modules/.bin/openclaw" "\$@"
+WRAPPER
+		chmod +x "$OBOL_BIN_DIR/openclaw"
+		log_success "openclaw installed at $OBOL_BIN_DIR/openclaw"
+		return 0
+	fi
+
+	log_warn "Failed to install openclaw CLI"
+	echo ""
+	echo "  Install manually: npm install -g openclaw"
+	echo ""
+	return 1
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -1002,6 +1094,7 @@ install_dependencies() {
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
+	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
 
 	echo ""
 	log_success "Dependencies check complete"
@@ -1081,6 +1174,11 @@ configure_hosts_file() {
 	if ! check_hosts_file; then
 		update_hosts_file
 	fi
+
+	# Note: wildcard *.obol.stack DNS is handled by a local DNS resolver
+	# that starts automatically with 'obol stack up'. The /etc/hosts entry
+	# above provides baseline resolution for the root domain (obol.stack).
+	log_info "Wildcard *.obol.stack DNS will be configured on first 'obol stack up'"
 }
 
 # Detect appropriate shell profile file (NVM-style detection)

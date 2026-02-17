@@ -1,17 +1,25 @@
 # Helmfile for Obol Stack default infrastructure
 # Orchestrates core infrastructure components deployed with every stack
+# Uses Traefik with Gateway API for routing (replaces nginx-ingress)
 
 repositories:
-  - name: ingress-nginx
-    url: https://kubernetes.github.io/ingress-nginx
+  - name: traefik
+    url: https://traefik.github.io/charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
   - name: ethereum
     url: https://ethpandaops.github.io/ethereum-helm-charts
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
+  - name: stakater
+    url: https://stakater.github.io/stakater-charts
 
 # Single source of truth: change this to switch networks
 values:
-  - network: mainnet 
+  - network: mainnet
+  - gatewayApiVersion: v1.4.1
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -21,46 +29,209 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
+      # obol-agent namespace and RBAC. Set obolAgent.enabled=true to deploy.
+      - obolAgent:
+          enabled: false
 
-  # Nginx ingress controller (upstream chart)
-  - name: ingress-nginx
-    namespace: ingress-nginx
-    chart: ingress-nginx/ingress-nginx
-    version: 4.13.3
+  # Monitoring stack (Prometheus operator + Prometheus)
+  - name: monitoring
+    namespace: monitoring
+    createNamespace: true
+    chart: prometheus-community/kube-prometheus-stack
+    version: 79.5.0
     values:
-      - controller:
-          replicaCount: 1
-          service:
-            type: LoadBalancer
-            externalTrafficPolicy: Local
-          resources:
-            limits:
-              cpu: 500m
-              memory: 512Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
-          tolerations: []
-          admissionWebhooks:
+      - ./values/monitoring.yaml.gotmpl
+
+  # Traefik ingress controller with Gateway API support
+  # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
+  - name: traefik
+    namespace: traefik
+    createNamespace: true
+    chart: traefik/traefik
+    version: 38.0.2
+    values:
+      # Gateway API provider configuration
+      - providers:
+          kubernetesGateway:
+            enabled: true
+            namespaces: []  # Watch all namespaces
+          kubernetesCRD:
+            enabled: true
+          kubernetesIngress:
+            enabled: false  # Disable legacy Ingress support
+      # GatewayClass configuration
+      - gatewayClass:
+          enabled: true
+          name: traefik
+      # Gateway configuration (main entry point)
+      - gateway:
+          enabled: true
+          name: traefik-gateway
+          namespace: traefik
+          listeners:
+            web:
+              port: 8000
+              protocol: HTTP
+              namespacePolicy:
+                from: All
+      # Ports configuration
+      - ports:
+          web:
+            port: 8000
+            expose:
+              default: true
+            exposedPort: 80
+            protocol: TCP
+          websecure:
+            port: 8443
+            expose:
+              default: true
+            exposedPort: 443
+            protocol: TCP
+            tls:
+              enabled: false  # TLS termination disabled for local dev
+      # Service configuration
+      - service:
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+      # Resource limits
+      - resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+      # Disable dashboard by default
+      - ingressRoute:
+          dashboard:
             enabled: false
+
+  # Cloudflare Tunnel (quick tunnel mode for public access)
+  - name: cloudflared
+    namespace: traefik
+    chart: ./cloudflared
+    needs:
+      - traefik/traefik
+
+  # Stakater Reloader (restarts workloads on Secret/ConfigMap change)
+  - name: reloader
+    namespace: reloader
+    createNamespace: true
+    chart: stakater/reloader
+    version: 2.2.7
 
   # eRPC
   - name: erpc
     namespace: erpc
+    createNamespace: true
     chart: ethereum/erpc
     needs:
       - kube-system/base
-      - ingress-nginx/ingress-nginx
+      - traefik/traefik
     values:
       - ./values/erpc.yaml.gotmpl
+
+  # eRPC HTTPRoute
+  - name: erpc-httproute
+    namespace: erpc
+    chart: bedag/raw
+    needs:
+      - traefik/traefik
+      - erpc/erpc
+    values:
+      - resources:
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            metadata:
+              name: erpc
+              namespace: erpc
+            spec:
+              parentRefs:
+                - name: traefik-gateway
+                  namespace: traefik
+                  sectionName: web
+              rules:
+                - matches:
+                    - path:
+                        type: PathPrefix
+                        value: /rpc
+                  backendRefs:
+                    - name: erpc
+                      port: 4000
 
   # Obol Stack frontend
   - name: obol-frontend
     namespace: obol-frontend
+    createNamespace: true
     chart: obol/obol-app
-    version: 0.1.0
+    version: 0.1.1
     needs:
-      - ingress-nginx/ingress-nginx
+      - traefik/traefik
       - erpc/erpc
     values:
       - ./values/obol-frontend.yaml.gotmpl
+
+  # Obol Frontend HTTPRoute
+  - name: obol-frontend-httproute
+    namespace: obol-frontend
+    chart: bedag/raw
+    needs:
+      - traefik/traefik
+      - obol-frontend/obol-frontend
+    values:
+      - resources:
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            metadata:
+              name: obol-frontend
+              namespace: obol-frontend
+            spec:
+              parentRefs:
+                - name: traefik-gateway
+                  namespace: traefik
+                  sectionName: web
+              rules:
+                - matches:
+                    - path:
+                        type: PathPrefix
+                        value: /
+                  backendRefs:
+                    - name: obol-frontend-obol-app
+                      port: 3000
+
+  # Obol Frontend RBAC (OpenClaw instance discovery via Kubernetes API)
+  - name: obol-frontend-rbac
+    namespace: obol-frontend
+    chart: bedag/raw
+    needs:
+      - obol-frontend/obol-frontend
+    values:
+      - resources:
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRole
+            metadata:
+              name: obol-frontend-openclaw-discovery
+              labels:
+                app.kubernetes.io/name: obol-frontend
+            rules:
+              - apiGroups: [""]
+                resources: ["namespaces"]
+                verbs: ["get", "list"]
+              - apiGroups: [""]
+                resources: ["pods", "configmaps", "secrets"]
+                verbs: ["get", "list"]
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: obol-frontend-openclaw-discovery
+              labels:
+                app.kubernetes.io/name: obol-frontend
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: obol-frontend-openclaw-discovery
+            subjects:
+              - kind: ServiceAccount
+                name: obol-frontend
+                namespace: obol-frontend
