@@ -265,7 +265,7 @@ func imageRef() string {
 // on every deploy, which can take 10+ minutes on slower connections.
 // Failures are non-fatal: the kubelet will fall back to pulling from the registry.
 func importImageToK3d(cfg *config.Config) {
-	stackIDPath := filepath.Join(cfg.ConfigDir, ".stack-id")
+	stackIDPath := filepath.Join(cfg.ConfigDir, ".cluster-id")
 	stackIDBytes, err := os.ReadFile(stackIDPath)
 	if err != nil {
 		// No stack ID means no cluster — skip silently.
