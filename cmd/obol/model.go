@@ -8,17 +8,17 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/llm"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/urfave/cli/v2"
 )
 
-func llmCommand(cfg *config.Config) *cli.Command {
+func modelCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "llm",
-		Usage: "Manage LLM providers (llmspy universal proxy)",
+		Name:  "model",
+		Usage: "Manage model providers (llmspy universal proxy)",
 		Subcommands: []*cli.Command{
 			{
-				Name:  "configure",
+				Name:  "setup",
 				Usage: "Configure a cloud AI provider in the llmspy gateway",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
@@ -38,20 +38,20 @@ func llmCommand(cfg *config.Config) *cli.Command {
 					// Interactive mode if flags not provided
 					if provider == "" || apiKey == "" {
 						var err error
-						provider, apiKey, err = promptLLMConfig()
+						provider, apiKey, err = promptModelConfig()
 						if err != nil {
 							return err
 						}
 					}
 
-					return llm.ConfigureLLMSpy(cfg, provider, apiKey)
+					return model.ConfigureLLMSpy(cfg, provider, apiKey)
 				},
 			},
 			{
 				Name:  "status",
 				Usage: "Show global llmspy provider status",
 				Action: func(c *cli.Context) error {
-					status, err := llm.GetProviderStatus(cfg)
+					status, err := model.GetProviderStatus(cfg)
 					if err != nil {
 						return err
 					}
@@ -84,8 +84,8 @@ func llmCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-// promptLLMConfig interactively asks the user for provider and API key.
-func promptLLMConfig() (string, string, error) {
+// promptModelConfig interactively asks the user for provider and API key.
+func promptModelConfig() (string, string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("Select a provider:")

@@ -39,7 +39,7 @@ spec:
 ---
 # llms.py v3 configuration for Obol Stack:
 # - Ollama provider enabled by default (host machine via ollama Service)
-# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol llm configure`)
+# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol model setup`)
 # - Default model is gpt-oss:120b-cloud (Ollama cloud)
 apiVersion: v1
 kind: ConfigMap
@@ -97,7 +97,7 @@ data:
 
 ---
 # Secret for cloud provider API keys. Empty by default; patched imperatively
-# via `obol llm configure` or `obol openclaw setup`.
+# via `obol model setup` or `obol openclaw setup`.
 apiVersion: v1
 kind: Secret
 metadata:
