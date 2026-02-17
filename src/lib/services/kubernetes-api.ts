@@ -198,7 +198,7 @@ export class KubernetesAPIClient {
       {
         port: 8545,
         name: 'JSON-RPC',
-        service: 'l1-full-node-execution',
+        service: 'l1-full-node-execution', // TODO: check erpc
         check: true,
       },
       {

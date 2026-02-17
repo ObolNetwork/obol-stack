@@ -356,7 +356,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           {/* Ports Section */}
           <SectionContainer>
             <SectionTitle>PORTS</SectionTitle>
-            <PortsList>
+            {/* <PortsList>
               {portList.map(port => (
                 <PortItem key={port.key}>
                   <PortNameAndNumber>
@@ -369,7 +369,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
                   </PortStatus>
                 </PortItem>
               ))}
-            </PortsList>
+            </PortsList> */}
           </SectionContainer>
         </NodeContent>
       </Accordion>
