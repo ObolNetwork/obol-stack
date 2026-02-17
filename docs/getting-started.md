@@ -1,6 +1,6 @@
 # Getting Started with the Obol Stack
 
-This guide walks you through installing the Obol Stack, starting a local Kubernetes cluster, testing LLM inference, and deploying your first blockchain network.
+This guide walks you through installing the Obol Stack, starting a local Kubernetes cluster, testing model inference, and deploying your first blockchain network.
 
 > [!IMPORTANT]
 > The Obol Stack is alpha software. If you encounter an issue, please open a
@@ -11,7 +11,7 @@ This guide walks you through installing the Obol Stack, starting a local Kuberne
 - **Docker** -- The stack runs a local Kubernetes cluster via [k3d](https://k3d.io), which requires Docker.
   - Linux: [Docker Engine](https://docs.docker.com/engine/install/)
   - macOS / Windows: [Docker Desktop](https://docs.docker.com/desktop/)
-- **Ollama** (optional) -- For LLM inference. Install from [ollama.com](https://ollama.com) and start it with `ollama serve`.
+- **Ollama** (optional) -- For model inference. Install from [ollama.com](https://ollama.com) and start it with `ollama serve`.
 
 ## Install
 
@@ -47,7 +47,7 @@ This creates a local k3d cluster and deploys the default infrastructure:
 |-----------|-----------|-------------|
 | **Traefik** | `traefik` | Gateway API ingress controller |
 | **Monitoring** | `monitoring` | Prometheus and kube-prometheus-stack |
-| **LLMSpy** | `llm` | OpenAI-compatible gateway (proxies to host Ollama) |
+| **LLMSpy** | `model` | OpenAI-compatible gateway (proxies to host Ollama) |
 | **eRPC** | `erpc` | Unified RPC load balancer |
 | **Frontend** | `obol-frontend` | Web interface at http://obol.stack/ |
 | **Cloudflared** | `traefik` | Quick tunnel for optional public access |
@@ -65,9 +65,9 @@ All pods should show `Running`. eRPC may show `0/1 Ready` -- this is normal unti
 
 Open the frontend in your browser: http://obol.stack/
 
-## Step 4 -- Test LLM Inference
+## Step 4 -- Test Model Inference
 
-If Ollama is running on the host (`ollama serve`), the stack can route inference requests through LLMSpy.
+If Ollama is running on the host (`ollama serve`), the stack can route inference requests through the model gateway.
 
 Verify Ollama has models loaded:
 
@@ -78,11 +78,11 @@ curl -s http://localhost:11434/api/tags | python3 -m json.tool
 Test inference through the cluster:
 
 ```bash
-obol kubectl run -n llm inference-test --rm -it --restart=Never \
+obol kubectl run -n model inference-test --rm -it --restart=Never \
   --overrides='{"spec":{"terminationGracePeriodSeconds":180,"activeDeadlineSeconds":180}}' \
   --image=curlimages/curl -- \
   curl -s --max-time 120 -X POST \
-    http://llmspy.llm.svc.cluster.local:8000/v1/chat/completions \
+    http://llmspy.model.svc.cluster.local:8000/v1/chat/completions \
     -H "Content-Type: application/json" \
     -d '{"model":"gpt-oss:120b-cloud","messages":[{"role":"user","content":"Say hello in one word"}],"max_tokens":10}'
 ```

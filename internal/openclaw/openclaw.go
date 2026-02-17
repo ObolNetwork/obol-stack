@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/llm"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/dustinkirkland/golang-petname"
 )
 
@@ -30,8 +30,8 @@ import (
 var openclawVersion string
 
 // CloudProviderInfo holds the cloud provider selection from interactive setup.
-// This is used to configure llmspy with the API key separately from the
-// OpenClaw overlay (which routes through llmspy).
+// This is used to configure the model gateway with the API key separately from the
+// OpenClaw overlay (which routes through the model gateway).
 type CloudProviderInfo struct {
 	Name    string // "anthropic" or "openai"
 	APIKey  string
@@ -169,10 +169,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 			if err != nil {
 				return fmt.Errorf("interactive setup failed: %w", err)
 			}
-			// Push cloud API key to llmspy if a cloud provider was selected
+			// Push cloud API key to model gateway if a cloud provider was selected
 			if cloudProvider != nil {
-				if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-					return fmt.Errorf("failed to configure llmspy: %w", llmErr)
+				if err := model.ConfigureProvider(cfg, cloudProvider.Name, cloudProvider.APIKey); err != nil {
+					return fmt.Errorf("failed to configure model gateway: %w", err)
 				}
 			}
 		}
@@ -705,10 +705,10 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
-	// Push cloud API key to llmspy if a cloud provider was selected
+	// Push cloud API key to model gateway if a cloud provider was selected
 	if cloudProvider != nil {
-		if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-			return fmt.Errorf("failed to configure llmspy: %w", llmErr)
+		if err := model.ConfigureProvider(cfg, cloudProvider.Name, cloudProvider.APIKey); err != nil {
+			return fmt.Errorf("failed to configure model gateway: %w", err)
 		}
 	}
 
@@ -1177,17 +1177,17 @@ rbac:
 		}
 		b.WriteString(importedOverlay)
 	} else {
-		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
+		b.WriteString(`# Route agent traffic to in-cluster Ollama via model gateway
 openclaw:
   agentModel: ollama/gpt-oss:120b-cloud
 ` + gatewayBlock + `
-# Default model provider: in-cluster Ollama (routed through llmspy)
+# Default model provider: in-cluster Ollama (routed through model gateway)
 # apiKeyValue is a dummy placeholder — Ollama does not require auth.
 # It is safe to inline here (unlike real cloud keys, which go to secrets).
 models:
   ollama:
     enabled: true
-    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    baseUrl: http://llmspy.model.svc.cluster.local:8000/v1
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
@@ -1258,7 +1258,7 @@ func detectOllama() bool {
 // interactiveSetup prompts the user for provider configuration.
 // If imported is non-nil, offers to use the detected config.
 // Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
-// when a cloud provider was selected (so the caller can configure llmspy).
+// when a cloud provider was selected (so the caller can configure the model gateway).
 func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
 	reader := bufio.NewReader(os.Stdin)
 
@@ -1282,9 +1282,9 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	if ollamaAvailable {
 		fmt.Println("\nSelect a model provider:")
-		fmt.Println("  [1] Global Ollama via llmspy (default)")
-		fmt.Println("  [2] Global OpenAI via llmspy")
-		fmt.Println("  [3] Global Anthropic via llmspy")
+		fmt.Println("  [1] Global Ollama via model gateway (default)")
+		fmt.Println("  [2] Global OpenAI via model gateway")
+		fmt.Println("  [3] Global Anthropic via model gateway")
 		fmt.Println("  [4] Direct OpenAI (instance override)")
 		fmt.Println("  [5] Direct Anthropic (instance override)")
 		fmt.Println("  [6] Custom OpenAI-compatible endpoint (instance override)")
@@ -1298,21 +1298,21 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 		switch choice {
 		case "1":
-			fmt.Println("Using global Ollama route via llmspy.")
+			fmt.Println("Using global Ollama route via model gateway.")
 			return nil, nil, nil
 		case "2":
 			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
-			result := buildLLMSpyRoutedOverlay(cloud)
+			result := buildGatewayRoutedOverlay(cloud)
 			return result, cloud, nil
 		case "3":
 			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
-			result := buildLLMSpyRoutedOverlay(cloud)
+			result := buildGatewayRoutedOverlay(cloud)
 			return result, cloud, nil
 		case "4":
 			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
@@ -1340,8 +1340,8 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	// Ollama not available — offer cloud/global and direct overrides
 	fmt.Println("\nSelect a model provider:")
-	fmt.Println("  [1] Global OpenAI via llmspy")
-	fmt.Println("  [2] Global Anthropic via llmspy")
+	fmt.Println("  [1] Global OpenAI via model gateway")
+	fmt.Println("  [2] Global Anthropic via model gateway")
 	fmt.Println("  [3] Direct OpenAI (instance override)")
 	fmt.Println("  [4] Direct Anthropic (instance override)")
 	fmt.Println("  [5] Custom OpenAI-compatible endpoint (instance override)")
@@ -1359,14 +1359,14 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		if err != nil {
 			return nil, nil, err
 		}
-		result := buildLLMSpyRoutedOverlay(cloud)
+		result := buildGatewayRoutedOverlay(cloud)
 		return result, cloud, nil
 	case "2":
 		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
-		result := buildLLMSpyRoutedOverlay(cloud)
+		result := buildGatewayRoutedOverlay(cloud)
 		return result, cloud, nil
 	case "3":
 		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
@@ -1392,7 +1392,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 }
 
 // promptForCloudProvider asks for an API key and returns cloud provider info.
-// The actual overlay (ImportResult) is built separately via buildLLMSpyRoutedOverlay.
+// The actual overlay (ImportResult) is built separately via buildGatewayRoutedOverlay.
 func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string) (*CloudProviderInfo, error) {
 	fmt.Printf("\n%s API key: ", display)
 	apiKey, _ := reader.ReadString('\n')
@@ -1492,21 +1492,21 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	return buildDirectProviderOverlay("openai", baseURL, apiType, apiKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
-// buildLLMSpyRoutedOverlay creates an ImportResult that routes a cloud model
-// through the llmspy proxy. OpenClaw sees an "ollama" provider pointing at the
-// cluster-wide llmspy gateway, with the cloud model in its model list. We reuse
-// the "ollama" provider name because the remote Helm chart only iterates a
+// buildGatewayRoutedOverlay creates an ImportResult that routes a cloud model
+// through the model gateway (llmspy). OpenClaw sees an "ollama" provider pointing
+// at the cluster-wide model gateway, with the cloud model in its model list. We
+// reuse the "ollama" provider name because the remote Helm chart only iterates a
 // hardcoded list (ollama, anthropic, openai) — using a custom name would cause
 // the provider to be silently dropped from the rendered config.
-// The actual cloud providers are disabled in OpenClaw — llmspy handles upstream
-// routing based on the bare model ID.
-func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
+// The actual cloud providers are disabled in OpenClaw — the model gateway handles
+// upstream routing based on the bare model ID.
+func buildGatewayRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
 	return &ImportResult{
 		AgentModel: "ollama/" + cloud.ModelID,
 		Providers: []ImportedProvider{
 			{
 				Name:         "ollama",
-				BaseURL:      "http://llmspy.llm.svc.cluster.local:8000/v1",
+				BaseURL:      "http://llmspy.model.svc.cluster.local:8000/v1",
 				API:          "openai-completions",
 				APIKeyEnvVar: "OLLAMA_API_KEY",
 				APIKey:       "ollama-local",

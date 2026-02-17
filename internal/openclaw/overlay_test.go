@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
+func TestBuildGatewayRoutedOverlay_Anthropic(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "anthropic",
 		APIKey:  "sk-ant-test",
@@ -13,15 +13,15 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 		Display: "Claude Sonnet 4.5",
 	}
 
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildGatewayRoutedOverlay(cloud)
 
 	// Agent model uses ollama/ prefix — the "ollama" provider slot is repurposed
-	// to point at llmspy, so the model reference must match the provider name.
+	// to point at the model gateway, so the model reference must match the provider name.
 	if result.AgentModel != "ollama/claude-sonnet-4-5-20250929" {
 		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "ollama/claude-sonnet-4-5-20250929")
 	}
 
-	// Check 3 providers: ollama (enabled, pointing at llmspy), anthropic (disabled), openai (disabled)
+	// Check 3 providers: ollama (enabled, pointing at model gateway), anthropic (disabled), openai (disabled)
 	if len(result.Providers) != 3 {
 		t.Fatalf("len(Providers) = %d, want 3", len(result.Providers))
 	}
@@ -30,7 +30,7 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 	if ollama.Name != "ollama" || ollama.Disabled {
 		t.Errorf("ollama: name=%q disabled=%v, want ollama/false", ollama.Name, ollama.Disabled)
 	}
-	if ollama.BaseURL != "http://llmspy.llm.svc.cluster.local:8000/v1" {
+	if ollama.BaseURL != "http://llmspy.model.svc.cluster.local:8000/v1" {
 		t.Errorf("ollama.BaseURL = %q", ollama.BaseURL)
 	}
 	if ollama.APIKeyEnvVar != "OLLAMA_API_KEY" {
@@ -60,7 +60,7 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 	}
 }
 
-func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
+func TestBuildGatewayRoutedOverlay_OpenAI(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "openai",
 		APIKey:  "sk-open-test",
@@ -68,7 +68,7 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 		Display: "GPT-5.2",
 	}
 
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildGatewayRoutedOverlay(cloud)
 
 	if result.AgentModel != "ollama/gpt-5.2" {
 		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "ollama/gpt-5.2")
@@ -80,14 +80,14 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 	}
 }
 
-func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
+func TestOverlayYAML_GatewayRouted(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "anthropic",
 		APIKey:  "sk-ant-test",
 		ModelID: "claude-sonnet-4-5-20250929",
 		Display: "Claude Sonnet 4.5",
 	}
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildGatewayRoutedOverlay(cloud)
 	yaml := TranslateToOverlayYAML(result)
 
 	// Agent model should have ollama/ prefix
@@ -95,12 +95,12 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML missing agentModel, got:\n%s", yaml)
 	}
 
-	// ollama should be enabled with llmspy baseUrl
+	// ollama should be enabled with model gateway baseUrl
 	if !strings.Contains(yaml, "ollama:\n    enabled: true") {
 		t.Errorf("YAML missing enabled ollama provider, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
-		t.Errorf("YAML missing llmspy baseUrl, got:\n%s", yaml)
+	if !strings.Contains(yaml, "baseUrl: http://llmspy.model.svc.cluster.local:8000/v1") {
+		t.Errorf("YAML missing model gateway baseUrl, got:\n%s", yaml)
 	}
 
 	// apiKeyEnvVar should be OLLAMA_API_KEY
@@ -113,7 +113,7 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML should not contain apiKeyValue literals, got:\n%s", yaml)
 	}
 
-	// api should be openai-completions (llmspy is OpenAI-compatible)
+	// api should be openai-completions (model gateway is OpenAI-compatible)
 	if !strings.Contains(yaml, "api: openai-completions") {
 		t.Errorf("YAML missing api: openai-completions, got:\n%s", yaml)
 	}
@@ -139,8 +139,8 @@ func TestGenerateOverlayValues_OllamaDefault(t *testing.T) {
 	if !strings.Contains(yaml, "agentModel: ollama/gpt-oss:120b-cloud") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
-		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
+	if !strings.Contains(yaml, "baseUrl: http://llmspy.model.svc.cluster.local:8000/v1") {
+		t.Errorf("default overlay missing model gateway baseUrl, got:\n%s", yaml)
 	}
 }
 

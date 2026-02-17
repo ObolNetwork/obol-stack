@@ -63,9 +63,9 @@ COMMANDS:
      openclaw delete    Remove instance and cluster resources
      openclaw skills    Manage skills (sync from local dir)
 
-   LLM Gateway:
-     llm configure      Configure cloud AI provider in llmspy gateway
-     llm status         Show global llmspy provider status
+   Model Gateway:
+     model configure    Configure cloud AI provider in model gateway
+     model status       Show global model provider status
 
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway
@@ -438,7 +438,7 @@ GLOBAL OPTIONS:
 			networkCommand(cfg),
 			openclawCommand(cfg),
 			inferenceCommand(cfg),
-			llmCommand(cfg),
+			modelCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",

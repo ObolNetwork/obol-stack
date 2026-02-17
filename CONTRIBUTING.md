@@ -58,7 +58,7 @@ internal/
   stack/           Cluster lifecycle (init, up, down, purge)
   network/         Network deployment (install, sync, delete)
   openclaw/        OpenClaw AI assistant integration
-  llm/             LLM provider management (llmspy gateway)
+  model/           Model provider management (llmspy gateway)
   embed/           Embedded assets (k3d config, network definitions, infrastructure)
   version/         Build version injection
 obolup.sh          Bootstrap installer

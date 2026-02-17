@@ -1,4 +1,4 @@
-package llm
+package model
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	namespace     = "llm"
+	namespace     = "model"
 	secretName    = "llms-secrets"
 	configMapName = "llmspy-config"
 	deployName    = "llmspy"
@@ -25,20 +25,20 @@ var providerEnvKeys = map[string]string{
 	"openai":    "OPENAI_API_KEY",
 }
 
-// ProviderStatus captures effective global llmspy provider state.
+// ProviderStatus captures effective global model provider state.
 type ProviderStatus struct {
 	Enabled   bool
 	HasAPIKey bool
 	APIKeyEnv string
 }
 
-// ConfigureLLMSpy enables a cloud provider in the llmspy gateway.
+// ConfigureProvider enables a cloud provider in the model gateway.
 // It patches the llms-secrets Secret with the API key, enables the provider
 // in the llmspy-config ConfigMap, and restarts the deployment.
-func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
+func ConfigureProvider(cfg *config.Config, provider, apiKey string) error {
 	envKey, ok := providerEnvKeys[provider]
 	if !ok {
-		return fmt.Errorf("unsupported llmspy provider: %s (supported: anthropic, openai)", provider)
+		return fmt.Errorf("unsupported model provider: %s (supported: anthropic, openai)", provider)
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
@@ -49,41 +49,41 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	}
 
 	// 1. Patch the Secret with the API key
-	fmt.Printf("Configuring llmspy: setting %s key...\n", provider)
+	fmt.Printf("Configuring model gateway: setting %s key...\n", provider)
 	patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envKey, apiKey)
 	if err := kubectl(kubectlBinary, kubeconfigPath,
 		"patch", "secret", secretName, "-n", namespace,
 		"-p", patchJSON, "--type=merge"); err != nil {
-		return fmt.Errorf("failed to patch llmspy secret: %w", err)
+		return fmt.Errorf("failed to patch model gateway secret: %w", err)
 	}
 
 	// 2. Read current ConfigMap, enable the provider in llms.json
-	fmt.Printf("Enabling %s provider in llmspy config...\n", provider)
+	fmt.Printf("Enabling %s provider in model gateway...\n", provider)
 	if err := enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider); err != nil {
-		return fmt.Errorf("failed to update llmspy config: %w", err)
+		return fmt.Errorf("failed to update model gateway config: %w", err)
 	}
 
 	// 3. Restart the deployment so it picks up new Secret + ConfigMap
-	fmt.Printf("Restarting llmspy deployment...\n")
+	fmt.Printf("Restarting model gateway...\n")
 	if err := kubectl(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
-		return fmt.Errorf("failed to restart llmspy: %w", err)
+		return fmt.Errorf("failed to restart model gateway: %w", err)
 	}
 
 	// 4. Wait for rollout to complete
 	if err := kubectl(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
 		"--timeout=60s"); err != nil {
-		fmt.Printf("Warning: llmspy rollout not confirmed: %v\n", err)
+		fmt.Printf("Warning: model gateway rollout not confirmed: %v\n", err)
 		fmt.Println("The deployment may still be rolling out.")
 	} else {
-		fmt.Printf("llmspy restarted with %s provider enabled.\n", provider)
+		fmt.Printf("Model gateway restarted with %s provider enabled.\n", provider)
 	}
 
 	return nil
 }
 
-// GetProviderStatus reads llmspy ConfigMap + Secret and returns global provider status.
+// GetProviderStatus reads the model gateway ConfigMap + Secret and returns global provider status.
 func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -98,7 +98,7 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	}
 	var llmsConfig map[string]interface{}
 	if err := json.Unmarshal([]byte(llmsRaw), &llmsConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse llms.json from ConfigMap: %w", err)
+		return nil, fmt.Errorf("failed to parse model gateway config: %w", err)
 	}
 
 	status := make(map[string]ProviderStatus)
@@ -130,7 +130,7 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(secretRaw), &secret); err != nil {
-		return nil, fmt.Errorf("failed to parse llms secret: %w", err)
+		return nil, fmt.Errorf("failed to parse model gateway secret: %w", err)
 	}
 
 	for provider, envKey := range providerEnvKeys {
