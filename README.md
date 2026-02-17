@@ -17,7 +17,7 @@ Built on [Kubernetes](https://kubernetes.io) with [Helm](https://helm.sh/) for p
 
 > [!IMPORTANT]
 > The Obol Stack is alpha software. If you encounter an issue, please open a
-> [GitHub issue](http://github.com/obolNetwork/obol-stack/issues).
+> [GitHub issue](https://github.com/obolNetwork/obol-stack/issues).
 
 ## Getting Started
 
