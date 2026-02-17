@@ -1,4 +1,4 @@
-package llm
+package model
 
 import (
 	"bytes"
@@ -116,7 +116,7 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 				// Ollama needs no API key, so it's always considered "has key".
 				// Cloud providers are updated below from the actual K8s Secret.
 				HasAPIKey: name == "ollama",
-				EnvVar: keyEnv,
+				EnvVar:    keyEnv,
 			}
 		}
 	}

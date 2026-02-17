@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-The Obol Stack is a local Kubernetes-based framework for running blockchain networks. It provides a simplified CLI experience for managing a k3d cluster with dynamically deployable network instances. Each network installation creates a uniquely-namespaced deployment, allowing multiple instances of the same network type to run simultaneously.
+The Obol Stack is a framework for AI agents to run decentralised infrastructure locally. It provides a simplified CLI experience for managing a k3d cluster with an AI agent (OpenClaw), dynamically deployable blockchain networks, and public access via Cloudflare tunnels. Each network installation creates a uniquely-namespaced deployment, allowing multiple instances of the same network type to run simultaneously.
 
 ## Architecture Overview
 
@@ -148,8 +148,9 @@ obol
 │   │   ├── helios (dynamically generated)
 │   │   └── aztec (dynamically generated)
 │   └── delete
-├── llm (LLM provider management)
-│   └── configure
+├── model (LLM provider management)
+│   ├── setup
+│   └── status
 ├── openclaw (OpenClaw AI assistant)
 │   ├── setup
 │   ├── onboard
@@ -158,7 +159,21 @@ obol
 ├── helm (passthrough with KUBECONFIG)
 ├── helmfile (passthrough with KUBECONFIG)
 ├── k9s (passthrough with KUBECONFIG)
-├── app (future application management)
+├── app (application management)
+│   ├── install
+│   ├── sync
+│   ├── list
+│   └── delete
+├── tunnel (Cloudflare tunnel management)
+│   ├── status
+│   ├── login
+│   ├── provision
+│   ├── restart
+│   └── logs
+├── agent (AI agent management)
+│   └── init
+├── inference (x402 inference gateway)
+│   └── serve
 ├── version
 └── bootstrap (hidden, used by installer)
 ```
@@ -558,8 +573,11 @@ obol network install ethereum --id hoodi-test --network=hoodi
 
 **Components**:
 - **Base resources**: Local path storage provisioner
-- **ERPC** (planned): Unified RPC load balancer
-- **Obol Frontend** (planned): Web management interface
+- **ERPC**: Unified RPC load balancer (namespace: `erpc`, route: `/rpc`)
+- **Obol Frontend**: Web management interface (namespace: `obol-frontend`, route: `/`)
+- **Cloudflared**: Cloudflare Tunnel connector (namespace: `traefik`)
+- **Monitoring**: Prometheus + kube-prometheus-stack (namespace: `monitoring`)
+- **Reloader**: Watches ConfigMap/Secret changes and triggers pod restarts
 
 **Deployment mechanism**:
 - Defaults directory mounted to k3s: `/var/lib/rancher/k3s/server/manifests/defaults/`
@@ -585,17 +603,18 @@ The stack uses a two-tier architecture for LLM routing. A cluster-wide proxy (ll
 | `llmspy` | Service (ClusterIP) | `llmspy.llm.svc.cluster.local:8000` |
 | `ollama` | Service (ExternalName) | Routes to host Ollama via `{{OLLAMA_HOST}}` placeholder |
 
-**Configuration mechanism** (`internal/llm/llm.go` — `ConfigureLLMSpy()`):
+**Configuration mechanism** (`internal/model/model.go` — `ConfigureLLMSpy()`):
 1. Patches `llms-secrets` Secret with the API key
 2. Reads `llmspy-config` ConfigMap, sets `providers.<name>.enabled = true` in `llms.json`
 3. Restarts `llmspy` Deployment via rollout restart
 4. Waits for rollout to complete (60s timeout)
 
-**CLI surface** (`cmd/obol/llm.go`):
-- `obol llm configure --provider=anthropic --api-key=sk-...`
+**CLI surface** (`cmd/obol/model.go`):
+- `obol model setup --provider=anthropic --api-key=sk-...`
+- `obol model status` — show which providers are enabled in llmspy
 - Interactive prompt if flags omitted (choice of Anthropic or OpenAI)
 
-**Key design**: Ollama is enabled by default; cloud providers are disabled until configured via `obol llm configure`. An init container copies the ConfigMap into a writable emptyDir so llmspy can write runtime state.
+**Key design**: Ollama is enabled by default; cloud providers are disabled until configured via `obol model setup`. An init container copies the ConfigMap into a writable emptyDir so llmspy can write runtime state.
 
 ### Tier 2: Per-Instance Application Config (per-deployment namespace)
 
@@ -666,7 +685,7 @@ models:
 | **Namespace** | `llm` | `<app>-<id>` (e.g., `openclaw-<id>`) |
 | **Config storage** | ConfigMap `llmspy-config` | ConfigMap `<release>-config` |
 | **Secrets** | Secret `llms-secrets` | Secret `<release>-secrets` |
-| **Configure via** | `obol llm configure` | `obol openclaw setup <id>` |
+| **Configure via** | `obol model setup` | `obol openclaw setup <id>` |
 | **Providers** | Real (Ollama, Anthropic, OpenAI) | Cloud: "llmspy" virtual provider; Default: "ollama" pointing at llmspy |
 | **API field** | N/A (provider-native) | Must be `openai-completions` for llmspy routing |
 
@@ -674,8 +693,8 @@ models:
 
 | File | Role |
 |------|------|
-| `internal/llm/llm.go` | `ConfigureLLMSpy()` — patches global Secret + ConfigMap + restart |
-| `cmd/obol/llm.go` | `obol llm configure` CLI command |
+| `internal/model/model.go` | `ConfigureLLMSpy()` — patches global Secret + ConfigMap + restart |
+| `cmd/obol/model.go` | `obol model setup` CLI command |
 | `internal/embed/infrastructure/base/templates/llm.yaml` | llmspy Kubernetes resource definitions |
 | `internal/openclaw/openclaw.go` | `Setup()`, `interactiveSetup()`, `generateOverlayValues()`, `buildLLMSpyRoutedOverlay()` |
 | `internal/openclaw/import.go` | `DetectExistingConfig()`, `TranslateToOverlayYAML()` |
@@ -922,8 +941,8 @@ obol network delete ethereum-<generated-name> --force
 - `internal/embed/embed.go` - Embedded asset management
 
 **LLM and OpenClaw**:
-- `internal/llm/llm.go` - llmspy gateway configuration (`ConfigureLLMSpy()`)
-- `cmd/obol/llm.go` - `obol llm configure` CLI command
+- `internal/model/model.go` - llmspy gateway configuration (`ConfigureLLMSpy()`)
+- `cmd/obol/model.go` - `obol model setup` CLI command
 - `internal/embed/infrastructure/base/templates/llm.yaml` - llmspy K8s resources
 - `internal/openclaw/openclaw.go` - OpenClaw setup, overlay generation, llmspy routing
 - `internal/openclaw/import.go` - Existing config detection and translation

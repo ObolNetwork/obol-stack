@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/llm"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -164,7 +164,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 			}
 			// Push cloud API key to llmspy if a cloud provider was selected
 			if cloudProvider != nil {
-				if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+				if llmErr := model.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
 					return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 				}
 			}
@@ -636,7 +636,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 
 	// Push cloud API key to llmspy if a cloud provider was selected
 	if cloudProvider != nil {
-		if llmErr := llm.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+		if llmErr := model.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
 			return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 		}
 	}
