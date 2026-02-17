@@ -46,7 +46,7 @@ COMMANDS:
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
    Obol Agent:
-     agent init      Initialize the Obol Agent with an API key
+     agent init      Initialize the Obol Agent
    Network Management:
      network list    List available networks
      network install Install and deploy network to cluster
@@ -166,18 +166,9 @@ GLOBAL OPTIONS:
 				Subcommands: []*cli.Command{
 					{
 						Name:  "init",
-						Usage: "Initialize the Obol Agent with an API key",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:    "agent-api-key",
-								Aliases: []string{"a"},
-								Usage:   "API key for the Obol Agent",
-								EnvVars: []string{"AGENT_API_KEY"},
-							},
-						},
+						Usage: "Initialize the Obol Agent",
 						Action: func(c *cli.Context) error {
-							agentAPIKey := c.String("agent-api-key")
-							return agent.Init(cfg, agentAPIKey)
+							return agent.Init(cfg)
 						},
 					},
 				},

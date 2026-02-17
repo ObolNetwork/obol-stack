@@ -29,8 +29,7 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
-      # obol-agent is disabled by default (image not publicly available).
-      # Set obolAgent.enabled=true to deploy it.
+      # obol-agent namespace and RBAC. Set obolAgent.enabled=true to deploy.
       - obolAgent:
           enabled: false
 
