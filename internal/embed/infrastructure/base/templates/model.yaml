@@ -44,7 +44,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: modelspy-config
+  name: llmspy-config
   namespace: model
 data:
   llms.json: |
@@ -101,7 +101,7 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: models-secrets
+  name: llms-secrets
   namespace: model
 type: Opaque
 stringData:
@@ -112,7 +112,7 @@ stringData:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: modelspy
+  name: llmspy
   namespace: model
   labels:
     app: llmspy
@@ -184,7 +184,7 @@ spec:
             - "8000"
           envFrom:
             - secretRef:
-                name: models-secrets
+                name: llms-secrets
                 optional: true
           env:
             # Avoid surprises if the image changes its default HOME.
@@ -217,7 +217,7 @@ spec:
       volumes:
         - name: llmspy-config
           configMap:
-            name: modelspy-config
+            name: llmspy-config
             items:
               - key: llms.json
                 path: llms.json
@@ -230,7 +230,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: modelspy
+  name: llmspy
   namespace: model
   labels:
     app: llmspy
