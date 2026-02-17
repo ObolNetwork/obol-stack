@@ -121,7 +121,7 @@ Configure which LLM provider the agent uses:
 
 ```bash
 # Interactive setup (Ollama, Anthropic, or OpenAI)
-obol model configure
+obol model setup
 
 # Check status
 obol model status
