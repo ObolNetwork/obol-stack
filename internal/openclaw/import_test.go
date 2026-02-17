@@ -235,7 +235,7 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 		Providers: []ImportedProvider{
 			{
 				Name:    "anthropic",
-				BaseURL: "https://api.anthropic.com/v1",
+				BaseURL: "https://api.anthropic.com",
 				API:     "anthropic-messages",
 				APIKey:  "sk-ant-test",
 				Models: []ImportedModel{
@@ -248,7 +248,7 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 
 	checks := []string{
 		"anthropic:\n    enabled: true",
-		"baseUrl: https://api.anthropic.com/v1",
+		"baseUrl: https://api.anthropic.com",
 		"api: anthropic-messages",
 		"- id: claude-opus-4-6",
 		"name: Claude Opus 4.6",
@@ -326,7 +326,7 @@ func TestTranslateToOverlayYAML_FullConfig(t *testing.T) {
 		Providers: []ImportedProvider{
 			{
 				Name:    "anthropic",
-				BaseURL: "https://api.anthropic.com/v1",
+				BaseURL: "https://api.anthropic.com",
 				API:     "anthropic-messages",
 				APIKey:  "sk-ant-test",
 				Models:  []ImportedModel{{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"}},
@@ -400,7 +400,7 @@ func TestDetectExistingConfigAt_ValidConfig(t *testing.T) {
 	cfg := &openclawConfig{}
 	cfg.Models.Providers = map[string]openclawProvider{
 		"anthropic": {
-			BaseURL: "https://api.anthropic.com/v1",
+			BaseURL: "https://api.anthropic.com",
 			API:     "anthropic-messages",
 			APIKey:  "sk-ant-test-key",
 			Models:  []openclawModel{{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"}},

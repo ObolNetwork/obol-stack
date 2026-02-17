@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -1213,13 +1214,15 @@ skills:
 # Agent init Job (enable to bootstrap workspace on first deploy)
 initJob:
   enabled: false
+
+# Gateway authentication token (auto-generated)
+secrets:
+  gatewayToken:
+    value: ` + generateToken() + `
 `)
 
 	if useExternalSecrets {
-		b.WriteString(`
-# Load instance-local credentials (provider/channel tokens) from a dedicated Secret
-secrets:
-  extraEnvFromSecrets:
+		b.WriteString(`  extraEnvFromSecrets:
     - ` + userSecretsK8sSecretRef + `
 `)
 	}
@@ -1238,6 +1241,16 @@ func ollamaEndpoint() string {
 		return strings.TrimRight(host, "/")
 	}
 	return "http://localhost:11434"
+}
+
+// generateToken returns a cryptographically random URL-safe token (32 bytes, base64).
+func generateToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use petname as a weak token (should never happen).
+		return petname.Generate(4, "-")
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // detectOllama checks whether Ollama is reachable on the host machine by
@@ -1325,7 +1338,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			}
 			return result, nil, nil
 		case "5":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1379,7 +1392,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		}
 		return result, nil, nil
 	case "4":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com/v1", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
