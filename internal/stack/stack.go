@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/update"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -153,6 +154,7 @@ func Up(cfg *config.Config) error {
 
 		fmt.Println("Stack restarted successfully")
 		fmt.Printf("Stack ID: %s\n", stackID)
+		update.HintIfStale(cfg)
 		return nil
 	}
 
@@ -208,6 +210,7 @@ func Up(cfg *config.Config) error {
 
 	fmt.Printf("\nStack ID: %s\n", stackID)
 	fmt.Printf("\nStack started successfully.\nVisit http://obol.stack in your browser to get started.\nTry setting up an agent with `obol agent init` next.\n")
+	update.HintIfStale(cfg)
 	return nil
 }
 
