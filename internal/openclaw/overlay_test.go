@@ -214,6 +214,49 @@ func TestBuildDirectProviderOverlay_OpenAI(t *testing.T) {
 	}
 }
 
+func TestBuildDirectProviderOverlay_Anthropic(t *testing.T) {
+	result := buildDirectProviderOverlay(
+		"anthropic",
+		"https://api.anthropic.com",
+		"anthropic-messages",
+		"ANTHROPIC_API_KEY",
+		"claude-opus-4-6",
+		"Claude Opus 4.6",
+		"sk-ant-test",
+	)
+
+	if result.AgentModel != "anthropic/claude-opus-4-6" {
+		t.Fatalf("AgentModel = %q, want anthropic/claude-opus-4-6", result.AgentModel)
+	}
+	foundEnabled := false
+	for _, p := range result.Providers {
+		if p.Name == "anthropic" {
+			foundEnabled = true
+			if p.Disabled {
+				t.Fatalf("anthropic provider should be enabled")
+			}
+			if p.BaseURL != "https://api.anthropic.com" {
+				t.Fatalf("anthropic BaseURL = %q, want https://api.anthropic.com (no /v1 suffix)", p.BaseURL)
+			}
+			if p.API != "anthropic-messages" {
+				t.Fatalf("anthropic API = %q, want anthropic-messages", p.API)
+			}
+			if p.APIKeyEnvVar != "ANTHROPIC_API_KEY" {
+				t.Fatalf("anthropic APIKeyEnvVar = %q", p.APIKeyEnvVar)
+			}
+		}
+		if p.Name == "openai" && !p.Disabled {
+			t.Fatalf("openai provider should be disabled for anthropic direct")
+		}
+		if p.Name == "ollama" && !p.Disabled {
+			t.Fatalf("ollama provider should be disabled for anthropic direct")
+		}
+	}
+	if !foundEnabled {
+		t.Fatalf("anthropic provider not found in overlay")
+	}
+}
+
 func TestRemoteCapableCommands(t *testing.T) {
 	// Commands that should go through port-forward
 	remote := []string{"gateway", "acp", "browser", "logs"}
