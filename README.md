@@ -125,6 +125,24 @@ obol k9s
 
 The stack will create a local Kubernetes cluster. Each network installation creates a uniquely-namespaced deployment instance, allowing you to run multiple configurations simultaneously.
 
+## Public Access (Cloudflare Tunnel)
+
+By default, the stack deploys a Cloudflare Tunnel connector in “quick tunnel” mode, which provides a random public URL. Check it with:
+
+```bash
+obol tunnel status
+```
+
+To use a persistent hostname instead:
+
+- Browser login flow (requires `cloudflared` installed locally, e.g. `brew install cloudflared` on macOS):
+  - `obol tunnel login --hostname stack.example.com`
+- API-driven provisioning:
+  - `obol tunnel provision --hostname stack.example.com --account-id ... --zone-id ... --api-token ...`
+  - Or set `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN`.
+
+Note: the stack ID (used in tunnel naming) is preserved across `obol stack init --force`. Use `obol stack purge` to reset it.
+
 > [!TIP]
 > Use `obol network list` to see all available networks. Customize installations with flags (e.g., `obol network install ethereum --network=holesky --execution-client=geth`) to create different deployment configurations. After installation, deploy to the cluster with `obol network sync <network>/<id>`.
 
@@ -145,14 +163,13 @@ obol network list
 
 **Available networks:**
 - **ethereum** - Full Ethereum node (execution + consensus clients)
-- **helios** - Lightweight Ethereum client
 - **aztec** - Aztec rollup network
 
 **View installed deployments:**
 
 ```bash
 # List all network deployment namespaces
-obol kubectl get namespaces | grep -E "ethereum|helios|aztec"
+obol kubectl get namespaces | grep -E "ethereum|aztec"
 
 # View resources in a specific deployment
 obol kubectl get all -n ethereum-nervous-otter
@@ -210,7 +227,7 @@ obol network install ethereum --network=hoodi
 ```
 
 **Ethereum configuration options:**
-- `--network`: Choose network (mainnet, sepolia, hoodi)
+- `--network`: Choose network (mainnet, hoodi)
 - `--execution-client`: Choose execution client (reth, geth, nethermind, besu, erigon, ethereumjs)
 - `--consensus-client`: Choose consensus client (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
@@ -394,6 +411,35 @@ obol stack purge -f
 > [!WARNING]
 > The `purge` command permanently deletes all cluster data and configuration. The `-f` flag is required to remove persistent volume claims (PVCs) owned by root. Use with caution.
 
+### Dashboard Authentication (Better Auth)
+
+The dashboard UI is protected behind login when configured. RPC endpoints under `/rpc/*` remain unauthenticated (the x402 payment flow is handled separately).
+
+**Required environment variables (set before `obol stack up`):**
+
+- `STACK_PUBLIC_DOMAIN` (defaults to `obol.stack`; set to your Cloudflare tunnel hostname for internet exposure)
+- `BETTER_AUTH_SECRET` (min 32 chars)
+- `OBOL_GOOGLE_CLIENT_ID`
+- `OBOL_GOOGLE_CLIENT_SECRET`
+
+**Google OAuth redirect URI:**
+
+Register this in Google Cloud Console:
+
+```text
+https://<STACK_PUBLIC_DOMAIN>/api/auth/callback/google
+```
+
+**Nodecore token refresh (for eRPC upstream header injection):**
+
+Create/update the Secret `erpc/nodecore-oauth-refresh` with:
+
+- `client_id`
+- `client_secret`
+- `refresh_token`
+
+The in-cluster CronJob refreshes a short-lived Google `id_token` and writes it into `erpc/obol-oauth-token`, which eRPC uses to inject `X-Nodecore-Token` on upstream requests.
+
 ### Working with Kubernetes
 
 The `obol` CLI includes convenient wrappers for common Kubernetes tools. These automatically use the correct cluster configuration:
@@ -488,7 +534,6 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 │   ├── ethereum/                  # Ethereum network deployments
 │   │   ├── <namespace-1>/         # First deployment instance
 │   │   └── <namespace-2>/         # Second deployment instance
-│   ├── helios/                    # Helios network deployments
 │   └── aztec/                     # Aztec network deployments
 └── applications/                  # Installed application deployments
     ├── redis/                     # Redis deployments
@@ -506,7 +551,6 @@ The Obol Stack follows the [XDG Base Directory](https://specifications.freedeskt
 └── <cluster-id>/                  # Per-cluster data
     └── networks/                  # Network blockchain data
         ├── ethereum_<namespace>/  # Ethereum deployment instance data
-        ├── helios_<namespace>/    # Helios deployment instance data
         └── aztec_<namespace>/     # Aztec deployment instance data
 ```
 
@@ -594,7 +638,6 @@ If you're contributing to the Obol Stack or want to run it from source, you can 
 │   │   ├── ethereum/            # Ethereum network deployments
 │   │   │   ├── <namespace-1>/  # First deployment instance
 │   │   │   └── <namespace-2>/  # Second deployment instance
-│   │   ├── helios/
 │   │   └── aztec/
 │   └── applications/            # Installed application deployments
 │       ├── redis/
@@ -622,7 +665,7 @@ Networks are embedded in the binary at `internal/embed/networks/`. Each network 
 ```yaml
 # internal/embed/networks/ethereum/helmfile.yaml.gotmpl
 values:
-  # @enum mainnet,sepolia,holesky,hoodi
+  # @enum mainnet,hoodi
   # @default mainnet
   # @description Blockchain network to deploy
   - network: {{.Network}}

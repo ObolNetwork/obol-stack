@@ -1,0 +1,245 @@
+---
+# LLM foundation services (OKR-1)
+#
+# This deploys:
+# - An ExternalName Service "ollama" that resolves to the host's Ollama server
+# - llms.py (LLMSpy) as an OpenAI-compatible gateway / router over providers
+#
+# Design notes:
+# - No in-cluster Ollama is deployed; the host is expected to run Ollama
+#   (or another OpenAI-compatible server) on port 11434.
+# - The ollama Service abstracts host resolution:
+#     k3d  → host.k3d.internal
+#     k3s  → resolved at stack init via node IP
+# - LLMSpy and all consumers reference ollama.llm.svc.cluster.local:11434,
+#   which the ExternalName Service routes to the host.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm
+
+---
+# ExternalName Service: routes ollama.llm.svc.cluster.local → host Ollama.
+# The externalName is resolved during `obol stack init` via the {{OLLAMA_HOST}} placeholder.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: llm
+  labels:
+    app: ollama
+spec:
+  type: ExternalName
+  externalName: {{OLLAMA_HOST}}
+  ports:
+    - name: http
+      port: 11434
+      protocol: TCP
+
+---
+# llms.py v3 configuration for Obol Stack:
+# - Ollama provider enabled by default (host machine via ollama Service)
+# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol llm configure`)
+# - Default model is gpt-oss:120b-cloud (Ollama cloud)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmspy-config
+  namespace: llm
+data:
+  llms.json: |
+    {
+      "version": 3,
+      "defaults": {
+        "headers": {
+          "Content-Type": "application/json",
+          "User-Agent": "llmspy.org/3.0"
+        },
+        "text": {
+          "model": "gpt-oss:120b-cloud",
+          "messages": [
+            { "role": "user", "content": [{ "type": "text", "text": "" }] }
+          ]
+        }
+      },
+      "providers": {
+        "ollama": {
+          "enabled": true
+        },
+        "anthropic": {
+          "enabled": false
+        },
+        "openai": {
+          "enabled": false
+        }
+      }
+    }
+  providers.json: |
+    {
+      "ollama": {
+        "id": "ollama",
+        "npm": "ollama",
+        "api": "http://ollama.llm.svc.cluster.local:11434",
+        "models": {},
+        "all_models": true
+      },
+      "anthropic": {
+        "id": "anthropic",
+        "npm": "@ai-sdk/anthropic",
+        "api_key": "$ANTHROPIC_API_KEY"
+      },
+      "openai": {
+        "id": "openai",
+        "npm": "openai",
+        "api_key": "$OPENAI_API_KEY"
+      }
+    }
+
+---
+# Secret for cloud provider API keys. Empty by default; patched imperatively
+# via `obol llm configure` or `obol openclaw setup`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llms-secrets
+  namespace: llm
+type: Opaque
+stringData:
+  ANTHROPIC_API_KEY: ""
+  OPENAI_API_KEY: ""
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmspy
+  namespace: llm
+  labels:
+    app: llmspy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llmspy
+  template:
+    metadata:
+      labels:
+        app: llmspy
+    spec:
+      initContainers:
+        # Seed ~/.llms/ from the ConfigMap + package defaults.
+        # llms.json is taken from the ConfigMap (controls which providers are enabled).
+        # providers.json is taken from the llmspy package (has full model definitions)
+        # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
+        - name: seed-config
+          image: ghcr.io/obolnetwork/llms:3.0.33-obol.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import json, os, shutil
+              os.makedirs('/data', exist_ok=True)
+              # Copy llms.json from ConfigMap (provider enabled/disabled state)
+              shutil.copy2('/config/llms.json', '/data/llms.json')
+              # Start with package providers.json (has full model definitions)
+              import llms
+              pkg_dir = os.path.dirname(llms.__file__)
+              with open(os.path.join(pkg_dir, 'providers.json')) as f:
+                  providers = json.load(f)
+              # Merge ConfigMap overrides (Ollama endpoint, API key refs)
+              with open('/config/providers.json') as f:
+                  overrides = json.load(f)
+              for pid, pcfg in overrides.items():
+                  if pid in providers:
+                      providers[pid].update(pcfg)
+                  else:
+                      providers[pid] = pcfg
+              with open('/data/providers.json', 'w') as f:
+                  json.dump(providers, f, indent=2)
+              os.chmod('/data/llms.json', 0o666)
+              os.chmod('/data/providers.json', 0o666)
+          volumeMounts:
+            - name: llmspy-config
+              mountPath: /config
+              readOnly: true
+            - name: llmspy-home
+              mountPath: /data
+      containers:
+        - name: llmspy
+          # Obol fork of LLMSpy with smart routing extension.
+          # Pin a specific version for reproducibility.
+          image: ghcr.io/obolnetwork/llms:3.0.33-obol.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          command:
+            - llms
+          args:
+            - --config
+            - /home/llms/.llms/llms.json
+            - --serve
+            - "8000"
+          envFrom:
+            - secretRef:
+                name: llms-secrets
+                optional: true
+          env:
+            # Avoid surprises if the image changes its default HOME.
+            - name: HOME
+              value: /home/llms
+          volumeMounts:
+            - name: llmspy-home
+              mountPath: /home/llms/.llms
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: llmspy-config
+          configMap:
+            name: llmspy-config
+            items:
+              - key: llms.json
+                path: llms.json
+              - key: providers.json
+                path: providers.json
+        - name: llmspy-home
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmspy
+  namespace: llm
+  labels:
+    app: llmspy
+spec:
+  type: ClusterIP
+  selector:
+    app: llmspy
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

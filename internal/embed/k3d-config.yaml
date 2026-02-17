@@ -35,7 +35,7 @@ options:
       - arg: --kube-apiserver-arg=feature-gates=KubeletInUserNamespace=true
         nodeFilters:
           - server:*
-      # Disable Traefik to use nginx instead
+      # Disable bundled Traefik (we install Traefik via Helm)
       - arg: --disable=traefik
         nodeFilters:
           - server:*
