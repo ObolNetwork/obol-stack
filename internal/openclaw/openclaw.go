@@ -81,11 +81,11 @@ func SetupDefault(cfg *config.Config) error {
 	if !hasImportedProviders {
 		ollamaAvailable := detectOllama()
 		if ollamaAvailable {
-			fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+			fmt.Printf("  ✓ Local Ollama detected at %s\n", ollamaEndpoint())
 		} else {
-			fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
-			fmt.Println("  Skipping default OpenClaw provider setup.")
-			fmt.Println("  Run 'obol openclaw setup default' to configure a provider later.")
+			fmt.Printf("  ⚠ Local Ollama not detected on host (%s)\n", ollamaEndpoint())
+			fmt.Println("  Skipping default OpenClaw model provider setup.")
+			fmt.Println("  Run 'obol agent init' to configure a provider later.")
 			return nil
 		}
 	}
@@ -273,12 +273,12 @@ func doSync(cfg *config.Config, id string) error {
 	}
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-	fmt.Printf("\n✓ OpenClaw synced successfully!\n")
+	fmt.Printf("\n✓ OpenClaw installed successfully!\n")
 	fmt.Printf("  Namespace: %s\n", namespace)
 	fmt.Printf("  URL:       http://%s\n", hostname)
-	fmt.Printf("\nRetrieve gateway token:\n")
+	fmt.Printf("\n[Optional] Retrieve a gateway token:\n")
 	fmt.Printf("  obol openclaw token %s\n", id)
-	fmt.Printf("\nPort-forward fallback:\n")
+	fmt.Printf("\n[Optional] Port-forward fallback:\n")
 	fmt.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789\n", namespace)
 
 	return nil
@@ -625,7 +625,7 @@ type SetupOptions struct {
 func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
-		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
+		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw onboard' first", appName, id)
 	}
 
 	// Always show the provider prompt — that's the whole point of setup.
@@ -668,13 +668,14 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
-	fmt.Printf("\nWaiting for pod to be ready...\n")
+	fmt.Printf("\nWaiting for the OpenClaw gateway to be ready...\n")
 	if _, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 90); err != nil {
 		fmt.Printf("Warning: pod not ready yet: %v\n", err)
 		fmt.Println("The deployment may still be rolling out. Check with: obol kubectl get pods -n", namespace)
+		fmt.Println("Or track the status from http://obol.stack")
 	} else {
 		fmt.Printf("\n✓ Setup complete!\n")
-		fmt.Printf("  Open dashboard: obol openclaw dashboard %s\n", id)
+		fmt.Printf("  Access the OpenClaw dashboard from http://obol.stack\n")
 	}
 	return nil
 }
