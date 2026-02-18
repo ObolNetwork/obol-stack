@@ -1106,6 +1106,7 @@ models:
   ollama:
     enabled: true
     baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    api: openai-completions
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
