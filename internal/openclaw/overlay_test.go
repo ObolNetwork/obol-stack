@@ -220,13 +220,13 @@ func TestBuildDirectProviderOverlay_Anthropic(t *testing.T) {
 		"https://api.anthropic.com",
 		"anthropic-messages",
 		"ANTHROPIC_API_KEY",
-		"claude-opus-4-6",
-		"Claude Opus 4.6",
+		"claude-sonnet-4-6",
+		"Claude Sonnet 4.6",
 		"sk-ant-test",
 	)
 
-	if result.AgentModel != "anthropic/claude-opus-4-6" {
-		t.Fatalf("AgentModel = %q, want anthropic/claude-opus-4-6", result.AgentModel)
+	if result.AgentModel != "anthropic/claude-sonnet-4-6" {
+		t.Fatalf("AgentModel = %q, want anthropic/claude-sonnet-4-6", result.AgentModel)
 	}
 	foundEnabled := false
 	for _, p := range result.Providers {

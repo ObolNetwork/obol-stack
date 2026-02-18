@@ -1106,6 +1106,7 @@ models:
   ollama:
     enabled: true
     baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    api: openai-completions
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
     models:
@@ -1219,7 +1220,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			fmt.Println("Using global Ollama route via llmspy.")
 			return nil, nil, nil
 		case "2":
-			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
+			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1233,7 +1234,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 			result := buildLLMSpyRoutedOverlay(cloud)
 			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1273,7 +1274,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 	switch choice {
 	case "1":
-		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-opus-4-6", "Claude Opus 4.6")
+		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1287,7 +1288,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		result := buildLLMSpyRoutedOverlay(cloud)
 		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-opus-4-6", "Claude Opus 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
