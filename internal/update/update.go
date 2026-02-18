@@ -17,14 +17,15 @@ import (
 
 // UpdateResult holds the complete results of an update check
 type UpdateResult struct {
-	HelmRepoUpdated   bool
-	ChartStatuses     []ChartStatus
-	CLIRelease        *LatestRelease
-	CLIUpdateAvail    bool
-	ChartUpdatesAvail bool
-	IsDev             bool
-	HelmError         string
-	CLIError          string
+	HelmRepoUpdated        bool
+	ChartStatuses          []ChartStatus
+	CLIRelease             *LatestRelease
+	CLIUpdateAvail         bool
+	ChartUpdatesAvail      bool
+	ChartMajorUpdatesAvail bool
+	IsDev                  bool
+	HelmError              string
+	CLIError               string
 }
 
 // CheckForUpdates runs all update checks and returns a unified result.
@@ -56,7 +57,8 @@ func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*Upda
 			for _, s := range statuses {
 				if s.Status == "Update available" {
 					result.ChartUpdatesAvail = true
-					break
+				} else if s.Status == "Major update available" {
+					result.ChartMajorUpdatesAvail = true
 				}
 			}
 		}
@@ -79,7 +81,9 @@ func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*Upda
 }
 
 // ApplyUpgrades runs helmfile sync on defaults and all installed deployments.
-func ApplyUpgrades(cfg *config.Config, defaultsOnly bool) error {
+// If pinned is true, only deploys the versions embedded in the binary without bumping to latest.
+// If major is true, allows bumping across major version boundaries.
+func ApplyUpgrades(cfg *config.Config, defaultsOnly bool, pinned bool, major bool) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// 1. Helm repo update
@@ -103,7 +107,40 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool) error {
 	}
 	fmt.Println("  ✓ Defaults updated from embedded assets")
 
-	// 3. Helmfile sync on defaults
+	// 3. Bump chart version pins to latest (unless --pinned)
+	if !pinned {
+		if major {
+			fmt.Println("\nBumping chart versions to latest (including major versions)...")
+		} else {
+			fmt.Println("\nBumping chart versions to latest (minor/patch only)...")
+		}
+		bumps, err := UpgradeHelmfileVersions(cfg, major)
+		if err != nil {
+			fmt.Printf("  Warning: failed to bump versions: %v\n", err)
+		} else if len(bumps) > 0 {
+			for _, b := range bumps {
+				fmt.Printf("  %s: %s → %s\n", b.Chart, b.From, b.To)
+			}
+		} else {
+			fmt.Println("  All chart versions already at latest.")
+		}
+
+		// Check if any major updates were skipped
+		if !major {
+			skipped := checkSkippedMajorUpdates(cfg)
+			if len(skipped) > 0 {
+				fmt.Println("\n  Major version updates available (skipped):")
+				for _, s := range skipped {
+					fmt.Printf("    %s: %s → %s\n", s.Chart, s.From, s.To)
+				}
+				fmt.Println("  Use 'obol upgrade --major' to apply major version updates.")
+			}
+		}
+	} else {
+		fmt.Println("\nUsing pinned versions from embedded binary (--pinned).")
+	}
+
+	// 4. Helmfile sync on defaults
 	fmt.Println("\nUpgrading default infrastructure...")
 	helmfilePath := filepath.Join(defaultsDir, "helmfile.yaml")
 	helmfileCmd := exec.Command(
@@ -122,13 +159,13 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool) error {
 	fmt.Println("  ✓ Default infrastructure upgraded")
 
 	if !defaultsOnly {
-		// 4. Re-sync installed networks
+		// 5. Re-sync installed networks
 		fmt.Println("\nUpgrading installed networks...")
 		if err := upgradeNetworks(cfg); err != nil {
 			fmt.Printf("  Warning: %v\n", err)
 		}
 
-		// 5. Re-sync installed apps
+		// 6. Re-sync installed apps
 		fmt.Println("\nUpgrading installed apps...")
 		if err := upgradeApps(cfg); err != nil {
 			fmt.Printf("  Warning: %v\n", err)
@@ -137,7 +174,7 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool) error {
 
 	fmt.Println("\n✓ All helm chart upgrades applied.")
 
-	// 6. Check CLI version and hint if newer available
+	// 7. Check CLI version and hint if newer available
 	release, err := CheckLatestRelease()
 	if err == nil && version.Short() != "dev" {
 		if CompareVersions(version.Short(), release.Version) < 0 {
@@ -149,6 +186,26 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool) error {
 	}
 
 	return nil
+}
+
+// checkSkippedMajorUpdates checks the on-disk helmfile for charts where a major
+// version update is available but was not applied. Best-effort, returns nil on error.
+func checkSkippedMajorUpdates(cfg *config.Config) []VersionBump {
+	statuses, err := CheckChartVersions(cfg)
+	if err != nil {
+		return nil
+	}
+	var skipped []VersionBump
+	for _, s := range statuses {
+		if s.Status == "Major update available" {
+			skipped = append(skipped, VersionBump{
+				Chart: s.Chart,
+				From:  s.Pinned,
+				To:    s.Latest,
+			})
+		}
+	}
+	return skipped
 }
 
 // upgradeNetworks iterates over installed network deployments and syncs each.
@@ -285,7 +342,7 @@ func PrintCLIStatus(current string, release *LatestRelease, isDev bool) {
 
 // PrintUpdateSummary prints the actionable summary at the end of `obol update`.
 func PrintUpdateSummary(result *UpdateResult) {
-	if !result.ChartUpdatesAvail && !result.CLIUpdateAvail {
+	if !result.ChartUpdatesAvail && !result.ChartMajorUpdatesAvail && !result.CLIUpdateAvail {
 		fmt.Println("\nEverything is up to date.")
 		return
 	}
@@ -299,6 +356,15 @@ func PrintUpdateSummary(result *UpdateResult) {
 			}
 		}
 		fmt.Printf("  %d chart update(s) available. Run 'obol upgrade' to apply.\n", count)
+	}
+	if result.ChartMajorUpdatesAvail {
+		count := 0
+		for _, s := range result.ChartStatuses {
+			if s.Status == "Major update available" {
+				count++
+			}
+		}
+		fmt.Printf("  %d major chart update(s) available. Run 'obol upgrade --major' to apply.\n", count)
 	}
 	if result.CLIUpdateAvail && result.CLIRelease != nil {
 		fmt.Printf("  CLI update available (v%s → %s). Run:\n", version.Short(), result.CLIRelease.TagName)

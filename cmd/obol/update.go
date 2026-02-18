@@ -85,6 +85,14 @@ func upgradeCommand(cfg *config.Config) *cli.Command {
 				Name:  "defaults-only",
 				Usage: "Only upgrade default infrastructure, skip networks and apps",
 			},
+			&cli.BoolFlag{
+				Name:  "pinned",
+				Usage: "Deploy only the versions embedded in the binary, without bumping to latest",
+			},
+			&cli.BoolFlag{
+				Name:  "major",
+				Usage: "Allow upgrading across major version boundaries (may include breaking changes)",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -92,7 +100,7 @@ func upgradeCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("stack not running, use 'obol stack up' first")
 			}
 
-			return update.ApplyUpgrades(cfg, c.Bool("defaults-only"))
+			return update.ApplyUpgrades(cfg, c.Bool("defaults-only"), c.Bool("pinned"), c.Bool("major"))
 		},
 	}
 }

@@ -126,6 +126,7 @@ releases:
     namespace: erpc
     createNamespace: true
     chart: ethereum/erpc
+    version: 0.0.4
     needs:
       - kube-system/base
       - traefik/traefik
@@ -136,6 +137,7 @@ releases:
   - name: erpc-httproute
     namespace: erpc
     chart: bedag/raw
+    version: 2.0.2
     needs:
       - traefik/traefik
       - erpc/erpc
@@ -176,6 +178,7 @@ releases:
   - name: obol-frontend-httproute
     namespace: obol-frontend
     chart: bedag/raw
+    version: 2.0.2
     needs:
       - traefik/traefik
       - obol-frontend/obol-frontend
@@ -204,6 +207,7 @@ releases:
   - name: obol-frontend-rbac
     namespace: obol-frontend
     chart: bedag/raw
+    version: 2.0.2
     needs:
       - obol-frontend/obol-frontend
     values:

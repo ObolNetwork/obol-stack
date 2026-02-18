@@ -75,6 +75,11 @@ func CompareVersions(current, latest string) int {
 	return 0
 }
 
+// MajorVersion extracts the major version number from a semver string.
+func MajorVersion(v string) int {
+	return parseSemver(v)[0]
+}
+
 // parseSemver extracts [major, minor, patch] from a version string.
 // Handles formats like "1.2.3", "1.2.3-rc.1", "1.2".
 func parseSemver(v string) [3]int {

@@ -119,7 +119,11 @@ func CheckChartVersions(cfg *config.Config) ([]ChartStatus, error) {
 
 		status := "Up to date"
 		if CompareVersions(rel.Version, latest) < 0 {
-			status = "Update available"
+			if MajorVersion(latest) != MajorVersion(rel.Version) {
+				status = "Major update available"
+			} else {
+				status = "Update available"
+			}
 		}
 
 		statuses = append(statuses, ChartStatus{
@@ -131,6 +135,149 @@ func CheckChartVersions(cfg *config.Config) ([]ChartStatus, error) {
 	}
 
 	return statuses, nil
+}
+
+// VersionBump records a single chart version change made by UpgradeHelmfileVersions.
+type VersionBump struct {
+	Chart string
+	From  string
+	To    string
+}
+
+// UpgradeHelmfileVersions rewrites version pins in the on-disk defaults helmfile
+// to the latest available versions from helm repos. Uses yaml.Node to preserve
+// comments and formatting. If major is false, only bumps within the same major
+// version (like npm's ^ behavior). Returns the list of charts that were bumped.
+func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, error) {
+	helmfilePath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
+	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	data, err := os.ReadFile(helmfilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read helmfile: %w", err)
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("failed to parse helmfile: %w", err)
+	}
+
+	// doc.Content[0] is the root mapping node
+	if doc.Content == nil || len(doc.Content) == 0 {
+		return nil, fmt.Errorf("empty helmfile document")
+	}
+	root := doc.Content[0]
+
+	// Find the "releases" key in the root mapping
+	var releasesNode *yaml.Node
+	for i := 0; i < len(root.Content)-1; i += 2 {
+		if root.Content[i].Value == "releases" {
+			releasesNode = root.Content[i+1]
+			break
+		}
+	}
+	if releasesNode == nil {
+		return nil, fmt.Errorf("no releases found in helmfile")
+	}
+
+	// Track which charts we've already bumped (dedup bedag/raw etc.)
+	bumped := make(map[string]bool)
+	var bumps []VersionBump
+
+	// Walk each release (sequence of mapping nodes)
+	for _, releaseNode := range releasesNode.Content {
+		if releaseNode.Kind != yaml.MappingNode {
+			continue
+		}
+
+		var chartValue string
+		var versionNode *yaml.Node
+
+		// Extract chart and version from the mapping
+		for i := 0; i < len(releaseNode.Content)-1; i += 2 {
+			key := releaseNode.Content[i].Value
+			val := releaseNode.Content[i+1]
+			switch key {
+			case "chart":
+				chartValue = val.Value
+			case "version":
+				versionNode = val
+			}
+		}
+
+		// Skip local charts and charts without version pins
+		if chartValue == "" || strings.HasPrefix(chartValue, "./") || strings.HasPrefix(chartValue, "/") {
+			continue
+		}
+		if versionNode == nil {
+			continue
+		}
+
+		// Skip if we already bumped this chart (dedup)
+		if bumped[chartValue] {
+			continue
+		}
+
+		// Query latest version
+		latest, err := helmSearchLatest(helmBinary, kubeconfigPath, chartValue)
+		if err != nil {
+			continue // best-effort, skip on failure
+		}
+
+		currentVersion := versionNode.Value
+		if CompareVersions(currentVersion, latest) >= 0 {
+			continue // already up to date
+		}
+
+		// Skip major version jumps unless explicitly opted in
+		if !major && MajorVersion(latest) != MajorVersion(currentVersion) {
+			continue
+		}
+
+		// Update all releases with this chart to the new version
+		for _, rn := range releasesNode.Content {
+			if rn.Kind != yaml.MappingNode {
+				continue
+			}
+			var rnChart string
+			var rnVersion *yaml.Node
+			for i := 0; i < len(rn.Content)-1; i += 2 {
+				switch rn.Content[i].Value {
+				case "chart":
+					rnChart = rn.Content[i+1].Value
+				case "version":
+					rnVersion = rn.Content[i+1]
+				}
+			}
+			if rnChart == chartValue && rnVersion != nil {
+				rnVersion.Value = latest
+			}
+		}
+
+		bumped[chartValue] = true
+		bumps = append(bumps, VersionBump{
+			Chart: chartValue,
+			From:  currentVersion,
+			To:    latest,
+		})
+	}
+
+	if len(bumps) == 0 {
+		return nil, nil
+	}
+
+	// Marshal back to YAML and write
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal updated helmfile: %w", err)
+	}
+
+	if err := os.WriteFile(helmfilePath, out, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write updated helmfile: %w", err)
+	}
+
+	return bumps, nil
 }
 
 // parseHelmfileReleases extracts release entries from a helmfile YAML.
