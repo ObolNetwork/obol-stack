@@ -219,10 +219,10 @@ func TestTranslateToOverlayYAML_Nil(t *testing.T) {
 
 func TestTranslateToOverlayYAML_AgentModelOnly(t *testing.T) {
 	result := &ImportResult{
-		AgentModel: "claude-opus-4-6",
+		AgentModel: "claude-sonnet-4-6",
 	}
 	got := TranslateToOverlayYAML(result)
-	if !strings.Contains(got, "agentModel: claude-opus-4-6") {
+	if !strings.Contains(got, "agentModel: claude-sonnet-4-6") {
 		t.Errorf("YAML missing agentModel, got:\n%s", got)
 	}
 	if strings.Contains(got, "models:") {
@@ -239,7 +239,7 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 				API:     "anthropic-messages",
 				APIKey:  "sk-ant-test",
 				Models: []ImportedModel{
-					{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
+					{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
 				},
 			},
 		},
@@ -250,8 +250,8 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 		"anthropic:\n    enabled: true",
 		"baseUrl: https://api.anthropic.com",
 		"api: anthropic-messages",
-		"- id: claude-opus-4-6",
-		"name: Claude Opus 4.6",
+		"- id: claude-sonnet-4-6",
+		"name: Claude Sonnet 4.6",
 	}
 	for _, check := range checks {
 		if !strings.Contains(got, check) {
@@ -322,14 +322,14 @@ func TestTranslateToOverlayYAML_Channels(t *testing.T) {
 
 func TestTranslateToOverlayYAML_FullConfig(t *testing.T) {
 	result := &ImportResult{
-		AgentModel: "claude-opus-4-6",
+		AgentModel: "claude-sonnet-4-6",
 		Providers: []ImportedProvider{
 			{
 				Name:    "anthropic",
 				BaseURL: "https://api.anthropic.com",
 				API:     "anthropic-messages",
 				APIKey:  "sk-ant-test",
-				Models:  []ImportedModel{{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"}},
+				Models:  []ImportedModel{{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"}},
 			},
 			{Name: "openai", Disabled: true},
 		},
@@ -339,7 +339,7 @@ func TestTranslateToOverlayYAML_FullConfig(t *testing.T) {
 	}
 	got := TranslateToOverlayYAML(result)
 
-	if !strings.Contains(got, "agentModel: claude-opus-4-6") {
+	if !strings.Contains(got, "agentModel: claude-sonnet-4-6") {
 		t.Errorf("YAML missing agentModel, got:\n%s", got)
 	}
 	if !strings.Contains(got, "anthropic:\n    enabled: true") {
@@ -403,10 +403,10 @@ func TestDetectExistingConfigAt_ValidConfig(t *testing.T) {
 			BaseURL: "https://api.anthropic.com",
 			API:     "anthropic-messages",
 			APIKey:  "sk-ant-test-key",
-			Models:  []openclawModel{{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"}},
+			Models:  []openclawModel{{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"}},
 		},
 	}
-	cfg.Agents.Defaults.Model.Primary = "claude-opus-4-6"
+	cfg.Agents.Defaults.Model.Primary = "claude-sonnet-4-6"
 	writeTestOpenclawConfig(t, home, cfg)
 
 	result, err := detectExistingConfigAt(home)
@@ -417,8 +417,8 @@ func TestDetectExistingConfigAt_ValidConfig(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	if result.AgentModel != "claude-opus-4-6" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "claude-opus-4-6")
+	if result.AgentModel != "claude-sonnet-4-6" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "claude-sonnet-4-6")
 	}
 	if len(result.Providers) != 1 {
 		t.Fatalf("len(Providers) = %d, want 1", len(result.Providers))
@@ -436,7 +436,7 @@ func TestDetectExistingConfigAt_ValidConfig(t *testing.T) {
 	if p.APIKeyEnvVar != "ANTHROPIC_API_KEY" {
 		t.Errorf("Provider.APIKeyEnvVar = %q, want %q", p.APIKeyEnvVar, "ANTHROPIC_API_KEY")
 	}
-	if len(p.Models) != 1 || p.Models[0].ID != "claude-opus-4-6" {
+	if len(p.Models) != 1 || p.Models[0].ID != "claude-sonnet-4-6" {
 		t.Errorf("Provider.Models = %v", p.Models)
 	}
 }
