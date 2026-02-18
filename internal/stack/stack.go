@@ -2,10 +2,12 @@ package stack
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -167,6 +169,12 @@ func Up(cfg *config.Config) error {
 	// Create data directory if it doesn't exist
 	if err := os.MkdirAll(absDataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Check required ports are available before creating cluster
+	requiredPorts := []int{80, 8080, 443, 8443}
+	if err := checkPortsAvailable(requiredPorts); err != nil {
+		return err
 	}
 
 	// Create cluster using k3d config with custom name
@@ -390,6 +398,39 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 	}
 
 	return nil
+}
+
+// checkPortsAvailable verifies that all required ports can be bound.
+// Returns an actionable error if any port is already in use.
+func checkPortsAvailable(ports []int) error {
+	var blocked []int
+	for _, port := range ports {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			blocked = append(blocked, port)
+			continue
+		}
+		ln.Close()
+	}
+	if len(blocked) > 0 {
+		return fmt.Errorf(
+			"port(s) %s already in use\n\n"+
+				"Obol Stack needs these ports for HTTP/HTTPS access.\n"+
+				"Find what's using them with:\n"+
+				"  sudo lsof -i :%d\n\n"+
+				"Then stop the conflicting service and retry 'obol stack up'.",
+			formatPorts(blocked), blocked[0],
+		)
+	}
+	return nil
+}
+
+func formatPorts(ports []int) string {
+	strs := make([]string, len(ports))
+	for i, p := range ports {
+		strs[i] = strconv.Itoa(p)
+	}
+	return strings.Join(strs, ", ")
 }
 
 func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
