@@ -289,7 +289,7 @@ func TestRemoteCapableCommands(t *testing.T) {
 	}
 
 	// Commands that should go through kubectl exec
-	local := []string{"agent", "doctor", "config", "models", "message"}
+	local := []string{"agent", "doctor", "config", "models", "message", "skills"}
 	for _, cmd := range local {
 		if remoteCapableCommands[cmd] {
 			t.Errorf("%q should NOT be remote-capable", cmd)

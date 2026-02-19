@@ -133,6 +133,90 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				Usage: "Manage OpenClaw skills",
 				Subcommands: []*cli.Command{
 					{
+						Name:      "list",
+						Usage:     "List skills loaded in an OpenClaw instance",
+						ArgsUsage: "<id>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "json", Usage: "Output as JSON"},
+							&cli.BoolFlag{Name: "eligible", Usage: "Show only eligible (ready-to-use) skills"},
+							&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show details including requirements"},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("instance ID required (e.g., obol openclaw skills list default)")
+							}
+							var args []string
+							if c.Bool("json") {
+								args = append(args, "--json")
+							}
+							if c.Bool("eligible") {
+								args = append(args, "--eligible")
+							}
+							if c.Bool("verbose") {
+								args = append(args, "-v")
+							}
+							return openclaw.SkillsCLI(cfg, c.Args().First(), append([]string{"list"}, args...))
+						},
+					},
+					{
+						Name:      "info",
+						Usage:     "Show detailed information about a skill",
+						ArgsUsage: "<id> <skill-name>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "json", Usage: "Output as JSON"},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() < 2 {
+								return fmt.Errorf("instance ID and skill name required (e.g., obol openclaw skills info default github)")
+							}
+							args := []string{"info", c.Args().Get(1)}
+							if c.Bool("json") {
+								args = append(args, "--json")
+							}
+							return openclaw.SkillsCLI(cfg, c.Args().First(), args)
+						},
+					},
+					{
+						Name:      "check",
+						Usage:     "Check which skills are ready vs missing requirements",
+						ArgsUsage: "<id>",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{Name: "json", Usage: "Output as JSON"},
+						},
+						Action: func(c *cli.Context) error {
+							if c.NArg() == 0 {
+								return fmt.Errorf("instance ID required (e.g., obol openclaw skills check default)")
+							}
+							args := []string{"check"}
+							if c.Bool("json") {
+								args = append(args, "--json")
+							}
+							return openclaw.SkillsCLI(cfg, c.Args().First(), args)
+						},
+					},
+					{
+						Name:      "add",
+						Usage:     "Install a skill from the clawhub registry and sync to pod",
+						ArgsUsage: "<id> <slug>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() < 2 {
+								return fmt.Errorf("instance ID and skill slug required (e.g., obol openclaw skills add default austintgriffith/ethereum-wingman)")
+							}
+							return openclaw.SkillsAdd(cfg, c.Args().First(), c.Args().Get(1))
+						},
+					},
+					{
+						Name:      "remove",
+						Usage:     "Remove a skill from the managed directory and re-sync",
+						ArgsUsage: "<id> <skill-name>",
+						Action: func(c *cli.Context) error {
+							if c.NArg() < 2 {
+								return fmt.Errorf("instance ID and skill name required (e.g., obol openclaw skills remove default ethereum-wingman)")
+							}
+							return openclaw.SkillsRemove(cfg, c.Args().First(), c.Args().Get(1))
+						},
+					},
+					{
 						Name:      "sync",
 						Usage:     "Package a local skills directory into a ConfigMap",
 						ArgsUsage: "<id>",
