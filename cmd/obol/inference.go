@@ -53,9 +53,14 @@ func inferenceCreateCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "create",
 		Usage:     "Register a new inference deployment",
-		ArgsUsage: "<name>",
+		ArgsUsage: "[options] <name>",
 		Description: `Creates a named inference deployment and persists its configuration to disk.
 The Secure Enclave key is generated on first use (obol inference deploy or serve).
+
+The deployment name can be supplied as a positional argument (flags first) or
+via --name (any order):
+  obol inference create --wallet <addr> [flags] <name>
+  obol inference create --name <name> --wallet <addr> [flags]
 
 Analogous to 'ecloud compute app deploy --name <name>'.`,
 		Flags: append(deployFlags(),
@@ -66,9 +71,12 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 			},
 		),
 		Action: func(c *cli.Context) error {
-			name := c.Args().First()
+			name := c.String("name")
 			if name == "" {
-				return fmt.Errorf("usage: obol inference create <name>")
+				name = c.Args().First()
+			}
+			if name == "" {
+				return fmt.Errorf("usage: obol inference create [options] <name>")
 			}
 			store := inference.NewStore(cfg.ConfigDir)
 			d := &inference.Deployment{
@@ -105,17 +113,25 @@ func inferenceDeployCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "deploy",
 		Usage:     "Create (or update) a deployment and start the gateway",
-		ArgsUsage: "<name>",
+		ArgsUsage: "[options] <name>",
 		Description: `Combines obol inference create and obol inference serve into a single step.
 If the deployment already exists, its config is updated with any supplied flags
 and the gateway starts immediately.
 
+The deployment name can be supplied as a positional argument (flags first) or
+via --name (any order):
+  obol inference deploy --wallet <addr> [flags] <name>
+  obol inference deploy --name <name> --wallet <addr> [flags]
+
 Analogous to 'ecloud compute app deploy'.`,
 		Flags: deployFlags(),
 		Action: func(c *cli.Context) error {
-			name := c.Args().First()
+			name := c.String("name")
 			if name == "" {
-				return fmt.Errorf("usage: obol inference deploy <name>")
+				name = c.Args().First()
+			}
+			if name == "" {
+				return fmt.Errorf("usage: obol inference deploy [options] <name>")
 			}
 
 			store := inference.NewStore(cfg.ConfigDir)
@@ -131,6 +147,11 @@ Analogous to 'ecloud compute app deploy'.`,
 
 			// Apply CLI flag overrides.
 			applyFlags(c, d)
+
+			// Validate required fields before writing config.
+			if d.WalletAddress == "" {
+				return fmt.Errorf("wallet address required — use --wallet <addr> or set X402_WALLET")
+			}
 
 			if err := store.Create(d, true); err != nil {
 				return err
@@ -439,6 +460,17 @@ For managed deployments use 'obol inference deploy'.`,
 // deployFlags returns the common flags shared by create / deploy / serve.
 func deployFlags() []cli.Flag {
 	return []cli.Flag{
+		// name is provided as both a positional arg and a flag so that
+		// users can write either:
+		//   obol inference deploy --wallet addr <name>   (flags first)
+		//   obol inference deploy --name <name> --wallet addr  (flag form)
+		// urfave/cli v2 stops flag parsing at the first positional arg, so
+		// the flag form is necessary when the name comes before other flags.
+		&cli.StringFlag{
+			Name:    "name",
+			Aliases: []string{"n"},
+			Usage:   "Deployment name (alternative to positional argument)",
+		},
 		&cli.StringFlag{
 			Name:    "listen",
 			Aliases: []string{"l"},
@@ -507,9 +539,18 @@ func deployFlags() []cli.Flag {
 
 // applyFlags merges CLI flag values into an existing Deployment, leaving
 // fields unchanged when the flag was not explicitly provided.
+//
+// For flags that have a non-empty default value (listen, upstream, price,
+// chain, facilitator) we use c.IsSet so that an existing deployment's
+// persisted value is not overwritten when the user omits the flag.
+//
+// For flags with no meaningful empty default (wallet, enclave-tag) we apply
+// the flag whenever the string is non-empty, because IsSet can return false
+// in urfave/cli v2 when the flag was resolved via env var lookup before the
+// argument is parsed.
 func applyFlags(c *cli.Context, d *inference.Deployment) {
-	if c.IsSet("enclave-tag") {
-		d.EnclaveTag = c.String("enclave-tag")
+	if v := c.String("enclave-tag"); v != "" {
+		d.EnclaveTag = v
 	}
 	if c.IsSet("listen") {
 		d.ListenAddr = c.String("listen")
@@ -517,8 +558,8 @@ func applyFlags(c *cli.Context, d *inference.Deployment) {
 	if c.IsSet("upstream") {
 		d.UpstreamURL = c.String("upstream")
 	}
-	if c.IsSet("wallet") {
-		d.WalletAddress = c.String("wallet")
+	if v := c.String("wallet"); v != "" {
+		d.WalletAddress = v
 	}
 	if c.IsSet("price") {
 		d.PricePerRequest = c.String("price")
