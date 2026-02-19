@@ -340,7 +340,18 @@ func updateResolvConf() {
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Warning: failed to update %s: %v\n", systemResolvConf, err)
 		fmt.Printf("  Run manually: sudo ln -sf %s %s\n", nmResolvConf, systemResolvConf)
+		return
 	}
+
+	// Wait for DNS to actually resolve after NM restart (max 10s).
+	// NM's dnsmasq needs a moment to start accepting queries.
+	for i := 0; i < 20; i++ {
+		if err := exec.Command("nslookup", "github.com").Run(); err == nil {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	fmt.Println("Warning: DNS not yet responding after NM restart; may need a moment to stabilize")
 }
 
 // cleanupResolvedDropIn removes the legacy systemd-resolved drop-in that was

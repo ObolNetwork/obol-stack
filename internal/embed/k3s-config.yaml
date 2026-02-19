@@ -19,6 +19,14 @@ tls-san:
   - "localhost"
   - "obol.stack"
 
+# Relax eviction thresholds: k3s reports imagefs capacity as 0 on shared
+# filesystems, causing spurious disk-pressure taints with percentage thresholds.
+# Use absolute values instead.
+kubelet-arg:
+  - "eviction-hard=imagefs.available<1Gi,nodefs.available<1Gi,memory.available<100Mi"
+  - "eviction-soft=imagefs.available<2Gi,nodefs.available<2Gi,memory.available<200Mi"
+  - "eviction-soft-grace-period=imagefs.available=1m,nodefs.available=1m,memory.available=30s"
+
 # Node labels
 node-label:
   - "obol.cluster-id={{STACK_ID}}"

@@ -30,13 +30,15 @@ func (b *K3sBackend) Prerequisites(cfg *config.Config) error {
 		return fmt.Errorf("k3s backend is only supported on Linux")
 	}
 
-	// Check sudo access (allow interactive password prompt)
-	cmd := exec.Command("sudo", "-v")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("k3s backend requires root/sudo access")
+	// Check sudo access: try non-interactive first (NOPASSWD), fall back to interactive prompt
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		cmd := exec.Command("sudo", "-v")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("k3s backend requires root/sudo access")
+		}
 	}
 
 	// Check k3s binary exists
