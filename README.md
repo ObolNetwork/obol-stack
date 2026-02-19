@@ -117,17 +117,42 @@ Find charts at [Artifact Hub](https://artifacthub.io).
 
 ## Model Providers
 
-Configure which LLM provider the agent uses:
+The stack runs [llmspy](https://github.com/ObolNetwork/llms) as an in-cluster gateway that proxies all LLM traffic. By default, Ollama on the host machine is used. To switch to a cloud provider:
 
 ```bash
-# Interactive setup (Ollama, Anthropic, or OpenAI)
+# Interactive — prompts for provider and API key
 obol model setup
 
-# Check status
+# Or pass flags directly
+obol model setup --provider anthropic --api-key sk-ant-...
+obol model setup --provider openai --api-key sk-proj-...
+
+# Check which providers are enabled
 obol model status
 ```
 
-The model gateway (llmspy) runs in-cluster and proxies all LLM traffic. Cloud provider API keys are stored as Kubernetes secrets.
+`model setup` patches the llmspy Kubernetes Secret with your API key, enables the provider, and restarts the gateway. All OpenClaw instances automatically route through llmspy.
+
+## OpenClaw AI Agent
+
+[OpenClaw](https://openclaw.ai) is the AI agent deployed by the stack. Multiple instances can run side-by-side, each with its own model provider configuration.
+
+```bash
+# Create and deploy an instance (interactive provider setup)
+obol openclaw onboard
+
+# Reconfigure model provider for an existing instance
+obol openclaw setup <id>
+
+# List instances
+obol openclaw list
+
+# Open the web dashboard
+obol openclaw dashboard <id>
+
+# Remove an instance
+obol openclaw delete <id> --force
+```
 
 ## Public Access (Cloudflare Tunnel)
 
