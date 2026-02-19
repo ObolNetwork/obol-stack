@@ -131,7 +131,7 @@ HELM_DIFF_VERSION="3.14.1"
 
 ### Architecture
 
-**CLI Framework**: urfave/cli/v2 with custom help template
+**CLI Framework**: urfave/cli/v3 with custom help template
 
 **Command Structure**:
 ```
@@ -173,7 +173,13 @@ obol
 ├── agent (AI agent management)
 │   └── init
 ├── inference (x402 inference gateway)
-│   └── serve
+│   ├── create   (create deployment config)
+│   ├── deploy   (create container + start gateway; --vm for Apple Containerization)
+│   ├── list     (list saved deployments)
+│   ├── info     (show deployment details)
+│   ├── delete   (remove deployment + optionally purge SE key)
+│   ├── pubkey   (print Secure Enclave public key)
+│   └── serve    (start gateway directly from flags; no deployment record)
 ├── version
 └── bootstrap (hidden, used by installer)
 ```
@@ -211,16 +217,17 @@ obol
 {
     Name:            "kubectl",
     SkipFlagParsing: true,  // Pass all args directly to kubectl
-    Action: func(c *cli.Context) error {
+    Action: func(ctx context.Context, cmd *cli.Command) error {
         kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-        cmd := exec.Command(kubectlPath, c.Args().Slice()...)
-        cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-        cmd.Stdin = os.Stdin
-        cmd.Stdout = os.Stdout
-        cmd.Stderr = os.Stderr
+        // Note: local var named 'proc' to avoid shadowing the cmd *cli.Command parameter
+        proc := exec.Command(kubectlPath, cmd.Args().Slice()...)
+        proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+        proc.Stdin = os.Stdin
+        proc.Stdout = os.Stdout
+        proc.Stderr = os.Stderr
 
-        return cmd.Run()
+        return proc.Run()
     },
 }
 ```
@@ -783,7 +790,113 @@ models:
 - Ensures consistent CLI flag ordering in `--help` output
 - Predictable behavior across runs and environments
 
-## Key Implementation Patterns
+## Inference Gateway (x402)
+
+### Overview
+
+The `obol inference` subsystem is an OpenAI-compatible HTTP gateway that requires x402 micropayment headers before forwarding requests to a local LLM (Ollama). It is designed for trustless monetisation of inference: callers pay per request on-chain, the gateway verifies settlement with a facilitator, and then proxies the completion.
+
+### Architecture
+
+```
+Client                     obol inference gateway            Ollama / VM
+  │                              │                              │
+  ├─ POST /v1/chat/completions ──▶│                              │
+  │  (no x402 header)            ├─ 402 Payment Required ───────▶│
+  │◀─ 402 ───────────────────────│                              │
+  │                              │                              │
+  ├─ POST /v1/chat/completions ──▶│                              │
+  │  (X-Payment header)          ├─ verify with facilitator      │
+  │                              ├─ POST /v1/chat/completions ──▶│
+  │◀─ 200 (completion) ──────────│◀─────────────────────────────│
+```
+
+### Key Components
+
+| Component | Package | Role |
+|-----------|---------|------|
+| `Gateway` | `internal/inference/gateway.go` | HTTP server, x402 middleware, Ollama proxy |
+| `ContainerManager` | `internal/inference/container.go` | Apple Containerization VM lifecycle (macOS) |
+| `Store` | `internal/inference/store.go` | Deployment config persistence (~/.config/obol/inference/) |
+| `Deployment` | `internal/inference/types.go` | Config struct (wallet, model, VM settings) |
+| `seKey` | `internal/enclave/enclave_darwin.go` | Secure Enclave key (Sign-in with Apple entitlement) |
+
+### Deployment Lifecycle
+
+```
+obol inference create --wallet <addr> [--name <id>]
+    → writes ~/.config/obol/inference/<id>/config.json (no container)
+
+obol inference deploy [--name <id>] [--vm] [--vm-image <img>] [--vm-cpus N] [--vm-memory M]
+    → loads config, applies flag overrides (wallet validated before write)
+    → if --vm: container pull <image>; container run --detach --publish 11434:11434
+    → starts gateway on :8080 (or --listen), proxying to upstream Ollama
+
+obol inference list / info / delete / pubkey
+    → manage saved deployments and SE key
+
+obol inference serve (stateless, from flags only)
+    → gateway without a saved deployment record
+```
+
+### Secure Enclave Integration
+
+The Secure Enclave key (`internal/enclave/`) is used to:
+1. **Sign responses** — every completion response carries an SE signature proving it originated from this device
+2. **Re-encrypt** (optional) — `enclave_middleware.go` can decrypt the client's request payload with its ephemeral key and re-encrypt the response
+
+**`Key` interface** (`internal/enclave/enclave.go`):
+```go
+type Key interface {
+    Tag() string
+    PublicKey() *ecdsa.PublicKey
+    Sign(digest []byte) ([]byte, error)
+    Decrypt(ciphertext []byte) ([]byte, error)
+    Delete() error
+}
+```
+
+**macOS backend** (`enclave_darwin.go`): Uses `kSecAttrTokenIDSecureEnclave` via CGo/Security.framework. Falls back to ephemeral in-memory key when `errSecMissingEntitlement` (development without provisioning profile).
+
+**Build guards**: `enclave_darwin.go` has `//go:build darwin && cgo`; `enclave_stub.go` has `//go:build !darwin || !cgo` — compiles on all platforms.
+
+### VM Mode (Apple Containerization)
+
+`--vm` flag on `obol inference deploy` uses the `apple/container` CLI (v0.9.0+, installed by `obol agent init`) to run Ollama in a Linux VM:
+
+```bash
+container pull ollama/ollama:latest   # streams progress
+container run --detach --name obol-inference-<id> \
+    --publish 11434:11434 \
+    ollama/ollama:latest
+```
+
+**First cold pull**: multi-GB download (arm64 Linux image); progress is now streamed to stdout.
+
+**Platform guard**: `container.go` uses `runtime.GOOS == "darwin"` check; Linux implementation (`container_linux.go`) is a future stub using podman/containerd.
+
+### CLI Flag Patterns
+
+**Deployment name**: Two supported patterns (positional deprecated for flags after name):
+```bash
+obol inference deploy --name test-vm --wallet 0xABC   # preferred
+obol inference deploy test-vm --wallet 0xABC           # also works
+```
+
+**VM flags**:
+```bash
+--vm               # enable Apple Containerization VM
+--vm-image         # container image (default: ollama/ollama:latest)
+--vm-cpus          # CPU count (default: 4)
+--vm-memory        # memory MiB (default: 8192)
+--vm-host-port     # host port for Ollama (default: 11434)
+```
+
+**Env var**: `X402_WALLET` sets the wallet address without a flag.
+
+---
+
+
 
 ### Environment Variable Handling
 
@@ -957,6 +1070,18 @@ obol network delete ethereum-<generated-name> --force
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
 
+**Inference gateway and Secure Enclave**:
+- `internal/enclave/enclave.go` - `Key` interface definition
+- `internal/enclave/enclave_darwin.go` - macOS Secure Enclave backend (CGo/Security.framework)
+- `internal/enclave/enclave_stub.go` - Stub for non-darwin/non-cgo builds
+- `internal/inference/gateway.go` - x402 HTTP gateway, Ollama proxy
+- `internal/inference/container.go` - Apple Containerization VM lifecycle (macOS)
+- `internal/inference/store.go` - Deployment config persistence
+- `internal/inference/types.go` - `Deployment` struct
+- `internal/inference/enclave_middleware.go` - SE sign/decrypt/re-encrypt middleware
+- `cmd/obol/inference.go` - `obol inference` CLI commands
+- `internal/inference/sdk/` - Cross-platform Go client SDK
+
 **Build and version**:
 - `justfile` - Task runner (install, build, up, down commands)
 - `VERSION` - Semver version file
@@ -982,7 +1107,7 @@ obol network delete ethereum-<generated-name> --force
 - helm-diff plugin 3.14.1
 
 **Go dependencies** (key packages):
-- `github.com/urfave/cli/v2` - CLI framework
+- `github.com/urfave/cli/v3` - CLI framework (v3.6.2+; `cli.Command` replaces `cli.App`, `context.Context` added to Action signatures)
 - `github.com/dustinkirkland/golang-petname` - Namespace generation
 - Embed uses stdlib `embed` package
 
