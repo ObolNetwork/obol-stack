@@ -125,6 +125,13 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
 			fmt.Println("Default OpenClaw instance already configured, re-syncing...")
+			// Always regenerate helmfile.yaml to pick up chart version bumps.
+			// values-obol.yaml (user config) is intentionally left unchanged.
+			namespace := fmt.Sprintf("%s-%s", appName, id)
+			helmfileContent := generateHelmfile(id, namespace)
+			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
+			}
 			if opts.Sync {
 				if err := doSync(cfg, id); err != nil {
 					return err
