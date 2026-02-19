@@ -20,6 +20,10 @@ prometheus:
         cpu: 500m
         memory: 1Gi
 
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false  # Disable webhook pre-install hooks (avoids timeout on fresh k3s)
+
 grafana:
   enabled: false  # Enable when we want UI access
 

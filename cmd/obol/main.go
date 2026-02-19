@@ -126,9 +126,14 @@ GLOBAL OPTIONS:
 								Aliases: []string{"f"},
 								Usage:   "Force overwrite existing configuration",
 							},
+							&cli.StringFlag{
+								Name:    "backend",
+								Usage:   "Cluster backend: k3d (Docker-based) or k3s (bare-metal)",
+								EnvVars: []string{"OBOL_BACKEND"},
+							},
 						},
 						Action: func(c *cli.Context) error {
-							return stack.Init(cfg, c.Bool("force"))
+							return stack.Init(cfg, c.Bool("force"), c.String("backend"))
 						},
 					},
 					{
