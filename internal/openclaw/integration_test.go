@@ -21,6 +21,66 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Test setup
+// ---------------------------------------------------------------------------
+
+// TestMain loads .env from the repo root before any test runs, so API keys
+// can be stored in a gitignored file rather than exported in the shell.
+func TestMain(m *testing.M) {
+	loadDotEnv()
+	os.Exit(m.Run())
+}
+
+// loadDotEnv reads KEY=value pairs from .env at the module root and sets
+// them as environment variables. Existing env vars are not overwritten, so
+// explicit exports always take precedence. Missing or unreadable .env is
+// silently ignored.
+func loadDotEnv() {
+	root := findModuleRoot()
+	if root == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		return // .env doesn't exist — that's fine
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.Trim(strings.TrimSpace(val), `"'`)
+		if os.Getenv(key) == "" { // don't override explicit exports
+			os.Setenv(key, val) //nolint:errcheck
+		}
+	}
+}
+
+// findModuleRoot walks up from the test's working directory to find the
+// directory containing go.mod.
+func findModuleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers — obol CLI runner
 // ---------------------------------------------------------------------------
 
@@ -83,12 +143,14 @@ func requireOllama(t *testing.T) []string {
 	return models
 }
 
-// requireEnvKey returns the value of an env var or skips.
+// requireEnvKey returns the value of an env var or skips with instructions.
 func requireEnvKey(t *testing.T, key string) string {
 	t.Helper()
 	v := os.Getenv(key)
 	if v == "" {
-		t.Skipf("environment variable %s not set", key)
+		t.Skipf("%s not set — add it to a .env file in the repo root:\n\n"+
+			"  echo '%s=<your-key>' >> .env\n\n"+
+			"See .env.example for all required keys.", key, key)
 	}
 	return v
 }
