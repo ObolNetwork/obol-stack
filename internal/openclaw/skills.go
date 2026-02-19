@@ -113,13 +113,77 @@ func SkillsRemove(cfg *config.Config, id, name string) error {
 	}
 	fmt.Printf("Removed skill %s\n", name)
 
-	// Re-sync remaining skills to pod
+	// Re-sync remaining skills to pod, or reset if none left
 	entries, _ := os.ReadDir(skillsDir)
 	if len(entries) == 0 {
-		fmt.Println("No skills remaining; skipping sync")
-		return nil
+		fmt.Println("No managed skills remaining; resetting ConfigMap...")
+		return skillsReset(cfg, id)
 	}
 
 	fmt.Printf("Syncing skills to instance %s...\n", id)
 	return SkillsSync(cfg, id, skillsDir)
+}
+
+// skillsReset creates a ConfigMap with an empty tar archive and restarts
+// the deployment. The init container sees a valid skills.tgz, clears the
+// old extracted skills directory, and extracts nothing — effectively
+// removing all managed skills from the pod.
+func skillsReset(cfg *config.Config, id string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	configMapName := "openclaw-skills"
+
+	// Create an empty tar.gz archive so the init container's "rm -rf + extract"
+	// path runs and cleans the directory (an empty ConfigMap would just skip).
+	emptyTgz, err := os.CreateTemp("", "openclaw-empty-skills-*.tgz")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(emptyTgz.Name())
+
+	emptyDir, err := os.MkdirTemp("", "openclaw-empty-skills-dir-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(emptyDir)
+
+	tarCmd := exec.Command("tar", "-czf", emptyTgz.Name(), "-C", emptyDir, ".")
+	if err := tarCmd.Run(); err != nil {
+		return fmt.Errorf("failed to create empty archive: %w", err)
+	}
+	emptyTgz.Close()
+
+	kubeEnv := append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	delCmd := exec.Command(kubectlBinary, "delete", "configmap", configMapName,
+		"-n", namespace, "--ignore-not-found")
+	delCmd.Env = kubeEnv
+	delCmd.Run()
+
+	createCmd := exec.Command(kubectlBinary, "create", "configmap", configMapName,
+		"-n", namespace,
+		fmt.Sprintf("--from-file=skills.tgz=%s", emptyTgz.Name()))
+	createCmd.Env = kubeEnv
+	if err := createCmd.Run(); err != nil {
+		return fmt.Errorf("failed to reset ConfigMap: %w", err)
+	}
+
+	restartCmd := exec.Command(kubectlBinary, "rollout", "restart",
+		"deployment/openclaw", "-n", namespace)
+	restartCmd.Env = kubeEnv
+	if err := restartCmd.Run(); err != nil {
+		return fmt.Errorf("failed to restart deployment: %w", err)
+	}
+
+	waitCmd := exec.Command(kubectlBinary, "rollout", "status",
+		"deployment/openclaw", "-n", namespace, "--timeout=60s")
+	waitCmd.Env = kubeEnv
+	waitCmd.Stdout = os.Stdout
+	if err := waitCmd.Run(); err != nil {
+		return fmt.Errorf("rollout did not complete: %w", err)
+	}
+
+	fmt.Printf("✓ Managed skills cleared from instance %s\n", id)
+	return nil
 }

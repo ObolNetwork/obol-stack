@@ -887,7 +887,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string) error {
 		return fmt.Errorf("skills directory not found: %s", skillsDir)
 	}
 
-	configMapName := fmt.Sprintf("openclaw-%s-skills", id)
+	configMapName := "openclaw-skills"
 	archiveKey := "skills.tgz"
 
 	fmt.Printf("Packaging skills from %s...\n", skillsDir)
@@ -932,7 +932,26 @@ func SkillsSync(cfg *config.Config, id, skillsDir string) error {
 	}
 
 	fmt.Printf("✓ Skills ConfigMap updated: %s\n", configMapName)
-	fmt.Printf("\nTo apply, re-sync: obol openclaw sync %s\n", id)
+
+	// Restart the deployment so the init container re-extracts skills
+	fmt.Printf("Restarting deployment to load new skills...\n")
+	restartCmd := exec.Command(kubectlBinary, "rollout", "restart",
+		"deployment/openclaw", "-n", namespace)
+	restartCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if err := restartCmd.Run(); err != nil {
+		return fmt.Errorf("failed to restart deployment: %w", err)
+	}
+
+	// Wait for rollout to complete
+	waitCmd := exec.Command(kubectlBinary, "rollout", "status",
+		"deployment/openclaw", "-n", namespace, "--timeout=60s")
+	waitCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	waitCmd.Stdout = os.Stdout
+	if err := waitCmd.Run(); err != nil {
+		return fmt.Errorf("rollout did not complete: %w", err)
+	}
+
+	fmt.Printf("✓ Skills loaded in instance %s\n", id)
 	return nil
 }
 

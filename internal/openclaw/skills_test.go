@@ -84,7 +84,7 @@ func TestSkillsRemove_SkillNotFound(t *testing.T) {
 
 func TestSkillsRemove_LastSkill(t *testing.T) {
 	tmpDir := t.TempDir()
-	cfg := &config.Config{ConfigDir: tmpDir}
+	cfg := &config.Config{ConfigDir: tmpDir, BinDir: tmpDir}
 	id := "test-remove"
 
 	// Create deployment + one skill
@@ -97,24 +97,26 @@ func TestSkillsRemove_LastSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Remove the only skill — should succeed without attempting sync
+	// Remove the only skill — removal succeeds, but reset fails (no cluster/kubectl)
 	err := SkillsRemove(cfg, id, "my-skill")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	// Skill directory should be gone
-	if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
+	// Skill directory should be gone regardless of reset outcome
+	if _, statErr := os.Stat(skillPath); !os.IsNotExist(statErr) {
 		t.Error("skill directory should be removed")
 	}
 
 	// Skills dir itself should still exist (just empty)
-	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		t.Fatalf("failed to read skills dir: %v", err)
+	entries, readErr := os.ReadDir(skillsDir)
+	if readErr != nil {
+		t.Fatalf("failed to read skills dir: %v", readErr)
 	}
 	if len(entries) != 0 {
 		t.Errorf("skills dir should be empty, got %d entries", len(entries))
+	}
+
+	// Reset will fail without kubectl/cluster — that's expected in unit tests
+	if err != nil && !strings.Contains(err.Error(), "failed to reset ConfigMap") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
