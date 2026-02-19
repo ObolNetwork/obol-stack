@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -98,8 +99,18 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 	// Remove any stale container with this name (ignore errors — may not exist).
 	_ = m.Stop(ctx)
 
-	log.Printf("container: starting %q from image %s (%d CPUs, %d MiB RAM)...",
-		m.name, image, cpus, memoryMB)
+	// Pull the image first so the user sees download progress.
+	// On cache hit the pull completes in milliseconds; on a cold pull (first
+	// run) it can take several minutes for large images like ollama/ollama.
+	log.Printf("container: pulling image %s (first run may take several minutes)...", image)
+	pullCmd := exec.CommandContext(ctx, m.binary, "pull", image)
+	pullCmd.Stdout = os.Stdout
+	pullCmd.Stderr = os.Stderr
+	if err := pullCmd.Run(); err != nil {
+		return fmt.Errorf("container pull %s: %w", image, err)
+	}
+
+	log.Printf("container: starting %q (%d CPUs, %d MiB RAM)...", m.name, cpus, memoryMB)
 
 	args := []string{
 		"run",
