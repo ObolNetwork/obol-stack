@@ -48,6 +48,25 @@ type Deployment struct {
 	// FacilitatorURL is the x402 facilitator URL.
 	FacilitatorURL string `json:"facilitator_url"`
 
+	// VMMode enables running the upstream inference engine inside an Apple
+	// Containerization Linux micro-VM instead of pointing at an existing
+	// Ollama process.  Requires the apple/container CLI to be installed.
+	// See: https://github.com/apple/container
+	VMMode bool `json:"vm_mode,omitempty"`
+
+	// VMImage is the OCI image to run (default "ollama/ollama:latest").
+	VMImage string `json:"vm_image,omitempty"`
+
+	// VMCPUs is the number of vCPUs to allocate to the VM (default 4).
+	VMCPUs int `json:"vm_cpus,omitempty"`
+
+	// VMMemoryMB is the RAM to allocate to the VM in MiB (default 8192).
+	VMMemoryMB int `json:"vm_memory_mb,omitempty"`
+
+	// VMHostPort is the host-local port mapped to Ollama's 11434 inside the
+	// container (default 11435).  Must not conflict with other deployments.
+	VMHostPort int `json:"vm_host_port,omitempty"`
+
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 

@@ -478,6 +478,30 @@ func deployFlags() []cli.Flag {
 			Usage:   "Keychain SE tag (default: com.obol.inference.<name>)",
 			EnvVars: []string{"OBOL_ENCLAVE_TAG"},
 		},
+		&cli.BoolFlag{
+			Name:  "vm",
+			Usage: "Run Ollama inside an Apple Containerization Linux micro-VM (requires apple/container CLI, macOS 15+)",
+		},
+		&cli.StringFlag{
+			Name:  "vm-image",
+			Usage: "OCI image for the inference container",
+			Value: "ollama/ollama:latest",
+		},
+		&cli.IntFlag{
+			Name:  "vm-cpus",
+			Usage: "vCPUs to allocate to the VM",
+			Value: 4,
+		},
+		&cli.IntFlag{
+			Name:  "vm-memory",
+			Usage: "RAM to allocate to the VM in MiB",
+			Value: 8192,
+		},
+		&cli.IntFlag{
+			Name:  "vm-host-port",
+			Usage: "Host-local port mapped from the container's Ollama port 11434 (default 11435)",
+			Value: 11435,
+		},
 	}
 }
 
@@ -505,6 +529,21 @@ func applyFlags(c *cli.Context, d *inference.Deployment) {
 	if c.IsSet("facilitator") {
 		d.FacilitatorURL = c.String("facilitator")
 	}
+	if c.IsSet("vm") {
+		d.VMMode = c.Bool("vm")
+	}
+	if c.IsSet("vm-image") {
+		d.VMImage = c.String("vm-image")
+	}
+	if c.IsSet("vm-cpus") {
+		d.VMCPUs = c.Int("vm-cpus")
+	}
+	if c.IsSet("vm-memory") {
+		d.VMMemoryMB = c.Int("vm-memory")
+	}
+	if c.IsSet("vm-host-port") {
+		d.VMHostPort = c.Int("vm-host-port")
+	}
 }
 
 // runGateway starts the inference gateway for a Deployment and blocks until
@@ -523,6 +562,11 @@ func runGateway(d *inference.Deployment) error {
 		Chain:           chain,
 		FacilitatorURL:  d.FacilitatorURL,
 		EnclaveTag:      d.EnclaveTag,
+		VMMode:          d.VMMode,
+		VMImage:         d.VMImage,
+		VMCPUs:          d.VMCPUs,
+		VMMemoryMB:      d.VMMemoryMB,
+		VMHostPort:      d.VMHostPort,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)

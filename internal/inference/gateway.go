@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
@@ -51,13 +52,37 @@ type GatewayConfig struct {
 	// When empty, all enclave functionality is disabled and the gateway
 	// operates in plain x402-only mode.
 	EnclaveTag string
+
+	// VMMode enables running the upstream inference engine inside an Apple
+	// Containerization Linux micro-VM via the apple/container CLI.
+	// When true, the gateway starts the container on Start() and stops it on
+	// Stop(), overriding UpstreamURL with the container's mapped local port.
+	VMMode bool
+
+	// VMImage is the OCI image to run (default "ollama/ollama:latest").
+	VMImage string
+
+	// VMCPUs is the number of vCPUs to allocate (default 4).
+	VMCPUs int
+
+	// VMMemoryMB is the RAM to allocate in MiB (default 8192).
+	VMMemoryMB int
+
+	// VMHostPort is the host-local port mapped from the container's Ollama
+	// port 11434 (default 11435).
+	VMHostPort int
+
+	// VMBinary is the path to the container CLI binary.
+	// Defaults to "container" (PATH lookup).
+	VMBinary string
 }
 
 // Gateway is an x402-enabled reverse proxy for LLM inference with optional
-// Secure Enclave request encryption.
+// Secure Enclave request encryption and optional container-isolated upstream.
 type Gateway struct {
-	config GatewayConfig
-	server *http.Server
+	config    GatewayConfig
+	server    *http.Server
+	container *ContainerManager // non-nil when VMMode is active
 }
 
 // NewGateway creates a new inference gateway with the given configuration.
@@ -80,6 +105,27 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 
 // Start begins serving the gateway. Blocks until the server is shut down.
 func (g *Gateway) Start() error {
+	// If VM mode is enabled, start the Ollama container and override upstream.
+	if g.config.VMMode {
+		cm := newContainerManager(g.config.VMBinary, "", g.config.VMHostPort)
+		// Use deployment name from enclave tag suffix if available.
+		if g.config.EnclaveTag != "" {
+			const prefix = "com.obol.inference."
+			if strings.HasPrefix(g.config.EnclaveTag, prefix) {
+				cm = newContainerManager(g.config.VMBinary,
+					strings.TrimPrefix(g.config.EnclaveTag, prefix),
+					g.config.VMHostPort)
+			}
+		}
+		ctx := context.Background()
+		if err := cm.Start(ctx, g.config.VMImage, g.config.VMCPUs, g.config.VMMemoryMB); err != nil {
+			return fmt.Errorf("container start: %w", err)
+		}
+		g.container = cm
+		g.config.UpstreamURL = cm.UpstreamURL()
+		log.Printf("  container:   %s → %s", cm.name, cm.UpstreamURL())
+	}
+
 	upstream, err := url.Parse(g.config.UpstreamURL)
 	if err != nil {
 		return fmt.Errorf("invalid upstream URL %q: %w", g.config.UpstreamURL, err)
@@ -129,8 +175,12 @@ func (g *Gateway) Start() error {
 	// Layer order (innermost → outermost):
 	//   upstream proxy → enclave middleware → x402 payment gate → client
 	//
-	// The enclave layer sits between payment and proxy so that the operator
-	// can only see that a paid request arrived — never its plaintext content.
+	// The enclave middleware decrypts the request body via the SE private key
+	// before forwarding plaintext to the upstream.  Note: the decrypted body
+	// is present in this process's memory — this provides transit encryption
+	// and hardware key custody, not operator-blind inference.  Phase 2a (VM
+	// mode) reduces the exfiltration surface by running the upstream inside
+	// an isolated container with no network egress.
 	protect := func(h http.Handler) http.Handler {
 		if em != nil {
 			h = em.wrap(h)
@@ -186,12 +236,22 @@ func (g *Gateway) Start() error {
 	return g.server.Serve(listener)
 }
 
-// Stop gracefully shuts down the gateway.
+// Stop gracefully shuts down the gateway and any managed container.
 func (g *Gateway) Stop() error {
-	if g.server == nil {
-		return nil
+	var serverErr error
+	if g.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		serverErr = g.server.Shutdown(ctx)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return g.server.Shutdown(ctx)
+
+	if g.container != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := g.container.Stop(ctx); err != nil {
+			log.Printf("container stop: %v", err)
+		}
+	}
+
+	return serverErr
 }
