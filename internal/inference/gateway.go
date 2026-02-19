@@ -36,6 +36,10 @@ type GatewayConfig struct {
 	// FacilitatorURL is the x402 facilitator service URL.
 	FacilitatorURL string
 
+	// VerifyOnly skips blockchain settlement after successful verification.
+	// Useful for testing and staging environments where no real funds are involved.
+	VerifyOnly bool
+
 	// EnclaveTag is the macOS Secure Enclave keychain application tag used for
 	// request decryption.  When non-empty the gateway enables two additional
 	// behaviours:
@@ -103,32 +107,15 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	return &Gateway{config: cfg}, nil
 }
 
-// Start begins serving the gateway. Blocks until the server is shut down.
-func (g *Gateway) Start() error {
-	// If VM mode is enabled, start the Ollama container and override upstream.
-	if g.config.VMMode {
-		cm := newContainerManager(g.config.VMBinary, "", g.config.VMHostPort)
-		// Use deployment name from enclave tag suffix if available.
-		if g.config.EnclaveTag != "" {
-			const prefix = "com.obol.inference."
-			if strings.HasPrefix(g.config.EnclaveTag, prefix) {
-				cm = newContainerManager(g.config.VMBinary,
-					strings.TrimPrefix(g.config.EnclaveTag, prefix),
-					g.config.VMHostPort)
-			}
-		}
-		ctx := context.Background()
-		if err := cm.Start(ctx, g.config.VMImage, g.config.VMCPUs, g.config.VMMemoryMB); err != nil {
-			return fmt.Errorf("container start: %w", err)
-		}
-		g.container = cm
-		g.config.UpstreamURL = cm.UpstreamURL()
-		log.Printf("  container:   %s → %s", cm.name, cm.UpstreamURL())
-	}
-
-	upstream, err := url.Parse(g.config.UpstreamURL)
+// buildHandler constructs the HTTP mux and middleware stack for the gateway.
+// It is separated from Start() to allow tests to inject the handler into an
+// httptest.Server without requiring a real network listener.
+//
+// upstreamURL must be pre-resolved (i.e. VM container URL override already applied).
+func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
+	upstream, err := url.Parse(upstreamURL)
 	if err != nil {
-		return fmt.Errorf("invalid upstream URL %q: %w", g.config.UpstreamURL, err)
+		return nil, fmt.Errorf("invalid upstream URL %q: %w", upstreamURL, err)
 	}
 
 	// Build reverse proxy to upstream inference service.
@@ -145,13 +132,14 @@ func (g *Gateway) Start() error {
 		RecipientAddress: g.config.WalletAddress,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create payment requirement: %w", err)
+		return nil, fmt.Errorf("failed to create payment requirement: %w", err)
 	}
 
 	// Configure x402 middleware.
 	x402Config := &x402http.Config{
 		FacilitatorURL:      g.config.FacilitatorURL,
 		PaymentRequirements: []x402.PaymentRequirement{requirement},
+		VerifyOnly:          g.config.VerifyOnly,
 	}
 	paymentMiddleware := x402http.NewX402Middleware(x402Config)
 
@@ -159,11 +147,11 @@ func (g *Gateway) Start() error {
 	var em *enclaveMiddleware
 	if g.config.EnclaveTag != "" {
 		if err := enclave.CheckSIP(); err != nil {
-			return fmt.Errorf("enclave SIP check failed: %w", err)
+			return nil, fmt.Errorf("enclave SIP check failed: %w", err)
 		}
 		em, err = newEnclaveMiddleware(g.config.EnclaveTag)
 		if err != nil {
-			return fmt.Errorf("enclave middleware: %w", err)
+			return nil, fmt.Errorf("enclave middleware: %w", err)
 		}
 		log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
 			em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
@@ -212,9 +200,42 @@ func (g *Gateway) Start() error {
 	// Unprotected OpenAI-compat metadata passthrough.
 	mux.Handle("/", proxy)
 
+	return mux, nil
+}
+
+// Start begins serving the gateway. Blocks until the server is shut down.
+func (g *Gateway) Start() error {
+	upstreamURL := g.config.UpstreamURL
+
+	// If VM mode is enabled, start the Ollama container and override upstream.
+	if g.config.VMMode {
+		cm := newContainerManager(g.config.VMBinary, "", g.config.VMHostPort)
+		// Use deployment name from enclave tag suffix if available.
+		if g.config.EnclaveTag != "" {
+			const prefix = "com.obol.inference."
+			if strings.HasPrefix(g.config.EnclaveTag, prefix) {
+				cm = newContainerManager(g.config.VMBinary,
+					strings.TrimPrefix(g.config.EnclaveTag, prefix),
+					g.config.VMHostPort)
+			}
+		}
+		ctx := context.Background()
+		if err := cm.Start(ctx, g.config.VMImage, g.config.VMCPUs, g.config.VMMemoryMB); err != nil {
+			return fmt.Errorf("container start: %w", err)
+		}
+		g.container = cm
+		upstreamURL = cm.UpstreamURL()
+		log.Printf("  container:   %s → %s", cm.name, cm.UpstreamURL())
+	}
+
+	handler, err := g.buildHandler(upstreamURL)
+	if err != nil {
+		return err
+	}
+
 	g.server = &http.Server{
 		Addr:              g.config.ListenAddr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -224,12 +245,12 @@ func (g *Gateway) Start() error {
 	}
 
 	log.Printf("x402 inference gateway listening on %s", g.config.ListenAddr)
-	log.Printf("  upstream:    %s", g.config.UpstreamURL)
+	log.Printf("  upstream:    %s", upstreamURL)
 	log.Printf("  wallet:      %s", g.config.WalletAddress)
 	log.Printf("  price:       %s USDC/request", g.config.PricePerRequest)
 	log.Printf("  chain:       %s", g.config.Chain.NetworkID)
 	log.Printf("  facilitator: %s", g.config.FacilitatorURL)
-	if em == nil {
+	if g.config.EnclaveTag == "" {
 		log.Printf("  enclave:     disabled")
 	}
 
