@@ -59,6 +59,7 @@ const CLIENT_ICONS: Partial<Record<ClientNameType, string>> = {
   grandine: 'https://avatars.githubusercontent.com/u/53257991?s=48&v=4',
   aztec: 'https://avatars.githubusercontent.com/u/45291733?s=200&v=4',
   helios: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
+  erpc: 'https://avatars.githubusercontent.com/u/136539810?s=200&v=4',
 } as const;
 
 /**

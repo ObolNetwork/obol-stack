@@ -21,6 +21,7 @@ export const NODE_MODES = {
   FULL_MODE: 'fullMode',
   LIGHT_MODE: 'lightMode',
   AZTEC_SEQUENCER: 'aztecSequencer',
+  ERPC_PROXY: 'erpcProxy',
 } as const;
 
 // App instance types matching application-instances.ts
@@ -28,6 +29,7 @@ export const APP_INSTANCE_TYPES = {
   HELIOS: 'helios',
   AZTEC: 'aztec',
   ETHEREUM: 'ethereum',
+  ERPC: 'erpc',
 } as const;
 
 export type AppInstanceType =
@@ -38,6 +40,7 @@ export const APP_TO_NODE_MODE: Record<AppInstanceType, NodeModeType> = {
   [APP_INSTANCE_TYPES.HELIOS]: NODE_MODES.LIGHT_MODE,
   [APP_INSTANCE_TYPES.AZTEC]: NODE_MODES.AZTEC_SEQUENCER,
   [APP_INSTANCE_TYPES.ETHEREUM]: NODE_MODES.FULL_MODE,
+  [APP_INSTANCE_TYPES.ERPC]: NODE_MODES.ERPC_PROXY,
 } as const;
 
 export const CLIENT_STATUS = {
@@ -67,6 +70,7 @@ export const CLIENT_NAMES = {
   GRANDINE: 'grandine',
   AZTEC: 'aztec',
   HELIOS: 'helios',
+  ERPC: 'erpc',
 } as const;
 
 export const PORT_STATUS = {
@@ -105,6 +109,7 @@ export interface AppData {
   participation: number;
   clients: ClientInfo[]; // Array of clients for this chain
   distance: number; // Distance to justified
+  upstreamCount?: number; // eRPC: number of configured upstream providers
 }
 
 export interface DashboardData {

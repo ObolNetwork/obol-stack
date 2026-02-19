@@ -6,6 +6,7 @@ export interface ChainChipProps {
     | 'fullMode'
     | 'lightMode'
     | 'aztecSequencer'
+    | 'erpcProxy'
     | 'hoodi'
     | 'sepolia'
     | 'mainnet';
@@ -40,6 +41,10 @@ const StyledChainChip = styled(Box, {
       aztecSequencer: {
         background: 'rgba(212, 255, 40, 0.20)',
         color: '#D4FF28',
+      },
+      erpcProxy: {
+        background: 'rgba(145, 103, 228, 0.20)',
+        color: '#9167E4',
       },
       hoodi: {
         border: '1px solid $bg05',
@@ -77,6 +82,8 @@ const getChipText = (variant: ChainChipProps['variant']) => {
       return 'Mainnet';
     case 'aztecSequencer':
       return 'Sequencer';
+    case 'erpcProxy':
+      return 'RPC Proxy';
     default:
       return 'Mainnet';
   }

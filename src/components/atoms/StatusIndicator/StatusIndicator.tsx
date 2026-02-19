@@ -1,91 +1,145 @@
 import React from 'react';
-import { Box, styled, theme } from '@obolnetwork/obol-ui';
+import {
+  Box,
+  Flex,
+  Text,
+  styled,
+  theme,
+  keyframes,
+} from '@obolnetwork/obol-ui';
 import { Tooltip } from '../Tooltip';
 
+export type StatusType = 'synced' | 'syncing' | 'error' | 'unsynced';
+
 export interface StatusIndicatorProps {
-  status?: 'synced' | 'unsynced';
+  status?: StatusType;
   size?: 'sm' | 'md';
   className?: string;
 }
+
+const outerPulse = keyframes({
+  '0%, 100%': { opacity: 0.2 },
+  '50%': { opacity: 0.5 },
+});
+
+const STATUS_CONFIG: Record<
+  StatusType,
+  { color: string; label: string; pulse: boolean }
+> = {
+  synced: {
+    color: theme.colors.obolGreen.value,
+    label: 'Synced',
+    pulse: true,
+  },
+  syncing: {
+    color: '#F5A623',
+    label: 'Syncing',
+    pulse: true,
+  },
+  error: {
+    color: '#FF6B6B',
+    label: 'Error',
+    pulse: false,
+  },
+  unsynced: {
+    color: theme.colors.body.value,
+    label: 'Unsynced',
+    pulse: false,
+  },
+};
+
+const SIZE_VALUES: Record<
+  NonNullable<StatusIndicatorProps['size']>,
+  { container: number; dot: number }
+> = {
+  sm: { container: 16, dot: 8 },
+  md: { container: 20, dot: 10 },
+};
 
 const StatusContainer = styled(Box, {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-
-  variants: {
-    size: {
-      sm: {
-        width: '$sm',
-        height: '$sm',
-      },
-      md: {
-        width: '$md',
-        height: '$md',
-      },
-    },
-  },
-
-  defaultVariants: {
-    size: 'md',
-  },
+  position: 'relative',
+  flexShrink: 0,
 });
 
-const getStatusColors = (status: StatusIndicatorProps['status']) => {
-  switch (status) {
-    case 'synced':
-      return theme.colors.obolGreen.value;
-    case 'unsynced':
-      return theme.colors.body.value;
-    default:
-      return theme.colors.obolGreen.value;
-  }
-};
+const OuterRing = styled(Box, {
+  position: 'absolute',
+  inset: 0,
+  borderRadius: '$round',
+});
 
-const getSizeValues = (size: StatusIndicatorProps['size']) => {
-  switch (size) {
-    case 'sm':
-      return { width: 16, height: 16, outerRadius: 8, innerRadius: 4 };
-    case 'md':
-      return { width: 20, height: 20, outerRadius: 10, innerRadius: 5 };
-    default:
-      return { width: 20, height: 20, outerRadius: 10, innerRadius: 5 };
-  }
-};
+const InnerDot = styled(Box, {
+  borderRadius: '$round',
+  flexShrink: 0,
+  position: 'relative',
+});
+
+const PillContainer = styled(Flex, {
+  alignItems: 'center',
+  width: 'fit-content',
+  gap: '6px',
+  borderRadius: '$pill',
+  paddingTop: '$xxxs',
+  paddingBottom: '$xxxs',
+  paddingLeft: '$xs',
+  paddingRight: '$xs',
+  fontSize: '$1',
+  fontWeight: '$medium',
+});
+
+export interface StatusPillProps {
+  status?: StatusType;
+  label?: string;
+}
+
+export function StatusPill({ status = 'synced', label }: StatusPillProps) {
+  const config = STATUS_CONFIG[status];
+  const displayLabel = label ?? config.label;
+
+  return (
+    <PillContainer
+      css={{ backgroundColor: `${config.color}18`, color: config.color }}
+    >
+      <StatusIndicator status={status} size="sm" />
+      <Text css={{ fontSize: '$1', fontWeight: '$medium', color: 'inherit' }}>
+        {displayLabel}
+      </Text>
+    </PillContainer>
+  );
+}
 
 export function StatusIndicator({
   status = 'synced',
   size = 'md',
   className,
 }: StatusIndicatorProps) {
-  const color = getStatusColors(status);
-  const sizeValues = getSizeValues(size);
-  const tooltipText = status === 'synced' ? 'Synced' : 'Unsynced';
+  const config = STATUS_CONFIG[status];
+  const sizes = SIZE_VALUES[size];
 
   return (
-    <Tooltip content={tooltipText} side="bottom">
-      <StatusContainer size={size} className={className}>
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width={sizeValues.width}
-          height={sizeValues.height}
-          viewBox={`0 0 ${sizeValues.width} ${sizeValues.height}`}
-          fill="none"
-        >
-          <circle
-            opacity="0.3"
-            cx={sizeValues.outerRadius}
-            cy={sizeValues.outerRadius}
-            r={sizeValues.outerRadius}
-            fill={color}
-          />
-          <circle
-            cx={sizeValues.outerRadius}
-            cy={sizeValues.outerRadius}
-            r={sizeValues.innerRadius}
-            fill={color}
-          />
-        </svg>
+    <Tooltip content={config.label} side="bottom">
+      <StatusContainer
+        className={className}
+        css={{ width: sizes.container, height: sizes.container }}
+      >
+        <OuterRing
+          css={{
+            backgroundColor: config.color,
+            opacity: 0.25,
+            ...(config.pulse
+              ? { animation: `${outerPulse} 2s ease-in-out infinite` }
+              : {}),
+          }}
+        />
+        <InnerDot
+          css={{
+            width: sizes.dot,
+            height: sizes.dot,
+            backgroundColor: config.color,
+          }}
+        />
       </StatusContainer>
     </Tooltip>
   );

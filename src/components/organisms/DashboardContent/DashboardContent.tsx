@@ -1,5 +1,5 @@
 import { Box, styled } from '@obolnetwork/obol-ui';
-import { NetworkStatus } from '../NetworkStatus';
+import { NetworksSection } from '../NetworksSection/NetworksSection';
 import { NodeOverview } from '../NodeOverview';
 import { OpenClawList } from '../OpenClawList';
 import { DashboardData } from '../../../types/dashboard';
@@ -83,14 +83,7 @@ export function DashboardContent({
         <SectionContainer>
           <OpenClawList onInstanceSelect={handleInstanceSelect} />
           {error && <ErrorState onRetry={onRetry} />}
-          {data &&
-            data.apps.map((app, index) => (
-              <NetworkStatus
-                key={app.appId}
-                appData={app}
-                defaultExpanded={index === 0}
-              />
-            ))}
+          {data && data.apps.length > 0 && <NetworksSection apps={data.apps} />}
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
         </SectionContainer>
       </MainSection>

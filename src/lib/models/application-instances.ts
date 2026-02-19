@@ -10,6 +10,7 @@ export const BaseApplicationInstanceSchema = Type.Object({
     Type.Literal('helios'),
     Type.Literal('aztec'),
     Type.Literal('ethereum'),
+    Type.Literal('erpc'),
   ]),
   id: Type.String(),
   creationTimestamp: Type.Date(),
@@ -38,6 +39,17 @@ export const HeliosInstanceDataSchema = Type.Object({
 });
 
 export const AztecInstanceDataSchema = Type.Object({
+  network: Type.Union([
+    Type.Literal(CHAINS.ETHEREUM),
+    Type.Literal(CHAINS.SEPOLIA),
+    Type.Literal(CHAINS.HOODI),
+  ]),
+  endpoints: Type.Object({
+    rpc: RpcEndpointSchema,
+  }),
+});
+
+export const ErpcInstanceDataSchema = Type.Object({
   network: Type.Union([
     Type.Literal(CHAINS.ETHEREUM),
     Type.Literal(CHAINS.SEPOLIA),
@@ -81,6 +93,11 @@ export const AztecInstanceSchema = Type.Intersect([
   AztecInstanceDataSchema,
 ]);
 
+export const ErpcInstanceSchema = Type.Intersect([
+  BaseApplicationInstanceSchema,
+  ErpcInstanceDataSchema,
+]);
+
 export const EthereumInstanceSchema = Type.Intersect([
   BaseApplicationInstanceSchema,
   EthereumInstanceDataSchema,
@@ -95,6 +112,7 @@ export type BaseApplicationInstance = Static<
 export type HeliosInstance = Static<typeof HeliosInstanceSchema>;
 export type AztecInstance = Static<typeof AztecInstanceSchema>;
 export type EthereumInstance = Static<typeof EthereumInstanceSchema>;
+export type ErpcInstance = Static<typeof ErpcInstanceSchema>;
 
 //
 // App → schema mapping
@@ -103,12 +121,14 @@ const AppInstanceDataSchemas = {
   helios: HeliosInstanceDataSchema,
   aztec: AztecInstanceDataSchema,
   ethereum: EthereumInstanceDataSchema,
+  erpc: ErpcInstanceDataSchema,
 } as const;
 
 export type AnyApplicationInstance =
   | HeliosInstance
   | AztecInstance
-  | EthereumInstance;
+  | EthereumInstance
+  | ErpcInstance;
 
 export type AppName = keyof typeof AppInstanceDataSchemas;
 

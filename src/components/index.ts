@@ -26,6 +26,7 @@ export { DashboardTemplate } from './templates/DashboardTemplate';
 export { DashboardHeader } from './organisms/DashboardHeader';
 export { DashboardContent } from './organisms/DashboardContent';
 export { FooterBar } from './organisms/FooterBar';
+export { NetworksSection } from './organisms/NetworksSection/NetworksSection';
 export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
 export { NodeOverview } from './organisms/NodeOverview';
 export { OpenClawList } from './organisms/OpenClawList';

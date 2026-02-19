@@ -6,6 +6,7 @@ import {
   ClientMetricsService,
   ClientType,
   ConsensusClientMetrics,
+  ErpcClientMetrics,
   ExecutionClientMetrics,
   HeliosClientMetrics,
 } from '@/lib/services/client-metrics';
@@ -125,14 +126,14 @@ export async function GET() {
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
       } else {
-        const appType = instance.app; // 'helios' | 'aztec'
+        const appType = instance.app; // 'helios' | 'aztec' | 'erpc'
         const appUrl = config.isInCluster
           ? instance.endpoints.rpc.internal
           : instance.endpoints.rpc.external;
         const result = (await clientMetrics.getMetrics(
           appType as ClientType,
           appUrl
-        )) as HeliosClientMetrics | AztecClientMetrics;
+        )) as HeliosClientMetrics | AztecClientMetrics | ErpcClientMetrics;
         clients.push({
           name: appType as ClientNameType,
           version: parseVersion(result.version),
@@ -145,8 +146,27 @@ export async function GET() {
           internalUrl: instance.endpoints.rpc.internal,
         });
         blockHeight = result.blockNumber || 0;
-        finalizedEpoch = result.finalizedEpoch || 0;
-        participation = result.participation || 0;
+        finalizedEpoch =
+          ('finalizedEpoch' in result ? result.finalizedEpoch : 0) || 0;
+        participation =
+          ('participation' in result ? result.participation : 0) || 0;
+        const upstreamCount =
+          'upstreamCount' in result ? result.upstreamCount : undefined;
+
+        apps.push({
+          chainName: instance.network,
+          app: instance.app,
+          appId: instance.id,
+          nodeMode,
+          status: CLIENT_STATUS.SYNCED,
+          blocks: blockHeight,
+          finalized: finalizedEpoch,
+          participation,
+          clients,
+          distance: 0,
+          upstreamCount,
+        });
+        continue;
       }
 
       apps.push({
