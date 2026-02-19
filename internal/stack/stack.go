@@ -407,6 +407,11 @@ func checkPortsAvailable(ports []int) error {
 	for _, port := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
+			// Permission denied (ports < 1024 on Linux require root) means the
+			// port is available but we can't bind as non-root — not a conflict.
+			if strings.Contains(err.Error(), "permission denied") {
+				continue
+			}
 			blocked = append(blocked, port)
 			continue
 		}
