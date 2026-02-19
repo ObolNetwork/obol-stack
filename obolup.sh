@@ -55,6 +55,7 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
+readonly CONTAINER_VERSION="0.9.0"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -1082,6 +1083,56 @@ WRAPPER
 	return 1
 }
 
+# install_container installs the apple/container CLI (macOS only).
+# The CLI is used by 'obol inference deploy --vm' to run Ollama in an isolated
+# Apple Containerization Linux micro-VM.
+# Source: https://github.com/apple/container
+install_container() {
+	# Only relevant on macOS.
+	if [[ "$(detect_platform)" != "darwin" ]]; then
+		return 0
+	fi
+
+	# Check if already installed at the pinned version or newer.
+	if command -v container >/dev/null 2>&1; then
+		local current_version
+		current_version=$(container --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+		if [[ -n "$current_version" ]] && version_ge "$current_version" "$CONTAINER_VERSION"; then
+			log_success "Apple container CLI v$current_version already installed"
+			return 0
+		fi
+	fi
+
+	log_info "Installing Apple container CLI v${CONTAINER_VERSION}..."
+	echo "  This enables 'obol inference deploy --vm' for isolated Ollama VMs"
+	echo "  Source: https://github.com/apple/container"
+	echo ""
+
+	local pkg_url="https://github.com/apple/container/releases/download/${CONTAINER_VERSION}/container-installer-signed.pkg"
+	local pkg_file
+	pkg_file="$(mktemp /tmp/container-installer.XXXXXX.pkg)"
+
+	if ! curl -fsSL "$pkg_url" -o "$pkg_file"; then
+		log_warn "Failed to download Apple container installer (continuing without VM support)"
+		rm -f "$pkg_file"
+		return 1
+	fi
+
+	if ! sudo installer -pkg "$pkg_file" -target / >/dev/null 2>&1; then
+		log_warn "Failed to install Apple container CLI — sudo required (continuing without VM support)"
+		rm -f "$pkg_file"
+		return 1
+	fi
+
+	rm -f "$pkg_file"
+	log_success "Apple container CLI v${CONTAINER_VERSION} installed"
+	echo ""
+	echo "  To start the container system daemon:"
+	echo "    container system start --enable-kernel-install"
+	echo ""
+	return 0
+}
+
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -1095,6 +1146,7 @@ install_dependencies() {
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
+	install_container || log_warn "Apple container CLI installation failed (VM inference unavailable)"
 
 	echo ""
 	log_success "Dependencies check complete"
