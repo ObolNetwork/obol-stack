@@ -27,7 +27,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 
 			// Step 1: Initialize stack
 			fmt.Println("Initializing stack configuration...")
-			if err := stack.Init(cfg, false); err != nil {
+			if err := stack.Init(cfg, false, ""); err != nil {
 				// Check if it's an "already exists" error - that's okay
 				if !strings.Contains(err.Error(), "already exists") {
 					return fmt.Errorf("bootstrap init failed: %w", err)

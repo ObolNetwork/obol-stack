@@ -115,7 +115,8 @@ affinity: {}
 imagePullSecrets: []
 
 # Annotations for the Deployment
-annotations: {}
+annotations:
+  secret.reloader.stakater.com/reload: "obol-oauth-token"
 
 # Liveness probe
 livenessProbe:
@@ -140,7 +141,8 @@ nodeSelector: {}
 podLabels: {}
 
 # Pod annotations
-podAnnotations: {}
+podAnnotations:
+  secret.reloader.stakater.com/reload: "obol-oauth-token"
 
 # Pod management policy
 podManagementPolicy: OrderedReady

@@ -44,6 +44,20 @@
         "^internal/openclaw/OPENCLAW_VERSION$"
       ],
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update llmspy image version from ObolNetwork/llms releases",
+      "matchStrings": [
+        "image:\\s*ghcr\\.io/obolnetwork/llms:(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+-obol\\.[0-9]+)"
+      ],
+      "fileMatch": [
+        "^internal/embed/infrastructure/base/templates/llm\\.yaml$"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "ObolNetwork/llms",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-obol\\.(?<build>\\d+)$",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ],
   "packageRules": [
@@ -116,6 +130,22 @@
         "every hour"
       ],
       "groupName": "OpenClaw updates"
+    },
+    {
+      "description": "Group llmspy updates",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "ObolNetwork/llms"
+      ],
+      "labels": [
+        "renovate/llmspy"
+      ],
+      "schedule": [
+        "every hour"
+      ],
+      "groupName": "llmspy updates"
     }
   ]
 }

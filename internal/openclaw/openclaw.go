@@ -45,11 +45,12 @@ const (
 
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
-	ID          string // Deployment ID (empty = generate petname)
-	Force       bool   // Overwrite existing deployment
-	Sync        bool   // Also run helmfile sync after install
-	Interactive bool   // true = prompt for provider choice; false = silent defaults
-	IsDefault   bool   // true = use fixed ID "default", idempotent on re-run
+	ID           string   // Deployment ID (empty = generate petname)
+	Force        bool     // Overwrite existing deployment
+	Sync         bool     // Also run helmfile sync after install
+	Interactive  bool     // true = prompt for provider choice; false = silent defaults
+	IsDefault    bool     // true = use fixed ID "default", idempotent on re-run
+	OllamaModels []string // Available Ollama models detected on host (nil = not queried)
 }
 
 // SetupDefault deploys a default OpenClaw instance as part of stack setup.
@@ -77,23 +78,31 @@ func SetupDefault(cfg *config.Config) error {
 	}
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
-	// If no imported providers, check Ollama availability for the default overlay
+	// If no imported providers, query Ollama for available models
+	var ollamaModels []string
 	if !hasImportedProviders {
-		ollamaAvailable := detectOllama()
-		if ollamaAvailable {
-			fmt.Printf("  ✓ Local Ollama detected at %s\n", ollamaEndpoint())
+		ollamaModels = listOllamaModels()
+		if ollamaModels != nil {
+			if len(ollamaModels) > 0 {
+				fmt.Printf("  ✓ Local Ollama detected with %d model(s) at %s\n", len(ollamaModels), ollamaEndpoint())
+			} else {
+				fmt.Printf("  ✓ Local Ollama detected at %s (no models pulled)\n", ollamaEndpoint())
+				fmt.Println("  Run 'obol model setup' to configure a cloud provider,")
+				fmt.Println("  or pull a model with: ollama pull llama3.2:3b")
+			}
 		} else {
 			fmt.Printf("  ⚠ Local Ollama not detected on host (%s)\n", ollamaEndpoint())
 			fmt.Println("  Skipping default OpenClaw model provider setup.")
-			fmt.Println("  Run 'obol agent init' to configure a provider later.")
+			fmt.Println("  Run 'obol model setup' to configure a provider later.")
 			return nil
 		}
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:        "default",
-		Sync:      true,
-		IsDefault: true,
+		ID:           "default",
+		Sync:         true,
+		IsDefault:    true,
+		OllamaModels: ollamaModels,
 	})
 }
 
@@ -116,6 +125,13 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
 			fmt.Println("Default OpenClaw instance already configured, re-syncing...")
+			// Always regenerate helmfile.yaml to pick up chart version bumps.
+			// values-obol.yaml (user config) is intentionally left unchanged.
+			namespace := fmt.Sprintf("%s-%s", appName, id)
+			helmfileContent := generateHelmfile(id, namespace)
+			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
+			}
 			if opts.Sync {
 				if err := doSync(cfg, id); err != nil {
 					return err
@@ -183,7 +199,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0)
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -273,6 +289,7 @@ func doSync(cfg *config.Config, id string) error {
 	}
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
+
 	fmt.Printf("\n✓ OpenClaw installed successfully!\n")
 	fmt.Printf("  Namespace: %s\n", namespace)
 	fmt.Printf("  URL:       http://%s\n", hostname)
@@ -654,7 +671,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0)
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil)
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -1046,7 +1063,7 @@ func deploymentPath(cfg *config.Config, id string) string {
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
-func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool) string {
+func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string) string {
 	var b strings.Builder
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
@@ -1089,17 +1106,19 @@ rbac:
 		}
 		b.WriteString(importedOverlay)
 	} else {
-		b.WriteString(`# Route agent traffic to in-cluster Ollama via llmspy proxy
-openclaw:
-  agentModel: ollama/gpt-oss:120b-cloud
-  gateway:
+		// Default provider: in-cluster Ollama via llmspy proxy.
+		// Model list is populated from the host's Ollama instance (if available).
+		b.WriteString("# Default model provider: in-cluster Ollama (routed through llmspy)\nopenclaw:\n")
+		if len(ollamaModels) > 0 {
+			b.WriteString(fmt.Sprintf("  agentModel: ollama/%s\n", ollamaModels[0]))
+		}
+		b.WriteString(`  gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
     # Required: browser on non-localhost HTTP has no crypto.subtle,
     # so device identity is unavailable. Token auth is still enforced.
     controlUi:
       allowInsecureAuth: true
 
-# Default model provider: in-cluster Ollama (routed through llmspy)
 # apiKeyValue is a dummy placeholder — Ollama does not require auth.
 # It is safe to inline here (unlike real cloud keys, which go to secrets).
 models:
@@ -1109,11 +1128,16 @@ models:
     api: openai-completions
     apiKeyEnvVar: OLLAMA_API_KEY
     apiKeyValue: ollama-local
-    models:
-      - id: gpt-oss:120b-cloud
-        name: GPT-OSS 120B Cloud
-
 `)
+		if len(ollamaModels) > 0 {
+			b.WriteString("    models:\n")
+			for _, m := range ollamaModels {
+				b.WriteString(fmt.Sprintf("      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m)))
+			}
+		} else {
+			b.WriteString("    models: []\n")
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString(`# eRPC integration
@@ -1172,6 +1196,53 @@ func detectOllama() bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// listOllamaModels queries the local Ollama server for pulled models.
+// Returns nil if Ollama is not reachable, empty slice if reachable but no models pulled.
+func listOllamaModels() []string {
+	endpoint := ollamaEndpoint()
+	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
+	if err != nil {
+		return nil
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(tagsURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(result.Models))
+	for _, m := range result.Models {
+		name := strings.TrimSuffix(m.Name, ":latest")
+		names = append(names, name)
+	}
+	return names
+}
+
+// ollamaModelDisplayName converts an Ollama model name (e.g. "llama3.2:3b")
+// into a human-friendly display name (e.g. "Llama3.2 3b").
+func ollamaModelDisplayName(name string) string {
+	parts := strings.SplitN(name, ":", 2)
+	display := parts[0]
+	if len(display) > 0 {
+		display = strings.ToUpper(display[:1]) + display[1:]
+	}
+	if len(parts) > 1 {
+		display += " " + parts[1]
+	}
+	return display
 }
 
 // interactiveSetup prompts the user for provider configuration.
