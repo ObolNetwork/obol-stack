@@ -62,7 +62,7 @@ If a test script fails (non-zero exit), read the output to identify which test(s
 
 ## Important Notes
 
-- The k3s backend requires **sudo access** - the user may need to enter their password
+- The k3s backend requires **NOPASSWD sudo** or cached credentials (`sudo -v`) — the Bash tool has no TTY for interactive password prompts
 - The k3d backend requires **Docker to be running**
 - Each test script performs its own cleanup (purge) before and after
 - Tests are sequential and ordered: init -> up -> verify -> down -> restart -> purge

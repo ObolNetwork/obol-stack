@@ -7,12 +7,25 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 OBOL="${PROJECT_ROOT}/.workspace/bin/obol"
 export OBOL_DEVELOPMENT=true
-export PATH="${PROJECT_ROOT}/.workspace/bin:$PATH"
+export PATH="${PROJECT_ROOT}/.workspace/bin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
 
 cd "$PROJECT_ROOT"
 
 PASS=0
 FAIL=0
+
+# --- Pre-flight checks ---
+if [ ! -x "${PROJECT_ROOT}/.workspace/bin/k3s" ]; then
+    echo "ERROR: k3s binary not found at .workspace/bin/k3s"
+    echo "Install with: curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_START=true INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_BIN_DIR=${PROJECT_ROOT}/.workspace/bin sh -"
+    exit 1
+fi
+
+if ! sudo -n true 2>/dev/null; then
+    echo "ERROR: sudo requires NOPASSWD or cached credentials"
+    echo "Either run 'sudo -v' first, or add NOPASSWD to sudoers"
+    exit 1
+fi
 
 log() { echo "$(date +%H:%M:%S) $*"; }
 pass() { log "  PASS: $*"; PASS=$((PASS + 1)); }
