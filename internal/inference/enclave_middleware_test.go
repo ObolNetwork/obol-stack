@@ -1,6 +1,6 @@
 //go:build darwin && cgo
 
-package inference_test
+package inference
 
 import (
 	"bytes"
@@ -9,223 +9,229 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
-	"github.com/ObolNetwork/obol-stack/internal/inference"
 )
 
-const testEnclaveTag = "com.obol.inference.test"
-
-// cleanupKey removes the test SE key if present.
-func cleanupKey(t *testing.T) {
+func testEnclaveTag(t *testing.T) string {
 	t.Helper()
-	_ = enclave.DeleteKey(testEnclaveTag)
+	tag := "com.obol.inference.test." + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "."))
+	t.Cleanup(func() { _ = enclave.DeleteKey(tag) })
+	_ = enclave.DeleteKey(tag)
+	return tag
 }
 
-// startTestGateway starts an httptest.Server backed by a Gateway configured
-// with the given EnclaveTag and a dummy upstream that echoes the request body.
-func startTestGateway(t *testing.T) *httptest.Server {
+func testReplyTag(t *testing.T) string {
 	t.Helper()
-
-	// Upstream echo handler — returns the request body as-is.
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		body, _ := io.ReadAll(r.Body)
-		_, _ = w.Write(body)
-	}))
-	t.Cleanup(upstream.Close)
-
-	gw, err := inference.NewGateway(inference.GatewayConfig{
-		ListenAddr:      "127.0.0.1:0", // OS-assigned port
-		UpstreamURL:     upstream.URL,
-		WalletAddress:   "0x0000000000000000000000000000000000000001",
-		PricePerRequest: "0",
-		EnclaveTag:      testEnclaveTag,
-	})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-
-	srv := httptest.NewUnstartedServer(nil)
-	// We can't easily test gateway.Start() (it blocks), so we test
-	// the handler directly by inspecting through the Gateway.
-	// Instead, use a real httptest.Server with only the enclave portions.
-	_ = gw
-	_ = srv
-	return nil // placeholder — see individual test helpers below
+	tag := testEnclaveTag(t) + ".reply"
+	t.Cleanup(func() { _ = enclave.DeleteKey(tag) })
+	_ = enclave.DeleteKey(tag)
+	return tag
 }
 
-// TestPubkeyEndpoint verifies that GET /v1/enclave/pubkey returns a valid JSON
-// response with the SE public key.
-func TestPubkeyEndpoint(t *testing.T) {
-	cleanupKey(t)
-	t.Cleanup(func() { cleanupKey(t) })
-
-	// Generate a key so it's available.
-	k, err := enclave.NewKey(testEnclaveTag)
+func TestEnclavePubkeyEndpoint(t *testing.T) {
+	em, err := newEnclaveMiddleware(testEnclaveTag(t))
 	if err != nil {
-		t.Fatalf("NewKey: %v", err)
+		t.Fatalf("newEnclaveMiddleware: %v", err)
 	}
 
-	// Simulate what the gateway's pubkey handler returns by using the
-	// same JSON shape the gateway emits.
-	expectedPubkeyHex := hex.EncodeToString(k.PublicKeyBytes())
+	req := httptest.NewRequest(http.MethodGet, "/v1/enclave/pubkey", nil)
+	rr := httptest.NewRecorder()
+	em.handlePubkey(rr, req)
 
-	body := map[string]any{
-		"pubkey":     expectedPubkeyHex,
-		"tag":        testEnclaveTag,
-		"persistent": k.Persistent(),
-		"algorithm":  "ECIES-P256-HKDF-SHA256-AES256GCM",
-	}
-	b, _ := json.Marshal(body)
-
-	var got map[string]any
-	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", rr.Code)
 	}
 
-	pubkeyHex, _ := got["pubkey"].(string)
-	if pubkeyHex != expectedPubkeyHex {
-		t.Fatalf("pubkey mismatch: want %s, got %s", expectedPubkeyHex, pubkeyHex)
+	var got pubkeyJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if got["algorithm"] != "ECIES-P256-HKDF-SHA256-AES256GCM" {
-		t.Fatalf("unexpected algorithm: %v", got["algorithm"])
+
+	if got.Tag != em.key.Tag() {
+		t.Fatalf("tag mismatch: want %q, got %q", em.key.Tag(), got.Tag)
+	}
+	if got.Algorithm != "ECIES-P256-HKDF-SHA256-AES256GCM" {
+		t.Fatalf("algorithm mismatch: got %q", got.Algorithm)
+	}
+	if _, err := hex.DecodeString(got.Pubkey); err != nil {
+		t.Fatalf("pubkey is not valid hex: %v", err)
+	}
+	if got.Pubkey != hex.EncodeToString(em.key.PublicKeyBytes()) {
+		t.Fatalf("pubkey mismatch")
 	}
 }
 
-// TestEncryptedRequestRoundTrip exercises the full encrypt → middleware →
-// upstream → (plaintext) response path.
-func TestEncryptedRequestRoundTrip(t *testing.T) {
-	cleanupKey(t)
-	t.Cleanup(func() { cleanupKey(t) })
+func TestEnclaveWrapDecryptsEncryptedRequest(t *testing.T) {
+	em, err := newEnclaveMiddleware(testEnclaveTag(t))
+	if err != nil {
+		t.Fatalf("newEnclaveMiddleware: %v", err)
+	}
 
-	requestBody := `{"model":"llama3","messages":[{"role":"user","content":"hello"}]}`
+	plaintextReq := `{"model":"llama3","messages":[{"role":"user","content":"hello"}]}`
+	encReq, err := enclave.Encrypt(em.key.PublicKeyBytes(), []byte(plaintextReq))
+	if err != nil {
+		t.Fatalf("encrypt request: %v", err)
+	}
 
-	// Upstream echoes whatever it receives.
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ct := r.Header.Get("Content-Type")
-		if !strings.Contains(ct, "application/json") {
-			t.Errorf("upstream received wrong Content-Type: %s", ct)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
 		}
-		body, _ := io.ReadAll(r.Body)
-		if string(body) != requestBody {
-			t.Errorf("upstream received wrong body:\n  want: %s\n  got:  %s", requestBody, body)
+		if got := string(body); got != plaintextReq {
+			t.Fatalf("plaintext mismatch: want %s got %s", plaintextReq, got)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("unexpected content-type: %q", ct)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
-	}))
-	t.Cleanup(upstream.Close)
-
-	// Build a gateway pointing at the upstream.
-	gw, err := inference.NewGateway(inference.GatewayConfig{
-		ListenAddr:      "127.0.0.1:0",
-		UpstreamURL:     upstream.URL,
-		WalletAddress:   "0x0000000000000000000000000000000000000001",
-		PricePerRequest: "0",
-		EnclaveTag:      testEnclaveTag,
 	})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(encReq))
+	req.Header.Set("Content-Type", contentTypeEncrypted)
+	rr := httptest.NewRecorder()
+
+	em.wrap(next).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", rr.Code)
 	}
-	_ = gw
-	// NOTE: Full integration requires a running gateway listener.
-	// The encrypt/decrypt logic is independently verified in enclave_test.go.
-	// This test validates the JSON shape and the middleware's Content-Type handling
-	// at the unit level; end-to-end is covered by internal/openclaw/integration_test.go.
-	t.Log("gateway constructed successfully with EnclaveTag")
+	if got := strings.TrimSpace(rr.Body.String()); got != plaintextReq {
+		t.Fatalf("response mismatch: want %s got %s", plaintextReq, got)
+	}
 }
 
-// TestPlaintextPassthrough verifies that non-encrypted requests are forwarded
-// unchanged (backward-compatible mode).
-func TestPlaintextPassthrough(t *testing.T) {
-	requestBody := `{"model":"llama3","messages":[]}`
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))
+func TestEnclaveWrapPassesPlaintextThrough(t *testing.T) {
+	em, err := newEnclaveMiddleware(testEnclaveTag(t))
+	if err != nil {
+		t.Fatalf("newEnclaveMiddleware: %v", err)
+	}
+
+	want := `{"model":"llama3","messages":[]}`
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if got := string(body); got != want {
+			t.Fatalf("body mismatch: want %s got %s", want, got)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("unexpected content-type: %q", ct)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(want))
 	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
 
-	// The middleware should not intercept application/json.
-	intercepted := false
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ct := r.Header.Get("Content-Type")
-		if ct != "application/json" {
-			t.Errorf("unexpected Content-Type after passthrough: %s", ct)
-		}
-		body, _ := io.ReadAll(r.Body)
-		if string(body) != requestBody {
-			t.Errorf("body changed during passthrough")
-		}
-		intercepted = true
-		w.WriteHeader(http.StatusOK)
-	})
+	em.wrap(next).ServeHTTP(rr, req)
 
-	// Verify manually: a plaintext request should reach the upstream.
-	w := httptest.NewRecorder()
-	upstream.ServeHTTP(w, req)
-	if !intercepted {
-		t.Fatal("upstream was not reached")
+	if !called {
+		t.Fatal("next handler was not called")
+	}
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d", rr.Code)
 	}
 }
 
-// TestEncryptedResponseRoundTrip verifies that when X-Obol-Reply-Pubkey is
-// set, the response body is encrypted back to the client's ephemeral key.
-func TestEncryptedResponseRoundTrip(t *testing.T) {
-	cleanupKey(t)
-	t.Cleanup(func() { cleanupKey(t) })
-
-	seKey, err := enclave.NewKey(testEnclaveTag)
+func TestEnclaveWrapEncryptsReplyAndRefreshesHeaders(t *testing.T) {
+	em, err := newEnclaveMiddleware(testEnclaveTag(t))
 	if err != nil {
-		t.Fatalf("NewKey: %v", err)
+		t.Fatalf("newEnclaveMiddleware: %v", err)
+	}
+	replyKey, err := enclave.NewKey(testReplyTag(t))
+	if err != nil {
+		t.Fatalf("reply NewKey: %v", err)
 	}
 
-	// Generate a client ephemeral key (simulates what the client would do).
-	clientKey, err := enclave.NewKey("com.obol.inference.test.client")
-	defer func() { _ = enclave.DeleteKey("com.obol.inference.test.client") }()
+	plaintextReq := `{"model":"llama3","messages":[{"role":"user","content":"secret"}]}`
+	plaintextResp := `{"choices":[{"message":{"content":"42"}}]}`
+	encReq, err := enclave.Encrypt(em.key.PublicKeyBytes(), []byte(plaintextReq))
 	if err != nil {
-		t.Fatalf("client NewKey: %v", err)
+		t.Fatalf("encrypt request: %v", err)
 	}
 
-	requestBody := `{"model":"llama3","messages":[{"role":"user","content":"secret"}]}`
-	responseBody := `{"choices":[{"message":{"content":"42"}}]}`
-
-	// Encrypt the request body with the SE public key.
-	ciphertext, err := enclave.Encrypt(seKey.PublicKeyBytes(), []byte(requestBody))
-	if err != nil {
-		t.Fatalf("Encrypt request: %v", err)
-	}
-
-	// Upstream returns a known response.
-	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v := r.Header.Get(headerReplyPubkey); v != "" {
+			t.Fatalf("reply pubkey header should be stripped before upstream, got %q", v)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responseBody))
+		w.Header().Set("Content-Length", strconv.Itoa(len(plaintextResp)))
+		w.Header().Set("Content-Encoding", "identity")
+		w.Header().Set("ETag", `"upstream-etag"`)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(plaintextResp))
 	})
 
-	// Build the encrypted request with reply pubkey header.
-	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(ciphertext))
-	req.Header.Set("Content-Type", "application/x-obol-encrypted")
-	req.Header.Set("X-Obol-Reply-Pubkey", hex.EncodeToString(clientKey.PublicKeyBytes()))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(encReq))
+	req.Header.Set("Content-Type", contentTypeEncrypted)
+	req.Header.Set(headerReplyPubkey, hex.EncodeToString(replyKey.PublicKeyBytes()))
+	rr := httptest.NewRecorder()
 
-	w := httptest.NewRecorder()
+	em.wrap(next).ServeHTTP(rr, req)
 
-	// We exercise the middleware directly by building it outside the gateway.
-	// (Gateway wires this up automatically when EnclaveTag is set.)
-	_ = upstream
-	_ = w
-	_ = req
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status: want 201, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Type"); got != contentTypeEncrypted {
+		t.Fatalf("content-type: want %q, got %q", contentTypeEncrypted, got)
+	}
+	if rr.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("content-encoding should be cleared, got %q", rr.Header().Get("Content-Encoding"))
+	}
+	if rr.Header().Get("ETag") != "" {
+		t.Fatalf("etag should be cleared, got %q", rr.Header().Get("ETag"))
+	}
+	wantLen := strconv.Itoa(rr.Body.Len())
+	if got := rr.Header().Get("Content-Length"); got != wantLen {
+		t.Fatalf("content-length: want %q, got %q", wantLen, got)
+	}
 
-	// Verify the response can be decrypted by the client key.
-	// Simulate: encrypt responseBody to clientKey, then decrypt.
-	encResp, err := enclave.Encrypt(clientKey.PublicKeyBytes(), []byte(responseBody))
+	decrypted, err := replyKey.Decrypt(rr.Body.Bytes())
 	if err != nil {
-		t.Fatalf("Encrypt response: %v", err)
+		t.Fatalf("decrypt response: %v", err)
 	}
-	decResp, err := clientKey.Decrypt(encResp)
+	if got := string(decrypted); got != plaintextResp {
+		t.Fatalf("decrypted response mismatch: want %s got %s", plaintextResp, got)
+	}
+}
+
+func TestEnclaveWrapRejectsInvalidReplyPubkey(t *testing.T) {
+	em, err := newEnclaveMiddleware(testEnclaveTag(t))
 	if err != nil {
-		t.Fatalf("Decrypt response: %v", err)
-	}
-	if string(decResp) != responseBody {
-		t.Fatalf("response round-trip mismatch:\n  want: %s\n  got:  %s", responseBody, decResp)
+		t.Fatalf("newEnclaveMiddleware: %v", err)
 	}
 
-	t.Log("encrypted response round-trip verified")
+	encReq, err := enclave.Encrypt(em.key.PublicKeyBytes(), []byte(`{"x":1}`))
+	if err != nil {
+		t.Fatalf("encrypt request: %v", err)
+	}
+
+	called := false
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(encReq))
+	req.Header.Set("Content-Type", contentTypeEncrypted)
+	req.Header.Set(headerReplyPubkey, "not-hex")
+	rr := httptest.NewRecorder()
+
+	em.wrap(next).ServeHTTP(rr, req)
+
+	if called {
+		t.Fatal("next handler should not run when reply pubkey is invalid")
+	}
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d", rr.Code)
+	}
 }

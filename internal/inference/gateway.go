@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/mark3labs/x402-go"
 	x402http "github.com/mark3labs/x402-go/http"
 )
@@ -111,6 +112,9 @@ func (g *Gateway) Start() error {
 	// Optionally initialise SE enclave middleware.
 	var em *enclaveMiddleware
 	if g.config.EnclaveTag != "" {
+		if err := enclave.CheckSIP(); err != nil {
+			return fmt.Errorf("enclave SIP check failed: %w", err)
+		}
 		em, err = newEnclaveMiddleware(g.config.EnclaveTag)
 		if err != nil {
 			return fmt.Errorf("enclave middleware: %w", err)

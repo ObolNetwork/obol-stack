@@ -58,7 +58,13 @@ func inferenceCreateCommand(cfg *config.Config) *cli.Command {
 The Secure Enclave key is generated on first use (obol inference deploy or serve).
 
 Analogous to 'ecloud compute app deploy --name <name>'.`,
-		Flags: deployFlags(),
+		Flags: append(deployFlags(),
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"f"},
+				Usage:   "Overwrite existing deployment config",
+			},
+		),
 		Action: func(c *cli.Context) error {
 			name := c.Args().First()
 			if name == "" {
@@ -105,13 +111,7 @@ If the deployment already exists, its config is updated with any supplied flags
 and the gateway starts immediately.
 
 Analogous to 'ecloud compute app deploy'.`,
-		Flags: append(deployFlags(),
-			&cli.BoolFlag{
-				Name:    "force",
-				Aliases: []string{"f"},
-				Usage:   "Overwrite an existing deployment config",
-			},
-		),
+		Flags: deployFlags(),
 		Action: func(c *cli.Context) error {
 			name := c.Args().First()
 			if name == "" {
@@ -223,17 +223,17 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 
 			if c.Bool("json") {
 				out := map[string]any{
-					"name":             d.Name,
-					"enclave_tag":      d.EnclaveTag,
-					"listen_addr":      d.ListenAddr,
-					"upstream_url":     d.UpstreamURL,
-					"wallet_address":   d.WalletAddress,
+					"name":              d.Name,
+					"enclave_tag":       d.EnclaveTag,
+					"listen_addr":       d.ListenAddr,
+					"upstream_url":      d.UpstreamURL,
+					"wallet_address":    d.WalletAddress,
 					"price_per_request": d.PricePerRequest,
-					"chain":            d.Chain,
-					"facilitator_url":  d.FacilitatorURL,
-					"created_at":       d.CreatedAt,
-					"updated_at":       d.UpdatedAt,
-					"algorithm":        "ECIES-P256-HKDF-SHA256-AES256GCM",
+					"chain":             d.Chain,
+					"facilitator_url":   d.FacilitatorURL,
+					"created_at":        d.CreatedAt,
+					"updated_at":        d.UpdatedAt,
+					"algorithm":         "ECIES-P256-HKDF-SHA256-AES256GCM",
 				}
 				if keyErr == nil {
 					out["pubkey"] = hex.EncodeToString(k.PublicKeyBytes())
@@ -393,16 +393,12 @@ func inferenceServeCommand(_ *config.Config) *cli.Command {
 		Usage: "Start the x402 inference gateway directly (no stored config)",
 		Description: `Starts the gateway without requiring a named deployment.
 For managed deployments use 'obol inference deploy'.`,
-		Flags: append(deployFlags(),
-			&cli.StringFlag{
-				Name:     "wallet",
-				Aliases:  []string{"w"},
-				Usage:    "USDC recipient wallet address",
-				EnvVars:  []string{"X402_WALLET"},
-				Required: true,
-			},
-		),
+		Flags: deployFlags(),
 		Action: func(c *cli.Context) error {
+			if c.String("wallet") == "" {
+				return fmt.Errorf("usage: obol inference serve --wallet <address> [flags]")
+			}
+
 			chain, err := resolveChain(c.String("chain"))
 			if err != nil {
 				return err
@@ -482,37 +478,32 @@ func deployFlags() []cli.Flag {
 			Usage:   "Keychain SE tag (default: com.obol.inference.<name>)",
 			EnvVars: []string{"OBOL_ENCLAVE_TAG"},
 		},
-		&cli.BoolFlag{
-			Name:    "force",
-			Aliases: []string{"f"},
-			Usage:   "Overwrite existing deployment config",
-		},
 	}
 }
 
 // applyFlags merges CLI flag values into an existing Deployment, leaving
 // fields unchanged when the flag was not explicitly provided.
 func applyFlags(c *cli.Context, d *inference.Deployment) {
-	if v := c.String("enclave-tag"); v != "" {
-		d.EnclaveTag = v
+	if c.IsSet("enclave-tag") {
+		d.EnclaveTag = c.String("enclave-tag")
 	}
-	if v := c.String("listen"); v != "" {
-		d.ListenAddr = v
+	if c.IsSet("listen") {
+		d.ListenAddr = c.String("listen")
 	}
-	if v := c.String("upstream"); v != "" {
-		d.UpstreamURL = v
+	if c.IsSet("upstream") {
+		d.UpstreamURL = c.String("upstream")
 	}
-	if v := c.String("wallet"); v != "" {
-		d.WalletAddress = v
+	if c.IsSet("wallet") {
+		d.WalletAddress = c.String("wallet")
 	}
-	if v := c.String("price"); v != "" {
-		d.PricePerRequest = v
+	if c.IsSet("price") {
+		d.PricePerRequest = c.String("price")
 	}
-	if v := c.String("chain"); v != "" {
-		d.Chain = v
+	if c.IsSet("chain") {
+		d.Chain = c.String("chain")
 	}
-	if v := c.String("facilitator"); v != "" {
-		d.FacilitatorURL = v
+	if c.IsSet("facilitator") {
+		d.FacilitatorURL = c.String("facilitator")
 	}
 }
 

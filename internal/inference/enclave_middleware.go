@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
@@ -164,7 +165,12 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 			return
 		}
 
+		// The encrypted response body differs from upstream plaintext, so refresh
+		// body-derived headers before writing.
 		w.Header().Set("Content-Type", contentTypeEncrypted)
+		w.Header().Set("Content-Length", strconv.Itoa(len(encResp)))
+		w.Header().Del("Content-Encoding")
+		w.Header().Del("ETag")
 		w.WriteHeader(rec.code())
 		if _, err := w.Write(encResp); err != nil {
 			log.Printf("enclave middleware: write encrypted response: %v", err)
