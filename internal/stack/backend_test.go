@@ -281,6 +281,111 @@ func TestK3sBackendInit(t *testing.T) {
 	}
 }
 
+func TestDetectExistingBackend(t *testing.T) {
+	t.Run("returns saved backend name", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		if err := SaveBackend(cfg, "k3s"); err != nil {
+			t.Fatalf("SaveBackend() error: %v", err)
+		}
+		got := DetectExistingBackend(cfg)
+		if got != "k3s" {
+			t.Errorf("DetectExistingBackend() = %q, want %q", got, "k3s")
+		}
+	})
+
+	t.Run("returns empty when no file exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		got := DetectExistingBackend(cfg)
+		if got != "" {
+			t.Errorf("DetectExistingBackend() = %q, want empty string", got)
+		}
+	})
+
+	t.Run("returns empty for corrupted file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		path := filepath.Join(tmpDir, stackBackendFile)
+		os.WriteFile(path, []byte("docker-swarm"), 0644)
+
+		got := DetectExistingBackend(cfg)
+		if got != "" {
+			t.Errorf("DetectExistingBackend() = %q, want empty string for invalid backend", got)
+		}
+	})
+}
+
+func TestCleanupStaleBackendConfigs(t *testing.T) {
+	t.Run("cleans k3d files when switching from k3d", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		// Create k3d config file
+		k3dPath := filepath.Join(tmpDir, k3dConfigFile)
+		os.WriteFile(k3dPath, []byte("k3d config"), 0644)
+
+		cleanupStaleBackendConfigs(cfg, BackendK3d)
+
+		if _, err := os.Stat(k3dPath); !os.IsNotExist(err) {
+			t.Error("k3d.yaml should be removed after cleanup")
+		}
+	})
+
+	t.Run("cleans k3s files when switching from k3s", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		// Create k3s files
+		for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
+			os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0644)
+		}
+
+		cleanupStaleBackendConfigs(cfg, BackendK3s)
+
+		for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
+			if _, err := os.Stat(filepath.Join(tmpDir, f)); !os.IsNotExist(err) {
+				t.Errorf("%s should be removed after cleanup", f)
+			}
+		}
+	})
+
+	t.Run("no-op for same backend", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &config.Config{ConfigDir: tmpDir}
+
+		// Create k3s config but clean up k3d (should not touch k3s files)
+		k3sPath := filepath.Join(tmpDir, k3sConfigFile)
+		os.WriteFile(k3sPath, []byte("k3s config"), 0644)
+
+		cleanupStaleBackendConfigs(cfg, BackendK3d)
+
+		if _, err := os.Stat(k3sPath); os.IsNotExist(err) {
+			t.Error("k3s-config.yaml should NOT be removed when cleaning k3d")
+		}
+	})
+}
+
+func TestOllamaHostForBackend(t *testing.T) {
+	t.Run("k3s returns localhost", func(t *testing.T) {
+		got := ollamaHostForBackend(BackendK3s)
+		if got != "127.0.0.1" {
+			t.Errorf("ollamaHostForBackend(k3s) = %q, want %q", got, "127.0.0.1")
+		}
+	})
+
+	t.Run("k3d returns docker host", func(t *testing.T) {
+		got := ollamaHostForBackend(BackendK3d)
+		// On macOS: host.docker.internal, on Linux: host.k3d.internal
+		if got != "host.docker.internal" && got != "host.k3d.internal" {
+			t.Errorf("ollamaHostForBackend(k3d) = %q, want docker host", got)
+		}
+	})
+}
+
 func TestGetStackID(t *testing.T) {
 	tests := []struct {
 		name    string

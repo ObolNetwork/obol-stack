@@ -1090,7 +1090,11 @@ install_dependencies() {
 	# Install each dependency
 	install_kubectl || log_warn "kubectl installation failed (continuing...)"
 	install_helm || log_warn "helm installation failed (continuing...)"
-	install_k3d || log_warn "k3d installation failed (continuing...)"
+	if [[ "${OBOL_BACKEND:-k3d}" != "k3s" ]]; then
+		install_k3d || log_warn "k3d installation failed (continuing...)"
+	else
+		log_info "Skipping k3d (using k3s backend)"
+	fi
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
@@ -1446,10 +1450,17 @@ main() {
 		log_info "Fresh installation starting..."
 	fi
 
-	# Check Docker prerequisites first
-	if ! check_docker; then
-		log_error "Docker requirements not met"
-		exit 1
+	# Check Docker prerequisites (only required for k3d backend, not k3s)
+	if [[ "${OBOL_BACKEND:-k3d}" != "k3s" ]]; then
+		if ! check_docker; then
+			log_error "Docker requirements not met"
+			echo ""
+			echo "If you want to use the k3s backend (no Docker required), run:"
+			echo "  OBOL_BACKEND=k3s $0"
+			exit 1
+		fi
+	else
+		log_info "Backend: k3s (Docker not required)"
 	fi
 	echo ""
 

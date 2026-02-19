@@ -26,8 +26,11 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			fmt.Println("Starting bootstrap process...")
 
 			// Step 1: Initialize stack
+			// Respect an existing backend choice (e.g., k3s) so bootstrap
+			// doesn't silently switch back to k3d.
+			backendName := stack.DetectExistingBackend(cfg)
 			fmt.Println("Initializing stack configuration...")
-			if err := stack.Init(cfg, false, ""); err != nil {
+			if err := stack.Init(cfg, false, backendName); err != nil {
 				// Check if it's an "already exists" error - that's okay
 				if !strings.Contains(err.Error(), "already exists") {
 					return fmt.Errorf("bootstrap init failed: %w", err)
