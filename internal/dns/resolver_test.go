@@ -13,10 +13,6 @@ func TestConstants(t *testing.T) {
 	if domain != "obol.stack" {
 		t.Errorf("domain = %q, want %q", domain, "obol.stack")
 	}
-	if hostsMarker != "# obol-stack-managed" {
-		t.Errorf("hostsMarker = %q, want %q", hostsMarker, "# obol-stack-managed")
-	}
-
 	// macOS constants
 	if macHostPort != "5553" {
 		t.Errorf("macHostPort = %q, want %q", macHostPort, "5553")
@@ -52,9 +48,3 @@ func TestHasNMDnsmasqConfig(t *testing.T) {
 	}
 }
 
-func TestHostsEntryExists(t *testing.T) {
-	// Test with a hostname that shouldn't exist in /etc/hosts with our marker
-	if hostsEntryExists("nonexistent-test-host-12345.obol.stack") {
-		t.Error("hostsEntryExists returned true for nonexistent host")
-	}
-}

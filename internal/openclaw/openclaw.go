@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -274,9 +273,6 @@ func doSync(cfg *config.Config, id string) error {
 	}
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-
-	// Ensure /etc/hosts entry exists (no-op if NM dnsmasq handles wildcard)
-	dns.AddHostEntry(fmt.Sprintf("openclaw-%s", id)) //nolint:errcheck
 
 	fmt.Printf("\n✓ OpenClaw installed successfully!\n")
 	fmt.Printf("  Namespace: %s\n", namespace)
@@ -857,9 +853,6 @@ func Delete(cfg *config.Config, id string, force bool) error {
 			os.Remove(parentDir)
 		}
 	}
-
-	// Remove /etc/hosts entry (no-op if NM dnsmasq handles wildcard)
-	dns.RemoveHostEntry(fmt.Sprintf("openclaw-%s", id))
 
 	fmt.Printf("\n✓ OpenClaw %s deleted successfully!\n", id)
 	return nil
