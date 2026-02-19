@@ -8,6 +8,14 @@ metadata: { "openclaw": { "emoji": "☸️", "requires": { "bins": ["curl", "pyt
 
 Monitor your Kubernetes environment using the mounted ServiceAccount token. Read-only access to pods, logs, services, events, and more within your own namespace.
 
+## Paths
+
+All script paths in this document are relative to this skill's directory. When running from the pod, prefix with the skill's installed location:
+
+```bash
+python3 /data/.openclaw/skills-injected/obol-k8s/scripts/kube.py pods
+```
+
 ## When to Use
 
 - "What pods are running?"
@@ -64,7 +72,10 @@ python3 scripts/kube.py services
 # Deployment status
 python3 scripts/kube.py deployments
 
-# Full details of a resource
+# List configmaps
+python3 scripts/kube.py configmaps
+
+# Full details of a resource (outputs JSON)
 python3 scripts/kube.py describe pod openclaw-7f8b9c6d5-x2k4j
 ```
 
@@ -145,4 +156,4 @@ curl -s $CA -H "Authorization: Bearer $TOKEN" \
 - **Read-only** — cannot create, modify, or delete any resources
 - **Own namespace only** — cannot see other namespaces or cluster-level resources
 - **No kubectl** — uses curl + SA token (kubectl binary not installed in pod)
-- **Formatted output** — the helper script outputs human-readable text, not raw JSON
+- **Formatted output** — list commands (`pods`, `services`, etc.) output human-readable text; `describe` outputs indented JSON

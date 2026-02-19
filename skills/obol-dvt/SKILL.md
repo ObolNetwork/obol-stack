@@ -32,7 +32,7 @@ protocol between operators so the validator appears as a single validator to the
 | **config_hash** | Hash of the cluster definition (pre-DKG); also embedded in the lock |
 | **lock_hash** | Hash of the cluster lock (post-DKG); the primary identifier for a running cluster |
 | **Operator** | An Ethereum address that participates in one or more DV clusters |
-| **Techne** | Obol's operator reputation system: base > bronze > silver |
+| **Techne** | Obol's operator reputation system: base > bronze > silver > gold |
 | **OWR** | Optimistic Withdrawal Recipient — a smart contract that splits validator rewards |
 
 ---
@@ -140,30 +140,31 @@ obol_api "/v1/lock/0x4d6e7f8a..."
 ### Investigate a cluster's health
 
 ```bash
-# 1. Get cluster config
+# 1. Get cluster config (nested under cluster_definition)
 curl -s "https://api.obol.tech/v1/lock/0x4d6e7f8a..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-print(f'Cluster: {d.get(\"name\",\"?\")} on {d.get(\"network\",\"?\")}')
-print(f'Threshold: {d.get(\"threshold\",\"?\")}-of-{len(d.get(\"operators\",[]))}')
-print(f'Validators: {d.get(\"num_validators\",len(d.get(\"validators\",[])))}')
+cd = d.get('cluster_definition', {})
+ops = cd.get('operators', [])
+dvs = d.get('distributed_validators', [])
+print(f'Cluster: {cd.get(\"name\",\"?\")}')
+print(f'Threshold: {cd.get(\"threshold\",\"?\")}-of-{len(ops)}')
+print(f'Validators: {len(dvs)}')
 "
 
-# 2. Check effectiveness
+# 2. Check effectiveness (dict keyed by pubkey, time-period scores)
 curl -s "https://api.obol.tech/v1/effectiveness/0x4d6e7f8a..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-for v in d.get('effectiveness',[]):
-    eff = v.get('effectiveness',0)
-    pk = v.get('public_key','?')[:16]
+for pk, scores in d.items():
+    eff = scores.get('sevenDay', 0)
     status = 'healthy' if eff > 0.95 else 'degraded' if eff > 0.8 else 'CRITICAL'
-    print(f'{pk}...  {eff:.3f}  [{status}]')
+    print(f'{pk[:16]}...  7d={eff:.3f}  [{status}]')
 "
 
-# 3. Check validator states
+# 3. Check validator states (dict keyed by pubkey, balance in ETH)
 curl -s "https://api.obol.tech/v1/state/0x4d6e7f8a..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-for v in d.get('validators',[]):
-    bal = int(v.get('balance','0')) / 1e9
-    print(f'{v[\"public_key\"][:16]}...  {v.get(\"status\",\"?\")}  {bal:.4f} ETH')
+for pk, v in d.items():
+    print(f'{pk[:16]}...  {v.get(\"status\",\"?\")}  {v.get(\"balance\",\"?\")} ETH')
 "
 ```
 
@@ -175,9 +176,9 @@ If effectiveness is low: one or more operators offline, misconfigured Charon, ne
 # 1. Exit status summary
 curl -s "https://api.obol.tech/v1/exp/exit/status/summary/0x..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-print(f'Ready to exit: {d.get(\"validators_ready_to_exit\",0)}/{d.get(\"total_validators\",0)}')
-for op in d.get('operators',[]):
-    print(f'  {op[\"address\"][:12]}...  signed: {op.get(\"signed_exits\",0)}')
+print(f'Ready to exit: {d.get(\"ready_exits\", 0)}')
+for addr, count in d.get('operator_exits', {}).items():
+    print(f'  {addr[:12]}...  signed: {count}')
 "
 ```
 
@@ -186,25 +187,32 @@ Exit is broadcast automatically once `threshold` operators have submitted their 
 ### Audit an operator
 
 ```bash
-# Techne level
+# Techne level (response is tiers with arrays)
 curl -s "https://api.obol.tech/v1/address/techne/0xAbCd..." | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(f'Level: {d.get(\"credential_level\",\"?\")}')"
+import sys,json; d=json.load(sys.stdin)
+for tier in ['gold', 'silver', 'bronze', 'base']:
+    if d.get(tier):
+        print(f'Level: {tier} (earned {d[tier][0].get(\"earned_at\",\"?\")})')
+        break
+else:
+    print('Level: none')
+"
 
-# Badges
+# Badges (qualified=true means earned)
 curl -s "https://api.obol.tech/v1/address/badges/0xAbCd..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-badges = [b['type'] for b in d.get('badges',[])]
-print(f'Badges: {badges if badges else \"none\"}')"
+earned = [b['name'] for b in d.get('badges',[]) if b.get('qualified')]
+print(f'Badges: {earned if earned else \"none\"}')"
 
-# Cluster count
+# Cluster count (paginated response)
 curl -s "https://api.obol.tech/v1/lock/operator/0xAbCd..." | python3 -c "
 import sys,json; d=json.load(sys.stdin)
-clusters = d if isinstance(d,list) else d.get('items',[])
-print(f'Active in {len(clusters)} cluster(s)')"
+print(f'Active in {d.get(\"total_count\", len(d.get(\"cluster_locks\", [])))} cluster(s)')"
 
 # T&Cs signed?
 curl -s "https://api.obol.tech/v1/termsAndConditions/0xAbCd..." | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(f'T&Cs signed: {d}')"
+import sys,json; d=json.load(sys.stdin)
+print(f'T&Cs signed: {d.get(\"isTermsAndConditionsSigned\", False)}')"
 ```
 
 ---

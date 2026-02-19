@@ -8,6 +8,14 @@ metadata: { "openclaw": { "emoji": "⛓️", "requires": { "bins": ["curl", "pyt
 
 Query Ethereum blockchain state through the local eRPC gateway. Covers raw JSON-RPC methods, ERC-20 token operations, ENS resolution, gas estimation, and transaction analysis.
 
+## Paths
+
+All script paths in this document are relative to this skill's directory. When running from the pod, prefix with the skill's installed location:
+
+```bash
+python3 /data/.openclaw/skills-injected/obol-blockchain/scripts/rpc.py eth_blockNumber
+```
+
 ## When to Use
 
 - "What's the latest block number?"
@@ -171,7 +179,7 @@ curl -s -X POST "$ERPC_URL/hoodi" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
 
-# Hoodi testnet (explicit chain ID — always works)
+# Hoodi testnet (explicit chain ID — valid URL, but requires hoodi network installed)
 curl -s -X POST "$ERPC_URL/evm/560048" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
