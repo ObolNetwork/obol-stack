@@ -1,19 +1,19 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
-func newInferenceTestApp(cfgDir string) *cli.App {
+func newInferenceTestApp(cfgDir string) *cli.Command {
 	cfg := &config.Config{ConfigDir: cfgDir}
-	return &cli.App{
+	return &cli.Command{
 		Name:      "obol",
 		Commands:  []*cli.Command{inferenceCommand(cfg)},
 		Writer:    io.Discard,
@@ -23,21 +23,21 @@ func newInferenceTestApp(cfgDir string) *cli.App {
 
 func TestInferenceDeployHelpDoesNotPanic(t *testing.T) {
 	app := newInferenceTestApp(t.TempDir())
-	if err := app.Run([]string{"obol", "inference", "deploy", "--help"}); err != nil {
+	if err := app.Run(context.Background(), []string{"obol", "inference", "deploy", "--help"}); err != nil {
 		t.Fatalf("deploy help should not fail: %v", err)
 	}
 }
 
 func TestInferenceServeHelpDoesNotPanic(t *testing.T) {
 	app := newInferenceTestApp(t.TempDir())
-	if err := app.Run([]string{"obol", "inference", "serve", "--help"}); err != nil {
+	if err := app.Run(context.Background(), []string{"obol", "inference", "serve", "--help"}); err != nil {
 		t.Fatalf("serve help should not fail: %v", err)
 	}
 }
 
 func TestInferenceServeRequiresWallet(t *testing.T) {
 	app := newInferenceTestApp(t.TempDir())
-	err := app.Run([]string{"obol", "inference", "serve"})
+	err := app.Run(context.Background(), []string{"obol", "inference", "serve"})
 	if err == nil {
 		t.Fatal("expected serve to fail without --wallet")
 	}
@@ -46,20 +46,28 @@ func TestInferenceServeRequiresWallet(t *testing.T) {
 	}
 }
 
-func deployContext(t *testing.T, args ...string) *cli.Context {
+// deployContext runs a temporary cli.Command with deployFlags() and the given
+// args, then returns the parsed *cli.Command so callers can inspect flag values.
+func deployContext(t *testing.T, args ...string) *cli.Command {
 	t.Helper()
 
-	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	for _, f := range deployFlags() {
-		if err := f.Apply(fs); err != nil {
-			t.Fatalf("apply flag: %v", err)
-		}
+	var captured *cli.Command
+	cmd := &cli.Command{
+		Name:  "deploy",
+		Flags: deployFlags(),
+		Action: func(ctx context.Context, c *cli.Command) error {
+			captured = c
+			return nil
+		},
 	}
-	if err := fs.Parse(args); err != nil {
-		t.Fatalf("parse flags: %v", err)
+	fullArgs := append([]string{"deploy"}, args...)
+	if err := cmd.Run(context.Background(), fullArgs); err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	return cli.NewContext(&cli.App{}, fs, nil)
+	if captured == nil {
+		t.Fatal("action was not invoked")
+	}
+	return captured
 }
 
 func TestApplyFlagsOnlyMutatesExplicitlySetFlags(t *testing.T) {

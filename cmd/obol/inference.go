@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/mark3labs/x402-go"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 // inferenceCommand returns the inference management command group.
@@ -33,7 +34,7 @@ func inferenceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "inference",
 		Usage: "Manage SE-protected paid inference deployments (x402 + Secure Enclave)",
-		Subcommands: []*cli.Command{
+		Commands: []*cli.Command{
 			inferenceCreateCommand(cfg),
 			inferenceDeployCommand(cfg),
 			inferenceListCommand(cfg),
@@ -70,10 +71,10 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 				Usage:   "Overwrite existing deployment config",
 			},
 		),
-		Action: func(c *cli.Context) error {
-			name := c.String("name")
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.String("name")
 			if name == "" {
-				name = c.Args().First()
+				name = cmd.Args().First()
 			}
 			if name == "" {
 				return fmt.Errorf("usage: obol inference create [options] <name>")
@@ -81,15 +82,15 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 			store := inference.NewStore(cfg.ConfigDir)
 			d := &inference.Deployment{
 				Name:            name,
-				EnclaveTag:      c.String("enclave-tag"),
-				ListenAddr:      c.String("listen"),
-				UpstreamURL:     c.String("upstream"),
-				WalletAddress:   c.String("wallet"),
-				PricePerRequest: c.String("price"),
-				Chain:           c.String("chain"),
-				FacilitatorURL:  c.String("facilitator"),
+				EnclaveTag:      cmd.String("enclave-tag"),
+				ListenAddr:      cmd.String("listen"),
+				UpstreamURL:     cmd.String("upstream"),
+				WalletAddress:   cmd.String("wallet"),
+				PricePerRequest: cmd.String("price"),
+				Chain:           cmd.String("chain"),
+				FacilitatorURL:  cmd.String("facilitator"),
 			}
-			if err := store.Create(d, c.Bool("force")); err != nil {
+			if err := store.Create(d, cmd.Bool("force")); err != nil {
 				if errors.Is(err, inference.ErrDeploymentExists) {
 					return fmt.Errorf("%w — use --force to overwrite", err)
 				}
@@ -125,10 +126,10 @@ via --name (any order):
 
 Analogous to 'ecloud compute app deploy'.`,
 		Flags: deployFlags(),
-		Action: func(c *cli.Context) error {
-			name := c.String("name")
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.String("name")
 			if name == "" {
-				name = c.Args().First()
+				name = cmd.Args().First()
 			}
 			if name == "" {
 				return fmt.Errorf("usage: obol inference deploy [options] <name>")
@@ -146,7 +147,7 @@ Analogous to 'ecloud compute app deploy'.`,
 			}
 
 			// Apply CLI flag overrides.
-			applyFlags(c, d)
+			applyFlags(cmd, d)
 
 			// Validate required fields before writing config.
 			if d.WalletAddress == "" {
@@ -177,14 +178,14 @@ func inferenceListCommand(cfg *config.Config) *cli.Command {
 				Usage:   "Output as JSON array",
 			},
 		},
-		Action: func(c *cli.Context) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			store := inference.NewStore(cfg.ConfigDir)
 			deployments, err := store.List()
 			if err != nil {
 				return err
 			}
 
-			if c.Bool("json") {
+			if cmd.Bool("json") {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				return enc.Encode(deployments)
@@ -227,8 +228,8 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 				Usage:   "Output as JSON",
 			},
 		},
-		Action: func(c *cli.Context) error {
-			name := c.Args().First()
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.Args().First()
 			if name == "" {
 				return fmt.Errorf("usage: obol inference info <name>")
 			}
@@ -242,7 +243,7 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 			// Load (or generate) the SE key to expose the public key.
 			k, keyErr := enclave.NewKey(d.EnclaveTag)
 
-			if c.Bool("json") {
+			if cmd.Bool("json") {
 				out := map[string]any{
 					"name":              d.Name,
 					"enclave_tag":       d.EnclaveTag,
@@ -311,8 +312,8 @@ Analogous to 'ecloud compute app terminate'.`,
 				Usage: "Also delete the Secure Enclave key from the keychain",
 			},
 		},
-		Action: func(c *cli.Context) error {
-			name := c.Args().First()
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.Args().First()
 			if name == "" {
 				return fmt.Errorf("usage: obol inference delete <name>")
 			}
@@ -323,7 +324,7 @@ Analogous to 'ecloud compute app terminate'.`,
 				return err
 			}
 
-			if c.Bool("purge-key") {
+			if cmd.Bool("purge-key") {
 				if err := enclave.DeleteKey(d.EnclaveTag); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not delete SE key %q: %v\n", d.EnclaveTag, err)
 				} else {
@@ -361,8 +362,8 @@ identity.`,
 				Usage:   "Output as JSON",
 			},
 		},
-		Action: func(c *cli.Context) error {
-			nameOrTag := c.Args().First()
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			nameOrTag := cmd.Args().First()
 			if nameOrTag == "" {
 				return fmt.Errorf("usage: obol inference pubkey <name-or-tag>")
 			}
@@ -379,7 +380,7 @@ identity.`,
 				return fmt.Errorf("enclave key: %w", err)
 			}
 
-			if c.Bool("json") {
+			if cmd.Bool("json") {
 				out := map[string]any{
 					"pubkey":     hex.EncodeToString(k.PublicKeyBytes()),
 					"tag":        k.Tag(),
@@ -415,24 +416,24 @@ func inferenceServeCommand(_ *config.Config) *cli.Command {
 		Description: `Starts the gateway without requiring a named deployment.
 For managed deployments use 'obol inference deploy'.`,
 		Flags: deployFlags(),
-		Action: func(c *cli.Context) error {
-			if c.String("wallet") == "" {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.String("wallet") == "" {
 				return fmt.Errorf("usage: obol inference serve --wallet <address> [flags]")
 			}
 
-			chain, err := resolveChain(c.String("chain"))
+			chain, err := resolveChain(cmd.String("chain"))
 			if err != nil {
 				return err
 			}
 
 			gw, err := inference.NewGateway(inference.GatewayConfig{
-				ListenAddr:      c.String("listen"),
-				UpstreamURL:     c.String("upstream"),
-				WalletAddress:   c.String("wallet"),
-				PricePerRequest: c.String("price"),
+				ListenAddr:      cmd.String("listen"),
+				UpstreamURL:     cmd.String("upstream"),
+				WalletAddress:   cmd.String("wallet"),
+				PricePerRequest: cmd.String("price"),
 				Chain:           chain,
-				FacilitatorURL:  c.String("facilitator"),
-				EnclaveTag:      c.String("enclave-tag"),
+				FacilitatorURL:  cmd.String("facilitator"),
+				EnclaveTag:      cmd.String("enclave-tag"),
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create gateway: %w", err)
@@ -487,7 +488,7 @@ func deployFlags() []cli.Flag {
 			Name:    "wallet",
 			Aliases: []string{"w"},
 			Usage:   "USDC recipient wallet address",
-			EnvVars: []string{"X402_WALLET"},
+			Sources: cli.EnvVars("X402_WALLET"),
 		},
 		&cli.StringFlag{
 			Name:  "price",
@@ -508,7 +509,7 @@ func deployFlags() []cli.Flag {
 			Name:    "enclave-tag",
 			Aliases: []string{"e"},
 			Usage:   "Keychain SE tag (default: com.obol.inference.<name>)",
-			EnvVars: []string{"OBOL_ENCLAVE_TAG"},
+			Sources: cli.EnvVars("OBOL_ENCLAVE_TAG"),
 		},
 		&cli.BoolFlag{
 			Name:  "vm",
@@ -541,49 +542,48 @@ func deployFlags() []cli.Flag {
 // fields unchanged when the flag was not explicitly provided.
 //
 // For flags that have a non-empty default value (listen, upstream, price,
-// chain, facilitator) we use c.IsSet so that an existing deployment's
+// chain, facilitator) we use cmd.IsSet so that an existing deployment's
 // persisted value is not overwritten when the user omits the flag.
 //
 // For flags with no meaningful empty default (wallet, enclave-tag) we apply
 // the flag whenever the string is non-empty, because IsSet can return false
-// in urfave/cli v2 when the flag was resolved via env var lookup before the
-// argument is parsed.
-func applyFlags(c *cli.Context, d *inference.Deployment) {
-	if v := c.String("enclave-tag"); v != "" {
+// when the flag was resolved via env var lookup before the argument is parsed.
+func applyFlags(cmd *cli.Command, d *inference.Deployment) {
+	if v := cmd.String("enclave-tag"); v != "" {
 		d.EnclaveTag = v
 	}
-	if c.IsSet("listen") {
-		d.ListenAddr = c.String("listen")
+	if cmd.IsSet("listen") {
+		d.ListenAddr = cmd.String("listen")
 	}
-	if c.IsSet("upstream") {
-		d.UpstreamURL = c.String("upstream")
+	if cmd.IsSet("upstream") {
+		d.UpstreamURL = cmd.String("upstream")
 	}
-	if v := c.String("wallet"); v != "" {
+	if v := cmd.String("wallet"); v != "" {
 		d.WalletAddress = v
 	}
-	if c.IsSet("price") {
-		d.PricePerRequest = c.String("price")
+	if cmd.IsSet("price") {
+		d.PricePerRequest = cmd.String("price")
 	}
-	if c.IsSet("chain") {
-		d.Chain = c.String("chain")
+	if cmd.IsSet("chain") {
+		d.Chain = cmd.String("chain")
 	}
-	if c.IsSet("facilitator") {
-		d.FacilitatorURL = c.String("facilitator")
+	if cmd.IsSet("facilitator") {
+		d.FacilitatorURL = cmd.String("facilitator")
 	}
-	if c.IsSet("vm") {
-		d.VMMode = c.Bool("vm")
+	if cmd.IsSet("vm") {
+		d.VMMode = cmd.Bool("vm")
 	}
-	if c.IsSet("vm-image") {
-		d.VMImage = c.String("vm-image")
+	if cmd.IsSet("vm-image") {
+		d.VMImage = cmd.String("vm-image")
 	}
-	if c.IsSet("vm-cpus") {
-		d.VMCPUs = c.Int("vm-cpus")
+	if cmd.IsSet("vm-cpus") {
+		d.VMCPUs = int(cmd.Int("vm-cpus"))
 	}
-	if c.IsSet("vm-memory") {
-		d.VMMemoryMB = c.Int("vm-memory")
+	if cmd.IsSet("vm-memory") {
+		d.VMMemoryMB = int(cmd.Int("vm-memory"))
 	}
-	if c.IsSet("vm-host-port") {
-		d.VMHostPort = c.Int("vm-host-port")
+	if cmd.IsSet("vm-host-port") {
+		d.VMHostPort = int(cmd.Int("vm-host-port"))
 	}
 }
 

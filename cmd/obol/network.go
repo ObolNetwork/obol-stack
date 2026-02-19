@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -8,7 +9,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/network"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 // networkCommand returns the network management command group with dynamic subcommands
@@ -19,32 +20,32 @@ func networkCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "network",
 		Usage: "Manage blockchain networks",
-		Subcommands: []*cli.Command{
+		Commands: []*cli.Command{
 			{
 				Name:  "list",
 				Usage: "List available networks",
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return network.List(cfg)
 				},
 			},
 			{
 				Name:        "install",
 				Usage:       "Install and deploy network to cluster",
-				Subcommands: installSubcommands,
-				Action: func(c *cli.Context) error {
+				Commands: installSubcommands,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					// Show help if no network specified
-					return cli.ShowSubcommandHelp(c)
+					return cli.ShowSubcommandHelp(cmd)
 				},
 			},
 			{
 				Name:      "sync",
 				Usage:     "Deploy or update network configuration to cluster",
 				ArgsUsage: "<network>/<id> or <network>-<id>",
-				Action: func(c *cli.Context) error {
-					if c.NArg() == 0 {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() == 0 {
 						return fmt.Errorf("deployment identifier required (e.g., ethereum/knowing-wahoo or ethereum-knowing-wahoo)")
 					}
-					deploymentIdentifier := c.Args().First()
+					deploymentIdentifier := cmd.Args().First()
 					return network.Sync(cfg, deploymentIdentifier)
 				},
 			},
@@ -52,11 +53,11 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				Name:      "delete",
 				Usage:     "Remove network deployment and clean up cluster resources",
 				ArgsUsage: "<network>/<id> or <network>-<id>",
-				Action: func(c *cli.Context) error {
-					if c.NArg() == 0 {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() == 0 {
 						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
 					}
-					deploymentIdentifier := c.Args().First()
+					deploymentIdentifier := cmd.Args().First()
 					return network.Delete(cfg, deploymentIdentifier)
 				},
 			},
@@ -134,18 +135,18 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			Name:  netName,
 			Usage: fmt.Sprintf("Install %s network", netName),
 			Flags: flags,
-			Action: func(c *cli.Context) error {
+			Action: func(ctx context.Context, cmd *cli.Command) error {
 				// Collect and validate flag values
 				overrides := make(map[string]string)
 
 				// Collect id flag (special case - not in parsed fields)
-				if idValue := c.String("id"); idValue != "" {
+				if idValue := cmd.String("id"); idValue != "" {
 					overrides["id"] = idValue
 				}
 
 				// Collect parsed template fields
 				for _, field := range netFields {
-					value := c.String(field.FlagName)
+					value := cmd.String(field.FlagName)
 					if value != "" {
 						// Validate enum constraint if defined
 						if len(field.EnumValues) > 0 {
@@ -160,7 +161,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 				}
 
 				// Get force flag
-				force := c.Bool("force")
+				force := cmd.Bool("force")
 
 				return network.Install(cfg, netName, overrides, force)
 			},

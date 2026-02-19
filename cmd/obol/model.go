@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -9,14 +10,14 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func modelCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "model",
 		Usage: "Manage model providers (llmspy universal proxy)",
-		Subcommands: []*cli.Command{
+		Commands: []*cli.Command{
 			{
 				Name:  "setup",
 				Usage: "Configure a cloud AI provider in the llmspy gateway",
@@ -28,12 +29,12 @@ func modelCommand(cfg *config.Config) *cli.Command {
 					&cli.StringFlag{
 						Name:    "api-key",
 						Usage:   "API key for the provider",
-						EnvVars: []string{"LLM_API_KEY"},
+						Sources: cli.EnvVars("LLM_API_KEY"),
 					},
 				},
-				Action: func(c *cli.Context) error {
-					provider := c.String("provider")
-					apiKey := c.String("api-key")
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					provider := cmd.String("provider")
+					apiKey := cmd.String("api-key")
 
 					// Interactive mode if flags not provided
 					if provider == "" || apiKey == "" {
@@ -50,7 +51,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:  "status",
 				Usage: "Show global llmspy provider status",
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					status, err := model.GetProviderStatus(cfg)
 					if err != nil {
 						return err

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,7 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 // bootstrapCommand creates a hidden command that initializes and starts the stack,
@@ -22,7 +23,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 		Name:   "bootstrap",
 		Usage:  "Initialize, start cluster, and open browser (hidden command for installer)",
 		Hidden: true, // Hidden from help output
-		Action: func(c *cli.Context) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			fmt.Println("Starting bootstrap process...")
 
 			// Step 1: Initialize stack
