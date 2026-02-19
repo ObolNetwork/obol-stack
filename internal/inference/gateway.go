@@ -33,9 +33,27 @@ type GatewayConfig struct {
 
 	// FacilitatorURL is the x402 facilitator service URL.
 	FacilitatorURL string
+
+	// EnclaveTag is the macOS Secure Enclave keychain application tag used for
+	// request decryption.  When non-empty the gateway enables two additional
+	// behaviours:
+	//
+	//   1. GET /v1/enclave/pubkey — returns the SE public key as JSON so that
+	//      clients can encrypt their request bodies.
+	//
+	//   2. Inference endpoints accept Content-Type: application/x-obol-encrypted
+	//      bodies.  The gateway decrypts them via the SE private key before
+	//      forwarding to the upstream service.  If the request also contains a
+	//      X-Obol-Reply-Pubkey header, the response is re-encrypted to the
+	//      client's ephemeral key (end-to-end confidentiality).
+	//
+	// When empty, all enclave functionality is disabled and the gateway
+	// operates in plain x402-only mode.
+	EnclaveTag string
 }
 
-// Gateway is an x402-enabled reverse proxy for LLM inference.
+// Gateway is an x402-enabled reverse proxy for LLM inference with optional
+// Secure Enclave request encryption.
 type Gateway struct {
 	config GatewayConfig
 	server *http.Server
@@ -66,14 +84,14 @@ func (g *Gateway) Start() error {
 		return fmt.Errorf("invalid upstream URL %q: %w", g.config.UpstreamURL, err)
 	}
 
-	// Build reverse proxy to upstream inference service
+	// Build reverse proxy to upstream inference service.
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("proxy error: %v", err)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 	}
 
-	// Create x402 payment requirement
+	// Create x402 payment requirement.
 	requirement, err := x402.NewUSDCPaymentRequirement(x402.USDCRequirementConfig{
 		Chain:            g.config.Chain,
 		Amount:           g.config.PricePerRequest,
@@ -83,29 +101,61 @@ func (g *Gateway) Start() error {
 		return fmt.Errorf("failed to create payment requirement: %w", err)
 	}
 
-	// Configure x402 middleware
+	// Configure x402 middleware.
 	x402Config := &x402http.Config{
-		FacilitatorURL:  g.config.FacilitatorURL,
+		FacilitatorURL:      g.config.FacilitatorURL,
 		PaymentRequirements: []x402.PaymentRequirement{requirement},
 	}
 	paymentMiddleware := x402http.NewX402Middleware(x402Config)
 
-	// Build HTTP mux
+	// Optionally initialise SE enclave middleware.
+	var em *enclaveMiddleware
+	if g.config.EnclaveTag != "" {
+		em, err = newEnclaveMiddleware(g.config.EnclaveTag)
+		if err != nil {
+			return fmt.Errorf("enclave middleware: %w", err)
+		}
+		log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
+			em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
+	}
+
+	// protect wraps a handler with the payment gate and (when enabled) the SE
+	// encryption/decryption layer.
+	//
+	// Layer order (innermost → outermost):
+	//   upstream proxy → enclave middleware → x402 payment gate → client
+	//
+	// The enclave layer sits between payment and proxy so that the operator
+	// can only see that a paid request arrived — never its plaintext content.
+	protect := func(h http.Handler) http.Handler {
+		if em != nil {
+			h = em.wrap(h)
+		}
+		return paymentMiddleware(h)
+	}
+
+	// Build HTTP mux.
 	mux := http.NewServeMux()
 
-	// Health check (no payment required)
+	// Health check — no payment or encryption required.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 
-	// Protected inference endpoints (x402 payment required)
-	mux.Handle("POST /v1/chat/completions", paymentMiddleware(proxy))
-	mux.Handle("POST /v1/completions", paymentMiddleware(proxy))
-	mux.Handle("POST /v1/embeddings", paymentMiddleware(proxy))
-	mux.Handle("GET /v1/models", paymentMiddleware(proxy))
+	// Enclave public key endpoint — unauthenticated, no payment required.
+	// Only registered when enclave mode is active.
+	if em != nil {
+		mux.HandleFunc("GET /v1/enclave/pubkey", em.handlePubkey)
+	}
 
-	// Unprotected OpenAI-compat metadata
+	// Protected inference endpoints (x402 payment + optional SE decryption).
+	mux.Handle("POST /v1/chat/completions", protect(proxy))
+	mux.Handle("POST /v1/completions", protect(proxy))
+	mux.Handle("POST /v1/embeddings", protect(proxy))
+	mux.Handle("GET /v1/models", protect(proxy))
+
+	// Unprotected OpenAI-compat metadata passthrough.
 	mux.Handle("/", proxy)
 
 	g.server = &http.Server{
@@ -120,11 +170,14 @@ func (g *Gateway) Start() error {
 	}
 
 	log.Printf("x402 inference gateway listening on %s", g.config.ListenAddr)
-	log.Printf("  upstream:  %s", g.config.UpstreamURL)
-	log.Printf("  wallet:    %s", g.config.WalletAddress)
-	log.Printf("  price:     %s USDC/request", g.config.PricePerRequest)
-	log.Printf("  chain:     %s", g.config.Chain.NetworkID)
+	log.Printf("  upstream:    %s", g.config.UpstreamURL)
+	log.Printf("  wallet:      %s", g.config.WalletAddress)
+	log.Printf("  price:       %s USDC/request", g.config.PricePerRequest)
+	log.Printf("  chain:       %s", g.config.Chain.NetworkID)
 	log.Printf("  facilitator: %s", g.config.FacilitatorURL)
+	if em == nil {
+		log.Printf("  enclave:     disabled")
+	}
 
 	return g.server.Serve(listener)
 }
