@@ -124,6 +124,7 @@ export function OpenClawInstanceCard({
 
       <ActionsRow>
         <Button
+          disabled={displayStatus !== 'running'}
           color="primary"
           onClick={() => onSelect?.(instance)}
           css={{ fontSize: '$3', height: '$sm' }}

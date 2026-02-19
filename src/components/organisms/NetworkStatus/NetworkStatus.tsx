@@ -1,4 +1,3 @@
-import React from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { ChainChip } from '../../atoms/ChainChip';
@@ -19,6 +18,7 @@ const NetworkHeader = styled(Flex, {
   justifyContent: 'space-between',
   gap: '$md',
   marginBottom: '$2xl',
+  flexWrap: 'wrap',
 });
 
 const CardAppType = styled(Text, {
@@ -108,10 +108,17 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
       }}
     >
       <NetworkHeader>
-        <Flex css={{ alignItems: 'center', gap: '$sm' }}>
+        <Flex
+          css={{
+            alignItems: 'center',
+            gap: '$sm',
+            flexWrap: 'wrap',
+            width: 'auto',
+          }}
+        >
           <AppIcon app={appData.app} size={24} />
 
-          <Flex css={{ flexDirection: 'column', gap: '$xxxs' }}>
+          <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
             <CardAppType>
               {appData.app === 'erpc'
                 ? 'eRPC'
