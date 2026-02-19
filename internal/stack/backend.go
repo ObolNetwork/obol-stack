@@ -75,3 +75,20 @@ func SaveBackend(cfg *config.Config, name string) error {
 	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
 	return os.WriteFile(path, []byte(name), 0644)
 }
+
+// DetectExistingBackend reads the persisted backend choice without
+// falling back to a default. Returns empty string if no backend file exists,
+// which lets Init() apply its own default.
+func DetectExistingBackend(cfg *config.Config) string {
+	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(data))
+	// Validate it's a known backend; return empty if corrupted
+	if _, err := NewBackend(name); err != nil {
+		return ""
+	}
+	return name
+}

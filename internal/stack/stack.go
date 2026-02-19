@@ -63,6 +63,13 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 		backendName = BackendK3d
 	}
 
+	// If switching backends, destroy the old one first to prevent
+	// orphaned clusters (e.g., k3d containers still running after
+	// switching to k3s, or k3s process still alive after switching to k3d).
+	if hasExistingConfig && force {
+		destroyOldBackendIfSwitching(cfg, backendName, stackID)
+	}
+
 	backend, err := NewBackend(backendName)
 	if err != nil {
 		return err
@@ -83,13 +90,10 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	}
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
-	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
-	// On macOS (Docker Desktop), host.docker.internal resolves to the host.
-	// On Linux (native Docker), host.k3d.internal is added by k3d.
-	ollamaHost := "host.k3d.internal"
-	if runtime.GOOS == "darwin" {
-		ollamaHost = "host.docker.internal"
-	}
+	// Resolve {{OLLAMA_HOST}} based on backend:
+	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
+	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
+	ollamaHost := ollamaHostForBackend(backendName)
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}": ollamaHost,
@@ -111,6 +115,62 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	fmt.Printf("Initialized stack configuration\n")
 	fmt.Printf("Stack ID: %s\n", stackID)
 	return nil
+}
+
+// destroyOldBackendIfSwitching checks if the backend is changing and tears down
+// the old one to prevent orphaned clusters running side by side.
+func destroyOldBackendIfSwitching(cfg *config.Config, newBackend, stackID string) {
+	oldBackend, err := LoadBackend(cfg)
+	if err != nil {
+		return
+	}
+	if oldBackend.Name() == newBackend {
+		return // same backend, nothing to clean up
+	}
+
+	fmt.Printf("Switching backend from %s to %s — destroying old cluster\n", oldBackend.Name(), newBackend)
+
+	// Destroy the old backend's cluster (best-effort, don't block init)
+	if stackID != "" {
+		if err := oldBackend.Destroy(cfg, stackID); err != nil {
+			fmt.Printf("Warning: failed to destroy old %s cluster: %v\n", oldBackend.Name(), err)
+		}
+	}
+
+	// Clean up stale config files from the old backend
+	cleanupStaleBackendConfigs(cfg, oldBackend.Name())
+}
+
+// cleanupStaleBackendConfigs removes config files belonging to the old backend
+// that would otherwise linger and confuse detection.
+func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
+	var staleFiles []string
+	switch oldBackend {
+	case BackendK3d:
+		staleFiles = []string{k3dConfigFile}
+	case BackendK3s:
+		staleFiles = []string{k3sConfigFile, k3sPidFile, k3sLogFile}
+	}
+	for _, f := range staleFiles {
+		path := filepath.Join(cfg.ConfigDir, f)
+		if _, err := os.Stat(path); err == nil {
+			os.Remove(path)
+		}
+	}
+}
+
+// ollamaHostForBackend returns the hostname/IP that reaches the host Ollama
+// instance from inside the cluster.
+func ollamaHostForBackend(backendName string) string {
+	if backendName == BackendK3s {
+		// k3s runs directly on the host — Ollama is at localhost
+		return "127.0.0.1"
+	}
+	// k3d runs inside Docker containers
+	if runtime.GOOS == "darwin" {
+		return "host.docker.internal"
+	}
+	return "host.k3d.internal"
 }
 
 // Up starts the cluster using the configured backend

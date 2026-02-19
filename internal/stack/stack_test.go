@@ -3,8 +3,12 @@ package stack
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
 func TestCheckPortsAvailable_FreePorts(t *testing.T) {
@@ -89,4 +93,85 @@ func TestFormatPorts(t *testing.T) {
 			t.Errorf("formatPorts(%v) = %q, want %q", tt.ports, got, tt.expected)
 		}
 	}
+}
+
+func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
+	// Simulate a k3d → k3s switch: k3d.yaml should be cleaned up
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+	}
+
+	// Write k3d as the current backend + its config file
+	SaveBackend(cfg, BackendK3d)
+	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
+
+	// Switch to k3s — k3d config should be cleaned up
+	// (Destroy will fail because no real cluster, but cleanup should still work)
+	destroyOldBackendIfSwitching(cfg, BackendK3s, "test-id")
+
+	if _, err := os.Stat(k3dPath); !os.IsNotExist(err) {
+		t.Error("k3d.yaml should be removed when switching to k3s")
+	}
+}
+
+func TestDestroyOldBackendIfSwitching_NoopSameBackend(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+	}
+
+	SaveBackend(cfg, BackendK3d)
+	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
+
+	// Same backend — nothing should be cleaned up
+	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+
+	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
+		t.Error("k3d.yaml should NOT be removed when re-initing same backend")
+	}
+}
+
+func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+	}
+
+	SaveBackend(cfg, BackendK3s)
+	// Create k3s state files
+	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
+		os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0644)
+	}
+
+	// Switch to k3d — k3s files should be cleaned up
+	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+
+	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
+		if _, err := os.Stat(filepath.Join(tmpDir, f)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed when switching from k3s to k3d", f)
+		}
+	}
+}
+
+func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
+	// No .stack-backend file — LoadBackend defaults to k3d.
+	// Switching to k3d should be a no-op (same backend).
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+	}
+
+	// Should not panic or error
+	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
 }
