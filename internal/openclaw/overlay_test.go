@@ -132,12 +132,34 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 	}
 }
 
-func TestGenerateOverlayValues_OllamaDefault(t *testing.T) {
-	// When imported is nil, generateOverlayValues should use Ollama defaults
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false)
+func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
+	// When Ollama models are available, overlay should use them
+	models := []string{"llama3.2:3b", "mistral:7b"}
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, models)
 
-	if !strings.Contains(yaml, "agentModel: ollama/gpt-oss:120b-cloud") {
+	if !strings.Contains(yaml, "agentModel: ollama/llama3.2:3b") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
+		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "id: llama3.2:3b") {
+		t.Errorf("default overlay missing first model, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "id: mistral:7b") {
+		t.Errorf("default overlay missing second model, got:\n%s", yaml)
+	}
+}
+
+func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
+	// When no Ollama models are available, overlay should have empty model list
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil)
+
+	if strings.Contains(yaml, "agentModel:") {
+		t.Errorf("default overlay should not set agentModel when no models available, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "models: []") {
+		t.Errorf("default overlay should have empty models list, got:\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
 		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
@@ -145,7 +167,7 @@ func TestGenerateOverlayValues_OllamaDefault(t *testing.T) {
 }
 
 func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true)
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true, nil)
 	if !strings.Contains(yaml, "extraEnvFromSecrets") {
 		t.Errorf("overlay missing extraEnvFromSecrets, got:\n%s", yaml)
 	}
