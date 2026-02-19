@@ -17,5 +17,4 @@ func newKey(_ string) (Key, error)                          { return nil, ErrNot
 func loadKey(_ string) (Key, error)                         { return nil, ErrNotSupported }
 func deleteKey(_ string) error                              { return ErrNotSupported }
 func checkSIP() error                                       { return ErrNotSupported }
-func encrypt(_, _ []byte) ([]byte, error)                   { return nil, ErrNotSupported }
 func decrypt(_ string, _ []byte) ([]byte, error)            { return nil, ErrNotSupported }

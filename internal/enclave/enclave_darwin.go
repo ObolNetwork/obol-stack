@@ -297,15 +297,9 @@ import "C"
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
-	"io"
 	"sync"
 	"unsafe"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // ephemeralCache stores ephemeral (non-persistent) keys by tag so that
@@ -529,63 +523,6 @@ func checkSIP() error {
 	return nil
 }
 
-// encrypt implements ECIES: ephemeral ECDH + HKDF-SHA256 + AES-256-GCM.
-// All operations are pure Go using the recipient's public key bytes.
-func encrypt(recipientPubKey, plaintext []byte) ([]byte, error) {
-	if len(recipientPubKey) != 65 || recipientPubKey[0] != 0x04 {
-		return nil, fmt.Errorf("enclave: Encrypt: recipientPubKey must be 65-byte uncompressed SEC1")
-	}
-
-	// Parse recipient public key.
-	curve := ecdh.P256()
-	recipKey, err := curve.NewPublicKey(recipientPubKey)
-	if err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: invalid recipient public key: %w", err)
-	}
-
-	// Generate ephemeral key pair.
-	ephKey, err := curve.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: GenerateKey: %w", err)
-	}
-	ephPubBytes := ephKey.PublicKey().Bytes() // 65-byte uncompressed
-
-	// ECDH shared secret.
-	sharedPoint, err := ephKey.ECDH(recipKey)
-	if err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: ECDH: %w", err)
-	}
-
-	// HKDF-SHA256 → 32-byte AES key.
-	aesKey, err := deriveKey(sharedPoint, ephPubBytes, recipientPubKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// AES-256-GCM encrypt.
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: aes.NewCipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: cipher.NewGCM: %w", err)
-	}
-	nonce := make([]byte, gcm.NonceSize()) // 12 bytes
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fmt.Errorf("enclave: Encrypt: rand nonce: %w", err)
-	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
-
-	// Wire format: [1:version][65:ephPub][12:nonce][ciphertext+tag]
-	out := make([]byte, 0, 1+65+12+len(ciphertext))
-	out = append(out, 0x01)
-	out = append(out, ephPubBytes...)
-	out = append(out, nonce...)
-	out = append(out, ciphertext...)
-	return out, nil
-}
-
 // decrypt loads the SE key by tag and decrypts the ciphertext.
 func decrypt(tag string, ciphertext []byte) ([]byte, error) {
 	k, err := loadKey(tag)
@@ -637,8 +574,6 @@ func decryptWithKey(k *seKey, ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// --- internal helpers ---
-
 // extractPublicKey reads the 65-byte uncompressed public key from a SecKeyRef.
 func extractPublicKey(privRef C.SecKeyRef) ([]byte, error) {
 	buf := make([]byte, 128)
@@ -651,21 +586,6 @@ func extractPublicKey(privRef C.SecKeyRef) ([]byte, error) {
 		return nil, fmt.Errorf("enclave: unexpected public key length %d (expected 65)", int(n))
 	}
 	return buf[:65], nil
-}
-
-// deriveKey runs HKDF-SHA256 over the ECDH shared point to produce a 32-byte
-// AES key, binding the context with the ephemeral and recipient public keys.
-func deriveKey(sharedPoint, ephPubBytes, recipPubBytes []byte) ([]byte, error) {
-	info := make([]byte, 0, len(ephPubBytes)+len(recipPubBytes))
-	info = append(info, ephPubBytes...)
-	info = append(info, recipPubBytes...)
-
-	kdf := hkdf.New(sha256.New, sharedPoint, nil, info)
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(kdf, key); err != nil {
-		return nil, fmt.Errorf("enclave: HKDF: %w", err)
-	}
-	return key, nil
 }
 
 // cfStringToGo converts a CFStringRef to a Go string.
