@@ -1,8 +1,63 @@
-# Obol Stack - Context for Claude Code
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 The Obol Stack is a framework for AI agents to run decentralised infrastructure locally. It provides a simplified CLI experience for managing a k3d cluster with an AI agent (OpenClaw), dynamically deployable blockchain networks, and public access via Cloudflare tunnels. Each network installation creates a uniquely-namespaced deployment, allowing multiple instances of the same network type to run simultaneously.
+
+## Build, Test, and Run Commands
+
+### Building
+
+```bash
+# Build with version info (recommended)
+just build
+
+# Build to specific location (e.g., for integration tests)
+go build -o .workspace/bin/obol ./cmd/obol
+
+# Build all packages (check compilation)
+go build ./...
+```
+
+### Testing
+
+```bash
+# Run all unit tests
+go test ./...
+
+# Run a single test
+go test -v -run 'TestBuildLLMSpyRoutedOverlay_Anthropic' ./internal/openclaw/
+
+# Run integration tests (requires running cluster + Ollama)
+export OBOL_CONFIG_DIR=$(pwd)/.workspace/config
+export OBOL_BIN_DIR=$(pwd)/.workspace/bin
+export OBOL_DATA_DIR=$(pwd)/.workspace/data
+go build -o .workspace/bin/obol ./cmd/obol   # MUST rebuild after code changes
+go test -tags integration -v -timeout 15m ./internal/openclaw/
+
+# Run a specific integration test
+go test -tags integration -v -run 'TestIntegration_OllamaInference' -timeout 10m ./internal/openclaw/
+```
+
+Integration tests use `//go:build integration` and skip gracefully when prerequisites (cluster, Ollama, API keys) are missing.
+
+### Cluster Management
+
+```bash
+just up          # obol cluster init + up
+just down        # obol cluster down + purge
+just install     # Run obolup.sh
+just clean       # Remove build artifacts
+```
+
+### Development Mode
+
+```bash
+OBOL_DEVELOPMENT=true ./obolup.sh   # One-time setup, uses .workspace/ directory
+# Changes to Go code reflected immediately via `go run` wrapper
+```
 
 ## Architecture Overview
 
@@ -957,21 +1012,36 @@ obol network delete ethereum-<generated-name> --force
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
 
+**Testing**:
+- `internal/openclaw/integration_test.go` - Full-cluster integration tests (Ollama, Anthropic, OpenAI inference through llmspy)
+- `internal/openclaw/overlay_test.go` - Unit tests for overlay generation
+- `internal/openclaw/import_test.go` - Unit tests for config import/translation
+- `internal/stack/stack_test.go` - Stack lifecycle tests
+- `internal/tunnel/tunnel_test.go` - Tunnel configuration tests
+- `internal/dns/resolver_test.go` - DNS resolver tests
+
 **Build and version**:
 - `justfile` - Task runner (install, build, up, down commands)
 - `VERSION` - Semver version file
 - `internal/version/version.go` - Version injection
+
+**CI/CD** (`.github/workflows/`):
+- `release.yml` - Multi-platform binary builds on tags, creates GitHub releases
+- `docker-publish-openclaw.yml` - OpenClaw Docker image build + Trivy security scan
 
 **Documentation**:
 - `README.md` - User-facing documentation
 - `plan.md` - Network redesign plan
 - `CONTRIBUTING.md` - Contribution guidelines
 
+**Developer Skills**:
+- `.agents/skills/obol-stack-dev/` - Dev/test/validate skill for LLM routing through llmspy
+
 ### External Dependencies
 
 **Required**:
 - Docker 20.10.0+ (daemon must be running)
-- Go 1.21+ (for building from source)
+- Go 1.25+ (for building from source)
 
 **Installed by obolup.sh**:
 - kubectl 1.35.0
