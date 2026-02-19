@@ -104,6 +104,15 @@ func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
 	return content, nil
 }
 
+// ReadInfrastructureFile reads a file from the embedded infrastructure directory
+func ReadInfrastructureFile(path string) ([]byte, error) {
+	content, err := infrastructureFS.ReadFile(filepath.Join("infrastructure", path))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read infrastructure file %s: %w", path, err)
+	}
+	return content, nil
+}
+
 // CopyNetwork recursively copies an embedded network to the destination directory
 func CopyNetwork(networkName, destDir string) error {
 	networkPath := filepath.Join("networks", networkName)

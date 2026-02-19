@@ -89,6 +89,10 @@ COMMANDS:
      helmfile        Run helmfile with stack kubeconfig (passthrough)
      k9s             Run k9s with stack kubeconfig (passthrough)
 
+   Updates:
+     update          Check for available updates
+     upgrade         Apply available helm chart upgrades
+
    Other:
      version         Show detailed version information
      help, h         Shows a list of commands or help for one command
@@ -440,6 +444,8 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
+			updateCommand(cfg),
+			upgradeCommand(cfg),
 			networkCommand(cfg),
 			openclawCommand(cfg),
 			inferenceCommand(cfg),
