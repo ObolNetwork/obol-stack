@@ -39,6 +39,10 @@ build/
 !.env.example
 .envrc.local
 
+# Python
+__pycache__/
+*.pyc
+
 # Temporary files
 *.tmp
 tmp/

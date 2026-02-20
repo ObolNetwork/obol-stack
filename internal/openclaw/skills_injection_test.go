@@ -29,7 +29,7 @@ func TestStageDefaultSkills(t *testing.T) {
 	}
 
 	// Verify all expected skills were staged
-	for _, skill := range []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"} {
+	for _, skill := range []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"} {
 		skillMD := filepath.Join(skillsDir, skill, "SKILL.md")
 		if _, err := os.Stat(skillMD); err != nil {
 			t.Errorf("%s/SKILL.md not staged: %v", skill, err)
@@ -59,7 +59,7 @@ func TestStageDefaultSkillsSkipsExisting(t *testing.T) {
 	}
 
 	// And no embedded skills should have been written (directory was pre-existing)
-	if _, err := os.Stat(filepath.Join(skillsDir, "hello", "SKILL.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(skillsDir, "ethereum-networks", "SKILL.md")); err == nil {
 		t.Errorf("embedded skills should NOT have been staged into existing directory")
 	}
 }
@@ -77,7 +77,7 @@ func TestInjectSkillsToVolume(t *testing.T) {
 
 	// Verify skills landed in the volume path
 	volumePath := skillsVolumePath(cfg, "test-inject")
-	for _, skill := range []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"} {
+	for _, skill := range []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"} {
 		skillMD := filepath.Join(volumePath, skill, "SKILL.md")
 		if _, err := os.Stat(skillMD); err != nil {
 			t.Errorf("%s/SKILL.md not injected to volume: %v", skill, err)
@@ -86,9 +86,9 @@ func TestInjectSkillsToVolume(t *testing.T) {
 
 	// Verify scripts and references are also injected
 	for _, sub := range []string{
-		"obol-blockchain/scripts/rpc.py",
-		"obol-k8s/scripts/kube.py",
-		"obol-dvt/references/api-examples.md",
+		"ethereum-networks/scripts/rpc.py",
+		"obol-stack/scripts/kube.py",
+		"distributed-validators/references/api-examples.md",
 	} {
 		path := filepath.Join(volumePath, sub)
 		if _, err := os.Stat(path); err != nil {

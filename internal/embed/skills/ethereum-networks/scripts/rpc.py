@@ -15,6 +15,7 @@ Examples:
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 # eRPC requires /rpc/{network} path. ERPC_URL is the base (without network).
@@ -43,8 +44,25 @@ def rpc_call(method, params=None, network=None):
         headers={"Content-Type": "application/json"},
     )
 
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        hints = {
+            413: "Request too large — try a smaller block range or simpler query",
+            502: "eRPC gateway not ready — is the network installed?",
+            503: "eRPC gateway unavailable — check if the erpc pod is running",
+        }
+        hint = hints.get(e.code, "")
+        msg = f"HTTP {e.code}"
+        if hint:
+            msg += f": {hint}"
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"Connection failed: {e.reason}", file=sys.stderr)
+        print(f"Is the eRPC gateway reachable at {url}?", file=sys.stderr)
+        sys.exit(1)
 
     if "error" in data:
         code = data["error"].get("code", "?")
