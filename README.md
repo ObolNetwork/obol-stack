@@ -142,17 +142,26 @@ obol model status
 obol openclaw onboard
 
 # Reconfigure model provider for an existing instance
-obol openclaw setup <id>
+obol openclaw setup
 
 # List instances
 obol openclaw list
 
 # Open the web dashboard
-obol openclaw dashboard <id>
+obol openclaw dashboard
+
+# Manage skills (add, remove, list)
+obol openclaw skills list
+obol openclaw skills add <package>
+obol openclaw skills remove <name>
 
 # Remove an instance
-obol openclaw delete <id> --force
+obol openclaw delete --force
 ```
+
+When only one OpenClaw instance is installed, the instance ID is optional — it is auto-selected. With multiple instances, specify the name: `obol openclaw setup prod`.
+
+Default Obol skills (`hello`, `ethereum`) are installed automatically on first deploy and provide the agent with eRPC JSON-RPC access and a basic smoke test.
 
 ## Public Access (Cloudflare Tunnel)
 

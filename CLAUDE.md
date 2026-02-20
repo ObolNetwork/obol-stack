@@ -207,9 +207,19 @@ obol
 │   ├── setup
 │   └── status
 ├── openclaw (OpenClaw AI assistant)
-│   ├── setup
 │   ├── onboard
-│   └── dashboard
+│   ├── setup
+│   ├── sync
+│   ├── list
+│   ├── delete
+│   ├── dashboard
+│   ├── token
+│   ├── cli
+│   └── skills (manage OpenClaw skills)
+│       ├── list
+│       ├── add
+│       ├── remove
+│       └── sync
 ├── kubectl (passthrough with KUBECONFIG)
 ├── helm (passthrough with KUBECONFIG)
 ├── helmfile (passthrough with KUBECONFIG)
@@ -756,6 +766,66 @@ models:
 | `internal/openclaw/chart/values.yaml` | Default per-instance model config |
 | `internal/openclaw/chart/templates/_helpers.tpl` | Renders model providers into application JSON config |
 
+## OpenClaw Skills System
+
+### Overview
+
+OpenClaw skills are SKILL.md files that give the AI agent domain-specific capabilities. The Obol Stack ships default skills embedded in the `obol` binary and supports runtime skill management via the openclaw CLI inside the pod.
+
+### Two Delivery Channels
+
+**Compile-time (default skills)**: SKILL.md files embedded in `internal/embed/skills/` are staged to the deployment config directory and pushed as a ConfigMap during `doSync()`.
+
+**Runtime**: `obol openclaw skills add/remove/list` runs the native openclaw CLI inside the pod via `kubectl exec -c openclaw`. Skills are persisted on the pod's PVC.
+
+### Default Skills (MVP)
+
+| Skill | Purpose |
+|-------|---------|
+| `hello` | Smoke test — confirms skills are loaded |
+| `ethereum` | Ethereum JSON-RPC queries via the eRPC gateway (`/rpc/<network>`) |
+
+### Skill Delivery Flow
+
+```
+Onboard / Sync:
+  1. stageDefaultSkills(deploymentDir)
+     → writes embedded skills to $CONFIG_DIR/applications/openclaw/<id>/skills/
+     → skips if skills/ directory already exists
+
+  2. doSync() → helmfile sync (creates namespace, chart, pod)
+
+  3. syncStagedSkills(cfg, id, deploymentDir)
+     → calls SkillsSync() which packages skills/ into ConfigMap openclaw-<id>-skills
+     → chart mounts ConfigMap into pod, extract-skills init container unpacks it
+```
+
+### Instance Resolution
+
+All `obol openclaw` subcommands (except `onboard` and `list`) use `ResolveInstance()`:
+- **0 instances**: error prompting `obol agent init`
+- **1 instance**: auto-selected, no ID required
+- **2+ instances**: first CLI arg must match an instance name
+
+### CLI Commands
+
+```bash
+obol openclaw skills list              # list installed skills (auto-resolves instance)
+obol openclaw skills add <package>     # add via openclaw CLI in pod
+obol openclaw skills remove <name>     # remove via openclaw CLI in pod
+obol openclaw skills sync --from <dir> # push local dir as ConfigMap (legacy)
+```
+
+### Key Source Files
+
+| File | Role |
+|------|------|
+| `internal/embed/skills/` | Embedded default SKILL.md files |
+| `internal/embed/embed.go` | `CopySkills()`, `GetEmbeddedSkillNames()` |
+| `internal/openclaw/resolve.go` | `ResolveInstance()`, `ListInstanceIDs()` |
+| `internal/openclaw/openclaw.go` | `stageDefaultSkills()`, `syncStagedSkills()`, `SkillAdd/Remove/List()` |
+| `cmd/obol/openclaw.go` | CLI wiring for `obol openclaw skills` subcommands |
+
 ## Network Install Implementation Details
 
 ### Template Field Parser
@@ -1011,11 +1081,18 @@ obol network delete ethereum-<generated-name> --force
   - `aztec/helmfile.yaml.gotmpl`
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
+- `internal/embed/skills/` - Default OpenClaw skills (hello, ethereum) embedded in obol binary
+
+**Skills system**:
+- `internal/openclaw/resolve.go` - Smart instance resolution (0/1/2+ instances)
+- `internal/embed/skills/hello/SKILL.md` - Hello world smoke-test skill
+- `internal/embed/skills/ethereum/SKILL.md` - Ethereum JSON-RPC via eRPC skill
 
 **Testing**:
 - `internal/openclaw/integration_test.go` - Full-cluster integration tests (Ollama, Anthropic, OpenAI inference through llmspy)
 - `internal/openclaw/overlay_test.go` - Unit tests for overlay generation
 - `internal/openclaw/import_test.go` - Unit tests for config import/translation
+- `internal/openclaw/resolve_test.go` - Unit tests for instance resolution
 - `internal/stack/stack_test.go` - Stack lifecycle tests
 - `internal/tunnel/tunnel_test.go` - Tunnel configuration tests
 - `internal/dns/resolver_test.go` - DNS resolver tests
