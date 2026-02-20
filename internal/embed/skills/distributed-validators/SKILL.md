@@ -104,26 +104,41 @@ Networks: `mainnet`, `hoodi`, `holesky`, `sepolia`
 ```bash
 # 1. Get cluster info
 curl -s "https://api.obol.tech/v1/lock/0x..." | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-print(f'Cluster: {d.get(\"name\",\"?\")} | {d.get(\"threshold\",\"?\")}-of-{len(d.get(\"operators\",[]))} | {d.get(\"network\",\"?\")}')"
+import sys, json
+d = json.load(sys.stdin)
+if 'error' in d or 'name' not in d:
+    print('Error or cluster not found:', json.dumps(d, indent=2))
+else:
+    ops = d.get('operators', [])
+    print(f'Cluster: {d.get(\"name\",\"?\")} | {d.get(\"threshold\",\"?\")}-of-{len(ops)} | {d.get(\"network\",\"?\")}')
+"
 
 # 2. Check validator effectiveness
 curl -s "https://api.obol.tech/v1/effectiveness/0x..." | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-for v in d.get('effectiveness',[]):
-    eff = v.get('effectiveness',0)
+import sys, json
+d = json.load(sys.stdin)
+for v in d.get('effectiveness', []):
+    eff = v.get('effectiveness', 0)
     status = 'healthy' if eff > 0.95 else 'degraded' if eff > 0.8 else 'CRITICAL'
-    print(f'{v.get(\"public_key\",\"?\")[:16]}...  {eff:.3f}  [{status}]')"
+    print(f'{v.get(\"public_key\", \"?\")[:16]}...  {eff:.3f}  [{status}]')
+if not d.get('effectiveness'):
+    print('No effectiveness data found')
+"
 ```
 
 ### Check exit progress
 
 ```bash
 curl -s "https://api.obol.tech/v1/exp/exit/status/summary/0x..." | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-print(f'Ready to exit: {d.get(\"validators_ready_to_exit\",0)}/{d.get(\"total_validators\",0)}')
-for op in d.get('operators',[]):
-    print(f'  {op[\"address\"][:12]}...  signed: {op.get(\"signed_exits\",0)}')"
+import sys, json
+d = json.load(sys.stdin)
+if not isinstance(d, dict) or 'total_validators' not in d:
+    print('No exit data or cluster not found:', json.dumps(d, indent=2))
+else:
+    print(f'Ready to exit: {d.get(\"validators_ready_to_exit\", 0)}/{d.get(\"total_validators\", 0)}')
+    for op in d.get('operators', []):
+        print(f'  {op.get(\"address\", \"?\")[:12]}...  signed: {op.get(\"signed_exits\", 0)}')
+"
 ```
 
 Exit broadcasts automatically once enough operators have signed (threshold reached).
@@ -133,5 +148,8 @@ Exit broadcasts automatically once enough operators have signed (threshold reach
 - **Read-only** — creating clusters, running DKG, and submitting exits require authenticated endpoints
 - Exit status endpoints (`/v1/exp/`) are experimental — pagination is 1-indexed
 - If timeouts occur, check `GET /v1/_health` first
+- **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
+- **Python stdlib only** — only the Python 3.11 standard library is available. No third-party packages
+- **Always check for null/missing data** — API responses may return errors or empty results. Always check before accessing nested fields
 
 See `references/api-examples.md` for response shapes and field reference.

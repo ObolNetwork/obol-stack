@@ -99,14 +99,26 @@ See `references/erc20-methods.md` for the full selector reference and `reference
 When the helper script doesn't cover a method:
 
 ```bash
-curl -s -X POST "$ERPC_URL/mainnet" \
+curl -s -X POST http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  | python3 -c "import sys,json; r=json.load(sys.stdin); print(int(r['result'],16) if 'result' in r else r)"
+  | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+if r.get('result') is not None:
+    print(int(r['result'], 16))
+elif 'error' in r:
+    print('Error:', r['error'].get('message', r['error']))
+else:
+    print(r)
+"
 ```
 
 ## Constraints
 
 - **Read-only** — no private keys, no signing, no state changes
-- **Local routing** — always use eRPC (`$ERPC_URL`), never call external providers
+- **Local routing** — always route through eRPC at `http://erpc.erpc.svc.cluster.local:4000/rpc/`, never call external RPC providers
 - **Hex encoding** — JSON-RPC uses hex; the helper script auto-converts common cases
+- **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `${var:offset}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
+- **Python stdlib only** — only the Python 3.11 standard library is available. Do not import `web3`, `eth_abi`, `rlp`, `pysha3`, or any third-party package
+- **Always check for null results** — RPC methods like `eth_getTransactionByHash` return `null` for unknown hashes. Always check `if result is not None` before accessing fields
