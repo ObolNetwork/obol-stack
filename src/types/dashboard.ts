@@ -109,7 +109,7 @@ export interface AppData {
   participation: number;
   clients: ClientInfo[]; // Array of clients for this chain
   distance: number; // Distance to justified
-  upstreamCount?: number; // eRPC: number of configured upstream providers
+  erpcStatus?: ErpcStatusData; // eRPC: network status from GET /
 }
 
 export interface DashboardData {
@@ -141,6 +141,16 @@ export interface DashboardData {
     prometheus: { port: number; status: PortStatusType };
     beaconApi: { port: number; status: PortStatusType };
   };
+}
+
+export interface ErpcNetwork {
+  id: string; // "evm:1", "evm:560048", etc.
+  alias: string; // "mainnet", "hoodi", "sepolia"
+  state: string; // "OK" | error string
+}
+
+export interface ErpcStatusData {
+  networks: ErpcNetwork[];
 }
 
 export interface MetricCardProps {

@@ -2,6 +2,8 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
+import type { ErpcStatusData } from '@/types/dashboard';
+
 export type ClientType =
   | 'execution'
   | 'consensus'
@@ -62,6 +64,32 @@ export interface AztecClientMetrics {
 
 export class ClientMetricsService {
   constructor() {}
+
+  /**
+   * Fetch the full eRPC status from GET / on the eRPC server.
+   * baseUrl should be the origin of the eRPC service (e.g. http://erpc.erpc.svc.cluster.local:4000)
+   */
+  async getErpcStatus(baseUrl: string): Promise<ErpcStatusData> {
+    try {
+      const origin = new URL(baseUrl).origin;
+      const resp = await fetch(`${origin}/`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await resp.json();
+
+      const networks: ErpcStatusData['networks'] = (data?.rpc ?? []).map(
+        (n: { id: string; alias: string; state: string }) => ({
+          id: n.id,
+          alias: n.alias,
+          state: n.state,
+        })
+      );
+
+      return { networks };
+    } catch {
+      return { networks: [] };
+    }
+  }
 
   /**
    * Unified method to fetch client metrics
