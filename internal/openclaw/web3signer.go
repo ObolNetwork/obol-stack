@@ -18,7 +18,7 @@ import (
 
 const (
 	web3signerChartVersion = "1.0.6"
-	web3signerImageTag     = "24.12.1"
+	web3signerImageTag     = "25.12.0"
 	web3signerReleaseName  = "web3signer"
 	web3signerPort         = 9000
 )
@@ -40,8 +40,8 @@ func GenerateSigningKey() (*Web3SignerKey, error) {
 		return nil, fmt.Errorf("failed to generate secp256k1 key: %w", err)
 	}
 
-	privBytes := privKey.Serialize()                       // 32 bytes
-	pubBytes := privKey.PubKey().SerializeUncompressed()    // 65 bytes: 04 || x || y
+	privBytes := privKey.Serialize()                     // 32 bytes
+	pubBytes := privKey.PubKey().SerializeUncompressed() // 65 bytes: 04 || x || y
 
 	// Ethereum address: keccak256(pubkey_without_prefix)[12:]
 	hash := sha3.NewLegacyKeccak256()
@@ -328,8 +328,9 @@ persistence:
   accessModes:
     - ReadWriteOnce
 
-# PostgreSQL is not needed for ETH1 file-based keys.
-postgresql:
+# Slashing protection DB (PostgreSQL) is not needed for ETH1 file-based keys.
+# The chart's dependency condition is 'slashingprotectiondb.enabled'.
+slashingprotectiondb:
   enabled: false
 
 # ClusterIP only — no external exposure.

@@ -156,9 +156,9 @@ func TestGenerateWeb3SignerValues(t *testing.T) {
 		t.Error("values should set key-store-path to /data")
 	}
 
-	// Should disable PostgreSQL
-	if !strings.Contains(values, "postgresql:") || !strings.Contains(values, "enabled: false") {
-		t.Error("values should disable PostgreSQL")
+	// Should disable slashing protection DB (PostgreSQL)
+	if !strings.Contains(values, "slashingprotectiondb:") || !strings.Contains(values, "enabled: false") {
+		t.Error("values should disable slashingprotectiondb (PostgreSQL)")
 	}
 
 	// Should use ClusterIP service
