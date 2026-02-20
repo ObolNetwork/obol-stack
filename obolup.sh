@@ -15,11 +15,11 @@ NC='\033[0m' # No Color
 # Development mode detection
 if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 	# Get script directory for development mode
-	# Use parameter expansion with default to handle curl | bash case
-	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+	# Use -f to check for a real file, not /dev/fd/* from process substitution
+	if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
 		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	else
-		# Fallback to current directory if BASH_SOURCE not available
+		# Fallback to current directory for curl | bash or bash <(...) cases
 		SCRIPT_DIR="$(pwd)"
 	fi
 	WORKSPACE_DIR="$SCRIPT_DIR/.workspace"
