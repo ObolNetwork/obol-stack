@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -224,6 +225,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
 	}
 
+	// Stage default skills to deployment directory (immediate, no cluster needed)
+	fmt.Println("\nStaging default skills...")
+	stageDefaultSkills(deploymentDir)
+
 	if opts.Sync {
 		fmt.Printf("\nDeploying to cluster...\n\n")
 		if err := doSync(cfg, id); err != nil {
@@ -287,6 +292,11 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Stage default skills if not yet present (self-healing for pre-existing instances)
+	stageDefaultSkills(deploymentDir)
+	// Push staged skills to cluster as ConfigMap
+	syncStagedSkills(cfg, id, deploymentDir)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -426,6 +436,65 @@ func copyWorkspaceToPod(cfg *config.Config, id, workspaceDir string) {
 	}
 
 	fmt.Printf("Imported workspace into pod %s\n", podName)
+}
+
+// stageDefaultSkills writes embedded Obol skills to the deployment's config
+// directory on the host filesystem. These are pushed to the cluster as a
+// ConfigMap during doSync — no pod readiness required.
+func stageDefaultSkills(deploymentDir string) {
+	skillsDir := filepath.Join(deploymentDir, "skills")
+
+	// Don't overwrite if skills directory already exists (user may have customised)
+	if _, err := os.Stat(skillsDir); err == nil {
+		return
+	}
+
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create skills directory: %v\n", err)
+		return
+	}
+
+	if err := obolembed.CopySkills(skillsDir); err != nil {
+		fmt.Printf("Warning: could not stage default skills: %v\n", err)
+		return
+	}
+
+	names, _ := obolembed.GetEmbeddedSkillNames()
+	for _, name := range names {
+		fmt.Printf("  ✓ Staged skill: %s\n", name)
+	}
+}
+
+// syncStagedSkills pushes the skills directory (if present) to the cluster
+// as a ConfigMap via the existing SkillsSync mechanism. Called after helmfile
+// sync so the namespace already exists.
+func syncStagedSkills(cfg *config.Config, id, deploymentDir string) {
+	skillsDir := filepath.Join(deploymentDir, "skills")
+	info, err := os.Stat(skillsDir)
+	if err != nil || !info.IsDir() {
+		return
+	}
+
+	// Check if there are actual skill subdirectories (not just empty dir)
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return
+	}
+	hasSkills := false
+	for _, e := range entries {
+		if e.IsDir() {
+			hasSkills = true
+			break
+		}
+	}
+	if !hasSkills {
+		return
+	}
+
+	fmt.Println("Pushing skills to cluster...")
+	if err := SkillsSync(cfg, id, skillsDir); err != nil {
+		fmt.Printf("Warning: could not push skills to cluster: %v\n", err)
+	}
 }
 
 // waitForPod polls for a Running pod matching the openclaw label and returns its name.
@@ -932,8 +1001,28 @@ func SkillsSync(cfg *config.Config, id, skillsDir string) error {
 	}
 
 	fmt.Printf("✓ Skills ConfigMap updated: %s\n", configMapName)
-	fmt.Printf("\nTo apply, re-sync: obol openclaw sync %s\n", id)
 	return nil
+}
+
+// SkillAdd adds a skill to a deployed OpenClaw instance by running the native
+// openclaw CLI inside the pod via kubectl exec.
+func SkillAdd(cfg *config.Config, id string, args []string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "add"}, args...))
+}
+
+// SkillRemove removes a skill from a deployed OpenClaw instance by running the
+// native openclaw CLI inside the pod via kubectl exec.
+func SkillRemove(cfg *config.Config, id string, args []string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "remove"}, args...))
+}
+
+// SkillList lists skills installed on a deployed OpenClaw instance by running
+// the native openclaw CLI inside the pod via kubectl exec.
+func SkillList(cfg *config.Config, id string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, []string{"skills", "list"})
 }
 
 // remoteCapableCommands lists openclaw subcommands that support --url and --token flags.
@@ -1027,10 +1116,12 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
-	// Build: kubectl exec -it -n <ns> deploy/openclaw -- node openclaw.mjs <args>
+	// Build: kubectl exec -it -c openclaw -n <ns> deploy/openclaw -- node openclaw.mjs <args>
 	// The pod runs `node openclaw.mjs` (no standalone binary in PATH).
+	// -c openclaw is required because the pod has an init container (extract-skills).
 	execArgs := []string{
 		"exec", "-it",
+		"-c", "openclaw",
 		"-n", namespace,
 		"deploy/openclaw",
 		"--",
