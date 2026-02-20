@@ -133,6 +133,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
 				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 			}
+
+			// Provision web3signer key + values if not already present.
+			ensureWeb3Signer(cfg, id, deploymentDir)
+
 			if opts.Sync {
 				if err := doSync(cfg, id); err != nil {
 					return err
@@ -206,11 +210,34 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
-	// Generate helmfile.yaml referencing obol/openclaw from the published Helm repo
+	// Generate helmfile.yaml referencing obol/openclaw + web3signer
 	helmfileContent := generateHelmfile(id, namespace)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
+	}
+
+	// Generate Web3Signer signing key and provision to host-path PVC.
+	// The key is created before deployment so web3signer can load it on startup.
+	fmt.Println("\nGenerating Web3Signer signing key...")
+	signingKey, err := GenerateSigningKey()
+	if err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to generate signing key: %w", err)
+	}
+	keysDir := Web3SignerKeysPath(cfg, id)
+	keyLabel := fmt.Sprintf("obol-agent-%s", id)
+	if err := ProvisionKeyFiles(keysDir, signingKey, keyLabel); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to provision signing key: %w", err)
+	}
+	fmt.Printf("  Signing address: %s\n", signingKey.Address)
+
+	// Write Web3Signer Helm values
+	web3signerValues := generateWeb3SignerValues(id)
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-web3signer.yaml"), []byte(web3signerValues), 0644); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write web3signer values: %w", err)
 	}
 
 	fmt.Printf("\n✓ OpenClaw instance configured!\n")
@@ -218,9 +245,11 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("  Namespace:  %s\n", namespace)
 	fmt.Printf("  Hostname:   %s\n", hostname)
 	fmt.Printf("  Location:   %s\n", deploymentDir)
+	fmt.Printf("  Signing:    %s\n", signingKey.Address)
 	fmt.Printf("\nFiles created:\n")
-	fmt.Printf("  - values-obol.yaml  Obol Stack overlay (httpRoute, providers, eRPC)\n")
-	fmt.Printf("  - helmfile.yaml     Deployment configuration (chart: obol/openclaw v%s)\n", chartVersion)
+	fmt.Printf("  - values-obol.yaml        Obol Stack overlay (httpRoute, providers, eRPC)\n")
+	fmt.Printf("  - values-web3signer.yaml   Web3Signer configuration (ETH1 signing)\n")
+	fmt.Printf("  - helmfile.yaml            Deployment configuration (openclaw v%s + web3signer v%s)\n", chartVersion, web3signerChartVersion)
 	if len(secretData) > 0 {
 		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
 	}
@@ -300,6 +329,10 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Apply web3signer-metadata ConfigMap (namespace now exists after helmfile sync).
+	// Read the signing key address from the provisioned key files.
+	applyWeb3SignerMetadata(cfg, id)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -1714,7 +1747,8 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 	return secretData
 }
 
-// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.
+// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart
+// and a co-located Web3Signer instance for Ethereum transaction signing.
 func generateHelmfile(id, namespace string) string {
 	return fmt.Sprintf(`# OpenClaw instance: %s
 # Managed by obol openclaw
@@ -1722,6 +1756,8 @@ func generateHelmfile(id, namespace string) string {
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/
+  - name: ethereum
+    url: https://ethpandaops.github.io/ethereum-helm-charts
 
 releases:
   - name: openclaw
@@ -1731,5 +1767,12 @@ releases:
     version: %s
     values:
       - values-obol.yaml
-`, id, namespace, chartVersion)
+
+  - name: web3signer
+    namespace: %s
+    chart: ethereum/web3signer
+    version: %s
+    values:
+      - values-web3signer.yaml
+`, id, namespace, chartVersion, namespace, web3signerChartVersion)
 }

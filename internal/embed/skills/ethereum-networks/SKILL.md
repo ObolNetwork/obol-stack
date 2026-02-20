@@ -18,7 +18,7 @@ Query Ethereum blockchain data through the local eRPC gateway. Supports any JSON
 
 ## When NOT to Use
 
-- Sending transactions or signing (read-only, no private keys)
+- Sending transactions, signing, or deploying contracts — use `ethereum-wallet`
 - Validator monitoring — use `distributed-validators`
 - Kubernetes pod diagnostics — use `obol-stack`
 
