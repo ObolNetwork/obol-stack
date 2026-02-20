@@ -120,9 +120,7 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
 
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
             <CardAppType>
-              {appData.app === 'erpc'
-                ? 'eRPC'
-                : appData.app.charAt(0).toUpperCase() + appData.app.slice(1)}
+              {appData.app.charAt(0).toUpperCase() + appData.app.slice(1)}
             </CardAppType>
             <CardAppId>{appData.appId}</CardAppId>
           </Flex>
@@ -152,12 +150,6 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
             <MetricValue>{appData.finalized.toLocaleString()}</MetricValue>
           </MetricItem>
         )}
-        {appData.nodeMode === 'erpcProxy' && (
-          <MetricItem>
-            <MetricLabel>UPSTREAMS</MetricLabel>
-            <MetricValue>{appData.upstreamCount ?? 0}</MetricValue>
-          </MetricItem>
-        )}
         <MetricItem>
           <MetricLabel>NODE MODE</MetricLabel>
           <MetricValue css={{ fontFamily: 'inherit' }}>
@@ -167,9 +159,7 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
                 ? 'Light Node'
                 : appData.nodeMode === 'aztecSequencer'
                   ? 'Sequencer'
-                  : appData.nodeMode === 'erpcProxy'
-                    ? 'RPC Proxy'
-                    : 'Unknown'}
+                  : 'Unknown'}
           </MetricValue>
         </MetricItem>
         {appData.nodeMode === 'fullMode' && (

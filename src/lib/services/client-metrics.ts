@@ -2,6 +2,12 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
+import type {
+  ErpcStatusData,
+  ErpcUpstream,
+  ErpcUpstreamMetrics,
+} from '@/types/dashboard';
+
 export type ClientType =
   | 'execution'
   | 'consensus'
@@ -62,6 +68,49 @@ export interface AztecClientMetrics {
 
 export class ClientMetricsService {
   constructor() {}
+
+  /**
+   * Fetch the full eRPC status from GET / on the eRPC server.
+   * baseUrl should be the origin of the eRPC service (e.g. http://erpc.erpc.svc.cluster.local:4000)
+   */
+  async getErpcStatus(baseUrl: string): Promise<ErpcStatusData> {
+    try {
+      const origin = new URL(baseUrl).origin;
+      const resp = await fetch(`${origin}/`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await resp.json();
+
+      const rawUpstreams: Record<
+        string,
+        { network: string; metrics: ErpcUpstreamMetrics }
+      > = data?.details?.rpc?.upstreams || {};
+
+      const upstreams: ErpcUpstream[] = Object.entries(rawUpstreams).map(
+        ([id, upstream]) => ({
+          id,
+          network: upstream.network || '',
+          metrics: upstream.metrics,
+        })
+      );
+
+      return {
+        status: data?.status || 'error',
+        message: data?.message || '',
+        networkCount: data?.details?.rpc?.config?.networks || 0,
+        upstreamCount: data?.details?.rpc?.config?.upstreams || 0,
+        upstreams,
+      };
+    } catch {
+      return {
+        status: 'error',
+        message: 'Failed to reach eRPC',
+        networkCount: 0,
+        upstreamCount: 0,
+        upstreams: [],
+      };
+    }
+  }
 
   /**
    * Unified method to fetch client metrics

@@ -6,7 +6,6 @@ import {
   ClientMetricsService,
   ClientType,
   ConsensusClientMetrics,
-  ErpcClientMetrics,
   ExecutionClientMetrics,
   HeliosClientMetrics,
 } from '@/lib/services/client-metrics';
@@ -125,15 +124,38 @@ export async function GET() {
         blockHeight = executionClient.blockNumber || 0;
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
+      } else if (instance.app === 'erpc') {
+        const erpcStatus = await clientMetrics.getErpcStatus(
+          config.erpcBaseUrl
+        );
+
+        apps.push({
+          chainName: instance.network,
+          app: instance.app,
+          appId: instance.id,
+          nodeMode,
+          status:
+            erpcStatus.status === 'OK'
+              ? CLIENT_STATUS.SYNCED
+              : CLIENT_STATUS.ERROR,
+          blocks: 0,
+          finalized: 0,
+          participation: 0,
+          clients: [],
+          distance: 0,
+          upstreamCount: erpcStatus.upstreamCount,
+          erpcStatus,
+        });
+        continue;
       } else {
-        const appType = instance.app; // 'helios' | 'aztec' | 'erpc'
+        const appType = instance.app; // 'helios' | 'aztec'
         const appUrl = config.isInCluster
           ? instance.endpoints.rpc.internal
           : instance.endpoints.rpc.external;
         const result = (await clientMetrics.getMetrics(
           appType as ClientType,
           appUrl
-        )) as HeliosClientMetrics | AztecClientMetrics | ErpcClientMetrics;
+        )) as HeliosClientMetrics | AztecClientMetrics;
         clients.push({
           name: appType as ClientNameType,
           version: parseVersion(result.version),
@@ -150,8 +172,6 @@ export async function GET() {
           ('finalizedEpoch' in result ? result.finalizedEpoch : 0) || 0;
         participation =
           ('participation' in result ? result.participation : 0) || 0;
-        const upstreamCount =
-          'upstreamCount' in result ? result.upstreamCount : undefined;
 
         apps.push({
           chainName: instance.network,
@@ -164,7 +184,6 @@ export async function GET() {
           participation,
           clients,
           distance: 0,
-          upstreamCount,
         });
         continue;
       }
