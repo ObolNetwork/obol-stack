@@ -492,6 +492,46 @@ func TestIntegration_OpenAIInference(t *testing.T) {
 	t.Logf("OpenAI response: %s", reply)
 }
 
+func TestIntegration_ZaiInference(t *testing.T) {
+	cfg := requireCluster(t)
+	apiKey := requireEnvKey(t, "ZHIPU_API_KEY")
+
+	const id = "test-zai"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	// Configure llmspy gateway via obol model setup — this provider was NOT in
+	// the old hardcoded map, so it only works with dynamic provider discovery.
+	t.Log("configuring llmspy via: obol model setup --provider zai")
+	obolRun(t, cfg, "model", "setup", "--provider", "zai", "--api-key", apiKey)
+
+	cloud := &CloudProviderInfo{
+		Name:    "zai",
+		APIKey:  apiKey,
+		ModelID: "glm-4-flash",
+		Display: "GLM-4 Flash",
+	}
+
+	// Scaffold cloud overlay + deploy via obol openclaw sync
+	t.Logf("scaffolding OpenClaw instance %q with Z.AI via llmspy", id)
+	scaffoldCloudInstance(t, cfg, id, cloud)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	token := getGatewayToken(t, cfg, id)
+	t.Logf("retrieved gateway token (%d chars)", len(token))
+
+	baseURL := portForward(t, cfg, namespace)
+	agentModel := "ollama/glm-4-flash" // routed through llmspy
+	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
+
+	reply := chatCompletion(t, baseURL, agentModel, token)
+	t.Logf("Z.AI response: %s", reply)
+}
+
 func TestIntegration_MultiInstance(t *testing.T) {
 	cfg := requireCluster(t)
 	models := requireOllama(t)
