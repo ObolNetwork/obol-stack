@@ -196,7 +196,7 @@ releases:
     namespace: obol-frontend
     createNamespace: true
     chart: obol/obol-app
-    version: 0.1.6
+    version: 0.1.1
     needs:
       - traefik/traefik
       - erpc/erpc
