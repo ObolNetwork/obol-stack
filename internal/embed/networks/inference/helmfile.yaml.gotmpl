@@ -15,6 +15,9 @@ releases:
         walletAddress: '{{ .Values.walletAddress }}'
         chain: '{{ .Values.chain }}'
         gatewayPort: '{{ .Values.gatewayPort }}'
+        teeRuntime: '{{ .Values.teeRuntime }}'
+        teeType: '{{ .Values.teeType }}'
+        teeModelHash: '{{ .Values.teeModelHash }}'
 
   # Metadata ConfigMap for frontend discovery
   - name: inference-metadata
@@ -45,5 +48,10 @@ releases:
                       "external": "http://obol.stack/inference-{{ .Values.id }}/v1",
                       "internal": "http://inference-gateway.inference-{{ .Values.id }}.svc.cluster.local:{{ .Values.gatewayPort }}"
                     }
+                  },
+                  "tee": {
+                    "runtime": "{{ .Values.teeRuntime }}",
+                    "type": "{{ .Values.teeType }}",
+                    "modelHash": "{{ .Values.teeModelHash }}"
                   }
                 }

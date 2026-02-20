@@ -21,3 +21,17 @@ chain: {{.Chain}}
 # @default 8402
 # @description Port for the x402 inference gateway
 gatewayPort: {{.GatewayPort}}
+
+# @enum none,kata-qemu-coco-dev,kata-qemu-snp,kata-qemu-tdx
+# @default none
+# @description CoCo runtime class for TEE pod isolation (requires CoCo operator)
+teeRuntime: {{.TeeRuntime}}
+
+# @enum stub,snp,tdx,nitro,none
+# @default none
+# @description TEE backend for attestation (none disables TEE features)
+teeType: {{.TeeType}}
+
+# @default ""
+# @description SHA-256 hash of model weights bound into TEE attestation
+teeModelHash: {{.TeeModelHash}}

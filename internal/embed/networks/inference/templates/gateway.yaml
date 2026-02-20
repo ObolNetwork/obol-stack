@@ -21,6 +21,9 @@ spec:
       labels:
         app: ollama
     spec:
+      {{- if and .Values.teeRuntime (ne .Values.teeRuntime "none") }}
+      runtimeClassName: {{ .Values.teeRuntime }}
+      {{- end }}
       containers:
         - name: ollama
           image: ollama/ollama:latest
@@ -113,6 +116,9 @@ spec:
       labels:
         app: inference-gateway
     spec:
+      {{- if and .Values.teeRuntime (ne .Values.teeRuntime "none") }}
+      runtimeClassName: {{ .Values.teeRuntime }}
+      {{- end }}
       containers:
         - name: gateway
           image: ghcr.io/obolnetwork/inference-gateway:latest
@@ -127,6 +133,21 @@ spec:
             - --wallet={{ .Values.walletAddress }}
             - --price={{ .Values.pricePerRequest }}
             - --chain={{ .Values.chain }}
+            {{- if and .Values.teeType (ne .Values.teeType "none") }}
+            - --tee={{ .Values.teeType }}
+            {{- end }}
+            {{- if .Values.teeModelHash }}
+            - --model-hash={{ .Values.teeModelHash }}
+            {{- end }}
+          env:
+            {{- if and .Values.teeType (ne .Values.teeType "none") }}
+            - name: OBOL_TEE_TYPE
+              value: "{{ .Values.teeType }}"
+            {{- end }}
+            {{- if .Values.teeModelHash }}
+            - name: OBOL_MODEL_HASH
+              value: "{{ .Values.teeModelHash }}"
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
