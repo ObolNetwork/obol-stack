@@ -1,0 +1,937 @@
+
+    ✻
+    |
+   ▟█▙     Claude Code v2.1.49
+ ▐▛███▜▌   Opus 4.6 · Claude Max
+▝▜█████▛▘  ~/Development/obol-stack
+  ▘▘ ▝▝  
+
+ Large CLAUDE.md will impact performance (41.0k chars > 40.0k) • /memory to edit
+
+
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿  Read internal/tee/tee_test.go (429 lines)
+  ⎿  Referenced file go.sum
+  ⎿  Read go.mod (51 lines)
+  ⎿  Read internal/tee/attest_nitro.go (160 lines)
+  ⎿  Read internal/tee/attest_tdx.go (136 lines)
+
+● Continuing with Phase 2b Steps 8 and 9. Let me read the existing inference
+  templates to understand the current pattern before making changes.
+
+● Read 4 files (ctrl+o to expand)
+
+● Now let me read the key TEE files and the existing gateway code to understand
+  how TEE flags are currently wired.
+
+● Read 4 files (ctrl+o to expand)
+
+● Now let me check the inference CLI and gateway code to understand how TEE is
+  currently wired.
+
+● Read 2 files (ctrl+o to expand)
+
+● Now let me also check what the SNP backend looks like and the gateway test
+  file.
+
+● Read 2 files (ctrl+o to expand)
+
+● Good, I have a complete picture of the codebase. Now let me implement Steps 8
+  and 9.
+
+● Starting with Step 8. First, I'll update the inference pod template to support
+   CoCo runtime classes.
+
+● Update(internal/embed/networks/inference/values.yaml.gotmpl)
+  ⎿  Added 14 lines
+      21  # @default 8402
+      22  # @description Port for the x402 inference gateway
+      23  gatewayPort: {{.GatewayPort}}
+      24 +                                                               
+      25 +# @enum none,kata-qemu-coco-dev,kata-qemu-snp,kata-qemu-tdx    
+      26 +# @default none                                                
+      27 +# @description CoCo runtime class for TEE pod isolation (requir
+         +es CoCo operator)                                              
+      28 +teeRuntime: {{.TeeRuntime}}                                    
+      29 +                                                               
+      30 +# @enum stub,snp,tdx,nitro,none                                
+      31 +# @default none                                                
+      32 +# @description TEE backend for attestation (none disables TEE f
+         +eatures)                                                       
+      33 +teeType: {{.TeeType}}                                          
+      34 +                                                               
+      35 +# @default ""                                                  
+      36 +# @description SHA-256 hash of model weights bound into TEE att
+         +estation                                                       
+      37 +teeModelHash: {{.TeeModelHash}}                                
+
+● Now update the helmfile to pass the new values through.
+
+● Update(internal/embed/networks/inference/helmfile.yaml.gotmpl)
+  ⎿  Added 3 lines
+      15          walletAddress: '{{ .Values.walletAddress }}'
+      16          chain: '{{ .Values.chain }}'
+      17          gatewayPort: '{{ .Values.gatewayPort }}'
+      18 +        teeRuntime: '{{ .Values.teeRuntime }}'                 
+      19 +        teeType: '{{ .Values.teeType }}'                       
+      20 +        teeModelHash: '{{ .Values.teeModelHash }}'             
+      21  
+      22    # Metadata ConfigMap for frontend discovery
+      23    - name: inference-metadata
+
+● Now update the gateway.yaml template to add conditional runtimeClassName and
+  TEE environment variables.
+
+● Update(internal/embed/networks/inference/templates/gateway.yaml)
+  ⎿  Added 3 lines
+      21        labels:
+      22          app: ollama
+      23      spec:
+      24 +      {{- if and .Values.teeRuntime (ne .Values.teeRuntime "non
+         +e") }}                                                         
+      25 +      runtimeClassName: {{ .Values.teeRuntime }}               
+      26 +      {{- end }}                                               
+      27        containers:
+      28          - name: ollama
+      29            image: ollama/ollama:latest
+
+● Update(internal/embed/networks/inference/templates/gateway.yaml)
+  ⎿  Added 18 lines
+      116        labels:
+      117          app: inference-gateway
+      118      spec:
+      119 +      {{- if and .Values.teeRuntime (ne .Values.teeRuntime "no
+          +ne") }}                                                       
+      120 +      runtimeClassName: {{ .Values.teeRuntime }}              
+      121 +      {{- end }}                                              
+      122        containers:
+      123          - name: gateway
+      124            image: ghcr.io/obolnetwork/inference-gateway:latest
+     ...
+      133              - --wallet={{ .Values.walletAddress }}
+      134              - --price={{ .Values.pricePerRequest }}
+      135              - --chain={{ .Values.chain }}
+      136 +            {{- if and .Values.teeType (ne .Values.teeType "no
+          +ne") }}                                                       
+      137 +            - --tee={{ .Values.teeType }}                     
+      138 +            {{- end }}                                        
+      139 +            {{- if .Values.teeModelHash }}                    
+      140 +            - --model-hash={{ .Values.teeModelHash }}         
+      141 +            {{- end }}                                        
+      142 +          env:                                                
+      143 +            {{- if and .Values.teeType (ne .Values.teeType "no
+          +ne") }}                                                       
+      144 +            - name: OBOL_TEE_TYPE                             
+      145 +              value: "{{ .Values.teeType }}"                  
+      146 +            {{- end }}                                        
+      147 +            {{- if .Values.teeModelHash }}                    
+      148 +            - name: OBOL_MODEL_HASH                           
+      149 +              value: "{{ .Values.teeModelHash }}"             
+      150 +            {{- end }}                                        
+      151            readinessProbe:
+      152              httpGet:
+      153                path: /health
+
+● Now let me also add metadata about the TEE config to the ConfigMap so the
+  frontend can discover it.
+
+● Update(internal/embed/networks/inference/helmfile.yaml.gotmpl)
+  ⎿  Added 5 lines
+      48                        "external": "http://obol.stack/inference-
+          {{ .Values.id }}/v1",
+      49                        "internal": "http://inference-gateway.inf
+          erence-{{ .Values.id }}.svc.cluster.local:{{ .Values.gatewayPor
+          t }}"
+      50                      }
+      51 +                  },                                           
+      52 +                  "tee": {                                     
+      53 +                    "runtime": "{{ .Values.teeRuntime }}",     
+      54 +                    "type": "{{ .Values.teeType }}",           
+      55 +                    "modelHash": "{{ .Values.teeModelHash }}"  
+      56                    }
+      57                  }
+
+● Now let me create the CoCo install/status helper.
+
+● Write(internal/tee/coco.go)
+  ⎿  Wrote 254 lines to internal/tee/coco.go
+       1 package tee
+       2 
+       3 import (
+       4        "context"
+       5        "encoding/json"
+       6        "fmt"
+       7        "os/exec"
+       8        "strings"
+       9        "time"
+      10 )
+     … +244 lines (ctrl+o to expand)
+
+● Now let's implement Step 9 — the integration tests. I'll create two files: one
+   for unit tests of the CoCo helper and one for integration tests requiring a
+  real cluster.
+
+● Write(internal/tee/coco_test.go)
+  ⎿  Wrote 110 lines to internal/tee/coco_test.go
+       1 package tee
+       2 
+       3 import (
+       4        "testing"
+       5 )
+       6 
+       7 func TestParseCoCoRuntime(t *testing.T) {
+       8        tests := []struct {
+       9                input string
+      10                want  CoCoRuntimeClass
+     … +100 lines (ctrl+o to expand)
+
+● Now create the integration test file (gated by //go:build integration).
+
+● Write(internal/tee/coco_integration_test.go)
+  ⎿  Wrote 291 lines to internal/tee/coco_integration_test.go
+       1 //go:build integration
+       2 
+       3 // Package tee integration tests require a running k3s cluster w
+         ith the
+       4 // Confidential Containers (CoCo) operator installed. Run them w
+         ith:
+       5 //
+       6 //     go test -tags integration -v -count=1 ./internal/tee/ -run Tes
+         tIntegration
+       7 //
+       8 // Prerequisites:
+       9 //   - k3s cluster running (obol stack up)
+      10 //   - CoCo operator installed (helm install coco ...)
+     … +281 lines (ctrl+o to expand)
+
+● Now let's verify everything compiles and tests pass.
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go build
+       ./internal/tee/)
+  ⎿  (No output)
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -v -count=1 ./internal/tee/ 2>&1)
+  ⎿  === RUN   TestParseCoCoRuntime
+     --- PASS: TestParseCoCoRuntime (0.00s)
+     === RUN   TestValidCoCoRuntimes
+     … +29 lines (ctrl+o to expand)
+
+● All 27 tests pass (22 existing + 5 new CoCo tests). Now let's also run the
+  inference gateway tests to make sure nothing is broken.
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -v -count=1 ./internal/inference/ 2>&1)
+  ⎿  === RUN   TestGateway_Health
+     2026/02/20 14:01:57 INFO payment requirements enriched from facilitato
+     r count=1
+     … +58 lines (ctrl+o to expand)
+
+● All 20 inference tests pass too. Let me also verify the full binary builds
+  cleanly.
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go build
+       -o /dev/null ./cmd/obol/ 2>&1)
+  ⎿  (No output)
+
+● Everything compiles. Let me now verify the updated templates look correct.
+
+● Read 1 file (ctrl+o to expand)
+
+● Templates look good. Let me also run the full test suite one more time to
+  confirm everything is green.
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -count=1 ./internal/tee/ ./internal/inference/ 2>&1)
+  ⎿  ok         github.com/ObolNetwork/obol-stack/internal/tee  0.009s
+     ok         github.com/ObolNetwork/obol-stack/internal/inference    0.030s
+
+● All tests pass. Let me verify the git status to see all the changes.
+
+● Bash(git status && echo "---" && git diff --stat)
+  ⎿  On branch feat/secure-enclave-inference
+     Your branch is ahead of 'silvermini/feat/secure-enclave-inference' by
+     8 commits.
+     … +19 lines (ctrl+o to expand)
+
+● Here's a summary of everything implemented for Steps 8 and 9:
+
+  Step 8: CoCo Pod Spec + Bare-Metal k3s Support
+
+  Template changes (3 files modified):
+  - values.yaml.gotmpl — Added 3 new fields: teeRuntime (CoCo runtime class),
+  teeType (TEE backend), teeModelHash (model identity for attestation). All have
+   @enum/@default annotations so the CLI auto-generates flags.
+  - helmfile.yaml.gotmpl — Passes the 3 new TEE values through to the Helm
+  release, and adds a tee section to the metadata ConfigMap for frontend
+  discovery.
+  - gateway.yaml — Both Ollama and gateway Deployments now conditionally add
+  runtimeClassName: {{ .Values.teeRuntime }} when the runtime isn't "none". The
+  gateway container also gets --tee and --model-hash args plus
+  OBOL_TEE_TYPE/OBOL_MODEL_HASH env vars.
+
+  CoCo helper (1 new file):
+  - internal/tee/coco.go — Go functions for CoCo operator lifecycle:
+    - InstallCoCo() — Runs helm install with k3s-specific flags (--set 
+  kata-as-coco-runtime.k8sDistribution=k3s)
+    - UninstallCoCo() — Clean removal
+    - CheckCoCo() — Returns CoCoStatus (installed, version, runtime classes, KVM
+   availability)
+    - ParseCoCoRuntime() / ValidCoCoRuntimes() — Validation for runtime class
+  names
+
+  Step 9: Integration Tests for QEMU Dev Mode
+
+  Unit tests (1 new file):
+  - internal/tee/coco_test.go — 5 tests: ParseCoCoRuntime, ValidCoCoRuntimes,
+  InstallCoCo_DryRun, UninstallCoCo_DryRun, CheckKVM
+
+  Integration tests (1 new file, //go:build integration):
+  - internal/tee/coco_integration_test.go — 4 tests gated behind the integration
+   build tag:
+    - TestIntegration_CoCoOperatorInstalled — Verifies CoCo Helm release is
+  deployed
+    - TestIntegration_RuntimeClassExists — Checks kata-qemu-coco-dev
+  RuntimeClass exists
+    - TestIntegration_KVMAvailable — Verifies /dev/kvm is accessible
+    - TestIntegration_CoCoDevPod — Deploys busybox pod with CoCo dev runtime,
+  checks kernel version differs from host (proving QEMU VM isolation)
+    - TestIntegration_InferenceGatewayInCoCo — Deploys inference gateway in CoCo
+   pod, tests /health and /v1/attestation endpoints from inside the VM
+
+  Test results: 27 tee tests + 20 inference tests = 47 tests all passing.
+
+✻ Sautéed for 13m 18s
+
+❯ okay commit to rad 
+
+● Bash(git status && echo "---" && git diff --stat && echo "---" && git log
+      --oneline -5)
+  ⎿  On branch feat/secure-enclave-inference
+     Your branch is ahead of 'silvermini/feat/secure-enclave-inference' by
+     8 commits.
+     … +19 lines (ctrl+o to expand)
+
+● Bash(git add internal/embed/networks/inference/helmfile.yaml.gotmpl
+      internal/embed/networks/inference/templates/gateway.yaml
+      internal/embed/networks/inference/values…)
+  ⎿  [feat/secure-enclave-inference 2453b85] feat(tee): add CoCo pod spec +
+      QEMU dev integration tests (Phase 2b Steps 8-9)
+      6 files changed, 698 insertions(+)
+     … +3 lines (ctrl+o to expand)
+
+● Now push to rad.
+
+● Bash(git push rad feat/secure-enclave-inference 2>&1)
+  ⎿  ✓ Synced with 1 seed(s)
+     To rad://z4PX8nYx5ockvmopm7RWgJa1JE7JK/z6MkeX3mrnpYWLQmaKgRbh2xtKwSX1D
+     iRCGp4e4WPkL9HS34
+     … +2 lines (ctrl+o to expand)
+
+● Pushed to rad. Commit 2453b85 synced with 1 seed.
+
+❯ what's next? 
+
+● Let me check the Phase 2b plan status.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Here's where Phase 2b stands:
+
+  Step: 1
+  Description: internal/tee/ scaffold (stub + key + tee + verify)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 2
+  Description: Gateway wiring (TEEType/ModelHash, /v1/attestation)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 3
+  Description: CLI flags (--tee, --model-hash)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 4
+  Description: TDX backend (grounded with go-tdx-guest)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 5
+  Description: SNP backend (grounded with go-sev-guest)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 6
+  Description: Nitro backend (grounded with hf/nsm + nitrite)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 7
+  Description: verify.go (real library verification for all 3 TEE types)
+  Status: Done
+  ────────────────────────────────────────
+  Step: 8
+  Description: CoCo pod spec + bare-metal k3s install helper
+  Status: Done (just committed)
+  ────────────────────────────────────────
+  Step: 9
+  Description: Integration tests (QEMU dev mode)
+  Status: Done (just committed)
+  ────────────────────────────────────────
+  Step: 10
+  Description: ERC-8004 anchor hook (stub only; full impl Phase 3)
+  Status: TODO
+
+  Step 10 is the last one — a stub for the ERC-8004 Validation Registry anchor.
+  The plan says "half day" and it's just a skeleton: a function signature +
+  types that the gateway would call on first startup to anchor the attestation
+  on-chain. The real implementation lives in Phase 3.
+
+  Want to knock out Step 10 to finish Phase 2b?
+
+❯ Collable the plan as a flat report with references  
+
+● Let me gather the current state of all relevant files to build an accurate
+  report.
+
+● Bash(git log --oneline feat/secure-enclave-inference --not main | head -20)
+  ⎿  2453b85 feat(tee): add CoCo pod spec + QEMU dev integration tests (Pha
+     se 2b Steps 8-9)
+     00a76b1 feat(tee): ground TEE backends with real attestation libraries
+     … +18 lines (ctrl+o to expand)
+
+● Read 1 file (ctrl+o to expand)
+
+● Bash(go test -v -count=1 ./internal/tee/ ./internal/inference/ 2>&1 | grep -E
+      "^(=== RUN|--- |ok |FAIL)" )
+  ⎿  No matches found
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -v -count=1 ./internal/tee/ ./internal/inference/ 2>&1 | grep -E "^(===
+      RUN|--- |ok |FA…)
+  ⎿  Error: Exit code 127
+     /bin/bash: line 1: grep: command not found
+
+     /bin/bash: line 1: grep: command not found
+
+● Bash(git diff --stat main..feat/secure-enclave-inference -- internal/tee/
+      internal/embed/networks/inference/ internal/inference/gateway.go
+      internal/inference/gateway…)
+  ⎿  Error: Sibling tool call errored
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -v -count=1 ./internal/tee/ ./internal/inference/ 2>&1 | tail -60)
+  ⎿  Error: Exit code 127
+     /bin/bash: line 1: tail: command not found
+
+     /bin/bash: line 1: tail: command not found
+
+● Bash(export PATH="/snap/go/current/bin:/usr/lib/go-1.25/bin:$PATH" && go test
+      -v -count=1 ./internal/tee/ ./internal/inference/ 2>&1)
+  ⎿  === RUN   TestParseCoCoRuntime
+     --- PASS: TestParseCoCoRuntime (0.00s)
+     === RUN   TestValidCoCoRuntimes
+     … +89 lines (ctrl+o to expand)
+
+● Bash(git diff --stat main..feat/secure-enclave-inference -- internal/tee/
+      internal/embed/networks/inference/ internal/inference/gateway.go
+      internal/inference/gateway…)
+  ⎿   cmd/obol/inference.go                              | 743 ++++++++++++
+     ++++++---
+      go.mod                                             |  20 +-
+     … +17 lines (ctrl+o to expand)
+
+● Bash(git log --oneline --format="%h %s" feat/secure-enclave-inference --not
+      main -- internal/tee/ internal/inference/ cmd/obol/inference.go
+      internal/embed/networks/i…)
+  ⎿  2453b85 feat(tee): add CoCo pod spec + QEMU dev integration tests (Pha
+     se 2b Steps 8-9)
+     00a76b1 feat(tee): ground TEE backends with real attestation libraries
+     … +14 lines (ctrl+o to expand)
+
+● Now let me get the dependency versions for the report.
+
+● Bash(git log --oneline --format="%h %ai %s" 1fef7dd 00a76b1 2453b85)
+  ⎿  2453b85 2026-02-20 14:09:46 +0400 feat(tee): add CoCo pod spec + QEMU
+     dev integration tests (Phase 2b Steps 8-9)
+     00a76b1 2026-02-20 13:10:09 +0400 feat(tee): ground TEE backends with
+     … +330 lines (ctrl+o to expand)
+
+● Now I have everything. Here's the flat report:
+
+  ---
+  Phase 2b — Linux TEE Backend: Implementation Report
+
+  Branch: feat/secure-enclave-inference
+  Machine: SilverMesh (AMD Ryzen 9 5950X, no SNP/TDX hardware — stub ceiling)
+  Date: 2026-02-20
+  Tests: 47/47 passing (27 tee + 20 inference)
+  Total new/modified: 20 files, +3,836 lines
+
+  ---
+  Commits (Phase 2b specific)
+
+  Hash: 1fef7dd
+  Description: feat(tee): add Linux TEE scaffold with stub backend (Steps 1-3)
+  ────────────────────────────────────────
+  Hash: 00a76b1
+  Description: feat(tee): ground TEE backends with real attestation libraries
+    (Steps 4-7)
+  ────────────────────────────────────────
+  Hash: 2453b85
+  Description: feat(tee): add CoCo pod spec + QEMU dev integration tests (Steps
+    8-9)
+
+  ---
+  Step Completion
+
+  #: 1
+  Step: TEE package scaffold
+  Status: Done
+  Key Files: internal/tee/tee.go:1-113, internal/tee/key.go:1-121,
+    internal/tee/attest_stub.go:1-135
+  ────────────────────────────────────────
+  #: 2
+  Step: Gateway wiring
+  Status: Done
+  Key Files: internal/inference/gateway.go:162-239 (key selection +
+    /v1/attestation)
+  ────────────────────────────────────────
+  #: 3
+  Step: CLI flags
+  Status: Done
+  Key Files: cmd/obol/inference.go:570-579 (--tee, --model-hash), :630-635
+    (applyFlags)
+  ────────────────────────────────────────
+  #: 4
+  Step: TDX backend
+  Status: Done
+  Key Files: internal/tee/attest_tdx.go:1-135 (real go-tdx-guest/client calls)
+  ────────────────────────────────────────
+  #: 5
+  Step: SNP backend
+  Status: Done
+  Key Files: internal/tee/attest_snp.go:1-134 (real go-sev-guest/client calls)
+  ────────────────────────────────────────
+  #: 6
+  Step: Nitro backend
+  Status: Done
+  Key Files: internal/tee/attest_nitro.go:1-159 (real hf/nsm + nitrite calls)
+  ────────────────────────────────────────
+  #: 7
+  Step: verify.go
+  Status: Done
+  Key Files: internal/tee/verify.go:1-297 (real verification for all 3 TEE
+  types)
+  ────────────────────────────────────────
+  #: 8
+  Step: CoCo pod spec
+  Status: Done
+  Key Files: internal/tee/coco.go:1-254,
+    internal/embed/networks/inference/templates/gateway.yaml:24-26,119-150
+  ────────────────────────────────────────
+  #: 9
+  Step: Integration tests
+  Status: Done
+  Key Files: internal/tee/coco_integration_test.go:1-291,
+    internal/tee/coco_test.go:1-110
+  ────────────────────────────────────────
+  #: 10
+  Step: ERC-8004 anchor hook
+  Status: TODO
+  Key Files: Stub only — full impl is Phase 3
+
+  ---
+  Package: internal/tee/ (1,577 lines source + 829 lines test)
+
+  Core Types
+
+  - TEEType (tee.go:28-35) — tdx, snp, nitro, stub
+  - AttestationReport (tee.go:54-60) — JSON struct: tee_type, pubkey,
+  model_hash, quote, timestamp
+  - backend interface (key.go:16-21) — sign, ecdh, attest, delete
+  - teeKey (key.go:27-33) — implements enclave.Key; wraps a backend
+  - CoCoRuntimeClass (coco.go:29-37) — kata-qemu-coco-dev, kata-qemu-snp,
+  kata-qemu-tdx
+  - CoCoStatus (coco.go:63-70) — installed, version, runtime classes, KVM
+  available
+
+  Exported Functions
+
+  Function: NewKey(tag, modelHash)
+  File:Line: attest_stub.go:94 / attest_tdx.go:98 / attest_snp.go:97 /
+    attest_nitro.go:122
+  Purpose: Generate P-256 key inside TEE (or stub)
+  ────────────────────────────────────────
+  Function: Attest(key, modelHash)
+  File:Line: tee.go:85-108
+  Purpose: Produce attestation report binding pubkey + model
+  ────────────────────────────────────────
+  Function: UserData(pubkey, modelHash)
+  File:Line: tee.go:68-77
+  Purpose: Compute SHA256(pubkey || modelHashBytes)
+  ────────────────────────────────────────
+  Function: MarshalReport(r)
+  File:Line: tee.go:111-113
+  Purpose: JSON-encode attestation report
+  ────────────────────────────────────────
+  Function: ExtractUserData(quote)
+  File:Line: verify.go:28-80
+  Purpose: Auto-detect format, extract user_data from any quote type
+  ────────────────────────────────────────
+  Function: VerifyBinding(quote, pubkey, modelHash)
+  File:Line: verify.go:88-104
+  Purpose: Verify user_data matches expected binding
+  ────────────────────────────────────────
+  Function: VerifyTDX(quote, expectedUserData)
+  File:Line: verify.go:114-147
+  Purpose: Full TDX DCAP verification via go-tdx-guest
+  ────────────────────────────────────────
+  Function: VerifySNP(report, expectedUserData)
+  File:Line: verify.go:158-204
+  Purpose: Full SNP verification via go-sev-guest
+  ────────────────────────────────────────
+  Function: VerifyNitro(doc, expectedUserData)
+  File:Line: verify.go:215-235
+  Purpose: Full Nitro verification via nitrite
+  ────────────────────────────────────────
+  Function: VerifyNitroWithPCR0(doc, userData, pcr0)
+  File:Line: verify.go:239-268
+  Purpose: Nitro + enclave image hash check
+  ────────────────────────────────────────
+  Function: ComputeModelHash(modelID)
+  File:Line: verify.go:273-276
+  Purpose: SHA-256 of model name string
+  ────────────────────────────────────────
+  Function: ParseTEEType(s)
+  File:Line: tee.go:43-49
+  Purpose: Validate string as TEEType
+  ────────────────────────────────────────
+  Function: InstallCoCo(ctx, opts)
+  File:Line: coco.go:122-142
+  Purpose: Helm install CoCo operator on k3s
+  ────────────────────────────────────────
+  Function: UninstallCoCo(ctx, opts)
+  File:Line: coco.go:145-160
+  Purpose: Helm uninstall CoCo
+  ────────────────────────────────────────
+  Function: CheckCoCo(ctx, opts)
+  File:Line: coco.go:163-199
+  Purpose: Query cluster for CoCo status
+  ────────────────────────────────────────
+  Function: ParseCoCoRuntime(s)
+  File:Line: coco.go:52-61
+  Purpose: Validate runtime class name
+
+  Build Tags
+
+  File: attest_stub.go
+  Tag: !tdx && !snp && !nitro
+  Backend: Software P-256 + dummy JSON quote
+  ────────────────────────────────────────
+  File: attest_tdx.go
+  Tag: linux && cgo && tdx
+  Backend: go-tdx-guest/client.GetRawQuote() via /dev/tdx-guest or configfs-tsm
+  ────────────────────────────────────────
+  File: attest_snp.go
+  Tag: linux && cgo && snp
+  Backend: go-sev-guest/client.GetRawQuote() via /dev/sev-guest
+  ────────────────────────────────────────
+  File: attest_nitro.go
+  Tag: linux && cgo && nitro
+  Backend: hf/nsm.OpenDefaultSession() via /dev/nsm
+  ────────────────────────────────────────
+  File: verify.go
+  Tag: none (all platforms)
+  Backend: Real verification using all three libraries
+  ────────────────────────────────────────
+  File: coco.go
+  Tag: none (all platforms)
+  Backend: Helm/kubectl exec for CoCo management
+
+  ---
+  Dependencies Added (go.mod)
+
+  Module: github.com/google/go-sev-guest
+  Version: v0.14.1
+  Used By: verify.go (SNP parse/verify/validate), attest_snp.go
+  ────────────────────────────────────────
+  Module: github.com/google/go-tdx-guest
+  Version: v0.3.1
+  Used By: verify.go (TDX parse/verify/validate), attest_tdx.go
+  ────────────────────────────────────────
+  Module: github.com/hf/nitrite
+  Version: v0.0.0-20241225
+  Used By: verify.go (Nitro COSE verification)
+  ────────────────────────────────────────
+  Module: github.com/hf/nsm
+  Version: v0.0.0-20220930
+  Used By: attest_nitro.go (NSM device communication)
+  ────────────────────────────────────────
+  Module: github.com/google/go-configfs-tsm
+  Version: v0.2.2
+  Used By: indirect (used by go-tdx-guest for Linux >= 6.7)
+  ────────────────────────────────────────
+  Module: github.com/fxamacker/cbor/v2
+  Version: v2.2.0
+  Used By: indirect (CBOR parsing for Nitro)
+  ────────────────────────────────────────
+  Module: google.golang.org/protobuf
+  Version: v1.36.6
+  Used By: indirect (protobuf for SNP/TDX report structs)
+
+  ---
+  Gateway Integration
+
+  Key selection (internal/inference/gateway.go:162-190):
+  TEEType != ""  → tee.NewKey(tag, modelHash)   → Linux TEE path
+  EnclaveTag != "" → enclave.NewKey(tag)          → macOS SE path
+  neither          → no enclave/TEE features
+
+  Endpoints when TEE active:
+  - GET /v1/attestation — returns AttestationReport JSON (gateway.go:229-239)
+  - GET /v1/enclave/pubkey — returns hex pubkey JSON (existing, reused)
+  - POST /v1/chat/completions — x402 + ECIES decrypt → upstream (existing,
+  reused)
+
+  ---
+  Inference Pod Templates
+
+  Files modified (3):
+  - internal/embed/networks/inference/values.yaml.gotmpl — added teeRuntime,
+  teeType, teeModelHash with CLI annotations
+  - internal/embed/networks/inference/helmfile.yaml.gotmpl — passes TEE values
+  through, adds tee section to metadata ConfigMap
+  - internal/embed/networks/inference/templates/gateway.yaml — conditional
+  runtimeClassName on Ollama (line 24-26) and gateway (line 119-121)
+  Deployments; --tee/--model-hash args + env vars on gateway container (lines
+  136-150)
+
+  Pod spec pattern (when teeRuntime != "none"):
+  spec:
+    runtimeClassName: kata-qemu-coco-dev  # or kata-qemu-snp, kata-qemu-tdx
+    containers:
+      - name: gateway
+        args:
+          - --tee=stub       # or snp, tdx, nitro
+          - --model-hash=... # SHA-256 of model
+
+  ---
+  Test Coverage
+
+  Unit Tests — 27 passing (internal/tee/)
+
+  Test: TestNewKey_StubBackend
+  File:Line: tee_test.go:14
+  What it verifies: 65-byte pubkey, 0x04 prefix, tag, persistence
+  ────────────────────────────────────────
+  Test: TestNewKey_UniqueKeys
+  File:Line: tee_test.go:38
+  What it verifies: Different tags produce different keys
+  ────────────────────────────────────────
+  Test: TestECIES_RoundTrip
+  File:Line: tee_test.go:55
+  What it verifies: Encrypt(pubkey, plain) → Decrypt(ct) == plain
+  ────────────────────────────────────────
+  Test: TestECIES_DecryptBadVersion
+  File:Line: tee_test.go:85
+  What it verifies: Rejects corrupted version byte
+  ────────────────────────────────────────
+  Test: TestECIES_DecryptTruncated
+  File:Line: tee_test.go:104
+  What it verifies: Rejects truncated ciphertext
+  ────────────────────────────────────────
+  Test: TestAttest_Stub
+  File:Line: tee_test.go:116
+  What it verifies: Stub quote fields, user_data binding
+  ────────────────────────────────────────
+  Test: TestVerifyBinding_Stub
+  File:Line: tee_test.go:167
+  What it verifies: VerifyBinding passes for valid quote
+  ────────────────────────────────────────
+  Test: TestVerifyBinding_WrongModel
+  File:Line: tee_test.go:184
+  What it verifies: VerifyBinding rejects wrong model hash
+  ────────────────────────────────────────
+  Test: TestExtractUserData_StubRoundTrip
+  File:Line: tee_test.go:203
+  What it verifies: ExtractUserData round-trips stub quotes
+  ────────────────────────────────────────
+  Test: TestSign_Stub
+  File:Line: tee_test.go:228
+  What it verifies: DER signature starts with 0x30
+  ────────────────────────────────────────
+  Test: TestDelete_Stub
+  File:Line: tee_test.go:249
+  What it verifies: Delete() succeeds
+  ────────────────────────────────────────
+  Test: TestParseTEEType
+  File:Line: tee_test.go:260
+  What it verifies: Valid/invalid TEE type parsing
+  ────────────────────────────────────────
+  Test: TestComputeModelHash
+  File:Line: tee_test.go:286
+  What it verifies: Deterministic SHA-256
+  ────────────────────────────────────────
+  Test: TestMarshalReport
+  File:Line: tee_test.go:303
+  What it verifies: JSON round-trip of AttestationReport
+  ────────────────────────────────────────
+  Test: TestVerifyTDX_RejectsGarbage
+  File:Line: tee_test.go:332
+  What it verifies: Real go-tdx-guest parser rejects garbage
+  ────────────────────────────────────────
+  Test: TestVerifySNP_RejectsShortReport
+  File:Line: tee_test.go:339
+  What it verifies: Real go-sev-guest rejects short input
+  ────────────────────────────────────────
+  Test: TestVerifySNP_RejectsInvalidReport
+  File:Line: tee_test.go:346
+  What it verifies: Real go-sev-guest rejects zeroed 1184 bytes
+  ────────────────────────────────────────
+  Test: TestVerifyNitro_RejectsGarbage
+  File:Line: tee_test.go:354
+  What it verifies: Real nitrite rejects non-COSE input
+  ────────────────────────────────────────
+  Test: TestExtractUserData_RejectsUnknownFormat
+  File:Line: tee_test.go:361
+  What it verifies: Rejects unrecognised format
+  ────────────────────────────────────────
+  Test: TestPadTo64
+  File:Line: tee_test.go:368
+  What it verifies: Zero-pads to 64 bytes
+  ────────────────────────────────────────
+  Test: TestExtractUserData_SyntheticSNP
+  File:Line: tee_test.go:385
+  What it verifies: Parses synthetic 1184-byte SNP at offset 0x050
+  ────────────────────────────────────────
+  Test: TestExtractUserData_SyntheticTDX
+  File:Line: tee_test.go:403
+  What it verifies: Parses synthetic TDX v4 at offset 0x238
+  ────────────────────────────────────────
+  Test: TestParseCoCoRuntime
+  File:Line: coco_test.go:7
+  What it verifies: Valid/invalid CoCo runtime names
+  ────────────────────────────────────────
+  Test: TestValidCoCoRuntimes
+  File:Line: coco_test.go:27
+  What it verifies: 3 runtimes, all parseable
+  ────────────────────────────────────────
+  Test: TestInstallCoCo_DryRun
+  File:Line: coco_test.go:40
+  What it verifies: Dry-run produces correct helm command
+  ────────────────────────────────────────
+  Test: TestUninstallCoCo_DryRun
+  File:Line: coco_test.go:62
+  What it verifies: Dry-run produces correct uninstall command
+  ────────────────────────────────────────
+  Test: TestCheckKVM
+  File:Line: coco_test.go:74
+  What it verifies: Doesn't panic (reports KVM: true on SilverMesh)
+
+  Gateway Tests — 20 passing (internal/inference/)
+
+  Test: TestGateway_Health
+  What it verifies: /health returns 200
+  ────────────────────────────────────────
+  Test: TestGateway_NoPayment_Returns402
+  What it verifies: x402 gate blocks without payment
+  ────────────────────────────────────────
+  Test: TestGateway_ValidPayment_Returns200
+  What it verifies: Valid payment → verify → settle → 200
+  ────────────────────────────────────────
+  Test: TestGateway_VerifyOnly_SkipsSettle
+  What it verifies: VerifyOnly mode skips settlement
+  ────────────────────────────────────────
+  Test: TestGateway_FacilitatorRejects_Returns402
+  What it verifies: Rejected payment → 402
+  ────────────────────────────────────────
+  Test: TestGateway_UpstreamDown_Returns502
+  What it verifies: Dead upstream → 502
+  ────────────────────────────────────────
+  Test: TestGateway_UnprotectedPassthrough
+  What it verifies: /v1/models requires payment
+  ────────────────────────────────────────
+  Test: TestGateway_ModelsEndpoint_WithPayment
+  What it verifies: /v1/models with payment → 200
+  ────────────────────────────────────────
+  Test: TestGateway_TEE_Attestation
+  What it verifies: /v1/attestation returns stub report
+  ────────────────────────────────────────
+  Test: TestGateway_TEE_PubkeyEndpoint
+  What it verifies: /v1/enclave/pubkey works with TEE key
+  ────────────────────────────────────────
+  Test: TestGateway_TEE_ECIES_RoundTrip
+  What it verifies: TEE pubkey is accessible
+  ────────────────────────────────────────
+  Test: TestGateway_NoTEE_NoAttestationEndpoint
+  What it verifies: No TEE → no attestation endpoint
+  ────────────────────────────────────────
+  Test: TestStoreCreateAndGet
+  What it verifies: Deployment persistence
+  ────────────────────────────────────────
+  Test: TestStoreCreateDuplicate
+  What it verifies: Duplicate rejection
+  ────────────────────────────────────────
+  Test: TestStoreList
+  What it verifies: List deployments
+  ────────────────────────────────────────
+  Test: TestStoreListEmpty
+  What it verifies: Empty list
+  ────────────────────────────────────────
+  Test: TestStoreDelete
+  What it verifies: Delete deployment
+  ────────────────────────────────────────
+  Test: TestStoreGetNotFound
+  What it verifies: Not found error
+  ────────────────────────────────────────
+  Test: TestStoreUpdate
+  What it verifies: Update deployment
+  ────────────────────────────────────────
+  Test: TestStoreDirPermissions
+  What it verifies: 0700 directory permissions
+
+  Integration Tests — gated (//go:build integration)
+
+  Test: TestIntegration_CoCoOperatorInstalled
+  File:Line: coco_integration_test.go:51
+  Requires: k3s + CoCo helm release
+  ────────────────────────────────────────
+  Test: TestIntegration_RuntimeClassExists
+  File:Line: coco_integration_test.go:73
+  Requires: kata-qemu-coco-dev RuntimeClass
+  ────────────────────────────────────────
+  Test: TestIntegration_KVMAvailable
+  File:Line: coco_integration_test.go:85
+  Requires: /dev/kvm
+  ────────────────────────────────────────
+  Test: TestIntegration_CoCoDevPod
+  File:Line: coco_integration_test.go:93
+  Requires: Deploys busybox pod, checks kernel differs from host
+  ────────────────────────────────────────
+  Test: TestIntegration_InferenceGatewayInCoCo
+  File:Line: coco_integration_test.go:145
+  Requires: Deploys gateway pod, tests /health + /v1/attestation
+
+  ---
+  What Remains
+
+  Step 10 (ERC-8004 anchor hook): Stub function signatures + types for on-chain
+  attestation anchoring. No contract interaction — that's Phase 3. Estimated:
+  half a session.
+
+  Phase 3 scope (not started): On-chain anchoring via ERC-8004 Validation
+  Registry, sealed key storage, MRTD pinning, QGS Helm chart.
+
+✻ Cogitated for 2m 12s
+
+❯ let's commit and push our changes on rad 
+
+● The working tree is already clean — everything was committed in 2453b85 and
+  pushed to rad earlier this session.
+
+● Bash(git status && echo "---" && git log --oneline -3)
+  ⎿  On branch feat/secure-enclave-inference
+     Your branch is ahead of 'silvermini/feat/secure-enclave-inference' by
+     9 commits.
+     … +9 lines (ctrl+o to expand)
+
+● Clean. Already on rad too — pushed 2453b85 earlier. Nothing new to commit or
+  push.
