@@ -142,17 +142,47 @@ obol model status
 obol openclaw onboard
 
 # Reconfigure model provider for an existing instance
-obol openclaw setup <id>
+obol openclaw setup
 
 # List instances
 obol openclaw list
 
 # Open the web dashboard
-obol openclaw dashboard <id>
+obol openclaw dashboard
+
+# Manage skills (add, remove, list)
+obol openclaw skills list
+obol openclaw skills add <package>
+obol openclaw skills remove <name>
 
 # Remove an instance
-obol openclaw delete <id> --force
+obol openclaw delete --force
 ```
+
+When only one OpenClaw instance is installed, the instance ID is optional — it is auto-selected. With multiple instances, specify the name: `obol openclaw setup prod`.
+
+### Skills
+
+OpenClaw ships with four embedded skills that are installed automatically on first deploy:
+
+| Skill | Purpose |
+|-------|---------|
+| `hello` | Smoke test — confirms skills pipeline works |
+| `obol-blockchain` | Ethereum JSON-RPC queries, ERC-20 token ops, ENS resolution via the eRPC gateway |
+| `obol-k8s` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
+| `obol-dvt` | Obol DVT cluster monitoring, operator audit, exit coordination |
+
+Manage skills at runtime:
+
+```bash
+obol openclaw skills list                   # list installed skills
+obol openclaw skills sync                   # re-inject embedded defaults
+obol openclaw skills sync --from ./my-skills  # push custom skills from local dir
+obol openclaw skills add <package>          # add via openclaw CLI in pod
+obol openclaw skills remove <name>          # remove via openclaw CLI in pod
+```
+
+Skills are delivered via host-path PVC injection — no ConfigMap size limits, works before pod readiness, and survives pod restarts.
 
 ## Public Access (Cloudflare Tunnel)
 

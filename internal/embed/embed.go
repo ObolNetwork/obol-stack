@@ -24,6 +24,9 @@ var infrastructureFS embed.FS
 //go:embed all:networks
 var networksFS embed.FS
 
+//go:embed all:skills
+var skillsFS embed.FS
+
 // CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory.
 // The replacements map is applied to every file: each key (e.g. "{{OLLAMA_HOST}}") is replaced
 // with its value. Pass nil for a verbatim copy.
@@ -111,6 +114,68 @@ func ReadInfrastructureFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read infrastructure file %s: %w", path, err)
 	}
 	return content, nil
+}
+
+// CopySkills recursively copies all embedded skills to the destination directory.
+// If a skill directory already exists at the destination, it is skipped (user skills
+// take precedence over embedded defaults).
+func CopySkills(destDir string) error {
+	return fs.WalkDir(skillsFS, "skills", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip root skills directory
+		if path == "skills" {
+			return nil
+		}
+
+		// Get relative path within skills/
+		relPath := strings.TrimPrefix(path, "skills/")
+		destPath := filepath.Join(destDir, relPath)
+
+		if d.IsDir() {
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
+			}
+			return nil
+		}
+
+		// Ensure parent directory exists
+		parentDir := filepath.Dir(destPath)
+		if err := os.MkdirAll(parentDir, 0755); err != nil {
+			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
+		}
+
+		// Read embedded file
+		data, err := skillsFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
+		}
+
+		// Write to destination
+		if err := os.WriteFile(destPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", destPath, err)
+		}
+
+		return nil
+	})
+}
+
+// GetEmbeddedSkillNames returns the names of all embedded skill directories.
+func GetEmbeddedSkillNames() ([]string, error) {
+	entries, err := fs.ReadDir(skillsFS, "skills")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded skills: %w", err)
+	}
+
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
 }
 
 // CopyNetwork recursively copies an embedded network to the destination directory
