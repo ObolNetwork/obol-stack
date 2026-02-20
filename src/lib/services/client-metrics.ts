@@ -2,11 +2,7 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
-import type {
-  ErpcStatusData,
-  ErpcUpstream,
-  ErpcUpstreamMetrics,
-} from '@/types/dashboard';
+import type { ErpcStatusData } from '@/types/dashboard';
 
 export type ClientType =
   | 'execution'
@@ -81,34 +77,17 @@ export class ClientMetricsService {
       });
       const data = await resp.json();
 
-      const rawUpstreams: Record<
-        string,
-        { network: string; metrics: ErpcUpstreamMetrics }
-      > = data?.details?.rpc?.upstreams || {};
-
-      const upstreams: ErpcUpstream[] = Object.entries(rawUpstreams).map(
-        ([id, upstream]) => ({
-          id,
-          network: upstream.network || '',
-          metrics: upstream.metrics,
+      const networks: ErpcStatusData['networks'] = (data?.rpc ?? []).map(
+        (n: { id: string; alias: string; state: string }) => ({
+          id: n.id,
+          alias: n.alias,
+          state: n.state,
         })
       );
 
-      return {
-        status: data?.status || 'error',
-        message: data?.message || '',
-        networkCount: data?.details?.rpc?.config?.networks || 0,
-        upstreamCount: data?.details?.rpc?.config?.upstreams || 0,
-        upstreams,
-      };
+      return { networks };
     } catch {
-      return {
-        status: 'error',
-        message: 'Failed to reach eRPC',
-        networkCount: 0,
-        upstreamCount: 0,
-        upstreams: [],
-      };
+      return { networks: [] };
     }
   }
 

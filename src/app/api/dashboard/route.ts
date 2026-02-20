@@ -129,21 +129,24 @@ export async function GET() {
           config.erpcBaseUrl
         );
 
+        const allOk = erpcStatus.networks.every(n => n.state === 'OK');
+        const anyOk = erpcStatus.networks.some(n => n.state === 'OK');
+
         apps.push({
           chainName: instance.network,
           app: instance.app,
           appId: instance.id,
           nodeMode,
-          status:
-            erpcStatus.status === 'OK'
-              ? CLIENT_STATUS.SYNCED
+          status: allOk
+            ? CLIENT_STATUS.SYNCED
+            : anyOk
+              ? CLIENT_STATUS.SYNCING
               : CLIENT_STATUS.ERROR,
           blocks: 0,
           finalized: 0,
           participation: 0,
           clients: [],
           distance: 0,
-          upstreamCount: erpcStatus.upstreamCount,
           erpcStatus,
         });
         continue;

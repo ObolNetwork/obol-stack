@@ -109,8 +109,7 @@ export interface AppData {
   participation: number;
   clients: ClientInfo[]; // Array of clients for this chain
   distance: number; // Distance to justified
-  upstreamCount?: number; // eRPC: number of configured upstream providers
-  erpcStatus?: ErpcStatusData; // eRPC: full status data from GET /
+  erpcStatus?: ErpcStatusData; // eRPC: network status from GET /
 }
 
 export interface DashboardData {
@@ -144,42 +143,14 @@ export interface DashboardData {
   };
 }
 
-export interface ErpcResponseQuantiles {
-  p50: number;
-  p70: number;
-  p90: number;
-  p95: number;
-  p99: number;
-}
-
-export interface ErpcUpstreamMetrics {
-  cordoned: boolean;
-  lastCordonedReason: string | null;
-  errorRate: number;
-  errorsTotal: number;
-  requestsTotal: number;
-  misbehaviorRate: number;
-  misbehaviorsTotal: number;
-  blockHeadLag: number;
-  finalizationLag: number;
-  throttledRate: number;
-  selfRateLimitedTotal: number;
-  remoteRateLimitedTotal: number;
-  responseQuantiles: ErpcResponseQuantiles;
-}
-
-export interface ErpcUpstream {
-  id: string;
-  network: string; // "evm:1", "evm:11155111", etc.
-  metrics: ErpcUpstreamMetrics;
+export interface ErpcNetwork {
+  id: string; // "evm:1", "evm:560048", etc.
+  alias: string; // "mainnet", "hoodi", "sepolia"
+  state: string; // "OK" | error string
 }
 
 export interface ErpcStatusData {
-  status: string; // "OK" or error string
-  message: string;
-  networkCount: number;
-  upstreamCount: number;
-  upstreams: ErpcUpstream[];
+  networks: ErpcNetwork[];
 }
 
 export interface MetricCardProps {
