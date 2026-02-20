@@ -324,3 +324,105 @@ func TestMarshalReport(t *testing.T) {
 		t.Errorf("round-trip tee_type = %q, want %q", parsed.TEEType, TEETypeStub)
 	}
 }
+
+// --- Verification API surface tests ---
+// These exercise the grounded verification functions with synthetic data.
+// Real hardware attestation documents will be tested on TEE-capable machines.
+
+func TestVerifyTDX_RejectsGarbage(t *testing.T) {
+	err := VerifyTDX([]byte("not a TDX quote"), nil)
+	if err == nil {
+		t.Error("expected VerifyTDX to reject garbage input")
+	}
+}
+
+func TestVerifySNP_RejectsShortReport(t *testing.T) {
+	err := VerifySNP(make([]byte, 100), nil)
+	if err == nil {
+		t.Error("expected VerifySNP to reject short report")
+	}
+}
+
+func TestVerifySNP_RejectsInvalidReport(t *testing.T) {
+	// 1184 bytes of zeros — valid length but invalid content.
+	err := VerifySNP(make([]byte, 1184), nil)
+	if err == nil {
+		t.Error("expected VerifySNP to reject zeroed report")
+	}
+}
+
+func TestVerifyNitro_RejectsGarbage(t *testing.T) {
+	err := VerifyNitro([]byte("not a COSE document"), nil)
+	if err == nil {
+		t.Error("expected VerifyNitro to reject garbage input")
+	}
+}
+
+func TestExtractUserData_RejectsUnknownFormat(t *testing.T) {
+	_, _, err := ExtractUserData([]byte("neither JSON nor binary TEE format"))
+	if err == nil {
+		t.Error("expected ExtractUserData to reject unknown format")
+	}
+}
+
+func TestPadTo64(t *testing.T) {
+	input := []byte{0x01, 0x02, 0x03}
+	out := padTo64(input)
+	if len(out) != 64 {
+		t.Fatalf("expected 64 bytes, got %d", len(out))
+	}
+	if out[0] != 0x01 || out[1] != 0x02 || out[2] != 0x03 {
+		t.Error("first 3 bytes should match input")
+	}
+	for i := 3; i < 64; i++ {
+		if out[i] != 0 {
+			t.Errorf("byte %d should be zero, got 0x%02x", i, out[i])
+			break
+		}
+	}
+}
+
+func TestExtractUserData_SyntheticSNP(t *testing.T) {
+	// Build a synthetic 1184-byte "SNP report" with known user_data at offset 0x050.
+	report := make([]byte, 1184)
+	userData := []byte("test-user-data-32-bytes-long!!!!") // exactly 32 bytes
+	copy(report[0x050:], userData)
+
+	extracted, teeType, err := ExtractUserData(report)
+	if err != nil {
+		t.Fatalf("ExtractUserData failed: %v", err)
+	}
+	if teeType != TEETypeSNP {
+		t.Errorf("expected TEE type %q, got %q", TEETypeSNP, teeType)
+	}
+	if !bytesEqual(extracted, userData) {
+		t.Errorf("user_data mismatch:\n  got:  %x\n  want: %x", extracted, userData)
+	}
+}
+
+func TestExtractUserData_SyntheticTDX(t *testing.T) {
+	// Build a synthetic TDX DCAP v4 quote header with known reportData.
+	quote := make([]byte, 0x278+64) // header + body + reportData area
+	// version=4 (uint16 LE)
+	quote[0] = 4
+	quote[1] = 0
+	// teeType=0x00000081 at offset 4 (uint32 LE)
+	quote[4] = 0x81
+	quote[5] = 0x00
+	quote[6] = 0x00
+	quote[7] = 0x00
+	// reportData at offset 0x238
+	userData := []byte("tdx-user-data-32bytes-exactly!!!") // 31 bytes + null
+	copy(quote[0x238:], userData)
+
+	extracted, teeType, err := ExtractUserData(quote)
+	if err != nil {
+		t.Fatalf("ExtractUserData failed: %v", err)
+	}
+	if teeType != TEETypeTDX {
+		t.Errorf("expected TEE type %q, got %q", TEETypeTDX, teeType)
+	}
+	if !bytesEqual(extracted, userData[:32]) {
+		t.Errorf("user_data mismatch:\n  got:  %x\n  want: %x", extracted, userData[:32])
+	}
+}

@@ -11,11 +11,22 @@ import (
 	"math/big"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
+	sevclient "github.com/google/go-sev-guest/client"
 )
 
-// snpBackend uses /dev/sev-guest ioctl SNP_GET_REPORT to produce an AMD
-// SEV-SNP attestation report. The 64-byte user_data field carries
-// SHA256(pubkey||modelHash).
+// snpBackend generates a P-256 key in-process (inside the SEV-SNP guest VM)
+// and obtains attestation reports via /dev/sev-guest. The private key is
+// protected by SEV-SNP memory encryption — even the host hypervisor cannot
+// read the guest's RAM.
+//
+// The 64-byte REPORT_DATA field at offset 0x050 in the 1184-byte report
+// carries SHA256(pubkey || modelHash) in its first 32 bytes.
+//
+// Dependencies:
+//   - Must be running inside an SEV-SNP guest VM
+//   - /dev/sev-guest device must exist
+//   - AMD PSP firmware must support SNP_GET_REPORT / SNP_GET_EXT_REPORT
+//   - VCEK certificate chain fetched from AMD KDS by the verifier
 type snpBackend struct {
 	privKey  *ecdsa.PrivateKey
 	ecdhPriv *ecdh.PrivateKey
@@ -55,17 +66,27 @@ func (b *snpBackend) ecdh(peerPubKeyBytes []byte) ([]byte, error) {
 }
 
 func (b *snpBackend) attest(userData []byte) ([]byte, error) {
-	// TODO(phase-2b): Implement SNP attestation via /dev/sev-guest.
-	//
-	// Steps:
-	// 1. Open /dev/sev-guest
-	// 2. ioctl(fd, SNP_GET_REPORT, &req) where req.UserData = userData[:64]
-	// 3. Return raw SNP AttestationReport (1184 bytes)
-	//
-	// Dependencies:
-	// - /dev/sev-guest must exist (running inside SEV-SNP VM)
-	// - github.com/virtee/sev-snp-guest Go bindings
-	return nil, fmt.Errorf("tee/snp: attestation not yet implemented")
+	// Get a QuoteProvider — auto-selects configfs-tsm (Linux >= 6.7) or
+	// legacy /dev/sev-guest ioctl.
+	qp, err := sevclient.GetQuoteProvider()
+	if err != nil {
+		return nil, fmt.Errorf("tee/snp: get quote provider: %w", err)
+	}
+
+	// Build the 64-byte REPORT_DATA. Our user_data (32-byte SHA-256 binding)
+	// occupies the first 32 bytes; the rest is zero-padded.
+	var reportData [64]byte
+	copy(reportData[:], userData)
+
+	// GetRawQuote returns: 1184-byte report + certificate table (VCEK, ASK, ARK).
+	// The certificate table allows the verifier to validate without fetching
+	// certs from AMD KDS.
+	rawQuote, err := qp.GetRawQuote(reportData)
+	if err != nil {
+		return nil, fmt.Errorf("tee/snp: get attestation report: %w", err)
+	}
+
+	return rawQuote, nil
 }
 
 func (b *snpBackend) delete() error {

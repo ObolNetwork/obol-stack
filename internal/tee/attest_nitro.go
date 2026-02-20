@@ -7,15 +7,36 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
+	"github.com/hf/nsm"
+	"github.com/hf/nsm/request"
 )
 
-// nitroBackend uses the AWS Nitro Security Module (NSM) at /dev/nsm to
-// produce an attestation document. UserData is SHA256(pubkey||modelHash)
-// encoded as CBOR inside the NSM request.
+// nitroBackend generates a P-256 key in-process inside the AWS Nitro
+// Enclave and obtains signed attestation documents via /dev/nsm.
+//
+// The private key is protected by the Nitro hypervisor's isolation —
+// even the parent EC2 instance cannot access enclave memory.
+//
+// The attestation document is a COSE_Sign1 structure (CBOR tag 18)
+// signed with ECDSA-P384-SHA384 by the Nitro Security Module. It
+// contains:
+//   - user_data: our SHA256(pubkey || modelHash) binding (max 512 bytes)
+//   - public_key: DER-encoded enclave ECDH public key (max 1024 bytes)
+//   - nonce: optional anti-replay challenge (max 512 bytes)
+//   - PCRs: platform configuration registers (PCR0 = enclave image hash)
+//   - certificate + cabundle: cert chain to AWS Nitro Root CA G1
+//
+// Dependencies:
+//   - Must be running inside an AWS Nitro Enclave
+//   - /dev/nsm device must exist
+//   - github.com/hf/nsm for enclave-side NSM communication
+//   - github.com/hf/nitrite for client-side COSE/CBOR verification
 type nitroBackend struct {
 	privKey  *ecdsa.PrivateKey
 	ecdhPriv *ecdh.PrivateKey
@@ -55,17 +76,42 @@ func (b *nitroBackend) ecdh(peerPubKeyBytes []byte) ([]byte, error) {
 }
 
 func (b *nitroBackend) attest(userData []byte) ([]byte, error) {
-	// TODO(phase-2b): Implement Nitro attestation via NSM device.
-	//
-	// Steps:
-	// 1. Open /dev/nsm
-	// 2. nsm.GetAttestationDocument(nonce=nil, userData=userData, publicKey=pubKeyDER)
-	// 3. Return signed CBOR attestation document
-	//
-	// Dependencies:
-	// - Running inside AWS Nitro Enclave
-	// - github.com/hf/nsm Go bindings
-	return nil, fmt.Errorf("tee/nitro: attestation not yet implemented")
+	// Open a session to /dev/nsm.
+	sess, err := nsm.OpenDefaultSession()
+	if err != nil {
+		return nil, fmt.Errorf("tee/nitro: open NSM session: %w", err)
+	}
+	defer sess.Close()
+
+	// DER-encode the ECDH public key for the attestation document's
+	// public_key field. Verifiers can use this to establish an encrypted
+	// channel back to the enclave.
+	pubKeyDER, err := x509.MarshalPKIXPublicKey(&b.privKey.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("tee/nitro: marshal public key: %w", err)
+	}
+
+	// Request attestation document. The NSM signs the document with
+	// ECDSA-P384-SHA384 using the enclave's platform key. The result
+	// is a CBOR-encoded COSE_Sign1 structure.
+	res, err := sess.Send(&request.Attestation{
+		UserData:  userData,   // our SHA256(pubkey || modelHash) binding
+		PublicKey: pubKeyDER,  // enclave ECDH public key for key agreement
+		Nonce:     nil,        // caller can add nonce via a wrapper if needed
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tee/nitro: NSM send: %w", err)
+	}
+
+	if res.Error != "" {
+		return nil, fmt.Errorf("tee/nitro: NSM error: %s", res.Error)
+	}
+
+	if res.Attestation == nil || res.Attestation.Document == nil {
+		return nil, errors.New("tee/nitro: NSM returned no attestation document")
+	}
+
+	return res.Attestation.Document, nil
 }
 
 func (b *nitroBackend) delete() error {

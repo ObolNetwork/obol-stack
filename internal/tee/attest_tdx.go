@@ -11,15 +11,23 @@ import (
 	"math/big"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
+	tdxclient "github.com/google/go-tdx-guest/client"
 )
 
-// tdxBackend uses the Intel TDX TDCALL instruction to produce a TD Report,
-// then requests a full quote from the Quote Generation Service (QGS) over
-// the host-side /dev/tdx_guest device.
+// tdxBackend generates a P-256 key in-process inside the TDX Trust Domain
+// (TD) and obtains DCAP v4 quotes via /dev/tdx-guest or configfs-tsm.
 //
-// The private key is generated in-process inside the TVM guest memory.
-// Even the host hypervisor cannot read it — TDX memory isolation guarantees
-// this.
+// The private key lives in TD-protected memory — the host VMM cannot read it
+// even with root access, thanks to TDX memory encryption and integrity.
+//
+// The 64-byte reportData in the TD Quote Body carries our user_data binding
+// (SHA256(pubkey || modelHash)) in its first 32 bytes.
+//
+// Dependencies:
+//   - Must be running inside a TDX Trust Domain (TD)
+//   - /dev/tdx-guest or /sys/kernel/config/tsm/report/ (Linux >= 6.7)
+//   - Quote Generation Service (QGS) reachable for DCAP quote signing
+//   - PCK certificate chain fetched from Intel PCS by the verifier
 type tdxBackend struct {
 	privKey  *ecdsa.PrivateKey
 	ecdhPriv *ecdh.PrivateKey
@@ -59,18 +67,27 @@ func (b *tdxBackend) ecdh(peerPubKeyBytes []byte) ([]byte, error) {
 }
 
 func (b *tdxBackend) attest(userData []byte) ([]byte, error) {
-	// TODO(phase-2b): Implement TDX attestation via TDCALL + QGS.
-	//
-	// Steps:
-	// 1. Build TDREPORT via TDCALL leaf 4 (TDG.MR.REPORT)
-	//    - reportData[0:32] = userData (SHA256 of pubkey||modelHash)
-	// 2. Send TDREPORT to QGS via /dev/tdx_guest ioctl (TDX_CMD_GET_QUOTE)
-	// 3. Return raw DCAP quote bytes
-	//
-	// Dependencies:
-	// - /dev/tdx_guest device must exist (running inside TDX TVM)
-	// - QGS must be reachable at /run/tdx-qgs/qgs.socket or localhost:4050
-	return nil, fmt.Errorf("tee/tdx: attestation not yet implemented")
+	// Get a QuoteProvider — prefers configfs-tsm (Linux >= 6.7), falls back
+	// to legacy /dev/tdx-guest ioctl.
+	qp, err := tdxclient.GetQuoteProvider()
+	if err != nil {
+		return nil, fmt.Errorf("tee/tdx: get quote provider: %w", err)
+	}
+
+	// Build the 64-byte reportData. Our user_data (32-byte SHA-256 binding)
+	// occupies the first 32 bytes; the rest is zero-padded.
+	var reportData [64]byte
+	copy(reportData[:], userData)
+
+	// GetRawQuote triggers:
+	//   1. TDCALL[TDG.MR.REPORT] → TD Report with reportData
+	//   2. QGS signs TD Report → DCAP v4 quote (header + TDQuoteBody + sig + certs)
+	rawQuote, err := tdxclient.GetRawQuote(qp, reportData)
+	if err != nil {
+		return nil, fmt.Errorf("tee/tdx: get DCAP quote: %w", err)
+	}
+
+	return rawQuote, nil
 }
 
 func (b *tdxBackend) delete() error {
