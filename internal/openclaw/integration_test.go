@@ -312,22 +312,22 @@ func portForward(t *testing.T, cfg *config.Config, namespace string) string {
 	return ""
 }
 
-// chatCompletion sends a chat completion request with the gateway Bearer token
-// and returns the assistant response.
-func chatCompletion(t *testing.T, baseURL, modelName, token string) string {
+// chatCompletionWithPrompt sends a chat completion with a custom user message.
+func chatCompletionWithPrompt(t *testing.T, baseURL, modelName, token, prompt string, maxTokens int) string {
 	t.Helper()
-	body := fmt.Sprintf(`{
-		"model": "%s",
-		"messages": [{"role":"user","content":"Reply with exactly one word: hello"}],
-		"max_tokens": 32
-	}`, modelName)
+	reqBody := map[string]interface{}{
+		"model":      modelName,
+		"messages":   []map[string]string{{"role": "user", "content": prompt}},
+		"max_tokens": maxTokens,
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		baseURL+"/v1/chat/completions",
-		strings.NewReader(body),
+		bytes.NewReader(bodyBytes),
 	)
 	if err != nil {
 		t.Fatalf("failed to create request: %v", err)
@@ -362,6 +362,13 @@ func chatCompletion(t *testing.T, baseURL, modelName, token string) string {
 		t.Fatalf("empty response from chat completion: %s", string(respBody))
 	}
 	return result.Choices[0].Message.Content
+}
+
+// chatCompletion sends a chat completion request with the gateway Bearer token
+// and returns the assistant response.
+func chatCompletion(t *testing.T, baseURL, modelName, token string) string {
+	t.Helper()
+	return chatCompletionWithPrompt(t, baseURL, modelName, token, "Reply with exactly one word: hello", 32)
 }
 
 // cleanupInstance deletes an OpenClaw instance via `obol openclaw delete --force`.
@@ -485,6 +492,46 @@ func TestIntegration_OpenAIInference(t *testing.T) {
 	t.Logf("OpenAI response: %s", reply)
 }
 
+func TestIntegration_ZaiInference(t *testing.T) {
+	cfg := requireCluster(t)
+	apiKey := requireEnvKey(t, "ZHIPU_API_KEY")
+
+	const id = "test-zai"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	// Configure llmspy gateway via obol model setup — this provider was NOT in
+	// the old hardcoded map, so it only works with dynamic provider discovery.
+	t.Log("configuring llmspy via: obol model setup --provider zai")
+	obolRun(t, cfg, "model", "setup", "--provider", "zai", "--api-key", apiKey)
+
+	cloud := &CloudProviderInfo{
+		Name:    "zai",
+		APIKey:  apiKey,
+		ModelID: "glm-5",
+		Display: "GLM-5",
+	}
+
+	// Scaffold cloud overlay + deploy via obol openclaw sync
+	t.Logf("scaffolding OpenClaw instance %q with Z.AI via llmspy", id)
+	scaffoldCloudInstance(t, cfg, id, cloud)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	token := getGatewayToken(t, cfg, id)
+	t.Logf("retrieved gateway token (%d chars)", len(token))
+
+	baseURL := portForward(t, cfg, namespace)
+	agentModel := "ollama/glm-5" // routed through llmspy
+	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
+
+	reply := chatCompletion(t, baseURL, agentModel, token)
+	t.Logf("Z.AI response: %s", reply)
+}
+
 func TestIntegration_MultiInstance(t *testing.T) {
 	cfg := requireCluster(t)
 	models := requireOllama(t)
@@ -527,5 +574,340 @@ func TestIntegration_MultiInstance(t *testing.T) {
 		t.Logf("testing inference on %s at %s", id, baseURL)
 		reply := chatCompletion(t, baseURL, agentModel, token)
 		t.Logf("instance %s replied: %s", id, reply)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Skills integration tests
+// ---------------------------------------------------------------------------
+
+// TestIntegration_SkillsStagedOnSync verifies that `obol openclaw sync`
+// stages embedded skills into the deployment directory and injects them
+// into the PVC volume path on the host filesystem.
+func TestIntegration_SkillsStagedOnSync(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skills-stage"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q", id)
+	scaffoldInstance(t, cfg, id, models)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	// 1. Verify skills were staged in the deployment directory
+	deployDir := deploymentPath(cfg, id)
+	skillsDir := filepath.Join(deployDir, "skills")
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
+
+	for _, skill := range expectedSkills {
+		skillMD := filepath.Join(skillsDir, skill, "SKILL.md")
+		info, err := os.Stat(skillMD)
+		if err != nil {
+			t.Errorf("skill %q not staged in deployment dir: %v", skill, err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("skill %q SKILL.md is empty", skill)
+		}
+		t.Logf("  staged: %s/SKILL.md (%d bytes)", skill, info.Size())
+	}
+
+	// Verify scripts and references were also staged
+	for _, sub := range []string{
+		"ethereum-networks/scripts/rpc.py",
+		"obol-stack/scripts/kube.py",
+		"distributed-validators/references/api-examples.md",
+	} {
+		if _, err := os.Stat(filepath.Join(skillsDir, sub)); err != nil {
+			t.Errorf("missing staged file %s: %v", sub, err)
+		}
+	}
+
+	// 2. Verify skills were injected into the PVC volume path
+	volumePath := skillsVolumePath(cfg, id)
+	for _, skill := range expectedSkills {
+		skillMD := filepath.Join(volumePath, skill, "SKILL.md")
+		if _, err := os.Stat(skillMD); err != nil {
+			t.Errorf("skill %q not injected to volume: %v", skill, err)
+		} else {
+			t.Logf("  injected: %s/SKILL.md in volume", skill)
+		}
+	}
+}
+
+// TestIntegration_SkillsVisibleInPod verifies that after deployment, skills
+// are visible inside the running OpenClaw pod at /data/.openclaw/skills/.
+func TestIntegration_SkillsVisibleInPod(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skills-pod"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q", id)
+	scaffoldInstance(t, cfg, id, models)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	// List skills inside the pod via kubectl exec (without -it for non-interactive)
+	output := obolRun(t, cfg, "kubectl",
+		"exec", "-c", "openclaw",
+		"-n", namespace, "deploy/openclaw", "--",
+		"ls", "/data/.openclaw/skills/",
+	)
+	t.Logf("skills visible in pod:\n%s", output)
+
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
+	for _, skill := range expectedSkills {
+		if !strings.Contains(output, skill) {
+			t.Errorf("skill %q not visible in pod; ls output:\n%s", skill, output)
+		}
+	}
+
+	// Verify SKILL.md content is readable inside the pod for a representative skill
+	mdContent := obolRun(t, cfg, "kubectl",
+		"exec", "-c", "openclaw",
+		"-n", namespace, "deploy/openclaw", "--",
+		"head", "-5", "/data/.openclaw/skills/ethereum-networks/SKILL.md",
+	)
+	if !strings.Contains(mdContent, "ethereum-networks") && !strings.Contains(mdContent, "Ethereum") {
+		t.Errorf("ethereum-networks SKILL.md not readable in pod; got:\n%s", mdContent)
+	}
+	t.Logf("ethereum-networks SKILL.md header in pod:\n%s", mdContent)
+}
+
+// TestIntegration_SkillsSync verifies that `obol openclaw skills sync --from`
+// copies a local skills directory to the PVC volume path.
+func TestIntegration_SkillsSync(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skills-sync"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q", id)
+	scaffoldInstance(t, cfg, id, models)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	// Create a custom skill in a temporary directory
+	customSkillsDir := t.TempDir()
+	customSkillDir := filepath.Join(customSkillsDir, "test-custom")
+	if err := os.MkdirAll(customSkillDir, 0755); err != nil {
+		t.Fatalf("failed to create custom skill dir: %v", err)
+	}
+	customMD := "---\nmetadata: {}\n---\n# Test Custom Skill\nThis is a test skill for integration testing.\n"
+	if err := os.WriteFile(filepath.Join(customSkillDir, "SKILL.md"), []byte(customMD), 0644); err != nil {
+		t.Fatalf("failed to write custom SKILL.md: %v", err)
+	}
+
+	// Sync custom skills via obol openclaw skills sync (explicit instance ID
+	// required when multiple instances exist, e.g. "default" + test instance).
+	// Flags must precede the positional arg for urfave/cli.
+	t.Log("syncing custom skills via: obol openclaw skills sync --from " + customSkillsDir + " " + id)
+	obolRun(t, cfg, "openclaw", "skills", "sync", "--from", customSkillsDir, id)
+
+	// Verify custom skill landed in the volume path
+	volumePath := skillsVolumePath(cfg, id)
+	customMDPath := filepath.Join(volumePath, "test-custom", "SKILL.md")
+	data, err := os.ReadFile(customMDPath)
+	if err != nil {
+		t.Fatalf("custom skill not found in volume path: %v", err)
+	}
+	if !strings.Contains(string(data), "Test Custom Skill") {
+		t.Errorf("custom SKILL.md content mismatch; got:\n%s", string(data))
+	}
+	t.Logf("custom skill synced to volume: %s", customMDPath)
+
+	// Verify custom skill is visible inside the pod
+	output := obolRun(t, cfg, "kubectl",
+		"exec", "-c", "openclaw",
+		"-n", namespace, "deploy/openclaw", "--",
+		"ls", "/data/.openclaw/skills/",
+	)
+	if !strings.Contains(output, "test-custom") {
+		t.Errorf("custom skill not visible in pod after sync; ls output:\n%s", output)
+	}
+	t.Logf("skills in pod after sync:\n%s", output)
+}
+
+// TestIntegration_SkillsIdempotentSync verifies that re-running sync does not
+// overwrite user-customised skills in the deployment directory.
+func TestIntegration_SkillsIdempotentSync(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skills-idem"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q", id)
+	scaffoldInstance(t, cfg, id, models)
+
+	// First sync — stages and injects default skills
+	t.Log("first sync...")
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	// Add a custom file to the staged skills directory (simulating user customisation)
+	deployDir := deploymentPath(cfg, id)
+	marker := filepath.Join(deployDir, "skills", "custom-user-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(marker), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(marker, []byte("# Custom User Skill"), 0644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	// Second sync — stageDefaultSkills should skip (skills/ dir already exists)
+	t.Log("second sync (idempotent)...")
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	// Custom marker should still be present
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("user-customised skill removed after re-sync: %v", err)
+	}
+
+	// Embedded skills should also still be present (from first sync)
+	for _, skill := range []string{"ethereum-networks", "distributed-validators"} {
+		skillMD := filepath.Join(deployDir, "skills", skill, "SKILL.md")
+		if _, err := os.Stat(skillMD); err != nil {
+			t.Errorf("embedded skill %q removed after re-sync: %v", skill, err)
+		}
+	}
+
+	// Custom skill should also be injected to volume (injectSkillsToVolume always runs)
+	volumePath := skillsVolumePath(cfg, id)
+	if _, err := os.Stat(filepath.Join(volumePath, "custom-user-skill", "SKILL.md")); err != nil {
+		t.Errorf("custom skill not injected to volume on re-sync: %v", err)
+	}
+}
+
+// TestIntegration_SkillInference verifies that OpenClaw loads skills into the
+// agent's context and uses them during inference. Deploys an instance, sends a
+// prompt asking about available skills, and checks the response references our
+// embedded skill names — proving skills flow from embed → staging → volume →
+// pod file watcher → agent system prompt → inference response.
+func TestIntegration_SkillInference(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skill-infer"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q with Ollama models: %v", id, models)
+	scaffoldInstance(t, cfg, id, models)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	token := getGatewayToken(t, cfg, id)
+	baseURL := portForward(t, cfg, namespace)
+	agentModel := fmt.Sprintf("ollama/%s", models[0])
+
+	// Ask the agent to list its skills. OpenClaw injects SKILL.md descriptions
+	// into the system prompt, so the agent should know about them.
+	prompt := "List every skill you have access to. For each skill, state its exact name. Be concise — just the names, one per line."
+	t.Logf("sending skill-awareness prompt to %s", agentModel)
+	reply := chatCompletionWithPrompt(t, baseURL, agentModel, token, prompt, 256)
+	t.Logf("agent reply:\n%s", reply)
+
+	replyLower := strings.ToLower(reply)
+
+	// The agent must mention at least 2 of our 4 embedded skills.
+	// We check for partial matches to be resilient to model output variations
+	// (e.g., "ethereum-networks" vs "ethereum networks" vs "Ethereum Networks").
+	skillHits := 0
+	skillChecks := []struct {
+		name     string
+		patterns []string
+	}{
+		{"ethereum-networks", []string{"ethereum-networks", "ethereum networks", "blockchain"}},
+		{"distributed-validators", []string{"distributed-validators", "distributed validator", "dvt"}},
+		{"obol-stack", []string{"obol-stack", "obol stack", "kubernetes", "k8s"}},
+		{"ethereum-wallet", []string{"ethereum-wallet", "ethereum wallet", "wallet"}},
+	}
+
+	for _, sc := range skillChecks {
+		for _, pattern := range sc.patterns {
+			if strings.Contains(replyLower, pattern) {
+				t.Logf("  ✓ agent referenced skill: %s (matched %q)", sc.name, pattern)
+				skillHits++
+				break
+			}
+		}
+	}
+
+	if skillHits < 2 {
+		t.Errorf("agent only referenced %d/4 skills — skills may not be loaded into context.\nFull reply:\n%s", skillHits, reply)
+	}
+}
+
+// TestIntegration_SkillsSmokeTest runs the Python smoke tests inside the pod
+// to verify that skill scripts (rpc.py, kube.py) actually work against live
+// services (eRPC, Kubernetes API, Obol API).
+func TestIntegration_SkillsSmokeTest(t *testing.T) {
+	cfg := requireCluster(t)
+	models := requireOllama(t)
+
+	const id = "test-skills-smoke"
+	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
+
+	t.Logf("scaffolding OpenClaw instance %q", id)
+	scaffoldInstance(t, cfg, id, models)
+
+	t.Log("deploying via: obol openclaw sync " + id)
+	obolRun(t, cfg, "openclaw", "sync", id)
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	waitForPodReady(t, cfg, namespace)
+
+	// Find the smoke test script relative to the module root
+	moduleRoot := findModuleRoot()
+	if moduleRoot == "" {
+		t.Fatal("could not find module root")
+	}
+	smokeScript := filepath.Join(moduleRoot, "tests", "skills_smoke_test.py")
+	scriptData, err := os.ReadFile(smokeScript)
+	if err != nil {
+		t.Fatalf("failed to read smoke test script: %v", err)
+	}
+
+	// Pipe the smoke test into the pod via kubectl exec
+	t.Log("running skills smoke tests inside pod...")
+	obolBinary := filepath.Join(cfg.BinDir, "obol")
+	cmd := exec.Command(obolBinary, "kubectl",
+		"exec", "-i", "-c", "openclaw",
+		"-n", namespace, "deploy/openclaw", "--",
+		"python3", "-",
+	)
+	cmd.Stdin = strings.NewReader(string(scriptData))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("smoke tests failed: %v\nstdout:\n%s\nstderr:\n%s",
+			err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	t.Logf("smoke test output:\n%s", output)
+
+	// Verify all tests passed
+	if !strings.Contains(output, "0 failed") {
+		t.Errorf("some smoke tests failed:\n%s", output)
 	}
 }

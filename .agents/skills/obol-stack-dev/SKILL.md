@@ -108,20 +108,68 @@ go test ./internal/openclaw/                                    # Unit tests
 go test -tags integration -v -timeout 10m ./internal/openclaw/  # Integration tests
 ```
 
+## OpenClaw Skills System
+
+Skills are SKILL.md files (with optional scripts and references) that give the agent domain-specific capabilities. Delivered via host-path PVC injection to `/data/.openclaw/skills/` inside the pod.
+
+### Default Embedded Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `hello` | `SKILL.md` | Smoke test |
+| `obol-blockchain` | `SKILL.md`, `scripts/rpc.py`, `references/` | Ethereum JSON-RPC, ERC-20, ENS via eRPC |
+| `obol-k8s` | `SKILL.md`, `scripts/kube.py` | K8s cluster diagnostics via ServiceAccount API |
+| `obol-dvt` | `SKILL.md`, `references/api-examples.md` | DVT monitoring via Obol API |
+
+### Skills CLI
+
+```bash
+obol openclaw skills list                   # list installed skills
+obol openclaw skills sync                   # re-inject embedded defaults
+obol openclaw skills sync --from ./custom   # push custom skills
+obol openclaw skills add <package>          # add via openclaw CLI in pod
+obol openclaw skills remove <name>          # remove skill from pod
+```
+
+### Skills Delivery Flow
+
+1. `stageDefaultSkills(deploymentDir)` — copies embedded skills to deployment dir
+2. `injectSkillsToVolume(cfg, id, deploymentDir)` — copies to host PVC path (`$DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/`)
+3. `doSync()` — helmfile sync; OpenClaw file watcher discovers skills on startup
+
+### Skills Testing
+
+```bash
+# Unit tests (embedding + injection)
+go test -v -run TestGetEmbeddedSkillNames ./internal/embed/
+go test -v -run TestInjectSkillsToVolume ./internal/openclaw/
+
+# Integration tests (requires running cluster)
+go test -tags integration -v -run TestIntegration_Skills -timeout 10m ./internal/openclaw/
+
+# In-pod smoke tests (piped via kubectl exec)
+obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - < tests/skills_smoke_test.py
+```
+
 ## Key Source Files
 
 | File | Purpose |
 |------|---------|
-| `internal/openclaw/openclaw.go` | `Onboard()`, `Sync()`, `Delete()`, `buildLLMSpyRoutedOverlay()`, `generateOverlayValues()` |
+| `internal/openclaw/openclaw.go` | `Onboard()`, `Sync()`, `Delete()`, `buildLLMSpyRoutedOverlay()`, `generateOverlayValues()`, `stageDefaultSkills()`, `injectSkillsToVolume()` |
 | `internal/openclaw/import.go` | `DetectExistingConfig()`, `TranslateToOverlayYAML()` |
 | `internal/openclaw/overlay_test.go` | Unit tests for overlay generation |
-| `internal/openclaw/integration_test.go` | Full-cluster integration tests (build tag: `integration`) |
+| `internal/openclaw/skills_injection_test.go` | Unit tests for skill staging and volume injection |
+| `internal/openclaw/integration_test.go` | Full-cluster integration tests (build tag: `integration`) — includes skills + inference tests |
 | `internal/model/model.go` | `ConfigureLLMSpy()` — patches llmspy Secret + ConfigMap + restart |
 | `cmd/obol/model.go` | `obol model setup` CLI command |
-| `cmd/obol/openclaw.go` | `obol openclaw` CLI commands |
+| `cmd/obol/openclaw.go` | `obol openclaw` CLI commands (including `skills` subcommands) |
 | `internal/embed/infrastructure/base/templates/llm.yaml` | llmspy Kubernetes resources |
+| `internal/embed/skills/` | Embedded default skills (hello, obol-blockchain, obol-k8s, obol-dvt) |
+| `internal/embed/embed.go` | `CopySkills()`, `GetEmbeddedSkillNames()` |
+| `internal/embed/embed_skills_test.go` | Unit tests for skill embedding |
 | `internal/openclaw/chart/values.yaml` | Default per-instance model config |
 | `internal/openclaw/chart/templates/_helpers.tpl` | Renders model providers into OpenClaw JSON config |
+| `tests/skills_smoke_test.py` | In-pod Python smoke tests for all rich skills |
 
 ## Constraints
 
