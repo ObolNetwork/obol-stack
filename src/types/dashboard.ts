@@ -104,11 +104,11 @@ export interface AppData {
   appId: string;
   nodeMode: NodeModeType;
   status: ClientStatusType;
-  blocks: number;
-  finalized: number;
-  participation: number;
-  clients: ClientInfo[]; // Array of clients for this chain
-  distance: number; // Distance to justified
+  blocks?: number;
+  finalized?: number;
+  participation?: number;
+  clients?: ClientInfo[]; // Array of clients for this chain
+  distance?: number; // Distance to justified
   erpcStatus?: ErpcStatusData; // eRPC: network status from GET /
 }
 
