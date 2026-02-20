@@ -507,8 +507,8 @@ func TestIntegration_ZaiInference(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "zai",
 		APIKey:  apiKey,
-		ModelID: "glm-4-flash",
-		Display: "GLM-4 Flash",
+		ModelID: "glm-5",
+		Display: "GLM-5",
 	}
 
 	// Scaffold cloud overlay + deploy via obol openclaw sync
@@ -525,7 +525,7 @@ func TestIntegration_ZaiInference(t *testing.T) {
 	t.Logf("retrieved gateway token (%d chars)", len(token))
 
 	baseURL := portForward(t, cfg, namespace)
-	agentModel := "ollama/glm-4-flash" // routed through llmspy
+	agentModel := "ollama/glm-5" // routed through llmspy
 	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
 
 	reply := chatCompletion(t, baseURL, agentModel, token)
@@ -712,9 +712,11 @@ func TestIntegration_SkillsSync(t *testing.T) {
 		t.Fatalf("failed to write custom SKILL.md: %v", err)
 	}
 
-	// Sync custom skills via obol openclaw skills sync
-	t.Log("syncing custom skills via: obol openclaw skills sync --from " + customSkillsDir)
-	obolRun(t, cfg, "openclaw", "skills", "sync", "--from", customSkillsDir)
+	// Sync custom skills via obol openclaw skills sync (explicit instance ID
+	// required when multiple instances exist, e.g. "default" + test instance).
+	// Flags must precede the positional arg for urfave/cli.
+	t.Log("syncing custom skills via: obol openclaw skills sync --from " + customSkillsDir + " " + id)
+	obolRun(t, cfg, "openclaw", "skills", "sync", "--from", customSkillsDir, id)
 
 	// Verify custom skill landed in the volume path
 	volumePath := skillsVolumePath(cfg, id)
