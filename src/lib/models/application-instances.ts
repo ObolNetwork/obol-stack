@@ -145,7 +145,7 @@ export function validateApplicationInstance(
   app: string,
   data: unknown,
   base: BaseApplicationInstance
-) {
+): AnyApplicationInstance {
   const schema = AppInstanceDataSchemas[app as AppName];
   if (!schema) {
     throw new Error(`No schema defined for app: ${app}`);
@@ -163,7 +163,7 @@ export function validateApplicationInstance(
 
   const parsed = Value.Cast(schema, data);
 
-  return { ...base, ...parsed };
+  return { ...base, ...parsed } as AnyApplicationInstance;
 }
 
 export function isValidApp(app: string): app is AppName {

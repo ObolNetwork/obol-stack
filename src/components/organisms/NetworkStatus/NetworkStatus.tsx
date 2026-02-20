@@ -142,12 +142,14 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
       <MetricsGrid>
         <MetricItem>
           <MetricLabel>BLOCK HEIGHT</MetricLabel>
-          <MetricValue>{appData.blocks.toLocaleString()}</MetricValue>
+          <MetricValue>{appData.blocks?.toLocaleString() ?? '—'}</MetricValue>
         </MetricItem>
         {appData.nodeMode === 'fullMode' && (
           <MetricItem>
             <MetricLabel>FINALIZED EPOCH</MetricLabel>
-            <MetricValue>{appData.finalized.toLocaleString()}</MetricValue>
+            <MetricValue>
+              {appData.finalized?.toLocaleString() ?? '—'}
+            </MetricValue>
           </MetricItem>
         )}
         <MetricItem>
@@ -162,7 +164,7 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
                   : 'Unknown'}
           </MetricValue>
         </MetricItem>
-        {appData.nodeMode === 'fullMode' && (
+        {appData.nodeMode === 'fullMode' && appData.participation && (
           <MetricItem>
             <MetricLabel>PARTICIPATION</MetricLabel>
             <MetricValue>
