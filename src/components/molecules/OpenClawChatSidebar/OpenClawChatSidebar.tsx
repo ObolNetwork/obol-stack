@@ -15,13 +15,15 @@ interface OpenClawChatSidebarProps {
   onSidebarToggle: (isOpen: boolean) => void;
 }
 
+const MIN_WIDTH = 280;
+const DEFAULT_WIDTH = 448; // 28rem
+
 // Sidebar container with slide animation
 const SidebarOverlay = styled(Box, {
   position: 'fixed',
   top: 0,
   right: 0,
   bottom: 0,
-  width: '28rem',
   zIndex: 30,
   display: 'flex',
   flexDirection: 'column',
@@ -38,6 +40,23 @@ const SidebarOverlay = styled(Box, {
         transform: 'translateX(100%)',
       },
     },
+  },
+});
+
+const ResizeHandle = styled(Box, {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  width: '4px',
+  height: '100%',
+  cursor: 'col-resize',
+  zIndex: 32,
+  transition: 'background-color 0.15s ease',
+  '&:hover': {
+    backgroundColor: '#2FE4AB44',
+  },
+  '&:active': {
+    backgroundColor: '#2FE4AB88',
   },
 });
 
@@ -207,6 +226,46 @@ export function OpenClawChatSidebar({
     useOpenClawChat(instance?.id ?? '');
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(DEFAULT_WIDTH);
+
+  const handleResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      isDragging.current = true;
+      dragStartX.current = e.clientX;
+      dragStartWidth.current = sidebarWidth;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    },
+    [sidebarWidth]
+  );
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = dragStartX.current - e.clientX;
+      const newWidth = Math.min(
+        window.innerWidth,
+        Math.max(MIN_WIDTH, dragStartWidth.current + delta)
+      );
+      setSidebarWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
 
   // // Auto-scroll to bottom
   useEffect(() => {
@@ -236,7 +295,8 @@ export function OpenClawChatSidebar({
   return (
     <>
       {/* Sidebar panel */}
-      <SidebarOverlay isOpen={isSidebarOpen}>
+      <SidebarOverlay isOpen={isSidebarOpen} css={{ width: sidebarWidth }}>
+        <ResizeHandle onMouseDown={handleResizeMouseDown} />
         {/* Header */}
         <HeaderContainer>
           <Flex

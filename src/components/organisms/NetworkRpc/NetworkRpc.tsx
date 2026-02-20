@@ -1,14 +1,14 @@
 'use client';
 
-import React, { useState, useRef, useEffect, MouseEvent } from 'react';
+import React, { MouseEvent } from 'react';
 import { WalletClient } from 'viem';
-import { Box, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { useWalletClient } from 'wagmi';
-import { Up } from '@/icons';
 import { Card } from '../../atoms/Card';
 import { ChainChip } from '../../atoms/ChainChip';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { AppIcon } from '../../atoms/AppIcon';
+import { CopyButton } from '../../atoms/CopyButton';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
 import {
   AppData,
@@ -16,6 +16,14 @@ import {
   ChainName,
   ClientStatusType,
 } from '../../../types/dashboard';
+import {
+  TESTNETS,
+  sortNetworks,
+  networkToChainName,
+  networkToStatus,
+  chainIdFromEvmId,
+  erpcUrl,
+} from '../../../lib/utils/network-rpc';
 
 export interface NetworkRpcProps {
   appData: AppData;
@@ -27,7 +35,7 @@ const RpcHeader = styled(Flex, {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: '$sm',
-  marginBottom: '$lg',
+  marginBottom: '$md',
 });
 
 const CardTitle = styled(Text, {
@@ -37,7 +45,7 @@ const CardTitle = styled(Text, {
   lineHeight: '$base',
 });
 
-// ── Network cards ─────────────────────────────────────────────────────────────
+// ── Network list ──────────────────────────────────────────────────────────────
 
 const NetworkList = styled(Box, {
   display: 'flex',
@@ -56,12 +64,8 @@ const NetworkCardHeader = styled(Flex, {
   alignItems: 'center',
   gap: '$sm',
   padding: '$xs $sm',
-  cursor: 'pointer',
-  userSelect: 'none',
-  '&:hover [data-chevron]': { color: '$light' },
 });
 
-// Fixed-width chip wrapper so all rows align regardless of chain name length
 const ChipSlot = styled(Box, {
   minWidth: 76,
   flexShrink: 0,
@@ -69,109 +73,53 @@ const ChipSlot = styled(Box, {
 
 const TestnetBadge = styled(Text, {
   fontSize: '$1',
-  fontWeight: '$medium',
-  color: '$muted',
+  fontWeight: '$semibold',
+  color: '$body',
   textTransform: 'uppercase',
-  letterSpacing: '0.06em',
+  letterSpacing: '$wider',
   flexShrink: 0,
 });
 
 const HeaderSpacer = styled(Box, { flex: 1 });
 
-const ChevronWrap = styled(Box, {
-  width: 20,
-  height: 20,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-  transition: 'transform 0.25s ease',
-  // Up icon points up; rotate 180° when collapsed so it points down
-  transform: 'rotate(180deg)',
-  variants: {
-    expanded: {
-      true: { transform: 'rotate(0deg)' },
-    },
-  },
-});
+// ── Details section ───────────────────────────────────────────────────────────
 
-// ── Expanded body ─────────────────────────────────────────────────────────────
-
-const ExpandBody = styled(Box, {
-  overflow: 'hidden',
-  transition: 'opacity 0.25s ease',
-  variants: {
-    expanded: {
-      true: { opacity: 1 },
-      false: { opacity: 0 },
-    },
-  },
-});
-
-const BodyInner = styled(Box, {
+const DetailsSection = styled(Box, {
   borderTop: '1px solid $stroke',
   padding: '$xs $sm $sm',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xxs',
-});
-
-const DetailRow = styled(Flex, {
+  display: 'grid',
+  gridTemplateColumns: '72px 1fr',
+  columnGap: '$sm',
+  rowGap: '$xxs',
   alignItems: 'baseline',
-  gap: '$sm',
 });
 
+// $body = #9CC2C9 — clearly readable on dark bg, properly secondary
 const DetailLabel = styled(Text, {
-  fontSize: '$2',
-  color: '$muted',
-  flexShrink: 0,
-  width: 64,
+  fontSize: '$1',
+  fontWeight: '$semibold',
+  color: '$body',
+  textTransform: 'uppercase',
+  letterSpacing: '$wider',
+  whiteSpace: 'nowrap',
 });
 
+// $light = #D9EEF3 — bright and clearly legible
 const DetailValue = styled(Text, {
   fontSize: '$2',
   color: '$light',
   fontFamily: 'monospace',
   wordBreak: 'break-all',
+  lineHeight: '$base',
 });
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const EndpointRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xs',
+  minWidth: 0,
+});
 
-const TESTNETS = new Set(['hoodi', 'sepolia']);
-const NETWORK_ORDER = ['mainnet', 'sepolia', 'hoodi'];
-
-function sortNetworks(networks: ErpcNetwork[]): ErpcNetwork[] {
-  return [...networks].sort((a, b) => {
-    const ai = NETWORK_ORDER.indexOf(a.alias);
-    const bi = NETWORK_ORDER.indexOf(b.alias);
-    if (ai === -1 && bi === -1) return a.alias.localeCompare(b.alias);
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    return ai - bi;
-  });
-}
-
-function networkToChainName(alias: string): ChainName | null {
-  if (alias === 'mainnet' || alias === 'sepolia' || alias === 'hoodi') {
-    return alias as ChainName;
-  }
-  return null;
-}
-
-function networkToStatus(state: string): ClientStatusType {
-  return state === 'OK' ? 'synced' : 'error';
-}
-
-function chainIdFromEvmId(id: string): number | null {
-  const match = id.match(/^evm:(\d+)$/);
-  return match ? parseInt(match[1], 10) : null;
-}
-
-function erpcUrl(): string {
-  return process.env.NEXT_PUBLIC_ERPC_URL ?? 'https://obol.stack/rpc';
-}
-
-// ── NetworkRow with expand/collapse ──────────────────────────────────────────
+// ── NetworkRow ────────────────────────────────────────────────────────────────
 
 function NetworkRow({
   network,
@@ -180,88 +128,47 @@ function NetworkRow({
   network: ErpcNetwork;
   walletClient: WalletClient | null | undefined;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
   const chainName = networkToChainName(network.alias);
   const status = networkToStatus(network.state);
   const isTestnet = TESTNETS.has(network.alias);
   const chainId = chainIdFromEvmId(network.id);
   const endpoint = `${erpcUrl()}/${network.alias}`;
 
-  // Animate height on expand/collapse (same pattern as Accordion)
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    if (expanded) {
-      const h = el.scrollHeight;
-      el.style.height = '0px';
-      requestAnimationFrame(() => {
-        el.style.height = `${h}px`;
-      });
-    } else {
-      if (el.style.height === 'auto') {
-        el.style.height = `${el.scrollHeight}px`;
-        requestAnimationFrame(() => {
-          el.style.height = '0px';
-        });
-      } else {
-        el.style.height = '0px';
-      }
-    }
-  }, [expanded]);
-
-  const handleTransitionEnd = () => {
-    if (expanded && bodyRef.current) {
-      bodyRef.current.style.height = 'auto';
-    }
-  };
-
   return (
     <NetworkCardWrapper>
-      <NetworkCardHeader onClick={() => setExpanded(e => !e)}>
+      <NetworkCardHeader>
         <ChipSlot>
           <ChainChip variant={chainName ?? 'mainnet'} />
         </ChipSlot>
 
         {isTestnet && <TestnetBadge>testnet</TestnetBadge>}
 
-        <StatusPill status={status} />
-
         <HeaderSpacer />
 
-        {/* Stop click propagation so wallet button doesn't toggle accordion */}
+        <StatusPill status={status} />
+
         <Box onClick={(e: MouseEvent) => e.stopPropagation()}>
           <AddNetworkButton
             chainName={chainName ?? 'mainnet'}
             walletClient={chainName ? walletClient : null}
           />
         </Box>
-
-        <ChevronWrap expanded={expanded} data-chevron>
-          <Up size="s" color={theme.colors.body.value} />
-        </ChevronWrap>
       </NetworkCardHeader>
 
-      <ExpandBody
-        ref={bodyRef}
-        expanded={expanded}
-        onTransitionEnd={handleTransitionEnd}
-        style={{ height: 0 }}
-      >
-        <BodyInner>
-          <DetailRow>
-            <DetailLabel>Endpoint</DetailLabel>
-            <DetailValue>{endpoint}</DetailValue>
-          </DetailRow>
-          {chainId !== null && (
-            <DetailRow>
-              <DetailLabel>Chain ID</DetailLabel>
-              <DetailValue>{chainId}</DetailValue>
-            </DetailRow>
-          )}
-        </BodyInner>
-      </ExpandBody>
+      <DetailsSection>
+        <DetailLabel>Endpoint</DetailLabel>
+        <EndpointRow>
+          <DetailValue>{endpoint}</DetailValue>
+          <CopyButton text={endpoint} title="Copy endpoint" />
+        </EndpointRow>
+
+        {chainId !== null && (
+          <>
+            <DetailLabel>Chain ID</DetailLabel>
+            <DetailValue>{chainId}</DetailValue>
+          </>
+        )}
+      </DetailsSection>
     </NetworkCardWrapper>
   );
 }

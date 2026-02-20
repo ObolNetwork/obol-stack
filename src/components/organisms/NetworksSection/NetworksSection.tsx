@@ -53,9 +53,6 @@ export function NetworksSection({ apps }: NetworksSectionProps) {
     >
       <SectionTitle>Networks</SectionTitle>
       <CountBadge count={apps.length} />
-      {/* <AddNetworkButton disabled title="Coming soon">
-        + Add network
-      </AddNetworkButton> */}
     </Flex>
   );
 

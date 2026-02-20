@@ -109,10 +109,16 @@ export const EthereumInstanceSchema = Type.Intersect([
 export type BaseApplicationInstance = Static<
   typeof BaseApplicationInstanceSchema
 >;
-export type HeliosInstance = Static<typeof HeliosInstanceSchema>;
-export type AztecInstance = Static<typeof AztecInstanceSchema>;
-export type EthereumInstance = Static<typeof EthereumInstanceSchema>;
-export type ErpcInstance = Static<typeof ErpcInstanceSchema>;
+export type HeliosInstance = Static<typeof HeliosInstanceSchema> & {
+  app: 'helios';
+};
+export type AztecInstance = Static<typeof AztecInstanceSchema> & {
+  app: 'aztec';
+};
+export type EthereumInstance = Static<typeof EthereumInstanceSchema> & {
+  app: 'ethereum';
+};
+export type ErpcInstance = Static<typeof ErpcInstanceSchema> & { app: 'erpc' };
 
 //
 // App → schema mapping
@@ -139,7 +145,7 @@ export function validateApplicationInstance(
   app: string,
   data: unknown,
   base: BaseApplicationInstance
-) {
+): AnyApplicationInstance {
   const schema = AppInstanceDataSchemas[app as AppName];
   if (!schema) {
     throw new Error(`No schema defined for app: ${app}`);
@@ -157,7 +163,7 @@ export function validateApplicationInstance(
 
   const parsed = Value.Cast(schema, data);
 
-  return { ...base, ...parsed };
+  return { ...base, ...parsed } as AnyApplicationInstance;
 }
 
 export function isValidApp(app: string): app is AppName {
@@ -168,4 +174,10 @@ export function isEthereumInstance(
   instance: AnyApplicationInstance
 ): instance is EthereumInstance {
   return instance.app === 'ethereum';
+}
+
+export function isErpcInstance(
+  instance: AnyApplicationInstance
+): instance is ErpcInstance {
+  return instance.app === 'erpc';
 }

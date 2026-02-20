@@ -1,6 +1,7 @@
 // Atoms
 export { Card } from './atoms/Card';
 export { ChainChip } from './atoms/ChainChip';
+export { CopyButton } from './atoms/CopyButton';
 export { ChainIcon } from './atoms/ChainIcon';
 export { PercentageChip } from './atoms/PercentageChip';
 export { StatusIndicator } from './atoms/StatusIndicator';

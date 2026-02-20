@@ -23,7 +23,10 @@ import {
   getNodeModeFromAppInstance,
   parseVersion,
 } from '@/lib/utils/client-detection';
-import { isEthereumInstance } from '@/lib/models/application-instances';
+import {
+  isErpcInstance,
+  isEthereumInstance,
+} from '@/lib/models/application-instances';
 
 export async function GET() {
   try {
@@ -124,7 +127,7 @@ export async function GET() {
         blockHeight = executionClient.blockNumber || 0;
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
-      } else if (instance.app === 'erpc') {
+      } else if (isErpcInstance(instance)) {
         const erpcStatus = await clientMetrics.getErpcStatus(
           config.erpcBaseUrl
         );
@@ -142,11 +145,6 @@ export async function GET() {
             : anyOk
               ? CLIENT_STATUS.SYNCING
               : CLIENT_STATUS.ERROR,
-          blocks: 0,
-          finalized: 0,
-          participation: 0,
-          clients: [],
-          distance: 0,
           erpcStatus,
         });
         continue;
