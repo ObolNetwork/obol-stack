@@ -228,7 +228,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "sync",
-				Usage:     "Package a local skills directory into a ConfigMap",
+				Usage:     "Copy a local skills directory to the OpenClaw volume",
 				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{

@@ -1,11 +1,4 @@
-{{- $network := .Values.network -}}
 {{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
-{{- $chainId := 1 -}}  {{/* Default: mainnet */}}
-{{- if eq $network "hoodi" -}}
-  {{- $chainId = 560048 -}}
-{{- else if ne $network "mainnet" -}}
-  {{- fail (printf "Unknown network: %s. Supported networks: mainnet, hoodi" $network) -}}
-{{- end -}}
 {{/*
   erpc.gcp.obol.tech — internal, rate-limited eRPC gateway hosted by Obol.
   The Basic Auth credential below is knowingly included in the obol-stack source.
@@ -19,7 +12,7 @@ replicas: 1
 
 image:
   repository: ghcr.io/erpc/erpc
-  tag: 0.0.56
+  tag: 0.0.62
   pullPolicy: IfNotPresent
 
 # Config file
@@ -55,15 +48,32 @@ config: |-
   projects:
     - id: rpc
       upstreams:
-        - id: erpc-gcp
-          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/{{ $network }}/evm/{{ $chainId }}
+        - id: obol-rpc-mainnet
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/mainnet/evm/1
           evm:
-            chainId: {{ $chainId }}
+            chainId: 1
+        - id: obol-rpc-hoodi
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/hoodi/evm/560048
+          evm:
+            chainId: 560048
       networks:
         - architecture: evm
           evm:
-            chainId: {{ $chainId }}
-          alias: {{ $network }}
+            chainId: 1
+          alias: mainnet
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+        - architecture: evm
+          evm:
+            chainId: 560048
+          alias: hoodi
           failsafe:
             timeout:
               duration: 30s

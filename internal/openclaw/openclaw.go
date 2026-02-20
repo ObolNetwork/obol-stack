@@ -143,7 +143,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 					fmt.Printf("Warning: could not read existing config: %v\n", importErr)
 				}
 				if imported != nil && imported.WorkspaceDir != "" {
-					copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
 				}
 				return nil
 			}
@@ -236,7 +236,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		}
 		// Copy workspace files into the pod after sync succeeds
 		if imported != nil && imported.WorkspaceDir != "" {
-			copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+			copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
 		}
 		return nil
 	}
@@ -276,6 +276,14 @@ func doSync(cfg *config.Config, id string) error {
 		return fmt.Errorf("failed to sync OpenClaw user secrets: %w", err)
 	}
 
+	// Stage default skills and inject directly to the host-side PVC path.
+	// The local-path-provisioner creates the PV directory on the host at a
+	// predictable path ($DATA_DIR/openclaw-<id>/openclaw-data/), so we can
+	// pre-populate skills before helmfile sync runs. OpenClaw's file watcher
+	// on /data/.openclaw/skills/ picks them up at startup or at runtime.
+	stageDefaultSkills(deploymentDir)
+	injectSkillsToVolume(cfg, id, deploymentDir)
+
 	fmt.Printf("Syncing OpenClaw: %s/%s\n", appName, id)
 	fmt.Printf("Deployment directory: %s\n", deploymentDir)
 	fmt.Printf("Running helmfile sync...\n\n")
@@ -292,11 +300,6 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
-
-	// Stage default skills if not yet present (self-healing for pre-existing instances)
-	stageDefaultSkills(deploymentDir)
-	// Push staged skills to cluster as ConfigMap
-	syncStagedSkills(cfg, id, deploymentDir)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -406,36 +409,26 @@ func ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace string) erro
 	return nil
 }
 
-// copyWorkspaceToPod copies the local workspace directory into the OpenClaw pod's PVC.
+// copyWorkspaceToVolume copies the local workspace directory directly to the
+// host-side PVC path that maps to /data/.openclaw/workspace/ in the container.
 // This is non-fatal: failures print a warning and continue.
-func copyWorkspaceToPod(cfg *config.Config, id, workspaceDir string) {
+func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	targetDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
 	fmt.Printf("\nImporting workspace from %s...\n", workspaceDir)
 
-	// Wait for pod to be ready
-	podName, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 60)
-	if err != nil {
-		fmt.Printf("Warning: could not find ready pod, skipping workspace import: %v\n", err)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create workspace directory: %v\n", err)
 		return
 	}
 
-	// kubectl cp <src>/. <pod>:/data/.openclaw/workspace/ -n <namespace>
-	dest := fmt.Sprintf("%s:/data/.openclaw/workspace/", podName)
-	src := workspaceDir + "/."
-	cmd := exec.Command(kubectlBinary, "cp", src, dest, "-n", namespace)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Warning: workspace copy failed: %v\n%s", err, stderr.String())
+	if err := copyDirRecursive(workspaceDir, targetDir); err != nil {
+		fmt.Printf("Warning: workspace copy failed: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Imported workspace into pod %s\n", podName)
+	fmt.Printf("Imported workspace to volume\n")
 }
 
 // stageDefaultSkills writes embedded Obol skills to the deployment's config
@@ -465,18 +458,37 @@ func stageDefaultSkills(deploymentDir string) {
 	}
 }
 
-// syncStagedSkills pushes the skills directory (if present) to the cluster
-// as a ConfigMap via the existing SkillsSync mechanism. Called after helmfile
-// sync so the namespace already exists.
-func syncStagedSkills(cfg *config.Config, id, deploymentDir string) {
-	skillsDir := filepath.Join(deploymentDir, "skills")
-	info, err := os.Stat(skillsDir)
+// skillsVolumePath returns the host-side path to the OpenClaw skills
+// directory inside the PVC provisioned by local-path-provisioner.
+//
+// The local-path-provisioner creates PV directories at:
+//
+//	$DATA_DIR/<namespace>/<pvc-name>/
+//
+// The OpenClaw chart creates a PVC named "openclaw-data" mounted at /data
+// in the container. OpenClaw watches /data/.openclaw/skills/ for skill files.
+//
+// Host paths by mode:
+//
+//	Dev:  .workspace/data/openclaw-<id>/openclaw-data/.openclaw/skills/
+//	Prod: ~/.local/share/obol/openclaw-<id>/openclaw-data/.openclaw/skills/
+func skillsVolumePath(cfg *config.Config, id string) string {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "skills")
+}
+
+// injectSkillsToVolume copies staged skills directly to the host-side PVC
+// path that maps to /data/.openclaw/skills/ inside the OpenClaw container.
+// This is called before helmfile sync so skills are present at first pod boot.
+// OpenClaw's file watcher detects new/changed skills at runtime.
+func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string) {
+	skillsSrc := filepath.Join(deploymentDir, "skills")
+	info, err := os.Stat(skillsSrc)
 	if err != nil || !info.IsDir() {
 		return
 	}
 
-	// Check if there are actual skill subdirectories (not just empty dir)
-	entries, err := os.ReadDir(skillsDir)
+	entries, err := os.ReadDir(skillsSrc)
 	if err != nil {
 		return
 	}
@@ -491,10 +503,48 @@ func syncStagedSkills(cfg *config.Config, id, deploymentDir string) {
 		return
 	}
 
-	fmt.Println("Pushing skills to cluster...")
-	if err := SkillsSync(cfg, id, skillsDir); err != nil {
-		fmt.Printf("Warning: could not push skills to cluster: %v\n", err)
+	targetDir := skillsVolumePath(cfg, id)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create skills volume directory: %v\n", err)
+		return
 	}
+
+	fmt.Println("Injecting skills to volume...")
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		src := filepath.Join(skillsSrc, e.Name())
+		dst := filepath.Join(targetDir, e.Name())
+		if err := copyDirRecursive(src, dst); err != nil {
+			fmt.Printf("Warning: could not inject skill %s: %v\n", e.Name(), err)
+			continue
+		}
+		fmt.Printf("  ✓ Injected skill: %s\n", e.Name())
+	}
+}
+
+// copyDirRecursive copies a directory tree from src to dst, creating
+// directories and copying files with 0755/0644 permissions.
+func copyDirRecursive(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, 0644)
+	})
 }
 
 // waitForPod polls for a Running pod matching the openclaw label and returns its name.
@@ -943,64 +993,40 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	return nil
 }
 
-// SkillsSync packages a local skills directory into a ConfigMap and rolls the deployment
+// SkillsSync copies a local skills directory to the host-side PVC path that
+// maps to /data/.openclaw/skills/ inside the OpenClaw container. OpenClaw's
+// file watcher detects changes automatically — no pod restart needed.
 func SkillsSync(cfg *config.Config, id, skillsDir string) error {
-	namespace := fmt.Sprintf("%s-%s", appName, id)
-
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
-	}
-
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		return fmt.Errorf("skills directory not found: %s", skillsDir)
 	}
 
-	configMapName := fmt.Sprintf("openclaw-%s-skills", id)
-	archiveKey := "skills.tgz"
+	targetDir := skillsVolumePath(cfg, id)
 
-	fmt.Printf("Packaging skills from %s...\n", skillsDir)
+	fmt.Printf("Syncing skills from %s to volume...\n", skillsDir)
 
-	var archiveBuf bytes.Buffer
-	tarCmd := exec.Command("tar", "-czf", "-", "-C", skillsDir, ".")
-	tarCmd.Stdout = &archiveBuf
-	var tarStderr bytes.Buffer
-	tarCmd.Stderr = &tarStderr
-	if err := tarCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create skills archive: %w\n%s", err, tarStderr.String())
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create skills volume directory: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "openclaw-skills-*.tgz")
+	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(archiveBuf.Bytes()); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("failed to write archive: %w", err)
-	}
-	tmpFile.Close()
-
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-
-	delCmd := exec.Command(kubectlBinary, "delete", "configmap", configMapName,
-		"-n", namespace, "--ignore-not-found")
-	delCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	delCmd.Run()
-
-	fmt.Printf("Creating ConfigMap %s in namespace %s...\n", configMapName, namespace)
-	createCmd := exec.Command(kubectlBinary, "create", "configmap", configMapName,
-		"-n", namespace,
-		fmt.Sprintf("--from-file=%s=%s", archiveKey, tmpFile.Name()))
-	createCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var createStderr bytes.Buffer
-	createCmd.Stderr = &createStderr
-	if err := createCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create ConfigMap: %w\n%s", err, createStderr.String())
+		return fmt.Errorf("failed to read skills directory: %w", err)
 	}
 
-	fmt.Printf("✓ Skills ConfigMap updated: %s\n", configMapName)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		src := filepath.Join(skillsDir, e.Name())
+		dst := filepath.Join(targetDir, e.Name())
+		if err := copyDirRecursive(src, dst); err != nil {
+			return fmt.Errorf("failed to copy skill %s: %w", e.Name(), err)
+		}
+		fmt.Printf("  ✓ Synced skill: %s\n", e.Name())
+	}
+
+	fmt.Printf("✓ Skills synced to volume (file watcher will reload)\n")
 	return nil
 }
 
@@ -1235,10 +1261,11 @@ models:
 erpc:
   url: http://erpc.erpc.svc.cluster.local:4000/rpc
 
-# Skills: chart creates a default empty ConfigMap; populate with obol openclaw skills sync
+# Skills: injected directly to the host-side PVC path at
+# $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
+# OpenClaw's file watcher picks them up; no ConfigMap needed.
 skills:
-  enabled: true
-  createDefault: true
+  enabled: false
 
 # Agent init Job (enable to bootstrap workspace on first deploy)
 initJob:
