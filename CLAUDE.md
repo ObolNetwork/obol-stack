@@ -770,34 +770,38 @@ models:
 
 ### Overview
 
-OpenClaw skills are SKILL.md files that give the AI agent domain-specific capabilities. The Obol Stack ships default skills embedded in the `obol` binary and supports runtime skill management via the openclaw CLI inside the pod.
+OpenClaw skills are SKILL.md files (with optional scripts and references) that give the AI agent domain-specific capabilities. The Obol Stack ships default skills embedded in the `obol` binary and supports runtime skill management via the CLI.
 
-### Two Delivery Channels
+### Delivery Mechanism: Host-Path PVC Injection
 
-**Compile-time (default skills)**: SKILL.md files embedded in `internal/embed/skills/` are staged to the deployment config directory and pushed as a ConfigMap during `doSync()`.
+Skills are delivered by writing directly to the host filesystem at `$DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/`, which maps to `/data/.openclaw/skills/` inside the OpenClaw container via k3d volume mounts and local-path-provisioner.
 
-**Runtime**: `obol openclaw skills add/remove/list` runs the native openclaw CLI inside the pod via `kubectl exec -c openclaw`. Skills are persisted on the pod's PVC.
+**Advantages over ConfigMap approach**: No 1MB size limit, works before pod readiness, survives pod restarts, supports binary files and scripts.
 
-### Default Skills (MVP)
+### Default Skills
 
-| Skill | Purpose |
-|-------|---------|
-| `hello` | Smoke test — confirms skills are loaded |
-| `ethereum` | Ethereum JSON-RPC queries via the eRPC gateway (`/rpc/<network>`) |
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `hello` | `SKILL.md` | Smoke test — confirms skills pipeline works |
+| `obol-blockchain` | `SKILL.md`, `scripts/rpc.py`, `references/erc20-methods.md`, `references/common-contracts.md` | Ethereum JSON-RPC queries, ERC-20 token ops, ENS resolution, gas estimation via the eRPC gateway |
+| `obol-k8s` | `SKILL.md`, `scripts/kube.py` | Kubernetes cluster diagnostics — pods, logs, events, deployments via ServiceAccount API |
+| `obol-dvt` | `SKILL.md`, `references/api-examples.md` | Obol DVT cluster monitoring, operator audit, exit coordination via Obol API |
 
 ### Skill Delivery Flow
 
 ```
 Onboard / Sync:
   1. stageDefaultSkills(deploymentDir)
-     → writes embedded skills to $CONFIG_DIR/applications/openclaw/<id>/skills/
-     → skips if skills/ directory already exists
+     → copies embedded skills from internal/embed/skills/ to deploymentDir/skills/
+     → skips if skills/ directory already exists (preserves user customizations)
 
-  2. doSync() → helmfile sync (creates namespace, chart, pod)
+  2. injectSkillsToVolume(cfg, id, deploymentDir)
+     → copies skills/ from deployment dir to host PVC path:
+       $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
+     → this path is volume-mounted into the pod at /data/.openclaw/skills/
 
-  3. syncStagedSkills(cfg, id, deploymentDir)
-     → calls SkillsSync() which packages skills/ into ConfigMap openclaw-<id>-skills
-     → chart mounts ConfigMap into pod, extract-skills init container unpacks it
+  3. doSync() → helmfile sync (creates namespace, chart, pod)
+     → OpenClaw file watcher auto-discovers skills on startup
 ```
 
 ### Instance Resolution
@@ -810,21 +814,25 @@ All `obol openclaw` subcommands (except `onboard` and `list`) use `ResolveInstan
 ### CLI Commands
 
 ```bash
-obol openclaw skills list              # list installed skills (auto-resolves instance)
-obol openclaw skills add <package>     # add via openclaw CLI in pod
-obol openclaw skills remove <name>     # remove via openclaw CLI in pod
-obol openclaw skills sync --from <dir> # push local dir as ConfigMap (legacy)
+obol openclaw skills list                   # list installed skills (auto-resolves instance)
+obol openclaw skills add <package>          # add via openclaw CLI in pod
+obol openclaw skills remove <name>          # remove via openclaw CLI in pod
+obol openclaw skills sync                   # re-inject embedded defaults to volume
+obol openclaw skills sync --from <dir>      # push custom skills from local directory
 ```
 
 ### Key Source Files
 
 | File | Role |
 |------|------|
-| `internal/embed/skills/` | Embedded default SKILL.md files |
+| `internal/embed/skills/` | Embedded default SKILL.md files + scripts + references |
 | `internal/embed/embed.go` | `CopySkills()`, `GetEmbeddedSkillNames()` |
+| `internal/embed/embed_skills_test.go` | Unit tests for skill embedding and copying |
 | `internal/openclaw/resolve.go` | `ResolveInstance()`, `ListInstanceIDs()` |
-| `internal/openclaw/openclaw.go` | `stageDefaultSkills()`, `syncStagedSkills()`, `SkillAdd/Remove/List()` |
+| `internal/openclaw/openclaw.go` | `stageDefaultSkills()`, `injectSkillsToVolume()`, `skillsVolumePath()`, `SkillAdd/Remove/List/Sync()` |
+| `internal/openclaw/skills_injection_test.go` | Unit tests for staging and volume injection |
 | `cmd/obol/openclaw.go` | CLI wiring for `obol openclaw skills` subcommands |
+| `tests/skills_smoke_test.py` | In-pod Python smoke tests for all 3 rich skills |
 
 ## Network Install Implementation Details
 
@@ -1081,12 +1089,17 @@ obol network delete ethereum-<generated-name> --force
   - `aztec/helmfile.yaml.gotmpl`
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
-- `internal/embed/skills/` - Default OpenClaw skills (hello, ethereum) embedded in obol binary
+- `internal/embed/skills/` - Default OpenClaw skills (hello, obol-blockchain, obol-k8s, obol-dvt) embedded in obol binary
 
 **Skills system**:
 - `internal/openclaw/resolve.go` - Smart instance resolution (0/1/2+ instances)
 - `internal/embed/skills/hello/SKILL.md` - Hello world smoke-test skill
-- `internal/embed/skills/ethereum/SKILL.md` - Ethereum JSON-RPC via eRPC skill
+- `internal/embed/skills/obol-blockchain/` - Ethereum JSON-RPC, ERC-20, ENS via eRPC (SKILL.md + scripts/rpc.py + references/)
+- `internal/embed/skills/obol-k8s/` - Kubernetes cluster diagnostics (SKILL.md + scripts/kube.py)
+- `internal/embed/skills/obol-dvt/` - DVT cluster monitoring via Obol API (SKILL.md + references/api-examples.md)
+- `internal/embed/embed_skills_test.go` - Unit tests for skill embedding
+- `internal/openclaw/skills_injection_test.go` - Unit tests for skill staging and injection
+- `tests/skills_smoke_test.py` - In-pod Python smoke tests for all rich skills
 
 **Testing**:
 - `internal/openclaw/integration_test.go` - Full-cluster integration tests (Ollama, Anthropic, OpenAI inference through llmspy)
