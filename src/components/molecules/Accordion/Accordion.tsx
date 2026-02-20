@@ -109,21 +109,39 @@ export function Accordion({
   useEffect(() => {
     if (contentRef.current) {
       if (isExpanded) {
-        // First set height to auto to measure, then animate to that height
-        contentRef.current.style.height = 'auto';
+        // Measure then animate to that height
         const scrollHeight = contentRef.current.scrollHeight;
         contentRef.current.style.height = '0px';
-        // Force reflow then animate to the measured height
         requestAnimationFrame(() => {
           if (contentRef.current) {
             contentRef.current.style.height = `${scrollHeight}px`;
           }
         });
       } else {
-        contentRef.current.style.height = '0px';
+        // If currently 'auto' (set after open animation), pin to px first so
+        // the collapse transition has a concrete start value
+        if (contentRef.current.style.height === 'auto') {
+          const scrollHeight = contentRef.current.scrollHeight;
+          contentRef.current.style.height = `${scrollHeight}px`;
+          requestAnimationFrame(() => {
+            if (contentRef.current) {
+              contentRef.current.style.height = '0px';
+            }
+          });
+        } else {
+          contentRef.current.style.height = '0px';
+        }
       }
     }
   }, [isExpanded]);
+
+  // After the open animation finishes, switch to 'auto' so dynamic content
+  // (data loaded after mount) can grow the container freely
+  const handleTransitionEnd = () => {
+    if (isExpanded && contentRef.current) {
+      contentRef.current.style.height = 'auto';
+    }
+  };
 
   return (
     <AccordionContainer className={className}>
@@ -134,7 +152,11 @@ export function Accordion({
         </ChevronIcon>
       </AccordionHeader>
 
-      <AccordionContent ref={contentRef} expanded={isExpanded}>
+      <AccordionContent
+        ref={contentRef}
+        expanded={isExpanded}
+        onTransitionEnd={handleTransitionEnd}
+      >
         {children}
       </AccordionContent>
     </AccordionContainer>

@@ -16,6 +16,8 @@ const StyledFooter = styled(Box, {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  flexWrap: 'wrap',
+  gap: '$sm',
   fontSize: '$3',
   color: '$body',
 });
@@ -66,7 +68,7 @@ export function FooterBar({ className }: FooterBarProps) {
         {showVersionInfo && (
           <Flex
             css={{
-              alignContent: 'center',
+              alignItems: 'center',
               gap: '$xxs',
             }}
           >

@@ -1,2 +1,6 @@
-export { StatusIndicator } from './StatusIndicator';
-export type { StatusIndicatorProps } from './StatusIndicator';
+export { StatusIndicator, StatusPill } from './StatusIndicator';
+export type {
+  StatusIndicatorProps,
+  StatusPillProps,
+  StatusType,
+} from './StatusIndicator';

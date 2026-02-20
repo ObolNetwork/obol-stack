@@ -8,6 +8,10 @@ export const config = {
     process.env.NEXT_PUBLIC_PROMETHEUS_URL ||
     'http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090',
   erpcUrl: process.env.NEXT_PUBLIC_ERPC_URL || 'https://obol.stack/rpc',
+  // Server-side base URL for the eRPC status endpoint (GET /).
+  // Defaults to the in-cluster service; override with ERPC_BASE_URL for local port-forwarding.
+  erpcBaseUrl:
+    process.env.ERPC_BASE_URL || 'http://erpc.erpc.svc.cluster.local:4000',
   openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
   commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',

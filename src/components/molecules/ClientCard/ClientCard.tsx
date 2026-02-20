@@ -19,7 +19,8 @@ const Card = styled(Box, {
   alignItems: 'flex-start',
   gap: '$xxs',
   borderRadius: '$3',
-  background: '$bg03',
+  background: '$bg04',
+  border: '1px solid $stroke',
 });
 
 const ClientHeader = styled(Flex, {
@@ -95,19 +96,6 @@ export function ClientCard({
   status = 'synced',
   icon,
 }: ClientCardProps) {
-  const getStatusIndicatorStatus = () => {
-    switch (status) {
-      case 'synced':
-        return 'synced';
-      case 'syncing':
-        return 'unsynced';
-      case 'error':
-        return 'unsynced';
-      default:
-        return 'synced';
-    }
-  };
-
   return (
     <Card>
       <ClientHeader>
@@ -129,7 +117,7 @@ export function ClientCard({
             <ClientVersion>{version}</ClientVersion>
           </ClientDetails>
         </ClientInfo>
-        <StatusIndicator status={getStatusIndicatorStatus()} size="sm" />
+        <StatusIndicator status={status} size="sm" />
       </ClientHeader>
       <ClientMetrics>
         {peers !== null && (

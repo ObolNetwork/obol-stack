@@ -1,7 +1,11 @@
 'use client';
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Card } from '../../atoms/Card';
+import { Accordion } from '../../molecules/Accordion';
+import { CountBadge } from '../../atoms/CountBadge';
 import { OpenClawInstanceCard } from '../../molecules/OpenClawInstanceCard';
+import { LoadingState } from '../../molecules/LoadingState';
 import { useOpenClawInstances } from '../../../hooks/useOpenClaw';
 import type { OpenClawInstance } from '@/types/openclaw';
 
@@ -9,45 +13,17 @@ interface OpenClawListProps {
   onInstanceSelect?: (instance: OpenClawInstance) => void;
 }
 
-const Container = styled(Box, {
-  borderRadius: '$4',
-  backgroundColor: '$bg02',
-  border: '1px solid $stroke',
-  overflow: 'hidden',
-});
-
-const Header = styled(Flex, {
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '$md $lg',
-  borderBottom: '1px solid $stroke',
-});
-
-const TitleRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$sm',
-});
-
-const Title = styled(Text, {
+const SectionTitle = styled(Text, {
   fontSize: '$5',
   fontWeight: '$semibold',
   color: '$light',
 });
 
-const Badge = styled(Box, {
-  backgroundColor: '#2FE4AB20',
-  color: '#2FE4AB',
-  borderRadius: '12px',
-  padding: '2px 10px',
-  fontSize: '$1',
-  fontWeight: '$semibold',
-});
-
-const InstancesContainer = styled(Box, {
+const InstancesList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$xs',
-  padding: '$md $lg',
+  paddingTop: '$lg',
 });
 
 const EmptyMessage = styled(Text, {
@@ -60,31 +36,35 @@ const EmptyMessage = styled(Text, {
 export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
   const { instances, loading, error } = useOpenClawInstances();
 
-  return (
-    <Container>
-      <Header>
-        <TitleRow>
-          <Title> AI Agent Instances</Title>
-          {!loading && instances.length > 0 && (
-            <Badge>{instances.length}</Badge>
-          )}
-        </TitleRow>
-      </Header>
+  const headerContent = (
+    <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
+      <SectionTitle>AI Agent Instances</SectionTitle>
+      {!loading && instances.length > 0 && (
+        <CountBadge count={instances.length} />
+      )}
+    </Flex>
+  );
 
-      <InstancesContainer>
-        {loading && <EmptyMessage>Loading instances...</EmptyMessage>}
-        {error && <EmptyMessage>Failed to load instances</EmptyMessage>}
-        {!loading && !error && instances.length === 0 && (
-          <EmptyMessage>No OpenClaw instances found</EmptyMessage>
-        )}
-        {instances.map(instance => (
-          <OpenClawInstanceCard
-            key={instance.id}
-            instance={instance}
-            onSelect={onInstanceSelect}
-          />
-        ))}
-      </InstancesContainer>
-    </Container>
+  return (
+    <Card css={{ position: 'relative', overflow: 'hidden', padding: '0' }}>
+      <Accordion header={headerContent} defaultExpanded={true}>
+        <InstancesList>
+          {loading && (
+            <LoadingState size="small" message="Loading instances..." />
+          )}
+          {error && <EmptyMessage>Failed to load instances</EmptyMessage>}
+          {!loading && !error && instances.length === 0 && (
+            <EmptyMessage>No OpenClaw instances found</EmptyMessage>
+          )}
+          {instances.map(instance => (
+            <OpenClawInstanceCard
+              key={instance.id}
+              instance={instance}
+              onSelect={onInstanceSelect}
+            />
+          ))}
+        </InstancesList>
+      </Accordion>
+    </Card>
   );
 }

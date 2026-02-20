@@ -2,7 +2,14 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
-export type ClientType = 'execution' | 'consensus' | 'helios' | 'aztec';
+import type { ErpcStatusData } from '@/types/dashboard';
+
+export type ClientType =
+  | 'execution'
+  | 'consensus'
+  | 'helios'
+  | 'aztec'
+  | 'erpc';
 
 export interface ExecutionClientMetrics {
   peers: number;
@@ -33,6 +40,15 @@ export interface ConsensusClientMetrics {
   participation?: number; // Nimbus-specific enrichment
 }
 
+export interface ErpcClientMetrics {
+  peers: number;
+  version: string;
+  syncing: boolean;
+  blockNumber: number;
+  chainId: number;
+  upstreamCount: number;
+}
+
 export interface AztecClientMetrics {
   peers: number;
   version: string;
@@ -50,6 +66,32 @@ export class ClientMetricsService {
   constructor() {}
 
   /**
+   * Fetch the full eRPC status from GET / on the eRPC server.
+   * baseUrl should be the origin of the eRPC service (e.g. http://erpc.erpc.svc.cluster.local:4000)
+   */
+  async getErpcStatus(baseUrl: string): Promise<ErpcStatusData> {
+    try {
+      const origin = new URL(baseUrl).origin;
+      const resp = await fetch(`${origin}/`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = await resp.json();
+
+      const networks: ErpcStatusData['networks'] = (data?.rpc ?? []).map(
+        (n: { id: string; alias: string; state: string }) => ({
+          id: n.id,
+          alias: n.alias,
+          state: n.state,
+        })
+      );
+
+      return { networks };
+    } catch {
+      return { networks: [] };
+    }
+  }
+
+  /**
    * Unified method to fetch client metrics
    * @param type - 'execution' | 'consensus' | 'helios'
    * @param url - The client endpoint URL
@@ -62,6 +104,7 @@ export class ClientMetricsService {
     | ConsensusClientMetrics
     | HeliosClientMetrics
     | AztecClientMetrics
+    | ErpcClientMetrics
   > {
     switch (type) {
       case 'execution':
@@ -72,6 +115,8 @@ export class ClientMetricsService {
         return this.getConsensusMetrics(url);
       case 'aztec':
         return this.getAztecMetrics(url);
+      case 'erpc':
+        return this.getErpcMetrics(url);
       default:
         throw new Error(`Unknown client type: ${type}`);
     }
@@ -236,6 +281,80 @@ export class ClientMetricsService {
     }
   }
 
+  /**
+   * Fetch metrics from eRPC proxy
+   * The url should be the network-specific RPC endpoint (e.g. http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet)
+   */
+  private async getErpcMetrics(erpcUrl: string): Promise<ErpcClientMetrics> {
+    try {
+      const baseUrl = new URL(erpcUrl).origin;
+
+      const [blockNumberResult, chainIdResult, upstreamCountResult] =
+        await Promise.allSettled([
+          this.fetchBlockNumber(erpcUrl),
+          this.fetchChainId(erpcUrl),
+          this.fetchErpcUpstreamCount(baseUrl),
+        ]);
+
+      return {
+        peers: 0,
+        version: 'eRPC',
+        syncing: false,
+        blockNumber:
+          blockNumberResult.status === 'fulfilled'
+            ? blockNumberResult.value
+            : 0,
+        chainId: chainIdResult.status === 'fulfilled' ? chainIdResult.value : 1,
+        upstreamCount:
+          upstreamCountResult.status === 'fulfilled'
+            ? upstreamCountResult.value
+            : 0,
+      };
+    } catch (err) {
+      console.error('Failed to fetch eRPC metrics:', err);
+      return {
+        peers: 0,
+        version: 'eRPC',
+        syncing: false,
+        blockNumber: 0,
+        chainId: 1,
+        upstreamCount: 0,
+      };
+    }
+  }
+
+  /**
+   * Fetch the total number of configured upstreams from the eRPC admin taxonomy endpoint.
+   * Returns 0 gracefully if the admin endpoint is unavailable or requires auth.
+   */
+  private async fetchErpcUpstreamCount(baseUrl: string): Promise<number> {
+    try {
+      const resp = await fetch(`${baseUrl}/admin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'erpc_taxonomy',
+          params: [],
+          id: 1,
+        }),
+      });
+      const data = await resp.json();
+      const projects: Array<{
+        networks?: Array<{ upstreams?: unknown[] }>;
+      }> = data.result?.projects || [];
+      let count = 0;
+      for (const project of projects) {
+        for (const network of project.networks || []) {
+          count += (network.upstreams || []).length;
+        }
+      }
+      return count;
+    } catch {
+      return 0;
+    }
+  }
+
   /** ------------------- Helper methods ------------------- */
 
   private async fetchWeb3ClientVersion(url: string): Promise<string> {
@@ -270,6 +389,7 @@ export class ClientMetricsService {
   }
 
   private async fetchBlockNumber(url: string): Promise<number> {
+    console.log(`Fetching block number from ${url}`);
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

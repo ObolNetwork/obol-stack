@@ -124,6 +124,32 @@ export async function GET() {
         blockHeight = executionClient.blockNumber || 0;
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
+      } else if (instance.app === 'erpc') {
+        const erpcStatus = await clientMetrics.getErpcStatus(
+          config.erpcBaseUrl
+        );
+
+        const allOk = erpcStatus.networks.every(n => n.state === 'OK');
+        const anyOk = erpcStatus.networks.some(n => n.state === 'OK');
+
+        apps.push({
+          chainName: instance.network,
+          app: instance.app,
+          appId: instance.id,
+          nodeMode,
+          status: allOk
+            ? CLIENT_STATUS.SYNCED
+            : anyOk
+              ? CLIENT_STATUS.SYNCING
+              : CLIENT_STATUS.ERROR,
+          blocks: 0,
+          finalized: 0,
+          participation: 0,
+          clients: [],
+          distance: 0,
+          erpcStatus,
+        });
+        continue;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
         const appUrl = config.isInCluster
@@ -145,8 +171,24 @@ export async function GET() {
           internalUrl: instance.endpoints.rpc.internal,
         });
         blockHeight = result.blockNumber || 0;
-        finalizedEpoch = result.finalizedEpoch || 0;
-        participation = result.participation || 0;
+        finalizedEpoch =
+          ('finalizedEpoch' in result ? result.finalizedEpoch : 0) || 0;
+        participation =
+          ('participation' in result ? result.participation : 0) || 0;
+
+        apps.push({
+          chainName: instance.network,
+          app: instance.app,
+          appId: instance.id,
+          nodeMode,
+          status: CLIENT_STATUS.SYNCED,
+          blocks: blockHeight,
+          finalized: finalizedEpoch,
+          participation,
+          clients,
+          distance: 0,
+        });
+        continue;
       }
 
       apps.push({

@@ -89,6 +89,55 @@ const HeliosIcon = () => (
   />
 );
 
+const ErpcIcon = ({ size = 32 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="16" cy="16" r="16" fill="#1A1032" />
+    <circle cx="16" cy="16" r="6" stroke="#9167E4" strokeWidth="2" />
+    <circle cx="7" cy="10" r="2.5" fill="#9167E4" />
+    <circle cx="25" cy="10" r="2.5" fill="#9167E4" />
+    <circle cx="7" cy="22" r="2.5" fill="#9167E4" />
+    <circle cx="25" cy="22" r="2.5" fill="#9167E4" />
+    <line
+      x1="9.2"
+      y1="11.2"
+      x2="13"
+      y2="13.5"
+      stroke="#9167E4"
+      strokeWidth="1.5"
+    />
+    <line
+      x1="22.8"
+      y1="11.2"
+      x2="19"
+      y2="13.5"
+      stroke="#9167E4"
+      strokeWidth="1.5"
+    />
+    <line
+      x1="9.2"
+      y1="20.8"
+      x2="13"
+      y2="18.5"
+      stroke="#9167E4"
+      strokeWidth="1.5"
+    />
+    <line
+      x1="22.8"
+      y1="20.8"
+      x2="19"
+      y2="18.5"
+      stroke="#9167E4"
+      strokeWidth="1.5"
+    />
+  </svg>
+);
+
 const appIcons: Record<
   AppInstanceType,
   React.ComponentType<{ size?: number }>
@@ -96,6 +145,7 @@ const appIcons: Record<
   ethereum: EthereumIcon,
   aztec: AztecIcon,
   helios: HeliosIcon,
+  erpc: ErpcIcon,
 };
 
 export function AppIcon({ app, size = 32, className }: AppIconProps) {
