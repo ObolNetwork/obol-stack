@@ -1,7 +1,8 @@
 package dns
 
 import (
-	"runtime"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,7 +13,6 @@ func TestConstants(t *testing.T) {
 	if domain != "obol.stack" {
 		t.Errorf("domain = %q, want %q", domain, "obol.stack")
 	}
-
 	// macOS constants
 	if macHostPort != "5553" {
 		t.Errorf("macHostPort = %q, want %q", macHostPort, "5553")
@@ -21,38 +21,30 @@ func TestConstants(t *testing.T) {
 		t.Errorf("macResolverFile = %q, want %q", macResolverFile, "obol.stack")
 	}
 
-	// Linux constants
-	if linuxBindIP != "127.0.0.2" {
-		t.Errorf("linuxBindIP = %q, want %q", linuxBindIP, "127.0.0.2")
+	// Linux NM constants
+	if nmConfFile != "obol-dns.conf" {
+		t.Errorf("nmConfFile = %q, want %q", nmConfFile, "obol-dns.conf")
 	}
-	if linuxBindPort != "53" {
-		t.Errorf("linuxBindPort = %q, want %q", linuxBindPort, "53")
-	}
-	if resolvedDropInFile != "obol-stack.conf" {
-		t.Errorf("resolvedDropInFile = %q, want %q", resolvedDropInFile, "obol-stack.conf")
+	if nmDnsmasqFile != "obol-stack.conf" {
+		t.Errorf("nmDnsmasqFile = %q, want %q", nmDnsmasqFile, "obol-stack.conf")
 	}
 }
 
-func TestPortBindings(t *testing.T) {
-	bindings := portBindings()
-	if len(bindings) != 4 {
-		t.Fatalf("portBindings() returned %d elements, want 4", len(bindings))
-	}
+func TestGetNMDNSMode(t *testing.T) {
+	// Test with non-existent files — should return empty
+	mode := getNMDNSMode()
+	// We can't guarantee what the system returns, so just verify it doesn't panic
+	_ = mode
+}
 
-	switch runtime.GOOS {
-	case "darwin":
-		if bindings[1] != "5553:53/udp" {
-			t.Errorf("macOS UDP binding = %q, want %q", bindings[1], "5553:53/udp")
-		}
-		if bindings[3] != "5553:53/tcp" {
-			t.Errorf("macOS TCP binding = %q, want %q", bindings[3], "5553:53/tcp")
-		}
-	case "linux":
-		if bindings[1] != "127.0.0.2:53:53/udp" {
-			t.Errorf("Linux UDP binding = %q, want %q", bindings[1], "127.0.0.2:53:53/udp")
-		}
-		if bindings[3] != "127.0.0.2:53:53/tcp" {
-			t.Errorf("Linux TCP binding = %q, want %q", bindings[3], "127.0.0.2:53:53/tcp")
-		}
+func TestHasNMDnsmasqConfig(t *testing.T) {
+	// On a clean system without obol config, this should return false
+	// unless the test system has it installed
+	result := hasNMDnsmasqConfig()
+	path := filepath.Join(nmDnsmasqDir, nmDnsmasqFile)
+	_, fileExists := os.Stat(path)
+	if result != (fileExists == nil) {
+		t.Errorf("hasNMDnsmasqConfig() = %v, but file exists = %v", result, fileExists == nil)
 	}
 }
+

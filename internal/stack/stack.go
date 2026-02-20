@@ -14,25 +14,35 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/update"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
 const (
-	k3dConfigFile  = "k3d.yaml"
 	kubeconfigFile = "kubeconfig.yaml"
 	stackIDFile    = ".stack-id"
 )
 
 // Init initializes the stack configuration
-func Init(cfg *config.Config, force bool) error {
-	// Create flat stack config directory
-	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
+func Init(cfg *config.Config, force bool, backendName string) error {
+	// Check if any stack config already exists
+	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+	backendFilePath := filepath.Join(cfg.ConfigDir, stackBackendFile)
 
-	// Check if config already exists
-	if _, err := os.Stat(k3dConfigPath); err == nil {
-		if !force {
-			return fmt.Errorf("stack configuration already exists at %s\nUse --force to overwrite", k3dConfigPath)
-		}
+	hasExistingConfig := false
+	if _, err := os.Stat(stackIDPath); err == nil {
+		hasExistingConfig = true
+	}
+	if _, err := os.Stat(backendFilePath); err == nil {
+		hasExistingConfig = true
+	}
+	// Also check legacy k3d.yaml for backward compatibility
+	if _, err := os.Stat(filepath.Join(cfg.ConfigDir, k3dConfigFile)); err == nil {
+		hasExistingConfig = true
+	}
+
+	if hasExistingConfig && !force {
+		return fmt.Errorf("stack configuration already exists at %s\nUse --force to overwrite", cfg.ConfigDir)
 	}
 
 	if err := os.MkdirAll(cfg.ConfigDir, 0755); err != nil {
@@ -40,55 +50,50 @@ func Init(cfg *config.Config, force bool) error {
 	}
 
 	// Check if stack ID already exists (preserve on --force)
-	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	var stackID string
 	if existingID, err := os.ReadFile(stackIDPath); err == nil {
-		stackID = string(existingID)
+		stackID = strings.TrimSpace(string(existingID))
 		fmt.Printf("Preserving existing stack ID: %s (use purge to reset)\n", stackID)
 	} else {
-		// Generate unique stack ID only if one doesn't exist
 		stackID = petname.Generate(2, "-")
+	}
+
+	// Default to k3d if no backend specified
+	if backendName == "" {
+		backendName = BackendK3d
+	}
+
+	// If switching backends, destroy the old one first to prevent
+	// orphaned clusters (e.g., k3d containers still running after
+	// switching to k3s, or k3s process still alive after switching to k3d).
+	if hasExistingConfig && force {
+		destroyOldBackendIfSwitching(cfg, backendName, stackID)
+	}
+
+	backend, err := NewBackend(backendName)
+	if err != nil {
+		return err
 	}
 
 	fmt.Println("Initializing cluster configuration")
 	fmt.Printf("Cluster ID: %s\n", stackID)
+	fmt.Printf("Backend: %s\n", backend.Name())
 
-	absDataDir, err := filepath.Abs(cfg.DataDir)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
+	// Check prerequisites
+	if err := backend.Prerequisites(cfg); err != nil {
+		return fmt.Errorf("prerequisites check failed: %w", err)
 	}
 
-	absConfigDir, err := filepath.Abs(cfg.ConfigDir)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for config directory: %w", err)
+	// Generate backend-specific config
+	if err := backend.Init(cfg, stackID); err != nil {
+		return err
 	}
-
-	// Check if overwriting config
-	if _, err := os.Stat(k3dConfigPath); err == nil {
-		fmt.Printf("Overwriting existing stack configuration: %s\n", k3dConfigPath)
-	}
-
-	// Replace placeholder in k3d config with actual stack ID
-	k3dConfig := embed.K3dConfig
-	k3dConfig = strings.ReplaceAll(k3dConfig, "{{STACK_ID}}", stackID)
-	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
-	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
-
-	// Write k3d config with stack ID to destination
-	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
-		return fmt.Errorf("failed to write k3d config: %w", err)
-	}
-
-	fmt.Printf("K3d config saved to: %s\n", k3dConfigPath)
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
-	// Resolve placeholders: {{OLLAMA_HOST}} → host DNS for the cluster runtime.
-	// On macOS (Docker Desktop), host.docker.internal resolves to the host.
-	// On Linux (native Docker), host.k3d.internal is added by k3d.
-	ollamaHost := "host.k3d.internal"
-	if runtime.GOOS == "darwin" {
-		ollamaHost = "host.docker.internal"
-	}
+	// Resolve {{OLLAMA_HOST}} based on backend:
+	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
+	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
+	ollamaHost := ollamaHostForBackend(backendName)
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}": ollamaHost,
@@ -97,113 +102,106 @@ func Init(cfg *config.Config, force bool) error {
 	}
 	fmt.Printf("Defaults copied to: %s\n", defaultsDir)
 
-	// Store stack ID for later use (stackIDPath already declared above)
+	// Store stack ID
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
-	fmt.Printf("Initialized stack configuration: %s\n", k3dConfigPath)
+	// Save backend choice
+	if err := SaveBackend(cfg, backendName); err != nil {
+		return fmt.Errorf("failed to save backend choice: %w", err)
+	}
+
+	fmt.Printf("Initialized stack configuration\n")
 	fmt.Printf("Stack ID: %s\n", stackID)
 	return nil
 }
 
-// Up starts the k3d cluster
-func Up(cfg *config.Config) error {
-	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
-
-	// Check if config exists
-	if _, err := os.Stat(k3dConfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack config not found, run 'obol stack init' first")
+// destroyOldBackendIfSwitching checks if the backend is changing and tears down
+// the old one to prevent orphaned clusters running side by side.
+func destroyOldBackendIfSwitching(cfg *config.Config, newBackend, stackID string) {
+	oldBackend, err := LoadBackend(cfg)
+	if err != nil {
+		return
+	}
+	if oldBackend.Name() == newBackend {
+		return // same backend, nothing to clean up
 	}
 
-	// Get stack ID and full stack name
+	fmt.Printf("Switching backend from %s to %s — destroying old cluster\n", oldBackend.Name(), newBackend)
+
+	// Destroy the old backend's cluster (best-effort, don't block init)
+	if stackID != "" {
+		if err := oldBackend.Destroy(cfg, stackID); err != nil {
+			fmt.Printf("Warning: failed to destroy old %s cluster: %v\n", oldBackend.Name(), err)
+		}
+	}
+
+	// Clean up stale config files from the old backend
+	cleanupStaleBackendConfigs(cfg, oldBackend.Name())
+}
+
+// cleanupStaleBackendConfigs removes config files belonging to the old backend
+// that would otherwise linger and confuse detection.
+func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
+	var staleFiles []string
+	switch oldBackend {
+	case BackendK3d:
+		staleFiles = []string{k3dConfigFile}
+	case BackendK3s:
+		staleFiles = []string{k3sConfigFile, k3sPidFile, k3sLogFile}
+	}
+	for _, f := range staleFiles {
+		path := filepath.Join(cfg.ConfigDir, f)
+		if _, err := os.Stat(path); err == nil {
+			os.Remove(path)
+		}
+	}
+}
+
+// ollamaHostForBackend returns the hostname/IP that reaches the host Ollama
+// instance from inside the cluster.
+func ollamaHostForBackend(backendName string) string {
+	if backendName == BackendK3s {
+		// k3s runs directly on the host — Ollama is at localhost
+		return "127.0.0.1"
+	}
+	// k3d runs inside Docker containers
+	if runtime.GOOS == "darwin" {
+		return "host.docker.internal"
+	}
+	return "host.k3d.internal"
+}
+
+// Up starts the cluster using the configured backend
+func Up(cfg *config.Config) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
 
-	stackName := getStackName(cfg)
-
-	// Check if cluster already exists using cluster list
-	listCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
-	listCmdOutput, err := listCmd.Output()
+	backend, err := LoadBackend(cfg)
 	if err != nil {
-		return fmt.Errorf("k3d list command failed: %w", err)
+		return fmt.Errorf("failed to load backend: %w", err)
 	}
 
-	if stackExists(string(listCmdOutput), stackName) {
-		// Cluster exists - check if it's stopped or running
-		fmt.Printf("Stack already exists, attempting to start: %s (id: %s)\n", stackName, stackID)
-		startCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "start", stackName)
-		startCmd.Stdout = os.Stdout
-		startCmd.Stderr = os.Stderr
-		if err := startCmd.Run(); err != nil {
-			return fmt.Errorf("failed to start existing cluster: %w", err)
-		}
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
 
-		if err := syncDefaults(cfg, kubeconfigPath); err != nil {
-			return err
-		}
+	fmt.Printf("Starting stack (id: %s, backend: %s)\n", stackID, backend.Name())
 
-		// Ensure DNS resolver is running for wildcard *.obol.stack
-		if err := dns.EnsureRunning(); err != nil {
-			fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
-		} else if err := dns.ConfigureSystemResolver(); err != nil {
-			fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
-		}
-
-		fmt.Println("Stack restarted successfully")
-		fmt.Printf("Stack ID: %s\n", stackID)
-		return nil
-	}
-
-	fmt.Printf("Starting stack: %s (id: %s)\n", stackName, stackID)
-
-	// Get absolute path to data directory for k3d volume mount
-	absDataDir, err := filepath.Abs(cfg.DataDir)
+	kubeconfigData, err := backend.Up(cfg, stackID)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
-	}
-
-	// Create data directory if it doesn't exist
-	if err := os.MkdirAll(absDataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
-	}
-
-	// Check required ports are available before creating cluster
-	requiredPorts := []int{80, 8080, 443, 8443}
-	if err := checkPortsAvailable(requiredPorts); err != nil {
 		return err
 	}
 
-	// Create cluster using k3d config with custom name
-	fmt.Println("Creating k3d cluster...")
-	createCmd := exec.Command(
-		filepath.Join(cfg.BinDir, "k3d"),
-		"cluster", "create", stackName,
-		"--config", k3dConfigPath,
-		"--kubeconfig-update-default=false",
-	)
-	createCmd.Stdout = os.Stdout
-	createCmd.Stderr = os.Stderr
-
-	if err := createCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create cluster: %w", err)
-	}
-
-	// Export kubeconfig
-	kubeconfigCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "kubeconfig", "get", stackName)
-	kubeconfigData, err := kubeconfigCmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to get kubeconfig: %w", err)
-	}
-
+	// Write kubeconfig (backend may have already written it, but ensure consistency)
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	if err := syncDefaults(cfg, kubeconfigPath); err != nil {
+	// Sync defaults with backend-aware dataDir
+	dataDir := backend.DataDir(cfg)
+	if err := syncDefaults(cfg, kubeconfigPath, dataDir); err != nil {
 		return err
 	}
 
@@ -216,75 +214,43 @@ func Up(cfg *config.Config) error {
 
 	fmt.Printf("\nStack ID: %s\n", stackID)
 	fmt.Printf("\nStack started successfully.\nVisit http://obol.stack in your browser to get started.\nTry setting up an agent with `obol agent init` next.\n")
+	update.HintIfStale(cfg)
 	return nil
 }
 
-// Down stops the k3d cluster
+// Down stops the cluster
 func Down(cfg *config.Config) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, stack may not be initialized")
 	}
-	stackName := getStackName(cfg)
 
-	fmt.Printf("Stopping stack gracefully: %s (id: %s)\n", stackName, stackID)
-
-	// First attempt graceful stop (allows processes to shutdown gracefully)
-	stopCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "stop", stackName)
-	stopCmd.Stdout = os.Stdout
-	stopCmd.Stderr = os.Stderr
-
-	if err := stopCmd.Run(); err != nil {
-		fmt.Println("Graceful stop timed out or failed, forcing cluster deletion")
-		// Fallback to delete if stop fails
-		deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
-		deleteCmd.Stdout = os.Stdout
-		deleteCmd.Stderr = os.Stderr
-		if err := deleteCmd.Run(); err != nil {
-			return fmt.Errorf("failed to stop cluster: %w", err)
-		}
+	backend, err := LoadBackend(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to load backend: %w", err)
 	}
 
-	fmt.Println("Stack stopped successfully")
-	return nil
+	return backend.Down(cfg, stackID)
 }
 
 // Purge deletes the cluster config and optionally data
 func Purge(cfg *config.Config, force bool) error {
-	// Delete cluster containers
-	stackName := getStackName(cfg)
-	if stackName != "" {
-		if force {
-			// Force delete without graceful shutdown
-			fmt.Printf("Force deleting cluster containers: %s\n", stackName)
-			deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
-			deleteCmd.Stdout = os.Stdout
-			deleteCmd.Stderr = os.Stderr
-			if err := deleteCmd.Run(); err != nil {
-				fmt.Printf("Failed to delete cluster (may already be deleted): %v\n", err)
-			}
-			fmt.Println("Cluster containers force deleted")
-		} else {
-			// Graceful shutdown first to ensure data is written properly
-			fmt.Printf("Gracefully stopping cluster before deletion: %s\n", stackName)
-			stopCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "stop", stackName)
-			stopCmd.Stdout = os.Stdout
-			stopCmd.Stderr = os.Stderr
-			if err := stopCmd.Run(); err != nil {
-				fmt.Println("Graceful stop timed out or failed, proceeding with deletion anyway")
-			} else {
-				fmt.Println("Cluster stopped gracefully")
-			}
+	stackID := getStackID(cfg)
 
-			// Now delete the stopped cluster
-			fmt.Println("Deleting cluster containers")
-			deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
-			deleteCmd.Stdout = os.Stdout
-			deleteCmd.Stderr = os.Stderr
-			if err := deleteCmd.Run(); err != nil {
-				fmt.Printf("Failed to delete cluster (may already be deleted): %v\n", err)
-			}
-			fmt.Println("Cluster containers deleted")
+	backend, err := LoadBackend(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to load backend: %w", err)
+	}
+
+	// Destroy cluster if we have a stack ID
+	if stackID != "" {
+		if force {
+			fmt.Printf("Force destroying cluster (id: %s)\n", stackID)
+		} else {
+			fmt.Printf("Destroying cluster (id: %s)\n", stackID)
+		}
+		if err := backend.Destroy(cfg, stackID); err != nil {
+			fmt.Printf("Failed to destroy cluster (may already be deleted): %v\n", err)
 		}
 	}
 
@@ -293,15 +259,13 @@ func Purge(cfg *config.Config, force bool) error {
 	dns.RemoveSystemResolver()
 
 	// Remove stack config directory
-	stackConfigDir := filepath.Join(cfg.ConfigDir)
-	if err := os.RemoveAll(stackConfigDir); err != nil {
+	if err := os.RemoveAll(cfg.ConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
 	fmt.Println("Removed cluster config directory")
 
 	// Remove data directory only if force flag is set
 	if force {
-		// Use sudo to remove data directory since it may contain root-owned files
 		fmt.Println("Removing data directory...")
 		rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
 		rmCmd.Stdout = os.Stdout
@@ -320,12 +284,6 @@ func Purge(cfg *config.Config, force bool) error {
 	return nil
 }
 
-// stackExists checks if stack name exists in k3d cluster list output
-func stackExists(output, name string) bool {
-	// Check if the stack name appears in the output
-	return strings.Contains(output, name)
-}
-
 // getStackID reads the stored stack ID
 func getStackID(cfg *config.Config) string {
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
@@ -336,15 +294,6 @@ func getStackID(cfg *config.Config) string {
 	return strings.TrimSpace(string(data))
 }
 
-// getStackName returns the full stack name (obol-stack-{stackid})
-func getStackName(cfg *config.Config) string {
-	stackID := getStackID(cfg)
-	if stackID == "" {
-		return ""
-	}
-	return fmt.Sprintf("obol-stack-%s", stackID)
-}
-
 // GetStackID reads the stored stack ID (exported for use in main)
 func GetStackID(cfg *config.Config) string {
 	return getStackID(cfg)
@@ -352,10 +301,9 @@ func GetStackID(cfg *config.Config) string {
 
 // syncDefaults deploys the default infrastructure using helmfile
 // If deployment fails, the cluster is automatically stopped via Down()
-func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
+func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) error {
 	fmt.Println("Deploying default infrastructure with helmfile")
 
-	// Sync defaults using helmfile (handles Helm hooks properly)
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
@@ -375,13 +323,15 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string) error {
 		"--kubeconfig", kubeconfigPath,
 		"sync",
 	)
-	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	helmfileCmd.Env = append(os.Environ(),
+		"KUBECONFIG="+kubeconfigPath,
+		fmt.Sprintf("STACK_DATA_DIR=%s", dataDir),
+	)
 	helmfileCmd.Stdout = os.Stdout
 	helmfileCmd.Stderr = os.Stderr
 
 	if err := helmfileCmd.Run(); err != nil {
 		fmt.Println("Failed to apply defaults helmfile, stopping cluster")
-		// Attempt to stop the cluster to clean up
 		if downErr := Down(cfg); downErr != nil {
 			fmt.Printf("Failed to stop cluster during cleanup: %v\n", downErr)
 		}
@@ -407,6 +357,11 @@ func checkPortsAvailable(ports []int) error {
 	for _, port := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
+			// Permission denied (ports < 1024 on Linux require root) means the
+			// port is available but we can't bind as non-root — not a conflict.
+			if strings.Contains(err.Error(), "permission denied") {
+				continue
+			}
 			blocked = append(blocked, port)
 			continue
 		}

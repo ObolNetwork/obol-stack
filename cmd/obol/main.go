@@ -90,6 +90,10 @@ COMMANDS:
      helmfile        Run helmfile with stack kubeconfig (passthrough)
      k9s             Run k9s with stack kubeconfig (passthrough)
 
+   Updates:
+     update          Check for available updates
+     upgrade         Apply available helm chart upgrades
+
    Other:
      version         Show detailed version information
      help, h         Shows a list of commands or help for one command
@@ -123,9 +127,14 @@ GLOBAL OPTIONS:
 								Aliases: []string{"f"},
 								Usage:   "Force overwrite existing configuration",
 							},
+							&cli.StringFlag{
+								Name:    "backend",
+								Usage:   "Cluster backend: k3d (Docker-based) or k3s (bare-metal)",
+								Sources: cli.EnvVars("OBOL_BACKEND"),
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Init(cfg, cmd.Bool("force"))
+							return stack.Init(cfg, cmd.Bool("force"), cmd.String("backend"))
 						},
 					},
 					{
@@ -436,6 +445,8 @@ GLOBAL OPTIONS:
 					return nil
 				},
 			},
+			updateCommand(cfg),
+			upgradeCommand(cfg),
 			networkCommand(cfg),
 			openclawCommand(cfg),
 			inferenceCommand(cfg),

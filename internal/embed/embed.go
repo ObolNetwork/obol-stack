@@ -15,6 +15,9 @@ import (
 //go:embed k3d-config.yaml
 var K3dConfig string
 
+//go:embed k3s-config.yaml
+var K3sConfig string
+
 //go:embed all:infrastructure
 var infrastructureFS embed.FS
 
@@ -97,6 +100,15 @@ func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
 	content, err := networksFS.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s from network %s: %w", filename, networkName, err)
+	}
+	return content, nil
+}
+
+// ReadInfrastructureFile reads a file from the embedded infrastructure directory
+func ReadInfrastructureFile(path string) ([]byte, error) {
+	content, err := infrastructureFS.ReadFile(filepath.Join("infrastructure", path))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read infrastructure file %s: %w", path, err)
 	}
 	return content, nil
 }
