@@ -14,6 +14,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
+	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/mark3labs/x402-go"
 	"github.com/urfave/cli/v3"
 )
@@ -89,6 +90,8 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 				PricePerRequest: cmd.String("price"),
 				Chain:           cmd.String("chain"),
 				FacilitatorURL:  cmd.String("facilitator"),
+				TEEType:         cmd.String("tee"),
+				ModelHash:       cmd.String("model-hash"),
 			}
 			if err := store.Create(d, cmd.Bool("force")); err != nil {
 				if errors.Is(err, inference.ErrDeploymentExists) {
@@ -240,8 +243,15 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 				return err
 			}
 
-			// Load (or generate) the SE key to expose the public key.
-			k, keyErr := enclave.NewKey(d.EnclaveTag)
+			// Load (or generate) the key to expose the public key.
+			// Use TEE backend when TEEType is set, otherwise use SE.
+			var k enclave.Key
+			var keyErr error
+			if d.TEEType != "" {
+				k, keyErr = tee.NewKey(d.EnclaveTag, d.ModelHash)
+			} else {
+				k, keyErr = enclave.NewKey(d.EnclaveTag)
+			}
 
 			if cmd.Bool("json") {
 				out := map[string]any{
@@ -371,13 +381,22 @@ identity.`,
 			// Try to resolve as deployment name first, fall back to raw tag.
 			store := inference.NewStore(cfg.ConfigDir)
 			tag := nameOrTag
+			var teeType, modelHash string
 			if d, err := store.Get(nameOrTag); err == nil {
 				tag = d.EnclaveTag
+				teeType = d.TEEType
+				modelHash = d.ModelHash
 			}
 
-			k, err := enclave.NewKey(tag)
-			if err != nil {
-				return fmt.Errorf("enclave key: %w", err)
+			var k enclave.Key
+			var keyErr error
+			if teeType != "" {
+				k, keyErr = tee.NewKey(tag, modelHash)
+			} else {
+				k, keyErr = enclave.NewKey(tag)
+			}
+			if keyErr != nil {
+				return fmt.Errorf("key: %w", keyErr)
 			}
 
 			if cmd.Bool("json") {
@@ -421,6 +440,17 @@ For managed deployments use 'obol inference deploy'.`,
 				return fmt.Errorf("usage: obol inference serve --wallet <address> [flags]")
 			}
 
+			teeType := cmd.String("tee")
+			modelHash := cmd.String("model-hash")
+			if teeType != "" {
+				if _, err := tee.ParseTEEType(teeType); err != nil {
+					return err
+				}
+				if modelHash == "" {
+					return fmt.Errorf("--model-hash is required when --tee is set")
+				}
+			}
+
 			chain, err := resolveChain(cmd.String("chain"))
 			if err != nil {
 				return err
@@ -434,6 +464,8 @@ For managed deployments use 'obol inference deploy'.`,
 				Chain:           chain,
 				FacilitatorURL:  cmd.String("facilitator"),
 				EnclaveTag:      cmd.String("enclave-tag"),
+				TEEType:         teeType,
+				ModelHash:       modelHash,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create gateway: %w", err)
@@ -535,6 +567,16 @@ func deployFlags() []cli.Flag {
 			Usage: "Host-local port mapped from the container's Ollama port 11434 (default 11435)",
 			Value: 11435,
 		},
+		&cli.StringFlag{
+			Name:    "tee",
+			Usage:   "Linux TEE backend: tdx, snp, nitro, or stub (dev mode)",
+			Sources: cli.EnvVars("OBOL_TEE_TYPE"),
+		},
+		&cli.StringFlag{
+			Name:    "model-hash",
+			Usage:   "SHA-256 of model weights bound into TEE attestation (required with --tee)",
+			Sources: cli.EnvVars("OBOL_MODEL_HASH"),
+		},
 	}
 }
 
@@ -585,11 +627,27 @@ func applyFlags(cmd *cli.Command, d *inference.Deployment) {
 	if cmd.IsSet("vm-host-port") {
 		d.VMHostPort = int(cmd.Int("vm-host-port"))
 	}
+	if v := cmd.String("tee"); v != "" {
+		d.TEEType = v
+	}
+	if v := cmd.String("model-hash"); v != "" {
+		d.ModelHash = v
+	}
 }
 
 // runGateway starts the inference gateway for a Deployment and blocks until
 // shutdown.
 func runGateway(d *inference.Deployment) error {
+	// Validate TEE type if set.
+	if d.TEEType != "" {
+		if _, err := tee.ParseTEEType(d.TEEType); err != nil {
+			return err
+		}
+		if d.ModelHash == "" {
+			return fmt.Errorf("--model-hash is required when --tee is set")
+		}
+	}
+
 	chain, err := resolveChain(d.Chain)
 	if err != nil {
 		return err
@@ -608,6 +666,8 @@ func runGateway(d *inference.Deployment) error {
 		VMCPUs:          d.VMCPUs,
 		VMMemoryMB:      d.VMMemoryMB,
 		VMHostPort:      d.VMHostPort,
+		TEEType:         d.TEEType,
+		ModelHash:       d.ModelHash,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)

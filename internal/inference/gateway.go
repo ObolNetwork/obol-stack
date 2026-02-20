@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
+	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/mark3labs/x402-go"
 	x402http "github.com/mark3labs/x402-go/http"
 )
@@ -79,14 +81,26 @@ type GatewayConfig struct {
 	// VMBinary is the path to the container CLI binary.
 	// Defaults to "container" (PATH lookup).
 	VMBinary string
+
+	// TEEType specifies the Linux TEE backend. When non-empty, the gateway
+	// uses internal/tee instead of internal/enclave for key management.
+	// Valid values: "tdx", "snp", "nitro", "stub".
+	// Mutually exclusive with EnclaveTag.
+	TEEType string
+
+	// ModelHash is the hex-encoded SHA-256 of the model being served.
+	// Required when TEEType is set. Bound into the TEE attestation user_data
+	// so verifiers can confirm the model identity.
+	ModelHash string
 }
 
 // Gateway is an x402-enabled reverse proxy for LLM inference with optional
-// Secure Enclave request encryption and optional container-isolated upstream.
+// Secure Enclave or TEE request encryption and optional container-isolated upstream.
 type Gateway struct {
 	config    GatewayConfig
 	server    *http.Server
 	container *ContainerManager // non-nil when VMMode is active
+	seKey     enclave.Key       // non-nil when TEE or SE mode is active
 }
 
 // NewGateway creates a new inference gateway with the given configuration.
@@ -143,9 +157,26 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	}
 	paymentMiddleware := x402http.NewX402Middleware(x402Config)
 
-	// Optionally initialise SE enclave middleware.
+	// Initialise key backend: TEE (Linux) or SE (macOS), mutually exclusive.
 	var em *enclaveMiddleware
-	if g.config.EnclaveTag != "" {
+	switch {
+	case g.config.TEEType != "":
+		// Linux TEE path — generate key inside TEE (or stub).
+		deployName := g.config.EnclaveTag
+		if deployName == "" {
+			deployName = "com.obol.inference.default"
+		}
+		seKey, keyErr := tee.NewKey(deployName, g.config.ModelHash)
+		if keyErr != nil {
+			return nil, fmt.Errorf("tee key: %w", keyErr)
+		}
+		g.seKey = seKey
+		em = &enclaveMiddleware{key: seKey}
+		log.Printf("  tee:       type=%s tag=%q pubkey=%x...",
+			g.config.TEEType, seKey.Tag(), seKey.PublicKeyBytes()[:8])
+
+	case g.config.EnclaveTag != "":
+		// macOS Secure Enclave path (existing).
 		if err := enclave.CheckSIP(); err != nil {
 			return nil, fmt.Errorf("enclave SIP check failed: %w", err)
 		}
@@ -153,6 +184,7 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("enclave middleware: %w", err)
 		}
+		g.seKey = em.key
 		log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
 			em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
 	}
@@ -186,9 +218,24 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	})
 
 	// Enclave public key endpoint — unauthenticated, no payment required.
-	// Only registered when enclave mode is active.
+	// Only registered when enclave/TEE mode is active.
 	if em != nil {
 		mux.HandleFunc("GET /v1/enclave/pubkey", em.handlePubkey)
+	}
+
+	// TEE attestation endpoint — returns hardware-signed quote binding
+	// the gateway's public key to the model being served.
+	// Only registered when TEE mode is active.
+	if g.config.TEEType != "" && g.seKey != nil {
+		mux.HandleFunc("GET /v1/attestation", func(w http.ResponseWriter, r *http.Request) {
+			report, err := tee.Attest(g.seKey, g.config.ModelHash)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(report)
+		})
 	}
 
 	// Protected inference endpoints (x402 payment + optional SE decryption).
@@ -250,7 +297,9 @@ func (g *Gateway) Start() error {
 	log.Printf("  price:       %s USDC/request", g.config.PricePerRequest)
 	log.Printf("  chain:       %s", g.config.Chain.NetworkID)
 	log.Printf("  facilitator: %s", g.config.FacilitatorURL)
-	if g.config.EnclaveTag == "" {
+	if g.config.TEEType != "" {
+		log.Printf("  tee:         %s (model_hash=%s)", g.config.TEEType, g.config.ModelHash)
+	} else if g.config.EnclaveTag == "" {
 		log.Printf("  enclave:     disabled")
 	}
 

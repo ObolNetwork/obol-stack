@@ -309,3 +309,149 @@ func TestGateway_ModelsEndpoint_WithPayment(t *testing.T) {
 		t.Errorf("expected 200 with payment, got %d", resp.StatusCode)
 	}
 }
+
+// ── TEE Mode Tests ────────────────────────────────────────────────────────────
+
+// newTestGatewayTEE starts a gateway with TEE stub mode enabled.
+func newTestGatewayTEE(t *testing.T, facilitatorURL, upstreamURL string) *httptest.Server {
+	t.Helper()
+	gw, err := NewGateway(GatewayConfig{
+		UpstreamURL:     upstreamURL,
+		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		PricePerRequest: "0.001",
+		Chain:           x402.BaseSepolia,
+		FacilitatorURL:  facilitatorURL,
+		VerifyOnly:      true,
+		TEEType:         "stub",
+		ModelHash:       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	handler, err := gw.buildHandler(upstreamURL)
+	if err != nil {
+		t.Fatalf("buildHandler: %v", err)
+	}
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestGateway_TEE_Attestation(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGatewayTEE(t, fac.URL, ollama.URL)
+
+	resp, err := http.Get(gw.URL + "/v1/attestation")
+	if err != nil {
+		t.Fatalf("GET /v1/attestation: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var report struct {
+		TEEType   string `json:"tee_type"`
+		Pubkey    string `json:"pubkey"`
+		ModelHash string `json:"model_hash"`
+		Quote     []byte `json:"quote"`
+		Timestamp int64  `json:"timestamp"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if report.TEEType != "stub" {
+		t.Errorf("tee_type = %q, want %q", report.TEEType, "stub")
+	}
+	if report.Pubkey == "" {
+		t.Error("pubkey should not be empty")
+	}
+	if report.ModelHash == "" {
+		t.Error("model_hash should not be empty")
+	}
+	if len(report.Quote) == 0 {
+		t.Error("quote should not be empty")
+	}
+	if report.Timestamp == 0 {
+		t.Error("timestamp should not be zero")
+	}
+}
+
+func TestGateway_TEE_PubkeyEndpoint(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGatewayTEE(t, fac.URL, ollama.URL)
+
+	resp, err := http.Get(gw.URL + "/v1/enclave/pubkey")
+	if err != nil {
+		t.Fatalf("GET /v1/enclave/pubkey: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var pk struct {
+		Pubkey    string `json:"pubkey"`
+		Algorithm string `json:"algorithm"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pk); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if pk.Pubkey == "" {
+		t.Error("pubkey should not be empty")
+	}
+}
+
+func TestGateway_TEE_ECIES_RoundTrip(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGatewayTEE(t, fac.URL, ollama.URL)
+
+	// Fetch pubkey.
+	resp, err := http.Get(gw.URL + "/v1/enclave/pubkey")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var pk struct {
+		Pubkey string `json:"pubkey"`
+	}
+	json.NewDecoder(resp.Body).Decode(&pk)
+
+	if pk.Pubkey == "" {
+		t.Fatal("empty pubkey from gateway")
+	}
+
+	// This confirms the TEE key is accessible via the standard enclave/pubkey endpoint.
+	// Full ECIES encrypt→decrypt is tested in internal/tee/tee_test.go.
+	t.Logf("TEE stub pubkey: %s...%s", pk.Pubkey[:16], pk.Pubkey[len(pk.Pubkey)-8:])
+}
+
+func TestGateway_NoTEE_NoAttestationEndpoint(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGateway(t, fac.URL, ollama.URL, false)
+
+	// /v1/attestation should NOT be registered when TEE is disabled.
+	resp, err := http.Get(gw.URL + "/v1/attestation")
+	if err != nil {
+		t.Fatalf("GET /v1/attestation: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Without a registered handler, the default mux route (proxy) handles it.
+	// It should NOT return 200 with an attestation report.
+	if resp.StatusCode == http.StatusOK {
+		var report struct {
+			TEEType string `json:"tee_type"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&report); err == nil && report.TEEType != "" {
+			t.Error("/v1/attestation should not be available when TEE mode is disabled")
+		}
+	}
+}

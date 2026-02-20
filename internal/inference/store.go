@@ -67,6 +67,15 @@ type Deployment struct {
 	// container (default 11435).  Must not conflict with other deployments.
 	VMHostPort int `json:"vm_host_port,omitempty"`
 
+	// TEEType is the Linux TEE backend ("tdx", "snp", "nitro", "stub").
+	// Empty means macOS Secure Enclave mode.
+	// Mutually exclusive with EnclaveTag-based SE mode on macOS.
+	TEEType string `json:"tee_type,omitempty"`
+
+	// ModelHash is the hex-encoded SHA-256 of the model being served.
+	// Required when TEEType is set. Bound into the TEE attestation user_data.
+	ModelHash string `json:"model_hash,omitempty"`
+
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 
