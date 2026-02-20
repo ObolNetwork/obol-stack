@@ -23,6 +23,8 @@ prometheus:
 prometheusOperator:
   admissionWebhooks:
     enabled: false  # Disable webhook pre-install hooks (avoids timeout on fresh k3s)
+  tls:
+    enabled: false  # Disable TLS secret volume mount (no admission webhook = no cert needed)
 
 grafana:
   enabled: false  # Enable when we want UI access
