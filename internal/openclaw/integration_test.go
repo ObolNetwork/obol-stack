@@ -600,7 +600,7 @@ func TestIntegration_SkillsStagedOnSync(t *testing.T) {
 	// 1. Verify skills were staged in the deployment directory
 	deployDir := deploymentPath(cfg, id)
 	skillsDir := filepath.Join(deployDir, "skills")
-	expectedSkills := []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"}
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
 
 	for _, skill := range expectedSkills {
 		skillMD := filepath.Join(skillsDir, skill, "SKILL.md")
@@ -617,9 +617,9 @@ func TestIntegration_SkillsStagedOnSync(t *testing.T) {
 
 	// Verify scripts and references were also staged
 	for _, sub := range []string{
-		"obol-blockchain/scripts/rpc.py",
-		"obol-k8s/scripts/kube.py",
-		"obol-dvt/references/api-examples.md",
+		"ethereum-networks/scripts/rpc.py",
+		"obol-stack/scripts/kube.py",
+		"distributed-validators/references/api-examples.md",
 	} {
 		if _, err := os.Stat(filepath.Join(skillsDir, sub)); err != nil {
 			t.Errorf("missing staged file %s: %v", sub, err)
@@ -664,7 +664,7 @@ func TestIntegration_SkillsVisibleInPod(t *testing.T) {
 	)
 	t.Logf("skills visible in pod:\n%s", output)
 
-	expectedSkills := []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"}
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
 	for _, skill := range expectedSkills {
 		if !strings.Contains(output, skill) {
 			t.Errorf("skill %q not visible in pod; ls output:\n%s", skill, output)
@@ -675,12 +675,12 @@ func TestIntegration_SkillsVisibleInPod(t *testing.T) {
 	mdContent := obolRun(t, cfg, "kubectl",
 		"exec", "-c", "openclaw",
 		"-n", namespace, "deploy/openclaw", "--",
-		"head", "-5", "/data/.openclaw/skills/obol-blockchain/SKILL.md",
+		"head", "-5", "/data/.openclaw/skills/ethereum-networks/SKILL.md",
 	)
-	if !strings.Contains(mdContent, "obol-blockchain") && !strings.Contains(mdContent, "blockchain") {
-		t.Errorf("obol-blockchain SKILL.md not readable in pod; got:\n%s", mdContent)
+	if !strings.Contains(mdContent, "ethereum-networks") && !strings.Contains(mdContent, "Ethereum") {
+		t.Errorf("ethereum-networks SKILL.md not readable in pod; got:\n%s", mdContent)
 	}
-	t.Logf("obol-blockchain SKILL.md header in pod:\n%s", mdContent)
+	t.Logf("ethereum-networks SKILL.md header in pod:\n%s", mdContent)
 }
 
 // TestIntegration_SkillsSync verifies that `obol openclaw skills sync --from`
@@ -778,7 +778,7 @@ func TestIntegration_SkillsIdempotentSync(t *testing.T) {
 	}
 
 	// Embedded skills should also still be present (from first sync)
-	for _, skill := range []string{"hello", "obol-blockchain"} {
+	for _, skill := range []string{"ethereum-networks", "distributed-validators"} {
 		skillMD := filepath.Join(deployDir, "skills", skill, "SKILL.md")
 		if _, err := os.Stat(skillMD); err != nil {
 			t.Errorf("embedded skill %q removed after re-sync: %v", skill, err)
@@ -828,16 +828,16 @@ func TestIntegration_SkillInference(t *testing.T) {
 
 	// The agent must mention at least 2 of our 4 embedded skills.
 	// We check for partial matches to be resilient to model output variations
-	// (e.g., "obol-blockchain" vs "obol blockchain" vs "Obol Blockchain").
+	// (e.g., "ethereum-networks" vs "ethereum networks" vs "Ethereum Networks").
 	skillHits := 0
 	skillChecks := []struct {
 		name     string
 		patterns []string
 	}{
-		{"hello", []string{"hello"}},
-		{"obol-blockchain", []string{"blockchain", "obol-blockchain"}},
-		{"obol-k8s", []string{"obol-k8s", "kubernetes", "k8s"}},
-		{"obol-dvt", []string{"obol-dvt", "dvt", "distributed validator"}},
+		{"ethereum-networks", []string{"ethereum-networks", "ethereum networks", "blockchain"}},
+		{"distributed-validators", []string{"distributed-validators", "distributed validator", "dvt"}},
+		{"obol-stack", []string{"obol-stack", "obol stack", "kubernetes", "k8s"}},
+		{"ethereum-wallet", []string{"ethereum-wallet", "ethereum wallet", "wallet"}},
 	}
 
 	for _, sc := range skillChecks {

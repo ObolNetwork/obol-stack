@@ -13,7 +13,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"}
+	want := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
 	sort.Strings(names)
 
 	if len(names) != len(want) {
@@ -34,7 +34,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"hello", "obol-blockchain", "obol-dvt", "obol-k8s"}
+	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -47,25 +47,25 @@ func TestCopySkills(t *testing.T) {
 		}
 	}
 
-	// obol-blockchain must have scripts/rpc.py and references/
+	// ethereum-networks must have scripts/rpc.py and references/
 	for _, sub := range []string{
-		"obol-blockchain/scripts/rpc.py",
-		"obol-blockchain/references/erc20-methods.md",
-		"obol-blockchain/references/common-contracts.md",
+		"ethereum-networks/scripts/rpc.py",
+		"ethereum-networks/references/erc20-methods.md",
+		"ethereum-networks/references/common-contracts.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)
 		}
 	}
 
-	// obol-k8s must have scripts/kube.py
-	if _, err := os.Stat(filepath.Join(destDir, "obol-k8s", "scripts", "kube.py")); err != nil {
-		t.Errorf("missing obol-k8s/scripts/kube.py: %v", err)
+	// obol-stack must have scripts/kube.py
+	if _, err := os.Stat(filepath.Join(destDir, "obol-stack", "scripts", "kube.py")); err != nil {
+		t.Errorf("missing obol-stack/scripts/kube.py: %v", err)
 	}
 
-	// obol-dvt must have references/api-examples.md
-	if _, err := os.Stat(filepath.Join(destDir, "obol-dvt", "references", "api-examples.md")); err != nil {
-		t.Errorf("missing obol-dvt/references/api-examples.md: %v", err)
+	// distributed-validators must have references/api-examples.md
+	if _, err := os.Stat(filepath.Join(destDir, "distributed-validators", "references", "api-examples.md")); err != nil {
+		t.Errorf("missing distributed-validators/references/api-examples.md: %v", err)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 	destDir := t.TempDir()
 
 	// Pre-create a skill directory with custom content
-	customDir := filepath.Join(destDir, "hello")
+	customDir := filepath.Join(destDir, "ethereum-wallet")
 	if err := os.MkdirAll(customDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
