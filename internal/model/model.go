@@ -103,6 +103,11 @@ if p and p.get('env'):
 	if err != nil {
 		return "", fmt.Errorf("failed to query llmspy for provider %q: %w", provider, err)
 	}
+	return parseProviderEnvKey(provider, output)
+}
+
+// parseProviderEnvKey extracts an env var name from kubectl exec output.
+func parseProviderEnvKey(provider, output string) (string, error) {
 	envKey := strings.TrimSpace(output)
 	if envKey == "" {
 		return "", fmt.Errorf("unknown provider %q — run 'obol model status' to see available providers", provider)
@@ -134,8 +139,17 @@ for pid in sorted(d):
 		return nil, fmt.Errorf("failed to query llmspy providers: %w", err)
 	}
 
+	return parseAvailableProviders(output), nil
+}
+
+// parseAvailableProviders parses tab-separated kubectl exec output into ProviderInfo slices.
+func parseAvailableProviders(output string) []ProviderInfo {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil
+	}
 	var providers []ProviderInfo
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for _, line := range strings.Split(trimmed, "\n") {
 		parts := strings.SplitN(line, "\t", 3)
 		if len(parts) != 3 {
 			continue
@@ -146,7 +160,7 @@ for pid in sorted(d):
 			EnvVar: parts[2],
 		})
 	}
-	return providers, nil
+	return providers
 }
 
 // GetProviderStatus reads llmspy state and returns global provider status.
@@ -164,10 +178,6 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	envKeyByProvider := make(map[string]string)
-	for _, p := range available {
-		envKeyByProvider[p.ID] = p.EnvVar
-	}
 
 	// Read enabled/disabled state from ConfigMap
 	llmsRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
@@ -175,8 +185,29 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Read Secret to check which API keys are set
+	secretRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+		"get", "secret", secretName, "-n", namespace, "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+
+	return buildProviderStatus(available, []byte(llmsRaw), []byte(secretRaw))
+}
+
+// buildProviderStatus is the pure logic for building provider status from raw data.
+// available: providers discovered from the llmspy pod
+// llmsJSON: the llms.json content from the ConfigMap
+// secretJSON: the full Secret JSON (with base64-encoded .data)
+func buildProviderStatus(available []ProviderInfo, llmsJSON, secretJSON []byte) (map[string]ProviderStatus, error) {
+	envKeyByProvider := make(map[string]string)
+	for _, p := range available {
+		envKeyByProvider[p.ID] = p.EnvVar
+	}
+
 	var llmsConfig map[string]interface{}
-	if err := json.Unmarshal([]byte(llmsRaw), &llmsConfig); err != nil {
+	if err := json.Unmarshal(llmsJSON, &llmsConfig); err != nil {
 		return nil, fmt.Errorf("failed to parse llms.json from ConfigMap: %w", err)
 	}
 
@@ -199,16 +230,11 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 		}
 	}
 
-	// Read Secret to check which API keys are set
-	secretRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
-		"get", "secret", secretName, "-n", namespace, "-o", "json")
-	if err != nil {
-		return nil, err
-	}
+	// Parse Secret
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(secretRaw), &secret); err != nil {
+	if err := json.Unmarshal(secretJSON, &secret); err != nil {
 		return nil, fmt.Errorf("failed to parse llms secret: %w", err)
 	}
 
@@ -241,45 +267,18 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 // sets providers.<name>.enabled = true, and patches the ConfigMap back.
 func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) error {
 	// Read current llms.json from ConfigMap
-	var stdout bytes.Buffer
-	cmd := exec.Command(kubectlBinary, "get", "configmap", configMapName,
-		"-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to read ConfigMap: %w\n%s", err, stderr.String())
-	}
-
-	// Parse JSON
-	var llmsConfig map[string]interface{}
-	if err := json.Unmarshal(stdout.Bytes(), &llmsConfig); err != nil {
-		return fmt.Errorf("failed to parse llms.json: %w", err)
-	}
-
-	// Set providers.<name>.enabled = true
-	providers, ok := llmsConfig["providers"].(map[string]interface{})
-	if !ok {
-		providers = make(map[string]interface{})
-		llmsConfig["providers"] = providers
-	}
-
-	providerCfg, ok := providers[provider].(map[string]interface{})
-	if !ok {
-		providerCfg = make(map[string]interface{})
-		providers[provider] = providerCfg
-	}
-	providerCfg["enabled"] = true
-
-	// Marshal back to JSON
-	updated, err := json.Marshal(llmsConfig)
+	raw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
 	if err != nil {
-		return fmt.Errorf("failed to marshal llms.json: %w", err)
+		return fmt.Errorf("failed to read ConfigMap: %w", err)
 	}
 
-	// Patch ConfigMap
-	// Use strategic merge patch with the new llms.json
+	updated, err := patchLLMsJSON([]byte(raw), provider)
+	if err != nil {
+		return err
+	}
+
+	// Build ConfigMap patch
 	patchData := map[string]interface{}{
 		"data": map[string]string{
 			"llms.json": string(updated),
@@ -293,6 +292,30 @@ func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) e
 	return kubectl(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", string(patchJSON), "--type=merge")
+}
+
+// patchLLMsJSON takes raw llms.json content and returns updated JSON
+// with providers.<name>.enabled = true.
+func patchLLMsJSON(llmsJSON []byte, provider string) ([]byte, error) {
+	var llmsConfig map[string]interface{}
+	if err := json.Unmarshal(llmsJSON, &llmsConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse llms.json: %w", err)
+	}
+
+	providers, ok := llmsConfig["providers"].(map[string]interface{})
+	if !ok {
+		providers = make(map[string]interface{})
+		llmsConfig["providers"] = providers
+	}
+
+	providerCfg, ok := providers[provider].(map[string]interface{})
+	if !ok {
+		providerCfg = make(map[string]interface{})
+		providers[provider] = providerCfg
+	}
+	providerCfg["enabled"] = true
+
+	return json.Marshal(llmsConfig)
 }
 
 // kubectl runs a kubectl command with the given kubeconfig and returns any error.
