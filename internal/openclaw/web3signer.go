@@ -69,24 +69,16 @@ func ProvisionKeyFiles(keysDir string, key *Web3SignerKey, label string) error {
 		return fmt.Errorf("failed to create keys directory: %w", err)
 	}
 
-	// Write raw hex private key file
-	keyFile := filepath.Join(keysDir, key.KeyID+".hex")
-	if err := os.WriteFile(keyFile, []byte(key.PrivateKeyHex), 0600); err != nil {
-		return fmt.Errorf("failed to write key file: %w", err)
-	}
+	// Write Web3Signer YAML key config with the private key inline.
+	// v25+ scans for .yaml files and expects the private key as a
+	// 0x-prefixed hex value in the `privateKey` field.
+	yamlContent := fmt.Sprintf(`type: "file-raw"
+keyType: "SECP256K1"
+privateKey: "0x%s"
+`, key.PrivateKeyHex)
 
-	// Write Web3Signer TOML key config pointing to the key file.
-	// The filename path must match the container mount, not the host path.
-	tomlContent := fmt.Sprintf(`[metadata]
-description = "%s"
-
-[signing]
-type = "file-raw"
-filename = "/data/%s.hex"
-`, label, key.KeyID)
-
-	configFile := filepath.Join(keysDir, key.KeyID+".toml")
-	if err := os.WriteFile(configFile, []byte(tomlContent), 0644); err != nil {
+	configFile := filepath.Join(keysDir, key.KeyID+".yaml")
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
 		return fmt.Errorf("failed to write key config: %w", err)
 	}
 
@@ -94,11 +86,13 @@ filename = "/data/%s.hex"
 }
 
 // Web3SignerKeysPath returns the host-side directory where Web3Signer
-// key files are provisioned. This maps into the pod via the k3d volume
-// mount and local-path-provisioner.
+// key files are provisioned. The chart creates a StatefulSet with a PVC
+// named "storage-web3signer-0" which the local-path-provisioner maps to
+// $DATA_DIR/<namespace>/storage-web3signer-0/ on the host. This path
+// appears as /data/ inside the web3signer pod.
 func Web3SignerKeysPath(cfg *config.Config, id string) string {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	return filepath.Join(cfg.DataDir, namespace, "web3signer-data")
+	return filepath.Join(cfg.DataDir, namespace, "storage-web3signer-0", "keys")
 }
 
 // MetadataAddress represents a single signing address in the ConfigMap.
@@ -291,7 +285,8 @@ func ensureWeb3Signer(cfg *config.Config, id, deploymentDir string) {
 		fmt.Printf("  Warning: could not provision signing key: %v\n", err)
 		return
 	}
-	fmt.Printf("  ✓ Signing address: %s\n", signingKey.Address)
+	fmt.Printf("  ✓ Agent wallet address: %s\n", signingKey.Address)
+	fmt.Printf("  Back up your key: cp %s/%s.yaml ~/obol-wallet-backup-%s.yaml\n", keysDir, signingKey.KeyID, id)
 
 	// Write values file
 	web3signerValues := generateWeb3SignerValues(id)
@@ -314,11 +309,25 @@ image:
   repository: consensys/web3signer
   tag: "%s"
 
-# ETH1 signing mode — keys loaded from /data/ (chart persistence mount)
-extraArgs:
-  - "--eth1-enabled"
-  - "--key-store-path=/data"
-  - "--http-host-allowlist=*"
+# Override the default command to use eth1 mode instead of eth2.
+# The chart's _cmd.tpl hardcodes "eth2" as the subcommand — we need "eth1"
+# for SECP256K1 execution-layer signing.
+# Override the config template to set data-path to /data/keys so that
+# web3signer only scans our key YAML files, not chart's config.yaml.
+config: |
+  data-path: "/data/keys"
+  http-listen-port: {{ .Values.httpPort }}
+  http-listen-host: 0.0.0.0
+  http-host-allowlist: "*"
+
+customCommand:
+  - sh
+  - -ac
+  - |
+    exec /opt/web3signer/bin/web3signer \
+      --config-file=/data/config.yaml \
+      --key-config-path=/data/keys \
+      eth1 --chain-id=1
 
 # Key storage via chart's built-in persistence.
 # Keys are pre-provisioned by 'obol agent init' to the host-path PVC.

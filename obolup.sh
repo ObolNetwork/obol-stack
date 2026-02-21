@@ -1382,6 +1382,7 @@ print_instructions() {
 				echo ""
 				echo "  obol stack init"
 				echo "  obol stack up"
+				echo "  obol agent init"
 				echo ""
 				return 1
 			fi
