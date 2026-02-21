@@ -231,7 +231,6 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to provision signing key: %w", err)
 	}
-	fmt.Printf("  Signing address: %s\n", signingKey.Address)
 
 	// Write Web3Signer Helm values
 	web3signerValues := generateWeb3SignerValues(id)
@@ -245,7 +244,6 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("  Namespace:  %s\n", namespace)
 	fmt.Printf("  Hostname:   %s\n", hostname)
 	fmt.Printf("  Location:   %s\n", deploymentDir)
-	fmt.Printf("  Signing:    %s\n", signingKey.Address)
 	fmt.Printf("\nFiles created:\n")
 	fmt.Printf("  - values-obol.yaml        Obol Stack overlay (httpRoute, providers, eRPC)\n")
 	fmt.Printf("  - values-web3signer.yaml   Web3Signer configuration (ETH1 signing)\n")
@@ -253,6 +251,13 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	if len(secretData) > 0 {
 		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
 	}
+
+	// Display wallet address and backup warning
+	fmt.Printf("\n  Agent wallet address: %s\n", signingKey.Address)
+	fmt.Printf("\n  Back up your signing key:\n")
+	fmt.Printf("    cp %s/%s.yaml ~/obol-wallet-backup-%s.yaml\n", keysDir, signingKey.KeyID, id)
+	fmt.Printf("\n  WARNING: This wallet feature is in alpha and may change rapidly.\n")
+	fmt.Printf("  Do not deposit mainnet funds you are not willing to lose.\n")
 
 	// Stage default skills to deployment directory (immediate, no cluster needed)
 	fmt.Println("\nStaging default skills...")
@@ -284,6 +289,10 @@ func doSync(cfg *config.Config, id string) error {
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nDirectory: %s", appName, id, deploymentDir)
 	}
+
+	// Ensure web3signer key + values exist (handles deployments created
+	// before web3signer was added, or manual values file deletion).
+	ensureWeb3Signer(cfg, id, deploymentDir)
 
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
@@ -995,7 +1004,25 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	}
 
 	if namespaceExists {
-		fmt.Printf("\nDeleting namespace %s...\n", namespace)
+		// Run helmfile destroy first to cleanly remove Helm releases (openclaw + web3signer).
+		// This ensures StatefulSet PVCs are properly cleaned up before namespace deletion.
+		helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+		if _, err := os.Stat(helmfilePath); err == nil {
+			if _, err := os.Stat(helmfileBinary); err == nil {
+				fmt.Printf("\nRemoving Helm releases from %s...\n", namespace)
+				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
+				destroyCmd.Dir = deploymentDir
+				destroyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+				destroyCmd.Stdout = os.Stdout
+				destroyCmd.Stderr = os.Stderr
+				if err := destroyCmd.Run(); err != nil {
+					fmt.Printf("Warning: helmfile destroy failed (will force-delete namespace): %v\n", err)
+				}
+			}
+		}
+
+		fmt.Printf("Deleting namespace %s...\n", namespace)
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
@@ -1003,7 +1030,7 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to delete namespace: %w", err)
+			fmt.Printf("Warning: namespace deletion may still be in progress: %v\n", err)
 		}
 		fmt.Println("Namespace deleted")
 	}
@@ -1023,6 +1050,15 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	}
 
 	fmt.Printf("\n✓ OpenClaw %s deleted successfully!\n", id)
+
+	// Note: signing key files on disk are intentionally preserved.
+	// They live in the data directory and are only removed by `obol stack purge --force`.
+	keysDir := Web3SignerKeysPath(cfg, id)
+	if _, err := os.Stat(keysDir); err == nil {
+		fmt.Printf("\n  Signing key preserved at: %s\n", keysDir)
+		fmt.Printf("  To remove: obol stack purge --force\n")
+	}
+
 	return nil
 }
 

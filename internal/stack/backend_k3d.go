@@ -1,15 +1,24 @@
 package stack
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
+
+// tlsInsecureSkipVerify returns a TLS config that skips certificate verification.
+// Used only for health-checking the local k3s API server which uses a self-signed cert.
+func tlsInsecureSkipVerify() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // local k3s health check only
+}
 
 const (
 	k3dConfigFile = "k3d.yaml"
@@ -121,7 +130,65 @@ func (b *K3dBackend) Up(cfg *config.Config, stackID string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 
+	// k3d generates kubeconfig with server: https://0.0.0.0:<port>.
+	// On macOS, Go's HTTP client and helm can't connect to 0.0.0.0.
+	// Replace with 127.0.0.1 which works on all platforms.
+	kubeconfigData = []byte(strings.ReplaceAll(string(kubeconfigData), "https://0.0.0.0:", "https://127.0.0.1:"))
+
+	// Wait for the Kubernetes API server to be reachable.
+	// After k3d starts containers, k3s inside needs time to bind ports.
+	if err := waitForAPIServer(kubeconfigData); err != nil {
+		return nil, fmt.Errorf("cluster started but API server not ready: %w", err)
+	}
+
 	return kubeconfigData, nil
+}
+
+// waitForAPIServer polls the Kubernetes API server URL from the kubeconfig
+// until it responds or a timeout is reached. This prevents race conditions
+// where helmfile runs before k3s has bound its listener.
+func waitForAPIServer(kubeconfigData []byte) error {
+	// Extract the server URL from kubeconfig (e.g. https://0.0.0.0:52489)
+	var serverURL string
+	for _, line := range strings.Split(string(kubeconfigData), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "server:") {
+			serverURL = strings.TrimSpace(strings.TrimPrefix(trimmed, "server:"))
+			break
+		}
+	}
+	if serverURL == "" {
+		return fmt.Errorf("could not find server URL in kubeconfig")
+	}
+
+	// k3d kubeconfig uses 0.0.0.0 which doesn't work with Go's HTTP client
+	// on macOS (can't connect to 0.0.0.0). Replace with 127.0.0.1.
+	serverURL = strings.Replace(serverURL, "0.0.0.0", "127.0.0.1", 1)
+
+	// k3s uses a self-signed cert, so skip TLS verification for the health check
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsInsecureSkipVerify(),
+		},
+	}
+
+	fmt.Print("Waiting for Kubernetes API server...")
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(serverURL + "/version")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
+				fmt.Println(" ready")
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+		fmt.Print(".")
+	}
+
+	return fmt.Errorf("timed out after 60s waiting for API server at %s", serverURL)
 }
 
 func (b *K3dBackend) Down(cfg *config.Config, stackID string) error {

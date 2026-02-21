@@ -3,7 +3,6 @@ package embed
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 )
 
@@ -13,15 +12,15 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
-	sort.Strings(names)
-
-	if len(names) != len(want) {
-		t.Fatalf("got %d skills %v, want %d %v", len(names), names, len(want), want)
+	// Core skills that must always be present
+	required := []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"}
+	nameSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		nameSet[n] = true
 	}
-	for i := range want {
-		if names[i] != want[i] {
-			t.Errorf("skill[%d] = %q, want %q", i, names[i], want[i])
+	for _, r := range required {
+		if !nameSet[r] {
+			t.Errorf("required skill %q not found in embedded skills %v", r, names)
 		}
 	}
 }
@@ -34,7 +33,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
+	skills := []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -73,7 +72,7 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 	destDir := t.TempDir()
 
 	// Pre-create a skill directory with custom content
-	customDir := filepath.Join(destDir, "ethereum-wallet")
+	customDir := filepath.Join(destDir, "local-wallet")
 	if err := os.MkdirAll(customDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

@@ -83,40 +83,29 @@ func TestProvisionKeyFiles(t *testing.T) {
 		t.Fatalf("ProvisionKeyFiles() error: %v", err)
 	}
 
-	// Check .hex file exists and has correct content
-	hexFile := filepath.Join(dir, "testkey1.hex")
-	hexContent, err := os.ReadFile(hexFile)
+	// Check .yaml key config file exists with inline private key
+	yamlFile := filepath.Join(dir, "testkey1.yaml")
+	info, err := os.Stat(yamlFile)
 	if err != nil {
-		t.Fatalf("failed to read hex file: %v", err)
-	}
-	if string(hexContent) != key.PrivateKeyHex {
-		t.Errorf("hex file content = %q, want %q", string(hexContent), key.PrivateKeyHex)
-	}
-
-	// Check .hex file permissions (0600)
-	info, err := os.Stat(hexFile)
-	if err != nil {
-		t.Fatalf("failed to stat hex file: %v", err)
+		t.Fatalf("failed to stat yaml key config: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("hex file permissions = %o, want 0600", perm)
+		t.Errorf("yaml file permissions = %o, want 0600", perm)
 	}
 
-	// Check .toml file exists and has correct structure
-	tomlFile := filepath.Join(dir, "testkey1.toml")
-	tomlContent, err := os.ReadFile(tomlFile)
+	yamlContent, err := os.ReadFile(yamlFile)
 	if err != nil {
-		t.Fatalf("failed to read toml file: %v", err)
+		t.Fatalf("failed to read yaml key config: %v", err)
 	}
-	toml := string(tomlContent)
-	if !strings.Contains(toml, `type = "file-raw"`) {
-		t.Error("toml should contain type = file-raw")
+	yaml := string(yamlContent)
+	if !strings.Contains(yaml, `type: "file-raw"`) {
+		t.Error("yaml should contain type: file-raw")
 	}
-	if !strings.Contains(toml, `filename = "/data/testkey1.hex"`) {
-		t.Error("toml should contain correct filename path")
+	if !strings.Contains(yaml, `privateKey: "0x`+key.PrivateKeyHex+`"`) {
+		t.Error("yaml should contain inline private key with 0x prefix")
 	}
-	if !strings.Contains(toml, `description = "test-agent"`) {
-		t.Error("toml should contain the label as description")
+	if !strings.Contains(yaml, `keyType: "SECP256K1"`) {
+		t.Error("yaml should specify SECP256K1 key type")
 	}
 }
 
@@ -133,8 +122,8 @@ func TestProvisionKeyFiles_CreatesDirectory(t *testing.T) {
 		t.Fatalf("ProvisionKeyFiles() should create nested dirs: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "k1.hex")); os.IsNotExist(err) {
-		t.Error("key file not created in nested directory")
+	if _, err := os.Stat(filepath.Join(dir, "k1.yaml")); os.IsNotExist(err) {
+		t.Error("key config not created in nested directory")
 	}
 }
 
@@ -146,14 +135,12 @@ func TestGenerateWeb3SignerValues(t *testing.T) {
 		t.Error("values should reference the instance ID")
 	}
 
-	// Should enable ETH1 mode
-	if !strings.Contains(values, "--eth1-enabled") {
-		t.Error("values should enable ETH1 mode")
+	// Should use customCommand with eth1 subcommand (not the chart's default eth2)
+	if !strings.Contains(values, "customCommand:") {
+		t.Error("values should use customCommand to override default eth2 command")
 	}
-
-	// Should set key store path
-	if !strings.Contains(values, "--key-store-path=/data") {
-		t.Error("values should set key-store-path to /data")
+	if !strings.Contains(values, "eth1") {
+		t.Error("values should use eth1 subcommand")
 	}
 
 	// Should disable slashing protection DB (PostgreSQL)
@@ -259,7 +246,7 @@ func TestWeb3SignerKeysPath(t *testing.T) {
 	}
 
 	path := Web3SignerKeysPath(cfg, "my-agent")
-	expected := "/home/user/.local/share/obol/openclaw-my-agent/web3signer-data"
+	expected := "/home/user/.local/share/obol/openclaw-my-agent/storage-web3signer-0/keys"
 	if path != expected {
 		t.Errorf("Web3SignerKeysPath() = %q, want %q", path, expected)
 	}
