@@ -1,6 +1,6 @@
 ---
 name: addresses
-description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing or hallucinating addresses. Includes Uniswap, Aave, Compound, Aerodrome, GMX, Pendle, Velodrome, Camelot, SyncSwap, Lido, Rocket Pool, 1inch, Permit2, MakerDAO/sDAI, EigenLayer, Across, Chainlink CCIP, Yearn V3, USDC, USDT, DAI, ENS, Safe, Chainlink, and more. Always verify addresses against a block explorer before sending transactions.
+description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing or hallucinating addresses. Includes Obol Splits, Uniswap, Aave, Compound, Aerodrome, GMX, Pendle, Velodrome, Camelot, SyncSwap, Lido, Rocket Pool, 1inch, Permit2, MakerDAO/sDAI, EigenLayer, Across, Chainlink CCIP, Yearn V3, USDC, USDT, DAI, ENS, Safe, Chainlink, and more. Always verify addresses against a block explorer before sending transactions.
 ---
 
 # Contract Addresses
@@ -301,6 +301,31 @@ Restaking protocol. Both are upgradeable proxies (EIP-1967).
 
 Source: [eigenlayer.xyz](https://docs.eigenlayer.xyz/)
 
+### Obol Splits — Factory Contracts
+
+Obol's reward-splitting infrastructure for distributed validators. Factory contracts deploy per-cluster split instances.
+
+#### Obol Validator Manager Factory
+| Chain | Address | Status |
+|-------|---------|--------|
+| Mainnet | `0x2c26B5A373294CaccBd3DE817D9B7C6aea7De584` | ✅ Verified |
+| Hoodi | `0x5754C8665B7e7BF15E83fCdF6d9636684B782b12` | ✅ Verified |
+| Sepolia | `0xF32F8B563d8369d40C45D5d667C2E26937F2A3d3` | ✅ Verified |
+
+#### Obol Lido Split Factory
+| Chain | Address | Status |
+|-------|---------|--------|
+| Hoodi | `0xb633CD420aF83E8A5172e299104842b63dd97ab7` | ✅ Verified |
+
+#### Optimistic Withdrawal Recipient (OWR) Factory
+| Chain | Address | Status |
+|-------|---------|--------|
+| Mainnet | `0x119acd7844cbdd5fc09b1c6a4408f490c8f7f522` | ✅ Verified |
+| Hoodi | `0x9ff0c649d0bf5fe7efa4d72e94bed7302ed5c8d7` | ✅ Verified |
+| Sepolia | `0xca78f8fda7ec13ae246e4d4cd38b9ce25a12e64a` | ✅ Verified |
+
+Source: [docs.obol.org/learn/readme/obol-splits#deployments](https://docs.obol.org/learn/readme/obol-splits#deployments)
+
 ### Chainlink CCIP Router (v1.2.0)
 
 Cross-chain messaging. Call `typeAndVersion()` to confirm — returns "Router 1.2.0".
@@ -526,6 +551,7 @@ cast code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url http://erpc.erpc.
 - **Rocket Pool:** https://docs.rocketpool.net/overview/contracts-integrations
 - **1inch:** https://docs.1inch.io/docs/aggregation-protocol/introduction
 - **EigenLayer:** https://docs.eigenlayer.xyz/
+- **Obol Splits:** https://docs.obol.org/learn/readme/obol-splits#deployments
 - **Across:** https://docs.across.to/reference/contract-addresses
 - **Chainlink CCIP:** https://docs.chain.link/ccip/directory/mainnet
 - **Yearn V3:** https://docs.yearn.fi/developers/addresses/v3-contracts

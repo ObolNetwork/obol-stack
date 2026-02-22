@@ -203,7 +203,11 @@ func splitLines(s string) []string {
 func applyWeb3SignerMetadata(cfg *config.Config, id string) {
 	keysDir := Web3SignerKeysPath(cfg, id)
 
-	// Find the .hex key file to reconstruct the key info
+	// Find a .yaml key file to reconstruct the key info.
+	// Key files are YAML with an inline privateKey field:
+	//   type: "file-raw"
+	//   keyType: "SECP256K1"
+	//   privateKey: "0xabcdef..."
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
 		fmt.Printf("  Warning: could not read web3signer keys directory: %v\n", err)
@@ -211,20 +215,27 @@ func applyWeb3SignerMetadata(cfg *config.Config, id string) {
 	}
 
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".hex" {
+		if filepath.Ext(entry.Name()) != ".yaml" {
 			continue
 		}
-		keyID := strings.TrimSuffix(entry.Name(), ".hex")
+		keyID := strings.TrimSuffix(entry.Name(), ".yaml")
 
-		privHex, err := os.ReadFile(filepath.Join(keysDir, entry.Name()))
+		content, err := os.ReadFile(filepath.Join(keysDir, entry.Name()))
 		if err != nil {
 			fmt.Printf("  Warning: could not read key file: %v\n", err)
 			continue
 		}
 
-		privBytes, err := hex.DecodeString(strings.TrimSpace(string(privHex)))
+		// Extract the privateKey value from the YAML content.
+		privHex := extractPrivateKeyFromYAML(string(content))
+		if privHex == "" {
+			fmt.Printf("  Warning: no privateKey found in %s\n", entry.Name())
+			continue
+		}
+
+		privBytes, err := hex.DecodeString(privHex)
 		if err != nil {
-			fmt.Printf("  Warning: invalid key hex: %v\n", err)
+			fmt.Printf("  Warning: invalid key hex in %s: %v\n", entry.Name(), err)
 			continue
 		}
 
@@ -245,10 +256,31 @@ func applyWeb3SignerMetadata(cfg *config.Config, id string) {
 		if err := ApplyMetadataConfigMap(cfg, id, key); err != nil {
 			fmt.Printf("  Warning: could not create web3signer-metadata ConfigMap: %v\n", err)
 		} else {
-			fmt.Printf("  ✓ Web3Signer metadata published (address: %s)\n", key.Address)
+			fmt.Printf("✓ Web3Signer metadata published (Agent address: %s)\n", key.Address)
+			fmt.Printf("  Back up your key: cp -r %s/ ~/obol-wallet-backup-%s/\n", keysDir, id)
+			fmt.Println("  WARNING: This wallet feature is in alpha and may change rapidly.")
+			fmt.Println("  Do not deposit mainnet funds you are not willing to lose.")
 		}
 		return // only process the first key
 	}
+}
+
+// extractPrivateKeyFromYAML parses a Web3Signer key YAML file and returns
+// the raw private key hex (without 0x prefix). Returns empty string if not found.
+func extractPrivateKeyFromYAML(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "privateKey:") {
+			continue
+		}
+		// privateKey: "0xabcdef..."
+		val := strings.TrimPrefix(line, "privateKey:")
+		val = strings.TrimSpace(val)
+		val = strings.Trim(val, `"'`)
+		val = strings.TrimPrefix(val, "0x")
+		return val
+	}
+	return ""
 }
 
 // ensureWeb3Signer checks if the web3signer key and values file exist for
@@ -265,7 +297,7 @@ func ensureWeb3Signer(cfg *config.Config, id, deploymentDir string) {
 		// Values exist — check if keys also exist
 		if entries, err := os.ReadDir(keysDir); err == nil {
 			for _, e := range entries {
-				if filepath.Ext(e.Name()) == ".hex" {
+				if filepath.Ext(e.Name()) == ".yaml" {
 					return // Both values and key exist — nothing to do
 				}
 			}

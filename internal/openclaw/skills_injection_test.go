@@ -29,7 +29,7 @@ func TestStageDefaultSkills(t *testing.T) {
 	}
 
 	// Verify all expected skills were staged
-	for _, skill := range []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"} {
+	for _, skill := range []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"} {
 		skillMD := filepath.Join(skillsDir, skill, "SKILL.md")
 		if _, err := os.Stat(skillMD); err != nil {
 			t.Errorf("%s/SKILL.md not staged: %v", skill, err)
@@ -77,7 +77,7 @@ func TestInjectSkillsToVolume(t *testing.T) {
 
 	// Verify skills landed in the volume path
 	volumePath := skillsVolumePath(cfg, "test-inject")
-	for _, skill := range []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"} {
+	for _, skill := range []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"} {
 		skillMD := filepath.Join(volumePath, skill, "SKILL.md")
 		if _, err := os.Stat(skillMD); err != nil {
 			t.Errorf("%s/SKILL.md not injected to volume: %v", skill, err)

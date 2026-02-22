@@ -252,6 +252,49 @@ func TestWeb3SignerKeysPath(t *testing.T) {
 	}
 }
 
+func TestExtractPrivateKeyFromYAML(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "standard format",
+			content: `type: "file-raw"
+keyType: "SECP256K1"
+privateKey: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+`,
+			want: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		},
+		{
+			name: "single quotes",
+			content: `type: "file-raw"
+privateKey: '0xdeadbeef'
+`,
+			want: "deadbeef",
+		},
+		{
+			name:    "no privateKey field",
+			content: `type: "file-raw"`,
+			want:    "",
+		},
+		{
+			name:    "empty content",
+			content: "",
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPrivateKeyFromYAML(tt.content)
+			if got != tt.want {
+				t.Errorf("extractPrivateKeyFromYAML() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIndentJSON(t *testing.T) {
 	input := `{
   "foo": "bar",
