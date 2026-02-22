@@ -1,6 +1,6 @@
 ---
 name: addresses
-description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing or hallucinating addresses. Includes Obol Splits, Uniswap, Aave, Compound, Aerodrome, GMX, Pendle, Velodrome, Camelot, SyncSwap, Lido, Rocket Pool, 1inch, Permit2, MakerDAO/sDAI, EigenLayer, Across, Chainlink CCIP, Yearn V3, USDC, USDT, DAI, ENS, Safe, Chainlink, and more. Always verify addresses against a block explorer before sending transactions.
+description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing or hallucinating addresses. Includes Obol Splits, Splits.org (0xSplits), Uniswap, Aave, Compound, Aerodrome, GMX, Pendle, Velodrome, Camelot, SyncSwap, Lido, Rocket Pool, 1inch, Permit2, MakerDAO/sDAI, EigenLayer, Across, Chainlink CCIP, Yearn V3, USDC, USDT, DAI, ENS, Safe, Chainlink, and more. Always verify addresses against a block explorer before sending transactions.
 ---
 
 # Contract Addresses
@@ -61,12 +61,15 @@ description: Verified contract addresses for major Ethereum protocols across mai
 | Arbitrum | `0x5979D7b546E38E414F7E9822514be443A4800529` | ✅ Verified |
 | Optimism | `0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb` | ✅ Verified |
 | Base | `0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452` | ✅ Verified |
+| Hoodi | `0x7E99eE3C66636DE415D2d7C880938F2f40f94De4` | ✅ Verified |
 
 ### Lido — Staking & Withdrawal
 | Contract | Address | Status |
 |----------|---------|--------|
 | stETH / Lido (deposit ETH here) | `0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84` | ✅ Verified |
+| stETH / Lido (Hoodi testnet) | `0x3508A952176b3c15387C97BE809eaffB1982176a` | ✅ Verified |
 | Withdrawal Queue (unstETH NFT) | `0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1` | ✅ Verified |
+| Withdrawal Queue (Hoodi) | `0xfe56573178f1bcdf53F01A6E9977670dcBBD9186` | ✅ Verified |
 
 ### Rocket Pool
 | Contract | Address | Status |
@@ -303,7 +306,7 @@ Source: [eigenlayer.xyz](https://docs.eigenlayer.xyz/)
 
 ### Obol Splits — Factory Contracts
 
-Obol's reward-splitting infrastructure for distributed validators. Factory contracts deploy per-cluster split instances.
+Obol's Ethereum Validator Manager and reward splitting contracts. Factory contract pattern. Used with splits.org splitter smart contracts and gnosis SAFEs.
 
 #### Obol Validator Manager Factory
 | Chain | Address | Status |
@@ -315,6 +318,7 @@ Obol's reward-splitting infrastructure for distributed validators. Factory contr
 #### Obol Lido Split Factory
 | Chain | Address | Status |
 |-------|---------|--------|
+| Mainnet | `0xa9d94139a310150ca1163b5e23f3e1dbb7d9e2a6` | ✅ Verified |
 | Hoodi | `0xb633CD420aF83E8A5172e299104842b63dd97ab7` | ✅ Verified |
 
 #### Optimistic Withdrawal Recipient (OWR) Factory
@@ -325,6 +329,38 @@ Obol's reward-splitting infrastructure for distributed validators. Factory contr
 | Sepolia | `0xca78f8fda7ec13ae246e4d4cd38b9ce25a12e64a` | ✅ Verified |
 
 Source: [docs.obol.org/learn/readme/obol-splits#deployments](https://docs.obol.org/learn/readme/obol-splits#deployments)
+
+### Splits.org (0xSplits) — Payment Splitting
+
+Onchain payment splitting protocol. Obol uses Splits under the hood for validator reward distribution. V2 contracts are deployed via CreateX (same address on all chains). Prefer V2.
+
+#### V1 — SplitMain
+| Network | Address | Status |
+|---------|---------|--------|
+| All chains | `0x2ed6c4B5dA6378c7897AC67Ba9e43102Feb694EE` | ✅ Verified |
+
+Verified on: Mainnet, Optimism, Arbitrum, Polygon, Base, Gnosis, BSC (identical address via CREATE2).
+
+#### V2 — SplitsWarehouse (ERC-6909 token wrapper)
+| Network | Address | Status |
+|---------|---------|--------|
+| All chains | `0x8fb66F38cF86A3d5e8768f8F1754A24A6c661Fb8` | ✅ Verified |
+
+Holds tokens on behalf of recipients in the pull-flow model. Replaces SplitMain as the central fund-holding contract.
+
+#### V2 — PullSplitFactory (recipients withdraw from warehouse)
+| Version | Address | Status |
+|---------|---------|--------|
+| V2.2 | `0x6B9118074aB15142d7524E8c4ea8f62A3Bdb98f1` | ✅ Verified |
+
+#### V2 — PushSplitFactory (funds pushed to recipients on distribute)
+| Version | Address | Status |
+|---------|---------|--------|
+| V2.2 | `0x8E8eB0cC6AE34A38B67D5Cf91ACa38f60bc3Ecf4` | ✅ Verified |
+
+All V2 addresses verified identical on: Mainnet, Arbitrum, Optimism, Base (CreateX deterministic deployment).
+
+Source: [github.com/0xSplits/splits-contracts-monorepo](https://github.com/0xSplits/splits-contracts-monorepo/tree/main/packages/splits-v2/deployments)
 
 ### Chainlink CCIP Router (v1.2.0)
 
@@ -552,6 +588,7 @@ cast code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url http://erpc.erpc.
 - **1inch:** https://docs.1inch.io/docs/aggregation-protocol/introduction
 - **EigenLayer:** https://docs.eigenlayer.xyz/
 - **Obol Splits:** https://docs.obol.org/learn/readme/obol-splits#deployments
+- **Splits.org (0xSplits):** https://github.com/0xSplits/splits-contracts-monorepo/tree/main/packages/splits-v2/deployments
 - **Across:** https://docs.across.to/reference/contract-addresses
 - **Chainlink CCIP:** https://docs.chain.link/ccip/directory/mainnet
 - **Yearn V3:** https://docs.yearn.fi/developers/addresses/v3-contracts
@@ -561,7 +598,7 @@ cast code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url http://erpc.erpc.
 
 ## Multi-Chain Notes
 
-- **CREATE2 deployments** (same address cross-chain): Uniswap V3, Safe, Seaport, ERC-4337 EntryPoint, ERC-8004, Permit2, 1inch v6, Yearn V3, Arachnid Deployer
+- **CREATE2 deployments** (same address cross-chain): Uniswap V3, Safe, Seaport, ERC-4337 EntryPoint, ERC-8004, Permit2, 1inch v6, Yearn V3, Splits.org (V1 + V2), Arachnid Deployer
 - **Different addresses per chain:** USDC, USDT, DAI, WETH, wstETH, **Uniswap V4**, Across SpokePool, Chainlink CCIP Router — always check per-chain
 - **Native vs Bridged USDC:** Some chains have both! Use native.
 
