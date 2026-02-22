@@ -56,15 +56,27 @@ python3 scripts/signer.py sign-typed 0xYourAddress '{"types":{...},"primaryType"
 | `accounts` | none | List signing addresses from web3signer |
 | `health` | none | Check web3signer `/upcheck` endpoint |
 | `sign` | `address data` | Sign arbitrary hex data (`eth_sign`) |
-| `sign-tx` | `--from --to [--value] [--data] [--gas] [--nonce] [--network]` | Sign a tx, return raw signed hex |
+| `sign-tx` | `--from --to [--value] [--data] [--gas] [--nonce] [--max-fee] [--priority-fee] [--network]` | Sign a tx, return raw signed hex |
 | `sign-typed` | `address typed-data-json` | Sign EIP-712 typed data |
-| `send-tx` | `--from --to [--value] [--data] [--network]` | Sign AND broadcast via eRPC |
+| `send-tx` | `--from --to [--value] [--data] [--max-fee] [--priority-fee] [--network]` | Sign AND broadcast via eRPC |
+
+## Transaction Types
+
+Transactions default to **EIP-1559 (type 2)** with `maxFeePerGas` and `maxPriorityFeePerGas`.
+If these are omitted, they are auto-derived from the network's base fee and priority fee.
+
+Use `--gas-price` to force a **legacy (type 0)** transaction instead:
+
+```bash
+python3 scripts/signer.py send-tx --gas-price 0x3B9ACA00 \
+  --from 0xYourAddress --to 0xRecipient --value 0xDE0B6B3A7640000
+```
 
 ## Transaction Submission Flow
 
 `send-tx` does the following:
 
-1. Fetches nonce, gas price, chain ID from eRPC (unless provided)
+1. Fetches nonce, EIP-1559 gas params, chain ID from eRPC (unless provided)
 2. Calls `eth_signTransaction` on web3signer — returns RLP-encoded signed tx
 3. Calls `eth_sendRawTransaction` on eRPC — returns tx hash
 4. Reports the tx hash (use `ethereum-networks` skill to check receipt later)

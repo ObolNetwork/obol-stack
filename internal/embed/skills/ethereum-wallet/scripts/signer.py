@@ -125,66 +125,79 @@ def cmd_sign_typed(address, typed_data_str):
     print(sig)
 
 
-def cmd_sign_tx(args):
-    """Sign a transaction with eth_signTransaction. Returns raw signed tx hex."""
-    tx, network = build_tx_from_args(args)
+def autofill_tx(tx, network):
+    """Auto-fill missing transaction fields from eRPC.
 
-    # Auto-fill missing fields from eRPC
+    Builds EIP-1559 (type 2) transactions by default. Falls back to legacy
+    (type 0) only when --gas-price is explicitly provided.
+    """
     if "nonce" not in tx:
         tx["nonce"] = erpc_rpc("eth_getTransactionCount", [tx["from"], "pending"], network)
-    if "gasPrice" not in tx:
-        tx["gasPrice"] = erpc_rpc("eth_gasPrice", [], network)
     if "chainId" not in tx:
         tx["chainId"] = erpc_rpc("eth_chainId", [], network)
+
+    # EIP-1559 (type 2) vs legacy (type 0) gas pricing.
+    # Use type 2 unless the caller explicitly set gasPrice.
+    if "gasPrice" in tx:
+        # Legacy mode — caller explicitly requested it via --gas-price
+        pass
+    else:
+        # EIP-1559: fetch maxPriorityFeePerGas and derive maxFeePerGas
+        if "maxPriorityFeePerGas" not in tx:
+            tx["maxPriorityFeePerGas"] = erpc_rpc("eth_maxPriorityFeePerGas", [], network)
+        if "maxFeePerGas" not in tx:
+            # maxFeePerGas = 2 * baseFee + maxPriorityFeePerGas
+            block = erpc_rpc("eth_getBlockByNumber", ["latest", False], network)
+            if block and "baseFeePerGas" in block:
+                base_fee = int(block["baseFeePerGas"], 16)
+                priority = int(tx["maxPriorityFeePerGas"], 16)
+                max_fee = 2 * base_fee + priority
+                tx["maxFeePerGas"] = hex(max_fee)
+            else:
+                # Chain doesn't report baseFee — fall back to legacy
+                del tx["maxPriorityFeePerGas"]
+                tx["gasPrice"] = erpc_rpc("eth_gasPrice", [], network)
+        # Set explicit type for EIP-1559
+        if "maxFeePerGas" in tx:
+            tx["type"] = "0x2"
+
     if "gas" not in tx:
         estimate_tx = {k: v for k, v in tx.items() if k in ("from", "to", "value", "data")}
         tx["gas"] = erpc_rpc("eth_estimateGas", [estimate_tx], network)
 
-    signed = web3signer_rpc("eth_signTransaction", [tx])
+    return tx
+
+
+def extract_signed_tx(signed):
+    """Extract the raw signed tx hex from eth_signTransaction response."""
     if signed is None:
         print("Error: eth_signTransaction returned null", file=sys.stderr)
         sys.exit(1)
-
-    # eth_signTransaction may return a hex string (raw RLP) or an object
     if isinstance(signed, str):
-        print(signed)
-    elif isinstance(signed, dict) and "raw" in signed:
-        print(signed["raw"])
-    else:
-        print(json.dumps(signed, indent=2))
+        return signed
+    if isinstance(signed, dict) and "raw" in signed:
+        return signed["raw"]
+    print("Error: unexpected eth_signTransaction response: %s" % json.dumps(signed), file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_sign_tx(args):
+    """Sign a transaction with eth_signTransaction. Returns raw signed tx hex."""
+    tx, network = build_tx_from_args(args)
+    tx = autofill_tx(tx, network)
+
+    signed = web3signer_rpc("eth_signTransaction", [tx])
+    print(extract_signed_tx(signed))
 
 
 def cmd_send_tx(args):
     """Sign and broadcast a transaction via eRPC."""
     tx, network = build_tx_from_args(args)
+    tx = autofill_tx(tx, network)
 
-    # Auto-fill missing fields from eRPC
-    if "nonce" not in tx:
-        tx["nonce"] = erpc_rpc("eth_getTransactionCount", [tx["from"], "pending"], network)
-    if "gasPrice" not in tx:
-        tx["gasPrice"] = erpc_rpc("eth_gasPrice", [], network)
-    if "chainId" not in tx:
-        tx["chainId"] = erpc_rpc("eth_chainId", [], network)
-    if "gas" not in tx:
-        estimate_tx = {k: v for k, v in tx.items() if k in ("from", "to", "value", "data")}
-        tx["gas"] = erpc_rpc("eth_estimateGas", [estimate_tx], network)
-
-    # Sign via web3signer
     signed = web3signer_rpc("eth_signTransaction", [tx])
-    if signed is None:
-        print("Error: eth_signTransaction returned null", file=sys.stderr)
-        sys.exit(1)
+    raw_tx = extract_signed_tx(signed)
 
-    # Extract raw signed transaction
-    if isinstance(signed, str):
-        raw_tx = signed
-    elif isinstance(signed, dict) and "raw" in signed:
-        raw_tx = signed["raw"]
-    else:
-        print("Error: unexpected eth_signTransaction response: %s" % json.dumps(signed), file=sys.stderr)
-        sys.exit(1)
-
-    # Submit to eRPC
     tx_hash = erpc_rpc("eth_sendRawTransaction", [raw_tx], network)
     if tx_hash is None:
         print("Error: eth_sendRawTransaction returned null", file=sys.stderr)
@@ -200,7 +213,11 @@ def cmd_send_tx(args):
 # ---------------------------------------------------------------------------
 
 def build_tx_from_args(args):
-    """Parse --from, --to, --value, --data, --gas, --nonce, --network from args list."""
+    """Parse transaction flags from args list.
+
+    EIP-1559 (type 2) flags: --max-fee, --priority-fee
+    Legacy (type 0) flag:    --gas-price (forces legacy mode)
+    """
     tx = {}
     network = ERPC_NETWORK
     i = 0
@@ -223,6 +240,15 @@ def build_tx_from_args(args):
         elif args[i] == "--nonce" and i + 1 < len(args):
             tx["nonce"] = args[i + 1]
             i += 2
+        elif args[i] == "--max-fee" and i + 1 < len(args):
+            tx["maxFeePerGas"] = args[i + 1]
+            i += 2
+        elif args[i] == "--priority-fee" and i + 1 < len(args):
+            tx["maxPriorityFeePerGas"] = args[i + 1]
+            i += 2
+        elif args[i] == "--gas-price" and i + 1 < len(args):
+            tx["gasPrice"] = args[i + 1]
+            i += 2
         elif args[i] == "--network" and i + 1 < len(args):
             network = args[i + 1]
             i += 2
@@ -244,11 +270,21 @@ Commands:
   accounts                          List signing addresses
   health                            Check Web3Signer health
   sign <address> <hex-data>         Sign arbitrary data (eth_sign)
-  sign-tx --from <addr> --to <addr> [--value <hex>] [--data <hex>] [--gas <hex>] [--nonce <hex>] [--network <net>]
+  sign-tx --from <addr> --to <addr> [--value <hex>] [--data <hex>] [options]
                                     Sign a transaction (returns raw signed tx)
-  send-tx --from <addr> --to <addr> [--value <hex>] [--data <hex>] [--network <net>]
+  send-tx --from <addr> --to <addr> [--value <hex>] [--data <hex>] [options]
                                     Sign and broadcast a transaction
   sign-typed <address> <json>       Sign EIP-712 typed data
+
+Transaction options:
+  --gas <hex>             Gas limit (auto-estimated if omitted)
+  --nonce <hex>           Nonce (auto-fetched if omitted)
+  --network <net>         Target network (default: mainnet)
+  --max-fee <hex>         EIP-1559 maxFeePerGas (auto-derived if omitted)
+  --priority-fee <hex>    EIP-1559 maxPriorityFeePerGas (auto-fetched if omitted)
+  --gas-price <hex>       Force legacy (type 0) tx with this gasPrice
+
+Transactions default to EIP-1559 (type 2). Use --gas-price to force legacy.
 
 Environment:
   WEB3SIGNER_URL  Web3Signer URL (default: http://web3signer:9000)
