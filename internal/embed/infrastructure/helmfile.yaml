@@ -38,7 +38,7 @@ releases:
     namespace: monitoring
     createNamespace: true
     chart: prometheus-community/kube-prometheus-stack
-    version: 79.5.0
+    version: 82.2.1
     values:
       - ./values/monitoring.yaml.gotmpl
 

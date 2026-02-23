@@ -175,7 +175,13 @@ podManagementPolicy: OrderedReady
 priorityClassName: null
 
 # Resource requests and limits
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 2Gi
 
 # The security context for pods
 securityContext:
