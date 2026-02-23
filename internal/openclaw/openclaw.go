@@ -41,7 +41,7 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.3"
+	chartVersion = "0.1.5"
 )
 
 // OnboardOptions contains options for the onboard command
