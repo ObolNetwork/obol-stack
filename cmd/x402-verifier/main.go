@@ -35,6 +35,7 @@ func main() {
 	mux.HandleFunc("/verify", v.HandleVerify)
 	mux.HandleFunc("/healthz", v.HandleHealthz)
 	mux.HandleFunc("/readyz", v.HandleReadyz)
+	mux.HandleFunc("GET /.well-known/agent-registration.json", v.HandleWellKnown)
 
 	server := &http.Server{
 		Addr:              *listen,

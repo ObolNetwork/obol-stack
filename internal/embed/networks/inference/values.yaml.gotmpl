@@ -35,3 +35,8 @@ teeType: {{.TeeType}}
 # @default ""
 # @description SHA-256 hash of model weights bound into TEE attestation
 teeModelHash: {{.TeeModelHash}}
+
+# @enum true,false
+# @default false
+# @description Enable x402 payment gating via Traefik ForwardAuth
+x402Enabled: {{.X402Enabled}}

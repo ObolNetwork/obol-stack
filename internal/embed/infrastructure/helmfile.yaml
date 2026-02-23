@@ -20,6 +20,7 @@ repositories:
 values:
   - network: mainnet
   - gatewayApiVersion: v1.4.1
+  - x402Enabled: false
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -158,9 +159,39 @@ releases:
                     - path:
                         type: PathPrefix
                         value: /rpc
+{{- if eq (.Values.x402Enabled | toString) "true" }}
+                  filters:
+                    - type: ExtensionRef
+                      extensionRef:
+                        group: traefik.io
+                        kind: Middleware
+                        name: x402-payment
+{{- end }}
                   backendRefs:
                     - name: erpc
                       port: 4000
+
+{{- if eq (.Values.x402Enabled | toString) "true" }}
+  # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier)
+  - name: erpc-x402-middleware
+    namespace: erpc
+    chart: bedag/raw
+    version: 2.0.2
+    needs:
+      - traefik/traefik
+    values:
+      - resources:
+          - apiVersion: traefik.io/v1alpha1
+            kind: Middleware
+            metadata:
+              name: x402-payment
+              namespace: erpc
+            spec:
+              forwardAuth:
+                address: http://x402-verifier.x402.svc.cluster.local:8080/verify
+                authResponseHeaders:
+                  - X-Payment-Response
+{{- end }}
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata

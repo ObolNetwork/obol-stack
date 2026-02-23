@@ -213,6 +213,13 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /v1
+        {{- if eq .Values.x402Enabled "true" }}
+        - type: ExtensionRef
+          extensionRef:
+            group: traefik.io
+            kind: Middleware
+            name: x402-payment
+        {{- end }}
       backendRefs:
         - name: inference-gateway
           port: {{ .Values.gatewayPort }}
@@ -229,4 +236,19 @@ spec:
       backendRefs:
         - name: inference-gateway
           port: {{ .Values.gatewayPort }}
+
+{{- if eq .Values.x402Enabled "true" }}
+---
+# x402 ForwardAuth Middleware (per-namespace, points to central verifier)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: x402-payment
+  namespace: {{ .Release.Namespace }}
+spec:
+  forwardAuth:
+    address: http://x402-verifier.x402.svc.cluster.local:8080/verify
+    authResponseHeaders:
+      - X-Payment-Response
+{{- end }}
 {{- end }}

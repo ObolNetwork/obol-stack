@@ -71,6 +71,11 @@ COMMANDS:
    Inference (x402 Pay-Per-Request):
      inference serve  Start the x402 inference gateway
 
+   x402 Payment Gating:
+     x402 register   Register service on ERC-8004 Identity Registry (Base Sepolia)
+     x402 setup      Configure x402 pricing in the cluster
+     x402 status     Show x402 pricing config and registration status
+
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
@@ -450,6 +455,7 @@ GLOBAL OPTIONS:
 			networkCommand(cfg),
 			openclawCommand(cfg),
 			inferenceCommand(cfg),
+			x402Command(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
