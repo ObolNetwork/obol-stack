@@ -41,11 +41,15 @@ projects:
 		"id":       "local-ethereum-test",
 		"endpoint": "http://ethereum-execution.ethereum-test.svc.cluster.local:8545",
 		"evm":      map[string]interface{}{"chainId": 1},
+		"ignoreMethods": []interface{}{
+			"eth_sendRawTransaction",
+			"eth_sendTransaction",
+		},
 	}
 	upstreams = append([]interface{}{newUpstream}, upstreams...)
 	project["upstreams"] = upstreams
 
-	// Verify local upstream is first (eRPC tries in order)
+	// Verify local upstream is first (eRPC tries in order for reads)
 	if len(project["upstreams"].([]interface{})) != 2 {
 		t.Errorf("expected 2 upstreams, got %d", len(project["upstreams"].([]interface{})))
 	}
@@ -54,9 +58,18 @@ projects:
 	if first["id"] != "local-ethereum-test" {
 		t.Errorf("first upstream should be local, got %v", first["id"])
 	}
+	// Local upstream must block write methods
+	ignored, ok := first["ignoreMethods"].([]interface{})
+	if !ok || len(ignored) != 2 {
+		t.Fatal("local upstream must have ignoreMethods for write methods")
+	}
+	if ignored[0] != "eth_sendRawTransaction" {
+		t.Errorf("ignoreMethods[0] = %v, want eth_sendRawTransaction", ignored[0])
+	}
+
 	second := project["upstreams"].([]interface{})[1].(map[string]interface{})
 	if second["id"] != "obol-rpc-mainnet" {
-		t.Errorf("second upstream should be remote fallback, got %v", second["id"])
+		t.Errorf("second upstream should be remote (write-capable), got %v", second["id"])
 	}
 }
 
@@ -140,6 +153,10 @@ func TestPatchERPCConfig_Idempotent(t *testing.T) {
 		"id":       "local-ethereum-test",
 		"endpoint": "http://new-endpoint:8545",
 		"evm":      map[string]interface{}{"chainId": 1},
+		"ignoreMethods": []interface{}{
+			"eth_sendRawTransaction",
+			"eth_sendTransaction",
+		},
 	}
 	filtered = append([]interface{}{newUpstream}, filtered...)
 	project["upstreams"] = filtered
@@ -191,11 +208,16 @@ func TestPatchERPCConfig_PreservesWriteOnlySelectionPolicy(t *testing.T) {
 	project := projects[0].(map[string]interface{})
 
 	// Simulate what patchERPCUpstream does: add local upstream at front
+	// with write methods blocked
 	upstreams := project["upstreams"].([]interface{})
 	newUpstream := map[string]interface{}{
 		"id":       "local-ethereum-prod",
 		"endpoint": "http://ethereum-execution.ethereum-prod.svc.cluster.local:8545",
 		"evm":      map[string]interface{}{"chainId": 1},
+		"ignoreMethods": []interface{}{
+			"eth_sendRawTransaction",
+			"eth_sendTransaction",
+		},
 	}
 	upstreams = append([]interface{}{newUpstream}, upstreams...)
 	project["upstreams"] = upstreams

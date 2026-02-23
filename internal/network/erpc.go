@@ -123,11 +123,19 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 		// Add the new upstream at the front of the array. eRPC tries
 		// upstreams in order, so position 0 = highest priority. This gives
 		// local-first routing with automatic fallback to remote RPCs.
+		//
+		// Write methods are blocked on local nodes so transactions are
+		// always routed through the designated write upstream (e.g.
+		// obol-rpc-mainnet) rather than leaking to the public mempool.
 		newUpstream := map[string]interface{}{
 			"id":       upstreamID,
 			"endpoint": endpoint,
 			"evm": map[string]interface{}{
 				"chainId": chainID,
+			},
+			"ignoreMethods": []interface{}{
+				"eth_sendRawTransaction",
+				"eth_sendTransaction",
 			},
 		}
 		filtered = append([]interface{}{newUpstream}, filtered...)
