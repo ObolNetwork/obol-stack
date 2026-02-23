@@ -85,6 +85,7 @@ releases:
               metadata.json: |
                 {
                   "network": "{{ .Values.network }}",
+                  "chainId": {{ if eq .Values.network "mainnet" }}1{{ else if eq .Values.network "hoodi" }}560048{{ else if eq .Values.network "sepolia" }}11155111{{ else }}0{{ end }},
                   "execution": {
                     "client": "{{ .Values.executionClient }}",
                     "endpoints": {
