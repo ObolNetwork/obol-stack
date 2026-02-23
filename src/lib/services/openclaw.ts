@@ -9,6 +9,7 @@ import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectPa
 import type {
   OpenClawInstance,
   OpenClawInstanceHealth,
+  Web3SignerMetadata,
 } from '@/types/openclaw';
 import { config } from '@/lib/config/environment';
 
@@ -175,6 +176,35 @@ export class OpenClawClient {
     } catch (error) {
       console.error(`Failed to read config for ${namespace}:`, error);
       return {};
+    }
+  }
+
+  /**
+   * Get Web3Signer metadata (wallet addresses) from ConfigMap
+   */
+  public async getWeb3SignerMetadata(
+    namespace: string
+  ): Promise<Web3SignerMetadata> {
+    try {
+      const response = await this.coreV1Api.readNamespacedConfigMap({
+        name: 'wallet-metadata',
+        namespace,
+      });
+
+      const raw = response.data?.['addresses.json'];
+      if (!raw) {
+        return { instanceId: namespace, addresses: [], count: 0 };
+      }
+
+      const parsed = JSON.parse(raw);
+      return {
+        instanceId: parsed.instanceId ?? namespace,
+        addresses: parsed.addresses ?? [],
+        count: parsed.count ?? parsed.addresses?.length ?? 0,
+      };
+    } catch {
+      // ConfigMap doesn't exist or can't be read — not an error
+      return { instanceId: namespace, addresses: [], count: 0 };
     }
   }
 

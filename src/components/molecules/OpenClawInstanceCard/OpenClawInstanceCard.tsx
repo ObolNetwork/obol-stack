@@ -10,10 +10,13 @@ import {
   OpenInNew,
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
+import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import {
   useOpenClawStatus,
   useOpenClawToken,
+  useWeb3SignerMetadata,
 } from '../../../hooks/useOpenClaw';
+import { useAddressBalance } from '../../../hooks/useAddressBalance';
 import type { OpenClawInstance } from '@/types/openclaw';
 
 interface OpenClawInstanceCardProps {
@@ -69,6 +72,29 @@ const ActionsRow = styled(Flex, {
   gap: '$xs',
 });
 
+const BalanceText = styled(Text, {
+  fontSize: '$1',
+  color: '$body',
+  whiteSpace: 'nowrap',
+});
+
+const KeysBadge = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '$obolGreen',
+  backgroundColor: 'rgba(47, 228, 171, 0.08)',
+  border: '1px solid rgba(47, 228, 171, 0.25)',
+  borderRadius: '4px',
+  padding: '1px 5px',
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+});
+
+function truncateAddress(address: string): string {
+  if (address.length <= 10) return address;
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 export function OpenClawInstanceCard({
   instance,
   onSelect,
@@ -86,6 +112,10 @@ export function OpenClawInstanceCard({
           : 'unknown';
 
   const { token } = useOpenClawToken(instance.id);
+  const { metadata } = useWeb3SignerMetadata(instance.id);
+
+  const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
+  const { balance: balanceInfo } = useAddressBalance(primaryAddress);
 
   const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
@@ -119,6 +149,26 @@ export function OpenClawInstanceCard({
         <MetaItem>
           <MetaLabel>Model:</MetaLabel>
           <MetaValue>{status.model}</MetaValue>
+        </MetaItem>
+      )}
+      {metadata && metadata.addresses.length > 0 && (
+        <MetaItem>
+          <MetaLabel>Wallet:</MetaLabel>
+          <MetaValue>
+            {truncateAddress(metadata.addresses[0].address)}
+          </MetaValue>
+          <CopyButton
+            text={metadata.addresses[0].address}
+            title="Copy address"
+          />
+          {metadata.count > 1 && (
+            <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
+          )}
+          {balanceInfo && (
+            <BalanceText>
+              {balanceInfo.balance} ETH ({balanceInfo.network})
+            </BalanceText>
+          )}
         </MetaItem>
       )}
 

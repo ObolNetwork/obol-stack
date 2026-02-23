@@ -2,7 +2,11 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
-import type { ErpcStatusData } from '@/types/dashboard';
+import type {
+  ErpcStatusData,
+  ErpcUpstream,
+  ErpcUpstreamMetrics,
+} from '@/types/dashboard';
 
 export type ClientType =
   | 'execution'
@@ -85,7 +89,33 @@ export class ClientMetricsService {
         })
       );
 
-      return { networks };
+      // Parse upstream metrics when available (data.details.rpc.upstreams)
+      const rawUpstreams: Record<
+        string,
+        { network: string; metrics: ErpcUpstreamMetrics }
+      > = data?.details?.rpc?.upstreams ?? {};
+
+      const upstreams: ErpcUpstream[] = Object.entries(rawUpstreams).map(
+        ([id, upstream]) => ({
+          id,
+          network: upstream.network || '',
+          metrics: upstream.metrics,
+        })
+      );
+
+      const networkCount =
+        data?.details?.rpc?.config?.networks ?? networks.length;
+      const upstreamCount =
+        data?.details?.rpc?.config?.upstreams ?? upstreams.length;
+
+      return {
+        networks,
+        status: data?.status ?? undefined,
+        message: data?.message ?? undefined,
+        networkCount,
+        upstreamCount,
+        upstreams: upstreams.length > 0 ? upstreams : undefined,
+      };
     } catch {
       return { networks: [] };
     }

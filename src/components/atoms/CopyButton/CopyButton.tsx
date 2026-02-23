@@ -36,7 +36,19 @@ export function CopyButton({ text, title = 'Copy' }: CopyButtonProps) {
 
   const handleCopy = async (e: MouseEvent) => {
     e.stopPropagation();
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for insecure contexts (e.g. http://obol.stack on Firefox)
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

@@ -132,8 +132,11 @@ export async function GET() {
           config.erpcBaseUrl
         );
 
-        const allOk = erpcStatus.networks.every(n => n.state === 'OK');
-        const anyOk = erpcStatus.networks.some(n => n.state === 'OK');
+        const hasNetworks = erpcStatus.networks.length > 0;
+        const allOk =
+          hasNetworks && erpcStatus.networks.every(n => n.state === 'OK');
+        const anyOk =
+          hasNetworks && erpcStatus.networks.some(n => n.state === 'OK');
 
         apps.push({
           chainName: instance.network,

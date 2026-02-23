@@ -1,5 +1,6 @@
 import {
   ErpcNetwork,
+  ErpcUpstream,
   ChainName,
   ClientStatusType,
 } from '../../types/dashboard';
@@ -36,4 +37,25 @@ export function chainIdFromEvmId(id: string): number | null {
 
 export function erpcUrl(): string {
   return process.env.NEXT_PUBLIC_ERPC_URL ?? 'https://obol.stack/rpc';
+}
+
+/** Group upstreams by their network ID (e.g. "evm:1") */
+export function groupUpstreamsByNetwork(
+  upstreams: ErpcUpstream[]
+): Map<string, ErpcUpstream[]> {
+  const groups = new Map<string, ErpcUpstream[]>();
+  for (const upstream of upstreams) {
+    const existing = groups.get(upstream.network) ?? [];
+    groups.set(upstream.network, [...existing, upstream]);
+  }
+  return groups;
+}
+
+export function formatMs(seconds: number): string {
+  return `${Math.round(seconds * 1000)}ms`;
+}
+
+export function formatRate(rate: number): string {
+  if (rate === 0) return '0%';
+  return `${(rate * 100).toFixed(2)}%`;
 }

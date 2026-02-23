@@ -149,8 +149,43 @@ export interface ErpcNetwork {
   state: string; // "OK" | error string
 }
 
+export interface ErpcResponseQuantiles {
+  p50: number;
+  p70: number;
+  p90: number;
+  p95: number;
+  p99: number;
+}
+
+export interface ErpcUpstreamMetrics {
+  cordoned: boolean;
+  lastCordonedReason: string | null;
+  errorRate: number;
+  errorsTotal: number;
+  requestsTotal: number;
+  misbehaviorRate: number;
+  misbehaviorsTotal: number;
+  blockHeadLag: number;
+  finalizationLag: number;
+  throttledRate: number;
+  selfRateLimitedTotal: number;
+  remoteRateLimitedTotal: number;
+  responseQuantiles: ErpcResponseQuantiles;
+}
+
+export interface ErpcUpstream {
+  id: string;
+  network: string; // "evm:1", "evm:11155111", etc.
+  metrics: ErpcUpstreamMetrics;
+}
+
 export interface ErpcStatusData {
   networks: ErpcNetwork[];
+  status?: string;
+  message?: string;
+  networkCount?: number;
+  upstreamCount?: number;
+  upstreams?: ErpcUpstream[];
 }
 
 export interface MetricCardProps {

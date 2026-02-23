@@ -19,3 +19,21 @@ export interface OpenClawInstanceHealth {
 export interface OpenClawToken {
   token: string;
 }
+
+export interface Web3SignerAddress {
+  address: string;
+  publicKey: string;
+  createdAt: string;
+  label: string;
+}
+
+export interface Web3SignerMetadata {
+  instanceId: string;
+  addresses: Web3SignerAddress[];
+  count: number;
+}
+
+export interface AddressBalance {
+  balance: string;
+  network: string;
+}

@@ -1,10 +1,10 @@
 {
   "name": "obol-stack-front-end",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "bash scripts/port-forward-erpc.sh & next dev --turbopack",
     "dev:local": "next dev --turbopack",
     "build": "next build",
     "start": "next start --hostname obol.stack",

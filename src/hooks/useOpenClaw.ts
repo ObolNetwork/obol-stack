@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type {
   OpenClawInstance,
   OpenClawInstanceHealth,
+  Web3SignerMetadata,
 } from '@/types/openclaw';
 
 export function useOpenClawInstances() {
@@ -96,4 +97,26 @@ export function useOpenClawToken(instanceId: string) {
   }, [fetchToken]);
 
   return { token };
+}
+
+export function useWeb3SignerMetadata(instanceId: string) {
+  const [metadata, setMetadata] = useState<Web3SignerMetadata | null>(null);
+
+  const fetchMetadata = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/openclaw/wallet?id=${instanceId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setMetadata(data);
+      }
+    } catch {
+      setMetadata(null);
+    }
+  }, [instanceId]);
+
+  useEffect(() => {
+    fetchMetadata();
+  }, [fetchMetadata]);
+
+  return { metadata };
 }
