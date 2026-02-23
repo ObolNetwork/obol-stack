@@ -38,11 +38,11 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "sync",
-				Usage:     "Deploy or update network configuration to cluster",
-				ArgsUsage: "<network>/<id> or <network>-<id>",
+				Usage:     "Deploy or update network configuration to cluster (no args = sync all)",
+				ArgsUsage: "[<network>/<id>]",
 				Action: func(c *cli.Context) error {
 					if c.NArg() == 0 {
-						return fmt.Errorf("deployment identifier required (e.g., ethereum/knowing-wahoo or ethereum-knowing-wahoo)")
+						return network.SyncAll(cfg)
 					}
 					deploymentIdentifier := c.Args().First()
 					return network.Sync(cfg, deploymentIdentifier)

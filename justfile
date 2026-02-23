@@ -34,3 +34,48 @@ up:
 down:
     obol cluster down
     obol cluster purge
+
+# Path to the frontend repo (override with FRONTEND_DIR=../path just dev-frontend)
+frontend_dir := env("FRONTEND_DIR", justfile_directory() / "../obol-stack-front-end")
+dev_image    := "obolnetwork/obol-stack-front-end:dev"
+
+# Build frontend from local source, import into k3d, and restart the pod
+dev-frontend:
+    #!/usr/bin/env bash
+    set -e
+    CLUSTER_ID=$(cat .workspace/config/.stack-id 2>/dev/null || cat ~/.config/obol/.stack-id)
+    echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
+    docker build -t {{ dev_image }} {{ frontend_dir }}
+    echo "→ Importing image into k3d cluster obol-stack-${CLUSTER_ID}"
+    k3d image import {{ dev_image }} -c "obol-stack-${CLUSTER_ID}"
+    echo "→ Restarting frontend deployment"
+    obol kubectl set image deployment/obol-frontend-obol-app \
+        obol-app={{ dev_image }} -n obol-frontend
+    obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
+    obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
+    echo "✓ Frontend dev build live at http://obol.stack"
+
+# Rebuild and hot-swap frontend (skip docker cache for faster iteration)
+dev-frontend-rebuild:
+    #!/usr/bin/env bash
+    set -e
+    CLUSTER_ID=$(cat .workspace/config/.stack-id 2>/dev/null || cat ~/.config/obol/.stack-id)
+    echo "→ Rebuilding {{ dev_image }} (no cache)"
+    docker build --no-cache -t {{ dev_image }} {{ frontend_dir }}
+    echo "→ Importing image into k3d cluster obol-stack-${CLUSTER_ID}"
+    k3d image import {{ dev_image }} -c "obol-stack-${CLUSTER_ID}"
+    echo "→ Restarting frontend deployment"
+    obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
+    obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
+    echo "✓ Frontend dev build live at http://obol.stack"
+
+# Reset frontend back to the released image
+dev-frontend-reset:
+    #!/usr/bin/env bash
+    set -e
+    echo "→ Resetting frontend to released image"
+    obol kubectl set image deployment/obol-frontend-obol-app \
+        obol-app=obolnetwork/obol-stack-front-end:v0.1.7 -n obol-frontend
+    obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
+    obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
+    echo "✓ Frontend reset to released image"

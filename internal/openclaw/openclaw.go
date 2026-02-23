@@ -41,7 +41,7 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.3"
+	chartVersion = "0.1.5"
 )
 
 // OnboardOptions contains options for the onboard command
@@ -962,7 +962,25 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	}
 
 	if namespaceExists {
-		fmt.Printf("\nDeleting namespace %s...\n", namespace)
+		// Run helmfile destroy first to cleanly remove Helm releases.
+		// This ensures StatefulSet PVCs are properly cleaned up before namespace deletion.
+		helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+		if _, err := os.Stat(helmfilePath); err == nil {
+			if _, err := os.Stat(helmfileBinary); err == nil {
+				fmt.Printf("\nRemoving Helm releases from %s...\n", namespace)
+				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
+				destroyCmd.Dir = deploymentDir
+				destroyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+				destroyCmd.Stdout = os.Stdout
+				destroyCmd.Stderr = os.Stderr
+				if err := destroyCmd.Run(); err != nil {
+					fmt.Printf("Warning: helmfile destroy failed (will force-delete namespace): %v\n", err)
+				}
+			}
+		}
+
+		fmt.Printf("Deleting namespace %s...\n", namespace)
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
@@ -970,7 +988,7 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to delete namespace: %w", err)
+			fmt.Printf("Warning: namespace deletion may still be in progress: %v\n", err)
 		}
 		fmt.Println("Namespace deleted")
 	}

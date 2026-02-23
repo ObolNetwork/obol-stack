@@ -56,11 +56,25 @@ config: |-
           endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/hoodi/evm/560048
           evm:
             chainId: 560048
+        - id: allnodes-rpc-hoodi
+          endpoint: https://ethereum-hoodi-rpc.publicnode.com
+          evm:
+            chainId: 560048
       networks:
         - architecture: evm
           evm:
             chainId: 1
           alias: mainnet
+          selectionPolicy:
+            evalInterval: 1m
+            evalPerMethod: true
+            evalFunction: |
+              (upstreams, method) => {
+                if (method === 'eth_sendRawTransaction') {
+                  return upstreams.filter(u => u.config.id === 'obol-rpc-mainnet');
+                }
+                return upstreams;
+              }
           failsafe:
             timeout:
               duration: 30s

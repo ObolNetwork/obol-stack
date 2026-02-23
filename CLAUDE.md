@@ -649,6 +649,30 @@ obol network install ethereum --id hoodi-test --network=hoodi
 - k3s auto-applies all YAML files on startup
 - Uses k3s HelmChart CRD for Helm deployments
 
+## Dynamic eRPC Upstream Management
+
+When a local Ethereum node is deployed via `obol network install ethereum`, it is automatically registered as an upstream in the eRPC gateway. This enables local-first routing: read requests hit the local node first (lowest latency), while write methods (`eth_sendRawTransaction`, `eth_sendTransaction`) are blocked on local upstreams and routed to designated remote providers.
+
+**Key functions** (`internal/network/erpc.go`):
+- `RegisterERPCUpstream()` — called after `obol network sync`, adds local node to eRPC ConfigMap at position 0 (highest priority)
+- `DeregisterERPCUpstream()` — called before `obol network delete`, removes the upstream
+- `patchERPCUpstream()` — core logic: reads eRPC ConfigMap, adds/removes upstream, restarts eRPC deployment
+
+**Chain ID mapping**: mainnet=1, hoodi=560048, sepolia=11155111
+
+**Write protection**: Local upstreams include `ignoreMethods` for `eth_sendRawTransaction` and `eth_sendTransaction`. A `selectionPolicy` on the mainnet network routes writes exclusively to `obol-rpc-mainnet`.
+
+**Data flow**:
+```
+obol network sync ethereum/my-node
+  → helmfile sync (deploys execution + consensus clients)
+  → RegisterERPCUpstream(cfg, "ethereum", "my-node")
+    → patches erpc-config ConfigMap: adds local-ethereum-my-node upstream at position 0
+    → restarts eRPC deployment
+  → reads now route: local node (priority) → obol-rpc-mainnet (fallback)
+  → writes route: obol-rpc-mainnet only (local node blocks write methods)
+```
+
 ## LLM Configuration Architecture
 
 The stack uses a two-tier architecture for LLM routing. A cluster-wide proxy (llmspy) handles actual provider communication, while each application instance (e.g., OpenClaw) sees a simplified single-provider view.
@@ -778,14 +802,44 @@ Skills are delivered by writing directly to the host filesystem at `$DATA_DIR/op
 
 **Advantages over ConfigMap approach**: No 1MB size limit, works before pod readiness, survives pod restarts, supports binary files and scripts.
 
-### Default Skills
+### Default Skills (20 skills)
+
+The stack ships 20 embedded skills organized into categories. All are installed automatically on first deploy.
+
+#### Infrastructure Skills
 
 | Skill | Contents | Purpose |
 |-------|----------|---------|
-| `hello` | `SKILL.md` | Smoke test — confirms skills pipeline works |
-| `obol-blockchain` | `SKILL.md`, `scripts/rpc.py`, `references/erc20-methods.md`, `references/common-contracts.md` | Ethereum JSON-RPC queries, ERC-20 token ops, ENS resolution, gas estimation via the eRPC gateway |
-| `obol-k8s` | `SKILL.md`, `scripts/kube.py` | Kubernetes cluster diagnostics — pods, logs, events, deployments via ServiceAccount API |
-| `obol-dvt` | `SKILL.md`, `references/api-examples.md` | Obol DVT cluster monitoring, operator audit, exit coordination via Obol API |
+| `ethereum-networks` | `SKILL.md`, `scripts/rpc.sh`, `scripts/rpc.py`, `references/erc20-methods.md`, `references/common-contracts.md` | Read-only Ethereum queries via cast/eRPC — blocks, balances, contract reads, ERC-20 lookups, ENS resolution |
+| `obol-stack` | `SKILL.md`, `scripts/kube.py` | Kubernetes cluster diagnostics — pods, logs, events, deployments via ServiceAccount API |
+| `distributed-validators` | `SKILL.md`, `references/api-examples.md` | Obol DVT cluster monitoring, operator audit, exit coordination via Obol API |
+
+#### Ethereum Development Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `addresses` | `SKILL.md` | Verified contract addresses — DeFi, tokens, bridges, ERC-8004 registries across all major chains |
+| `building-blocks` | `SKILL.md` | OpenZeppelin patterns, DEX integration, oracle usage, access control |
+| `concepts` | `SKILL.md` | Mental model — state machines, incentive design, gas mechanics, EOAs vs contracts |
+| `gas` | `SKILL.md` | Gas optimization patterns, L2 fee structures, estimation |
+| `indexing` | `SKILL.md` | The Graph, Dune, event indexing for onchain data |
+| `l2s` | `SKILL.md` | L2 comparison — Base, Arbitrum, Optimism, zkSync with gas costs and use cases |
+| `orchestration` | `SKILL.md` | End-to-end dApp build (Scaffold-ETH 2) + AI agent commerce cycle |
+| `security` | `SKILL.md` | Smart contract vulnerability patterns, reentrancy, flash loans, MEV protection |
+| `standards` | `SKILL.md` | ERC-8004, x402, EIP-3009, EIP-7702, ERC-4337 — spec details, integration patterns |
+| `ship` | `SKILL.md` | Architecture planning — what goes onchain vs offchain, chain selection, agent patterns |
+| `testing` | `SKILL.md` | Foundry testing — unit, fuzz, fork, invariant tests |
+| `tools` | `SKILL.md` | Development tooling — Foundry, Hardhat, Scaffold-ETH 2, verification |
+| `wallets` | `SKILL.md` | Wallet management — EOAs, Safe multisig, EIP-7702, key safety for AI agents |
+
+#### Frontend & UX Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `frontend-playbook` | `SKILL.md` | Frontend deployment — IPFS, Vercel, ENS subdomains |
+| `frontend-ux` | `SKILL.md` | Web3 UX patterns — wallet connection, transaction flows, error handling |
+| `qa` | `SKILL.md` | Quality assurance — testing strategy, coverage, CI/CD patterns |
+| `why` | `SKILL.md` | Why build on Ethereum — the AI agent angle with ERC-8004 and x402 |
 
 ### Skill Delivery Flow
 
@@ -1089,14 +1143,15 @@ obol network delete ethereum-<generated-name> --force
   - `aztec/helmfile.yaml.gotmpl`
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
-- `internal/embed/skills/` - Default OpenClaw skills (hello, obol-blockchain, obol-k8s, obol-dvt) embedded in obol binary
+- `internal/embed/skills/` - Default OpenClaw skills (20 skills) embedded in obol binary
 
 **Skills system**:
 - `internal/openclaw/resolve.go` - Smart instance resolution (0/1/2+ instances)
-- `internal/embed/skills/hello/SKILL.md` - Hello world smoke-test skill
-- `internal/embed/skills/obol-blockchain/` - Ethereum JSON-RPC, ERC-20, ENS via eRPC (SKILL.md + scripts/rpc.py + references/)
-- `internal/embed/skills/obol-k8s/` - Kubernetes cluster diagnostics (SKILL.md + scripts/kube.py)
-- `internal/embed/skills/obol-dvt/` - DVT cluster monitoring via Obol API (SKILL.md + references/api-examples.md)
+- `internal/embed/skills/ethereum-networks/` - Ethereum queries via cast/eRPC (SKILL.md + scripts/ + references/)
+- `internal/embed/skills/obol-stack/` - Kubernetes cluster diagnostics (SKILL.md + scripts/kube.py)
+- `internal/embed/skills/distributed-validators/` - DVT cluster monitoring via Obol API (SKILL.md + references/)
+- `internal/embed/skills/addresses/` - Verified contract addresses across chains
+- `internal/embed/skills/*/SKILL.md` - 17 additional domain-specific skills (see Default Skills section above)
 - `internal/embed/embed_skills_test.go` - Unit tests for skill embedding
 - `internal/openclaw/skills_injection_test.go` - Unit tests for skill staging and injection
 - `tests/skills_smoke_test.py` - In-pod Python smoke tests for all rich skills
