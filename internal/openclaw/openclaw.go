@@ -217,19 +217,20 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
 
-	// Generate Web3Signer signing key and provision to host-path PVC.
-	// The key is created before deployment so web3signer can load it on startup.
-	fmt.Println("\nGenerating Web3Signer signing key...")
-	signingKey, err := GenerateSigningKey()
+	// Generate encrypted V3 keystore via Foundry cast and provision
+	// Web3Signer key config. The keystore is created before deployment
+	// so web3signer can load it on startup.
+	fmt.Println("\nGenerating wallet keystore via cast...")
+	keysDir := Web3SignerKeysPath(cfg, id)
+	wallet, err := GenerateKeystoreViaCast(keysDir)
 	if err != nil {
 		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to generate signing key: %w", err)
+		return fmt.Errorf("failed to generate keystore: %w", err)
 	}
-	keysDir := Web3SignerKeysPath(cfg, id)
 	keyLabel := fmt.Sprintf("obol-agent-%s", id)
-	if err := ProvisionKeyFiles(keysDir, signingKey, keyLabel); err != nil {
+	if err := ProvisionKeyFiles(keysDir, wallet, keyLabel); err != nil {
 		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to provision signing key: %w", err)
+		return fmt.Errorf("failed to provision key config: %w", err)
 	}
 
 	// Write Web3Signer Helm values
@@ -253,9 +254,9 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	}
 
 	// Display wallet address and backup warning
-	fmt.Printf("\n  Agent wallet address: %s\n", signingKey.Address)
+	fmt.Printf("\n  Agent wallet address: %s\n", wallet.Address)
 	fmt.Printf("\n  Back up your signing key:\n")
-	fmt.Printf("    cp %s/%s.yaml ~/obol-wallet-backup-%s.yaml\n", keysDir, signingKey.KeyID, id)
+	fmt.Printf("    cp -r %s/ ~/obol-wallet-backup-%s/\n", keysDir, id)
 	fmt.Printf("\n  WARNING: This wallet feature is in alpha and may change rapidly.\n")
 	fmt.Printf("  Do not deposit mainnet funds you are not willing to lose.\n")
 
@@ -339,9 +340,9 @@ func doSync(cfg *config.Config, id string) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	// Apply web3signer-metadata ConfigMap (namespace now exists after helmfile sync).
-	// Read the signing key address from the provisioned key files.
-	applyWeb3SignerMetadata(cfg, id)
+	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
+	// Read the signing address from the provisioned keystore files.
+	applyWalletMetadata(cfg, id)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -1335,6 +1336,10 @@ erpc:
 # OpenClaw's file watcher picks them up; no ConfigMap needed.
 skills:
   enabled: false
+
+# Foundry CLI tools (cast) available to skills via init container
+foundry:
+  enabled: true
 
 # Agent init Job (enable to bootstrap workspace on first deploy)
 initJob:

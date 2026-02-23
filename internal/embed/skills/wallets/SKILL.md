@@ -97,15 +97,17 @@ git log --all -p | grep -iE 'private.?key|0x[a-fA-F0-9]{64}'
 ### Safe Patterns for AI Agents
 
 ```bash
-# Load key from environment (NEVER hardcode)
+# Encrypted keystore (Obol Stack default — keys never stored in plaintext)
+cast send ... --account obol-agent --keystore-dir /data/.foundry/keystores --password-file /secrets/keystore-password
+
+# Load key from environment (acceptable for testing, NEVER in production)
 cast send ... --private-key $DEPLOYER_PRIVATE_KEY
 
-# Or use encrypted keystore
-cast send ... --keystore ~/.foundry/keystores/deployer --password-file .password
-
-# Or use hardware wallet
+# Hardware wallet (best for high-value operations)
 cast send ... --ledger
 ```
+
+**Obol Stack uses encrypted V3 keystores by default.** Keys are generated during `obol agent init` via `cast wallet new`, stored encrypted on the PVC, and accessed via password file. The `local-ethereum-wallet` skill handles signing through Web3Signer (separate pod, keys never in the OpenClaw container).
 
 **Rule of thumb:** If `grep -r "0x[a-fA-F0-9]{64}" .` matches anything in your source code, you have a problem. Same for `grep -r "g.alchemy.com/v2/[A-Za-z0-9]"` or any RPC URL with an embedded API key.
 
@@ -160,6 +162,12 @@ async function sendSafely(wallet, to, value) {
   return receipt;
 }
 ```
+
+## See Also
+
+- `local-ethereum-wallet` — sign and send transactions via the local signing service
+- `security` — smart contract vulnerability patterns and defensive code
+- `ethereum-networks` — blockchain queries and contract reads
 
 ## Further Reading
 

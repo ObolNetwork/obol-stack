@@ -2,18 +2,17 @@ package openclaw
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -21,63 +20,216 @@ const (
 	web3signerImageTag     = "25.12.0"
 	web3signerReleaseName  = "web3signer"
 	web3signerPort         = 9000
+
+	keystoreAccountName = "obol-agent"
+	keystorePasswordLen = 32
+	foundryImage        = "ghcr.io/foundry-rs/foundry:stable"
 )
 
-// Web3SignerKey holds the generated key material and derived identifiers.
-type Web3SignerKey struct {
-	PrivateKeyHex string // 64 hex chars (32 bytes)
-	PublicKeyHex  string // 130 hex chars (65 bytes, uncompressed with 04 prefix)
-	Address       string // 0x-prefixed, 42 chars
-	KeyID         string // short identifier used in filenames
+// WalletKey holds the address and file locations for a generated wallet.
+type WalletKey struct {
+	Address      string // 0x-prefixed, 42 chars
+	KeystoreFile string // absolute path to V3 JSON keystore on host
+	PasswordFile string // absolute path to password file on host
 }
 
-// GenerateSigningKey creates a new SECP256K1 private key and derives
-// the Ethereum address from it. The key is suitable for Web3Signer's
-// file-raw key type.
-func GenerateSigningKey() (*Web3SignerKey, error) {
-	privKey, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate secp256k1 key: %w", err)
-	}
-
-	privBytes := privKey.Serialize()                     // 32 bytes
-	pubBytes := privKey.PubKey().SerializeUncompressed() // 65 bytes: 04 || x || y
-
-	// Ethereum address: keccak256(pubkey_without_prefix)[12:]
-	hash := sha3.NewLegacyKeccak256()
-	hash.Write(pubBytes[1:]) // skip 0x04 prefix
-	addrBytes := hash.Sum(nil)[12:]
-
-	// Generate a short key ID from randomness
-	idBytes := make([]byte, 4)
-	if _, err := rand.Read(idBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate key ID: %w", err)
-	}
-
-	return &Web3SignerKey{
-		PrivateKeyHex: hex.EncodeToString(privBytes),
-		PublicKeyHex:  "0x" + hex.EncodeToString(pubBytes),
-		Address:       "0x" + hex.EncodeToString(addrBytes),
-		KeyID:         hex.EncodeToString(idBytes),
-	}, nil
-}
-
-// ProvisionKeyFiles writes the private key and Web3Signer TOML config
-// to the host-side PVC path so that Web3Signer can load them on startup.
-func ProvisionKeyFiles(keysDir string, key *Web3SignerKey, label string) error {
+// GenerateKeystoreViaCast creates an encrypted V3 keystore using Foundry's
+// cast wallet new command. It tries the host-installed cast binary first,
+// then falls back to running cast inside a Docker container.
+func GenerateKeystoreViaCast(keysDir string) (*WalletKey, error) {
 	if err := os.MkdirAll(keysDir, 0755); err != nil {
-		return fmt.Errorf("failed to create keys directory: %w", err)
+		return nil, fmt.Errorf("failed to create keys directory: %w", err)
 	}
 
-	// Write Web3Signer YAML key config with the private key inline.
-	// v25+ scans for .yaml files and expects the private key as a
-	// 0x-prefixed hex value in the `privateKey` field.
-	yamlContent := fmt.Sprintf(`type: "file-raw"
-keyType: "SECP256K1"
-privateKey: "0x%s"
-`, key.PrivateKeyHex)
+	// Generate random password and write to file. cast reads the password
+	// from this file via --password-file (never passed on the command line).
+	password, err := generateRandomPassword(keystorePasswordLen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate password: %w", err)
+	}
 
-	configFile := filepath.Join(keysDir, key.KeyID+".yaml")
+	passwordPath := filepath.Join(keysDir, "password.txt")
+	if err := os.WriteFile(passwordPath, []byte(password), 0600); err != nil {
+		return nil, fmt.Errorf("failed to write password file: %w", err)
+	}
+
+	// Try host cast binary
+	if castPath, err := exec.LookPath("cast"); err == nil {
+		address, err := runCastWalletNew(castPath, keysDir, passwordPath)
+		if err == nil {
+			keystoreFile := findKeystoreFile(keysDir)
+			return &WalletKey{
+				Address:      address,
+				KeystoreFile: keystoreFile,
+				PasswordFile: passwordPath,
+			}, nil
+		}
+		fmt.Printf("  Warning: host cast failed: %v\n", err)
+	}
+
+	// Try Docker fallback
+	if dockerPath, err := exec.LookPath("docker"); err == nil {
+		address, err := runCastWalletNewDocker(dockerPath, keysDir, passwordPath)
+		if err == nil {
+			keystoreFile := findKeystoreFile(keysDir)
+			return &WalletKey{
+				Address:      address,
+				KeystoreFile: keystoreFile,
+				PasswordFile: passwordPath,
+			}, nil
+		}
+		fmt.Printf("  Warning: docker fallback failed: %v\n", err)
+	}
+
+	// Clean up password file on total failure
+	os.Remove(passwordPath)
+	return nil, fmt.Errorf("could not generate keystore.\n" +
+		"  Install Foundry: curl -L https://foundry.paradigm.xyz | bash && foundryup\n" +
+		"  Or install Docker: https://docs.docker.com/get-docker/")
+}
+
+// runCastWalletNew runs cast wallet new on the host to create a V3 keystore.
+// The password is read from a file, never passed on the command line.
+func runCastWalletNew(castBin, keysDir, passwordFile string) (string, error) {
+	cmd := exec.Command(castBin, "wallet", "new", keysDir, "--password-file", passwordFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("cast wallet new: %w\n%s", err, output)
+	}
+	return parseAddressFromOutput(string(output))
+}
+
+// runCastWalletNewDocker runs cast wallet new inside a Foundry Docker container.
+// The password file is mounted into the container at /keys/password.txt.
+func runCastWalletNewDocker(dockerBin, keysDir, passwordFile string) (string, error) {
+	absKeysDir, err := filepath.Abs(keysDir)
+	if err != nil {
+		return "", err
+	}
+
+	// password.txt is inside keysDir, so the single volume mount covers both
+	containerPasswordPath := "/keys/" + filepath.Base(passwordFile)
+	cmd := exec.Command(dockerBin, "run", "--rm",
+		"-v", absKeysDir+":/keys",
+		foundryImage,
+		"cast", "wallet", "new", "/keys", "--password-file", containerPasswordPath,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker cast wallet new: %w\n%s", err, output)
+	}
+	return parseAddressFromOutput(string(output))
+}
+
+// parseAddressFromOutput extracts the 0x-prefixed Ethereum address from
+// cast wallet new output.
+var addressRe = regexp.MustCompile(`0x[0-9a-fA-F]{40}`)
+
+func parseAddressFromOutput(output string) (string, error) {
+	// Look for address in output lines (skip private key lines)
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "private") {
+			continue
+		}
+		if match := addressRe.FindString(line); match != "" {
+			return match, nil
+		}
+	}
+	return "", fmt.Errorf("could not find address in output:\n%s", output)
+}
+
+// findKeystoreFile finds the V3 keystore file in the keys directory.
+// cast wallet import creates files named after the account (e.g. "obol-agent"),
+// while cast wallet new creates "UTC--<timestamp>--<address>" files.
+// We look for the known account name first, then fall back to any file
+// containing valid V3 keystore JSON.
+func findKeystoreFile(keysDir string) string {
+	// Check for the well-known account name first
+	knownPath := filepath.Join(keysDir, keystoreAccountName)
+	if info, err := os.Stat(knownPath); err == nil && !info.IsDir() {
+		return knownPath
+	}
+
+	// Fall back: scan for any file containing V3 keystore JSON
+	entries, err := os.ReadDir(keysDir)
+	if err != nil {
+		return ""
+	}
+
+	var newest string
+	var newestTime time.Time
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Skip known non-keystore files
+		if name == "password.txt" || filepath.Ext(name) == ".yaml" || filepath.Ext(name) == ".ports" {
+			continue
+		}
+		if !isV3Keystore(filepath.Join(keysDir, name)) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestTime) {
+			newest = filepath.Join(keysDir, name)
+			newestTime = info.ModTime()
+		}
+	}
+	return newest
+}
+
+// isV3Keystore returns true if the file at path contains valid V3 keystore JSON.
+func isV3Keystore(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var ks struct {
+		Version int `json:"version"`
+	}
+	return json.Unmarshal(content, &ks) == nil && ks.Version == 3
+}
+
+// generateRandomPassword creates a cryptographically random alphanumeric password.
+func generateRandomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	max := big.NewInt(int64(len(charset)))
+	for i := range b {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		b[i] = charset[n.Int64()]
+	}
+	return string(b), nil
+}
+
+// ProvisionKeyFiles writes the Web3Signer key configuration that references
+// the V3 encrypted keystore. Web3Signer uses file-keystore type to read
+// the encrypted key and password file at startup.
+func ProvisionKeyFiles(keysDir string, wallet *WalletKey, label string) error {
+	// Derive the container-relative paths. The host keysDir maps to
+	// /data/keys/ inside the web3signer pod via the PVC mount.
+	keystoreBasename := filepath.Base(wallet.KeystoreFile)
+	yamlContent := fmt.Sprintf(`type: "file-keystore"
+keyType: "SECP256K1"
+keystoreFile: "/data/keys/%s"
+keystorePasswordFile: "/data/keys/password.txt"
+`, keystoreBasename)
+
+	// Use a deterministic filename based on a short address prefix
+	shortAddr := strings.TrimPrefix(wallet.Address, "0x")
+	if len(shortAddr) > 8 {
+		shortAddr = shortAddr[:8]
+	}
+	configFile := filepath.Join(keysDir, shortAddr+".yaml")
 	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
 		return fmt.Errorf("failed to write key config: %w", err)
 	}
@@ -98,29 +250,28 @@ func Web3SignerKeysPath(cfg *config.Config, id string) string {
 // MetadataAddress represents a single signing address in the ConfigMap.
 type MetadataAddress struct {
 	Address   string `json:"address"`
-	PublicKey string `json:"publicKey"`
+	PublicKey string `json:"publicKey,omitempty"`
 	CreatedAt string `json:"createdAt"`
 	Label     string `json:"label"`
 }
 
-// MetadataPayload is the JSON structure stored in the web3signer-metadata ConfigMap.
+// MetadataPayload is the JSON structure stored in the wallet-metadata ConfigMap.
 type MetadataPayload struct {
 	InstanceID string            `json:"instanceId"`
 	Addresses  []MetadataAddress `json:"addresses"`
 	Count      int               `json:"count"`
 }
 
-// ApplyMetadataConfigMap creates or updates the web3signer-metadata ConfigMap
+// ApplyMetadataConfigMap creates or updates the wallet-metadata ConfigMap
 // in the instance namespace. The frontend reads this for display purposes.
-func ApplyMetadataConfigMap(cfg *config.Config, id string, key *Web3SignerKey) error {
+func ApplyMetadataConfigMap(cfg *config.Config, id string, address string) error {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	payload := MetadataPayload{
 		InstanceID: id,
 		Addresses: []MetadataAddress{
 			{
-				Address:   key.Address,
-				PublicKey: key.PublicKeyHex,
+				Address:   address,
 				CreatedAt: time.Now().UTC().Format(time.RFC3339),
 				Label:     fmt.Sprintf("obol-agent-%s", id),
 			},
@@ -133,21 +284,19 @@ func ApplyMetadataConfigMap(cfg *config.Config, id string, key *Web3SignerKey) e
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	// Build ConfigMap YAML
 	configMapYAML := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: web3signer-metadata
+  name: wallet-metadata
   namespace: %s
   labels:
-    app.kubernetes.io/component: web3signer
+    app.kubernetes.io/component: wallet
     app.kubernetes.io/managed-by: obol
 data:
   addresses.json: |
     %s
 `, namespace, indentJSON(string(payloadJSON), 4))
 
-	// Apply via kubectl
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
@@ -158,7 +307,7 @@ data:
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply web3signer-metadata ConfigMap: %w", err)
+		return fmt.Errorf("failed to apply wallet-metadata ConfigMap: %w", err)
 	}
 
 	return nil
@@ -197,128 +346,109 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// applyWeb3SignerMetadata reads the signing key from the provisioned key files
-// and creates the web3signer-metadata ConfigMap. Called after helmfile sync
+// applyWalletMetadata reads the signing address from the provisioned keystore
+// and creates the wallet-metadata ConfigMap. Called after helmfile sync
 // when the namespace exists. Errors are non-fatal (printed as warnings).
-func applyWeb3SignerMetadata(cfg *config.Config, id string) {
+func applyWalletMetadata(cfg *config.Config, id string) {
 	keysDir := Web3SignerKeysPath(cfg, id)
 
-	// Find a .yaml key file to reconstruct the key info.
-	// Key files are YAML with an inline privateKey field:
-	//   type: "file-raw"
-	//   keyType: "SECP256K1"
-	//   privateKey: "0xabcdef..."
-	entries, err := os.ReadDir(keysDir)
-	if err != nil {
-		fmt.Printf("  Warning: could not read web3signer keys directory: %v\n", err)
+	address := extractAddressFromKeystore(keysDir)
+	if address == "" {
+		fmt.Printf("  Warning: could not find wallet address in %s\n", keysDir)
 		return
 	}
 
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-		keyID := strings.TrimSuffix(entry.Name(), ".yaml")
-
-		content, err := os.ReadFile(filepath.Join(keysDir, entry.Name()))
-		if err != nil {
-			fmt.Printf("  Warning: could not read key file: %v\n", err)
-			continue
-		}
-
-		// Extract the privateKey value from the YAML content.
-		privHex := extractPrivateKeyFromYAML(string(content))
-		if privHex == "" {
-			fmt.Printf("  Warning: no privateKey found in %s\n", entry.Name())
-			continue
-		}
-
-		privBytes, err := hex.DecodeString(privHex)
-		if err != nil {
-			fmt.Printf("  Warning: invalid key hex in %s: %v\n", entry.Name(), err)
-			continue
-		}
-
-		// Derive address from private key
-		privKey := secp256k1.PrivKeyFromBytes(privBytes)
-		pubBytes := privKey.PubKey().SerializeUncompressed()
-
-		hash := sha3.NewLegacyKeccak256()
-		hash.Write(pubBytes[1:])
-		addrBytes := hash.Sum(nil)[12:]
-
-		key := &Web3SignerKey{
-			PublicKeyHex: "0x" + hex.EncodeToString(pubBytes),
-			Address:      "0x" + hex.EncodeToString(addrBytes),
-			KeyID:        keyID,
-		}
-
-		if err := ApplyMetadataConfigMap(cfg, id, key); err != nil {
-			fmt.Printf("  Warning: could not create web3signer-metadata ConfigMap: %v\n", err)
-		} else {
-			fmt.Printf("✓ Web3Signer metadata published (Agent address: %s)\n", key.Address)
-			fmt.Printf("  Back up your key: cp -r %s/ ~/obol-wallet-backup-%s/\n", keysDir, id)
-			fmt.Println("  WARNING: This wallet feature is in alpha and may change rapidly.")
-			fmt.Println("  Do not deposit mainnet funds you are not willing to lose.")
-		}
-		return // only process the first key
+	if err := ApplyMetadataConfigMap(cfg, id, address); err != nil {
+		fmt.Printf("  Warning: could not create wallet-metadata ConfigMap: %v\n", err)
+	} else {
+		fmt.Printf("✓ Wallet metadata published (Agent address: %s)\n", address)
+		fmt.Printf("  Back up your key: cp -r %s/ ~/obol-wallet-backup-%s/\n", keysDir, id)
+		fmt.Println("  WARNING: This wallet feature is in alpha and may change rapidly.")
+		fmt.Println("  Do not deposit mainnet funds you are not willing to lose.")
 	}
 }
 
-// extractPrivateKeyFromYAML parses a Web3Signer key YAML file and returns
-// the raw private key hex (without 0x prefix). Returns empty string if not found.
-func extractPrivateKeyFromYAML(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "privateKey:") {
+// extractAddressFromKeystore reads V3 JSON keystore files in the directory
+// and returns the address from the first one found. Keystore files may have
+// any extension (cast wallet import uses no extension, cast wallet new uses
+// UTC--timestamp--address format).
+func extractAddressFromKeystore(keysDir string) string {
+	// Check for the well-known account name first
+	knownPath := filepath.Join(keysDir, keystoreAccountName)
+	if addr := readAddressFromKeystoreFile(knownPath); addr != "" {
+		return addr
+	}
+
+	// Fall back: scan all files
+	entries, err := os.ReadDir(keysDir)
+	if err != nil {
+		return ""
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		// privateKey: "0xabcdef..."
-		val := strings.TrimPrefix(line, "privateKey:")
-		val = strings.TrimSpace(val)
-		val = strings.Trim(val, `"'`)
-		val = strings.TrimPrefix(val, "0x")
-		return val
+		name := entry.Name()
+		if name == "password.txt" || filepath.Ext(name) == ".yaml" || filepath.Ext(name) == ".ports" {
+			continue
+		}
+		if addr := readAddressFromKeystoreFile(filepath.Join(keysDir, name)); addr != "" {
+			return addr
+		}
 	}
 	return ""
 }
 
+// readAddressFromKeystoreFile reads a single file and extracts the address
+// if it's a valid V3 keystore JSON.
+func readAddressFromKeystoreFile(path string) string {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var ks struct {
+		Address string `json:"address"`
+		Version int    `json:"version"`
+	}
+	if json.Unmarshal(content, &ks) != nil || ks.Version != 3 || ks.Address == "" {
+		return ""
+	}
+	addr := ks.Address
+	if !strings.HasPrefix(addr, "0x") {
+		addr = "0x" + addr
+	}
+	return addr
+}
+
 // ensureWeb3Signer checks if the web3signer key and values file exist for
-// an existing deployment. If not, it generates them. This handles the case
-// where an existing deployment (created before web3signer was added) is
-// re-synced — the helmfile now references web3signer but the key/values
-// haven't been provisioned yet.
+// an existing deployment. If not, it generates them.
 func ensureWeb3Signer(cfg *config.Config, id, deploymentDir string) {
 	valuesPath := filepath.Join(deploymentDir, "values-web3signer.yaml")
 	keysDir := Web3SignerKeysPath(cfg, id)
 
-	// Check if values file already exists
+	// Check if values and keystore already exist
 	if _, err := os.Stat(valuesPath); err == nil {
-		// Values exist — check if keys also exist
-		if entries, err := os.ReadDir(keysDir); err == nil {
-			for _, e := range entries {
-				if filepath.Ext(e.Name()) == ".yaml" {
-					return // Both values and key exist — nothing to do
-				}
-			}
+		if findKeystoreFile(keysDir) != "" {
+			return // Both values and keystore exist — nothing to do
 		}
 	}
 
-	// Generate signing key
-	fmt.Println("\nProvisioning Web3Signer for existing deployment...")
-	signingKey, err := GenerateSigningKey()
+	// Generate signing key via cast (V3 encrypted keystore)
+	fmt.Println("\nProvisioning wallet for existing deployment...")
+	wallet, err := GenerateKeystoreViaCast(keysDir)
 	if err != nil {
-		fmt.Printf("  Warning: could not generate signing key: %v\n", err)
+		fmt.Printf("  Warning: could not generate keystore: %v\n", err)
 		return
 	}
 
 	keyLabel := fmt.Sprintf("obol-agent-%s", id)
-	if err := ProvisionKeyFiles(keysDir, signingKey, keyLabel); err != nil {
-		fmt.Printf("  Warning: could not provision signing key: %v\n", err)
+	if err := ProvisionKeyFiles(keysDir, wallet, keyLabel); err != nil {
+		fmt.Printf("  Warning: could not provision key config: %v\n", err)
 		return
 	}
-	fmt.Printf("  ✓ Agent wallet address: %s\n", signingKey.Address)
-	fmt.Printf("  Back up your key: cp %s/%s.yaml ~/obol-wallet-backup-%s.yaml\n", keysDir, signingKey.KeyID, id)
+	fmt.Printf("  ✓ Agent wallet address: %s\n", wallet.Address)
+	fmt.Printf("  Back up your key: cp -r %s/ ~/obol-wallet-backup-%s/\n", keysDir, id)
 
 	// Write values file
 	web3signerValues := generateWeb3SignerValues(id)

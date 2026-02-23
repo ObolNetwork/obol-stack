@@ -377,3 +377,14 @@ forge test --fuzz-runs 1000
 - [ ] Gas snapshots taken with `forge snapshot` to catch regressions
 - [ ] Static analysis with `slither .` — no high/medium findings unaddressed
 - [ ] All tests pass: `forge test -vvv`
+
+## Note on Tooling
+
+`forge`, `cast`, and `anvil` are available inside OpenClaw pods via the Foundry init container. All commands in this skill can be run directly.
+
+## See Also
+
+- `security` — vulnerability patterns and defensive code
+- `tools` — full Foundry command reference and dev environment setup
+- `gas` — current gas costs and estimation commands
+- `ethereum-networks` — live RPC queries for fork testing targets

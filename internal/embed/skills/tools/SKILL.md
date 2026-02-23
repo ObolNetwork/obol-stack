@@ -87,15 +87,20 @@ const response = await x402Fetch('https://api.example.com/data', {
 
 ## Essential Foundry cast Commands
 
+`cast` is available inside OpenClaw pods via the Foundry init container. The local eRPC gateway is the default RPC:
+
 ```bash
-# Read contract
+RPC="http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet"
+
+# Read contract (with ABI decoding)
 cast call 0xAddr "balanceOf(address)(uint256)" 0xWallet --rpc-url $RPC
 
-# Send transaction
-cast send 0xAddr "transfer(address,uint256)" 0xTo 1000000 --private-key $KEY --rpc-url $RPC
+# Send transaction (via local-ethereum-wallet skill for signing)
+# See local-ethereum-wallet skill for signing workflows
 
-# Gas price
+# Gas price / base fee
 cast gas-price --rpc-url $RPC
+cast base-fee --rpc-url $RPC
 
 # Decode calldata
 cast 4byte-decode 0xa9059cbb...
@@ -103,9 +108,21 @@ cast 4byte-decode 0xa9059cbb...
 # ENS resolution
 cast resolve-name vitalik.eth --rpc-url $RPC
 
+# Encode calldata for contract interaction
+cast calldata "transfer(address,uint256)" 0xRecipient 1000000
+
+# Unit conversion
+cast to-wei 1.5 ether        # → 1500000000000000000
+cast from-wei 1000000 gwei    # → 0.001
+
+# Fetch contract interface
+cast interface 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url $RPC
+
 # Fork mainnet locally
 anvil --fork-url $RPC
 ```
+
+For a full cast-based query tool, see the `ethereum-networks` skill (`scripts/rpc.sh`).
 
 ## RPC Providers
 
@@ -162,3 +179,11 @@ anvil --fork-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
 ```
 
 **Primary testnet:** Sepolia (Chain ID: 11155111). Goerli and Rinkeby are deprecated.
+
+## Related Skills
+
+- `ethereum-networks` — cast-based blockchain queries (`scripts/rpc.sh`)
+- `local-ethereum-wallet` — transaction signing + tx helpers (`scripts/tx-helper.sh`)
+- `testing` — Foundry test patterns (forge test, fuzz, fork, invariant)
+- `gas` — current gas costs and live estimation commands
+- `addresses` — verified contract addresses across chains

@@ -87,13 +87,25 @@ Spikes (10-50 gwei) happen during major events but last minutes to hours, not da
 
 ## Checking Gas Programmatically
 
+`cast` is available inside OpenClaw pods. Use the `ethereum-networks` skill for convenience:
+
 ```bash
-# Foundry cast (use local eRPC if running in Obol Stack)
+# Via rpc.sh wrapper (simplest)
+sh scripts/rpc.sh gas-price
+sh scripts/rpc.sh base-fee
+
+# Via cast directly
 cast gas-price --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
 cast base-fee --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
 cast blob-basefee --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
-# Fallback public RPC: https://eth.llamarpc.com
+
+# Estimate gas for a specific call
+cast estimate 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+  "transfer(address,uint256)" 0xRecipient 1000000 \
+  --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
 ```
+
+Note: `scripts/rpc.sh` is from the `ethereum-networks` skill. Copy it or reference it directly.
 
 ## When to Use Mainnet vs L2
 

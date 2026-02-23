@@ -51,3 +51,7 @@ temp/
 
 .direnv/
 bin
+
+# Wallet files
+**/password.txt
+obol-agent

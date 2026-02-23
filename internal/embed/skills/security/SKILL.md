@@ -462,6 +462,12 @@ forge test --gas-report       # Identify expensive functions
 - Arbitrary `delegatecall` or `selfdestruct`
 - Unprotected state-changing functions
 
+## See Also
+
+- `testing` — fuzz testing, invariant testing, fork testing patterns
+- `wallets` — key safety guardrails for AI agents
+- `addresses` — verified contract addresses (avoid using wrong addresses)
+
 ## Further Reading
 
 - **OpenZeppelin Contracts:** https://docs.openzeppelin.com/contracts — audited, battle-tested implementations

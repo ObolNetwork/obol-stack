@@ -1,5 +1,5 @@
 ---
-name: ethereum-wallet
+name: local-ethereum-wallet
 description: "Sign and send Ethereum transactions via the local Web3Signer. Use when asked to send ETH, sign messages, or interact with contracts that modify state."
 metadata: { "openclaw": { "emoji": "🔐", "requires": { "bins": ["python3"] } } }
 ---
@@ -104,15 +104,48 @@ All `--value` amounts are hex-encoded wei, matching the JSON-RPC standard:
 | 0.01 ETH | `0x2386F26FC10000` |
 | 1 Gwei | `0x3B9ACA00` |
 
-The script does NOT auto-convert from ETH decimal notation.
+Use `tx-helper.sh` for unit conversion instead of manual hex:
+
+```bash
+sh scripts/tx-helper.sh to-wei 1        # → 1000000000000000000
+sh scripts/tx-helper.sh to-wei 0.1      # → 100000000000000000
+sh scripts/tx-helper.sh to-hex 1000000  # → 0xf4240
+```
+
+## Transaction Helpers (cast)
+
+Use `tx-helper.sh` for pre-signing operations — gas estimation, ABI encoding, calldata construction:
+
+```bash
+# Estimate gas for a contract call
+sh scripts/tx-helper.sh estimate 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+  "transfer(address,uint256)" 0xRecipient 1000000
+
+# Estimate gas for a simple ETH transfer
+sh scripts/tx-helper.sh estimate-simple 0xRecipient 1000000000000000000
+
+# Encode function calldata (for use with --data flag in signer.py)
+sh scripts/tx-helper.sh calldata "transfer(address,uint256)" 0xRecipient 1000000
+
+# Get the 4-byte selector for a function
+sh scripts/tx-helper.sh sig "transfer(address,uint256)"
+
+# Decode a raw signed transaction
+sh scripts/tx-helper.sh decode-tx 0x02f8...
+
+# Fetch contract interface/ABI
+sh scripts/tx-helper.sh interface 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+
+# Checksum an address
+sh scripts/tx-helper.sh checksum 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
+```
 
 ## Constraints
 
-- **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `${var:offset}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
-- **Python stdlib only** — only the Python 3.11 standard library is available. Do not import `web3`, `eth_abi`, `rlp`, `pysha3`, or any third-party package
+- **Shell is `sh`, not `bash`** — do not use bashisms
 - **No key creation** — keys are managed by the `obol` CLI. If no keys exist, tell the user to run `obol agent init`
 - **Local only** — always use the in-cluster web3signer at `$WEB3SIGNER_URL`, never call external signing services
-- **Always check for null** — RPC methods may return `null` for unknown hashes or pending state. Always check `if result is not None` before accessing fields
+- **Signing via signer.py** — use `signer.py` for all signing/sending operations. Use `tx-helper.sh` only for pre-signing utilities (gas estimation, encoding, conversion)
 - **Confirm before sending** — always show the user what will be signed before executing `send-tx`
 
 ## Environment Variables

@@ -13,7 +13,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	}
 
 	// Core skills that must always be present
-	required := []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"}
+	required := []string{"distributed-validators", "ethereum-networks", "local-ethereum-wallet", "obol-stack"}
 	nameSet := make(map[string]bool, len(names))
 	for _, n := range names {
 		nameSet[n] = true
@@ -33,7 +33,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"distributed-validators", "ethereum-networks", "local-wallet", "obol-stack"}
+	skills := []string{"distributed-validators", "ethereum-networks", "local-ethereum-wallet", "obol-stack"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -72,7 +72,7 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 	destDir := t.TempDir()
 
 	// Pre-create a skill directory with custom content
-	customDir := filepath.Join(destDir, "local-wallet")
+	customDir := filepath.Join(destDir, "local-ethereum-wallet")
 	if err := os.MkdirAll(customDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

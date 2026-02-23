@@ -9,6 +9,17 @@ description: Verified contract addresses for major Ethereum protocols across mai
 
 **Last Verified:** February 16, 2026 (all addresses verified onchain via `eth_getCode` + `eth_call`)
 
+**Verify any address at runtime:**
+```bash
+# Check contract exists (returns bytecode, or 0x if EOA)
+sh scripts/rpc.sh code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+
+# Read contract identity
+sh scripts/rpc.sh call 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 "symbol()(string)"
+```
+
+(`scripts/rpc.sh` is from the `ethereum-networks` skill)
+
 ---
 
 ## Stablecoins
