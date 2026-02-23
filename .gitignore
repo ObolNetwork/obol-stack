@@ -51,3 +51,5 @@ temp/
 
 .direnv/
 bin
+
+obol-agent

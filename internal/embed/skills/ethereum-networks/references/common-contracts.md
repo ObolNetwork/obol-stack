@@ -36,6 +36,13 @@
 |----------|---------|
 | Obol Token (OBOL) | `0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7` |
 
+### ERC-8004 Agent Identity (same address on 20+ chains via CREATE2)
+
+| Contract | Address |
+|----------|---------|
+| IdentityRegistry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
+| ReputationRegistry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` |
+
 ## Hoodi Testnet (Chain ID: 560048)
 
 Hoodi is a newer testnet. Contract addresses may differ from mainnet. Use `eth_chainId` to confirm you're on the right network before querying.

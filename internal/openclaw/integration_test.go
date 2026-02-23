@@ -600,7 +600,7 @@ func TestIntegration_SkillsStagedOnSync(t *testing.T) {
 	// 1. Verify skills were staged in the deployment directory
 	deployDir := deploymentPath(cfg, id)
 	skillsDir := filepath.Join(deployDir, "skills")
-	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "obol-stack", "addresses", "wallets"}
 
 	for _, skill := range expectedSkills {
 		skillMD := filepath.Join(skillsDir, skill, "SKILL.md")
@@ -664,7 +664,7 @@ func TestIntegration_SkillsVisibleInPod(t *testing.T) {
 	)
 	t.Logf("skills visible in pod:\n%s", output)
 
-	expectedSkills := []string{"distributed-validators", "ethereum-networks", "ethereum-wallet", "obol-stack"}
+	expectedSkills := []string{"distributed-validators", "ethereum-networks", "obol-stack", "addresses", "wallets"}
 	for _, skill := range expectedSkills {
 		if !strings.Contains(output, skill) {
 			t.Errorf("skill %q not visible in pod; ls output:\n%s", skill, output)
@@ -837,7 +837,7 @@ func TestIntegration_SkillInference(t *testing.T) {
 		{"ethereum-networks", []string{"ethereum-networks", "ethereum networks", "blockchain"}},
 		{"distributed-validators", []string{"distributed-validators", "distributed validator", "dvt"}},
 		{"obol-stack", []string{"obol-stack", "obol stack", "kubernetes", "k8s"}},
-		{"ethereum-wallet", []string{"ethereum-wallet", "ethereum wallet", "wallet"}},
+		{"wallets", []string{"wallets", "wallet", "key management"}},
 	}
 
 	for _, sc := range skillChecks {

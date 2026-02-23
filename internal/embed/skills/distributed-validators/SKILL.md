@@ -148,8 +148,12 @@ Exit broadcasts automatically once enough operators have signed (threshold reach
 - **Read-only** — creating clusters, running DKG, and submitting exits require authenticated endpoints
 - Exit status endpoints (`/v1/exp/`) are experimental — pagination is 1-indexed
 - If timeouts occur, check `GET /v1/_health` first
-- **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
-- **Python stdlib only** — only the Python 3.11 standard library is available. No third-party packages
+- **Shell is `sh`, not `bash`** — do not use bashisms
 - **Always check for null/missing data** — API responses may return errors or empty results. Always check before accessing nested fields
 
 See `references/api-examples.md` for response shapes and field reference.
+
+## See Also
+
+- `ethereum-networks` — blockchain RPC queries (validator balances, beacon chain data)
+- `obol-stack` — Kubernetes cluster monitoring (pod status, logs)

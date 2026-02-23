@@ -159,6 +159,50 @@ func Install(cfg *config.Config, network string, overrides map[string]string, fo
 	return nil
 }
 
+// SyncAll syncs all installed network deployments found in the config directory.
+func SyncAll(cfg *config.Config) error {
+	networksDir := filepath.Join(cfg.ConfigDir, "networks")
+	networkDirs, err := os.ReadDir(networksDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No networks installed.")
+			return nil
+		}
+		return fmt.Errorf("could not read networks directory: %w", err)
+	}
+
+	var synced int
+	for _, networkDir := range networkDirs {
+		if !networkDir.IsDir() {
+			continue
+		}
+		deployments, err := os.ReadDir(filepath.Join(networksDir, networkDir.Name()))
+		if err != nil {
+			continue
+		}
+		for _, deployment := range deployments {
+			if !deployment.IsDir() {
+				continue
+			}
+			identifier := fmt.Sprintf("%s/%s", networkDir.Name(), deployment.Name())
+			fmt.Printf("─── Syncing %s ───\n", identifier)
+			if err := Sync(cfg, identifier); err != nil {
+				fmt.Printf("  Warning: failed to sync %s: %v\n", identifier, err)
+				continue
+			}
+			synced++
+			fmt.Println()
+		}
+	}
+
+	if synced == 0 {
+		fmt.Println("No networks installed. Use 'obol network install <network>' first.")
+	} else {
+		fmt.Printf("✓ Synced %d network deployment(s)\n", synced)
+	}
+	return nil
+}
+
 // Sync deploys or updates a network configuration to the cluster using helmfile
 func Sync(cfg *config.Config, deploymentIdentifier string) error {
 	// Parse deployment identifier (supports both "ethereum/knowing-wahoo" and "ethereum-knowing-wahoo")
@@ -242,6 +286,12 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 
 	fmt.Printf("\nDeployment synced successfully!\n")
 	fmt.Printf("Namespace: %s-%s\n", networkName, deploymentID)
+
+	// Register local node as eRPC upstream so the gateway routes through it
+	if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
+		fmt.Printf("  Warning: could not register eRPC upstream: %v\n", err)
+	}
+
 	fmt.Printf("\nTo check status: obol kubectl get all -n %s-%s\n", networkName, deploymentID)
 	fmt.Printf("To view logs: obol kubectl logs -n %s-%s <pod-name>\n", networkName, deploymentID)
 	fmt.Printf("To access dashboard: obol k9s -n %s-%s\n", networkName, deploymentID)
@@ -314,6 +364,11 @@ func Delete(cfg *config.Config, deploymentIdentifier string) error {
 	// Check if there's anything to delete
 	if !namespaceExists && !configExists {
 		return fmt.Errorf("deployment not found: %s", deploymentIdentifier)
+	}
+
+	// Deregister from eRPC before deleting the namespace
+	if err := DeregisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
+		fmt.Printf("  Warning: could not deregister eRPC upstream: %v\n", err)
 	}
 
 	// Delete Kubernetes namespace

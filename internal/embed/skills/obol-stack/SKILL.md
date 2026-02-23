@@ -93,6 +93,11 @@ Supported types for `describe`: pod, service, deployment, configmap, event, pvc,
 
 - **Read-only** — cannot create, modify, or delete resources
 - **Own namespace only** — cannot see other namespaces
-- **No kubectl** — uses the Kubernetes API directly via curl
-- **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
-- **Python stdlib only** — only the Python 3.11 standard library is available. No third-party packages
+- **No kubectl** — uses the Kubernetes API directly via Python urllib
+- **Shell is `sh`, not `bash`** — do not use bashisms
+- **Python stdlib only** — `kube.py` uses Python 3.11 stdlib (no third-party packages)
+
+## See Also
+
+- `ethereum-networks` — blockchain RPC queries via eRPC
+- `distributed-validators` — DVT cluster monitoring via Obol API
