@@ -169,18 +169,44 @@ Find your archetype below. Each tells you exactly how many contracts you need, w
 
 ### 6. AI Agent Service (0-1 contracts)
 
-**Architecture:** Agent logic is offchain. Onchain component is optional — ERC-8004 identity registration, or a payment contract for x402.
+**Architecture:** Agent logic is offchain. Onchain component is optional — ERC-8004 identity registration, or a payment contract for x402. You don't deploy a contract — you register with the existing IdentityRegistry.
 
 **Contracts:**
-- (often none — agent runs offchain, uses existing payment infra)
-- `AgentRegistry.sol` (optional) — ERC-8004 identity + service endpoints
+- (usually none — register with the existing ERC-8004 IdentityRegistry instead of deploying)
+- Custom contract only if you need bespoke onchain logic beyond identity + reputation
+
+**When to register with ERC-8004:**
+- Your agent offers a public service other agents can discover
+- You want onchain reputation that builds over time
+- You accept x402 micropayments and want trust signals for clients
+- You need cross-chain discoverability (same identity on 20+ chains)
+
+**When NOT to register:**
+- Internal agent with no public-facing service
+- Testing/development — register on a testnet first
+- Agent doesn't interact with other agents
+
+**Registration cost:** Just gas (no protocol fee). Base is cheapest (~$0.01).
+
+**Recommended chain:** Base — cheapest gas, largest ERC-8004 ecosystem, Coinbase distribution.
+
+**Quick start:**
+```bash
+# Prepare + pin + register in the Obol Stack
+sh scripts/identity.sh --network base --from 0xYourAddress pin-registration \
+  --name "MyAgent" --description "What it does" \
+  --services '[{"name":"A2A","endpoint":"https://your.agent/.well-known/agent-card.json","version":"0.3.0"}]' \
+  --x402
+```
 
 **Common mistakes:**
 - Putting agent logic onchain (Solidity is not for AI inference)
+- Deploying a custom AgentRegistry when the standard IdentityRegistry exists
 - Overcomplicating payments (x402 handles HTTP-native payments)
 - Ignoring key management (fetch `wallets/SKILL.md`)
+- Registering on mainnet before testing on a testnet
 
-**Fetch sequence:** `standards/SKILL.md` → `wallets/SKILL.md` → `tools/SKILL.md` → `orchestration/SKILL.md`
+**Fetch sequence:** `agent-identity/SKILL.md` → `standards/SKILL.md` → `wallets/SKILL.md` → `orchestration/SKILL.md`
 
 ---
 

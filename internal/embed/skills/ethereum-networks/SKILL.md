@@ -129,6 +129,36 @@ sh scripts/rpc.sh call 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 "symbol()(stri
 
 See `references/erc20-methods.md` for the full selector reference and `references/common-contracts.md` for well-known addresses.
 
+## ERC-8004 Agent Identity Queries
+
+The IdentityRegistry and ReputationRegistry are standard contracts queryable with `cast call`. For write operations (registration, feedback), use the `agent-identity` skill instead.
+
+```bash
+# Read agent registration URI
+sh scripts/rpc.sh call 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  "tokenURI(uint256)(string)" 42
+
+# Check agent owner
+sh scripts/rpc.sh call 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  "ownerOf(uint256)(address)" 42
+
+# Get agent's associated wallet
+sh scripts/rpc.sh call 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  "getAgentWallet(uint256)(address)" 42
+
+# Read metadata
+sh scripts/rpc.sh call 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  "getMetadata(uint256,string)(bytes)" 42 "x402.supported"
+
+# Query reputation summary
+sh scripts/rpc.sh call 0x8004BAa17C55a88189AE136b182e5fdA19dE9b63 \
+  "getSummary(uint256,address[],string,string)(uint64,int128,uint8)" 42 "[]" "quality" "30days"
+
+# Query registration events
+sh scripts/rpc.sh logs 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  $(cast sig-event "Registered(uint256,string,address)") --from-block 0
+```
+
 ## Fallback: Python rpc.py
 
 The `rpc.py` script is still available as a fallback if `cast` is not present:

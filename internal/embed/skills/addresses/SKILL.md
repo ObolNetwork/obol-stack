@@ -549,8 +549,11 @@ Source: [docs.morpho.org](https://docs.morpho.org/get-started/resources/addresse
 |----------|---------|--------|
 | IdentityRegistry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | ✅ Verified |
 | ReputationRegistry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` | ✅ Verified |
+| ValidationRegistry | Same CREATE2 pattern — set via `ERC8004_VALIDATION_REGISTRY` env var | ⏳ Deploying |
 
 Verified on: Mainnet, Arbitrum, Base, Optimism (CREATE2 — same address on all chains).
+
+See `agent-identity/references/erc8004-methods.md` for the full function reference and `agent-identity/references/abis/` for JSON ABIs.
 
 ---
 

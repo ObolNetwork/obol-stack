@@ -61,9 +61,12 @@ struct Feedback {
 **Example metrics:** Quality 87/100 → `value=87, decimals=0`. Uptime 99.77% → `value=9977, decimals=2`.
 
 **3. Validation Registry**
-- Independent verification of agent work
+- Independent third-party verification of agent work
 - Trust models: crypto-economic (stake-secured), zkML, TEE attestation
 - Validators respond with 0-100 scores
+- Request/response pattern: agent or client submits `validationRequest`, validator posts `validationResponse`
+- Aggregated summaries filterable by validator addresses and tags
+- Contract address uses same CREATE2 pattern (set via `ERC8004_VALIDATION_REGISTRY` env var)
 
 ### Agent Registration File (agentURI)
 
@@ -82,20 +85,32 @@ struct Feedback {
 }
 ```
 
-### Integration
+### Integration (cast + identity.sh)
 
-```solidity
-// Register agent
-uint256 agentId = identityRegistry.register("ipfs://QmYourReg", metadata);
+Use the `agent-identity` skill's `identity.sh` script for all registry operations. It wraps `cast` for reads and delegates to `signer.py` for writes.
 
-// Give feedback
-reputationRegistry.giveFeedback(agentId, 9977, 2, "uptime", "30days", 
-    "https://agent.example.com/api", "ipfs://QmDetails", keccak256(data));
+```bash
+# Register agent with IPFS URI
+sh scripts/identity.sh --from 0xYourAddress register --uri "ipfs://QmYourReg"
 
-// Query reputation
-(uint64 count, int128 value, uint8 decimals) = 
-    reputationRegistry.getSummary(agentId, trustedClients, "uptime", "30days");
+# Give feedback (value=9977, decimals=2 → 99.77%)
+sh scripts/identity.sh --from 0xYourAddress feedback 42 9977 2 "uptime" "30days" \
+  --endpoint "https://agent.example.com/api" --uri "ipfs://QmDetails"
+
+# Query aggregated reputation
+sh scripts/identity.sh reputation 42 --tag1 "uptime" --tag2 "30days"
+
+# Update agent URI
+sh scripts/identity.sh --from 0xYourAddress set-uri 42 "ipfs://QmNewHash"
+
+# Set metadata
+sh scripts/identity.sh --from 0xYourAddress set-metadata 42 "x402.supported" 0x01
+
+# Query registration events
+sh scripts/identity.sh events registered --from-block 0
 ```
+
+For the full CLI reference, see `agent-identity/SKILL.md` and `agent-identity/references/erc8004-methods.md`.
 
 ### Step-by-Step: Register an Agent Onchain
 
@@ -115,23 +130,24 @@ reputationRegistry.giveFeedback(agentId, 9977, 2, "uptime", "30days",
 }
 ```
 
-**2. Upload to IPFS** (or use any URI):
+**2. Pin to IPFS:**
 ```bash
-# Using IPFS
-ipfs add registration.json
-# → QmYourRegistrationHash
+# Using identity.sh (pins to in-cluster IPFS node)
+sh scripts/identity.sh pin registration.json
+# → ipfs://QmYourRegistrationHash
 
-# Or host at a URL — the agentURI just needs to resolve to the JSON
+# Or generate + pin in one step:
+sh scripts/identity.sh pin-registration --name "WeatherBot" \
+  --description "Provides real-time weather data via x402 micropayments" \
+  --services '[{"name":"A2A","endpoint":"https://weather.example.com/.well-known/agent-card.json","version":"0.3.0"}]' \
+  --x402
 ```
 
-**3. Call the Identity Registry:**
-```solidity
-// On any supported chain — same address everywhere
-IIdentityRegistry registry = IIdentityRegistry(0x8004A169FB4a3325136EB29fA0ceB6D2e539a432);
-
-// metadata bytes are optional (can be empty)
-uint256 agentId = registry.register("ipfs://QmYourRegistrationHash", "");
-// agentId is your ERC-721 tokenId — globally unique on this chain
+**3. Register onchain:**
+```bash
+# Register with the IPFS URI — signs via Web3Signer, sends via eRPC
+sh scripts/identity.sh --from 0xYourAddress register --uri "ipfs://QmYourRegistrationHash"
+# → Transaction hash. agentId is in the Registered event logs.
 ```
 
 **4. Verify your endpoint domain** — place a file at `.well-known/agent-registration.json`:
@@ -145,7 +161,29 @@ uint256 agentId = registry.register("ipfs://QmYourRegistrationHash", "");
 ```
 This proves the domain owner controls the agent identity. Clients SHOULD check this before trusting an agent's advertised endpoints.
 
-**5. Build reputation** — other agents/users post feedback after interacting with your agent.
+**5. Build reputation** — other agents/users post feedback after interacting with your agent:
+```bash
+# Another agent rates your service after using it
+sh scripts/identity.sh --from 0xClientAddress feedback 42 95 0 "quality" "weather" \
+  --endpoint "https://weather.example.com"
+```
+
+### Full Lifecycle Summary
+
+```
+1. prepare-registration  → Generate JSON
+2. pin / pin-registration → Pin to IPFS
+3. register --uri        → Register onchain (get agentId)
+4. set-metadata          → Add key-value metadata
+5. Domain verification   → .well-known/agent-registration.json
+6. Receive feedback      → Other agents call giveFeedback
+7. reputation            → Query your aggregated score
+8. respond               → Respond to feedback entries
+9. request-validation    → Request third-party verification
+10. set-uri              → Update URI when services change
+```
+
+See `agent-identity/SKILL.md` for complete command reference.
 
 ### Cross-Chain Agent Identity
 

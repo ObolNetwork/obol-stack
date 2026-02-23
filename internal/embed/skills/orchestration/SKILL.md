@@ -284,6 +284,29 @@ await reputationWriter.giveFeedback(
 
 **This is the agentic economy.** No API keys, no subscriptions, no invoicing, no trust assumptions. Just cryptographic identity, onchain reputation, and HTTP-native payments.
 
+### Shell-Based Agent Flow (Obol Stack)
+
+For agents running in the Obol Stack, the same cycle works via `identity.sh` + `rpc.sh`:
+
+```bash
+# 1. Discover: find registered agents
+sh scripts/identity.sh events registered --from-block 0
+# Parse logs for agents with matching service tags
+
+# 2. Trust: check reputation
+sh scripts/identity.sh reputation 42 --tag1 "quality" --tag2 "30days"
+# → count=47  value=92  decimals=0  (92/100 average quality)
+
+# 3-5. Call + Pay: x402 flow (requires TS/Python SDK — not yet shell-native)
+# The x402 payment negotiation happens at the HTTP level
+
+# 6. Rate: post feedback onchain
+sh scripts/identity.sh --from 0xYourAddress feedback 42 95 0 "quality" "weather" \
+  --endpoint "https://weather.agent.example.com"
+```
+
+See `agent-identity/SKILL.md` for the full CLI reference.
+
 ### Key Projects Building This Stack
 - **ERC-8004** — agent identity + reputation (EF, MetaMask, Google, Coinbase)
 - **x402** — HTTP payment protocol (Coinbase)

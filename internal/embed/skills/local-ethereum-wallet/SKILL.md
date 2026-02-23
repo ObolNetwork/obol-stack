@@ -140,6 +140,38 @@ sh scripts/tx-helper.sh interface 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
 sh scripts/tx-helper.sh checksum 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
 ```
 
+## Contract Interactions (ERC-8004 Example)
+
+The `send-tx --data` flag accepts pre-encoded calldata, enabling interaction with any smart contract. Use `tx-helper.sh calldata` to encode, then `signer.py send-tx` to sign and submit.
+
+```bash
+# 1. Encode registration calldata
+CALLDATA=$(sh scripts/tx-helper.sh calldata "register(string)" "ipfs://QmYourHash")
+
+# 2. Estimate gas
+sh scripts/tx-helper.sh estimate 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  "register(string)" "ipfs://QmYourHash"
+
+# 3. Sign and send
+python3 scripts/signer.py send-tx \
+  --from 0xYourAddress \
+  --to 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 \
+  --data "$CALLDATA"
+
+# Give feedback to an agent (more complex calldata)
+CALLDATA=$(sh scripts/tx-helper.sh calldata \
+  "giveFeedback(uint256,int128,uint8,string,string,string,string,bytes32)" \
+  42 95 0 "quality" "weather" "https://agent.example.com" "" \
+  0x0000000000000000000000000000000000000000000000000000000000000000)
+
+python3 scripts/signer.py send-tx \
+  --from 0xYourAddress \
+  --to 0x8004BAa17C55a88189AE136b182e5fdA19dE9b63 \
+  --data "$CALLDATA"
+```
+
+For a streamlined experience with ERC-8004 specifically, use the `agent-identity` skill which wraps this pattern with confirmation prompts and gas estimates.
+
 ## Constraints
 
 - **Shell is `sh`, not `bash`** — do not use bashisms

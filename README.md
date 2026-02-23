@@ -163,14 +163,49 @@ When only one OpenClaw instance is installed, the instance ID is optional — it
 
 ### Skills
 
-OpenClaw ships with four embedded skills that are installed automatically on first deploy:
+OpenClaw ships with 22 embedded skills that are installed automatically on first deploy. Skills give the agent domain-specific capabilities — from querying blockchains to registering onchain identities.
+
+#### Infrastructure
 
 | Skill | Purpose |
 |-------|---------|
-| `hello` | Smoke test — confirms skills pipeline works |
-| `obol-blockchain` | Ethereum JSON-RPC queries, ERC-20 token ops, ENS resolution via the eRPC gateway |
-| `obol-k8s` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
-| `obol-dvt` | Obol DVT cluster monitoring, operator audit, exit coordination |
+| `ethereum-networks` | Read-only Ethereum queries via cast — blocks, balances, contract reads, ERC-20, ENS |
+| `local-ethereum-wallet` | Sign and send transactions via Web3Signer — ETH transfers, contract calls, EIP-712 |
+| `obol-stack` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
+| `distributed-validators` | Obol DVT cluster monitoring, operator audit, exit coordination |
+
+#### Agent Identity & Commerce
+
+| Skill | Purpose |
+|-------|---------|
+| `agent-identity` | **ERC-8004 lifecycle** — register, update URI/metadata, give/query reputation, request validation, IPFS pinning. Full ABIs included |
+| `standards` | ERC-8004, x402, EIP-3009, EIP-7702 — specs, integration patterns, cast-based examples |
+| `orchestration` | dApp build system + AI agent commerce cycle (ERC-8004 discover → trust → pay → rate) |
+| `ship` | Architecture planning — onchain vs offchain, contract count, chain selection, agent service setup |
+
+#### Ethereum Development
+
+| Skill | Purpose |
+|-------|---------|
+| `addresses` | Verified contract addresses — DeFi, tokens, bridges, ERC-8004 registries across chains |
+| `building-blocks` | OpenZeppelin patterns, DEX integration, oracles, access control |
+| `concepts` | Mental model — state machines, incentives, gas, EOAs vs contracts |
+| `gas` | Gas optimization, L2 fee structures |
+| `indexing` | The Graph, Dune, event indexing |
+| `l2s` | L2 comparison — Base, Arbitrum, Optimism, zkSync |
+| `security` | Vulnerability patterns, reentrancy, flash loans, MEV |
+| `testing` | Foundry testing — unit, fuzz, fork, invariant |
+| `tools` | Foundry, Hardhat, Scaffold-ETH 2 |
+| `wallets` | EOAs, Safe multisig, EIP-7702, key safety for AI agents |
+
+#### Frontend & QA
+
+| Skill | Purpose |
+|-------|---------|
+| `frontend-playbook` | Deployment — IPFS, Vercel, ENS subdomains |
+| `frontend-ux` | Web3 UX — wallet flows, transaction states, error handling |
+| `qa` | Testing strategy, coverage, CI/CD |
+| `why` | Why Ethereum — the AI agent angle with ERC-8004 and x402 |
 
 Manage skills at runtime:
 
