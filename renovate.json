@@ -38,12 +38,12 @@
       "customType": "regex",
       "description": "Update OpenClaw version from upstream GitHub releases",
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9]+)?)"
       ],
       "fileMatch": [
         "^internal/openclaw/OPENCLAW_VERSION$"
       ],
-      "versioningTemplate": "semver"
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(-(?<build>\\d+))?$"
     },
     {
       "customType": "regex",
