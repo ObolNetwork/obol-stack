@@ -1127,6 +1127,11 @@ check_hosts_file() {
 	if grep -q "obol.stack" /etc/hosts 2>/dev/null; then
 		# Check if it points to localhost (127.0.0.1 or ::1)
 		if grep -E "^(127\.0\.0\.1|::1)[[:space:]].*obol\.stack" /etc/hosts >/dev/null 2>&1; then
+			# Check if rpc.obol.stack is also present
+			if ! grep -q "rpc\.obol\.stack" /etc/hosts 2>/dev/null; then
+				log_info "obol.stack configured but rpc.obol.stack missing — will update"
+				return 1
+			fi
 			log_success "obol.stack already configured in /etc/hosts"
 			return 0
 		else
@@ -1143,7 +1148,7 @@ check_hosts_file() {
 update_hosts_file() {
 	log_info "Adding obol.stack to /etc/hosts..."
 
-	local hosts_entry="127.0.0.1 obol.stack"
+	local hosts_entry="127.0.0.1 obol.stack rpc.obol.stack"
 
 	# Check if sudo is available
 	if ! command_exists sudo; then

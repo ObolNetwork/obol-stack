@@ -46,25 +46,16 @@ config: |-
     port: 4001
 
   projects:
-    - id: rpc
+    - id: mainnet
       upstreams:
         - id: obol-rpc-mainnet
           endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/mainnet/evm/1
           evm:
             chainId: 1
-        - id: obol-rpc-hoodi
-          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/hoodi/evm/560048
-          evm:
-            chainId: 560048
-        - id: allnodes-rpc-hoodi
-          endpoint: https://ethereum-hoodi-rpc.publicnode.com
-          evm:
-            chainId: 560048
       networks:
         - architecture: evm
           evm:
             chainId: 1
-          alias: mainnet
           selectionPolicy:
             evalInterval: 1m
             evalPerMethod: true
@@ -84,10 +75,36 @@ config: |-
             hedge:
               delay: 500ms
               maxCount: 1
+      cors:
+        allowedOrigins:
+          - "*"
+        allowedMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        allowedHeaders:
+          - "*"
+        exposedHeaders:
+          - "X-Request-ID"
+        allowCredentials: true
+        maxAge: 3600
+
+    - id: hoodi
+      upstreams:
+        - id: obol-rpc-hoodi
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/hoodi/evm/560048
+          evm:
+            chainId: 560048
+        - id: allnodes-rpc-hoodi
+          endpoint: https://ethereum-hoodi-rpc.publicnode.com
+          evm:
+            chainId: 560048
+      networks:
         - architecture: evm
           evm:
             chainId: 560048
-          alias: hoodi
           failsafe:
             timeout:
               duration: 30s

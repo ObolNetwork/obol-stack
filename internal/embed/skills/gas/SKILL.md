@@ -95,14 +95,14 @@ sh scripts/rpc.sh gas-price
 sh scripts/rpc.sh base-fee
 
 # Via cast directly
-cast gas-price --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
-cast base-fee --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
-cast blob-basefee --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+cast gas-price --rpc-url http://rpc.erpc.svc.cluster.local/mainnet
+cast base-fee --rpc-url http://rpc.erpc.svc.cluster.local/mainnet
+cast blob-basefee --rpc-url http://rpc.erpc.svc.cluster.local/mainnet
 
 # Estimate gas for a specific call
 cast estimate 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
   "transfer(address,uint256)" 0xRecipient 1000000 \
-  --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+  --rpc-url http://rpc.erpc.svc.cluster.local/mainnet
 ```
 
 Note: `scripts/rpc.sh` is from the `ethereum-networks` skill. Copy it or reference it directly.
@@ -127,7 +127,7 @@ Note: `scripts/rpc.sh` is from the `ethereum-networks` skill. Copy it or referen
 
 If this date is more than 30 days old, verify current gas with:
 ```bash
-cast base-fee --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+cast base-fee --rpc-url http://rpc.erpc.svc.cluster.local/mainnet
 ```
 
 The durable insight is that gas is extremely cheap compared to 2021-2023 and trending cheaper. Specific numbers may drift but the order of magnitude is stable.

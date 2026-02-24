@@ -31,7 +31,7 @@ releases:
             - --network
             - '{{ .Values.network }}'
           l1ExecutionUrls:
-            - '{{ if .Values.l1ExecutionUrl }}{{ .Values.l1ExecutionUrl }}{{ else }}http://erpc.erpc.svc.cluster.local:4000/rpc/{{ .Values.network }}{{ end }}'
+            - '{{ if .Values.l1ExecutionUrl }}{{ .Values.l1ExecutionUrl }}{{ else }}http://rpc.erpc.svc.cluster.local/{{ .Values.network }}{{ end }}'
           l1ConsensusUrls:
             - '{{ .Values.l1ConsensusUrl }}'
           resources:

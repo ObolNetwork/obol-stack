@@ -27,7 +27,7 @@ Query Ethereum blockchain data through the local eRPC gateway. Supports any JSON
 The eRPC gateway routes to whichever Ethereum networks are installed:
 
 ```
-http://erpc.erpc.svc.cluster.local:4000/rpc/{network}
+http://rpc.erpc.svc.cluster.local/{network}
 ```
 
 `mainnet` is always available. Other networks (e.g. `hoodi`) are available if installed. You can also use `evm/{chainId}` (e.g. `evm/560048` for Hoodi).
@@ -35,7 +35,7 @@ http://erpc.erpc.svc.cluster.local:4000/rpc/{network}
 To see which networks are connected:
 
 ```bash
-curl -s http://erpc.erpc.svc.cluster.local:4000/ | python3 -m json.tool
+curl -s http://rpc.erpc.svc.cluster.local/ | python3 -m json.tool
 ```
 
 ## Quick Start (cast)
@@ -172,7 +172,7 @@ python3 scripts/rpc.py --network hoodi eth_chainId
 ## Constraints
 
 - **Read-only** — no private keys, no signing, no state changes
-- **Local routing** — always route through eRPC at `http://erpc.erpc.svc.cluster.local:4000/rpc/`, never call external RPC providers
+- **Local routing** — always route through eRPC at `http://rpc.erpc.svc.cluster.local/`, never call external RPC providers
 - **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `${var:offset}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
 - **`cast` preferred** — use `rpc.sh` (Foundry cast) for all queries. Fall back to `rpc.py` (Python stdlib) only if cast is unavailable
 - **Always check for null results** — RPC methods like `eth_getTransactionByHash` return `null` for unknown hashes

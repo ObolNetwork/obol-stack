@@ -886,7 +886,7 @@ Namespace: openclaw-<id>
   OpenClaw Pod ──HTTP:9000──> remote-signer Pod
   (signer.py skill)          /data/keystores/<uuid>.json (V3)
          │
-         └── eth_sendRawTransaction ──> eRPC (:4000/rpc)
+         └── eth_sendRawTransaction ──> eRPC (rpc.erpc.svc.cluster.local)
 ```
 
 **Key generation**: secp256k1 via `crypto/rand` + `github.com/decred/dcrd/dcrec/secp256k1/v4`, encrypted to Web3 Secret Storage V3 format (scrypt + AES-128-CTR).

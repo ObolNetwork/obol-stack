@@ -248,10 +248,10 @@ contract SwapTest is Test {
 
 ```bash
 # Fork from local eRPC (if running in Obol Stack with mainnet installed)
-forge test --fork-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+forge test --fork-url http://rpc.erpc.svc.cluster.local/mainnet
 
 # Fork at specific block (reproducible)
-forge test --fork-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet --fork-block-number 19000000
+forge test --fork-url http://rpc.erpc.svc.cluster.local/mainnet --fork-block-number 19000000
 
 # Set in foundry.toml to avoid CLI flags
 # [rpc_endpoints]

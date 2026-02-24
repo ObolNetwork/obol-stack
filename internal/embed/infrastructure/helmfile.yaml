@@ -133,6 +133,32 @@ releases:
     values:
       - ./values/erpc.yaml.gotmpl
 
+  # eRPC port-80 alias Service — lets in-cluster consumers reach eRPC
+  # without specifying :4000 (e.g. http://erpc.erpc.svc.cluster.local/mainnet).
+  - name: erpc-http
+    namespace: erpc
+    chart: bedag/raw
+    version: 2.0.2
+    needs:
+      - erpc/erpc
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: rpc
+              namespace: erpc
+            spec:
+              type: ClusterIP
+              selector:
+                app.kubernetes.io/name: erpc
+                app.kubernetes.io/instance: erpc
+              ports:
+                - port: 80
+                  targetPort: 4000
+                  protocol: TCP
+                  name: http
+
   # eRPC HTTPRoute
   - name: erpc-httproute
     namespace: erpc
@@ -149,6 +175,8 @@ releases:
               name: erpc
               namespace: erpc
             spec:
+              hostnames:
+                - rpc.obol.stack
               parentRefs:
                 - name: traefik-gateway
                   namespace: traefik
@@ -157,10 +185,10 @@ releases:
                 - matches:
                     - path:
                         type: PathPrefix
-                        value: /rpc
+                        value: /
                   backendRefs:
-                    - name: erpc
-                      port: 4000
+                    - name: rpc
+                      port: 80
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata

@@ -9,7 +9,7 @@ serviceAccount:
 image:
   environment:
     - name: NEXT_PUBLIC_ERPC_URL
-      value: "https://{{ $publicDomain }}/rpc"
+      value: "http://rpc.{{ $publicDomain }}"
     - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
       value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
     - name: BETTER_AUTH_SECRET

@@ -14,8 +14,8 @@ resources:
           "network": "{{ .Values.network }}",
           "endpoints": {
             "rpc": {
-              "external": "http://obol.stack/rpc/{{ .Values.network }}",
-              "internal": "http://erpc.erpc.svc.cluster.local:4000/rpc/{{ .Values.network }}"
+              "external": "http://rpc.obol.stack/{{ .Values.network }}",
+              "internal": "http://rpc.erpc.svc.cluster.local/{{ .Values.network }}"
             }
           }
         }

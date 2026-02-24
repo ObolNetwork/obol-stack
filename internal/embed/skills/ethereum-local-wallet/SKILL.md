@@ -87,7 +87,7 @@ Supported networks: `mainnet`, `hoodi`, `sepolia` (depends on eRPC configuration
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API base URL |
-| `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway for RPC calls |
+| `ERPC_URL` | `http://rpc.erpc.svc.cluster.local` | eRPC gateway for RPC calls |
 | `ERPC_NETWORK` | `mainnet` | Default network for RPC routing |
 
 ## Security Model

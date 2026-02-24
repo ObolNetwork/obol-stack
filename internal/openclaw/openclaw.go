@@ -1310,7 +1310,7 @@ models:
 
 	b.WriteString(`# eRPC integration
 erpc:
-  url: http://erpc.erpc.svc.cluster.local:4000/rpc
+  url: http://rpc.erpc.svc.cluster.local
 
 # Remote-signer wallet for Ethereum transaction signing.
 # The remote-signer runs in the same namespace as OpenClaw.

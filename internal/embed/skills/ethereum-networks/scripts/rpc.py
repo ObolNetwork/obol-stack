@@ -18,8 +18,8 @@ import sys
 import urllib.error
 import urllib.request
 
-# eRPC requires /rpc/{network} path. ERPC_URL is the base (without network).
-ERPC_BASE = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
+# eRPC uses /{network} path (project ID = network name). ERPC_URL is the base.
+ERPC_BASE = os.environ.get("ERPC_URL", "http://rpc.erpc.svc.cluster.local")
 DEFAULT_NETWORK = os.environ.get("ERPC_NETWORK", "mainnet")
 
 # Methods that take no params

@@ -7,7 +7,7 @@ Usage: python3 scripts/signer.py [--network <name>] <command> [args...]
 
 Environment:
   REMOTE_SIGNER_URL  Base URL for remote-signer (default: http://remote-signer:9000)
-  ERPC_URL           Base URL for eRPC gateway (default: http://erpc.erpc.svc.cluster.local:4000/rpc)
+  ERPC_URL           Base URL for eRPC gateway (default: http://rpc.erpc.svc.cluster.local)
   ERPC_NETWORK       Default network (default: mainnet)
 """
 import json
@@ -17,7 +17,7 @@ import urllib.request
 import urllib.error
 
 SIGNER_URL = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000")
-ERPC_BASE = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
+ERPC_BASE = os.environ.get("ERPC_URL", "http://rpc.erpc.svc.cluster.local")
 NETWORK = os.environ.get("ERPC_NETWORK", "mainnet")
 
 # Chain IDs for known networks.
