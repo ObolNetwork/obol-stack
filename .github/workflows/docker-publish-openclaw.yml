@@ -18,7 +18,7 @@ on:
         required: false
         type: string
       foundry_version:
-        description: 'Foundry nightly tag (e.g. nightly-abc123...). Defaults to pinned version.'
+        description: 'Foundry version tag (e.g. v1.5.1). Defaults to pinned version.'
         required: false
         type: string
 
