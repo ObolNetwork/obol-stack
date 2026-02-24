@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
 // ---------------------------------------------------------------------------
