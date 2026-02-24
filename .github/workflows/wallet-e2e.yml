@@ -10,6 +10,10 @@
 name: Wallet E2E
 
 on:
+  # Temporary
+  push:
+    branches:
+      - oisin/integration
   workflow_dispatch: {}
   schedule:
     # Weekly on Monday at 07:00 UTC — catch regressions without burning credits daily.
