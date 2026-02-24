@@ -1,29 +1,34 @@
 package openclaw
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"golang.org/x/crypto/sha3"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/sha3"
 )
 
 // WalletInfo holds generated wallet metadata returned from GenerateWallet.
 type WalletInfo struct {
 	Address      string `json:"address"`       // 0x-prefixed Ethereum address
+	PublicKey    string `json:"publicKey"`      // 0x-prefixed uncompressed public key (130 hex chars)
 	KeystoreUUID string `json:"keystore_uuid"` // UUID of the V3 keystore file
 	KeystorePath string `json:"keystore_path"` // Absolute host path to keystore JSON
+	CreatedAt    string `json:"createdAt"`      // ISO 8601 timestamp
 	Password     string `json:"-"`             // Keystore password (not serialized)
 }
 
@@ -89,10 +94,15 @@ func GenerateWallet(cfg *config.Config, id string) (*WalletInfo, error) {
 		return nil, fmt.Errorf("keystore provisioning failed: %w", err)
 	}
 
+	// Uncompressed public key with 04 prefix for the frontend.
+	pubKeyHex := "0x04" + hex.EncodeToString(pubKey)
+
 	return &WalletInfo{
 		Address:      address,
+		PublicKey:    pubKeyHex,
 		KeystoreUUID: keystoreID,
 		KeystorePath: keystorePath,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 		Password:     password,
 	}, nil
 }
@@ -340,14 +350,6 @@ keystorePassword:
 persistence:
   enabled: true
   size: 100Mi
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 200m
-    memory: 128Mi
 `, wallet.Password)
 }
 
@@ -415,4 +417,69 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	fmt.Printf("  Wallet address: %s\n", wallet.Address)
+}
+
+// applyWalletMetadataConfigMap creates or updates a wallet-metadata ConfigMap
+// in the instance namespace. The frontend reads this to display wallet addresses.
+// Must be called after helmfile sync (namespace must exist).
+func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) {
+	wallet, err := readWalletMetadata(deploymentDir)
+	if err != nil {
+		return // no wallet metadata, nothing to apply
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Build addresses.json matching the frontend's WalletMetadata type.
+	addressesJSON := map[string]interface{}{
+		"instanceId": id,
+		"addresses": []map[string]string{
+			{
+				"address":   wallet.Address,
+				"publicKey": wallet.PublicKey,
+				"createdAt": wallet.CreatedAt,
+				"label":     fmt.Sprintf("obol-agent-%s", id),
+			},
+		},
+		"count": 1,
+	}
+
+	addressesData, err := json.Marshal(addressesJSON)
+	if err != nil {
+		fmt.Printf("Warning: could not marshal wallet metadata: %v\n", err)
+		return
+	}
+
+	manifest := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "wallet-metadata",
+			"namespace": namespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/component":  "remote-signer",
+				"app.kubernetes.io/managed-by": "obol",
+			},
+		},
+		"data": map[string]string{
+			"addresses.json": string(addressesData),
+		},
+	}
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		fmt.Printf("Warning: could not marshal ConfigMap: %v\n", err)
+		return
+	}
+
+	cmd := exec.Command(kubectlBinary, "apply", "-f", "-")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	cmd.Stdin = bytes.NewReader(raw)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: could not apply wallet-metadata ConfigMap: %v\n%s", err, stderr.String())
+	}
 }

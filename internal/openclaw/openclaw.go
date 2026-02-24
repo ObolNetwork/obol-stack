@@ -45,7 +45,7 @@ const (
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.1.0"
+	remoteSignerChartVersion = "0.2.0"
 )
 
 // OnboardOptions contains options for the onboard command
@@ -330,6 +330,9 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
+	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 

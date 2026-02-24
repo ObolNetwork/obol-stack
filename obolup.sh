@@ -55,6 +55,7 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
+readonly OPENCLAW_VERSION="2026.2.23"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -1013,34 +1014,43 @@ install_k9s() {
 # It's distributed as an npm package, so we install it locally into
 # OBOL_BIN_DIR using npm --prefix to keep it workspace-contained.
 install_openclaw() {
+	local current_version=""
+	local target_version="$OPENCLAW_VERSION"
+
 	# Remove broken symlink if exists
 	remove_broken_symlink "openclaw"
 
 	# Check for global openclaw first (same pattern as kubectl, helm, etc.)
 	local global_openclaw
 	if global_openclaw=$(check_global_binary "openclaw"); then
-		if create_binary_symlink "openclaw" "$global_openclaw"; then
-			log_success "openclaw already installed at: $global_openclaw (symlinked)"
-		else
-			log_success "openclaw already installed at: $global_openclaw"
+		local global_version
+		global_version=$("$global_openclaw" --version 2>/dev/null | tr -d '[:space:]' || echo "")
+		if [[ -n "$global_version" ]] && version_ge "$global_version" "$target_version"; then
+			if create_binary_symlink "openclaw" "$global_openclaw"; then
+				log_success "openclaw v$global_version already installed at: $global_openclaw (symlinked)"
+			else
+				log_success "openclaw v$global_version already installed at: $global_openclaw"
+			fi
+			return 0
 		fi
-		return 0
 	fi
 
-	# Check if already in OBOL_BIN_DIR
+	# Check current version in OBOL_BIN_DIR
 	if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
-		log_success "openclaw already installed"
-		return 0
+		current_version=$("$OBOL_BIN_DIR/openclaw" --version 2>/dev/null | tr -d '[:space:]' || echo "")
 	fi
 
-	log_info "Installing openclaw CLI..."
+	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
+		log_success "openclaw v$current_version is up to date"
+		return 0
+	fi
 
 	# Require Node.js 22+ and npm
 	if ! command_exists npm; then
 		log_warn "npm not found — cannot install openclaw CLI"
 		echo ""
 		echo "  Install Node.js 22+ first, then re-run obolup.sh"
-		echo "  Or install manually: npm install -g openclaw"
+		echo "  Or install manually: npm install -g openclaw@$target_version"
 		echo ""
 		return 1
 	fi
@@ -1051,18 +1061,23 @@ install_openclaw() {
 		log_warn "Node.js 22+ required for openclaw (found: v${node_major:-none})"
 		echo ""
 		echo "  Upgrade Node.js, then re-run obolup.sh"
-		echo "  Or install manually: npm install -g openclaw"
+		echo "  Or install manually: npm install -g openclaw@$target_version"
 		echo ""
 		return 1
+	fi
+
+	if [[ -n "$current_version" ]]; then
+		log_info "Upgrading openclaw from v$current_version to v$target_version..."
+	else
+		log_info "Installing openclaw v$target_version..."
 	fi
 
 	# Install into OBOL_BIN_DIR using npm --prefix so the package lives
 	# alongside the other managed binaries (works for both production
 	# ~/.local/bin and development .workspace/bin layouts).
 	local npm_prefix="$OBOL_BIN_DIR/.openclaw-npm"
-	log_info "Installing openclaw via npm into $OBOL_BIN_DIR..."
 
-	if npm install --prefix "$npm_prefix" openclaw 2>&1; then
+	if npm install --prefix "$npm_prefix" "openclaw@$target_version" 2>&1; then
 		# Create a wrapper script in OBOL_BIN_DIR that invokes the local install.
 		# npm --prefix puts the .bin stubs in node_modules/.bin/ which handle
 		# the correct entry point (openclaw.mjs) automatically.
@@ -1071,13 +1086,13 @@ install_openclaw() {
 exec "$npm_prefix/node_modules/.bin/openclaw" "\$@"
 WRAPPER
 		chmod +x "$OBOL_BIN_DIR/openclaw"
-		log_success "openclaw installed at $OBOL_BIN_DIR/openclaw"
+		log_success "openclaw v$target_version installed"
 		return 0
 	fi
 
 	log_warn "Failed to install openclaw CLI"
 	echo ""
-	echo "  Install manually: npm install -g openclaw"
+	echo "  Install manually: npm install -g openclaw@$target_version"
 	echo ""
 	return 1
 }

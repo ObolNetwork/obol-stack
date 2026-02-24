@@ -163,13 +163,14 @@ When only one OpenClaw instance is installed, the instance ID is optional — it
 
 ### Skills
 
-OpenClaw ships with 20 embedded skills that are installed automatically on first deploy. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.
+OpenClaw ships with 21 embedded skills that are installed automatically on first deploy. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.
 
 #### Infrastructure
 
 | Skill | Purpose |
 |-------|---------|
 | `ethereum-networks` | Read-only Ethereum queries via cast — blocks, balances, contract reads, ERC-20, ENS |
+| `ethereum-local-wallet` | Sign and send Ethereum transactions via the per-agent remote-signer |
 | `obol-stack` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
 | `distributed-validators` | Obol DVT cluster monitoring, operator audit, exit coordination |
 
