@@ -42,6 +42,10 @@ const (
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.4"
+
+	// remoteSignerChartVersion pins the remote-signer Helm chart version.
+	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
+	remoteSignerChartVersion = "0.1.0"
 )
 
 // OnboardOptions contains options for the onboard command
@@ -206,7 +210,24 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
-	// Generate helmfile.yaml referencing obol/openclaw from the published Helm repo
+	// Generate Ethereum signing wallet (key + remote-signer config).
+	fmt.Println("\nGenerating Ethereum wallet...")
+	wallet, err := GenerateWallet(cfg, id)
+	if err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to generate wallet: %w", err)
+	}
+	rsValues := generateRemoteSignerValues(wallet)
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues), 0600); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write remote-signer values: %w", err)
+	}
+	if err := writeWalletMetadata(deploymentDir, wallet); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write wallet metadata: %w", err)
+	}
+
+	// Generate helmfile.yaml referencing obol/openclaw + remote-signer
 	helmfileContent := generateHelmfile(id, namespace)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
@@ -217,13 +238,18 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("  Deployment: %s/%s\n", appName, id)
 	fmt.Printf("  Namespace:  %s\n", namespace)
 	fmt.Printf("  Hostname:   %s\n", hostname)
+	fmt.Printf("  Wallet:     %s\n", wallet.Address)
 	fmt.Printf("  Location:   %s\n", deploymentDir)
 	fmt.Printf("\nFiles created:\n")
-	fmt.Printf("  - values-obol.yaml  Obol Stack overlay (httpRoute, providers, eRPC)\n")
-	fmt.Printf("  - helmfile.yaml     Deployment configuration (chart: obol/openclaw v%s)\n", chartVersion)
+	fmt.Printf("  - values-obol.yaml           Obol Stack overlay (httpRoute, providers, eRPC)\n")
+	fmt.Printf("  - values-remote-signer.yaml  Remote-signer config (keystore password)\n")
+	fmt.Printf("  - wallet.json                Wallet metadata (address, keystore UUID)\n")
+	fmt.Printf("  - helmfile.yaml              Deployment configuration\n")
 	if len(secretData) > 0 {
 		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
 	}
+	fmt.Printf("\n  Back up your signing key:\n")
+	fmt.Printf("    cp -r %s ~/obol-wallet-backup/\n", keystoreVolumePath(cfg, id))
 
 	// Stage default skills to deployment directory (immediate, no cluster needed)
 	fmt.Println("\nStaging default skills...")
@@ -275,6 +301,10 @@ func doSync(cfg *config.Config, id string) error {
 	if err := applyUserSecretsIfPresent(cfg, namespace, deploymentDir); err != nil {
 		return fmt.Errorf("failed to sync OpenClaw user secrets: %w", err)
 	}
+
+	// Ensure wallet keystore + remote-signer values exist (handles
+	// deployments created before wallet was added, or manual re-syncs).
+	ensureWallet(cfg, id, deploymentDir)
 
 	// Stage default skills and inject directly to the host-side PVC path.
 	// The local-path-provisioner creates the PV directory on the host at a
@@ -1279,6 +1309,12 @@ models:
 erpc:
   url: http://erpc.erpc.svc.cluster.local:4000/rpc
 
+# Remote-signer wallet for Ethereum transaction signing.
+# The remote-signer runs in the same namespace as OpenClaw.
+extraEnv:
+  - name: REMOTE_SIGNER_URL
+    value: http://remote-signer:9000
+
 # Skills: injected directly to the host-side PVC path at
 # $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
 # OpenClaw's file watcher picks them up; no ConfigMap needed.
@@ -1732,7 +1768,8 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 	return secretData
 }
 
-// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.
+// generateHelmfile creates a helmfile.yaml referencing the published
+// obol/openclaw and obol/remote-signer charts in the same namespace.
 func generateHelmfile(id, namespace string) string {
 	return fmt.Sprintf(`# OpenClaw instance: %s
 # Managed by obol openclaw
@@ -1749,5 +1786,12 @@ releases:
     version: %s
     values:
       - values-obol.yaml
-`, id, namespace, chartVersion)
+
+  - name: remote-signer
+    namespace: %s
+    chart: obol/remote-signer
+    version: %s
+    values:
+      - values-remote-signer.yaml
+`, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
 }

@@ -3,9 +3,12 @@ module github.com/ObolNetwork/obol-stack
 go 1.25.1
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/dustinkirkland/golang-petname v0.0.0-20240428194347-eebcea082ee0
+	github.com/google/uuid v1.6.0
 	github.com/mark3labs/x402-go v0.13.0
 	github.com/urfave/cli/v2 v2.27.7
+	golang.org/x/crypto v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -19,7 +22,6 @@ require (
 	github.com/gagliardetto/binary v0.8.0 // indirect
 	github.com/gagliardetto/solana-go v1.14.0 // indirect
 	github.com/gagliardetto/treeout v0.1.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/logrusorgru/aurora v2.0.3+incompatible // indirect
@@ -37,7 +39,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/ratelimit v0.3.1 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
