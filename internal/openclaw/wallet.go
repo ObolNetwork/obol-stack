@@ -335,6 +335,22 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
+	// Chown to the remote-signer's UID/GID (65532 — distroless nonroot).
+	// This runs on the host before the pod starts. On Linux (including
+	// k3d's Docker host), this works without root because we own the files.
+	// On macOS, chown to a non-existent UID requires root but k3d runs
+	// inside Docker where the volume is accessed by the k3d container's root.
+	const remoteSignerUID = 65532
+	const remoteSignerGID = 65532
+	if err := os.Chown(dir, remoteSignerUID, remoteSignerGID); err != nil {
+		// Non-fatal: may fail on macOS without sudo. The remote-signer
+		// chart has a fix-permissions init container as a fallback.
+		fmt.Printf("Warning: could not chown keystore dir to UID %d: %v\n", remoteSignerUID, err)
+	}
+	if err := os.Chown(path, remoteSignerUID, remoteSignerGID); err != nil {
+		fmt.Printf("Warning: could not chown keystore file to UID %d: %v\n", remoteSignerUID, err)
+	}
+
 	return path, nil
 }
 

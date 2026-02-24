@@ -171,7 +171,7 @@ func TestIntegration_WalletE2E(t *testing.T) {
 	// 5. Fund the wallet on Hoodi using cast inside the pod.
 	t.Run("hoodi/fund-wallet", func(t *testing.T) {
 		// Send 0.01 ETH from funder to agent wallet on Hoodi.
-		rpcURL := "http://erpc.erpc.svc.cluster.local:4000/rpc/hoodi"
+		rpcURL := "http://rpc.erpc.svc.cluster.local/hoodi"
 		t.Logf("funding %s with 0.01 ETH on Hoodi...", wallet.Address)
 
 		out := kubectlExec(t, cfg, namespace,
