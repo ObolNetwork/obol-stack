@@ -48,10 +48,16 @@ jobs:
             | tar -xzC /usr/local/bin helmfile
           helm plugin install https://github.com/databus23/helm-diff --version v3.14.1
 
-      - name: Build obol binary
+      - name: Build obol binary and link dependencies
         run: |
           mkdir -p .workspace/bin
           go build -o .workspace/bin/obol ./cmd/obol
+          # obol looks for tools in OBOL_BIN_DIR — symlink the globally-installed ones.
+          for bin in k3d helm helmfile kubectl; do
+            if command -v "$bin" &>/dev/null && [ ! -e ".workspace/bin/$bin" ]; then
+              ln -s "$(command -v "$bin")" ".workspace/bin/$bin"
+            fi
+          done
 
       - name: Start cluster
         run: |
