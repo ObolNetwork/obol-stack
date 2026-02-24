@@ -20,16 +20,16 @@ export interface OpenClawToken {
   token: string;
 }
 
-export interface Web3SignerAddress {
+export interface WalletAddress {
   address: string;
   publicKey: string;
   createdAt: string;
   label: string;
 }
 
-export interface Web3SignerMetadata {
+export interface WalletMetadata {
   instanceId: string;
-  addresses: Web3SignerAddress[];
+  addresses: WalletAddress[];
   count: number;
 }
 

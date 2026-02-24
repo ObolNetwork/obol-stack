@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type {
   OpenClawInstance,
   OpenClawInstanceHealth,
-  Web3SignerMetadata,
+  WalletMetadata,
 } from '@/types/openclaw';
 
 export function useOpenClawInstances() {
@@ -99,8 +99,8 @@ export function useOpenClawToken(instanceId: string) {
   return { token };
 }
 
-export function useWeb3SignerMetadata(instanceId: string) {
-  const [metadata, setMetadata] = useState<Web3SignerMetadata | null>(null);
+export function useWalletMetadata(instanceId: string) {
+  const [metadata, setMetadata] = useState<WalletMetadata | null>(null);
 
   const fetchMetadata = useCallback(async () => {
     try {

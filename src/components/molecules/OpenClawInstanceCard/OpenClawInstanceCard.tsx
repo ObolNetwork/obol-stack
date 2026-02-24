@@ -14,7 +14,7 @@ import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import {
   useOpenClawStatus,
   useOpenClawToken,
-  useWeb3SignerMetadata,
+  useWalletMetadata,
 } from '../../../hooks/useOpenClaw';
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
 import type { OpenClawInstance } from '@/types/openclaw';
@@ -112,7 +112,7 @@ export function OpenClawInstanceCard({
           : 'unknown';
 
   const { token } = useOpenClawToken(instance.id);
-  const { metadata } = useWeb3SignerMetadata(instance.id);
+  const { metadata } = useWalletMetadata(instance.id);
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balance: balanceInfo } = useAddressBalance(primaryAddress);

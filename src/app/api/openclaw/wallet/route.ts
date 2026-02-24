@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenClawClient } from '@/lib/services/openclaw';
-import type { Web3SignerMetadata } from '@/types/openclaw';
+import type { WalletMetadata } from '@/types/openclaw';
 
 /**
  * GET /api/openclaw/wallet?id=default
- * Returns Web3Signer wallet addresses for an OpenClaw instance.
+ * Returns wallet signing addresses for an OpenClaw instance.
  * Returns empty addresses array if no wallet-metadata ConfigMap exists.
  */
 export async function GET(request: NextRequest) {
@@ -20,12 +20,12 @@ export async function GET(request: NextRequest) {
   try {
     const client = new OpenClawClient();
     const namespace = `openclaw-${id}`;
-    const metadata = await client.getWeb3SignerMetadata(namespace);
+    const metadata = await client.getWalletMetadata(namespace);
 
-    return NextResponse.json<Web3SignerMetadata>(metadata);
+    return NextResponse.json<WalletMetadata>(metadata);
   } catch (error) {
     console.error(`[OpenClaw Wallet] Error for instance '${id}':`, error);
-    return NextResponse.json<Web3SignerMetadata>(
+    return NextResponse.json<WalletMetadata>(
       { instanceId: id, addresses: [], count: 0 },
       { status: 500 }
     );

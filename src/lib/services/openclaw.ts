@@ -9,7 +9,7 @@ import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectPa
 import type {
   OpenClawInstance,
   OpenClawInstanceHealth,
-  Web3SignerMetadata,
+  WalletMetadata,
 } from '@/types/openclaw';
 import { config } from '@/lib/config/environment';
 
@@ -180,11 +180,9 @@ export class OpenClawClient {
   }
 
   /**
-   * Get Web3Signer metadata (wallet addresses) from ConfigMap
+   * Get wallet metadata (signing addresses) from ConfigMap
    */
-  public async getWeb3SignerMetadata(
-    namespace: string
-  ): Promise<Web3SignerMetadata> {
+  public async getWalletMetadata(namespace: string): Promise<WalletMetadata> {
     try {
       const response = await this.coreV1Api.readNamespacedConfigMap({
         name: 'wallet-metadata',

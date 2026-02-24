@@ -54,7 +54,10 @@ export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
           )}
           {error && <EmptyMessage>Failed to load instances</EmptyMessage>}
           {!loading && !error && instances.length === 0 && (
-            <EmptyMessage>No OpenClaw instances found</EmptyMessage>
+            <EmptyMessage>
+              No OpenClaw instances found. Run the command '
+              <code>obol agent init</code>' to create one.
+            </EmptyMessage>
           )}
           {instances.map(instance => (
             <OpenClawInstanceCard
