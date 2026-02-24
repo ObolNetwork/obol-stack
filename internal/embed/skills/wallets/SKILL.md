@@ -107,7 +107,7 @@ cast send ... --private-key $DEPLOYER_PRIVATE_KEY
 cast send ... --ledger
 ```
 
-**Obol Stack will use encrypted V3 keystores by default.** Transaction signing support via Web3Signer is coming soon.
+**Obol Stack uses encrypted V3 keystores by default.** Transaction signing is handled by the remote-signer service — see the `ethereum-local-wallet` skill.
 
 **Rule of thumb:** If `grep -r "0x[a-fA-F0-9]{64}" .` matches anything in your source code, you have a problem. Same for `grep -r "g.alchemy.com/v2/[A-Za-z0-9]"` or any RPC URL with an embedded API key.
 

@@ -16,7 +16,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	// Core skills that must always be present
 	coreSkills := []string{
 		"addresses", "building-blocks", "concepts", "distributed-validators",
-		"ethereum-networks", "frontend-playbook", "frontend-ux", "gas",
+		"ethereum-networks", "ethereum-local-wallet", "frontend-playbook", "frontend-ux", "gas",
 		"indexing", "l2s", "obol-stack", "orchestration", "qa", "security",
 		"ship", "standards", "testing", "tools", "wallets", "why",
 	}
@@ -45,7 +45,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"distributed-validators", "ethereum-networks", "obol-stack", "addresses", "wallets"}
+	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-local-wallet", "obol-stack", "addresses", "wallets"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -63,6 +63,16 @@ func TestCopySkills(t *testing.T) {
 		"ethereum-networks/scripts/rpc.py",
 		"ethereum-networks/references/erc20-methods.md",
 		"ethereum-networks/references/common-contracts.md",
+	} {
+		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
+			t.Errorf("missing %s: %v", sub, err)
+		}
+	}
+
+	// ethereum-local-wallet must have scripts/signer.py and references/
+	for _, sub := range []string{
+		"ethereum-local-wallet/scripts/signer.py",
+		"ethereum-local-wallet/references/remote-signer-api.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)

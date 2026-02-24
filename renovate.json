@@ -47,14 +47,14 @@
     },
     {
       "customType": "regex",
-      "description": "Update Foundry nightly version from upstream GitHub releases",
+      "description": "Update Foundry version from upstream GitHub releases",
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>nightly-[0-9a-f]+)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+[^\\s]*)"
       ],
       "fileMatch": [
         "^internal/openclaw/FOUNDRY_VERSION$"
       ],
-      "versioningTemplate": "loose"
+      "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
@@ -143,7 +143,7 @@
       "groupName": "OpenClaw updates"
     },
     {
-      "description": "Group Foundry updates (weekly to avoid nightly PR noise)",
+      "description": "Group Foundry updates",
       "matchDatasources": [
         "github-releases"
       ],

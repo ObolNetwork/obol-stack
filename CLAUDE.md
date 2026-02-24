@@ -802,7 +802,7 @@ Skills are delivered by writing directly to the host filesystem at `$DATA_DIR/op
 
 **Advantages over ConfigMap approach**: No 1MB size limit, works before pod readiness, survives pod restarts, supports binary files and scripts.
 
-### Default Skills (20 skills)
+### Default Skills (21 skills)
 
 The stack ships 20 embedded skills organized into categories. All are installed automatically on first deploy.
 
@@ -811,6 +811,7 @@ The stack ships 20 embedded skills organized into categories. All are installed 
 | Skill | Contents | Purpose |
 |-------|----------|---------|
 | `ethereum-networks` | `SKILL.md`, `scripts/rpc.sh`, `scripts/rpc.py`, `references/erc20-methods.md`, `references/common-contracts.md` | Read-only Ethereum queries via cast/eRPC — blocks, balances, contract reads, ERC-20 lookups, ENS resolution |
+| `ethereum-local-wallet` | `SKILL.md`, `scripts/signer.py`, `references/remote-signer-api.md` | Sign and send Ethereum transactions via the per-agent remote-signer service |
 | `obol-stack` | `SKILL.md`, `scripts/kube.py` | Kubernetes cluster diagnostics — pods, logs, events, deployments via ServiceAccount API |
 | `distributed-validators` | `SKILL.md`, `references/api-examples.md` | Obol DVT cluster monitoring, operator audit, exit coordination via Obol API |
 
@@ -875,7 +876,44 @@ obol openclaw skills sync                   # re-inject embedded defaults to vol
 obol openclaw skills sync --from <dir>      # push custom skills from local directory
 ```
 
-### Key Source Files
+### Ethereum Local Wallet (Remote-Signer)
+
+Each OpenClaw instance is provisioned with an Ethereum signing wallet during `obol openclaw onboard`. The wallet is backed by a remote-signer service (Rust-based REST API) deployed in the same namespace.
+
+**Architecture**:
+```
+Namespace: openclaw-<id>
+  OpenClaw Pod ──HTTP:9000──> remote-signer Pod
+  (signer.py skill)          /data/keystores/<uuid>.json (V3)
+         │
+         └── eth_sendRawTransaction ──> eRPC (:4000/rpc)
+```
+
+**Key generation**: secp256k1 via `crypto/rand` + `github.com/decred/dcrd/dcrec/secp256k1/v4`, encrypted to Web3 Secret Storage V3 format (scrypt + AES-128-CTR).
+
+**Provisioning flow**:
+1. `GenerateWallet()` creates key + V3 keystore + random password
+2. Keystore written to host PVC path: `$DATA_DIR/openclaw-<id>/remote-signer-keystores/`
+3. Password stored in `values-remote-signer.yaml` for the Helm chart
+4. `generateHelmfile()` includes both `obol/openclaw` and `obol/remote-signer` releases
+5. After helmfile sync, `applyWalletMetadataConfigMap()` creates a `wallet-metadata` ConfigMap for the frontend
+
+**Remote-signer API** (ClusterIP, port 9000):
+- `GET /api/v1/keys` — list signing addresses
+- `POST /api/v1/sign/{address}/transaction` — sign EIP-1559 tx
+- `POST /api/v1/sign/{address}/message` — sign EIP-191 message
+- `POST /api/v1/sign/{address}/typed-data` — sign EIP-712 typed data
+- `POST /api/v1/sign/{address}/hash` — sign raw hash
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `internal/openclaw/wallet.go` | Key generation, V3 keystore encryption, provisioning, ConfigMap creation |
+| `internal/openclaw/wallet_test.go` | Unit tests for key gen, encrypt/decrypt round-trip, address derivation |
+| `internal/embed/skills/ethereum-local-wallet/` | Signing skill (SKILL.md, scripts/signer.py, references/) |
+
+### Key Source Files (Skills)
 
 | File | Role |
 |------|------|
@@ -1143,7 +1181,7 @@ obol network delete ethereum-<generated-name> --force
   - `aztec/helmfile.yaml.gotmpl`
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
-- `internal/embed/skills/` - Default OpenClaw skills (20 skills) embedded in obol binary
+- `internal/embed/skills/` - Default OpenClaw skills (21 skills) embedded in obol binary
 
 **Skills system**:
 - `internal/openclaw/resolve.go` - Smart instance resolution (0/1/2+ instances)
