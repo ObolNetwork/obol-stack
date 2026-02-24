@@ -1,0 +1,3 @@
+# renovate: datasource=github-releases depName=foundry-rs/foundry
+# Pins the Foundry nightly version for cast/forge/anvil in the OpenClaw image.
+nightly-63bb261c14c1a83c301fde2ea7e20279c781be33

@@ -380,7 +380,7 @@ forge test --fuzz-runs 1000
 
 ## Note on Tooling
 
-`forge`, `cast`, and `anvil` are available inside OpenClaw pods via the Foundry init container. All commands in this skill can be run directly.
+`forge`, `cast`, and `anvil` are pre-installed in the OpenClaw image. All commands in this skill can be run directly.
 
 ## See Also
 

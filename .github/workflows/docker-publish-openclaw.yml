@@ -6,19 +6,96 @@ on:
       - main
     paths:
       - 'internal/openclaw/OPENCLAW_VERSION'
+      - 'internal/openclaw/FOUNDRY_VERSION'
+      - 'docker/openclaw/**'
+  schedule:
+    # Daily at 06:00 UTC — detects new upstream OpenClaw releases and rebuilds.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'OpenClaw version to build (e.g. v2026.2.3)'
+        description: 'OpenClaw version to build (e.g. v2026.2.3). Defaults to pinned version.'
+        required: false
+        type: string
+      foundry_version:
+        description: 'Foundry nightly tag (e.g. nightly-abc123...). Defaults to pinned version.'
         required: false
         type: string
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: obolnetwork/openclaw
+  BASE_IMAGE_NAME: obolnetwork/openclaw-base
 
 jobs:
-  build-and-push:
+  # ---------------------------------------------------------------------------
+  # Job 1: Resolve versions and decide whether to build.
+  # On cron: checks if upstream has a newer release than pinned.
+  # On push/dispatch: always builds with the pinned (or input-overridden) version.
+  # ---------------------------------------------------------------------------
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      openclaw_version: ${{ steps.check.outputs.openclaw_version }}
+      foundry_version: ${{ steps.check.outputs.foundry_version }}
+
+    steps:
+      - name: Checkout obol-stack
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Resolve versions and check for updates
+        id: check
+        run: |
+          # --- OpenClaw version ---
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            OC_VERSION="${{ github.event.inputs.version }}"
+          else
+            OC_VERSION=$(grep -v '^#' internal/openclaw/OPENCLAW_VERSION | tr -d '[:space:]')
+          fi
+
+          # --- Foundry version ---
+          if [ -n "${{ github.event.inputs.foundry_version }}" ]; then
+            FOUNDRY_VERSION="${{ github.event.inputs.foundry_version }}"
+          else
+            FOUNDRY_VERSION=$(grep -v '^#' internal/openclaw/FOUNDRY_VERSION | tr -d '[:space:]')
+          fi
+
+          echo "foundry_version=$FOUNDRY_VERSION" >> "$GITHUB_OUTPUT"
+
+          # --- Cron: check for new upstream release ---
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            LATEST=$(curl -sS https://api.github.com/repos/openclaw/openclaw/releases/latest \
+              | jq -r '.tag_name')
+
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+              echo "::warning::Failed to fetch latest upstream release"
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+              echo "openclaw_version=$OC_VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$LATEST" = "$OC_VERSION" ]; then
+              echo "No new upstream release. Pinned: $OC_VERSION"
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "New upstream release detected: $LATEST (pinned: $OC_VERSION)"
+              OC_VERSION="$LATEST"
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "openclaw_version=$OC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved: OpenClaw=$OC_VERSION  Foundry=$FOUNDRY_VERSION"
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Build upstream OpenClaw from source and push as base image.
+  # ---------------------------------------------------------------------------
+  build-base:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,22 +105,11 @@ jobs:
       - name: Checkout obol-stack
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Read pinned version
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION=$(grep -v '^#' internal/openclaw/OPENCLAW_VERSION | tr -d '[:space:]')
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building OpenClaw $VERSION"
-
       - name: Checkout upstream OpenClaw
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: openclaw/openclaw
-          ref: ${{ steps.version.outputs.version }}
+          ref: ${{ needs.check-upstream.outputs.openclaw_version }}
           path: openclaw-src
 
       - name: Set up Docker Buildx
@@ -59,24 +125,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract base image metadata
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ needs.check-upstream.outputs.openclaw_version }}
             type=sha,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
-            org.opencontainers.image.title=OpenClaw
-            org.opencontainers.image.description=AI agent gateway for Obol Stack
+            org.opencontainers.image.title=OpenClaw Base
+            org.opencontainers.image.description=Upstream OpenClaw build (without Foundry tools)
             org.opencontainers.image.vendor=Obol Network
             org.opencontainers.image.source=https://github.com/openclaw/openclaw
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ needs.check-upstream.outputs.openclaw_version }}
 
-      - name: Build and push Docker image
+      - name: Build and push base image
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: openclaw-src
@@ -84,24 +149,80 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=openclaw-base
+          cache-to: type=gha,scope=openclaw-base,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Layer Foundry tools onto the base image and publish final image.
+  # ---------------------------------------------------------------------------
+  build-final:
+    needs: [check-upstream, build-base]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout obol-stack
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract final image metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.check-upstream.outputs.openclaw_version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.check-upstream.outputs.openclaw_version }}
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=OpenClaw
+            org.opencontainers.image.description=AI agent gateway for Obol Stack (with Foundry tools)
+            org.opencontainers.image.vendor=Obol Network
+            org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
+            org.opencontainers.image.version=${{ needs.check-upstream.outputs.openclaw_version }}
+
+      - name: Build and push final image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: docker/openclaw/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FOUNDRY_TAG=${{ needs.check-upstream.outputs.foundry_version }}
+            BASE_TAG=${{ needs.check-upstream.outputs.openclaw_version }}
+          cache-from: type=gha,scope=openclaw-final
+          cache-to: type=gha,scope=openclaw-final,mode=max
           provenance: true
           sbom: true
 
+  # ---------------------------------------------------------------------------
+  # Job 4: Security scan the final published image.
+  # ---------------------------------------------------------------------------
   security-scan:
-    needs: build-and-push
+    needs: build-final
     runs-on: ubuntu-latest
     permissions:
       security-events: write
 
     steps:
-      - name: Read pinned version
-        id: version
-        run: |
-          # Re-derive for the scan job
-          echo "Scanning latest pushed image"
-
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@22438a435773de8c97dc0958cc0b823c45b064ac # master
         with:
