@@ -47,6 +47,17 @@
     },
     {
       "customType": "regex",
+      "description": "Update Foundry nightly version from upstream GitHub releases",
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>nightly-[0-9a-f]+)"
+      ],
+      "fileMatch": [
+        "^internal/openclaw/FOUNDRY_VERSION$"
+      ],
+      "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
       "description": "Update llmspy image version from ObolNetwork/llms releases",
       "matchStrings": [
         "image:\\s*ghcr\\.io/obolnetwork/llms:(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+-obol\\.[0-9]+)"
@@ -130,6 +141,22 @@
         "every hour"
       ],
       "groupName": "OpenClaw updates"
+    },
+    {
+      "description": "Group Foundry updates (weekly to avoid nightly PR noise)",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "foundry-rs/foundry"
+      ],
+      "labels": [
+        "renovate/foundry"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Foundry updates"
     },
     {
       "description": "Group llmspy updates",

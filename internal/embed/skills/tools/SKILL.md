@@ -87,7 +87,7 @@ const response = await x402Fetch('https://api.example.com/data', {
 
 ## Essential Foundry cast Commands
 
-`cast` is available inside OpenClaw pods via the Foundry init container. The local eRPC gateway is the default RPC:
+`cast` is pre-installed in the OpenClaw image. The local eRPC gateway is the default RPC:
 
 ```bash
 RPC="http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet"
