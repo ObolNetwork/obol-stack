@@ -1,0 +1,88 @@
+# Wallet E2E Integration Test
+#
+# Deploys an OpenClaw instance with a wallet, funds it on Hoodi,
+# sends a transaction, and verifies skills work end-to-end.
+#
+# Required secrets:
+#   ANTHROPIC_API_KEY        — Anthropic API key for LLM provider
+#   HOODI_FUNDER_PRIVATE_KEY — hex private key of a pre-funded Hoodi testnet wallet
+
+name: Wallet E2E
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Weekly on Monday at 07:00 UTC — catch regressions without burning credits daily.
+    - cron: '0 7 * * 1'
+
+env:
+  OBOL_CONFIG_DIR: ${{ github.workspace }}/.workspace/config
+  OBOL_BIN_DIR: ${{ github.workspace }}/.workspace/bin
+  OBOL_DATA_DIR: ${{ github.workspace }}/.workspace/data
+
+jobs:
+  wallet-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+      - name: Install helmfile + helm-diff
+        run: |
+          curl -fsSL https://github.com/helmfile/helmfile/releases/download/v1.2.3/helmfile_1.2.3_linux_amd64.tar.gz \
+            | tar -xzC /usr/local/bin helmfile
+          helm plugin install https://github.com/databus23/helm-diff --version v3.14.1
+
+      - name: Build obol binary
+        run: |
+          mkdir -p .workspace/bin
+          go build -o .workspace/bin/obol ./cmd/obol
+
+      - name: Start cluster
+        run: |
+          .workspace/bin/obol stack init
+          .workspace/bin/obol stack up
+          # Wait for default infrastructure to settle.
+          sleep 30
+          .workspace/bin/obol kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n traefik --timeout=120s || true
+          .workspace/bin/obol kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=erpc -n erpc --timeout=120s || true
+
+      - name: Run wallet E2E test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HOODI_FUNDER_PRIVATE_KEY: ${{ secrets.HOODI_FUNDER_PRIVATE_KEY }}
+        run: |
+          go test -tags integration -v -run 'TestIntegration_WalletE2E' \
+            -timeout 20m ./internal/openclaw/
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Pod status ==="
+          .workspace/bin/obol kubectl get pods -A || true
+          echo ""
+          echo "=== Events ==="
+          .workspace/bin/obol kubectl get events -A --sort-by='.lastTimestamp' | tail -50 || true
+          echo ""
+          echo "=== OpenClaw logs ==="
+          .workspace/bin/obol kubectl logs -n openclaw-test-wallet-e2e deploy/openclaw -c openclaw --tail=50 || true
+          echo ""
+          echo "=== Remote-signer logs ==="
+          .workspace/bin/obol kubectl logs -n openclaw-test-wallet-e2e deploy/remote-signer --tail=50 || true
+
+      - name: Tear down cluster
+        if: always()
+        run: |
+          .workspace/bin/obol stack down || true
+          .workspace/bin/obol stack purge -f || true

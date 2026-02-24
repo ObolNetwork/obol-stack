@@ -315,6 +315,16 @@ Restaking protocol. Both are upgradeable proxies (EIP-1967).
 
 Source: [eigenlayer.xyz](https://docs.eigenlayer.xyz/)
 
+### OBOL Token
+
+The Obol Collective token (ERC-20).
+
+| Network | Address | Status |
+|---------|---------|--------|
+| Mainnet | `0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7` | ✅ Verified |
+
+Source: [docs.obol.org/community-and-governance/obol-token](https://docs.obol.org/community-and-governance/obol-token)
+
 ### Obol Splits — Factory Contracts
 
 Obol's Ethereum Validator Manager and reward splitting contracts. Factory contract pattern. Used with splits.org splitter smart contracts and gnosis SAFEs.
