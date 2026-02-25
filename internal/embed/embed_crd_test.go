@@ -246,6 +246,38 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		}
 	}
 
+	// Core API group ("") should have configmaps for x402-pricing management
+	if !apiGroups[""] {
+		t.Error("ClusterRole missing core API group (needed for configmaps)")
+	}
+
+	// Verify configmaps resource is present in one of the core rules
+	hasConfigMaps := false
+	for _, r := range rules {
+		rm := r.(map[string]interface{})
+		groups, ok := rm["apiGroups"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			if g.(string) != "" {
+				continue
+			}
+			resources, ok := rm["resources"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, res := range resources {
+				if res.(string) == "configmaps" {
+					hasConfigMaps = true
+				}
+			}
+		}
+	}
+	if !hasConfigMaps {
+		t.Error("ClusterRole missing 'configmaps' resource in core API group")
+	}
+
 	// ClusterRoleBinding should reference openclaw-monetize
 	roleRef := nested(crb, "roleRef", "name")
 	if roleRef != "openclaw-monetize" {

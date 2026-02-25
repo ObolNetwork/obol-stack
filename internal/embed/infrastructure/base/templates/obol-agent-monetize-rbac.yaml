@@ -28,6 +28,10 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # ConfigMaps - manage x402-pricing routes in the x402 namespace
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "patch"]
   # Read workload status - pods, services, endpoints
   - apiGroups: [""]
     resources: ["pods", "services", "endpoints"]

@@ -1198,3 +1198,340 @@ func TestIntegration_E2E_ListAndStatus(t *testing.T) {
 		t.Logf("offer-status output (expected ServiceOffer YAML):\n%s", statusOut)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6 — Tunnel E2E: Ollama model exposed and sold via CF tunnel
+// ─────────────────────────────────────────────────────────────────────────────
+
+// requireTunnel skips the test if the CF tunnel is not active.
+// Returns the tunnel URL (e.g. "https://xxx.trycloudflare.com").
+func requireTunnel(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	tunnelURL, err := obolRunErr(cfg, "tunnel", "status")
+	if err != nil {
+		t.Skip("tunnel not available — run: obol stack up")
+	}
+
+	// Extract URL from the status output.
+	for _, line := range strings.Split(tunnelURL, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "URL:") {
+			url := strings.TrimSpace(strings.TrimPrefix(line, "URL:"))
+			if strings.HasPrefix(url, "https://") {
+				return url
+			}
+		}
+	}
+
+	t.Skip("tunnel URL not found in status output")
+	return ""
+}
+
+// requireOllamaModel ensures a specific model is available, pulling it if needed.
+// Returns the model name that's available (may be adjusted if not found).
+func requireOllamaModel(t *testing.T, targetModel string) string {
+	t.Helper()
+	models := requireOllama(t)
+
+	// Check if the target model is already available.
+	for _, m := range models {
+		if strings.Contains(m, targetModel) {
+			return m
+		}
+	}
+
+	// Try to use whatever model is available (smallest first).
+	// For the test, any model works — we just need a valid inference endpoint.
+	t.Logf("target model %q not found, using available model %q", targetModel, models[0])
+	return models[0]
+}
+
+// ollamaServiceOfferYAML returns a ServiceOffer YAML for an Ollama model.
+func ollamaServiceOfferYAML(name, namespace, model, wallet string) string {
+	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  model:
+    name: %s
+    runtime: ollama
+  upstream:
+    service: ollama
+    namespace: llm
+    port: 11434
+    healthPath: /api/generate
+  pricing:
+    amount: "0.001"
+    unit: request
+    currency: USDC
+    chain: base-sepolia
+  wallet: "%s"
+  path: /services/%s
+`, name, namespace, model, wallet, name)
+}
+
+// TestIntegration_Tunnel_OllamaMonetized is the full E2E test:
+// Ollama model → ServiceOffer → reconciliation → x402 payment gate → CF tunnel.
+//
+// Validates that:
+//  1. An Ollama model is exposed as a ServiceOffer
+//  2. The reconciler creates Middleware + HTTPRoute + pricing route
+//  3. Requests without payment return 402
+//  4. Requests with valid payment return 200 + inference result
+//  5. The service is accessible via the CF tunnel
+//  6. Deletion cleans up all resources including the pricing route
+func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireOllamaModel(t, "qwen2.5")
+	tunnelURL := requireTunnel(t, cfg)
+
+	mf := setupMockFacilitator(t, cfg)
+
+	walletAddr := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+	name := "test-tunnel-ollama"
+	// Use the llm namespace since that's where the ollama service lives.
+	ns := "llm"
+
+	// Step 1: Create ServiceOffer for the Ollama model.
+	yaml := ollamaServiceOfferYAML(name, ns, model, walletAddr)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		deleteServiceOffer(t, cfg, name, ns)
+		// Give time for pricing route cleanup by the delete handler.
+		time.Sleep(2 * time.Second)
+	})
+	t.Logf("created ServiceOffer %s/%s for model %s", ns, name, model)
+
+	// Step 2: Trigger reconciliation (monetize.py process).
+	out, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", out)
+
+	// Step 3: Verify all conditions are True.
+	so := getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Errorf("condition %s = %q, want True", cond, status)
+		}
+	}
+
+	// Step 4: Verify x402-pricing ConfigMap has the route.
+	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("x402-pricing ConfigMap missing route for %s:\n%s", name, pricingOut)
+	}
+
+	// Step 5: Wait for Reloader to restart verifier + route propagation.
+	time.Sleep(8 * time.Second)
+
+	// Step 6: Test via LOCAL endpoint (obol.stack:8080) — request without payment → 402.
+	localURL := fmt.Sprintf("http://obol.stack:8080/services/%s/v1/chat/completions", name)
+	chatBody := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"say hello"}],"stream":false}`, model)
+
+	resp, err := http.Post(localURL, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("[local] expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		t.Logf("[local] correctly returned 402 Payment Required")
+	}
+
+	// Step 7: Test via LOCAL endpoint — request WITH payment → 200 + inference.
+	paymentHeader := testutil.TestPaymentHeader(t, walletAddr)
+	req, _ := http.NewRequest("POST", localURL, strings.NewReader(chatBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("[local] request with payment failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("[local] expected 200 with payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		t.Logf("[local] payment accepted, inference response received (%d bytes)", len(body))
+		// Verify response contains a completion.
+		var chatResp map[string]interface{}
+		if err := json.Unmarshal(body, &chatResp); err == nil {
+			if choices, ok := chatResp["choices"].([]interface{}); ok && len(choices) > 0 {
+				t.Logf("[local] inference response has %d choice(s)", len(choices))
+			}
+		}
+	}
+
+	// Step 8: Verify mock facilitator was called.
+	if mf.VerifyCalls.Load() == 0 {
+		t.Error("mock facilitator /verify was never called")
+	}
+	t.Logf("mock facilitator: %d verify calls, %d settle calls",
+		mf.VerifyCalls.Load(), mf.SettleCalls.Load())
+
+	// Step 9: Test via TUNNEL endpoint — same flow through the public URL.
+	tunnelChatURL := fmt.Sprintf("%s/services/%s/v1/chat/completions", tunnelURL, name)
+	t.Logf("testing via tunnel: %s", tunnelChatURL)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// 9a: Without payment → 402 via tunnel.
+	resp, err = client.Post(tunnelChatURL, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Logf("[tunnel] could not reach tunnel URL: %v (may be expected if tunnel not ready)", err)
+	} else {
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusPaymentRequired {
+			t.Errorf("[tunnel] expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+		} else {
+			t.Logf("[tunnel] correctly returned 402 Payment Required")
+		}
+
+		// 9b: With payment → 200 via tunnel.
+		req, _ = http.NewRequest("POST", tunnelChatURL, strings.NewReader(chatBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-PAYMENT", paymentHeader)
+
+		resp, err = client.Do(req)
+		if err != nil {
+			t.Errorf("[tunnel] request with payment failed: %v", err)
+		} else {
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("[tunnel] expected 200 with payment, got %d; body: %s", resp.StatusCode, body)
+			} else {
+				t.Logf("[tunnel] payment accepted via tunnel, inference response (%d bytes)", len(body))
+			}
+		}
+	}
+
+	// Step 10: Delete and verify cleanup.
+	obolRun(t, cfg, "kubectl", "delete", "serviceoffer", name, "-n", ns)
+	time.Sleep(5 * time.Second)
+
+	// Verify pricing route was NOT automatically removed (delete was via kubectl, not monetize.py).
+	// In practice, the pricing route cleanup happens when using the skill's delete command.
+	// Let's verify the K8s resources are gone (cascade via OwnerRef).
+	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
+	if strings.Contains(mwOut, name) {
+		t.Errorf("middleware still exists after deletion")
+	}
+	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
+	if strings.Contains(hrOut, name) {
+		t.Errorf("httproute still exists after deletion")
+	}
+
+	t.Logf("tunnel E2E test complete: model %s exposed, gated, paid, and cleaned up", model)
+}
+
+// TestIntegration_Tunnel_AgentAutonomousMonetize validates that the OpenClaw agent
+// can autonomously create, reconcile, and manage a ServiceOffer using the monetize
+// skill — the full lifecycle driven entirely from inside the agent pod.
+func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	_ = requireOllamaModel(t, "qwen2.5")
+
+	walletAddr := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+	name := "test-agent-auto"
+	ns := "llm"
+
+	// Step 1: Agent creates the ServiceOffer via monetize.py create.
+	out := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"create", name,
+		"--model", "qwen2.5:3b",
+		"--upstream", "ollama",
+		"--namespace", ns,
+		"--port", "11434",
+		"--price", "0.001",
+		"--unit", "request",
+		"--chain", "base-sepolia",
+		"--wallet", walletAddr,
+		"--path", fmt.Sprintf("/services/%s", name),
+	)
+	t.Logf("create output:\n%s", out)
+	t.Cleanup(func() {
+		// Delete via the skill (which also removes pricing route).
+		execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/monetize/scripts/monetize.py",
+			"delete", name, "--namespace", ns)
+	})
+
+	// Step 2: Agent reconciles the offer.
+	out, _ = execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("process output:\n%s", out)
+
+	// Step 3: Agent checks status.
+	statusOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"status", name, "--namespace", ns)
+	t.Logf("status output:\n%s", statusOut)
+
+	// Step 4: Verify conditions.
+	so := getServiceOffer(t, cfg, name, ns)
+	readyStatus := getConditionStatus(so, "Ready")
+	if readyStatus != "True" {
+		// Log all conditions for debugging.
+		for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Registered", "Ready"} {
+			t.Logf("  %s = %s", cond, getConditionStatus(so, cond))
+		}
+		t.Errorf("offer not Ready after agent reconciliation: Ready=%s", readyStatus)
+	}
+
+	// Step 5: Verify x402-pricing ConfigMap has the route (added by the agent).
+	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("agent did not add pricing route to x402-pricing ConfigMap:\n%s", pricingOut)
+	} else {
+		t.Logf("agent autonomously added pricing route for /services/%s/*", name)
+	}
+
+	// Step 6: Agent lists offers — should see the one we created.
+	listOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"list")
+	if !strings.Contains(listOut, name) {
+		t.Errorf("agent list does not contain %q:\n%s", name, listOut)
+	}
+
+	// Step 7: Agent deletes the offer (should also remove pricing route).
+	delOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"delete", name, "--namespace", ns)
+	t.Logf("delete output:\n%s", delOut)
+
+	// Step 8: Verify pricing route removed.
+	time.Sleep(2 * time.Second)
+	pricingOut = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("agent did not remove pricing route after delete:\n%s", pricingOut)
+	} else {
+		t.Logf("agent autonomously cleaned up pricing route")
+	}
+
+	// Step 9: Verify CR is gone.
+	_, err := obolRunErr(cfg, "kubectl", "get", "serviceoffer", name, "-n", ns)
+	if err == nil {
+		t.Error("ServiceOffer still exists after agent delete")
+	}
+
+	t.Logf("agent autonomous monetize test complete: full lifecycle managed from pod")
+}

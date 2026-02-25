@@ -70,10 +70,12 @@ When `process` runs on an offer, it steps through these stages:
 
 1. **ModelReady** — Pull the model via Ollama API (if runtime is ollama)
 2. **UpstreamHealthy** — Health-check the upstream service
-3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier
+3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier AND add a pricing route to the x402-pricing ConfigMap so the verifier returns 402 for requests without payment
 4. **RoutePublished** — Create a Gateway API HTTPRoute with the middleware
 5. **Registered** — (Optional) Register on ERC-8004 via the local wallet
 6. **Ready** — All conditions met, service is live
+
+When `delete` runs, it also removes the pricing route from the x402-pricing ConfigMap.
 
 ## Pricing
 

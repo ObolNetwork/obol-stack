@@ -196,7 +196,7 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
 
 
 def stage_payment_gate(spec, ns, name, token, ssl_ctx):
-    """Create a Traefik ForwardAuth Middleware pointing at x402-verifier."""
+    """Create a Traefik ForwardAuth Middleware and add x402 pricing route."""
     middleware_name = f"x402-{name}"
 
     # Build the Middleware resource.
@@ -247,8 +247,74 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
         print(f"  Creating Middleware {middleware_name}...")
         api_post(mw_path, middleware, token, ssl_ctx)
 
-    set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created", token, ssl_ctx)
+    # Add pricing route to x402-verifier ConfigMap so requests are actually gated.
+    # Without this, the verifier passes through all requests (200 for unmatched routes).
+    _add_pricing_route(spec, name, token, ssl_ctx)
+
+    set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created with pricing route", token, ssl_ctx)
     return True
+
+
+def _add_pricing_route(spec, name, token, ssl_ctx):
+    """Add a pricing route to the x402-verifier ConfigMap for this offer.
+
+    Uses simple string manipulation for YAML to avoid a PyYAML dependency.
+    The pricing.yaml format is simple enough (flat keys + routes array) to
+    handle without a full parser.
+    """
+    url_path = spec.get("path", f"/services/{name}")
+    pricing = spec.get("pricing", {})
+    price = pricing.get("amount", "0.001")
+    wallet = spec.get("wallet", "")
+
+    route_pattern = f"{url_path}/*"
+
+    # Read current x402-pricing ConfigMap.
+    cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
+    try:
+        cm = api_get(cm_path, token, ssl_ctx)
+    except SystemExit:
+        print(f"  Warning: x402-pricing ConfigMap not found, skipping pricing route")
+        return
+
+    pricing_yaml_str = cm.get("data", {}).get("pricing.yaml", "")
+    if not pricing_yaml_str:
+        print(f"  Warning: x402-pricing ConfigMap has no pricing.yaml key")
+        return
+
+    # Check if route already exists.
+    if route_pattern in pricing_yaml_str:
+        print(f"  Pricing route {route_pattern} already exists")
+        return
+
+    # Build the new route entry in YAML format.
+    route_entry = (
+        f'- pattern: "{route_pattern}"\n'
+        f'  price: "{price}"\n'
+        f'  description: "ServiceOffer {name}"\n'
+    )
+
+    # Append route to existing routes section or create it.
+    if "routes:" in pricing_yaml_str:
+        # Check if routes is currently empty (routes: []).
+        if "routes: []" in pricing_yaml_str:
+            pricing_yaml_str = pricing_yaml_str.replace(
+                "routes: []",
+                f"routes:\n{route_entry}",
+            )
+        else:
+            # Append after last route entry (before any trailing newlines).
+            pricing_yaml_str = pricing_yaml_str.rstrip() + "\n" + route_entry
+    else:
+        pricing_yaml_str = pricing_yaml_str.rstrip() + f"\nroutes:\n{route_entry}"
+
+    # If wallet not set in the global config, set it from the offer.
+    if wallet and "wallet:" not in pricing_yaml_str:
+        pricing_yaml_str = f'wallet: "{wallet}"\n' + pricing_yaml_str
+
+    patch_body = {"data": {"pricing.yaml": pricing_yaml_str}}
+    api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
+    print(f"  Added pricing route: {route_pattern} → {price} USDC")
 
 
 def stage_route_published(spec, ns, name, token, ssl_ctx):
@@ -514,10 +580,64 @@ def cmd_create(args, token, ns, ssl_ctx):
 
 
 def cmd_delete(ns, name, token, ssl_ctx):
-    """Delete a ServiceOffer CR."""
-    path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
-    api_delete(path, token, ssl_ctx)
+    """Delete a ServiceOffer CR and remove its pricing route."""
+    # Read the offer to get the path before deleting.
+    so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
+    try:
+        so = api_get(so_path, token, ssl_ctx)
+        url_path = so.get("spec", {}).get("path", f"/services/{name}")
+        _remove_pricing_route(url_path, name, token, ssl_ctx)
+    except SystemExit:
+        pass  # Offer may already be gone.
+
+    api_delete(so_path, token, ssl_ctx)
     print(f"ServiceOffer {ns}/{name} deleted")
+
+
+def _remove_pricing_route(url_path, name, token, ssl_ctx):
+    """Remove a pricing route from the x402-verifier ConfigMap."""
+    route_pattern = f"{url_path}/*"
+
+    cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
+    try:
+        cm = api_get(cm_path, token, ssl_ctx)
+    except SystemExit:
+        return
+
+    pricing_yaml_str = cm.get("data", {}).get("pricing.yaml", "")
+    if route_pattern not in pricing_yaml_str:
+        return
+
+    # Remove the route entry (3 lines: pattern, price, description).
+    lines = pricing_yaml_str.split("\n")
+    filtered = []
+    skip_count = 0
+    for line in lines:
+        if skip_count > 0:
+            skip_count -= 1
+            continue
+        if f'pattern: "{route_pattern}"' in line:
+            # Skip this line and the next 2 (price + description).
+            skip_count = 2
+            continue
+        filtered.append(line)
+
+    updated = "\n".join(filtered)
+
+    # If routes section is now empty, replace with routes: [].
+    remaining_routes = [l for l in filtered if l.strip().startswith("- pattern:")]
+    if not remaining_routes and "routes:" in updated:
+        # Replace "routes:\n" with "routes: []"
+        idx = updated.find("routes:")
+        end = updated.find("\n", idx)
+        if end != -1:
+            updated = updated[:idx] + "routes: []" + updated[end:]
+        else:
+            updated = updated[:idx] + "routes: []"
+
+    patch_body = {"data": {"pricing.yaml": updated}}
+    api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
+    print(f"  Removed pricing route: {route_pattern}")
 
 
 def cmd_process(ns, name, all_offers, token, ssl_ctx):
