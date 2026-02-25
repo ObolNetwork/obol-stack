@@ -381,6 +381,307 @@ func TestStore(t *testing.T) {
 	}
 }
 
+// txMockHandlers returns a handler map for write-transaction tests.
+// It mocks the full tx lifecycle: chain ID, code check, gas, nonce,
+// sendRawTransaction, receipt (status 0x1, empty logs), and block data.
+func txMockHandlers(fakeTxHash common.Hash) map[string]func([]json.RawMessage) (json.RawMessage, error) {
+	var nonceMu sync.Mutex
+	nonce := uint64(0)
+
+	return map[string]func([]json.RawMessage) (json.RawMessage, error){
+		"eth_chainId": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x14a34"`), nil
+		},
+		"eth_getCode": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x6080"`), nil
+		},
+		"eth_gasPrice": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x3b9aca00"`), nil
+		},
+		"eth_maxPriorityFeePerGas": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x3b9aca00"`), nil
+		},
+		"eth_getTransactionCount": func(_ []json.RawMessage) (json.RawMessage, error) {
+			nonceMu.Lock()
+			defer nonceMu.Unlock()
+			result := fmt.Sprintf(`"0x%x"`, nonce)
+			nonce++
+			return json.RawMessage(result), nil
+		},
+		"eth_estimateGas": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x5208"`), nil
+		},
+		"eth_sendRawTransaction": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(fmt.Sprintf(`"%s"`, fakeTxHash.Hex())), nil
+		},
+		"eth_getTransactionReceipt": func(_ []json.RawMessage) (json.RawMessage, error) {
+			receipt := fmt.Sprintf(`{
+				"status": "0x1",
+				"transactionHash": "%s",
+				"blockNumber": "0x1",
+				"blockHash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+				"transactionIndex": "0x0",
+				"gasUsed": "0x5208",
+				"cumulativeGasUsed": "0x5208",
+				"contractAddress": null,
+				"logs": [],
+				"logsBloom": "0x`+strings.Repeat("0", 512)+`",
+				"type": "0x2",
+				"effectiveGasPrice": "0x3b9aca00"
+			}`, fakeTxHash.Hex())
+			return json.RawMessage(receipt), nil
+		},
+		"eth_blockNumber": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x1"`), nil
+		},
+		"eth_getBlockByNumber": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{
+				"number": "0x1",
+				"hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+				"baseFeePerGas": "0x3b9aca00",
+				"timestamp": "0x60000000",
+				"gasLimit": "0x1c9c380",
+				"gasUsed": "0x5208",
+				"miner": "0x0000000000000000000000000000000000000000",
+				"extraData": "0x",
+				"parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+				"sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+				"logsBloom": "0x` + strings.Repeat("0", 512) + `",
+				"transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"stateRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"receiptsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+				"mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+				"nonce": "0x0000000000000000",
+				"difficulty": "0x0",
+				"totalDifficulty": "0x0",
+				"size": "0x200",
+				"uncles": [],
+				"transactions": []
+			}`), nil
+		},
+	}
+}
+
+func TestSetAgentURI(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeTxHash := common.HexToHash("0x1111")
+	handlers := txMockHandlers(fakeTxHash)
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	err = client.SetAgentURI(ctx, key, big.NewInt(42), "https://example.com/updated")
+	if err != nil {
+		t.Fatalf("SetAgentURI: %v", err)
+	}
+}
+
+func TestSetMetadata(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeTxHash := common.HexToHash("0x2222")
+	handlers := txMockHandlers(fakeTxHash)
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	if err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+}
+
+func TestNewClient_DialError(t *testing.T) {
+	ctx := context.Background()
+	// Use an unreachable address to trigger a dial/chain-id error.
+	_, err := NewClient(ctx, "http://127.0.0.1:1")
+	if err == nil {
+		t.Fatal("expected error from unreachable RPC URL, got nil")
+	}
+}
+
+func TestRegister_NoRegisteredEvent(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Use txMockHandlers which returns a receipt with empty logs.
+	fakeTxHash := common.HexToHash("0x3333")
+	handlers := txMockHandlers(fakeTxHash)
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Register(ctx, key, "https://example.com/agent")
+	if err == nil {
+		t.Fatal("expected error when Registered event not found, got nil")
+	}
+	if !strings.Contains(err.Error(), "Registered event not found") {
+		t.Errorf("error = %q, want it to contain 'Registered event not found'", err.Error())
+	}
+}
+
+func TestRegister_TxError(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeTxHash := common.HexToHash("0x4444")
+	handlers := txMockHandlers(fakeTxHash)
+	// Override sendRawTransaction to return an error.
+	handlers["eth_sendRawTransaction"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return nil, fmt.Errorf("insufficient funds")
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Register(ctx, key, "https://example.com/agent")
+	if err == nil {
+		t.Fatal("expected error from sendRawTransaction failure, got nil")
+	}
+}
+
+func TestGetMetadata_EmptyResult(t *testing.T) {
+	parsedABI, err := parseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ABI-encode empty bytes ([]byte{}).
+	encoded, err := parsedABI.Methods["getMetadata"].Outputs.Pack([]byte{})
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+
+	handlers := map[string]func([]json.RawMessage) (json.RawMessage, error){
+		"eth_chainId": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x14a34"`), nil
+		},
+		"eth_call": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(fmt.Sprintf(`"0x%s"`, hex.EncodeToString(encoded))), nil
+		},
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	result, err := client.GetMetadata(ctx, big.NewInt(1), "x402")
+	if err != nil {
+		t.Fatalf("GetMetadata: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty bytes, got %q", result)
+	}
+}
+
+func TestStore_SaveOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	rec1 := &RegistrationRecord{
+		AgentID:  "1",
+		AgentURI: "https://first.example.com",
+		TxHash:   "0x1111",
+		Chain:    "base-sepolia",
+		Registry: "eip155:84532:" + IdentityRegistryBaseSepolia,
+	}
+	if err := store.Save(rec1); err != nil {
+		t.Fatalf("Save first: %v", err)
+	}
+
+	rec2 := &RegistrationRecord{
+		AgentID:  "2",
+		AgentURI: "https://second.example.com",
+		TxHash:   "0x2222",
+		Chain:    "base-sepolia",
+		Registry: "eip155:84532:" + IdentityRegistryBaseSepolia,
+	}
+	if err := store.Save(rec2); err != nil {
+		t.Fatalf("Save second: %v", err)
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.AgentID != "2" {
+		t.Errorf("AgentID = %q, want %q (second save should overwrite)", loaded.AgentID, "2")
+	}
+	if loaded.AgentURI != "https://second.example.com" {
+		t.Errorf("AgentURI = %q, want %q", loaded.AgentURI, "https://second.example.com")
+	}
+	if loaded.TxHash != "0x2222" {
+		t.Errorf("TxHash = %q, want %q", loaded.TxHash, "0x2222")
+	}
+}
+
+func TestStore_LoadCorruptJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewStore(tmpDir)
+
+	// Write malformed JSON directly to the file.
+	dir := filepath.Join(tmpDir, "x402")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "registration.json"), []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Load()
+	if err == nil {
+		t.Fatal("expected error from corrupt JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("error = %q, want it to contain 'parse'", err.Error())
+	}
+}
+
 // parseABI is a helper that parses the embedded ABI for use in tests.
 func parseABI() (abi.ABI, error) {
 	return abi.JSON(strings.NewReader(identityRegistryABI))

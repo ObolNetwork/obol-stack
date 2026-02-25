@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	x402lib "github.com/mark3labs/x402-go"
 )
 
@@ -348,5 +349,131 @@ func TestVerifier_InvalidChain(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for unsupported chain")
+	}
+}
+
+func TestVerifier_SetRegistration(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, nil)
+
+	reg := &erc8004.AgentRegistration{
+		Type:        erc8004.RegistrationType,
+		Name:        "test-agent",
+		Description: "A test agent",
+		Services: []erc8004.ServiceDef{
+			{Name: "web", Endpoint: "https://example.com"},
+		},
+		X402Support: true,
+		Active:      true,
+	}
+
+	v.SetRegistration(reg)
+
+	// HandleWellKnown should now return the registration.
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-registration.json", nil)
+	w := httptest.NewRecorder()
+	v.HandleWellKnown(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 after SetRegistration, got %d", w.Code)
+	}
+
+	var got erc8004.AgentRegistration
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Name != "test-agent" {
+		t.Errorf("name = %q, want test-agent", got.Name)
+	}
+	if !got.X402Support {
+		t.Error("x402Support should be true")
+	}
+}
+
+func TestVerifier_HandleWellKnown_NoRegistration(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, nil)
+
+	// No SetRegistration called — should return 404.
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-registration.json", nil)
+	w := httptest.NewRecorder()
+	v.HandleWellKnown(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 without registration, got %d", w.Code)
+	}
+}
+
+func TestVerifier_HandleWellKnown_JSON(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, nil)
+
+	reg := &erc8004.AgentRegistration{
+		Type:        erc8004.RegistrationType,
+		Name:        "json-test",
+		Description: "Testing JSON response",
+		Services: []erc8004.ServiceDef{
+			{Name: "web", Endpoint: "https://example.com", Version: "1.0"},
+			{Name: "A2A", Endpoint: "https://example.com/a2a"},
+		},
+		X402Support: true,
+		Active:      true,
+		Registrations: []erc8004.OnChainReg{
+			{AgentID: 42, AgentRegistry: "eip155:84532:0x8004A818"},
+		},
+	}
+
+	v.SetRegistration(reg)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-registration.json", nil)
+	w := httptest.NewRecorder()
+	v.HandleWellKnown(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// Check Content-Type.
+	ct := w.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	// Verify the response is valid JSON with expected fields.
+	body, _ := io.ReadAll(w.Body)
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+
+	if raw["type"] != erc8004.RegistrationType {
+		t.Errorf("type = %v, want %s", raw["type"], erc8004.RegistrationType)
+	}
+	if raw["name"] != "json-test" {
+		t.Errorf("name = %v, want json-test", raw["name"])
+	}
+	if raw["x402Support"] != true {
+		t.Errorf("x402Support = %v, want true", raw["x402Support"])
+	}
+	if raw["active"] != true {
+		t.Errorf("active = %v, want true", raw["active"])
+	}
+
+	services, ok := raw["services"].([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("services count = %d, want 2", len(services))
+	}
+}
+
+func TestVerifier_ReadyzNotReady(t *testing.T) {
+	// Create a Verifier with a nil config pointer to test 503 response.
+	v := &Verifier{}
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when config is nil, got %d", w.Code)
 	}
 }
