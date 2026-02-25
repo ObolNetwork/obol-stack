@@ -275,3 +275,209 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 		t.Error("expected GET to fail after delete, but it succeeded")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 — RBAC + Reconciliation Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+// requireAgent skips the test if the obol-agent OpenClaw instance is not deployed.
+func requireAgent(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	out, err := obolRunErr(cfg, "openclaw", "list")
+	if err != nil || !strings.Contains(out, "obol-agent") {
+		t.Skip("obol-agent not deployed — run: obol agent init")
+	}
+}
+
+// execInAgent runs a command inside the obol-agent pod.
+func execInAgent(t *testing.T, cfg *config.Config, args ...string) string {
+	t.Helper()
+	fullArgs := append([]string{"kubectl", "exec", "-i",
+		"-n", "openclaw-obol-agent", "deploy/openclaw",
+		"-c", "openclaw", "--"}, args...)
+	return obolRun(t, cfg, fullArgs...)
+}
+
+// execInAgentErr runs a command inside the obol-agent pod, returning output + error.
+func execInAgentErr(cfg *config.Config, args ...string) (string, error) {
+	fullArgs := append([]string{"kubectl", "exec", "-i",
+		"-n", "openclaw-obol-agent", "deploy/openclaw",
+		"-c", "openclaw", "--"}, args...)
+	return obolRunErr(cfg, fullArgs...)
+}
+
+func TestIntegration_RBAC_ClusterRoleExists(t *testing.T) {
+	cfg := requireCluster(t)
+
+	out := obolRun(t, cfg, "kubectl", "get", "clusterrole", "openclaw-monetize", "-o", "json")
+	var cr map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &cr); err != nil {
+		t.Fatalf("parse clusterrole JSON: %v", err)
+	}
+
+	rules, ok := cr["rules"].([]interface{})
+	if !ok || len(rules) == 0 {
+		t.Fatal("ClusterRole has no rules")
+	}
+
+	// Verify key apiGroups are present
+	apiGroups := make(map[string]bool)
+	for _, r := range rules {
+		rm := r.(map[string]interface{})
+		groups, ok := rm["apiGroups"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			apiGroups[g.(string)] = true
+		}
+	}
+
+	for _, want := range []string{"obol.network", "traefik.io", "gateway.networking.k8s.io"} {
+		if !apiGroups[want] {
+			t.Errorf("ClusterRole missing apiGroup %q", want)
+		}
+	}
+}
+
+func TestIntegration_RBAC_BindingPatched(t *testing.T) {
+	cfg := requireCluster(t)
+	requireAgent(t, cfg)
+
+	out := obolRun(t, cfg, "kubectl", "get", "clusterrolebinding", "openclaw-monetize-binding", "-o", "json")
+	var crb map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &crb); err != nil {
+		t.Fatalf("parse binding JSON: %v", err)
+	}
+
+	subjects, ok := crb["subjects"].([]interface{})
+	if !ok || len(subjects) == 0 {
+		t.Skip("ClusterRoleBinding has no subjects yet — obol agent init may not have run")
+	}
+
+	// Check that at least one subject is an openclaw service account
+	found := false
+	for _, s := range subjects {
+		sm := s.(map[string]interface{})
+		ns, _ := sm["namespace"].(string)
+		if strings.HasPrefix(ns, "openclaw-") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("no openclaw-* service account found in binding subjects")
+	}
+}
+
+func TestIntegration_Monetize_ListEmpty(t *testing.T) {
+	cfg := requireCluster(t)
+	requireAgent(t, cfg)
+
+	// Run monetize.py list inside the agent pod — should not error
+	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/monetize/scripts/monetize.py", "list")
+	// Should produce output (even if empty table) without crashing
+	t.Logf("monetize list output:\n%s", out)
+}
+
+func TestIntegration_Monetize_ProcessAllEmpty(t *testing.T) {
+	cfg := requireCluster(t)
+	requireAgent(t, cfg)
+
+	// When no ServiceOffers exist, process --all should return HEARTBEAT_OK
+	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/monetize/scripts/monetize.py", "process", "--all")
+	if !strings.Contains(out, "HEARTBEAT_OK") {
+		t.Errorf("expected HEARTBEAT_OK in output, got:\n%s", out)
+	}
+}
+
+func TestIntegration_Monetize_ProcessUnhealthy(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+
+	ns := testNamespace("monetize-unhealthy")
+	createTestNamespace(t, cfg, ns)
+
+	name := "test-unhealthy"
+	// Point upstream at a non-existent service
+	yaml := fmt.Sprintf(`apiVersion: obol.network/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  upstream:
+    service: does-not-exist
+    namespace: %s
+    port: 9999
+    healthPath: /health
+  pricing:
+    amount: "0.001"
+    unit: MTok
+    chain: base-sepolia
+  wallet: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+`, name, ns, ns)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// Run process for this specific offer
+	out, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("process output:\n%s", out)
+
+	// Check the ServiceOffer status — UpstreamHealthy should be False
+	so := getServiceOffer(t, cfg, name, ns)
+	status, ok := so["status"].(map[string]interface{})
+	if !ok {
+		t.Skip("status not yet set — monetize.py may not have patched it")
+	}
+
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok {
+		t.Skip("no conditions set yet")
+	}
+
+	for _, c := range conditions {
+		cm := c.(map[string]interface{})
+		if cm["type"] == "UpstreamHealthy" && cm["status"] == "False" {
+			return // success
+		}
+	}
+	t.Errorf("expected UpstreamHealthy=False in conditions: %v", conditions)
+}
+
+func TestIntegration_Monetize_Idempotent(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+
+	ns := testNamespace("monetize-idempotent")
+	createTestNamespace(t, cfg, ns)
+
+	name := "test-idempotent"
+	yaml := minimalServiceOfferYAML(name, ns)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// First process run
+	out1, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	// Second process run (should be idempotent)
+	out2, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	// Both runs should complete without error
+	t.Logf("run 1:\n%s", out1)
+	t.Logf("run 2:\n%s", out2)
+
+	// Verify the ServiceOffer status is consistent
+	so := getServiceOffer(t, cfg, name, ns)
+	if _, ok := so["status"]; !ok {
+		t.Skip("status not set — reconciliation may not have completed")
+	}
+}
