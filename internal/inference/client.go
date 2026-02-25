@@ -2,8 +2,7 @@ package inference
 
 // client.go — cross-platform client SDK for the Obol SE inference gateway.
 //
-// Mirrors ecloud's encryptRSAOAEPAndAES256GCM/deployAndEncrypt pattern but
-// for per-request encryption rather than deploy-time secret encryption:
+// Provides per-request encryption using the gateway's Secure Enclave public key:
 //
 //  1. Fetch the gateway's SE public key once (cached).
 //  2. Encrypt each request body with ECIES (enclave.Encrypt).

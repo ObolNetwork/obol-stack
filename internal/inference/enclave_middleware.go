@@ -34,8 +34,7 @@ const (
 // request bodies.  It exposes GET /v1/enclave/pubkey so that clients can
 // discover the Secure Enclave public key needed to encrypt requests.
 //
-// Encryption protocol (mirrors ecloud's JWE approach but uses ECIES over
-// SE-backed P-256 instead of RSA-OAEP-256):
+// Encryption protocol (ECIES over SE-backed P-256):
 //
 //	Client → GET /v1/enclave/pubkey
 //	      ← {"pubkey":"<hex65>","algorithm":"ECIES-P256-HKDF-SHA256-AES256GCM",...}

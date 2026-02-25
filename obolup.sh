@@ -1099,7 +1099,7 @@ WRAPPER
 }
 
 # install_container installs the apple/container CLI (macOS only).
-# The CLI is used by 'obol inference deploy --vm' to run Ollama in an isolated
+# The CLI is used by 'obol service deploy --vm' to run Ollama in an isolated
 # Apple Containerization Linux micro-VM.
 # Source: https://github.com/apple/container
 install_container() {
@@ -1119,7 +1119,7 @@ install_container() {
 	fi
 
 	log_info "Installing Apple container CLI v${CONTAINER_VERSION}..."
-	echo "  This enables 'obol inference deploy --vm' for isolated Ollama VMs"
+	echo "  This enables 'obol service deploy --vm' for isolated Ollama VMs"
 	echo "  Source: https://github.com/apple/container"
 	echo ""
 

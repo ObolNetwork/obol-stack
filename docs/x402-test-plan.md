@@ -20,7 +20,7 @@
 | `internal/x402` | `config.go` | implicit via verifier | ~40% (missing LoadConfig, ResolveChain edge cases) |
 | `internal/x402` | `watcher.go` | none | 0% |
 | `internal/x402` | `setup.go` | none | 0% (kubectl-dependent, needs mock) |
-| `cmd/obol` | `x402.go` | none | 0% |
+| `cmd/obol` | `monetize.go` | none | 0% |
 
 ### Target: 100% Function Coverage
 

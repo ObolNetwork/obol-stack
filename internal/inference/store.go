@@ -19,8 +19,8 @@ var ErrDeploymentNotFound = errors.New("inference: deployment not found")
 var ErrDeploymentExists = errors.New("inference: deployment already exists")
 
 // Deployment is a named, persisted inference gateway configuration.
-// It mirrors ecloud's app concept: a long-lived entity with a stable identity
-// (SE public key) and configurable parameters.
+// A long-lived entity with a stable identity (SE public key) and configurable
+// parameters.
 type Deployment struct {
 	// Name is the human-readable identifier for this deployment.
 	// Used as the keychain tag suffix and directory name.

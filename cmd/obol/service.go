@@ -21,17 +21,6 @@ import (
 )
 
 // serviceCommand returns the service management command group.
-//
-// Command hierarchy mirrors ecloud's `compute app` surface:
-//
-//	ecloud compute app create   -> obol service create
-//	ecloud compute app deploy   -> obol service deploy  (create + serve)
-//	ecloud compute app list     -> obol service list
-//	ecloud compute app info     -> obol service info
-//	ecloud compute app logs     -> obol service logs
-//	ecloud compute app start    -> obol service start
-//	ecloud compute app stop     -> (Ctrl-C / obol service stop  TODO: PID management)
-//	ecloud compute app terminate-> obol service delete
 func serviceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "service",
@@ -65,7 +54,7 @@ via --name (any order):
   obol service create --wallet <addr> [flags] <name>
   obol service create --name <name> --wallet <addr> [flags]
 
-Analogous to 'ecloud compute app deploy --name <name>'.`,
+Creates a persistent deployment configuration on disk.`,
 		Flags: append(deployFlags(),
 			&cli.BoolFlag{
 				Name:    "force",
@@ -111,7 +100,7 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 }
 
 // ---------------------------------------------------------------------------
-// deploy  (create + start -- same pattern as ecloud's deploy)
+// deploy  (create + start)
 // ---------------------------------------------------------------------------
 
 func serviceDeployCommand(cfg *config.Config) *cli.Command {
@@ -128,7 +117,7 @@ via --name (any order):
   obol service deploy --wallet <addr> [flags] <name>
   obol service deploy --name <name> --wallet <addr> [flags]
 
-Analogous to 'ecloud compute app deploy'.`,
+Combines create and serve into a single step.`,
 		Flags: deployFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			name := cmd.String("name")
@@ -227,7 +216,7 @@ func serviceInfoCommand(cfg *config.Config) *cli.Command {
 		Description: `Prints configuration and the SE public key for a deployment.
 The public key is the hardware-bound identity clients use to encrypt requests.
 
-Analogous to 'ecloud compute app info <app-id>'.`,
+Shows wallet, pricing, enclave key, and connection details.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "json",
@@ -319,7 +308,7 @@ func serviceDeleteCommand(cfg *config.Config) *cli.Command {
 		Description: `Removes the deployment config from disk.
 Use --purge-key to also delete the SE key from the macOS keychain.
 
-Analogous to 'ecloud compute app terminate'.`,
+Permanently removes the deployment record.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "purge-key",
@@ -367,8 +356,7 @@ func servicePubkeyCommand(cfg *config.Config) *cli.Command {
 		Description: `Loads the SE-backed P-256 public key for a named deployment (or bare tag)
 and prints it.  Clients use this key to encrypt service requests.
 
-Analogous to 'ecloud compute app info' which exposes the app's hardware-bound
-identity.`,
+Exposes the hardware-bound identity that clients use for request encryption.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "json",
