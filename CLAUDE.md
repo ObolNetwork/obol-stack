@@ -227,7 +227,7 @@ obol
 │   └── logs
 ├── agent (AI agent management)
 │   └── init
-├── inference (x402 inference gateway)
+├── service (x402 inference gateway)
 │   ├── create   (create deployment config)
 │   ├── deploy   (create container + start gateway; --vm for Apple Containerization)
 │   ├── list     (list saved deployments)
@@ -845,16 +845,16 @@ models:
 - Ensures consistent CLI flag ordering in `--help` output
 - Predictable behavior across runs and environments
 
-## Inference Gateway (x402)
+## Service Gateway (x402)
 
 ### Overview
 
-The `obol inference` subsystem is an OpenAI-compatible HTTP gateway that requires x402 micropayment headers before forwarding requests to a local LLM (Ollama). It is designed for trustless monetisation of inference: callers pay per request on-chain, the gateway verifies settlement with a facilitator, and then proxies the completion.
+The `obol service` subsystem is an OpenAI-compatible HTTP gateway that requires x402 micropayment headers before forwarding requests to a local LLM (Ollama). It is designed for trustless monetisation of inference: callers pay per request on-chain, the gateway verifies settlement with a facilitator, and then proxies the completion.
 
 ### Architecture
 
 ```
-Client                     obol inference gateway            Ollama / VM
+Client                     obol service gateway              Ollama / VM
   │                              │                              │
   ├─ POST /v1/chat/completions ──▶│                              │
   │  (no x402 header)            ├─ 402 Payment Required ───────▶│
@@ -879,18 +879,18 @@ Client                     obol inference gateway            Ollama / VM
 ### Deployment Lifecycle
 
 ```
-obol inference create --wallet <addr> [--name <id>]
+obol service create --wallet <addr> [--name <id>]
     → writes ~/.config/obol/inference/<id>/config.json (no container)
 
-obol inference deploy [--name <id>] [--vm] [--vm-image <img>] [--vm-cpus N] [--vm-memory M]
+obol service deploy [--name <id>] [--vm] [--vm-image <img>] [--vm-cpus N] [--vm-memory M]
     → loads config, applies flag overrides (wallet validated before write)
     → if --vm: container pull <image>; container run --detach --publish 11434:11434
     → starts gateway on :8080 (or --listen), proxying to upstream Ollama
 
-obol inference list / info / delete / pubkey
+obol service list / info / delete / pubkey
     → manage saved deployments and SE key
 
-obol inference serve (stateless, from flags only)
+obol service serve (stateless, from flags only)
     → gateway without a saved deployment record
 ```
 
@@ -917,7 +917,7 @@ type Key interface {
 
 ### VM Mode (Apple Containerization)
 
-`--vm` flag on `obol inference deploy` uses the `apple/container` CLI (v0.9.0+, installed by `obol agent init`) to run Ollama in a Linux VM:
+`--vm` flag on `obol service deploy` uses the `apple/container` CLI (v0.9.0+, installed by `obol agent init`) to run Ollama in a Linux VM:
 
 ```bash
 container pull ollama/ollama:latest   # streams progress
@@ -934,8 +934,8 @@ container run --detach --name obol-inference-<id> \
 
 **Deployment name**: Two supported patterns (positional deprecated for flags after name):
 ```bash
-obol inference deploy --name test-vm --wallet 0xABC   # preferred
-obol inference deploy test-vm --wallet 0xABC           # also works
+obol service deploy --name test-vm --wallet 0xABC   # preferred
+obol service deploy test-vm --wallet 0xABC           # also works
 ```
 
 **VM flags**:
@@ -1134,7 +1134,7 @@ obol network delete ethereum-<generated-name> --force
 - `internal/inference/store.go` - Deployment config persistence
 - `internal/inference/types.go` - `Deployment` struct
 - `internal/inference/enclave_middleware.go` - SE sign/decrypt/re-encrypt middleware
-- `cmd/obol/inference.go` - `obol inference` CLI commands
+- `cmd/obol/service.go` - `obol service` CLI commands
 - `internal/inference/sdk/` - Cross-platform Go client SDK
 
 **Testing**:

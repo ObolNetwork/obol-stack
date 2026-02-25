@@ -20,50 +20,50 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// inferenceCommand returns the inference management command group.
+// serviceCommand returns the service management command group.
 //
 // Command hierarchy mirrors ecloud's `compute app` surface:
 //
-//	ecloud compute app create   → obol inference create
-//	ecloud compute app deploy   → obol inference deploy  (create + serve)
-//	ecloud compute app list     → obol inference list
-//	ecloud compute app info     → obol inference info
-//	ecloud compute app logs     → obol inference logs
-//	ecloud compute app start    → obol inference start
-//	ecloud compute app stop     → (Ctrl-C / obol inference stop  TODO: PID management)
-//	ecloud compute app terminate→ obol inference delete
-func inferenceCommand(cfg *config.Config) *cli.Command {
+//	ecloud compute app create   -> obol service create
+//	ecloud compute app deploy   -> obol service deploy  (create + serve)
+//	ecloud compute app list     -> obol service list
+//	ecloud compute app info     -> obol service info
+//	ecloud compute app logs     -> obol service logs
+//	ecloud compute app start    -> obol service start
+//	ecloud compute app stop     -> (Ctrl-C / obol service stop  TODO: PID management)
+//	ecloud compute app terminate-> obol service delete
+func serviceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "inference",
-		Usage: "Manage SE-protected paid inference deployments (x402 + Secure Enclave)",
+		Name:  "service",
+		Usage: "Manage encrypted compute service deployments",
 		Commands: []*cli.Command{
-			inferenceCreateCommand(cfg),
-			inferenceDeployCommand(cfg),
-			inferenceListCommand(cfg),
-			inferenceInfoCommand(cfg),
-			inferenceDeleteCommand(cfg),
-			inferencePubkeyCommand(cfg),
-			inferenceServeCommand(cfg),
+			serviceCreateCommand(cfg),
+			serviceDeployCommand(cfg),
+			serviceListCommand(cfg),
+			serviceInfoCommand(cfg),
+			serviceDeleteCommand(cfg),
+			servicePubkeyCommand(cfg),
+			serviceServeCommand(cfg),
 		},
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // create
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
-func inferenceCreateCommand(cfg *config.Config) *cli.Command {
+func serviceCreateCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "create",
-		Usage:     "Register a new inference deployment",
+		Usage:     "Register a new service deployment",
 		ArgsUsage: "[options] <name>",
-		Description: `Creates a named inference deployment and persists its configuration to disk.
-The Secure Enclave key is generated on first use (obol inference deploy or serve).
+		Description: `Creates a named service deployment and persists its configuration to disk.
+The Secure Enclave key is generated on first use (obol service deploy or serve).
 
 The deployment name can be supplied as a positional argument (flags first) or
 via --name (any order):
-  obol inference create --wallet <addr> [flags] <name>
-  obol inference create --name <name> --wallet <addr> [flags]
+  obol service create --wallet <addr> [flags] <name>
+  obol service create --name <name> --wallet <addr> [flags]
 
 Analogous to 'ecloud compute app deploy --name <name>'.`,
 		Flags: append(deployFlags(),
@@ -79,7 +79,7 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 				name = cmd.Args().First()
 			}
 			if name == "" {
-				return fmt.Errorf("usage: obol inference create [options] <name>")
+				return fmt.Errorf("usage: obol service create [options] <name>")
 			}
 			store := inference.NewStore(cfg.ConfigDir)
 			d := &inference.Deployment{
@@ -100,33 +100,33 @@ Analogous to 'ecloud compute app deploy --name <name>'.`,
 				}
 				return err
 			}
-			fmt.Printf("Created inference deployment %q\n", name)
+			fmt.Printf("Created service deployment %q\n", name)
 			fmt.Printf("  Enclave tag: %s\n", d.EnclaveTag)
 			fmt.Printf("  Upstream:    %s\n", d.UpstreamURL)
 			fmt.Printf("  Listen:      %s\n", d.ListenAddr)
-			fmt.Printf("\nRun: obol inference deploy %s\n", name)
+			fmt.Printf("\nRun: obol service deploy %s\n", name)
 			return nil
 		},
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// deploy  (create + start — same pattern as ecloud's deploy)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// deploy  (create + start -- same pattern as ecloud's deploy)
+// ---------------------------------------------------------------------------
 
-func inferenceDeployCommand(cfg *config.Config) *cli.Command {
+func serviceDeployCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "deploy",
-		Usage:     "Create (or update) a deployment and start the gateway",
+		Usage:     "Create (or update) a deployment and start the service gateway",
 		ArgsUsage: "[options] <name>",
-		Description: `Combines obol inference create and obol inference serve into a single step.
+		Description: `Combines obol service create and obol service serve into a single step.
 If the deployment already exists, its config is updated with any supplied flags
 and the gateway starts immediately.
 
 The deployment name can be supplied as a positional argument (flags first) or
 via --name (any order):
-  obol inference deploy --wallet <addr> [flags] <name>
-  obol inference deploy --name <name> --wallet <addr> [flags]
+  obol service deploy --wallet <addr> [flags] <name>
+  obol service deploy --name <name> --wallet <addr> [flags]
 
 Analogous to 'ecloud compute app deploy'.`,
 		Flags: deployFlags(),
@@ -136,7 +136,7 @@ Analogous to 'ecloud compute app deploy'.`,
 				name = cmd.Args().First()
 			}
 			if name == "" {
-				return fmt.Errorf("usage: obol inference deploy [options] <name>")
+				return fmt.Errorf("usage: obol service deploy [options] <name>")
 			}
 
 			store := inference.NewStore(cfg.ConfigDir)
@@ -170,14 +170,14 @@ Analogous to 'ecloud compute app deploy'.`,
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // list
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
-func inferenceListCommand(cfg *config.Config) *cli.Command {
+func serviceListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
-		Usage: "List all inference deployments",
+		Usage: "List all service deployments",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "json",
@@ -199,8 +199,8 @@ func inferenceListCommand(cfg *config.Config) *cli.Command {
 			}
 
 			if len(deployments) == 0 {
-				fmt.Println("No inference deployments found.")
-				fmt.Println("Run: obol inference create <name>")
+				fmt.Println("No service deployments found.")
+				fmt.Println("Run: obol service create <name>")
 				return nil
 			}
 
@@ -215,11 +215,11 @@ func inferenceListCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // info
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
-func inferenceInfoCommand(cfg *config.Config) *cli.Command {
+func serviceInfoCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "info",
 		Usage:     "Show deployment details and Secure Enclave public key",
@@ -238,7 +238,7 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			name := cmd.Args().First()
 			if name == "" {
-				return fmt.Errorf("usage: obol inference info <name>")
+				return fmt.Errorf("usage: obol service info <name>")
 			}
 
 			store := inference.NewStore(cfg.ConfigDir)
@@ -307,14 +307,14 @@ Analogous to 'ecloud compute app info <app-id>'.`,
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // delete
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
-func inferenceDeleteCommand(cfg *config.Config) *cli.Command {
+func serviceDeleteCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "delete",
-		Usage:     "Remove an inference deployment",
+		Usage:     "Remove a service deployment",
 		ArgsUsage: "<name>",
 		Description: `Removes the deployment config from disk.
 Use --purge-key to also delete the SE key from the macOS keychain.
@@ -329,7 +329,7 @@ Analogous to 'ecloud compute app terminate'.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			name := cmd.Args().First()
 			if name == "" {
-				return fmt.Errorf("usage: obol inference delete <name>")
+				return fmt.Errorf("usage: obol service delete <name>")
 			}
 
 			store := inference.NewStore(cfg.ConfigDir)
@@ -349,23 +349,23 @@ Analogous to 'ecloud compute app terminate'.`,
 			if err := store.Delete(name); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted inference deployment %q\n", name)
+			fmt.Printf("Deleted service deployment %q\n", name)
 			return nil
 		},
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // pubkey
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
-func inferencePubkeyCommand(cfg *config.Config) *cli.Command {
+func servicePubkeyCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "pubkey",
 		Usage:     "Print the Secure Enclave public key for a deployment or tag",
 		ArgsUsage: "<name-or-tag>",
 		Description: `Loads the SE-backed P-256 public key for a named deployment (or bare tag)
-and prints it.  Clients use this key to encrypt inference requests.
+and prints it.  Clients use this key to encrypt service requests.
 
 Analogous to 'ecloud compute app info' which exposes the app's hardware-bound
 identity.`,
@@ -379,7 +379,7 @@ identity.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			nameOrTag := cmd.Args().First()
 			if nameOrTag == "" {
-				return fmt.Errorf("usage: obol inference pubkey <name-or-tag>")
+				return fmt.Errorf("usage: obol service pubkey <name-or-tag>")
 			}
 
 			// Try to resolve as deployment name first, fall back to raw tag.
@@ -428,20 +428,20 @@ identity.`,
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// serve  (run gateway inline — low-level, no stored config required)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// serve  (run gateway inline -- low-level, no stored config required)
+// ---------------------------------------------------------------------------
 
-func inferenceServeCommand(_ *config.Config) *cli.Command {
+func serviceServeCommand(_ *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "serve",
-		Usage: "Start the x402 inference gateway directly (no stored config)",
+		Usage: "Start the service gateway directly (no stored config)",
 		Description: `Starts the gateway without requiring a named deployment.
-For managed deployments use 'obol inference deploy'.`,
+For managed deployments use 'obol service deploy'.`,
 		Flags: deployFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.String("wallet") == "" {
-				return fmt.Errorf("usage: obol inference serve --wallet <address> [flags]")
+				return fmt.Errorf("usage: obol service serve --wallet <address> [flags]")
 			}
 			if err := x402verifier.ValidateWallet(cmd.String("wallet")); err != nil {
 				return err
@@ -493,17 +493,17 @@ For managed deployments use 'obol inference deploy'.`,
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 // shared helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
 
 // deployFlags returns the common flags shared by create / deploy / serve.
 func deployFlags() []cli.Flag {
 	return []cli.Flag{
 		// name is provided as both a positional arg and a flag so that
 		// users can write either:
-		//   obol inference deploy --wallet addr <name>   (flags first)
-		//   obol inference deploy --name <name> --wallet addr  (flag form)
+		//   obol service deploy --wallet addr <name>   (flags first)
+		//   obol service deploy --name <name> --wallet addr  (flag form)
 		// urfave/cli v2 stops flag parsing at the first positional arg, so
 		// the flag form is necessary when the name comes before other flags.
 		&cli.StringFlag{
@@ -520,7 +520,7 @@ func deployFlags() []cli.Flag {
 		&cli.StringFlag{
 			Name:    "upstream",
 			Aliases: []string{"u"},
-			Usage:   "Upstream inference service URL",
+			Usage:   "Upstream service URL",
 			Value:   "http://localhost:11434",
 		},
 		&cli.StringFlag{
@@ -531,7 +531,7 @@ func deployFlags() []cli.Flag {
 		},
 		&cli.StringFlag{
 			Name:  "price",
-			Usage: "USDC price per inference request",
+			Usage: "USDC price per request",
 			Value: "0.001",
 		},
 		&cli.StringFlag{
@@ -556,7 +556,7 @@ func deployFlags() []cli.Flag {
 		},
 		&cli.StringFlag{
 			Name:  "vm-image",
-			Usage: "OCI image for the inference container",
+			Usage: "OCI image for the service container",
 			Value: "ollama/ollama:latest",
 		},
 		&cli.IntFlag{
@@ -642,7 +642,7 @@ func applyFlags(cmd *cli.Command, d *inference.Deployment) {
 	}
 }
 
-// runGateway starts the inference gateway for a Deployment and blocks until
+// runGateway starts the service gateway for a Deployment and blocks until
 // shutdown.
 func runGateway(d *inference.Deployment) error {
 	// Validate TEE type if set.

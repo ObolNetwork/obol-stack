@@ -68,13 +68,19 @@ COMMANDS:
      model setup        Configure cloud AI provider in llmspy gateway
      model status       Show global llmspy provider status
 
-   Inference (x402 Pay-Per-Request):
-     inference serve  Start the x402 inference gateway
+   Service Management:
+     service create   Register a new service deployment
+     service deploy   Create (or update) and start the service gateway
+     service serve    Start the service gateway directly (no stored config)
+     service list     List all service deployments
+     service info     Show deployment details and encryption public key
+     service delete   Remove a service deployment
+     service pubkey   Print the encryption public key
 
-   x402 Payment Gating:
-     x402 register   Register service on ERC-8004 Identity Registry (Base Sepolia)
-     x402 setup      Configure x402 pricing in the cluster
-     x402 status     Show x402 pricing config and registration status
+   Monetize:
+     monetize pricing    Configure x402 pricing in the cluster
+     monetize register   Register service on ERC-8004 Identity Registry (Base Sepolia)
+     monetize status     Show pricing config and registration status
 
    App Management:
      app install     Install a Helm chart as an application
@@ -454,8 +460,8 @@ GLOBAL OPTIONS:
 			upgradeCommand(cfg),
 			networkCommand(cfg),
 			openclawCommand(cfg),
-			inferenceCommand(cfg),
-			x402Command(cfg),
+			serviceCommand(cfg),
+			monetizeCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",

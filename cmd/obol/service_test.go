@@ -11,33 +11,33 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func newInferenceTestApp(cfgDir string) *cli.Command {
+func newServiceTestApp(cfgDir string) *cli.Command {
 	cfg := &config.Config{ConfigDir: cfgDir}
 	return &cli.Command{
 		Name:      "obol",
-		Commands:  []*cli.Command{inferenceCommand(cfg)},
+		Commands:  []*cli.Command{serviceCommand(cfg)},
 		Writer:    io.Discard,
 		ErrWriter: io.Discard,
 	}
 }
 
-func TestInferenceDeployHelpDoesNotPanic(t *testing.T) {
-	app := newInferenceTestApp(t.TempDir())
-	if err := app.Run(context.Background(), []string{"obol", "inference", "deploy", "--help"}); err != nil {
+func TestServiceDeployHelpDoesNotPanic(t *testing.T) {
+	app := newServiceTestApp(t.TempDir())
+	if err := app.Run(context.Background(), []string{"obol", "service", "deploy", "--help"}); err != nil {
 		t.Fatalf("deploy help should not fail: %v", err)
 	}
 }
 
-func TestInferenceServeHelpDoesNotPanic(t *testing.T) {
-	app := newInferenceTestApp(t.TempDir())
-	if err := app.Run(context.Background(), []string{"obol", "inference", "serve", "--help"}); err != nil {
+func TestServiceServeHelpDoesNotPanic(t *testing.T) {
+	app := newServiceTestApp(t.TempDir())
+	if err := app.Run(context.Background(), []string{"obol", "service", "serve", "--help"}); err != nil {
 		t.Fatalf("serve help should not fail: %v", err)
 	}
 }
 
-func TestInferenceServeRequiresWallet(t *testing.T) {
-	app := newInferenceTestApp(t.TempDir())
-	err := app.Run(context.Background(), []string{"obol", "inference", "serve"})
+func TestServiceServeRequiresWallet(t *testing.T) {
+	app := newServiceTestApp(t.TempDir())
+	err := app.Run(context.Background(), []string{"obol", "service", "serve"})
 	if err == nil {
 		t.Fatal("expected serve to fail without --wallet")
 	}

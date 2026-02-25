@@ -15,14 +15,14 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func x402Command(cfg *config.Config) *cli.Command {
+func monetizeCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "x402",
-		Usage: "Manage x402 payment gating and ERC-8004 agent registration",
+		Name:  "monetize",
+		Usage: "Manage payment gating, pricing, and on-chain registration",
 		Commands: []*cli.Command{
-			x402RegisterCommand(cfg),
-			x402SetupCommand(cfg),
-			x402StatusCommand(cfg),
+			monetizeRegisterCommand(cfg),
+			monetizePricingCommand(cfg),
+			monetizeStatusCommand(cfg),
 		},
 	}
 }
@@ -31,10 +31,10 @@ func x402Command(cfg *config.Config) *cli.Command {
 // register
 // ─────────────────────────────────────────────────────────────────────────────
 
-func x402RegisterCommand(cfg *config.Config) *cli.Command {
+func monetizeRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Register service on ERC-8004 Identity Registry (Base Sepolia)",
+		Usage: "Register service on ERC-8004 Identity Registry",
 		Description: `Mints an agent NFT on the ERC-8004 Identity Registry.
 The agent URI points to a /.well-known/agent-registration.json document
 that describes the service endpoints and x402 payment support.
@@ -160,9 +160,9 @@ func autoDetectEndpoint(cfg *config.Config) (string, error) {
 // setup
 // ─────────────────────────────────────────────────────────────────────────────
 
-func x402SetupCommand(cfg *config.Config) *cli.Command {
+func monetizePricingCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "setup",
+		Name:  "pricing",
 		Usage: "Configure x402 pricing in the cluster",
 		Description: `Patches the x402 verifier's pricing ConfigMap in the cluster.
 Sets the wallet address and chain for payment collection.
@@ -194,10 +194,10 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 // status
 // ─────────────────────────────────────────────────────────────────────────────
 
-func x402StatusCommand(cfg *config.Config) *cli.Command {
+func monetizeStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "status",
-		Usage: "Show x402 pricing config and registration status",
+		Usage: "Show pricing config and registration status",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			// Show cluster pricing config.
 			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
@@ -227,7 +227,7 @@ func x402StatusCommand(cfg *config.Config) *cli.Command {
 			if err != nil {
 				if errors.Is(err, erc8004.ErrNoRegistration) {
 					fmt.Printf("ERC-8004 Registration: not registered\n")
-					fmt.Printf("  Run 'obol x402 register' to register on Base Sepolia\n")
+					fmt.Printf("  Run 'obol monetize register' to register on Base Sepolia\n")
 				} else {
 					fmt.Printf("ERC-8004 Registration: error (%v)\n", err)
 				}
