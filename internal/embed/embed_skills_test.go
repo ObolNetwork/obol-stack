@@ -17,7 +17,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	coreSkills := []string{
 		"addresses", "building-blocks", "concepts", "distributed-validators",
 		"ethereum-networks", "ethereum-local-wallet", "frontend-playbook", "frontend-ux", "gas",
-		"indexing", "l2s", "obol-stack", "orchestration", "qa", "security",
+		"indexing", "l2s", "monetize", "obol-stack", "orchestration", "qa", "security",
 		"ship", "standards", "testing", "tools", "wallets", "why",
 	}
 	sort.Strings(names)
@@ -45,7 +45,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-local-wallet", "obol-stack", "addresses", "wallets"}
+	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-local-wallet", "monetize", "obol-stack", "addresses", "wallets"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -82,6 +82,17 @@ func TestCopySkills(t *testing.T) {
 	// obol-stack must have scripts/kube.py
 	if _, err := os.Stat(filepath.Join(destDir, "obol-stack", "scripts", "kube.py")); err != nil {
 		t.Errorf("missing obol-stack/scripts/kube.py: %v", err)
+	}
+
+	// monetize must have scripts/monetize.py and references/
+	for _, sub := range []string{
+		"monetize/scripts/monetize.py",
+		"monetize/references/serviceoffer-spec.md",
+		"monetize/references/x402-pricing.md",
+	} {
+		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
+			t.Errorf("missing %s: %v", sub, err)
+		}
 	}
 
 	// distributed-validators must have references/api-examples.md

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -20,9 +24,213 @@ func monetizeCommand(cfg *config.Config) *cli.Command {
 		Name:  "monetize",
 		Usage: "Manage payment gating, pricing, and on-chain registration",
 		Commands: []*cli.Command{
+			// CRD-based ServiceOffer commands
+			monetizeOfferCommand(cfg),
+			monetizeListOffersCommand(cfg),
+			monetizeOfferStatusCommand(cfg),
+			monetizeDeleteOfferCommand(cfg),
+			// Direct commands (backward compat)
 			monetizeRegisterCommand(cfg),
 			monetizePricingCommand(cfg),
 			monetizeStatusCommand(cfg),
+		},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ServiceOffer CRD commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+func monetizeOfferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "offer",
+		Usage: "Create a ServiceOffer CR for payment-gated compute",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "model",
+				Usage: "Model name (e.g. qwen3:8b)",
+			},
+			&cli.StringFlag{
+				Name:  "runtime",
+				Usage: "Model runtime",
+				Value: "ollama",
+			},
+			&cli.StringFlag{
+				Name:     "price",
+				Usage:    "Price per unit (e.g. 0.50)",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "unit",
+				Usage: "Billing unit: MTok or request",
+				Value: "MTok",
+			},
+			&cli.StringFlag{
+				Name:     "chain",
+				Usage:    "Chain for payments (e.g. base-sepolia, base)",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     "wallet",
+				Usage:    "USDC recipient wallet address",
+				Sources:  cli.EnvVars("X402_WALLET"),
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "namespace",
+				Usage: "Target namespace for the ServiceOffer",
+				Value: "llm",
+			},
+			&cli.StringFlag{
+				Name:  "upstream",
+				Usage: "Upstream service name",
+				Value: "ollama",
+			},
+			&cli.IntFlag{
+				Name:  "port",
+				Usage: "Upstream service port",
+				Value: 11434,
+			},
+			&cli.StringFlag{
+				Name:  "path",
+				Usage: "URL path prefix (default: /services/<name>)",
+			},
+			&cli.BoolFlag{
+				Name:  "register",
+				Usage: "Register on ERC-8004 after routing is live",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("name required: obol monetize offer <name> --price ... --chain ... --wallet ...")
+			}
+			name := cmd.Args().First()
+			ns := cmd.String("namespace")
+
+			spec := map[string]interface{}{
+				"upstream": map[string]interface{}{
+					"service":   cmd.String("upstream"),
+					"namespace": ns,
+					"port":      cmd.Int("port"),
+				},
+				"pricing": map[string]interface{}{
+					"amount":   cmd.String("price"),
+					"unit":     cmd.String("unit"),
+					"currency": "USDC",
+					"chain":    cmd.String("chain"),
+				},
+				"wallet":   cmd.String("wallet"),
+				"register": cmd.Bool("register"),
+			}
+
+			if model := cmd.String("model"); model != "" {
+				spec["model"] = map[string]interface{}{
+					"name":    model,
+					"runtime": cmd.String("runtime"),
+				}
+			}
+
+			if path := cmd.String("path"); path != "" {
+				spec["path"] = path
+			}
+
+			manifest := map[string]interface{}{
+				"apiVersion": "obol.network/v1alpha1",
+				"kind":       "ServiceOffer",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": ns,
+				},
+				"spec": spec,
+			}
+
+			return kubectlApply(cfg, manifest)
+		},
+	}
+}
+
+func monetizeListOffersCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "list",
+		Usage: "List all ServiceOffer CRs",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "namespace",
+				Aliases: []string{"n"},
+				Usage:   "Filter by namespace (default: all namespaces)",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			args := []string{"get", "serviceoffers"}
+			if ns := cmd.String("namespace"); ns != "" {
+				args = append(args, "-n", ns)
+			} else {
+				args = append(args, "-A")
+			}
+			args = append(args, "-o", "wide")
+			return kubectlRun(cfg, args...)
+		},
+	}
+}
+
+func monetizeOfferStatusCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "offer-status",
+		Usage: "Show conditions for a ServiceOffer",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "namespace",
+				Aliases:  []string{"n"},
+				Usage:    "Namespace of the ServiceOffer",
+				Required: true,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("name required: obol monetize offer-status <name> --namespace <ns>")
+			}
+			name := cmd.Args().First()
+			ns := cmd.String("namespace")
+			return kubectlRun(cfg, "get", "serviceoffer", name, "-n", ns, "-o", "yaml")
+		},
+	}
+}
+
+func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "delete",
+		Usage: "Delete a ServiceOffer CR",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "namespace",
+				Aliases:  []string{"n"},
+				Usage:    "Namespace of the ServiceOffer",
+				Required: true,
+			},
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"f"},
+				Usage:   "Skip confirmation",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("name required: obol monetize delete <name> --namespace <ns>")
+			}
+			name := cmd.Args().First()
+			ns := cmd.String("namespace")
+
+			if !cmd.Bool("force") {
+				fmt.Printf("Delete ServiceOffer %s/%s? This will also remove the associated Middleware and HTTPRoute. [y/N] ", ns, name)
+				var response string
+				fmt.Scanln(&response)
+				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			return kubectlRun(cfg, "delete", "serviceoffer", name, "-n", ns)
 		},
 	}
 }
@@ -157,7 +365,7 @@ func autoDetectEndpoint(cfg *config.Config) (string, error) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// setup
+// pricing
 // ─────────────────────────────────────────────────────────────────────────────
 
 func monetizePricingCommand(cfg *config.Config) *cli.Command {
@@ -191,7 +399,7 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// status
+// status (cluster-level pricing + ERC-8004 registration)
 // ─────────────────────────────────────────────────────────────────────────────
 
 func monetizeStatusCommand(cfg *config.Config) *cli.Command {
@@ -254,3 +462,46 @@ func valueOrNone(s string) string {
 	return s
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// kubectl helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// kubectlApply applies a JSON manifest via kubectl apply -f -.
+func kubectlApply(cfg *config.Config, manifest interface{}) error {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	proc := exec.Command(kubectlPath, "apply", "-f", "-")
+	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	proc.Stdin = bytes.NewReader(raw)
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+
+	if err := proc.Run(); err != nil {
+		return fmt.Errorf("kubectl apply failed: %w", err)
+	}
+	return nil
+}
+
+// kubectlRun executes kubectl with the given arguments and stack kubeconfig.
+func kubectlRun(cfg *config.Config, args ...string) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	}
+
+	proc := exec.Command(kubectlPath, args...)
+	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	proc.Stdin = os.Stdin
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+
+	return proc.Run()
+}

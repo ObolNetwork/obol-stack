@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke tests for OpenClaw skills (obol-blockchain, obol-k8s, obol-dvt).
+"""Smoke tests for OpenClaw skills (ethereum-networks, obol-stack, distributed-validators).
 
 Run inside the OpenClaw pod:
     obol kubectl exec -i -n openclaw-default deploy/openclaw -c openclaw -- python3 - < tests/skills_smoke_test.py
@@ -16,8 +16,8 @@ import sys
 import urllib.request
 
 SKILLS_DIR = "/data/.openclaw/skills"
-RPC = os.path.join(SKILLS_DIR, "obol-blockchain", "scripts", "rpc.py")
-KUBE = os.path.join(SKILLS_DIR, "obol-k8s", "scripts", "kube.py")
+RPC = os.path.join(SKILLS_DIR, "ethereum-networks", "scripts", "rpc.py")
+KUBE = os.path.join(SKILLS_DIR, "obol-stack", "scripts", "kube.py")
 
 passed = 0
 failed = 0
@@ -52,9 +52,9 @@ def http_get(url, timeout=15):
 
 
 # ──────────────────────────────────────────────
-# obol-blockchain tests
+# ethereum-networks tests
 # ──────────────────────────────────────────────
-print("\n\033[1m--- obol-blockchain ---\033[0m")
+print("\n\033[1m--- ethereum-networks ---\033[0m")
 
 
 def test_blockchain_files():
@@ -64,11 +64,11 @@ def test_blockchain_files():
         "references/erc20-methods.md",
         "references/common-contracts.md",
     ]:
-        path = os.path.join(SKILLS_DIR, "obol-blockchain", f)
+        path = os.path.join(SKILLS_DIR, "ethereum-networks", f)
         assert os.path.isfile(path), f"missing: {f}"
 
 
-test("blockchain/files_exist", test_blockchain_files)
+test("ethereum-networks/files_exist", test_blockchain_files)
 
 
 def test_block_number():
@@ -81,7 +81,7 @@ def test_block_number():
     assert block > 20_000_000, f"block number too low: {block}"
 
 
-test("blockchain/block_number", test_block_number)
+test("ethereum-networks/block_number", test_block_number)
 
 
 def test_chain_id():
@@ -91,7 +91,7 @@ def test_chain_id():
     assert "mainnet" in out, f"missing 'mainnet' in: {out}"
 
 
-test("blockchain/chain_id", test_chain_id)
+test("ethereum-networks/chain_id", test_chain_id)
 
 
 def test_gas_price():
@@ -104,7 +104,7 @@ def test_gas_price():
     assert gwei > 0, f"gas price is 0"
 
 
-test("blockchain/gas_price", test_gas_price)
+test("ethereum-networks/gas_price", test_gas_price)
 
 
 def test_eth_balance():
@@ -118,7 +118,7 @@ def test_eth_balance():
     assert eth > 0, f"balance is 0"
 
 
-test("blockchain/eth_balance", test_eth_balance)
+test("ethereum-networks/eth_balance", test_eth_balance)
 
 
 def test_erc20_total_supply():
@@ -128,7 +128,7 @@ def test_erc20_total_supply():
     assert "Result:" in out or "0x" in out, f"unexpected output: {out}"
 
 
-test("blockchain/erc20_total_supply", test_erc20_total_supply)
+test("ethereum-networks/erc20_total_supply", test_erc20_total_supply)
 
 
 def test_hoodi_chain_id():
@@ -138,22 +138,22 @@ def test_hoodi_chain_id():
     assert "hoodi" in out, f"missing 'hoodi' in: {out}"
 
 
-test("blockchain/hoodi_chain_id", test_hoodi_chain_id)
+test("ethereum-networks/hoodi_chain_id", test_hoodi_chain_id)
 
 
 # ──────────────────────────────────────────────
-# obol-k8s tests
+# obol-stack tests
 # ──────────────────────────────────────────────
-print("\n\033[1m--- obol-k8s ---\033[0m")
+print("\n\033[1m--- obol-stack ---\033[0m")
 
 
 def test_k8s_files():
     for f in ["SKILL.md", "scripts/kube.py"]:
-        path = os.path.join(SKILLS_DIR, "obol-k8s", f)
+        path = os.path.join(SKILLS_DIR, "obol-stack", f)
         assert os.path.isfile(path), f"missing: {f}"
 
 
-test("k8s/files_exist", test_k8s_files)
+test("obol-stack/files_exist", test_k8s_files)
 
 # We'll capture pod name from the pods test for use in logs test
 _discovered_pod = [None]
@@ -170,7 +170,7 @@ def test_pods():
             break
 
 
-test("k8s/pods", test_pods)
+test("obol-stack/pods", test_pods)
 
 
 def test_services():
@@ -179,7 +179,7 @@ def test_services():
     assert len(out) > 0, "empty output"
 
 
-test("k8s/services", test_services)
+test("obol-stack/services", test_services)
 
 
 def test_deployments():
@@ -188,7 +188,7 @@ def test_deployments():
     assert "openclaw" in out.lower(), f"no openclaw deployment in: {out}"
 
 
-test("k8s/deployments", test_deployments)
+test("obol-stack/deployments", test_deployments)
 
 
 def test_events():
@@ -197,7 +197,7 @@ def test_events():
     # events may legitimately be empty
 
 
-test("k8s/events", test_events)
+test("obol-stack/events", test_events)
 
 
 def test_configmaps():
@@ -206,7 +206,7 @@ def test_configmaps():
     assert "openclaw" in out.lower(), f"no openclaw configmap in: {out}"
 
 
-test("k8s/configmaps", test_configmaps)
+test("obol-stack/configmaps", test_configmaps)
 
 
 def test_logs():
@@ -217,7 +217,7 @@ def test_logs():
     assert len(out) > 0, "empty logs"
 
 
-test("k8s/logs", test_logs)
+test("obol-stack/logs", test_logs)
 
 
 def test_describe_deployment():
@@ -226,22 +226,22 @@ def test_describe_deployment():
     assert "replica" in out.lower() or "Replica" in out, f"no replicas info in: {out[:200]}"
 
 
-test("k8s/describe_deployment", test_describe_deployment)
+test("obol-stack/describe_deployment", test_describe_deployment)
 
 
 # ──────────────────────────────────────────────
-# obol-dvt tests
+# distributed-validators tests
 # ──────────────────────────────────────────────
-print("\n\033[1m--- obol-dvt ---\033[0m")
+print("\n\033[1m--- distributed-validators ---\033[0m")
 
 
 def test_dvt_files():
     for f in ["SKILL.md", "references/api-examples.md"]:
-        path = os.path.join(SKILLS_DIR, "obol-dvt", f)
+        path = os.path.join(SKILLS_DIR, "distributed-validators", f)
         assert os.path.isfile(path), f"missing: {f}"
 
 
-test("dvt/files_exist", test_dvt_files)
+test("distributed-validators/files_exist", test_dvt_files)
 
 
 def curl_json(url):
@@ -263,7 +263,7 @@ def test_obol_api_health():
     assert mainnet.get("status") == "up", f"mainnet beacon not up: {details}"
 
 
-test("dvt/api_health", test_obol_api_health)
+test("distributed-validators/api_health", test_obol_api_health)
 
 
 def test_network_summary():
@@ -273,7 +273,7 @@ def test_network_summary():
     assert clusters > 0, f"total_clusters is 0 or missing: {data}"
 
 
-test("dvt/network_summary", test_network_summary)
+test("distributed-validators/network_summary", test_network_summary)
 
 
 # ──────────────────────────────────────────────

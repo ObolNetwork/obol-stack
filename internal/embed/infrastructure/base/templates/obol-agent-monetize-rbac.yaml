@@ -1,0 +1,63 @@
+{{- if .Values.obolAgent.enabled }}
+---
+# Monetize RBAC for OpenClaw Agents
+# Grants OpenClaw service accounts the ability to create and manage
+# ServiceOffers (CRD), Traefik middlewares, and Gateway API HTTPRoutes.
+# Subjects are intentionally empty — they are patched dynamically by
+# `obol agent init` when an OpenClaw instance is provisioned.
+
+#------------------------------------------------------------------------------
+# ClusterRole - Monetize permissions for OpenClaw agents
+# Allows creating tunnel routes, x402 ForwardAuth middlewares, and
+# reading workload status across namespaces.
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openclaw-monetize
+rules:
+  # ServiceOffer CRD - full lifecycle management
+  - apiGroups: ["obol.network"]
+    resources: ["serviceoffers", "serviceoffers/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Traefik middlewares - create ForwardAuth for x402 gating
+  - apiGroups: ["traefik.io"]
+    resources: ["middlewares"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Gateway API HTTPRoutes - expose services via traefik-gateway
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Read workload status - pods, services, endpoints
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list"]
+  # Read deployment status
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  # Read pod logs for diagnostics
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Cluster-wide read for capacity assessment
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Binds monetize role to OpenClaw service accounts
+# Subjects are empty and patched dynamically by `obol agent init` to add
+# the ServiceAccount for each OpenClaw instance (e.g., openclaw-<id>).
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openclaw-monetize-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openclaw-monetize
+subjects: []
+{{- end }}

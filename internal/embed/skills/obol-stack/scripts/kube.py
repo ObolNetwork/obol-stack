@@ -66,6 +66,72 @@ def api_get(path, token, ssl_ctx):
         sys.exit(1)
 
 
+def api_post(path, body, token, ssl_ctx):
+    """POST JSON to the Kubernetes API."""
+    url = f"{API_SERVER}{path}"
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode() if e.fp else ""
+        print(f"API error {e.code}: {body_text[:200]}", file=sys.stderr)
+        sys.exit(1)
+
+
+def api_patch(path, body, token, ssl_ctx, patch_type="merge"):
+    """PATCH request. patch_type: merge | strategic | json"""
+    content_types = {
+        "merge": "application/merge-patch+json",
+        "strategic": "application/strategic-merge-patch+json",
+        "json": "application/json-patch+json",
+    }
+    url = f"{API_SERVER}{path}"
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="PATCH",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": content_types.get(patch_type, content_types["merge"]),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode() if e.fp else ""
+        print(f"API error {e.code}: {body_text[:200]}", file=sys.stderr)
+        sys.exit(1)
+
+
+def api_delete(path, token, ssl_ctx):
+    """DELETE request to the Kubernetes API."""
+    url = f"{API_SERVER}{path}"
+    req = urllib.request.Request(
+        url,
+        method="DELETE",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode() if e.fp else ""
+        print(f"API error {e.code}: {body_text[:200]}", file=sys.stderr)
+        sys.exit(1)
+
+
 def age(timestamp_str):
     """Convert ISO timestamp to human-readable age."""
     if not timestamp_str:

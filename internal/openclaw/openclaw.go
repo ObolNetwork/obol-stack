@@ -55,6 +55,7 @@ type OnboardOptions struct {
 	Sync         bool     // Also run helmfile sync after install
 	Interactive  bool     // true = prompt for provider choice; false = silent defaults
 	IsDefault    bool     // true = use fixed ID "default", idempotent on re-run
+	AgentMode    bool     // true = obol-agent singleton with heartbeat config
 	OllamaModels []string // Available Ollama models detected on host (nil = not queried)
 }
 
@@ -205,6 +206,18 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
 	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels)
+
+	// Append heartbeat config for agent mode.
+	if opts.AgentMode {
+		overlay += `
+# Agent mode: periodic heartbeat for monetize reconciliation
+agents:
+  defaults:
+    heartbeat:
+      every: "1m"
+      target: "none"
+`
+	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)

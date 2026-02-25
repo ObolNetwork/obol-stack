@@ -78,9 +78,12 @@ COMMANDS:
      service pubkey   Print the encryption public key
 
    Monetize:
+     monetize offer      Create a ServiceOffer CR
+     monetize list       List all ServiceOffer CRs
+     monetize status     Show conditions for a ServiceOffer
+     monetize delete     Delete a ServiceOffer CR
      monetize pricing    Configure x402 pricing in the cluster
      monetize register   Register service on ERC-8004 Identity Registry (Base Sepolia)
-     monetize status     Show pricing config and registration status
 
    App Management:
      app install     Install a Helm chart as an application
