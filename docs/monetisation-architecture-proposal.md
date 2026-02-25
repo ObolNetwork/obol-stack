@@ -26,7 +26,7 @@ No separate controller binary. No Go operator. The obol-agent is a regular OpenC
                              ▼
               ┌────────────────────────────────────┐
               │  ServiceOffer CR                    │
-              │  apiVersion: obol.network/v1alpha1 │
+              │  apiVersion: obol.org/v1alpha1 │
               │  kind: ServiceOffer                │
               └──────────┬───────────────────────────┘
                          │ read by
@@ -73,7 +73,7 @@ The traditional operator pattern is the right answer when you need guaranteed su
 ## 4. The CRD
 
 ```yaml
-apiVersion: obol.network/v1alpha1
+apiVersion: obol.org/v1alpha1
 kind: ServiceOffer
 metadata:
   name: qwen-inference
@@ -139,7 +139,7 @@ status:
 ```
 
 **Design:**
-- **Namespace-scoped** — the CR lives in the same namespace as the upstream service. This preserves OwnerReference cascade (garbage collection on delete) and avoids cross-namespace complexity. The obol-agent's ClusterRoleBinding lets it watch ServiceOffers across all namespaces via `GET /apis/obol.network/v1alpha1/serviceoffers` (cluster-wide list).
+- **Namespace-scoped** — the CR lives in the same namespace as the upstream service. This preserves OwnerReference cascade (garbage collection on delete) and avoids cross-namespace complexity. The obol-agent's ClusterRoleBinding lets it watch ServiceOffers across all namespaces via `GET /apis/obol.org/v1alpha1/serviceoffers` (cluster-wide list).
 - **Conditions, not Phase** — [deprecated by API conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties). Conditions give granular insight into which step failed.
 - **Status subresource** — prevents users from accidentally overwriting status. ([docs](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#status-subresource))
 - **Same-namespace as upstream** — the Middleware and HTTPRoute are created alongside the upstream service. OwnerReferences work (same namespace), so deleting the ServiceOffer garbage-collects the route and middleware. ([docs](https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/))
@@ -253,10 +253,10 @@ metadata:
   name: openclaw-monetize
 rules:
   # Read/write ServiceOffer CRs
-  - apiGroups: ["obol.network"]
+  - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["obol.network"]
+  - apiGroups: ["obol.org"]
     resources: ["serviceoffers/status"]
     verbs: ["get", "update", "patch"]
 
@@ -391,7 +391,7 @@ Even if RBAC allows creating any Middleware, the admission policy ensures OpenCl
      → sets condition: Registered=True
 
    Step 6: Update status
-     PATCH /apis/obol.network/v1alpha1/.../serviceoffers/qwen-inference/status
+     PATCH /apis/obol.org/v1alpha1/.../serviceoffers/qwen-inference/status
      → Ready=True, endpoint=https://stack.example.com/services/qwen-inference
 
 4. User: "What's the status?"

@@ -135,7 +135,7 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 			}
 
 			manifest := map[string]interface{}{
-				"apiVersion": "obol.network/v1alpha1",
+				"apiVersion": "obol.org/v1alpha1",
 				"kind":       "ServiceOffer",
 				"metadata": map[string]interface{}{
 					"name":      name,

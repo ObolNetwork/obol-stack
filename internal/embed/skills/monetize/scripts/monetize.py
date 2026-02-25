@@ -30,7 +30,7 @@ KUBE_SCRIPTS = os.path.join(os.path.dirname(SKILL_DIR), "obol-stack", "scripts")
 sys.path.insert(0, KUBE_SCRIPTS)
 from kube import load_sa, make_ssl_context, api_get, api_post, api_patch, api_delete  # noqa: E402
 
-CRD_GROUP = "obol.network"
+CRD_GROUP = "obol.org"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL = "serviceoffers"
 
