@@ -218,7 +218,7 @@ func Up(cfg *config.Config) error {
 	return nil
 }
 
-// Down stops the cluster
+// Down stops the cluster and the DNS resolver container.
 func Down(cfg *config.Config) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
@@ -229,6 +229,10 @@ func Down(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to load backend: %w", err)
 	}
+
+	// Stop the DNS resolver container so it doesn't hold port 5553
+	// across restarts and block subsequent obol stack up runs.
+	dns.Stop()
 
 	return backend.Down(cfg, stackID)
 }

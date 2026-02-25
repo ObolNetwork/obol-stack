@@ -44,23 +44,25 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "sync",
 				Usage:     "Deploy or update an OpenClaw instance",
-				ArgsUsage: "<id>",
+				ArgsUsage: "[instance-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("instance ID required (e.g., obol openclaw sync happy-otter)")
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
-					return openclaw.Sync(cfg, cmd.Args().First())
+					return openclaw.Sync(cfg, id)
 				},
 			},
 			{
 				Name:      "token",
 				Usage:     "Retrieve gateway token for an OpenClaw instance",
-				ArgsUsage: "<id>",
+				ArgsUsage: "[instance-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("instance ID required (e.g., obol openclaw token happy-otter)")
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
-					return openclaw.Token(cfg, cmd.Args().First())
+					return openclaw.Token(cfg, id)
 				},
 			},
 			{
@@ -73,7 +75,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "delete",
 				Usage:     "Remove an OpenClaw instance and its cluster resources",
-				ArgsUsage: "<id>",
+				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{
 						Name:    "force",
@@ -82,27 +84,29 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("instance ID required (e.g., obol openclaw delete happy-otter)")
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
-					return openclaw.Delete(cfg, cmd.Args().First(), cmd.Bool("force"))
+					return openclaw.Delete(cfg, id, cmd.Bool("force"))
 				},
 			},
 			{
 				Name:      "setup",
 				Usage:     "Reconfigure model providers for a deployed instance",
-				ArgsUsage: "<id>",
+				ArgsUsage: "[instance-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("instance ID required (e.g., obol openclaw setup default)")
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
-					return openclaw.Setup(cfg, cmd.Args().First(), openclaw.SetupOptions{})
+					return openclaw.Setup(cfg, id, openclaw.SetupOptions{})
 				},
 			},
 			{
 				Name:      "dashboard",
 				Usage:     "Open the OpenClaw dashboard in a browser",
-				ArgsUsage: "<id>",
+				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					&cli.IntFlag{
 						Name:  "port",
@@ -115,11 +119,12 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("instance ID required (e.g., obol openclaw dashboard default)")
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
 					noBrowser := cmd.Bool("no-browser")
-					return openclaw.Dashboard(cfg, cmd.Args().First(), openclaw.DashboardOptions{
+					return openclaw.Dashboard(cfg, id, openclaw.DashboardOptions{
 						Port:      int(cmd.Int("port")),
 						NoBrowser: noBrowser,
 					}, func(url string) {
@@ -129,58 +134,38 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					})
 				},
 			},
-			{
-				Name:  "skills",
-				Usage: "Manage OpenClaw skills",
-				Commands: []*cli.Command{
-					{
-						Name:      "sync",
-						Usage:     "Package a local skills directory into a ConfigMap",
-						ArgsUsage: "<id>",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "from",
-								Usage:    "Path to local skills directory",
-								Required: true,
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							if cmd.NArg() == 0 {
-								return fmt.Errorf("instance ID required (e.g., obol openclaw skills sync happy-otter --from ./skills)")
-							}
-							return openclaw.SkillsSync(cfg, cmd.Args().First(), cmd.String("from"))
-						},
-					},
-				},
-			},
+			openclawSkillsCommand(cfg),
 			{
 				Name:            "cli",
 				Usage:           "Run openclaw CLI commands against a deployed instance",
-				ArgsUsage:       "<id> [-- <openclaw args...>]",
+				ArgsUsage:       "[instance-name] [-- <openclaw args...>]",
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
-					if len(args) == 0 {
-						return fmt.Errorf("instance ID required\n\nUsage:\n" +
-							"  obol openclaw cli <id> -- <openclaw command>\n\n" +
-							"Examples:\n" +
-							"  obol openclaw cli default -- gateway health\n" +
-							"  obol openclaw cli default -- gateway call config.get\n" +
-							"  obol openclaw cli default -- doctor")
+
+					// Resolve the target instance. With SkipFlagParsing, we get raw args.
+					// ResolveInstance will auto-select if single instance, or consume
+					// the instance name from args[0] if multiple instances exist.
+					id, remaining, err := openclaw.ResolveInstance(cfg, args)
+					if err != nil {
+						return fmt.Errorf("%w\n\nUsage:\n"+
+							"  obol openclaw cli [instance-name] -- <openclaw command>\n\n"+
+							"Examples:\n"+
+							"  obol openclaw cli -- gateway health\n"+
+							"  obol openclaw cli default -- doctor", err)
 					}
 
-					id := args[0]
-					// Everything after "--" is the openclaw command
+					// Strip the "--" separator if present
 					var openclawArgs []string
-					for i, arg := range args[1:] {
+					for i, arg := range remaining {
 						if arg == "--" {
-							openclawArgs = args[i+2:]
+							openclawArgs = remaining[i+1:]
 							break
 						}
 					}
-					if len(openclawArgs) == 0 && len(args) > 1 {
-						// No "--" separator found; treat remaining args as openclaw command
-						openclawArgs = args[1:]
+					if len(openclawArgs) == 0 && len(remaining) > 0 {
+						// No "--" separator found; treat all remaining args as openclaw command
+						openclawArgs = remaining
 					}
 
 					return openclaw.CLI(cfg, id, openclawArgs)
@@ -189,3 +174,79 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 		},
 	}
 }
+
+// openclawSkillsCommand builds the "obol openclaw skills" subcommand group.
+func openclawSkillsCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "skills",
+		Usage: "Manage OpenClaw skills",
+		Commands: []*cli.Command{
+			{
+				Name:            "add",
+				Usage:           "Add a skill package to the OpenClaw instance",
+				ArgsUsage:       "[instance-name] <package-or-path>",
+				SkipFlagParsing: true,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					id, remaining, err := openclaw.ResolveInstance(cfg, args)
+					if err != nil {
+						return err
+					}
+					if len(remaining) == 0 {
+						return fmt.Errorf("skill package or path required\n\nUsage: obol openclaw skill add <package-or-path>")
+					}
+					return openclaw.SkillAdd(cfg, id, remaining)
+				},
+			},
+			{
+				Name:            "remove",
+				Usage:           "Remove a skill from the OpenClaw instance",
+				ArgsUsage:       "[instance-name] <skill-name>",
+				SkipFlagParsing: true,
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					id, remaining, err := openclaw.ResolveInstance(cfg, args)
+					if err != nil {
+						return err
+					}
+					if len(remaining) == 0 {
+						return fmt.Errorf("skill name required\n\nUsage: obol openclaw skill remove <skill-name>")
+					}
+					return openclaw.SkillRemove(cfg, id, remaining)
+				},
+			},
+			{
+				Name:      "list",
+				Usage:     "List installed skills on the OpenClaw instance",
+				ArgsUsage: "[instance-name]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					return openclaw.SkillList(cfg, id)
+				},
+			},
+			{
+				Name:      "sync",
+				Usage:     "Copy a local skills directory to the OpenClaw volume",
+				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "from",
+						Usage:    "Path to local skills directory",
+						Required: true,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					return openclaw.SkillsSync(cfg, id, cmd.String("from"))
+				},
+			},
+		},
+	}
+}
+

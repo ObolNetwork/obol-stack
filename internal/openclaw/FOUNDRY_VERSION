@@ -1,0 +1,3 @@
+# renovate: datasource=github-releases depName=foundry-rs/foundry
+# Pins the Foundry version for cast/forge/anvil in the OpenClaw image.
+v1.5.1

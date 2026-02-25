@@ -38,10 +38,21 @@
       "customType": "regex",
       "description": "Update OpenClaw version from upstream GitHub releases",
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9]+)?)"
       ],
       "fileMatch": [
         "^internal/openclaw/OPENCLAW_VERSION$"
+      ],
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(-(?<build>\\d+))?$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Foundry version from upstream GitHub releases",
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+[^\\s]*)"
+      ],
+      "fileMatch": [
+        "^internal/openclaw/FOUNDRY_VERSION$"
       ],
       "versioningTemplate": "semver"
     },
@@ -130,6 +141,22 @@
         "every hour"
       ],
       "groupName": "OpenClaw updates"
+    },
+    {
+      "description": "Group Foundry updates",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "foundry-rs/foundry"
+      ],
+      "labels": [
+        "renovate/foundry"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Foundry updates"
     },
     {
       "description": "Group llmspy updates",

@@ -62,7 +62,7 @@ COMMANDS:
      openclaw token     Retrieve gateway token
      openclaw list      List instances
      openclaw delete    Remove instance and cluster resources
-     openclaw skills    Manage skills (sync from local dir)
+     openclaw skills    Manage skills
 
    Model Providers:
      model setup        Configure cloud AI provider in llmspy gateway

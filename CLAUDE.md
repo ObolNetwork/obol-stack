@@ -207,9 +207,19 @@ obol
 │   ├── setup
 │   └── status
 ├── openclaw (OpenClaw AI assistant)
-│   ├── setup
 │   ├── onboard
-│   └── dashboard
+│   ├── setup
+│   ├── sync
+│   ├── list
+│   ├── delete
+│   ├── dashboard
+│   ├── token
+│   ├── cli
+│   └── skills (manage OpenClaw skills)
+│       ├── list
+│       ├── add
+│       ├── remove
+│       └── sync
 ├── kubectl (passthrough with KUBECONFIG)
 ├── helm (passthrough with KUBECONFIG)
 ├── helmfile (passthrough with KUBECONFIG)
@@ -646,6 +656,30 @@ obol network install ethereum --id hoodi-test --network=hoodi
 - k3s auto-applies all YAML files on startup
 - Uses k3s HelmChart CRD for Helm deployments
 
+## Dynamic eRPC Upstream Management
+
+When a local Ethereum node is deployed via `obol network install ethereum`, it is automatically registered as an upstream in the eRPC gateway. This enables local-first routing: read requests hit the local node first (lowest latency), while write methods (`eth_sendRawTransaction`, `eth_sendTransaction`) are blocked on local upstreams and routed to designated remote providers.
+
+**Key functions** (`internal/network/erpc.go`):
+- `RegisterERPCUpstream()` — called after `obol network sync`, adds local node to eRPC ConfigMap at position 0 (highest priority)
+- `DeregisterERPCUpstream()` — called before `obol network delete`, removes the upstream
+- `patchERPCUpstream()` — core logic: reads eRPC ConfigMap, adds/removes upstream, restarts eRPC deployment
+
+**Chain ID mapping**: mainnet=1, hoodi=560048, sepolia=11155111
+
+**Write protection**: Local upstreams include `ignoreMethods` for `eth_sendRawTransaction` and `eth_sendTransaction`. A `selectionPolicy` on the mainnet network routes writes exclusively to `obol-rpc-mainnet`.
+
+**Data flow**:
+```
+obol network sync ethereum/my-node
+  → helmfile sync (deploys execution + consensus clients)
+  → RegisterERPCUpstream(cfg, "ethereum", "my-node")
+    → patches erpc-config ConfigMap: adds local-ethereum-my-node upstream at position 0
+    → restarts eRPC deployment
+  → reads now route: local node (priority) → obol-rpc-mainnet (fallback)
+  → writes route: obol-rpc-mainnet only (local node blocks write methods)
+```
+
 ## LLM Configuration Architecture
 
 The stack uses a two-tier architecture for LLM routing. A cluster-wide proxy (llmspy) handles actual provider communication, while each application instance (e.g., OpenClaw) sees a simplified single-provider view.
@@ -762,6 +796,142 @@ models:
 | `internal/openclaw/import.go` | `DetectExistingConfig()`, `TranslateToOverlayYAML()` |
 | `internal/openclaw/chart/values.yaml` | Default per-instance model config |
 | `internal/openclaw/chart/templates/_helpers.tpl` | Renders model providers into application JSON config |
+
+## OpenClaw Skills System
+
+### Overview
+
+OpenClaw skills are SKILL.md files (with optional scripts and references) that give the AI agent domain-specific capabilities. The Obol Stack ships default skills embedded in the `obol` binary and supports runtime skill management via the CLI.
+
+### Delivery Mechanism: Host-Path PVC Injection
+
+Skills are delivered by writing directly to the host filesystem at `$DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/`, which maps to `/data/.openclaw/skills/` inside the OpenClaw container via k3d volume mounts and local-path-provisioner.
+
+**Advantages over ConfigMap approach**: No 1MB size limit, works before pod readiness, survives pod restarts, supports binary files and scripts.
+
+### Default Skills (21 skills)
+
+The stack ships 20 embedded skills organized into categories. All are installed automatically on first deploy.
+
+#### Infrastructure Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `ethereum-networks` | `SKILL.md`, `scripts/rpc.sh`, `scripts/rpc.py`, `references/erc20-methods.md`, `references/common-contracts.md` | Read-only Ethereum queries via cast/eRPC — blocks, balances, contract reads, ERC-20 lookups, ENS resolution |
+| `ethereum-local-wallet` | `SKILL.md`, `scripts/signer.py`, `references/remote-signer-api.md` | Sign and send Ethereum transactions via the per-agent remote-signer service |
+| `obol-stack` | `SKILL.md`, `scripts/kube.py` | Kubernetes cluster diagnostics — pods, logs, events, deployments via ServiceAccount API |
+| `distributed-validators` | `SKILL.md`, `references/api-examples.md` | Obol DVT cluster monitoring, operator audit, exit coordination via Obol API |
+
+#### Ethereum Development Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `addresses` | `SKILL.md` | Verified contract addresses — DeFi, tokens, bridges, ERC-8004 registries across all major chains |
+| `building-blocks` | `SKILL.md` | OpenZeppelin patterns, DEX integration, oracle usage, access control |
+| `concepts` | `SKILL.md` | Mental model — state machines, incentive design, gas mechanics, EOAs vs contracts |
+| `gas` | `SKILL.md` | Gas optimization patterns, L2 fee structures, estimation |
+| `indexing` | `SKILL.md` | The Graph, Dune, event indexing for onchain data |
+| `l2s` | `SKILL.md` | L2 comparison — Base, Arbitrum, Optimism, zkSync with gas costs and use cases |
+| `orchestration` | `SKILL.md` | End-to-end dApp build (Scaffold-ETH 2) + AI agent commerce cycle |
+| `security` | `SKILL.md` | Smart contract vulnerability patterns, reentrancy, flash loans, MEV protection |
+| `standards` | `SKILL.md` | ERC-8004, x402, EIP-3009, EIP-7702, ERC-4337 — spec details, integration patterns |
+| `ship` | `SKILL.md` | Architecture planning — what goes onchain vs offchain, chain selection, agent patterns |
+| `testing` | `SKILL.md` | Foundry testing — unit, fuzz, fork, invariant tests |
+| `tools` | `SKILL.md` | Development tooling — Foundry, Hardhat, Scaffold-ETH 2, verification |
+| `wallets` | `SKILL.md` | Wallet management — EOAs, Safe multisig, EIP-7702, key safety for AI agents |
+
+#### Frontend & UX Skills
+
+| Skill | Contents | Purpose |
+|-------|----------|---------|
+| `frontend-playbook` | `SKILL.md` | Frontend deployment — IPFS, Vercel, ENS subdomains |
+| `frontend-ux` | `SKILL.md` | Web3 UX patterns — wallet connection, transaction flows, error handling |
+| `qa` | `SKILL.md` | Quality assurance — testing strategy, coverage, CI/CD patterns |
+| `why` | `SKILL.md` | Why build on Ethereum — the AI agent angle with ERC-8004 and x402 |
+
+### Skill Delivery Flow
+
+```
+Onboard / Sync:
+  1. stageDefaultSkills(deploymentDir)
+     → copies embedded skills from internal/embed/skills/ to deploymentDir/skills/
+     → skips if skills/ directory already exists (preserves user customizations)
+
+  2. injectSkillsToVolume(cfg, id, deploymentDir)
+     → copies skills/ from deployment dir to host PVC path:
+       $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
+     → this path is volume-mounted into the pod at /data/.openclaw/skills/
+
+  3. doSync() → helmfile sync (creates namespace, chart, pod)
+     → OpenClaw file watcher auto-discovers skills on startup
+```
+
+### Instance Resolution
+
+All `obol openclaw` subcommands (except `onboard` and `list`) use `ResolveInstance()`:
+- **0 instances**: error prompting `obol agent init`
+- **1 instance**: auto-selected, no ID required
+- **2+ instances**: first CLI arg must match an instance name
+
+### CLI Commands
+
+```bash
+obol openclaw skills list                   # list installed skills (auto-resolves instance)
+obol openclaw skills add <package>          # add via openclaw CLI in pod
+obol openclaw skills remove <name>          # remove via openclaw CLI in pod
+obol openclaw skills sync                   # re-inject embedded defaults to volume
+obol openclaw skills sync --from <dir>      # push custom skills from local directory
+```
+
+### Ethereum Local Wallet (Remote-Signer)
+
+Each OpenClaw instance is provisioned with an Ethereum signing wallet during `obol openclaw onboard`. The wallet is backed by a remote-signer service (Rust-based REST API) deployed in the same namespace.
+
+**Architecture**:
+```
+Namespace: openclaw-<id>
+  OpenClaw Pod ──HTTP:9000──> remote-signer Pod
+  (signer.py skill)          /data/keystores/<uuid>.json (V3)
+         │
+         └── eth_sendRawTransaction ──> eRPC (:4000/rpc)
+```
+
+**Key generation**: secp256k1 via `crypto/rand` + `github.com/decred/dcrd/dcrec/secp256k1/v4`, encrypted to Web3 Secret Storage V3 format (scrypt + AES-128-CTR).
+
+**Provisioning flow**:
+1. `GenerateWallet()` creates key + V3 keystore + random password
+2. Keystore written to host PVC path: `$DATA_DIR/openclaw-<id>/remote-signer-keystores/`
+3. Password stored in `values-remote-signer.yaml` for the Helm chart
+4. `generateHelmfile()` includes both `obol/openclaw` and `obol/remote-signer` releases
+5. After helmfile sync, `applyWalletMetadataConfigMap()` creates a `wallet-metadata` ConfigMap for the frontend
+
+**Remote-signer API** (ClusterIP, port 9000):
+- `GET /api/v1/keys` — list signing addresses
+- `POST /api/v1/sign/{address}/transaction` — sign EIP-1559 tx
+- `POST /api/v1/sign/{address}/message` — sign EIP-191 message
+- `POST /api/v1/sign/{address}/typed-data` — sign EIP-712 typed data
+- `POST /api/v1/sign/{address}/hash` — sign raw hash
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `internal/openclaw/wallet.go` | Key generation, V3 keystore encryption, provisioning, ConfigMap creation |
+| `internal/openclaw/wallet_test.go` | Unit tests for key gen, encrypt/decrypt round-trip, address derivation |
+| `internal/embed/skills/ethereum-local-wallet/` | Signing skill (SKILL.md, scripts/signer.py, references/) |
+
+### Key Source Files (Skills)
+
+| File | Role |
+|------|------|
+| `internal/embed/skills/` | Embedded default SKILL.md files + scripts + references |
+| `internal/embed/embed.go` | `CopySkills()`, `GetEmbeddedSkillNames()` |
+| `internal/embed/embed_skills_test.go` | Unit tests for skill embedding and copying |
+| `internal/openclaw/resolve.go` | `ResolveInstance()`, `ListInstanceIDs()` |
+| `internal/openclaw/openclaw.go` | `stageDefaultSkills()`, `injectSkillsToVolume()`, `skillsVolumePath()`, `SkillAdd/Remove/List/Sync()` |
+| `internal/openclaw/skills_injection_test.go` | Unit tests for staging and volume injection |
+| `cmd/obol/openclaw.go` | CLI wiring for `obol openclaw skills` subcommands |
+| `tests/skills_smoke_test.py` | In-pod Python smoke tests for all 3 rich skills |
 
 ## Network Install Implementation Details
 
@@ -1124,6 +1294,18 @@ obol network delete ethereum-<generated-name> --force
   - `aztec/helmfile.yaml.gotmpl`
 - `internal/embed/defaults/` - Default stack resources
 - `internal/embed/infrastructure/` - Infrastructure resources (llmspy, Traefik)
+- `internal/embed/skills/` - Default OpenClaw skills (21 skills) embedded in obol binary
+
+**Skills system**:
+- `internal/openclaw/resolve.go` - Smart instance resolution (0/1/2+ instances)
+- `internal/embed/skills/ethereum-networks/` - Ethereum queries via cast/eRPC (SKILL.md + scripts/ + references/)
+- `internal/embed/skills/obol-stack/` - Kubernetes cluster diagnostics (SKILL.md + scripts/kube.py)
+- `internal/embed/skills/distributed-validators/` - DVT cluster monitoring via Obol API (SKILL.md + references/)
+- `internal/embed/skills/addresses/` - Verified contract addresses across chains
+- `internal/embed/skills/*/SKILL.md` - 17 additional domain-specific skills (see Default Skills section above)
+- `internal/embed/embed_skills_test.go` - Unit tests for skill embedding
+- `internal/openclaw/skills_injection_test.go` - Unit tests for skill staging and injection
+- `tests/skills_smoke_test.py` - In-pod Python smoke tests for all rich skills
 
 **Inference gateway and Secure Enclave**:
 - `internal/enclave/enclave.go` - `Key` interface definition
@@ -1141,6 +1323,7 @@ obol network delete ethereum-<generated-name> --force
 - `internal/openclaw/integration_test.go` - Full-cluster integration tests (Ollama, Anthropic, OpenAI inference through llmspy)
 - `internal/openclaw/overlay_test.go` - Unit tests for overlay generation
 - `internal/openclaw/import_test.go` - Unit tests for config import/translation
+- `internal/openclaw/resolve_test.go` - Unit tests for instance resolution
 - `internal/stack/stack_test.go` - Stack lifecycle tests
 - `internal/tunnel/tunnel_test.go` - Tunnel configuration tests
 - `internal/dns/resolver_test.go` - DNS resolver tests

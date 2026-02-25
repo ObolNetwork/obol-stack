@@ -142,17 +142,76 @@ obol model status
 obol openclaw onboard
 
 # Reconfigure model provider for an existing instance
-obol openclaw setup <id>
+obol openclaw setup
 
 # List instances
 obol openclaw list
 
 # Open the web dashboard
-obol openclaw dashboard <id>
+obol openclaw dashboard
+
+# Manage skills (add, remove, list)
+obol openclaw skills list
+obol openclaw skills add <package>
+obol openclaw skills remove <name>
 
 # Remove an instance
-obol openclaw delete <id> --force
+obol openclaw delete --force
 ```
+
+When only one OpenClaw instance is installed, the instance ID is optional — it is auto-selected. With multiple instances, specify the name: `obol openclaw setup prod`.
+
+### Skills
+
+OpenClaw ships with 21 embedded skills that are installed automatically on first deploy. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.
+
+#### Infrastructure
+
+| Skill | Purpose |
+|-------|---------|
+| `ethereum-networks` | Read-only Ethereum queries via cast — blocks, balances, contract reads, ERC-20, ENS |
+| `ethereum-local-wallet` | Sign and send Ethereum transactions via the per-agent remote-signer |
+| `obol-stack` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
+| `distributed-validators` | Obol DVT cluster monitoring, operator audit, exit coordination |
+
+#### Ethereum Development
+
+| Skill | Purpose |
+|-------|---------|
+| `addresses` | Verified contract addresses — DeFi, tokens, bridges, ERC-8004 registries across chains |
+| `building-blocks` | OpenZeppelin patterns, DEX integration, oracle usage, access control |
+| `concepts` | Mental model — state machines, incentive design, gas mechanics, EOAs vs contracts |
+| `gas` | Gas optimization patterns, L2 fee structures, estimation |
+| `indexing` | The Graph, Dune, event indexing for onchain data |
+| `l2s` | L2 comparison — Base, Arbitrum, Optimism, zkSync with gas costs and use cases |
+| `orchestration` | End-to-end dApp build (Scaffold-ETH 2) + AI agent commerce cycle |
+| `security` | Smart contract vulnerability patterns, reentrancy, flash loans, MEV protection |
+| `standards` | ERC-8004, x402, EIP-3009, EIP-7702, ERC-4337 — spec details and integration patterns |
+| `ship` | Architecture planning — onchain vs offchain, chain selection, agent service patterns |
+| `testing` | Foundry testing — unit, fuzz, fork, invariant tests |
+| `tools` | Development tooling — Foundry, Hardhat, Scaffold-ETH 2, verification |
+| `wallets` | Wallet management — EOAs, Safe multisig, EIP-7702, key safety for AI agents |
+
+#### Frontend & QA
+
+| Skill | Purpose |
+|-------|---------|
+| `frontend-playbook` | Deployment — IPFS, Vercel, ENS subdomains |
+| `frontend-ux` | Web3 UX patterns — wallet connection, transaction flows, error handling |
+| `qa` | Quality assurance — testing strategy, coverage, CI/CD patterns |
+| `why` | Why Ethereum — the AI agent angle with ERC-8004 and x402 |
+
+Manage skills at runtime:
+
+```bash
+obol openclaw skills list                   # list installed skills
+obol openclaw skills sync                   # re-inject embedded defaults
+obol openclaw skills sync --from ./my-skills  # push custom skills from local dir
+obol openclaw skills add <package>          # add via openclaw CLI in pod
+obol openclaw skills remove <name>          # remove via openclaw CLI in pod
+```
+
+Skills are delivered via host-path PVC injection — no ConfigMap size limits, works before pod readiness, and survives pod restarts.
 
 ## Public Access (Cloudflare Tunnel)
 

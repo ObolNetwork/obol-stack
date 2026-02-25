@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -40,7 +41,11 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.3"
+	chartVersion = "0.1.5"
+
+	// remoteSignerChartVersion pins the remote-signer Helm chart version.
+	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
+	remoteSignerChartVersion = "0.2.0"
 )
 
 // OnboardOptions contains options for the onboard command
@@ -142,7 +147,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 					fmt.Printf("Warning: could not read existing config: %v\n", importErr)
 				}
 				if imported != nil && imported.WorkspaceDir != "" {
-					copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
 				}
 				return nil
 			}
@@ -205,7 +210,24 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
-	// Generate helmfile.yaml referencing obol/openclaw from the published Helm repo
+	// Generate Ethereum signing wallet (key + remote-signer config).
+	fmt.Println("\nGenerating Ethereum wallet...")
+	wallet, err := GenerateWallet(cfg, id)
+	if err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to generate wallet: %w", err)
+	}
+	rsValues := generateRemoteSignerValues(wallet)
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues), 0600); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write remote-signer values: %w", err)
+	}
+	if err := writeWalletMetadata(deploymentDir, wallet); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to write wallet metadata: %w", err)
+	}
+
+	// Generate helmfile.yaml referencing obol/openclaw + remote-signer
 	helmfileContent := generateHelmfile(id, namespace)
 	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
@@ -216,13 +238,22 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	fmt.Printf("  Deployment: %s/%s\n", appName, id)
 	fmt.Printf("  Namespace:  %s\n", namespace)
 	fmt.Printf("  Hostname:   %s\n", hostname)
+	fmt.Printf("  Wallet:     %s\n", wallet.Address)
 	fmt.Printf("  Location:   %s\n", deploymentDir)
 	fmt.Printf("\nFiles created:\n")
-	fmt.Printf("  - values-obol.yaml  Obol Stack overlay (httpRoute, providers, eRPC)\n")
-	fmt.Printf("  - helmfile.yaml     Deployment configuration (chart: obol/openclaw v%s)\n", chartVersion)
+	fmt.Printf("  - values-obol.yaml           Obol Stack overlay (httpRoute, providers, eRPC)\n")
+	fmt.Printf("  - values-remote-signer.yaml  Remote-signer config (keystore password)\n")
+	fmt.Printf("  - wallet.json                Wallet metadata (address, keystore UUID)\n")
+	fmt.Printf("  - helmfile.yaml              Deployment configuration\n")
 	if len(secretData) > 0 {
 		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
 	}
+	fmt.Printf("\n  Back up your signing key:\n")
+	fmt.Printf("    cp -r %s ~/obol-wallet-backup/\n", keystoreVolumePath(cfg, id))
+
+	// Stage default skills to deployment directory (immediate, no cluster needed)
+	fmt.Println("\nStaging default skills...")
+	stageDefaultSkills(deploymentDir)
 
 	if opts.Sync {
 		fmt.Printf("\nDeploying to cluster...\n\n")
@@ -231,7 +262,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		}
 		// Copy workspace files into the pod after sync succeeds
 		if imported != nil && imported.WorkspaceDir != "" {
-			copyWorkspaceToPod(cfg, id, imported.WorkspaceDir)
+			copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
 		}
 		return nil
 	}
@@ -271,6 +302,18 @@ func doSync(cfg *config.Config, id string) error {
 		return fmt.Errorf("failed to sync OpenClaw user secrets: %w", err)
 	}
 
+	// Ensure wallet keystore + remote-signer values exist (handles
+	// deployments created before wallet was added, or manual re-syncs).
+	ensureWallet(cfg, id, deploymentDir)
+
+	// Stage default skills and inject directly to the host-side PVC path.
+	// The local-path-provisioner creates the PV directory on the host at a
+	// predictable path ($DATA_DIR/openclaw-<id>/openclaw-data/), so we can
+	// pre-populate skills before helmfile sync runs. OpenClaw's file watcher
+	// on /data/.openclaw/skills/ picks them up at startup or at runtime.
+	stageDefaultSkills(deploymentDir)
+	injectSkillsToVolume(cfg, id, deploymentDir)
+
 	fmt.Printf("Syncing OpenClaw: %s/%s\n", appName, id)
 	fmt.Printf("Deployment directory: %s\n", deploymentDir)
 	fmt.Printf("Running helmfile sync...\n\n")
@@ -287,6 +330,9 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
+	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -396,36 +442,142 @@ func ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace string) erro
 	return nil
 }
 
-// copyWorkspaceToPod copies the local workspace directory into the OpenClaw pod's PVC.
+// copyWorkspaceToVolume copies the local workspace directory directly to the
+// host-side PVC path that maps to /data/.openclaw/workspace/ in the container.
 // This is non-fatal: failures print a warning and continue.
-func copyWorkspaceToPod(cfg *config.Config, id, workspaceDir string) {
+func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	targetDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
 	fmt.Printf("\nImporting workspace from %s...\n", workspaceDir)
 
-	// Wait for pod to be ready
-	podName, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 60)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create workspace directory: %v\n", err)
+		return
+	}
+
+	if err := copyDirRecursive(workspaceDir, targetDir); err != nil {
+		fmt.Printf("Warning: workspace copy failed: %v\n", err)
+		return
+	}
+
+	fmt.Printf("Imported workspace to volume\n")
+}
+
+// stageDefaultSkills writes embedded Obol skills to the deployment's config
+// directory on the host filesystem. These are pushed to the cluster as a
+// ConfigMap during doSync — no pod readiness required.
+func stageDefaultSkills(deploymentDir string) {
+	skillsDir := filepath.Join(deploymentDir, "skills")
+
+	// Don't overwrite if skills directory already exists (user may have customised)
+	if _, err := os.Stat(skillsDir); err == nil {
+		return
+	}
+
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create skills directory: %v\n", err)
+		return
+	}
+
+	if err := obolembed.CopySkills(skillsDir); err != nil {
+		fmt.Printf("Warning: could not stage default skills: %v\n", err)
+		return
+	}
+
+	names, _ := obolembed.GetEmbeddedSkillNames()
+	for _, name := range names {
+		fmt.Printf("  ✓ Staged skill: %s\n", name)
+	}
+}
+
+// skillsVolumePath returns the host-side path to the OpenClaw skills
+// directory inside the PVC provisioned by local-path-provisioner.
+//
+// The local-path-provisioner creates PV directories at:
+//
+//	$DATA_DIR/<namespace>/<pvc-name>/
+//
+// The OpenClaw chart creates a PVC named "openclaw-data" mounted at /data
+// in the container. OpenClaw watches /data/.openclaw/skills/ for skill files.
+//
+// Host paths by mode:
+//
+//	Dev:  .workspace/data/openclaw-<id>/openclaw-data/.openclaw/skills/
+//	Prod: ~/.local/share/obol/openclaw-<id>/openclaw-data/.openclaw/skills/
+func skillsVolumePath(cfg *config.Config, id string) string {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "skills")
+}
+
+// injectSkillsToVolume copies staged skills directly to the host-side PVC
+// path that maps to /data/.openclaw/skills/ inside the OpenClaw container.
+// This is called before helmfile sync so skills are present at first pod boot.
+// OpenClaw's file watcher detects new/changed skills at runtime.
+func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string) {
+	skillsSrc := filepath.Join(deploymentDir, "skills")
+	info, err := os.Stat(skillsSrc)
+	if err != nil || !info.IsDir() {
+		return
+	}
+
+	entries, err := os.ReadDir(skillsSrc)
 	if err != nil {
-		fmt.Printf("Warning: could not find ready pod, skipping workspace import: %v\n", err)
+		return
+	}
+	hasSkills := false
+	for _, e := range entries {
+		if e.IsDir() {
+			hasSkills = true
+			break
+		}
+	}
+	if !hasSkills {
 		return
 	}
 
-	// kubectl cp <src>/. <pod>:/data/.openclaw/workspace/ -n <namespace>
-	dest := fmt.Sprintf("%s:/data/.openclaw/workspace/", podName)
-	src := workspaceDir + "/."
-	cmd := exec.Command(kubectlBinary, "cp", src, dest, "-n", namespace)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Warning: workspace copy failed: %v\n%s", err, stderr.String())
+	targetDir := skillsVolumePath(cfg, id)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		fmt.Printf("Warning: could not create skills volume directory: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Imported workspace into pod %s\n", podName)
+	fmt.Println("Injecting skills to volume...")
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		src := filepath.Join(skillsSrc, e.Name())
+		dst := filepath.Join(targetDir, e.Name())
+		if err := copyDirRecursive(src, dst); err != nil {
+			fmt.Printf("Warning: could not inject skill %s: %v\n", e.Name(), err)
+			continue
+		}
+		fmt.Printf("  ✓ Injected skill: %s\n", e.Name())
+	}
+}
+
+// copyDirRecursive copies a directory tree from src to dst, creating
+// directories and copying files with 0755/0644 permissions.
+func copyDirRecursive(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, 0644)
+	})
 }
 
 // waitForPod polls for a Running pod matching the openclaw label and returns its name.
@@ -843,7 +995,25 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	}
 
 	if namespaceExists {
-		fmt.Printf("\nDeleting namespace %s...\n", namespace)
+		// Run helmfile destroy first to cleanly remove Helm releases.
+		// This ensures StatefulSet PVCs are properly cleaned up before namespace deletion.
+		helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+		if _, err := os.Stat(helmfilePath); err == nil {
+			if _, err := os.Stat(helmfileBinary); err == nil {
+				fmt.Printf("\nRemoving Helm releases from %s...\n", namespace)
+				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
+				destroyCmd.Dir = deploymentDir
+				destroyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+				destroyCmd.Stdout = os.Stdout
+				destroyCmd.Stderr = os.Stderr
+				if err := destroyCmd.Run(); err != nil {
+					fmt.Printf("Warning: helmfile destroy failed (will force-delete namespace): %v\n", err)
+				}
+			}
+		}
+
+		fmt.Printf("Deleting namespace %s...\n", namespace)
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
@@ -851,7 +1021,7 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to delete namespace: %w", err)
+			fmt.Printf("Warning: namespace deletion may still be in progress: %v\n", err)
 		}
 		fmt.Println("Namespace deleted")
 	}
@@ -874,66 +1044,62 @@ func Delete(cfg *config.Config, id string, force bool) error {
 	return nil
 }
 
-// SkillsSync packages a local skills directory into a ConfigMap and rolls the deployment
+// SkillsSync copies a local skills directory to the host-side PVC path that
+// maps to /data/.openclaw/skills/ inside the OpenClaw container. OpenClaw's
+// file watcher detects changes automatically — no pod restart needed.
 func SkillsSync(cfg *config.Config, id, skillsDir string) error {
-	namespace := fmt.Sprintf("%s-%s", appName, id)
-
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
-	}
-
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		return fmt.Errorf("skills directory not found: %s", skillsDir)
 	}
 
-	configMapName := fmt.Sprintf("openclaw-%s-skills", id)
-	archiveKey := "skills.tgz"
+	targetDir := skillsVolumePath(cfg, id)
 
-	fmt.Printf("Packaging skills from %s...\n", skillsDir)
+	fmt.Printf("Syncing skills from %s to volume...\n", skillsDir)
 
-	var archiveBuf bytes.Buffer
-	tarCmd := exec.Command("tar", "-czf", "-", "-C", skillsDir, ".")
-	tarCmd.Stdout = &archiveBuf
-	var tarStderr bytes.Buffer
-	tarCmd.Stderr = &tarStderr
-	if err := tarCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create skills archive: %w\n%s", err, tarStderr.String())
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create skills volume directory: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp("", "openclaw-skills-*.tgz")
+	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(archiveBuf.Bytes()); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("failed to write archive: %w", err)
-	}
-	tmpFile.Close()
-
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-
-	delCmd := exec.Command(kubectlBinary, "delete", "configmap", configMapName,
-		"-n", namespace, "--ignore-not-found")
-	delCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	delCmd.Run()
-
-	fmt.Printf("Creating ConfigMap %s in namespace %s...\n", configMapName, namespace)
-	createCmd := exec.Command(kubectlBinary, "create", "configmap", configMapName,
-		"-n", namespace,
-		fmt.Sprintf("--from-file=%s=%s", archiveKey, tmpFile.Name()))
-	createCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var createStderr bytes.Buffer
-	createCmd.Stderr = &createStderr
-	if err := createCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create ConfigMap: %w\n%s", err, createStderr.String())
+		return fmt.Errorf("failed to read skills directory: %w", err)
 	}
 
-	fmt.Printf("✓ Skills ConfigMap updated: %s\n", configMapName)
-	fmt.Printf("\nTo apply, re-sync: obol openclaw sync %s\n", id)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		src := filepath.Join(skillsDir, e.Name())
+		dst := filepath.Join(targetDir, e.Name())
+		if err := copyDirRecursive(src, dst); err != nil {
+			return fmt.Errorf("failed to copy skill %s: %w", e.Name(), err)
+		}
+		fmt.Printf("  ✓ Synced skill: %s\n", e.Name())
+	}
+
+	fmt.Printf("✓ Skills synced to volume (file watcher will reload)\n")
 	return nil
+}
+
+// SkillAdd adds a skill to a deployed OpenClaw instance by running the native
+// openclaw CLI inside the pod via kubectl exec.
+func SkillAdd(cfg *config.Config, id string, args []string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "add"}, args...))
+}
+
+// SkillRemove removes a skill from a deployed OpenClaw instance by running the
+// native openclaw CLI inside the pod via kubectl exec.
+func SkillRemove(cfg *config.Config, id string, args []string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "remove"}, args...))
+}
+
+// SkillList lists skills installed on a deployed OpenClaw instance by running
+// the native openclaw CLI inside the pod via kubectl exec.
+func SkillList(cfg *config.Config, id string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	return cliViaKubectlExec(cfg, namespace, []string{"skills", "list"})
 }
 
 // remoteCapableCommands lists openclaw subcommands that support --url and --token flags.
@@ -1027,10 +1193,12 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
-	// Build: kubectl exec -it -n <ns> deploy/openclaw -- node openclaw.mjs <args>
+	// Build: kubectl exec -it -c openclaw -n <ns> deploy/openclaw -- node openclaw.mjs <args>
 	// The pod runs `node openclaw.mjs` (no standalone binary in PATH).
+	// -c openclaw is required because the pod has an init container (extract-skills).
 	execArgs := []string{
 		"exec", "-it",
+		"-c", "openclaw",
 		"-n", namespace,
 		"deploy/openclaw",
 		"--",
@@ -1144,10 +1312,17 @@ models:
 erpc:
   url: http://erpc.erpc.svc.cluster.local:4000/rpc
 
-# Skills: chart creates a default empty ConfigMap; populate with obol openclaw skills sync
+# Remote-signer wallet for Ethereum transaction signing.
+# The remote-signer runs in the same namespace as OpenClaw.
+extraEnv:
+  - name: REMOTE_SIGNER_URL
+    value: http://remote-signer:9000
+
+# Skills: injected directly to the host-side PVC path at
+# $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
+# OpenClaw's file watcher picks them up; no ConfigMap needed.
 skills:
-  enabled: true
-  createDefault: true
+  enabled: false
 
 # Agent init Job (enable to bootstrap workspace on first deploy)
 initJob:
@@ -1596,7 +1771,8 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 	return secretData
 }
 
-// generateHelmfile creates a helmfile.yaml referencing the published obol/openclaw chart.
+// generateHelmfile creates a helmfile.yaml referencing the published
+// obol/openclaw and obol/remote-signer charts in the same namespace.
 func generateHelmfile(id, namespace string) string {
 	return fmt.Sprintf(`# OpenClaw instance: %s
 # Managed by obol openclaw
@@ -1613,5 +1789,12 @@ releases:
     version: %s
     values:
       - values-obol.yaml
-`, id, namespace, chartVersion)
+
+  - name: remote-signer
+    namespace: %s
+    chart: obol/remote-signer
+    version: %s
+    values:
+      - values-remote-signer.yaml
+`, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
 }
