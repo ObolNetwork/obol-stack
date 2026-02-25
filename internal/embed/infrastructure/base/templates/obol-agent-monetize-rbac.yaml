@@ -17,7 +17,7 @@ metadata:
   name: openclaw-monetize
 rules:
   # ServiceOffer CRD - full lifecycle management
-  - apiGroups: ["obol.network"]
+  - apiGroups: ["obol.org"]
     resources: ["serviceoffers", "serviceoffers/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Traefik middlewares - create ForwardAuth for x402 gating
