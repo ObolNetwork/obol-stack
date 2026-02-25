@@ -2,8 +2,10 @@ package embed
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -98,6 +100,48 @@ func TestCopySkills(t *testing.T) {
 	// distributed-validators must have references/api-examples.md
 	if _, err := os.Stat(filepath.Join(destDir, "distributed-validators", "references", "api-examples.md")); err != nil {
 		t.Errorf("missing distributed-validators/references/api-examples.md: %v", err)
+	}
+}
+
+func TestMonetizePy_Syntax(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	monetizePy := filepath.Join(destDir, "monetize", "scripts", "monetize.py")
+	if _, err := os.Stat(monetizePy); err != nil {
+		t.Fatalf("monetize.py not found: %v", err)
+	}
+
+	cmd := exec.Command("python3", "-m", "py_compile", monetizePy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("monetize.py has syntax errors:\n%s\n%v", output, err)
+	}
+}
+
+func TestKubePy_WriteHelpers(t *testing.T) {
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	kubePy := filepath.Join(destDir, "obol-stack", "scripts", "kube.py")
+	data, err := os.ReadFile(kubePy)
+	if err != nil {
+		t.Fatalf("read kube.py: %v", err)
+	}
+
+	content := string(data)
+	for _, fn := range []string{"def api_post", "def api_patch", "def api_delete"} {
+		if !strings.Contains(content, fn) {
+			t.Errorf("kube.py missing function %q", fn)
+		}
 	}
 }
 
