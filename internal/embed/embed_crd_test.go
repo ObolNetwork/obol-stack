@@ -83,13 +83,13 @@ func TestServiceOfferCRD_Parses(t *testing.T) {
 	}
 
 	name := nested(crd, "metadata", "name")
-	if name != "serviceoffers.obol.network" {
-		t.Errorf("metadata.name = %v, want serviceoffers.obol.network", name)
+	if name != "serviceoffers.obol.org" {
+		t.Errorf("metadata.name = %v, want serviceoffers.obol.org", name)
 	}
 
 	group := nested(crd, "spec", "group")
-	if group != "obol.network" {
-		t.Errorf("spec.group = %v, want obol.network", group)
+	if group != "obol.org" {
+		t.Errorf("spec.group = %v, want obol.org", group)
 	}
 }
 
@@ -222,7 +222,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Errorf("ClusterRole name = %v, want openclaw-monetize", name)
 	}
 
-	// ClusterRole should have rules for obol.network, traefik.io, gateway.networking.k8s.io
+	// ClusterRole should have rules for obol.org, traefik.io, gateway.networking.k8s.io
 	rules, ok := cr["rules"].([]interface{})
 	if !ok || len(rules) == 0 {
 		t.Fatal("ClusterRole has no rules")
@@ -240,7 +240,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"obol.network", "traefik.io", "gateway.networking.k8s.io"} {
+	for _, want := range []string{"obol.org", "traefik.io", "gateway.networking.k8s.io"} {
 		if !apiGroups[want] {
 			t.Errorf("ClusterRole missing apiGroup %q", want)
 		}

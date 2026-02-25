@@ -1,11 +1,11 @@
 # ServiceOffer CRD Reference
 
-Group: `obol.network`, Version: `v1alpha1`, Kind: `ServiceOffer`
+Group: `obol.org`, Version: `v1alpha1`, Kind: `ServiceOffer`
 
 ## Example
 
 ```yaml
-apiVersion: obol.network/v1alpha1
+apiVersion: obol.org/v1alpha1
 kind: ServiceOffer
 metadata:
   name: qwen-inference

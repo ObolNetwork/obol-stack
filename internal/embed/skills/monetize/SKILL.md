@@ -85,7 +85,7 @@ When `process` runs on an offer, it steps through these stages:
 ## Architecture
 
 ```
-ServiceOffer CR (obol.network/v1alpha1)
+ServiceOffer CR (obol.org/v1alpha1)
     |
     v
 monetize.py process

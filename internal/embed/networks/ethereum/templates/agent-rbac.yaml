@@ -16,7 +16,7 @@ rules:
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch"]
   # Write access to CRDs and routing for monetization
-  - apiGroups: ["obol.network"]
+  - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["traefik.io"]
