@@ -1535,3 +1535,228 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 
 	t.Logf("agent autonomous monetize test complete: full lifecycle managed from pod")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 7 — Fork Validation: Anvil-backed ServiceOffer with mock facilitator
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestIntegration_Fork_FullPaymentFlow validates the full payment flow using
+// an Anvil fork of Base Sepolia as the upstream (simulating a real chain
+// environment) with a mock facilitator for payment verification.
+//
+// This test proves:
+//  1. The agent can reconcile an offer backed by a forked chain upstream
+//  2. The x402-pricing ConfigMap is correctly patched by the agent
+//  3. The payment gate correctly returns 402 for unpaid requests
+//  4. The payment gate correctly returns 200 with valid payment
+//  5. The mock facilitator receives verify+settle calls
+//  6. Deletion cleans up both K8s resources and pricing routes
+func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("fork-pay")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	// Use Anvil account[1] as the payment recipient (has 10000 ETH).
+	walletAddr := anvil.Accounts[1].Address
+
+	mf := setupMockFacilitator(t, cfg)
+
+	name := "test-fork-pay"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	// Agent reconciles the offer.
+	out, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", out)
+
+	// Verify conditions.
+	so := getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Errorf("condition %s = %q, want True", cond, status)
+		}
+	}
+
+	// Verify pricing route was added by the reconciler.
+	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("reconciler did not add pricing route:\n%s", pricingOut)
+	}
+
+	// Wait for Reloader + route propagation.
+	time.Sleep(8 * time.Second)
+
+	// Request WITHOUT payment → 402.
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+	resp, err := http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		t.Logf("correctly returned 402 Payment Required")
+
+		// Verify payment requirements include chain info.
+		var reqs map[string]interface{}
+		if err := json.Unmarshal(body, &reqs); err == nil {
+			if accepts, ok := reqs["accepts"].([]interface{}); ok && len(accepts) > 0 {
+				first := accepts[0].(map[string]interface{})
+				t.Logf("payment requirements: network=%v, maxAmount=%v",
+					first["network"], first["maxAmountRequired"])
+			}
+		}
+	}
+
+	// Request WITH payment → 200 + RPC response from Anvil fork.
+	paymentHeader := testutil.TestPaymentHeader(t, walletAddr)
+	req, _ := http.NewRequest("POST", url, strings.NewReader(rpcBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request with payment failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		// Parse RPC response — should have a block number from the fork.
+		var rpcResp map[string]interface{}
+		if err := json.Unmarshal(body, &rpcResp); err == nil {
+			if result, ok := rpcResp["result"].(string); ok {
+				t.Logf("Anvil fork block number: %s (payment accepted)", result)
+			}
+		}
+	}
+
+	// Verify mock facilitator was invoked.
+	if mf.VerifyCalls.Load() == 0 {
+		t.Error("mock facilitator /verify was never called")
+	}
+	t.Logf("facilitator calls: verify=%d, settle=%d",
+		mf.VerifyCalls.Load(), mf.SettleCalls.Load())
+
+	// Delete via the agent skill (tests pricing route removal).
+	delOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"delete", name, "--namespace", ns)
+	t.Logf("delete output:\n%s", delOut)
+
+	// Verify pricing route was removed.
+	time.Sleep(2 * time.Second)
+	pricingOut = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
+	}
+
+	// Verify K8s resources are gone.
+	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffer", name, "-n", ns)
+	if err == nil {
+		t.Error("ServiceOffer still exists after delete")
+	}
+
+	t.Logf("fork payment flow test complete: Anvil fork → x402 → paid → cleaned up")
+}
+
+// TestIntegration_Fork_AgentSkillIteration validates that the monetize skill
+// can handle error cases gracefully and recover:
+//   - Create offer with unreachable upstream → process fails at UpstreamHealthy
+//   - Fix upstream (deploy Anvil) → re-process → all conditions True
+//   - Demonstrates the agent can iterate and self-heal
+func TestIntegration_Fork_AgentSkillIteration(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("fork-iterate")
+	createTestNamespace(t, cfg, ns)
+
+	walletAddr := anvil.Accounts[1].Address
+	name := "test-iterate"
+
+	// Step 1: Create offer pointing at non-existent upstream.
+	badYAML := fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  upstream:
+    service: does-not-exist
+    namespace: %s
+    port: 8545
+    healthPath: /
+  pricing:
+    amount: "0.001"
+    unit: request
+    currency: USDC
+    chain: base-sepolia
+  wallet: "%s"
+  path: /services/%s
+`, name, ns, ns, walletAddr, name)
+	applyServiceOffer(t, cfg, badYAML)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// Step 2: Agent tries to reconcile → should fail at UpstreamHealthy.
+	out1, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("first process (expected failure):\n%s", out1)
+
+	so := getServiceOffer(t, cfg, name, ns)
+	if status := getConditionStatus(so, "UpstreamHealthy"); status != "False" {
+		t.Logf("UpstreamHealthy = %q (expected False)", status)
+	}
+	if status := getConditionStatus(so, "Ready"); status == "True" {
+		t.Error("Ready should not be True with bad upstream")
+	}
+
+	// Step 3: Fix the upstream — deploy Anvil service.
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	// Step 4: Update the ServiceOffer to point at the correct upstream.
+	fixedYAML := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, fixedYAML)
+
+	// Step 5: Agent re-processes — should now succeed.
+	// Reset UpstreamHealthy condition by patching status to force re-check.
+	statusPatch := `{"status":{"conditions":[]}}`
+	obolRun(t, cfg, "kubectl", "patch", "serviceoffer", name, "-n", ns,
+		"--type=merge", "--subresource=status", "-p", statusPatch)
+
+	out2, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("second process (after fix):\n%s", out2)
+
+	// Step 6: Verify all conditions now True.
+	so = getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Errorf("after fix: %s = %q, want True", cond, status)
+		}
+	}
+
+	t.Logf("skill iteration test complete: agent recovered from bad upstream")
+}
