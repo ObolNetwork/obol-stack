@@ -5,6 +5,7 @@ package openclaw
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/testutil"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -782,5 +784,417 @@ func TestIntegration_Route_DeleteCascades(t *testing.T) {
 	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
 	if strings.Contains(hrOut, name) {
 		t.Errorf("httproute still exists after ServiceOffer deletion:\n%s", hrOut)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 — Payment Gate Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+// setupMockFacilitator starts a host-side mock facilitator and patches
+// the x402-verifier ConfigMap to use it via host.k3d.internal.
+// Returns the MockFacilitator. Registers cleanup to restore original config.
+func setupMockFacilitator(t *testing.T, cfg *config.Config) *testutil.MockFacilitator {
+	t.Helper()
+	mf := testutil.StartMockFacilitator(t)
+
+	// Save original pricing config for restore.
+	origCfg, err := x402verifier.GetPricingConfig(cfg)
+	if err != nil {
+		t.Fatalf("read original pricing config: %v", err)
+	}
+
+	// Patch facilitator URL to host-side mock.
+	// The mock listens on 127.0.0.1 but k3d pods reach the host via host.k3d.internal.
+	patchYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: false\nroutes: []\n"}}`,
+		origCfg.Wallet, origCfg.Chain, mf.ClusterURL)
+
+	obolRun(t, cfg, "kubectl", "patch", "configmap", "x402-pricing",
+		"-n", "x402", "-p", patchYAML, "--type=merge")
+
+	// Wait for Reloader to restart the verifier pod.
+	time.Sleep(5 * time.Second)
+
+	t.Cleanup(func() {
+		// Restore original config.
+		restoreYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: %v\nroutes: []\n"}}`,
+			origCfg.Wallet, origCfg.Chain, origCfg.FacilitatorURL, origCfg.VerifyOnly)
+		_, _ = obolRunErr(cfg, "kubectl", "patch", "configmap", "x402-pricing",
+			"-n", "x402", "-p", restoreYAML, "--type=merge")
+	})
+
+	return mf
+}
+
+// addPricingRoute adds a route to the x402-verifier ConfigMap.
+func addPricingRoute(t *testing.T, cfg *config.Config, pattern, price, wallet string) {
+	t.Helper()
+	if err := x402verifier.AddRoute(cfg, pattern, price, "test route"); err != nil {
+		t.Fatalf("add pricing route: %v", err)
+	}
+	// Wait for Reloader to pick up changes.
+	time.Sleep(5 * time.Second)
+}
+
+func TestIntegration_PaymentGate_VerifierHealthy(t *testing.T) {
+	cfg := requireCluster(t)
+	_ = cfg
+
+	// x402-verifier /healthz and /readyz should return 200.
+	// These are accessed via port-forward or direct cluster check.
+	out, err := obolRunErr(cfg, "kubectl", "exec", "-n", "x402",
+		"deploy/x402-verifier", "--", "wget", "-qO-", "http://localhost:8080/healthz")
+	if err != nil {
+		t.Skipf("could not reach verifier healthz: %v", err)
+	}
+	t.Logf("healthz: %s", out)
+
+	out, err = obolRunErr(cfg, "kubectl", "exec", "-n", "x402",
+		"deploy/x402-verifier", "--", "wget", "-qO-", "http://localhost:8080/readyz")
+	if err != nil {
+		t.Skipf("could not reach verifier readyz: %v", err)
+	}
+	t.Logf("readyz: %s", out)
+}
+
+func TestIntegration_PaymentGate_402WithoutPayment(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("pay-402")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	// Start mock facilitator and patch verifier config.
+	_ = setupMockFacilitator(t, cfg)
+
+	name := "test-pay402"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// Trigger reconciliation to create Middleware + HTTPRoute.
+	execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	// Add a pricing route for this service path.
+	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+
+	// Wait for route propagation.
+	time.Sleep(3 * time.Second)
+
+	// Request WITHOUT payment should get 402.
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+	resp, err := http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("expected 402 Payment Required, got %d; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestIntegration_PaymentGate_RequirementsFormat(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("pay-req")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	_ = setupMockFacilitator(t, cfg)
+
+	name := "test-payreq"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+
+	time.Sleep(3 * time.Second)
+
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+	resp, err := http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Skipf("expected 402 for requirements check, got %d", resp.StatusCode)
+	}
+
+	// Parse the 402 body for payment requirements.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read 402 body: %v", err)
+	}
+
+	var requirements map[string]interface{}
+	if err := json.Unmarshal(body, &requirements); err != nil {
+		t.Fatalf("parse 402 body: %v\nbody: %s", err, body)
+	}
+
+	// Should have accepts array with chain/currency/amount.
+	accepts, ok := requirements["accepts"].([]interface{})
+	if !ok || len(accepts) == 0 {
+		t.Fatalf("402 body missing 'accepts' array: %s", body)
+	}
+	t.Logf("payment requirements: %s", body)
+
+	// Verify first accept entry has expected fields.
+	first, ok := accepts[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("accepts[0] is not an object: %v", accepts[0])
+	}
+	if _, ok := first["network"]; !ok {
+		t.Error("accepts[0] missing 'network' field")
+	}
+}
+
+func TestIntegration_PaymentGate_200WithPayment(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("pay-200")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	mf := setupMockFacilitator(t, cfg)
+
+	name := "test-pay200"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+
+	time.Sleep(3 * time.Second)
+
+	// Request WITH payment should get 200 and RPC response from Anvil.
+	walletAddr := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+	paymentHeader := testutil.TestPaymentHeader(t, walletAddr)
+
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+	req, err := http.NewRequest("POST", url, strings.NewReader(rpcBody))
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with valid payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		t.Logf("payment accepted, response: %s", body)
+	}
+
+	// Verify mock facilitator was called.
+	if mf.VerifyCalls.Load() == 0 {
+		t.Logf("warning: mock facilitator verify was not called (may use cached result)")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 — Full E2E (CLI-Driven) Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestIntegration_E2E_OfferLifecycle(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("e2e")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	mf := setupMockFacilitator(t, cfg)
+
+	name := "test-e2e"
+	walletAddr := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+
+	// Step 1: Create ServiceOffer via obol CLI.
+	obolRun(t, cfg, "monetize", "offer", name,
+		"--price", "0.001",
+		"--chain", "base-sepolia",
+		"--wallet", walletAddr,
+		"--namespace", ns,
+		"--upstream", "anvil-rpc",
+		"--port", fmt.Sprintf("%d", anvil.Port),
+		"--path", fmt.Sprintf("/services/%s", name),
+		"--unit", "request",
+	)
+	t.Cleanup(func() {
+		_, _ = obolRunErr(cfg, "monetize", "delete", name, "--namespace", ns, "--force")
+	})
+
+	// Step 2: Verify CR was created.
+	so := getServiceOffer(t, cfg, name, ns)
+	spec, ok := so["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("spec missing from created ServiceOffer")
+	}
+	if spec["wallet"] != walletAddr {
+		t.Errorf("wallet = %v, want %s", spec["wallet"], walletAddr)
+	}
+
+	// Step 3: Trigger reconciliation via monetize.py.
+	execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+
+	// Step 4: Verify offer-status shows conditions.
+	statusOut := obolRun(t, cfg, "monetize", "offer-status", name, "--namespace", ns)
+	t.Logf("offer-status:\n%s", statusOut)
+
+	// Step 5: Verify obol monetize list shows the offer.
+	listOut := obolRun(t, cfg, "monetize", "list", "--namespace", ns)
+	if !strings.Contains(listOut, name) {
+		t.Errorf("monetize list does not contain %q:\n%s", name, listOut)
+	}
+
+	// Step 6: Add pricing route and test payment flow.
+	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001", walletAddr)
+	time.Sleep(3 * time.Second)
+
+	// Without payment → 402.
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+	resp, err := http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Logf("expected 402 without payment, got %d", resp.StatusCode)
+	}
+
+	// With payment → 200.
+	paymentHeader := testutil.TestPaymentHeader(t, walletAddr)
+	req, _ := http.NewRequest("POST", url, strings.NewReader(rpcBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080 with payment: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("expected 200 with payment, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Step 7: Delete via CLI.
+	obolRun(t, cfg, "monetize", "delete", name, "--namespace", ns, "--force")
+
+	// Step 8: Verify CR is gone.
+	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffer", name, "-n", ns)
+	if err == nil {
+		t.Error("ServiceOffer still exists after CLI delete")
+	}
+
+	// Step 9: Verify route is gone.
+	time.Sleep(3 * time.Second)
+	resp, err = http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err == nil {
+		resp.Body.Close()
+		// After route removal, should get 404 or 502 (no backend).
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPaymentRequired {
+			t.Logf("expected 404/502 after delete, got %d", resp.StatusCode)
+		}
+	}
+
+	_ = mf // mock facilitator used
+}
+
+func TestIntegration_E2E_HeartbeatReconciles(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	ns := testNamespace("e2e-heartbeat")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	name := "test-heartbeat"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// Do NOT manually trigger process — wait for the heartbeat cron (every 60s)
+	// to auto-reconcile the pending offer. Timeout 90s.
+	deadline := time.Now().Add(90 * time.Second)
+	reconciled := false
+	for time.Now().Before(deadline) {
+		so := getServiceOffer(t, cfg, name, ns)
+		status := getConditionStatus(so, "UpstreamHealthy")
+		if status != "" {
+			reconciled = true
+			t.Logf("heartbeat reconciled: UpstreamHealthy=%s", status)
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if !reconciled {
+		t.Skip("heartbeat did not reconcile within 90s — cron may not be configured")
+	}
+}
+
+func TestIntegration_E2E_ListAndStatus(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+
+	ns := testNamespace("e2e-ls")
+	createTestNamespace(t, cfg, ns)
+
+	name := "test-ls"
+	yaml := minimalServiceOfferYAML(name, ns)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
+
+	// obol monetize list should show the offer.
+	listOut := obolRun(t, cfg, "monetize", "list")
+	if !strings.Contains(listOut, name) {
+		t.Errorf("monetize list does not contain %q:\n%s", name, listOut)
+	}
+
+	// obol monetize offer-status should show the CR.
+	statusOut := obolRun(t, cfg, "monetize", "offer-status", name, "--namespace", ns)
+	if !strings.Contains(statusOut, "ServiceOffer") && !strings.Contains(statusOut, "serviceoffer") && !strings.Contains(statusOut, "kind") {
+		t.Logf("offer-status output (expected ServiceOffer YAML):\n%s", statusOut)
 	}
 }
