@@ -22,8 +22,8 @@ import (
 // requireCRD skips the test if the ServiceOffer CRD is not installed.
 func requireCRD(t *testing.T, cfg *config.Config) {
 	t.Helper()
-	out := obolRun(t, cfg, "kubectl", "get", "crd", "serviceoffers.obol.network")
-	if !strings.Contains(out, "serviceoffers.obol.network") {
+	out := obolRun(t, cfg, "kubectl", "get", "crd", "serviceoffers.obol.org")
+	if !strings.Contains(out, "serviceoffers.obol.org") {
 		t.Skip("ServiceOffer CRD not installed")
 	}
 }
@@ -73,7 +73,7 @@ func testNamespace(prefix string) string {
 
 // minimalServiceOfferYAML returns a valid ServiceOffer YAML for testing.
 func minimalServiceOfferYAML(name, namespace string) string {
-	return fmt.Sprintf(`apiVersion: obol.network/v1alpha1
+	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
 kind: ServiceOffer
 metadata:
   name: %s
@@ -200,7 +200,7 @@ func TestIntegration_CRD_WalletValidation(t *testing.T) {
 	createTestNamespace(t, cfg, ns)
 
 	// Bad wallet — should be rejected by CRD validation regex
-	badYAML := fmt.Sprintf(`apiVersion: obol.network/v1alpha1
+	badYAML := fmt.Sprintf(`apiVersion: obol.org/v1alpha1
 kind: ServiceOffer
 metadata:
   name: test-bad-wallet
