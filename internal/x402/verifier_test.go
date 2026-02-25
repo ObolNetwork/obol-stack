@@ -102,19 +102,19 @@ func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *V
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-func TestVerifier_NoForwardedURI_Returns200(t *testing.T) {
+func TestVerifier_NoForwardedURI_Returns403(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	v := newTestVerifier(t, fac.URL, []RouteRule{
 		{Pattern: "/rpc/*", Price: "0.0001"},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
-	// No X-Forwarded-Uri header.
+	// No X-Forwarded-Uri header — fail-closed.
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200 without X-Forwarded-Uri, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 without X-Forwarded-Uri, got %d", w.Code)
 	}
 }
 

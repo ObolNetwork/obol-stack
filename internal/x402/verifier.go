@@ -56,8 +56,10 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	uri := r.Header.Get("X-Forwarded-Uri")
 	if uri == "" {
-		// No forwarded URI — shouldn't happen in ForwardAuth. Allow through.
-		w.WriteHeader(http.StatusOK)
+		// No forwarded URI — signals misconfiguration or direct access.
+		// Fail-closed: deny rather than silently allowing through.
+		log.Printf("x402-verifier: missing X-Forwarded-Uri header (misconfiguration or direct access)")
+		http.Error(w, "forbidden: missing forwarded URI", http.StatusForbidden)
 		return
 	}
 

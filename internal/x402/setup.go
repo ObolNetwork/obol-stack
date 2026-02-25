@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -21,6 +22,10 @@ const (
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
 func Setup(cfg *config.Config, wallet, chain string) error {
+	if err := ValidateWallet(wallet); err != nil {
+		return err
+	}
+
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -30,35 +35,27 @@ func Setup(cfg *config.Config, wallet, chain string) error {
 
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
-	patchJSON := fmt.Sprintf(`{"stringData":{"WALLET_ADDRESS":"%s"}}`, wallet)
+	secretPatch := map[string]any{"stringData": map[string]string{"WALLET_ADDRESS": wallet}}
+	patchJSON, err := json.Marshal(secretPatch)
+	if err != nil {
+		return fmt.Errorf("marshal secret patch: %w", err)
+	}
 	if err := kubectlRun(kubectlBin, kubeconfig,
 		"patch", "secret", x402SecretName, "-n", x402Namespace,
-		"-p", patchJSON, "--type=merge"); err != nil {
+		"-p", string(patchJSON), "--type=merge"); err != nil {
 		return fmt.Errorf("failed to patch x402 secret: %w", err)
 	}
 
 	// 2. Update the pricing ConfigMap with wallet and chain.
 	fmt.Printf("Updating x402 pricing config...\n")
-	pricingYAML := fmt.Sprintf(`wallet: "%s"
-chain: "%s"
-facilitatorURL: "https://facilitator.x402.rs"
-verifyOnly: false
-routes: []
-`, wallet, chain)
-
-	cmPatch := map[string]interface{}{
-		"data": map[string]string{
-			"pricing.yaml": pricingYAML,
-		},
+	pricingCfg := &PricingConfig{
+		Wallet:         wallet,
+		Chain:          chain,
+		FacilitatorURL: "https://facilitator.x402.rs",
+		VerifyOnly:     false,
+		Routes:         []RouteRule{},
 	}
-	cmPatchJSON, err := json.Marshal(cmPatch)
-	if err != nil {
-		return fmt.Errorf("marshal pricing patch: %w", err)
-	}
-
-	if err := kubectlRun(kubectlBin, kubeconfig,
-		"patch", "configmap", pricingConfigMap, "-n", x402Namespace,
-		"-p", string(cmPatchJSON), "--type=merge"); err != nil {
+	if err := patchPricingConfig(kubectlBin, kubeconfig, pricingCfg); err != nil {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
@@ -129,29 +126,14 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 }
 
 func patchPricingConfig(kubectlBin, kubeconfig string, pcfg *PricingConfig) error {
-	// Serialize pricing config as YAML.
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "wallet: \"%s\"\n", pcfg.Wallet)
-	fmt.Fprintf(&sb, "chain: \"%s\"\n", pcfg.Chain)
-	fmt.Fprintf(&sb, "facilitatorURL: \"%s\"\n", pcfg.FacilitatorURL)
-	fmt.Fprintf(&sb, "verifyOnly: %v\n", pcfg.VerifyOnly)
-
-	if len(pcfg.Routes) == 0 {
-		sb.WriteString("routes: []\n")
-	} else {
-		sb.WriteString("routes:\n")
-		for _, r := range pcfg.Routes {
-			fmt.Fprintf(&sb, "  - pattern: \"%s\"\n", r.Pattern)
-			fmt.Fprintf(&sb, "    price: \"%s\"\n", r.Price)
-			if r.Description != "" {
-				fmt.Fprintf(&sb, "    description: \"%s\"\n", r.Description)
-			}
-		}
+	pricingBytes, err := yaml.Marshal(pcfg)
+	if err != nil {
+		return fmt.Errorf("marshal pricing config: %w", err)
 	}
 
-	cmPatch := map[string]interface{}{
+	cmPatch := map[string]any{
 		"data": map[string]string{
-			"pricing.yaml": sb.String(),
+			"pricing.yaml": string(pricingBytes),
 		},
 	}
 	cmPatchJSON, err := json.Marshal(cmPatch)

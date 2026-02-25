@@ -3,6 +3,7 @@ package x402
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	x402lib "github.com/mark3labs/x402-go"
 	"gopkg.in/yaml.v3"
@@ -62,7 +63,28 @@ func LoadConfig(path string) (*PricingConfig, error) {
 		cfg.Chain = "base-sepolia"
 	}
 
+	if err := ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
+}
+
+// ValidateFacilitatorURL checks that the facilitator URL uses HTTPS.
+// Payment proofs sent over plain HTTP could be intercepted.
+// Loopback addresses (localhost, 127.0.0.1) are exempted for local
+// development and testing.
+func ValidateFacilitatorURL(u string) error {
+	if strings.HasPrefix(u, "https://") {
+		return nil
+	}
+	// Allow loopback for local development and testing.
+	if strings.HasPrefix(u, "http://localhost") ||
+		strings.HasPrefix(u, "http://127.0.0.1") ||
+		strings.HasPrefix(u, "http://[::1]") {
+		return nil
+	}
+	return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)
 }
 
 // ResolveChain maps a chain name string to an x402 ChainConfig.

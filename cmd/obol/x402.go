@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -42,8 +43,12 @@ Requires a funded Base Sepolia wallet (private key).`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "private-key",
-				Usage:   "Secp256k1 private key (hex, no 0x prefix)",
+				Usage:   "DEPRECATED: use --private-key-file or ERC8004_PRIVATE_KEY env var instead",
 				Sources: cli.EnvVars("ERC8004_PRIVATE_KEY"),
+			},
+			&cli.StringFlag{
+				Name:  "private-key-file",
+				Usage: "Path to file containing secp256k1 private key (hex)",
 			},
 			&cli.StringFlag{
 				Name:  "rpc-url",
@@ -67,7 +72,19 @@ Requires a funded Base Sepolia wallet (private key).`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			keyHex := cmd.String("private-key")
 			if keyHex == "" {
-				return fmt.Errorf("--private-key or ERC8004_PRIVATE_KEY required")
+				if keyFile := cmd.String("private-key-file"); keyFile != "" {
+					data, err := os.ReadFile(keyFile)
+					if err != nil {
+						return fmt.Errorf("read private key file: %w", err)
+					}
+					keyHex = strings.TrimSpace(string(data))
+				}
+			}
+			if keyHex == "" {
+				return fmt.Errorf("private key required: use --private-key-file <path> or set ERC8004_PRIVATE_KEY")
+			}
+			if cmd.IsSet("private-key") {
+				fmt.Fprintf(os.Stderr, "Warning: --private-key flag exposes key in process args. Use --private-key-file or ERC8004_PRIVATE_KEY env var instead.\n")
 			}
 			keyHex = strings.TrimPrefix(keyHex, "0x")
 
@@ -164,7 +181,11 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			return x402verifier.Setup(cfg, cmd.String("wallet"), cmd.String("chain"))
+			wallet := cmd.String("wallet")
+			if err := x402verifier.ValidateWallet(wallet); err != nil {
+				return err
+			}
+			return x402verifier.Setup(cfg, wallet, cmd.String("chain"))
 		},
 	}
 }
