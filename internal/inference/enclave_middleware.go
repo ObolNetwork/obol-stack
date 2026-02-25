@@ -24,6 +24,10 @@ const (
 	// The gateway will encrypt the upstream response to that key before
 	// returning it, providing end-to-end confidentiality.
 	headerReplyPubkey = "X-Obol-Reply-Pubkey"
+
+	// maxResponseCapture is the maximum size of an upstream response body that
+	// will be buffered for re-encryption. Prevents OOM from unbounded responses.
+	maxResponseCapture = 64 << 20 // 64 MiB
 )
 
 // enclaveMiddleware wraps inference HTTP handlers to support SE-encrypted
@@ -158,6 +162,12 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		rec := &responseCapture{header: w.Header()}
 		next.ServeHTTP(rec, r)
 
+		if rec.overflow {
+			log.Printf("enclave middleware: upstream response exceeded %d byte capture limit", maxResponseCapture)
+			http.Error(w, "response too large to encrypt", http.StatusBadGateway)
+			return
+		}
+
 		encResp, err := enclave.Encrypt(replyPubkey, rec.body.Bytes())
 		if err != nil {
 			log.Printf("enclave middleware: response encrypt error: %v", err)
@@ -184,11 +194,21 @@ type responseCapture struct {
 	header     http.Header
 	body       bytes.Buffer
 	statusCode int
+	overflow   bool // true if body exceeded maxResponseCapture
 }
 
 func (c *responseCapture) Header() http.Header { return c.header }
 
-func (c *responseCapture) Write(b []byte) (int, error) { return c.body.Write(b) }
+func (c *responseCapture) Write(b []byte) (int, error) {
+	if c.overflow {
+		return 0, fmt.Errorf("response body exceeds %d byte limit", maxResponseCapture)
+	}
+	if c.body.Len()+len(b) > maxResponseCapture {
+		c.overflow = true
+		return 0, fmt.Errorf("response body exceeds %d byte limit", maxResponseCapture)
+	}
+	return c.body.Write(b)
+}
 
 func (c *responseCapture) WriteHeader(code int) {
 	if c.statusCode == 0 {

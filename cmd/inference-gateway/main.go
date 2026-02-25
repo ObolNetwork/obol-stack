@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/inference"
-	"github.com/mark3labs/x402-go"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
 func main() {
@@ -16,7 +16,7 @@ func main() {
 	upstream := flag.String("upstream", "http://ollama:11434", "Upstream inference service URL")
 	wallet := flag.String("wallet", "", "USDC recipient wallet address (required)")
 	price := flag.String("price", "0.001", "USDC price per request")
-	chain := flag.String("chain", "base-sepolia", "Blockchain network (base, base-sepolia)")
+	chain := flag.String("chain", "base-sepolia", "Blockchain network (base, base-sepolia, polygon, polygon-amoy, avalanche, avalanche-fuji)")
 	facilitator := flag.String("facilitator", "https://facilitator.x402.rs", "x402 facilitator URL")
 	flag.Parse()
 
@@ -27,15 +27,13 @@ func main() {
 			log.Fatal("--wallet flag or X402_WALLET env var required")
 		}
 	}
+	if err := x402verifier.ValidateWallet(*wallet); err != nil {
+		log.Fatalf("wallet: %v", err)
+	}
 
-	var x402Chain x402.ChainConfig
-	switch *chain {
-	case "base", "base-mainnet":
-		x402Chain = x402.BaseMainnet
-	case "base-sepolia":
-		x402Chain = x402.BaseSepolia
-	default:
-		log.Fatalf("unsupported chain: %s (use: base, base-sepolia)", *chain)
+	x402Chain, err := x402verifier.ResolveChain(*chain)
+	if err != nil {
+		log.Fatalf("chain: %v", err)
 	}
 
 	gw, err := inference.NewGateway(inference.GatewayConfig{

@@ -15,6 +15,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/mark3labs/x402-go"
 	"github.com/urfave/cli/v3"
 )
@@ -155,6 +156,9 @@ Analogous to 'ecloud compute app deploy'.`,
 			// Validate required fields before writing config.
 			if d.WalletAddress == "" {
 				return fmt.Errorf("wallet address required — use --wallet <addr> or set X402_WALLET")
+			}
+			if err := x402verifier.ValidateWallet(d.WalletAddress); err != nil {
+				return err
 			}
 
 			if err := store.Create(d, true); err != nil {
@@ -438,6 +442,9 @@ For managed deployments use 'obol inference deploy'.`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.String("wallet") == "" {
 				return fmt.Errorf("usage: obol inference serve --wallet <address> [flags]")
+			}
+			if err := x402verifier.ValidateWallet(cmd.String("wallet")); err != nil {
+				return err
 			}
 
 			teeType := cmd.String("tee")

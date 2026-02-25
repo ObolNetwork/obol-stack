@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -83,6 +84,19 @@ type Deployment struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
+// validDeploymentName matches safe deployment names: alphanumeric, hyphens,
+// underscores, 1-63 chars. No path separators, dots, or shell metacharacters.
+var validDeploymentName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
+
+// ValidateName checks that name is a safe deployment identifier.
+// It rejects empty strings, path traversal attempts, and shell metacharacters.
+func ValidateName(name string) error {
+	if !validDeploymentName.MatchString(name) {
+		return fmt.Errorf("invalid deployment name %q: must be 1-63 alphanumeric chars, hyphens, or underscores", name)
+	}
+	return nil
+}
+
 // Store manages named inference deployment configurations on disk.
 // Layout: <configDir>/inference/<name>/config.json
 type Store struct {
@@ -107,6 +121,9 @@ func (s *Store) configPath(name string) string {
 // Create persists a new Deployment.  Returns ErrDeploymentExists if a
 // deployment with that name is already stored and force is false.
 func (s *Store) Create(d *Deployment, force bool) error {
+	if err := ValidateName(d.Name); err != nil {
+		return err
+	}
 	if _, err := os.Stat(s.configPath(d.Name)); err == nil && !force {
 		return fmt.Errorf("%w: %s", ErrDeploymentExists, d.Name)
 	}
@@ -152,6 +169,9 @@ func (s *Store) Create(d *Deployment, force bool) error {
 
 // Get loads a Deployment by name.  Returns ErrDeploymentNotFound if missing.
 func (s *Store) Get(name string) (*Deployment, error) {
+	if err := ValidateName(name); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(s.configPath(name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -194,6 +214,9 @@ func (s *Store) List() ([]*Deployment, error) {
 // The SE key in the keychain is NOT deleted by this method — call
 // enclave.DeleteKey(d.EnclaveTag) separately if desired.
 func (s *Store) Delete(name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
 	if _, err := s.Get(name); err != nil {
 		return err
 	}

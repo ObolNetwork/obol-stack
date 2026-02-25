@@ -40,6 +40,32 @@ type ContainerManager struct {
 	port   int    // host-local port mapped to container's 11434
 }
 
+// sanitizeContainerName strips unsafe characters from a deployment name and
+// returns a valid container name. Only lowercase alphanumeric and hyphens are
+// kept; the result is truncated to 63 chars.
+func sanitizeContainerName(deploymentName string) string {
+	name := strings.ToLower(deploymentName)
+	var b strings.Builder
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			b.WriteRune(c)
+		}
+	}
+	s := b.String()
+	// Trim leading hyphens.
+	s = strings.TrimLeft(s, "-")
+	if s == "" {
+		s = "default"
+	}
+	full := "obol-inference-" + s
+	if len(full) > 63 {
+		full = full[:63]
+	}
+	// Trim trailing hyphens after truncation.
+	full = strings.TrimRight(full, "-")
+	return full
+}
+
 // newContainerManager creates a ContainerManager for the named deployment.
 // binary may be empty to use "container" from PATH.
 func newContainerManager(binary, deploymentName string, hostPort int) *ContainerManager {
@@ -51,7 +77,7 @@ func newContainerManager(binary, deploymentName string, hostPort int) *Container
 	}
 	return &ContainerManager{
 		binary: binary,
-		name:   "obol-inference-" + deploymentName,
+		name:   sanitizeContainerName(deploymentName),
 		port:   hostPort,
 	}
 }

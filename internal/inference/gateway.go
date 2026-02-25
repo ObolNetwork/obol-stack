@@ -14,6 +14,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/mark3labs/x402-go"
 	x402http "github.com/mark3labs/x402-go/http"
 )
@@ -105,11 +106,17 @@ type Gateway struct {
 
 // NewGateway creates a new inference gateway with the given configuration.
 func NewGateway(cfg GatewayConfig) (*Gateway, error) {
+	if cfg.TEEType != "" && cfg.EnclaveTag != "" {
+		return nil, fmt.Errorf("TEEType and EnclaveTag are mutually exclusive: set one or neither")
+	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8402"
 	}
 	if cfg.FacilitatorURL == "" {
 		cfg.FacilitatorURL = "https://facilitator.x402.rs"
+	}
+	if err := x402verifier.ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {
+		return nil, err
 	}
 	if cfg.Chain.NetworkID == "" {
 		cfg.Chain = x402.BaseSepolia
@@ -230,7 +237,8 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		mux.HandleFunc("GET /v1/attestation", func(w http.ResponseWriter, r *http.Request) {
 			report, err := tee.Attest(g.seKey, g.config.ModelHash)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				log.Printf("attestation error: %v", err)
+				http.Error(w, "attestation unavailable", http.StatusInternalServerError)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")

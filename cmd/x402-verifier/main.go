@@ -26,6 +26,12 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	if cfg.Wallet != "" {
+		if err := x402verifier.ValidateWallet(cfg.Wallet); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+	}
+
 	v, err := x402verifier.NewVerifier(cfg)
 	if err != nil {
 		log.Fatalf("create verifier: %v", err)
