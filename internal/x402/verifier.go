@@ -71,12 +71,28 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chain := v.chain.Load()
+	// Per-route payTo and network override global config.
+	wallet := cfg.Wallet
+	if rule.PayTo != "" {
+		wallet = rule.PayTo
+	}
+
+	chainName := cfg.Chain
+	if rule.Network != "" {
+		chainName = rule.Network
+	}
+
+	chain, err := ResolveChain(chainName)
+	if err != nil {
+		log.Printf("x402-verifier: failed to resolve chain %q for route %q: %v", chainName, rule.Pattern, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	requirement, err := x402lib.NewUSDCPaymentRequirement(x402lib.USDCRequirementConfig{
-		Chain:            *chain,
+		Chain:            chain,
 		Amount:           rule.Price,
-		RecipientAddress: cfg.Wallet,
+		RecipientAddress: wallet,
 	})
 	if err != nil {
 		log.Printf("x402-verifier: failed to create payment requirement: %v", err)

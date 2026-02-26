@@ -28,7 +28,9 @@ type PricingConfig struct {
 	Routes []RouteRule `yaml:"routes"`
 }
 
-// RouteRule maps a URL pattern to a price.
+// RouteRule maps a URL pattern to x402 payment requirements.
+// Per-route fields (PayTo, Network) override the global PricingConfig values
+// when set, enabling multiple ServiceOffers with different wallets/chains.
 type RouteRule struct {
 	// Pattern is a path matching pattern. Supports:
 	//   - Exact match: "/health"
@@ -41,6 +43,14 @@ type RouteRule struct {
 
 	// Description is a human-readable label for this route (optional).
 	Description string `yaml:"description"`
+
+	// PayTo overrides the global wallet for this route (x402: payTo).
+	// If empty, falls back to PricingConfig.Wallet.
+	PayTo string `yaml:"payTo,omitempty"`
+
+	// Network overrides the global chain for this route (human-friendly).
+	// If empty, falls back to PricingConfig.Chain.
+	Network string `yaml:"network,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.
@@ -72,16 +82,17 @@ func LoadConfig(path string) (*PricingConfig, error) {
 
 // ValidateFacilitatorURL checks that the facilitator URL uses HTTPS.
 // Payment proofs sent over plain HTTP could be intercepted.
-// Loopback addresses (localhost, 127.0.0.1) are exempted for local
-// development and testing.
+// Loopback addresses (localhost, 127.0.0.1) and k3d internal addresses
+// (host.k3d.internal) are exempted for local development and testing.
 func ValidateFacilitatorURL(u string) error {
 	if strings.HasPrefix(u, "https://") {
 		return nil
 	}
-	// Allow loopback for local development and testing.
+	// Allow loopback and k3d internal addresses for local development and testing.
 	if strings.HasPrefix(u, "http://localhost") ||
 		strings.HasPrefix(u, "http://127.0.0.1") ||
-		strings.HasPrefix(u, "http://[::1]") {
+		strings.HasPrefix(u, "http://[::1]") ||
+		strings.HasPrefix(u, "http://host.k3d.internal") {
 		return nil
 	}
 	return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)

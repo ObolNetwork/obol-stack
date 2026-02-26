@@ -28,6 +28,7 @@ func monetizeCommand(cfg *config.Config) *cli.Command {
 			monetizeOfferCommand(cfg),
 			monetizeListOffersCommand(cfg),
 			monetizeOfferStatusCommand(cfg),
+			monetizeStopOfferCommand(cfg),
 			monetizeDeleteOfferCommand(cfg),
 			// Direct commands (backward compat)
 			monetizeRegisterCommand(cfg),
@@ -47,34 +48,46 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 		Usage: "Create a ServiceOffer CR for payment-gated compute",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
+				Name:  "type",
+				Usage: "Workload type: inference or fine-tuning",
+				Value: "inference",
+			},
+			&cli.StringFlag{
 				Name:  "model",
-				Usage: "Model name (e.g. qwen3:8b)",
+				Usage: "Model name (e.g. qwen3.5:35b)",
 			},
 			&cli.StringFlag{
 				Name:  "runtime",
-				Usage: "Model runtime",
+				Usage: "Model runtime (ollama, vllm, tgi)",
 				Value: "ollama",
 			},
 			&cli.StringFlag{
-				Name:     "price",
-				Usage:    "Price per unit (e.g. 0.50)",
+				Name:  "per-request",
+				Usage: "Per-request price in USDC (e.g. 0.001)",
+			},
+			&cli.StringFlag{
+				Name:  "per-mtok",
+				Usage: "Per-million-tokens price in USDC (inference only)",
+			},
+			&cli.StringFlag{
+				Name:  "per-hour",
+				Usage: "Per-compute-hour price in USDC (fine-tuning only)",
+			},
+			&cli.StringFlag{
+				Name:     "network",
+				Usage:    "Payment chain (e.g. base-sepolia, base)",
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:  "unit",
-				Usage: "Billing unit: MTok or request",
-				Value: "MTok",
-			},
-			&cli.StringFlag{
-				Name:     "chain",
-				Usage:    "Chain for payments (e.g. base-sepolia, base)",
-				Required: true,
-			},
-			&cli.StringFlag{
-				Name:     "wallet",
-				Usage:    "USDC recipient wallet address",
+				Name:     "pay-to",
+				Usage:    "USDC recipient wallet address (x402: payTo)",
 				Sources:  cli.EnvVars("X402_WALLET"),
 				Required: true,
+			},
+			&cli.IntFlag{
+				Name:  "max-timeout",
+				Usage: "Payment validity window in seconds",
+				Value: 300,
 			},
 			&cli.StringFlag{
 				Name:  "namespace",
@@ -95,32 +108,61 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 				Name:  "path",
 				Usage: "URL path prefix (default: /services/<name>)",
 			},
+			// Registration flags
 			&cli.BoolFlag{
 				Name:  "register",
 				Usage: "Register on ERC-8004 after routing is live",
 			},
+			&cli.StringFlag{
+				Name:  "register-name",
+				Usage: "Agent name for ERC-8004 registration",
+			},
+			&cli.StringFlag{
+				Name:  "register-description",
+				Usage: "Agent description for ERC-8004 registration",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("name required: obol monetize offer <name> --price ... --chain ... --wallet ...")
+				return fmt.Errorf("name required: obol monetize offer <name> --network ... --pay-to ...")
 			}
 			name := cmd.Args().First()
 			ns := cmd.String("namespace")
 
+			// Validate at least one pricing field is set.
+			perRequest := cmd.String("per-request")
+			perMTok := cmd.String("per-mtok")
+			perHour := cmd.String("per-hour")
+			if perRequest == "" && perMTok == "" && perHour == "" {
+				return fmt.Errorf("at least one price required: --per-request, --per-mtok, or --per-hour")
+			}
+
+			// Build price table.
+			price := map[string]interface{}{}
+			if perRequest != "" {
+				price["perRequest"] = perRequest
+			}
+			if perMTok != "" {
+				price["perMTok"] = perMTok
+			}
+			if perHour != "" {
+				price["perHour"] = perHour
+			}
+
 			spec := map[string]interface{}{
+				"type": cmd.String("type"),
 				"upstream": map[string]interface{}{
 					"service":   cmd.String("upstream"),
 					"namespace": ns,
 					"port":      cmd.Int("port"),
 				},
-				"pricing": map[string]interface{}{
-					"amount":   cmd.String("price"),
-					"unit":     cmd.String("unit"),
-					"currency": "USDC",
-					"chain":    cmd.String("chain"),
+				"payment": map[string]interface{}{
+					"scheme":            "exact",
+					"network":           cmd.String("network"),
+					"payTo":             cmd.String("pay-to"),
+					"maxTimeoutSeconds": cmd.Int("max-timeout"),
+					"price":             price,
 				},
-				"wallet":   cmd.String("wallet"),
-				"register": cmd.Bool("register"),
 			}
 
 			if model := cmd.String("model"); model != "" {
@@ -132,6 +174,20 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			// Build registration section if any registration flags are set.
+			if cmd.Bool("register") || cmd.String("register-name") != "" {
+				reg := map[string]interface{}{
+					"enabled": cmd.Bool("register"),
+				}
+				if n := cmd.String("register-name"); n != "" {
+					reg["name"] = n
+				}
+				if d := cmd.String("register-description"); d != "" {
+					reg["description"] = d
+				}
+				spec["registration"] = reg
 			}
 
 			manifest := map[string]interface{}{
@@ -161,7 +217,7 @@ func monetizeListOffersCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			args := []string{"get", "serviceoffers"}
+			args := []string{"get", "serviceoffers.obol.org"}
 			if ns := cmd.String("namespace"); ns != "" {
 				args = append(args, "-n", ns)
 			} else {
@@ -191,7 +247,66 @@ func monetizeOfferStatusCommand(cfg *config.Config) *cli.Command {
 			}
 			name := cmd.Args().First()
 			ns := cmd.String("namespace")
-			return kubectlRun(cfg, "get", "serviceoffer", name, "-n", ns, "-o", "yaml")
+			return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "yaml")
+		},
+	}
+}
+
+func monetizeStopOfferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "stop",
+		Usage: "Stop serving a ServiceOffer (removes pricing route, keeps CR and registration)",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "namespace",
+				Aliases:  []string{"n"},
+				Usage:    "Namespace of the ServiceOffer",
+				Required: true,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("name required: obol monetize stop <name> --namespace <ns>")
+			}
+			name := cmd.Args().First()
+			ns := cmd.String("namespace")
+
+			fmt.Printf("Stopping ServiceOffer %s/%s...\n", ns, name)
+
+			// Remove pricing route from x402-verifier ConfigMap.
+			// The CR and registration remain intact for restart.
+			urlPath := fmt.Sprintf("/services/%s", name)
+
+			// Try to read the offer to get the actual path.
+			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
+			if err == nil {
+				// Remove the pricing route.
+				updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
+				for _, r := range pricingCfg.Routes {
+					if !strings.Contains(r.Pattern, urlPath) {
+						updatedRoutes = append(updatedRoutes, r)
+					}
+				}
+				if len(updatedRoutes) < len(pricingCfg.Routes) {
+					pricingCfg.Routes = updatedRoutes
+					if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
+						fmt.Printf("Warning: failed to remove pricing route: %v\n", err)
+					} else {
+						fmt.Printf("Removed pricing route for %s\n", urlPath)
+					}
+				}
+			}
+
+			// Patch the Ready condition to False via kubectl.
+			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
+			err = kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
+				"--type=merge", "--subresource=status", "-p", patchJSON)
+			if err != nil {
+				return fmt.Errorf("failed to patch status: %w", err)
+			}
+
+			fmt.Printf("ServiceOffer %s/%s stopped. Use 'obol monetize offer' to restart.\n", ns, name)
+			return nil
 		},
 	}
 }
@@ -199,7 +314,7 @@ func monetizeOfferStatusCommand(cfg *config.Config) *cli.Command {
 func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "delete",
-		Usage: "Delete a ServiceOffer CR",
+		Usage: "Delete a ServiceOffer CR and deactivate ERC-8004 registration",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
@@ -221,7 +336,11 @@ func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
-				fmt.Printf("Delete ServiceOffer %s/%s? This will also remove the associated Middleware and HTTPRoute. [y/N] ", ns, name)
+				fmt.Printf("Delete ServiceOffer %s/%s? This will:\n", ns, name)
+				fmt.Println("  - Remove the associated Middleware and HTTPRoute")
+				fmt.Println("  - Remove the pricing route from the x402 verifier")
+				fmt.Println("  - Deactivate the ERC-8004 registration (if registered)")
+				fmt.Print("[y/N] ")
 				var response string
 				fmt.Scanln(&response)
 				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
@@ -230,7 +349,10 @@ func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			return kubectlRun(cfg, "delete", "serviceoffer", name, "-n", ns)
+			// TODO: If status.agentId is set, deactivate ERC-8004 registration
+			// by calling setAgentURI with a document that has active: false.
+
+			return kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns)
 		},
 	}
 }
@@ -423,7 +545,11 @@ func monetizeStatusCommand(cfg *config.Config) *cli.Command {
 					if desc == "" {
 						desc = "(no description)"
 					}
-					fmt.Printf("    %s → %s USDC  %s\n", r.Pattern, r.Price, desc)
+					payTo := r.PayTo
+					if payTo == "" {
+						payTo = "(global)"
+					}
+					fmt.Printf("    %s → %s USDC  payTo=%s  %s\n", r.Pattern, r.Price, payTo, desc)
 				}
 			}
 

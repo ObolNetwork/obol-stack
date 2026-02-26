@@ -23,6 +23,7 @@ func TestMonetizeCommand_Structure(t *testing.T) {
 		"offer":        false,
 		"list":         false,
 		"offer-status": false,
+		"stop":         false,
 		"delete":       false,
 		"register":     false,
 		"pricing":      false,
@@ -57,9 +58,8 @@ func TestMonetizeOffer_RequiredFlags(t *testing.T) {
 		}
 
 		requiredFlags := map[string]bool{
-			"price":  false,
-			"chain":  false,
-			"wallet": false,
+			"network": false,
+			"pay-to":  false,
 		}
 
 		for _, f := range sub.Flags {
