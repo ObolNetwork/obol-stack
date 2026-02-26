@@ -104,8 +104,9 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 		fmt.Fprint(w, `{"success":true,"transaction":"0xmocktxhash","network":"base-sepolia"}`)
 	})
 
-	// Find a free port and create a listener so we know the port before starting.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// Find a free port.  Bind on 0.0.0.0 so k3d containers can reach us
+	// via the docker0 bridge IP on Linux.
+	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("find free port for mock facilitator: %v", err)
 	}
