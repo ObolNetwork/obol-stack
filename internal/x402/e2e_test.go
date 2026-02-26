@@ -4,11 +4,9 @@ package x402
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	x402lib "github.com/mark3labs/x402-go"
+	"github.com/ObolNetwork/obol-stack/internal/testutil"
 )
 
 // TestIntegration_PaymentGate_FullLifecycle tests the complete sell-side
@@ -68,25 +66,11 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 	t.Logf("Testing route: %s", routePath)
 
 	// ── Step 1: Start mock facilitator on host ──────────────────────────
-	mockFac := startHostMockFacilitator(t)
-	t.Logf("Mock facilitator running on port %d (cluster URL: %s)", mockFac.port, mockFac.clusterURL)
+	mockFac := testutil.StartMockFacilitator(t)
+	t.Logf("Mock facilitator running on port %d (cluster URL: %s)", mockFac.Port, mockFac.ClusterURL)
 
 	// ── Step 2: Patch ConfigMap to use mock facilitator ─────────────────
-	// Save original for restore.
-	originalCM, err := kubectlOutput(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
-		"-n", "x402", "-o", "json")
-	if err != nil {
-		t.Fatalf("kubectl get cm (json): %v", err)
-	}
-
-	patchFacilitatorURL(t, kubectlBin, kubeconfig, cmYAML, mockFac.clusterURL)
-	t.Cleanup(func() {
-		restoreConfigMap(t, kubectlBin, kubeconfig, originalCM)
-	})
-
-	// Wait for x402-verifier to reload the config (poll-based watcher, ~5s interval).
-	t.Log("Waiting for x402-verifier config reload...")
-	waitForVerifierReload(t, kubectlBin, kubeconfig, mockFac.clusterURL)
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, mockFac.ClusterURL)
 
 	// ── Step 3: Request WITHOUT payment → 402 ──────────────────────────
 	t.Log("Step 3: Request without payment (expect 402)")
@@ -119,7 +103,7 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 
 	// ── Step 4: Request WITH payment → 200 + inference ─────────────────
 	t.Log("Step 4: Request with mock payment (expect 200 + inference)")
-	paymentHeader := buildTestPaymentHeader(t)
+	paymentHeader := testutil.TestPaymentHeader(t, payReq.Accepts[0].PayTo)
 	resp200 := httpPost(t, fmt.Sprintf("http://obol.stack:8080%s", routePath),
 		`{"model":"qwen3.5:35b","messages":[{"role":"user","content":"Say exactly: hello world"}],"stream":false}`,
 		map[string]string{"X-PAYMENT": paymentHeader})
@@ -160,19 +144,19 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 	}
 
 	// ── Step 5: Verify mock facilitator was called ──────────────────────
-	if mockFac.verifyCalls() == 0 {
+	if mockFac.VerifyCalls.Load() == 0 {
 		t.Error("mock facilitator /verify was never called")
 	}
-	if mockFac.settleCalls() == 0 {
+	if mockFac.SettleCalls.Load() == 0 {
 		t.Error("mock facilitator /settle was never called")
 	}
 	t.Logf("Facilitator calls: verify=%d, settle=%d",
-		mockFac.verifyCalls(), mockFac.settleCalls())
+		mockFac.VerifyCalls.Load(), mockFac.SettleCalls.Load())
 
 	t.Log("Full sell-side lifecycle complete: offer → 402 → payment → 200 (inference)")
 }
 
-// ── Test infrastructure ─────────────────────────────────────────────────────
+// ── Test infrastructure (kept: test-specific helpers) ────────────────────────
 
 type clusterConfig struct {
 	configDir string
@@ -197,106 +181,6 @@ func requireClusterConfig(t *testing.T) clusterConfig {
 	return cfg
 }
 
-type hostMockFacilitator struct {
-	port       int
-	clusterURL string
-	_verify    int32
-	_settle    int32
-}
-
-func (f *hostMockFacilitator) verifyCalls() int32 {
-	return f._verify
-}
-
-func (f *hostMockFacilitator) settleCalls() int32 {
-	return f._settle
-}
-
-func startHostMockFacilitator(t *testing.T) *hostMockFacilitator {
-	t.Helper()
-
-	// Find a free port.
-	ln, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-
-	fac := &hostMockFacilitator{port: port}
-	// On macOS with k3d, the host is reachable as host.docker.internal.
-	fac.clusterURL = fmt.Sprintf("http://host.docker.internal:%d", port)
-
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/supported", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"kinds":[{"x402Version":1,"scheme":"exact","network":"base-sepolia"}]}`)
-	})
-
-	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
-		fac._verify++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"isValid":true,"payer":"0xmockpayer"}`)
-	})
-
-	mux.HandleFunc("/settle", func(w http.ResponseWriter, r *http.Request) {
-		fac._settle++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"success":true,"transaction":"0xmocktxhash","network":"base-sepolia"}`)
-	})
-
-	// Use a specific listener on the chosen port.
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		t.Fatalf("listen on port %d: %v", port, err)
-	}
-
-	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-
-	t.Cleanup(func() {
-		server.Close()
-	})
-
-	// Wait for server to be ready.
-	for i := 0; i < 10; i++ {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/supported", port))
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return fac
-}
-
-func buildTestPaymentHeader(t *testing.T) string {
-	t.Helper()
-	p := x402lib.PaymentPayload{
-		X402Version: 1,
-		Scheme:      "exact",
-		Network:     x402lib.BaseSepolia.NetworkID,
-		Payload: map[string]any{
-			"signature": "0xmocksignature",
-			"authorization": map[string]any{
-				"from":        "0x1234567890123456789012345678901234567890",
-				"to":          "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-				"value":       "1000",
-				"validAfter":  "0",
-				"validBefore": "9999999999",
-				"nonce":       "0xabcdef",
-			},
-		},
-	}
-	data, err := json.Marshal(p)
-	if err != nil {
-		t.Fatalf("marshal payment: %v", err)
-	}
-	return base64.StdEncoding.EncodeToString(data)
-}
-
 func extractRoutePath(pricingYAML string) string {
 	// Extract the first route pattern and convert from glob to path.
 	// Pattern format: "/services/qwen35/*"  → path: "/services/qwen35/v1/chat/completions"
@@ -312,79 +196,6 @@ func extractRoutePath(pricingYAML string) string {
 		}
 	}
 	return ""
-}
-
-func patchFacilitatorURL(t *testing.T, kubectlBin, kubeconfig, currentYAML, newURL string) {
-	t.Helper()
-
-	// Replace the facilitatorURL in the pricing YAML.
-	updated := currentYAML
-	for _, line := range strings.Split(currentYAML, "\n") {
-		if strings.Contains(line, "facilitatorURL:") {
-			updated = strings.Replace(updated, line, fmt.Sprintf(`facilitatorURL: "%s"`, newURL), 1)
-			break
-		}
-	}
-
-	// Patch the ConfigMap.
-	patchJSON, _ := json.Marshal(map[string]any{
-		"data": map[string]string{
-			"pricing.yaml": updated,
-		},
-	})
-
-	if err := kubectlRun(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
-		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
-		t.Fatalf("patch ConfigMap: %v", err)
-	}
-	t.Logf("Patched x402-pricing facilitatorURL to %s", newURL)
-}
-
-func restoreConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON string) {
-	// Extract original data from the saved JSON.
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(originalJSON), &cm); err != nil {
-		t.Logf("Warning: could not restore ConfigMap: %v", err)
-		return
-	}
-
-	patchJSON, _ := json.Marshal(map[string]any{
-		"data": cm.Data,
-	})
-
-	if err := kubectlRun(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
-		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
-		t.Logf("Warning: could not restore ConfigMap: %v", err)
-	} else {
-		t.Log("Restored original x402-pricing ConfigMap")
-	}
-}
-
-func waitForVerifierReload(t *testing.T, kubectlBin, kubeconfig, expectedURL string) {
-	t.Helper()
-
-	// Force restart the verifier so it picks up the new ConfigMap immediately.
-	// Stakater Reloader would do this eventually, but explicit restart is faster.
-	if err := kubectlRun(kubectlBin, kubeconfig, "rollout", "restart",
-		"deploy/x402-verifier", "-n", "x402"); err != nil {
-		t.Fatalf("rollout restart x402-verifier: %v", err)
-	}
-
-	// Wait for rollout to complete (new pod up and ready).
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		// Check if the verifier startup log shows the expected facilitator URL.
-		logs, err := kubectlOutput(kubectlBin, kubeconfig, "logs", "deploy/x402-verifier",
-			"-n", "x402", "--tail=10")
-		if err == nil && strings.Contains(logs, expectedURL) {
-			t.Log("Verifier restarted with updated facilitator URL")
-			return
-		}
-		time.Sleep(3 * time.Second)
-	}
-	t.Log("Warning: did not confirm verifier restart with new URL (continuing anyway)")
 }
 
 func httpPost(t *testing.T, url, body string, headers map[string]string) *http.Response {
