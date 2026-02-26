@@ -64,7 +64,8 @@ func Setup(cfg *config.Config, wallet, chain string) error {
 }
 
 // AddRoute adds a pricing route to the x402 ConfigMap.
-func AddRoute(cfg *config.Config, pattern, price, description string) error {
+// Optional per-route payTo and network override the global config when set.
+func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -78,15 +79,33 @@ func AddRoute(cfg *config.Config, pattern, price, description string) error {
 		return fmt.Errorf("read pricing config: %w", err)
 	}
 
-	// Add the new route.
-	pricingCfg.Routes = append(pricingCfg.Routes, RouteRule{
+	// Build the route rule.
+	rule := RouteRule{
 		Pattern:     pattern,
 		Price:       price,
 		Description: description,
-	})
+	}
+	for _, opt := range opts {
+		opt(&rule)
+	}
+
+	pricingCfg.Routes = append(pricingCfg.Routes, rule)
 
 	// Re-serialize and patch.
 	return patchPricingConfig(kubectlBin, kubeconfig, pricingCfg)
+}
+
+// RouteOption is a functional option for AddRoute.
+type RouteOption func(*RouteRule)
+
+// WithPayTo sets a per-route payTo address (overrides global wallet).
+func WithPayTo(payTo string) RouteOption {
+	return func(r *RouteRule) { r.PayTo = payTo }
+}
+
+// WithNetwork sets a per-route network (overrides global chain).
+func WithNetwork(network string) RouteOption {
+	return func(r *RouteRule) { r.Network = network }
 }
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.
@@ -123,6 +142,13 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 	tmpFile.Close()
 
 	return LoadConfig(tmpFile.Name())
+}
+
+// WritePricingConfig writes the pricing config to the cluster ConfigMap.
+func WritePricingConfig(cfg *config.Config, pcfg *PricingConfig) error {
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	return patchPricingConfig(kubectlBin, kubeconfig, pcfg)
 }
 
 func patchPricingConfig(kubectlBin, kubeconfig string, pcfg *PricingConfig) error {

@@ -121,8 +121,8 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 		t.Fatalf("spec.properties is not a map: %T", specProps)
 	}
 
-	// Required fields in spec
-	for _, field := range []string{"model", "upstream", "pricing", "wallet", "path", "register"} {
+	// Required fields in spec (aligned with x402/ERC-8004 schema)
+	for _, field := range []string{"type", "model", "upstream", "payment", "path", "registration"} {
 		if _, exists := pm[field]; !exists {
 			t.Errorf("spec.properties missing field %q", field)
 		}
@@ -152,7 +152,7 @@ func TestServiceOfferCRD_PrinterColumns(t *testing.T) {
 		t.Fatal("additionalPrinterColumns missing or wrong type")
 	}
 
-	expected := []string{"Model", "Price", "Ready", "Age"}
+	expected := []string{"Type", "Model", "Price", "Network", "Ready", "Age"}
 	if len(cols) != len(expected) {
 		t.Fatalf("got %d printer columns, want %d", len(cols), len(expected))
 	}
@@ -179,18 +179,20 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 
 	versions := nested(crd, "spec", "versions").([]interface{})
 	v0 := versions[0].(map[string]interface{})
-	walletProp := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties", "wallet")
-	wm, ok := walletProp.(map[string]interface{})
+	// Wallet validation is now at spec.payment.properties.payTo (aligned with x402)
+	payToProp := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties",
+		"payment", "properties", "payTo")
+	wm, ok := payToProp.(map[string]interface{})
 	if !ok {
-		t.Fatal("wallet property not a map")
+		t.Fatal("payment.payTo property not a map")
 	}
 
 	pattern, ok := wm["pattern"].(string)
 	if !ok {
-		t.Fatal("wallet.pattern missing")
+		t.Fatal("payment.payTo.pattern missing")
 	}
 	if pattern != "^0x[0-9a-fA-F]{40}$" {
-		t.Errorf("wallet.pattern = %q, want ^0x[0-9a-fA-F]{40}$", pattern)
+		t.Errorf("payment.payTo.pattern = %q, want ^0x[0-9a-fA-F]{40}$", pattern)
 	}
 }
 
@@ -244,6 +246,38 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		if !apiGroups[want] {
 			t.Errorf("ClusterRole missing apiGroup %q", want)
 		}
+	}
+
+	// Core API group ("") should have configmaps for x402-pricing management
+	if !apiGroups[""] {
+		t.Error("ClusterRole missing core API group (needed for configmaps)")
+	}
+
+	// Verify configmaps resource is present in one of the core rules
+	hasConfigMaps := false
+	for _, r := range rules {
+		rm := r.(map[string]interface{})
+		groups, ok := rm["apiGroups"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			if g.(string) != "" {
+				continue
+			}
+			resources, ok := rm["resources"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, res := range resources {
+				if res.(string) == "configmaps" {
+					hasConfigMaps = true
+				}
+			}
+		}
+	}
+	if !hasConfigMaps {
+		t.Error("ClusterRole missing 'configmaps' resource in core API group")
 	}
 
 	// ClusterRoleBinding should reference openclaw-monetize

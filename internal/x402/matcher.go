@@ -33,11 +33,11 @@ func matchPattern(pattern, uri string) bool {
 	}
 
 	// Simple prefix match: pattern ends with "/*" and has no other wildcards.
-	// "/rpc/*" matches "/rpc/anything" and "/rpc/a/b/c".
+	// "/rpc/*" matches "/rpc", "/rpc/", "/rpc/anything", and "/rpc/a/b/c".
 	if strings.HasSuffix(pattern, "/*") {
-		prefix := strings.TrimSuffix(pattern, "*")
+		prefix := strings.TrimSuffix(pattern, "/*")
 		if !strings.Contains(prefix, "*") {
-			return strings.HasPrefix(uri, prefix)
+			return uri == prefix || strings.HasPrefix(uri, prefix+"/")
 		}
 	}
 

@@ -35,10 +35,9 @@ python3 scripts/monetize.py create my-inference \
   --upstream ollama \
   --namespace llm \
   --port 11434 \
-  --price 0.50 \
-  --unit MTok \
-  --chain base-sepolia \
-  --wallet 0xYourWalletAddress
+  --per-request 0.001 \
+  --network base-sepolia \
+  --pay-to 0xYourWalletAddress
 
 # Check status of an offer
 python3 scripts/monetize.py status my-inference --namespace llm
@@ -70,17 +69,21 @@ When `process` runs on an offer, it steps through these stages:
 
 1. **ModelReady** — Pull the model via Ollama API (if runtime is ollama)
 2. **UpstreamHealthy** — Health-check the upstream service
-3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier
+3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier AND add a pricing route to the x402-pricing ConfigMap so the verifier returns 402 for requests without payment
 4. **RoutePublished** — Create a Gateway API HTTPRoute with the middleware
 5. **Registered** — (Optional) Register on ERC-8004 via the local wallet
 6. **Ready** — All conditions met, service is live
 
-## Pricing
+When `delete` runs, it also removes the pricing route from the x402-pricing ConfigMap.
 
-- `amount`: Price per unit (e.g., "0.50")
-- `unit`: Billing unit — `MTok` (per million tokens) or `request` (per request)
-- `currency`: Payment currency (default: USDC)
-- `chain`: Blockchain for payments (e.g., base-sepolia, base)
+## Payment (x402-aligned)
+
+- `payment.payTo`: USDC recipient wallet address (x402: payTo)
+- `payment.network`: Chain for payments (e.g., base-sepolia, base)
+- `payment.price.perRequest`: Flat per-request price in USDC
+- `payment.price.perMTok`: Per-million-tokens price in USDC (inference)
+- `payment.price.perHour`: Per-compute-hour price in USDC (fine-tuning)
+- `payment.scheme`: Payment scheme (default: exact)
 
 ## Architecture
 

@@ -11,6 +11,7 @@ metadata:
   name: qwen-inference
   namespace: llm
 spec:
+  type: inference
   model:
     name: qwen3:8b
     runtime: ollama
@@ -18,34 +19,48 @@ spec:
     service: ollama
     namespace: llm
     port: 11434
-    healthPath: /api/generate
-  pricing:
-    amount: "0.50"
-    unit: MTok
-    currency: USDC
-    chain: base-sepolia
-  wallet: "0x1234567890abcdef1234567890abcdef12345678"
+    healthPath: /health
+  payment:
+    network: base-sepolia
+    payTo: "0x1234567890abcdef1234567890abcdef12345678"
+    scheme: exact
+    maxTimeoutSeconds: 300
+    price:
+      perRequest: "0.001"
+      perMTok: "0.50"
   path: /services/qwen-inference
-  register: false
+  registration:
+    enabled: false
+    name: "My Inference Agent"
+    description: "LLM inference on qwen3:8b"
 ```
 
 ## Spec Fields
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `spec.type` | string | No | `inference` | Workload type: `inference` or `fine-tuning` |
 | `spec.model.name` | string | Yes (if model set) | — | Model identifier (e.g., `qwen3:8b`) |
-| `spec.model.runtime` | string | Yes (if model set) | — | Runtime engine. Currently only `ollama` |
+| `spec.model.runtime` | string | Yes (if model set) | — | Runtime: `ollama`, `vllm`, or `tgi` |
 | `spec.upstream.service` | string | Yes | — | Kubernetes Service name for the upstream |
 | `spec.upstream.namespace` | string | Yes | — | Namespace of the upstream Service |
 | `spec.upstream.port` | integer | No | `11434` | Port on the upstream Service |
-| `spec.upstream.healthPath` | string | No | `/api/generate` | HTTP path for health checks |
-| `spec.pricing.amount` | string | Yes | — | Price per unit (e.g., `"0.50"`) |
-| `spec.pricing.unit` | string | Yes | `MTok` | Billing unit: `MTok` (per million tokens) or `request` |
-| `spec.pricing.currency` | string | No | `USDC` | Payment currency |
-| `spec.pricing.chain` | string | Yes | — | Blockchain for payments (e.g., `base-sepolia`, `base`) |
-| `spec.wallet` | string | Yes | — | USDC recipient wallet (must match `^0x[0-9a-fA-F]{40}$`) |
+| `spec.upstream.healthPath` | string | No | `/health` | HTTP path for health checks |
+| `spec.payment.network` | string | Yes | — | Chain for payments (e.g., `base-sepolia`, `base`) |
+| `spec.payment.payTo` | string | Yes | — | USDC recipient wallet (must match `^0x[0-9a-fA-F]{40}$`) |
+| `spec.payment.scheme` | string | No | `exact` | x402 payment scheme |
+| `spec.payment.maxTimeoutSeconds` | integer | No | `300` | Payment validity window in seconds |
+| `spec.payment.price.perRequest` | string | No | — | Flat per-request price in USDC |
+| `spec.payment.price.perMTok` | string | No | — | Per-million-tokens price in USDC (inference) |
+| `spec.payment.price.perHour` | string | No | — | Per-compute-hour price in USDC (fine-tuning) |
+| `spec.payment.price.perEpoch` | string | No | — | Per-training-epoch price in USDC (fine-tuning) |
 | `spec.path` | string | No | `/services/<name>` | URL path prefix for the HTTPRoute |
-| `spec.register` | boolean | No | `false` | Register on ERC-8004 after routing is live |
+| `spec.registration.enabled` | boolean | No | `false` | Register on ERC-8004 after routing is live |
+| `spec.registration.name` | string | No | — | Agent name (ERC-8004: AgentRegistration.name) |
+| `spec.registration.description` | string | No | — | Agent description |
+| `spec.registration.image` | string | No | — | Agent icon URL |
+| `spec.registration.services` | array | No | — | Service endpoints (ERC-8004: services[]) |
+| `spec.registration.supportedTrust` | array | No | — | Trust methods: `reputation`, `crypto-economic`, `tee-attestation` |
 
 ## Status
 
@@ -71,6 +86,8 @@ Each condition has:
 | Field | Type | Description |
 |-------|------|-------------|
 | `status.endpoint` | string | Public URL path once route is published |
+| `status.agentId` | string | ERC-8004 agent NFT token ID after registration |
+| `status.registrationTxHash` | string | Transaction hash of the ERC-8004 registration |
 | `status.observedGeneration` | integer | Last observed generation |
 
 ## Ownership Cascade

@@ -31,7 +31,7 @@ func TestMatchRoute_PrefixMatch(t *testing.T) {
 		{"/rpc/sepolia", true},
 		{"/rpc/a/b/c", true},   // deep sub-path
 		{"/rpc/", true},        // trailing slash
-		{"/rpc", false},        // no trailing slash — prefix is "/rpc/"
+		{"/rpc", true},         // exact base path (no trailing slash)
 		{"/rpcx/foo", false},   // different prefix
 		{"/other", false},      // unrelated
 	}

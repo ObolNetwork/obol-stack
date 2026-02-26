@@ -4,6 +4,10 @@
 Reconciles ServiceOffer custom resources through a staged pipeline:
   ModelReady → UpstreamHealthy → PaymentGateReady → RoutePublished → Registered → Ready
 
+Schema alignment:
+  - payment.* fields align with x402 PaymentRequirements (V2): payTo, network, scheme
+  - registration.* fields align with ERC-8004 AgentRegistration: name, description, services
+
 Usage:
     python3 monetize.py <command> [args]
 
@@ -109,6 +113,43 @@ def set_endpoint(ns, name, endpoint, token, ssl_ctx):
     api_patch(path, patch_body, token, ssl_ctx, patch_type="merge")
 
 
+def set_status_field(ns, name, field, value, token, ssl_ctx):
+    """Set a status field on a ServiceOffer."""
+    path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}/status"
+    patch_body = {"status": {field: value}}
+    api_patch(path, patch_body, token, ssl_ctx, patch_type="merge")
+
+
+# ---------------------------------------------------------------------------
+# Spec accessors (aligned with new schema)
+# ---------------------------------------------------------------------------
+
+def get_payment(spec):
+    """Return the payment section (x402-aligned field names)."""
+    return spec.get("payment", {})
+
+
+def get_price_table(spec):
+    """Return the price table from the payment section."""
+    return get_payment(spec).get("price", {})
+
+
+def get_effective_price(spec):
+    """Return the effective per-request price for x402 gating."""
+    price = get_price_table(spec)
+    return price.get("perRequest") or price.get("perMTok") or price.get("perHour") or "0"
+
+
+def get_pay_to(spec):
+    """Return the payTo wallet address."""
+    return get_payment(spec).get("payTo", "")
+
+
+def get_network(spec):
+    """Return the payment network."""
+    return get_payment(spec).get("network", "")
+
+
 # ---------------------------------------------------------------------------
 # Reconciliation stages
 # ---------------------------------------------------------------------------
@@ -162,7 +203,7 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
     svc = upstream.get("service", "ollama")
     svc_ns = upstream.get("namespace", ns)
     port = upstream.get("port", 11434)
-    health_path = upstream.get("healthPath", "/api/generate")
+    health_path = upstream.get("healthPath", "/health")
 
     model_spec = spec.get("model", {})
     model_name = model_spec.get("name", "")
@@ -185,7 +226,11 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
         with urllib.request.urlopen(req, timeout=30) as resp:
             resp.read()
             print(f"  Upstream healthy (HTTP {resp.status})")
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+    except urllib.error.HTTPError as e:
+        # An HTTP error (400, 405, etc.) still proves the upstream is reachable
+        # and accepting connections — only connection failures mean "unhealthy".
+        print(f"  Upstream reachable (HTTP {e.code} — acceptable for health check)")
+    except (urllib.error.URLError, OSError) as e:
         msg = str(e)[:200]
         print(f"  Health-check failed: {msg}", file=sys.stderr)
         set_condition(ns, name, "UpstreamHealthy", "False", "Unhealthy", msg, token, ssl_ctx)
@@ -196,7 +241,7 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
 
 
 def stage_payment_gate(spec, ns, name, token, ssl_ctx):
-    """Create a Traefik ForwardAuth Middleware pointing at x402-verifier."""
+    """Create a Traefik ForwardAuth Middleware and add x402 pricing route."""
     middleware_name = f"x402-{name}"
 
     # Build the Middleware resource.
@@ -247,8 +292,77 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
         print(f"  Creating Middleware {middleware_name}...")
         api_post(mw_path, middleware, token, ssl_ctx)
 
-    set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created", token, ssl_ctx)
+    # Add pricing route to x402-verifier ConfigMap so requests are actually gated.
+    # Without this, the verifier passes through all requests (200 for unmatched routes).
+    _add_pricing_route(spec, name, token, ssl_ctx)
+
+    set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created with pricing route", token, ssl_ctx)
     return True
+
+
+def _add_pricing_route(spec, name, token, ssl_ctx):
+    """Add a pricing route to the x402-verifier ConfigMap for this offer.
+
+    Uses simple string manipulation for YAML to avoid a PyYAML dependency.
+    The pricing.yaml format is simple enough (flat keys + routes array) to
+    handle without a full parser.
+
+    Now includes per-route payTo and network fields aligned with x402.
+    """
+    url_path = spec.get("path", f"/services/{name}")
+    price = get_effective_price(spec)
+    pay_to = get_pay_to(spec)
+    network = get_network(spec)
+
+    route_pattern = f"{url_path}/*"
+
+    # Read current x402-pricing ConfigMap.
+    cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
+    try:
+        cm = api_get(cm_path, token, ssl_ctx)
+    except SystemExit:
+        print(f"  Warning: x402-pricing ConfigMap not found, skipping pricing route")
+        return
+
+    pricing_yaml_str = cm.get("data", {}).get("pricing.yaml", "")
+    if not pricing_yaml_str:
+        print(f"  Warning: x402-pricing ConfigMap has no pricing.yaml key")
+        return
+
+    # Check if route already exists.
+    if route_pattern in pricing_yaml_str:
+        print(f"  Pricing route {route_pattern} already exists")
+        return
+
+    # Build the new route entry in YAML format.
+    # Per-route payTo and network enable multi-offer with different wallets/chains.
+    route_entry = (
+        f'- pattern: "{route_pattern}"\n'
+        f'  price: "{price}"\n'
+        f'  description: "ServiceOffer {name}"\n'
+    )
+    if pay_to:
+        route_entry += f'  payTo: "{pay_to}"\n'
+    if network:
+        route_entry += f'  network: "{network}"\n'
+
+    # Append route to existing routes section or create it.
+    if "routes:" in pricing_yaml_str:
+        # Check if routes is currently empty (routes: []).
+        if "routes: []" in pricing_yaml_str:
+            pricing_yaml_str = pricing_yaml_str.replace(
+                "routes: []",
+                f"routes:\n{route_entry}",
+            )
+        else:
+            # Append after last route entry (before any trailing newlines).
+            pricing_yaml_str = pricing_yaml_str.rstrip() + "\n" + route_entry
+    else:
+        pricing_yaml_str = pricing_yaml_str.rstrip() + f"\nroutes:\n{route_entry}"
+
+    patch_body = {"data": {"pricing.yaml": pricing_yaml_str}}
+    api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
+    print(f"  Added pricing route: {route_pattern} → {price} USDC (payTo={pay_to or 'global'})")
 
 
 def stage_route_published(spec, ns, name, token, ssl_ctx):
@@ -263,15 +377,15 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
     url_path = spec.get("path", f"/services/{name}")
 
     # Build the HTTPRoute resource.
+    # Use ExtensionRef filter (not traefik.io/middleware annotation) because
+    # Traefik's Gateway API provider ignores annotations — only ExtensionRef
+    # works for attaching middleware to HTTPRoutes.
     httproute = {
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
         "metadata": {
             "name": route_name,
             "namespace": ns,
-            "annotations": {
-                "traefik.io/middleware": f"{ns}-{middleware_name}@kubernetescrd",
-            },
             "ownerReferences": [
                 {
                     "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
@@ -300,6 +414,25 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
                                 "value": url_path,
                             }
                         }
+                    ],
+                    "filters": [
+                        {
+                            "type": "ExtensionRef",
+                            "extensionRef": {
+                                "group": "traefik.io",
+                                "kind": "Middleware",
+                                "name": middleware_name,
+                            },
+                        },
+                        {
+                            "type": "URLRewrite",
+                            "urlRewrite": {
+                                "path": {
+                                    "type": "ReplacePrefixMatch",
+                                    "replacePrefixMatch": "/",
+                                },
+                            },
+                        },
                     ],
                     "backendRefs": [
                         {
@@ -341,8 +474,9 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
 
 
 def stage_registered(spec, ns, name, token, ssl_ctx):
-    """Register on ERC-8004 if spec.register is true."""
-    if not spec.get("register", False):
+    """Register on ERC-8004 if registration.enabled is true."""
+    registration = spec.get("registration", {})
+    if not registration.get("enabled", False):
         set_condition(ns, name, "Registered", "True", "Skipped", "Registration not requested", token, ssl_ctx)
         return True
 
@@ -418,21 +552,31 @@ def cmd_list(token, ssl_ctx):
         print("No ServiceOffers found.")
         return
 
-    print(f"{'NAMESPACE':<25} {'NAME':<25} {'MODEL':<25} {'PRICE':<12} {'READY':<8}")
-    print("-" * 95)
+    print(f"{'NAMESPACE':<25} {'NAME':<25} {'TYPE':<14} {'MODEL':<20} {'PRICE':<12} {'READY':<8}")
+    print("-" * 105)
     for item in items:
         ns = item["metadata"].get("namespace", "?")
-        name = item["metadata"].get("name", "?")
+        item_name = item["metadata"].get("name", "?")
+        wtype = item.get("spec", {}).get("type", "inference")
         model = item.get("spec", {}).get("model", {}).get("name", "-")
-        pricing = item.get("spec", {}).get("pricing", {})
-        price = f"{pricing.get('amount', '?')} {pricing.get('currency', 'USDC')}/{pricing.get('unit', '?')}"
+        price_table = get_price_table(item.get("spec", {}))
+        price = get_effective_price(item.get("spec", {}))
+        # Show which pricing type is active.
+        if price_table.get("perRequest"):
+            price_label = f"{price}/req"
+        elif price_table.get("perMTok"):
+            price_label = f"{price}/MTok"
+        elif price_table.get("perHour"):
+            price_label = f"{price}/hr"
+        else:
+            price_label = price
         conditions = item.get("status", {}).get("conditions", [])
         ready = "False"
         for c in conditions:
             if c.get("type") == "Ready":
                 ready = c.get("status", "False")
                 break
-        print(f"{ns:<25} {name:<25} {model:<25} {price:<12} {ready:<8}")
+        print(f"{ns:<25} {item_name:<25} {wtype:<14} {model:<20} {price_label:<12} {ready:<8}")
 
 
 def cmd_status(ns, name, token, ssl_ctx):
@@ -443,14 +587,21 @@ def cmd_status(ns, name, token, ssl_ctx):
     spec = obj.get("spec", {})
     status = obj.get("status", {})
     conditions = status.get("conditions", [])
+    payment = get_payment(spec)
 
     print(f"ServiceOffer: {ns}/{name}")
+    print(f"  Type:     {spec.get('type', 'inference')}")
     print(f"  Model:    {spec.get('model', {}).get('name', '-')}")
     print(f"  Upstream: {spec.get('upstream', {}).get('service', '-')}.{spec.get('upstream', {}).get('namespace', '-')}:{spec.get('upstream', {}).get('port', '-')}")
-    print(f"  Pricing:  {spec.get('pricing', {}).get('amount', '-')} {spec.get('pricing', {}).get('currency', 'USDC')}/{spec.get('pricing', {}).get('unit', '-')}")
-    print(f"  Wallet:   {spec.get('wallet', '-')}")
+    print(f"  Price:    {get_effective_price(spec)} USDC")
+    print(f"  PayTo:    {payment.get('payTo', '-')}")
+    print(f"  Network:  {payment.get('network', '-')}")
     print(f"  Path:     {spec.get('path', f'/services/{name}')}")
     print(f"  Endpoint: {status.get('endpoint', '-')}")
+    if status.get("agentId"):
+        print(f"  Agent ID: {status['agentId']}")
+    if status.get("registrationTxHash"):
+        print(f"  Reg Tx:   {status['registrationTxHash']}")
     print()
 
     if not conditions:
@@ -472,20 +623,33 @@ def cmd_create(args, token, ns, ssl_ctx):
     offer_name = args.name
     target_ns = args.namespace or ns
 
+    # Build price table.
+    price = {}
+    if args.per_request:
+        price["perRequest"] = args.per_request
+    if args.per_mtok:
+        price["perMTok"] = args.per_mtok
+    if args.per_hour:
+        price["perHour"] = args.per_hour
+
+    if not price:
+        print("Error: at least one price required: --per-request, --per-mtok, or --per-hour", file=sys.stderr)
+        sys.exit(1)
+
     spec = {
+        "type": args.type,
         "upstream": {
             "service": args.upstream,
             "namespace": target_ns,
             "port": args.port,
         },
-        "pricing": {
-            "amount": args.price,
-            "unit": args.unit,
-            "currency": "USDC",
-            "chain": args.chain,
+        "payment": {
+            "scheme": "exact",
+            "network": args.network,
+            "payTo": args.pay_to,
+            "maxTimeoutSeconds": 300,
+            "price": price,
         },
-        "wallet": args.wallet,
-        "register": args.register,
     }
 
     if args.model:
@@ -496,6 +660,14 @@ def cmd_create(args, token, ns, ssl_ctx):
 
     if args.path:
         spec["path"] = args.path
+
+    if args.register:
+        registration = {"enabled": True}
+        if args.register_name:
+            registration["name"] = args.register_name
+        if args.register_description:
+            registration["description"] = args.register_description
+        spec["registration"] = registration
 
     body = {
         "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
@@ -514,10 +686,69 @@ def cmd_create(args, token, ns, ssl_ctx):
 
 
 def cmd_delete(ns, name, token, ssl_ctx):
-    """Delete a ServiceOffer CR."""
-    path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
-    api_delete(path, token, ssl_ctx)
+    """Delete a ServiceOffer CR and remove its pricing route."""
+    # Read the offer to get the path before deleting.
+    so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
+    try:
+        so = api_get(so_path, token, ssl_ctx)
+        url_path = so.get("spec", {}).get("path", f"/services/{name}")
+        _remove_pricing_route(url_path, name, token, ssl_ctx)
+    except SystemExit:
+        pass  # Offer may already be gone.
+
+    api_delete(so_path, token, ssl_ctx)
     print(f"ServiceOffer {ns}/{name} deleted")
+
+
+def _remove_pricing_route(url_path, name, token, ssl_ctx):
+    """Remove a pricing route from the x402-verifier ConfigMap."""
+    route_pattern = f"{url_path}/*"
+
+    cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
+    try:
+        cm = api_get(cm_path, token, ssl_ctx)
+    except SystemExit:
+        return
+
+    pricing_yaml_str = cm.get("data", {}).get("pricing.yaml", "")
+    if route_pattern not in pricing_yaml_str:
+        return
+
+    # Remove the route entry. Routes now have variable line counts
+    # (pattern, price, description, optional payTo, optional network).
+    lines = pricing_yaml_str.split("\n")
+    filtered = []
+    skip = False
+    for line in lines:
+        if f'pattern: "{route_pattern}"' in line:
+            skip = True
+            continue
+        if skip:
+            stripped = line.strip()
+            # Stop skipping when we hit the next route entry or a non-indented line.
+            if stripped.startswith("- ") or (stripped and not stripped.startswith("price:") and not stripped.startswith("description:") and not stripped.startswith("payTo:") and not stripped.startswith("network:")):
+                skip = False
+                filtered.append(line)
+            # Skip continuation lines of the removed route.
+            continue
+        filtered.append(line)
+
+    updated = "\n".join(filtered)
+
+    # If routes section is now empty, replace with routes: [].
+    remaining_routes = [l for l in filtered if l.strip().startswith("- pattern:")]
+    if not remaining_routes and "routes:" in updated:
+        # Replace "routes:\n" with "routes: []"
+        idx = updated.find("routes:")
+        end = updated.find("\n", idx)
+        if end != -1:
+            updated = updated[:idx] + "routes: []" + updated[end:]
+        else:
+            updated = updated[:idx] + "routes: []"
+
+    patch_body = {"data": {"pricing.yaml": updated}}
+    api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
+    print(f"  Removed pricing route: {route_pattern}")
 
 
 def cmd_process(ns, name, all_offers, token, ssl_ctx):
@@ -577,17 +808,21 @@ def main():
     # create
     sp_create = subparsers.add_parser("create", help="Create a new ServiceOffer CR")
     sp_create.add_argument("name", help="ServiceOffer name")
-    sp_create.add_argument("--model", help="Model name (e.g. qwen3:8b)")
+    sp_create.add_argument("--type", default="inference", choices=["inference", "fine-tuning"], help="Workload type (default: inference)")
+    sp_create.add_argument("--model", help="Model name (e.g. qwen3.5:35b)")
     sp_create.add_argument("--runtime", default="ollama", help="Model runtime (default: ollama)")
     sp_create.add_argument("--upstream", required=True, help="Upstream service name")
     sp_create.add_argument("--namespace", help="Target namespace")
     sp_create.add_argument("--port", type=int, default=11434, help="Upstream port (default: 11434)")
-    sp_create.add_argument("--price", required=True, help="Price per unit (e.g. 0.50)")
-    sp_create.add_argument("--unit", default="MTok", choices=["MTok", "request"], help="Billing unit")
-    sp_create.add_argument("--chain", required=True, help="Chain for payments (e.g. base-sepolia)")
-    sp_create.add_argument("--wallet", required=True, help="USDC recipient wallet address")
+    sp_create.add_argument("--per-request", help="Per-request price in USDC")
+    sp_create.add_argument("--per-mtok", help="Per-million-tokens price in USDC (inference)")
+    sp_create.add_argument("--per-hour", help="Per-compute-hour price in USDC (fine-tuning)")
+    sp_create.add_argument("--network", required=True, help="Payment chain (e.g. base-sepolia)")
+    sp_create.add_argument("--pay-to", required=True, help="USDC recipient wallet address (x402: payTo)")
     sp_create.add_argument("--path", help="URL path prefix (default: /services/<name>)")
     sp_create.add_argument("--register", action="store_true", help="Register on ERC-8004")
+    sp_create.add_argument("--register-name", help="Agent name for ERC-8004")
+    sp_create.add_argument("--register-description", help="Agent description for ERC-8004")
 
     # delete
     sp_delete = subparsers.add_parser("delete", help="Delete a ServiceOffer CR")
