@@ -423,10 +423,11 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) err
 
 	fmt.Println("Default infrastructure deployed")
 
-	// Build and import local Docker images that aren't on a public registry.
-	// The x402-verifier is built from source in this repo; its GHCR image may
-	// not exist yet (workflow hasn't run or repo is private).
-	buildAndImportLocalImages(cfg)
+	// In development mode, build and import local Docker images that aren't
+	// on a public registry yet (e.g. x402-verifier built from source).
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		buildAndImportLocalImages(cfg)
+	}
 
 	// Deploy default OpenClaw instance (non-fatal on failure)
 	fmt.Println("Setting up default OpenClaw instance...")
