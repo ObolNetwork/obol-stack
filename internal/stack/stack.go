@@ -186,9 +186,8 @@ func ollamaHostForBackend(backendName string) string {
 // Resolution strategy:
 //  1. If already an IP (k3s: 127.0.0.1), return as-is
 //  2. Try host-side DNS resolution
-//  3. Resolve inside a Docker container (host.docker.internal is only in
-//     Docker's DNS, not the host's — this handles macOS Docker Desktop)
-//  4. On Linux: fall back to docker0 bridge interface IP
+//  3. macOS: use Docker Desktop VM gateway (192.168.65.254)
+//  4. Linux: fall back to docker0 bridge interface IP
 func ollamaHostIPForBackend(backendName string) (string, error) {
 	host := ollamaHostForBackend(backendName)
 
@@ -203,11 +202,11 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 		return addrs[0], nil
 	}
 
-	// host.docker.internal and host.k3d.internal are only resolvable inside
-	// Docker containers (via Docker Desktop DNS or k3d CoreDNS). Resolve by
-	// running a lightweight container.
-	if ip, dockerErr := dockerResolveHost(host); dockerErr == nil {
-		return ip, nil
+	// macOS Docker Desktop: host.docker.internal is only resolvable inside
+	// containers (Docker injects it via DNS), not on the host. Use the
+	// well-known VM gateway IP that Docker Desktop exposes to containers.
+	if runtime.GOOS == "darwin" && backendName == BackendK3d {
+		return dockerDesktopGatewayIP(), nil
 	}
 
 	// Linux fallback: docker0 bridge interface IP (reachable from all containers).
@@ -222,37 +221,13 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
 }
 
-// dockerResolveHost resolves a hostname from inside a Docker container.
-// Docker Desktop (macOS/Windows) injects host.docker.internal into container
-// DNS but NOT into the host's DNS. This function bridges that gap.
-func dockerResolveHost(hostname string) (string, error) {
-	out, err := exec.Command("docker", "run", "--rm", "alpine",
-		"nslookup", hostname).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("docker resolve %s: %w", hostname, err)
-	}
-	// Parse nslookup output: find "Address: <ip>" after the "Non-authoritative" line.
-	// Skip the first Address line (DNS server).
-	lines := strings.Split(string(out), "\n")
-	seenNonAuth := false
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "Non-authoritative") {
-			seenNonAuth = true
-			continue
-		}
-		if seenNonAuth && strings.HasPrefix(line, "Address:") {
-			ip := strings.TrimSpace(strings.TrimPrefix(line, "Address:"))
-			// Strip port if present (e.g. "192.168.65.7:53")
-			if h, _, splitErr := net.SplitHostPort(ip); splitErr == nil {
-				ip = h
-			}
-			if net.ParseIP(ip) != nil {
-				return ip, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("could not parse IP from nslookup output: %s", string(out))
+// dockerDesktopGatewayIP returns the Docker Desktop VM gateway IP.
+// On macOS, Docker Desktop runs a LinuxKit VM. The host is reachable from
+// containers at this well-known gateway address (192.168.65.254 maps to
+// host.docker.internal inside the VM). This has been stable across Docker
+// Desktop versions since the transition from HyperKit to Apple Virtualization.
+func dockerDesktopGatewayIP() string {
+	return "192.168.65.254"
 }
 
 // dockerBridgeGatewayIP returns the IPv4 address of the docker0 network interface.
