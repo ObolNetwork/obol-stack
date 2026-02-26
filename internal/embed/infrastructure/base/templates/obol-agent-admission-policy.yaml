@@ -30,7 +30,7 @@ spec:
     - name: only-openclaw-sa
       expression: 'request.userInfo.username.startsWith("system:serviceaccount:openclaw-")'
   validations:
-    - expression: 'object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
+    - expression: '!has(object.spec.parentRefs) || object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
       message: "HTTPRoutes created by OpenClaw must reference traefik-gateway"
     - expression: '!has(object.spec.forwardAuth) || object.spec.forwardAuth.address.startsWith("http://x402-verifier.x402.svc")'
       message: "ForwardAuth middlewares must target x402-verifier.x402.svc"

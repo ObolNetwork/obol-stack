@@ -55,7 +55,6 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
-readonly CONTAINER_VERSION="0.9.0"
 readonly OPENCLAW_VERSION="2026.2.23"
 
 # Repository URL for building from source
@@ -1098,54 +1097,114 @@ WRAPPER
 	return 1
 }
 
-# install_container installs the apple/container CLI (macOS only).
-# The CLI is used by 'obol service deploy --vm' to run Ollama in an isolated
-# Apple Containerization Linux micro-VM.
-# Source: https://github.com/apple/container
-install_container() {
-	# Only relevant on macOS.
-	if [[ "$(detect_platform)" != "darwin" ]]; then
+# Install Ollama (host runtime for local AI inference)
+# Unlike other dependencies, Ollama is a full application with a background server.
+# On macOS it installs Ollama.app; on Linux it sets up a systemd service.
+# We delegate to Ollama's official installer rather than downloading a binary ourselves.
+install_ollama() {
+	# Check for existing ollama installation
+	if command_exists ollama; then
+		local version
+		version=$(ollama --version 2>/dev/null | sed 's/ollama version is //' || echo "unknown")
+		log_success "Ollama v$version already installed"
+
+		# Check if the server is running
+		if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+			log_success "Ollama server is running"
+		else
+			log_warn "Ollama is installed but the server is not running"
+			echo ""
+			case "$(uname -s)" in
+			Darwin*)
+				echo "  Start it with: open -a Ollama"
+				;;
+			Linux*)
+				echo "  Start it with: ollama serve"
+				;;
+			esac
+			echo ""
+		fi
 		return 0
 	fi
 
-	# Check if already installed at the pinned version or newer.
-	if command -v container >/dev/null 2>&1; then
-		local current_version
-		current_version=$(container --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
-		if [[ -n "$current_version" ]] && version_ge "$current_version" "$CONTAINER_VERSION"; then
-			log_success "Apple container CLI v$current_version already installed"
+	# Ollama not found — ask user if they want to install it
+	echo ""
+	log_info "Ollama is not installed"
+	echo ""
+	echo "  Ollama provides local AI inference for the Obol Stack."
+	echo "  Without it, you can still use cloud providers (Anthropic, OpenAI)"
+	echo "  via 'obol model setup'."
+	echo ""
+
+	# Check if we can prompt the user
+	if [[ -c /dev/tty ]]; then
+		local choice
+		read -p "  Install Ollama now? [Y/n]: " choice </dev/tty
+
+		case "$choice" in
+		[Nn]*)
+			log_warn "Skipping Ollama — local AI inference will be unavailable"
+			echo ""
+			echo "  Install later: curl -fsSL https://ollama.com/install.sh | sh"
+			echo "  Then pull a model: obol model pull"
+			echo ""
 			return 0
-		fi
+			;;
+		*)
+			# Yes — delegate to official installer
+			log_info "Installing Ollama..."
+			echo ""
+			if curl -fsSL https://ollama.com/install.sh | sh; then
+				echo ""
+				log_success "Ollama installed"
+
+				# On macOS, the installer starts Ollama.app automatically.
+				# On Linux with systemd, the installer enables and starts the service.
+				# Give it a moment to come up.
+				local attempts=0
+				while [[ $attempts -lt 10 ]]; do
+					if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+						log_success "Ollama server is running"
+						echo ""
+						echo "  Pull a model later with: obol model pull"
+						echo ""
+						return 0
+					fi
+					sleep 1
+					attempts=$((attempts + 1))
+				done
+
+				log_warn "Ollama installed but server not yet responding"
+				echo ""
+				case "$(uname -s)" in
+				Darwin*)
+					echo "  Start it with: open -a Ollama"
+					;;
+				Linux*)
+					echo "  Start it with: ollama serve"
+					;;
+				esac
+				echo "  Then pull a model with: obol model pull"
+				echo ""
+				return 0
+			else
+				log_warn "Ollama installation failed"
+				echo ""
+				echo "  Install manually: https://ollama.com/download"
+				echo ""
+				return 1
+			fi
+			;;
+		esac
+	else
+		# Non-interactive — just warn
+		log_warn "Ollama not found — local AI inference will be unavailable"
+		echo ""
+		echo "  Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
+		echo "  Then pull a model: obol model pull"
+		echo ""
+		return 0
 	fi
-
-	log_info "Installing Apple container CLI v${CONTAINER_VERSION}..."
-	echo "  This enables 'obol service deploy --vm' for isolated Ollama VMs"
-	echo "  Source: https://github.com/apple/container"
-	echo ""
-
-	local pkg_url="https://github.com/apple/container/releases/download/${CONTAINER_VERSION}/container-installer-signed.pkg"
-	local pkg_file
-	pkg_file="$(mktemp /tmp/container-installer.XXXXXX.pkg)"
-
-	if ! curl -fsSL "$pkg_url" -o "$pkg_file"; then
-		log_warn "Failed to download Apple container installer (continuing without VM support)"
-		rm -f "$pkg_file"
-		return 1
-	fi
-
-	if ! sudo installer -pkg "$pkg_file" -target / >/dev/null 2>&1; then
-		log_warn "Failed to install Apple container CLI — sudo required (continuing without VM support)"
-		rm -f "$pkg_file"
-		return 1
-	fi
-
-	rm -f "$pkg_file"
-	log_success "Apple container CLI v${CONTAINER_VERSION} installed"
-	echo ""
-	echo "  To start the container system daemon:"
-	echo "    container system start --enable-kernel-install"
-	echo ""
-	return 0
 }
 
 # Install all dependencies
@@ -1165,7 +1224,7 @@ install_dependencies() {
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
-	install_container || log_warn "Apple container CLI installation failed (VM inference unavailable)"
+	install_ollama || log_warn "Ollama installation skipped (continuing...)"
 
 	echo ""
 	log_success "Dependencies check complete"
