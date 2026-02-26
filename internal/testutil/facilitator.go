@@ -24,7 +24,7 @@ type MockFacilitator struct {
 	SettleCalls atomic.Int32
 }
 
-// clusterHostURL returns the URL prefix for reaching the host from inside k3d.
+// clusterHostURL returns the hostname for reaching the host from inside k3d.
 // On macOS, Docker Desktop exposes the host as host.docker.internal.
 // On Linux, k3d uses host.k3d.internal with a host-gateway entry.
 func clusterHostURL() string {
@@ -32,6 +32,49 @@ func clusterHostURL() string {
 		return "host.docker.internal"
 	}
 	return "host.k3d.internal"
+}
+
+// ClusterHostIP returns an IP address that k3d containers can use to reach the
+// host machine. Used for creating EndpointSlice objects (which require IPs).
+//
+// On macOS: Docker Desktop VM gateway (192.168.65.254)
+// On Linux: docker0 bridge interface IP (typically 172.17.0.1)
+func ClusterHostIP(t *testing.T) string {
+	t.Helper()
+
+	hostname := clusterHostURL()
+
+	// Try DNS first (works on some setups).
+	addrs, err := net.LookupHost(hostname)
+	if err == nil && len(addrs) > 0 {
+		t.Logf("resolved %s → %s", hostname, addrs[0])
+		return addrs[0]
+	}
+
+	// macOS: Docker Desktop VM gateway.
+	if runtime.GOOS == "darwin" {
+		const dockerDesktopGW = "192.168.65.254"
+		t.Logf("%s not resolvable on host, using Docker Desktop gateway %s", hostname, dockerDesktopGW)
+		return dockerDesktopGW
+	}
+
+	// Linux: docker0 bridge interface.
+	iface, err := net.InterfaceByName("docker0")
+	if err != nil {
+		t.Fatalf("cannot resolve cluster host IP: DNS failed for %s and docker0 not found: %v", hostname, err)
+	}
+	ifAddrs, err := iface.Addrs()
+	if err != nil {
+		t.Fatalf("cannot get docker0 addresses: %v", err)
+	}
+	for _, addr := range ifAddrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+			t.Logf("using docker0 bridge IP %s", ipNet.IP)
+			return ipNet.IP.String()
+		}
+	}
+	t.Fatalf("no IPv4 address on docker0 interface")
+	return ""
 }
 
 // StartMockFacilitator starts a mock facilitator on a free port.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -522,6 +523,38 @@ func TestIntegration_Monetize_Idempotent(t *testing.T) {
 	}
 }
 
+// portForwardGeneric port-forwards any resource and returns the base URL.
+// Registers t.Cleanup to stop the port-forward.
+func portForwardGeneric(t *testing.T, cfg *config.Config, namespace, resource string, remotePort, localPort int) string {
+	t.Helper()
+	obolBinary := filepath.Join(cfg.BinDir, "obol")
+	cmd := exec.Command(obolBinary,
+		"kubectl", "-n", namespace, "port-forward", resource,
+		fmt.Sprintf("%d:%d", localPort, remotePort),
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("port-forward start: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	})
+	// Wait for TCP readiness.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", localPort), 500*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return fmt.Sprintf("http://localhost:%d", localPort)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("port-forward to %s/%s:%d did not become ready", namespace, resource, remotePort)
+	return ""
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 3 — Routing with Anvil Upstream
 // ─────────────────────────────────────────────────────────────────────────────
@@ -534,22 +567,11 @@ func requireAnvil(t *testing.T) *testutil.AnvilFork {
 }
 
 // resolveK3dHostIP returns the IP that pods inside k3d use to reach the host.
-// It resolves host.k3d.internal from inside an existing pod.
-func resolveK3dHostIP(t *testing.T, cfg *config.Config) string {
+// Uses testutil.ClusterHostIP which handles macOS (Docker Desktop gateway) and
+// Linux (docker0 bridge) without needing to exec into a container.
+func resolveK3dHostIP(t *testing.T, _ *config.Config) string {
 	t.Helper()
-	// Use the x402-verifier pod (always running) to resolve host.k3d.internal.
-	out, err := obolRunErr(cfg, "kubectl", "exec", "-n", "x402",
-		"deploy/x402-verifier", "--", "sh", "-c",
-		"getent hosts host.k3d.internal | awk '{print $1}'")
-	if err != nil {
-		t.Fatalf("failed to resolve host.k3d.internal from inside cluster: %v", err)
-	}
-	ip := strings.TrimSpace(out)
-	if ip == "" {
-		t.Fatal("host.k3d.internal resolved to empty string")
-	}
-	t.Logf("resolved host.k3d.internal → %s", ip)
-	return ip
+	return testutil.ClusterHostIP(t)
 }
 
 // deployAnvilUpstream creates a K8s Service + EndpointSlice in the given namespace
@@ -919,23 +941,26 @@ func addPricingRoute(t *testing.T, cfg *config.Config, pattern, price, wallet st
 
 func TestIntegration_PaymentGate_VerifierHealthy(t *testing.T) {
 	cfg := requireCluster(t)
-	_ = cfg
 
-	// x402-verifier /healthz and /readyz should return 200.
-	// These are accessed via port-forward or direct cluster check.
-	out, err := obolRunErr(cfg, "kubectl", "exec", "-n", "x402",
-		"deploy/x402-verifier", "--", "wget", "-qO-", "http://localhost:8080/healthz")
-	if err != nil {
-		t.Skipf("could not reach verifier healthz: %v", err)
-	}
-	t.Logf("healthz: %s", out)
+	// x402-verifier uses a distroless image (no shell/wget), so we
+	// port-forward and probe health endpoints from the test process.
+	localPort := freePort(t)
+	pfURL := portForwardGeneric(t, cfg, "x402", "deploy/x402-verifier", 8080, localPort)
 
-	out, err = obolRunErr(cfg, "kubectl", "exec", "-n", "x402",
-		"deploy/x402-verifier", "--", "wget", "-qO-", "http://localhost:8080/readyz")
-	if err != nil {
-		t.Skipf("could not reach verifier readyz: %v", err)
+	for _, path := range []string{"/healthz", "/readyz"} {
+		url := pfURL + path
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Skipf("could not reach verifier %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("verifier %s returned %d: %s", path, resp.StatusCode, body)
+		} else {
+			t.Logf("verifier %s: %s", path, body)
+		}
 	}
-	t.Logf("readyz: %s", out)
 }
 
 func TestIntegration_PaymentGate_402WithoutPayment(t *testing.T) {
@@ -1331,6 +1356,7 @@ func requireOllamaModel(t *testing.T, targetModel string) string {
 }
 
 // ollamaServiceOfferYAML returns a ServiceOffer YAML for an Ollama model.
+// Field names align with the CRD schema (payment.payTo, payment.price.perRequest).
 func ollamaServiceOfferYAML(name, namespace, model, wallet string) string {
 	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
 kind: ServiceOffer
@@ -1346,12 +1372,11 @@ spec:
     namespace: llm
     port: 11434
     healthPath: /api/generate
-  pricing:
-    amount: "0.001"
-    unit: request
-    currency: USDC
-    chain: base-sepolia
-  wallet: "%s"
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    price:
+      perRequest: "0.001"
   path: /services/%s
 `, name, namespace, model, wallet, name)
 }
@@ -1789,12 +1814,11 @@ spec:
     namespace: %s
     port: 8545
     healthPath: /
-  pricing:
-    amount: "0.001"
-    unit: request
-    currency: USDC
-    chain: base-sepolia
-  wallet: "%s"
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    price:
+      perRequest: "0.001"
   path: /services/%s
 `, name, ns, ns, walletAddr, name)
 	applyServiceOffer(t, cfg, badYAML)
@@ -1816,6 +1840,8 @@ spec:
 
 	// Step 3: Fix the upstream — deploy Anvil service.
 	deployAnvilUpstream(t, cfg, ns, anvil)
+	// Wait for EndpointSlice propagation before re-processing.
+	time.Sleep(3 * time.Second)
 
 	// Step 4: Update the ServiceOffer to point at the correct upstream.
 	fixedYAML := serviceOfferWithAnvil(name, ns, anvil.Port)
