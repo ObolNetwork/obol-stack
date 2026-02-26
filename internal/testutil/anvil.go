@@ -66,8 +66,9 @@ func StartAnvilForkWithURL(t *testing.T, forkURL string) *AnvilFork {
 		forkURL = "https://sepolia.base.org"
 	}
 
-	// Find a free port.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// Find a free port.  Bind on 0.0.0.0 so the k3d cluster can reach
+	// Anvil via the docker0 bridge IP on Linux.
+	l, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
@@ -78,6 +79,7 @@ func StartAnvilForkWithURL(t *testing.T, forkURL string) *AnvilFork {
 
 	cmd := exec.CommandContext(ctx, "anvil",
 		"--fork-url", forkURL,
+		"--host", "0.0.0.0",
 		"--port", fmt.Sprintf("%d", port),
 		"--silent",
 	)
