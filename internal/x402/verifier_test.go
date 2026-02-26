@@ -477,3 +477,252 @@ func TestVerifier_ReadyzNotReady(t *testing.T) {
 		t.Errorf("expected 503 when config is nil, got %d", w.Code)
 	}
 }
+
+// ── Per-route PayTo / Network override tests ─────────────────────────────────
+
+// parse402Accepts is a test helper that decodes a 402 response body and returns
+// the first PaymentRequirement from the "accepts" array.
+func parse402Accepts(t *testing.T, body []byte) x402lib.PaymentRequirement {
+	t.Helper()
+	var resp struct {
+		Accepts []x402lib.PaymentRequirement `json:"accepts"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("failed to decode 402 body: %v\nbody: %s", err, string(body))
+	}
+	if len(resp.Accepts) == 0 {
+		t.Fatal("402 response has empty accepts array")
+	}
+	return resp.Accepts[0]
+}
+
+func TestVerifier_PerRoutePayTo_UsesRouteWallet(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	globalWallet := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	routeWallet := "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         globalWallet,
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{{
+			Pattern: "/services/test/*",
+			Price:   "0.001",
+			PayTo:   routeWallet,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	pr := parse402Accepts(t, body)
+
+	if pr.PayTo != routeWallet {
+		t.Errorf("payTo = %q, want route wallet %q", pr.PayTo, routeWallet)
+	}
+	if pr.PayTo == globalWallet {
+		t.Error("payTo should NOT be the global wallet — per-route override was ignored")
+	}
+}
+
+func TestVerifier_PerRouteNetwork_ResolvesCorrectChain(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{{
+			Pattern: "/services/mainnet/*",
+			Price:   "0.001",
+			Network: "base",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/mainnet/rpc")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	pr := parse402Accepts(t, body)
+
+	// BaseMainnet.NetworkID is "base"; BaseSepolia.NetworkID is "base-sepolia".
+	if pr.Network != x402lib.BaseMainnet.NetworkID {
+		t.Errorf("network = %q, want %q (base mainnet)", pr.Network, x402lib.BaseMainnet.NetworkID)
+	}
+	if pr.Network == x402lib.BaseSepolia.NetworkID {
+		t.Error("network should NOT be base-sepolia — per-route override was ignored")
+	}
+}
+
+func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	routeWallet := "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{{
+			Pattern: "/services/test/*",
+			Price:   "0.001",
+			PayTo:   routeWallet,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid payment on per-route PayTo, got %d", w.Code)
+	}
+	if fac.verifyCalls.Load() != 1 {
+		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
+	}
+}
+
+func TestVerifier_PerRouteNetwork_InvalidChain_Returns500(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{{
+			Pattern: "/services/bad/*",
+			Price:   "0.001",
+			Network: "invalid-chain",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/bad/endpoint")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for invalid per-route chain, got %d", w.Code)
+	}
+}
+
+func TestVerifier_NoPerRouteOverride_UsesGlobalWallet(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	globalWallet := "0xcccccccccccccccccccccccccccccccccccccccc"
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         globalWallet,
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{{
+			Pattern: "/rpc/*",
+			Price:   "0.0001",
+			// No PayTo — should use global wallet.
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	pr := parse402Accepts(t, body)
+
+	if pr.PayTo != globalWallet {
+		t.Errorf("payTo = %q, want global wallet %q", pr.PayTo, globalWallet)
+	}
+}
+
+func TestVerifier_MixedRoutes_CorrectOverrides(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	globalWallet := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	customWallet := "0xdddddddddddddddddddddddddddddddddddddd"
+
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         globalWallet,
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes: []RouteRule{
+			{Pattern: "/rpc/*", Price: "0.0001"},                                    // no PayTo — uses global
+			{Pattern: "/services/custom/*", Price: "0.005", PayTo: customWallet},    // per-route PayTo
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	// Route 1: /rpc/* — should use global wallet.
+	req1 := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req1.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	req1.Header.Set("X-Forwarded-Host", "obol.stack")
+	w1 := httptest.NewRecorder()
+	v.HandleVerify(w1, req1)
+
+	if w1.Code != http.StatusPaymentRequired {
+		t.Fatalf("rpc route: expected 402, got %d", w1.Code)
+	}
+	body1, _ := io.ReadAll(w1.Body)
+	pr1 := parse402Accepts(t, body1)
+	if pr1.PayTo != globalWallet {
+		t.Errorf("rpc route: payTo = %q, want global wallet %q", pr1.PayTo, globalWallet)
+	}
+
+	// Route 2: /services/custom/* — should use custom wallet.
+	req2 := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req2.Header.Set("X-Forwarded-Uri", "/services/custom/endpoint")
+	req2.Header.Set("X-Forwarded-Host", "obol.stack")
+	w2 := httptest.NewRecorder()
+	v.HandleVerify(w2, req2)
+
+	if w2.Code != http.StatusPaymentRequired {
+		t.Fatalf("custom route: expected 402, got %d", w2.Code)
+	}
+	body2, _ := io.ReadAll(w2.Body)
+	pr2 := parse402Accepts(t, body2)
+	if pr2.PayTo != customWallet {
+		t.Errorf("custom route: payTo = %q, want custom wallet %q", pr2.PayTo, customWallet)
+	}
+}
