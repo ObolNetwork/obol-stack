@@ -630,6 +630,24 @@ ports:
 
 	applyServiceOffer(t, cfg, svcManifest)
 	applyServiceOffer(t, cfg, epSliceManifest)
+
+	// Wait for EndpointSlice to propagate — DNS + kube-proxy need time,
+	// especially on Linux where docker0 bridge adds latency.
+	t.Log("waiting for EndpointSlice propagation...")
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := obolRunErr(cfg, "kubectl", "exec", "-i",
+			"-n", agentNamespace(cfg), "deploy/openclaw",
+			"-c", "openclaw", "--",
+			"python3", "-c",
+			fmt.Sprintf("import urllib.request; urllib.request.urlopen('http://anvil-rpc.%s.svc.cluster.local:%d/', timeout=2)", namespace, anvil.Port))
+		if err == nil {
+			t.Log("EndpointSlice reachable from cluster")
+			break
+		}
+		_ = out
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // serviceOfferWithAnvil returns a ServiceOffer YAML targeting an Anvil upstream.
