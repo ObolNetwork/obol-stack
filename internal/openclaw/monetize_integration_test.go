@@ -296,22 +296,33 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 // Phase 2 — RBAC + Reconciliation Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-// agentNamespace returns the namespace of the first OpenClaw instance found.
-// Falls back to "openclaw-obol-agent" if detection fails.
+// agentNamespace returns the namespace of the OpenClaw instance that has
+// monetize RBAC. Prefers "openclaw-obol-agent" (set up by `obol agent init`)
+// over other instances, because only that SA gets the ClusterRoleBinding.
 func agentNamespace(cfg *config.Config) string {
 	out, err := obolRunErr(cfg, "openclaw", "list")
 	if err != nil {
 		return "openclaw-obol-agent"
 	}
-	// Parse "Namespace: openclaw-<id>" from output
+	// Collect all namespaces from output.
+	var namespaces []string
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "Namespace:") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				return parts[1]
+				namespaces = append(namespaces, parts[1])
 			}
 		}
+	}
+	// Prefer obol-agent (has RBAC from `obol agent init`).
+	for _, ns := range namespaces {
+		if ns == "openclaw-obol-agent" {
+			return ns
+		}
+	}
+	if len(namespaces) > 0 {
+		return namespaces[0]
 	}
 	return "openclaw-obol-agent"
 }
