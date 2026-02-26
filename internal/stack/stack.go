@@ -423,6 +423,11 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) err
 
 	fmt.Println("Default infrastructure deployed")
 
+	// Build and import local Docker images that aren't on a public registry.
+	// The x402-verifier is built from source in this repo; its GHCR image may
+	// not exist yet (workflow hasn't run or repo is private).
+	buildAndImportLocalImages(cfg)
+
 	// Deploy default OpenClaw instance (non-fatal on failure)
 	fmt.Println("Setting up default OpenClaw instance...")
 	if err := openclaw.SetupDefault(cfg); err != nil {
@@ -431,6 +436,83 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) err
 	}
 
 	return nil
+}
+
+// localImage describes a Docker image built from source in this repo.
+type localImage struct {
+	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
+	dockerfile string // relative to project root, e.g. "Dockerfile.x402-verifier"
+}
+
+// localImages lists images that should be built locally and imported into k3d.
+var localImages = []localImage{
+	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
+}
+
+// buildAndImportLocalImages builds Docker images from source and imports them
+// into the k3d cluster. This ensures images are available even when the GHCR
+// publish workflow hasn't run. Non-fatal: logs warnings on failure.
+func buildAndImportLocalImages(cfg *config.Config) {
+	stackID := getStackID(cfg)
+	if stackID == "" {
+		return
+	}
+
+	// Find the project root (where go.mod lives).
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		fmt.Println("Warning: could not find project root, skipping local image build")
+		return
+	}
+
+	clusterName := fmt.Sprintf("obol-stack-%s", stackID)
+	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+
+	for _, img := range localImages {
+		dockerfilePath := filepath.Join(projectRoot, img.dockerfile)
+		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
+			continue // Dockerfile not present (production install without source)
+		}
+
+		fmt.Printf("Building %s from %s...\n", img.tag, img.dockerfile)
+		buildCmd := exec.Command("docker", "build",
+			"-f", dockerfilePath,
+			"-t", img.tag,
+			projectRoot,
+		)
+		buildCmd.Stdout = os.Stdout
+		buildCmd.Stderr = os.Stderr
+		if err := buildCmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to build %s: %v\n", img.tag, err)
+			continue
+		}
+
+		fmt.Printf("Importing %s into cluster %s...\n", img.tag, clusterName)
+		importCmd := exec.Command(k3dBinary, "image", "import", img.tag, "-c", clusterName)
+		importCmd.Stdout = os.Stdout
+		importCmd.Stderr = os.Stderr
+		if err := importCmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+		}
+	}
+}
+
+// findProjectRoot walks up from the current directory to find go.mod.
+func findProjectRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // checkPortsAvailable verifies that all required ports can be bound.
