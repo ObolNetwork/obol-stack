@@ -154,8 +154,31 @@ def get_network(spec):
 # Reconciliation stages
 # ---------------------------------------------------------------------------
 
+def _ollama_base_url(spec, ns):
+    """Return the Ollama HTTP base URL from upstream spec."""
+    upstream = spec.get("upstream", {})
+    svc = upstream.get("service", "ollama")
+    svc_ns = upstream.get("namespace", ns)
+    port = upstream.get("port", 11434)
+    return f"http://{svc}.{svc_ns}.svc.cluster.local:{port}"
+
+
+def _ollama_model_exists(base_url, model_name):
+    """Check if a model is already available in Ollama via /api/tags."""
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            for m in data.get("models", []):
+                if m.get("name", "") == model_name:
+                    return True
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+        pass
+    return False
+
+
 def stage_model_ready(spec, ns, name, token, ssl_ctx):
-    """Pull the model via Ollama API if runtime is ollama."""
+    """Check model availability via Ollama API. Pull only if not cached."""
     model_spec = spec.get("model")
     if not model_spec:
         set_condition(ns, name, "ModelReady", "True", "NoModel", "No model specified, skipping pull", token, ssl_ctx)
@@ -168,12 +191,17 @@ def stage_model_ready(spec, ns, name, token, ssl_ctx):
         set_condition(ns, name, "ModelReady", "True", "UnsupportedRuntime", f"Runtime {runtime} does not require pull", token, ssl_ctx)
         return True
 
-    upstream = spec.get("upstream", {})
-    svc = upstream.get("service", "ollama")
-    svc_ns = upstream.get("namespace", ns)
-    port = upstream.get("port", 11434)
-    pull_url = f"http://{svc}.{svc_ns}.svc.cluster.local:{port}/api/pull"
+    base_url = _ollama_base_url(spec, ns)
 
+    # Fast path: check if model is already available (avoids slow /api/pull).
+    print(f"  Checking if model {model_name} is available...")
+    if _ollama_model_exists(base_url, model_name):
+        print(f"  Model {model_name} already available")
+        set_condition(ns, name, "ModelReady", "True", "Available", f"Model {model_name} already available", token, ssl_ctx)
+        return True
+
+    # Model not found — trigger a pull.
+    pull_url = f"{base_url}/api/pull"
     print(f"  Pulling model {model_name} via {pull_url}...")
     body = json.dumps({"name": model_name, "stream": False}).encode()
     req = urllib.request.Request(

@@ -1,4 +1,3 @@
-{{- if .Values.obolAgent.enabled }}
 ---
 # Admission Policy for OpenClaw-created resources
 # Ensures that when OpenClaw service accounts create Traefik middlewares or
@@ -47,4 +46,3 @@ spec:
   policyName: openclaw-resource-guard
   validationActions:
     - Deny
-{{- end }}
