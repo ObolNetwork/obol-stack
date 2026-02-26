@@ -185,10 +185,10 @@ func ollamaHostForBackend(backendName string) string {
 //
 // Resolution strategy:
 //  1. If already an IP (k3s: 127.0.0.1), return as-is
-//  2. Try DNS resolution (works on macOS with Docker Desktop: host.docker.internal)
-//  3. On Linux k3d: host.k3d.internal doesn't resolve on the host (only inside
-//     k3d's CoreDNS). Fall back to the docker0 interface IP, which is the Docker
-//     daemon's bridge gateway and is reachable from all Docker containers.
+//  2. Try host-side DNS resolution
+//  3. Resolve inside a Docker container (host.docker.internal is only in
+//     Docker's DNS, not the host's — this handles macOS Docker Desktop)
+//  4. On Linux: fall back to docker0 bridge interface IP
 func ollamaHostIPForBackend(backendName string) (string, error) {
 	host := ollamaHostForBackend(backendName)
 
@@ -197,15 +197,20 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 		return host, nil
 	}
 
-	// Try DNS resolution first (works on macOS Docker Desktop)
+	// Try host-side DNS resolution first.
 	addrs, err := net.LookupHost(host)
 	if err == nil && len(addrs) > 0 {
 		return addrs[0], nil
 	}
 
-	// Fallback for Linux k3d: host.k3d.internal doesn't resolve on the host.
-	// Use the docker0 bridge interface IP instead — it's the Docker daemon's
-	// gateway and is reachable from all Docker containers regardless of network.
+	// host.docker.internal and host.k3d.internal are only resolvable inside
+	// Docker containers (via Docker Desktop DNS or k3d CoreDNS). Resolve by
+	// running a lightweight container.
+	if ip, dockerErr := dockerResolveHost(host); dockerErr == nil {
+		return ip, nil
+	}
+
+	// Linux fallback: docker0 bridge interface IP (reachable from all containers).
 	if runtime.GOOS == "linux" && backendName == BackendK3d {
 		ip, bridgeErr := dockerBridgeGatewayIP()
 		if bridgeErr == nil {
@@ -214,10 +219,40 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %v", host, err, bridgeErr)
 	}
 
+	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
+}
+
+// dockerResolveHost resolves a hostname from inside a Docker container.
+// Docker Desktop (macOS/Windows) injects host.docker.internal into container
+// DNS but NOT into the host's DNS. This function bridges that gap.
+func dockerResolveHost(hostname string) (string, error) {
+	out, err := exec.Command("docker", "run", "--rm", "alpine",
+		"nslookup", hostname).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running (macOS)", host, err)
+		return "", fmt.Errorf("docker resolve %s: %w", hostname, err)
 	}
-	return "", fmt.Errorf("Ollama host %q resolved to no addresses", host)
+	// Parse nslookup output: find "Address: <ip>" after the "Non-authoritative" line.
+	// Skip the first Address line (DNS server).
+	lines := strings.Split(string(out), "\n")
+	seenNonAuth := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "Non-authoritative") {
+			seenNonAuth = true
+			continue
+		}
+		if seenNonAuth && strings.HasPrefix(line, "Address:") {
+			ip := strings.TrimSpace(strings.TrimPrefix(line, "Address:"))
+			// Strip port if present (e.g. "192.168.65.7:53")
+			if h, _, splitErr := net.SplitHostPort(ip); splitErr == nil {
+				ip = h
+			}
+			if net.ParseIP(ip) != nil {
+				return ip, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("could not parse IP from nslookup output: %s", string(out))
 }
 
 // dockerBridgeGatewayIP returns the IPv4 address of the docker0 network interface.
