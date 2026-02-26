@@ -93,10 +93,17 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	// Resolve {{OLLAMA_HOST}} based on backend:
 	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
 	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
+	// Resolve {{OLLAMA_HOST_IP}} to a numeric IP for the Endpoints object:
+	// - Endpoints require an IP, not a hostname (ClusterIP+Endpoints pattern)
 	ollamaHost := ollamaHostForBackend(backendName)
+	ollamaHostIP, err := ollamaHostIPForBackend(backendName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve Ollama host IP: %w", err)
+	}
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
-		"{{OLLAMA_HOST}}": ollamaHost,
+		"{{OLLAMA_HOST}}":    ollamaHost,
+		"{{OLLAMA_HOST_IP}}": ollamaHostIP,
 	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
@@ -171,6 +178,68 @@ func ollamaHostForBackend(backendName string) string {
 		return "host.docker.internal"
 	}
 	return "host.k3d.internal"
+}
+
+// ollamaHostIPForBackend resolves the Ollama host to an IP address.
+// ClusterIP+Endpoints requires an IP (not a hostname).
+//
+// Resolution strategy:
+//  1. If already an IP (k3s: 127.0.0.1), return as-is
+//  2. Try DNS resolution (works on macOS with Docker Desktop: host.docker.internal)
+//  3. On Linux k3d: host.k3d.internal doesn't resolve on the host (only inside
+//     k3d's CoreDNS). Fall back to the docker0 interface IP, which is the Docker
+//     daemon's bridge gateway and is reachable from all Docker containers.
+func ollamaHostIPForBackend(backendName string) (string, error) {
+	host := ollamaHostForBackend(backendName)
+
+	// If already an IP, return as-is (k3s: 127.0.0.1)
+	if net.ParseIP(host) != nil {
+		return host, nil
+	}
+
+	// Try DNS resolution first (works on macOS Docker Desktop)
+	addrs, err := net.LookupHost(host)
+	if err == nil && len(addrs) > 0 {
+		return addrs[0], nil
+	}
+
+	// Fallback for Linux k3d: host.k3d.internal doesn't resolve on the host.
+	// Use the docker0 bridge interface IP instead — it's the Docker daemon's
+	// gateway and is reachable from all Docker containers regardless of network.
+	if runtime.GOOS == "linux" && backendName == BackendK3d {
+		ip, bridgeErr := dockerBridgeGatewayIP()
+		if bridgeErr == nil {
+			return ip, nil
+		}
+		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %v", host, err, bridgeErr)
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running (macOS)", host, err)
+	}
+	return "", fmt.Errorf("Ollama host %q resolved to no addresses", host)
+}
+
+// dockerBridgeGatewayIP returns the IPv4 address of the docker0 network interface.
+// On Linux, docker0 is the default Docker bridge (typically 172.17.0.1). This IP
+// is reachable from any Docker container regardless of the container's network,
+// because the host has this address on its network stack and Docker enables
+// IP forwarding between bridge networks and the host.
+func dockerBridgeGatewayIP() (string, error) {
+	iface, err := net.InterfaceByName("docker0")
+	if err != nil {
+		return "", fmt.Errorf("docker0 interface not found: %w", err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return "", fmt.Errorf("cannot get docker0 addresses: %w", err)
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+			return ipNet.IP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no IPv4 address found on docker0 interface")
 }
 
 // Up starts the cluster using the configured backend

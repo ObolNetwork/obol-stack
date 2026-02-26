@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -174,4 +175,62 @@ func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
 
 	// Should not panic or error
 	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+}
+
+func TestOllamaHostIPForBackend_K3s(t *testing.T) {
+	// k3s backend should return 127.0.0.1 (already an IP, no DNS resolution needed)
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error for k3s backend: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected 127.0.0.1 for k3s backend, got %s", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_K3d(t *testing.T) {
+	// k3d backend should return a valid IP via one of two strategies:
+	//   macOS: DNS resolution of host.docker.internal
+	//   Linux: DNS resolution of host.k3d.internal, or docker0 bridge fallback
+	// In CI without Docker, both may fail → skip.
+	ip, err := ollamaHostIPForBackend(BackendK3d)
+	if err != nil {
+		t.Skipf("skipping: resolution failed (expected in CI without Docker): %v", err)
+	}
+	if ip == "" {
+		t.Fatal("expected non-empty IP for k3d backend")
+	}
+	// The result must be a parseable IP address (not a hostname)
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected a valid IP address for k3d backend, got %q", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
+	// Verify the function passes through an already-numeric IP unchanged.
+	// k3s returns "127.0.0.1" from ollamaHostForBackend, so it should
+	// short-circuit on net.ParseIP without attempting DNS.
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
+	}
+}
+
+func TestDockerBridgeGatewayIP(t *testing.T) {
+	// On Linux with Docker installed, docker0 should exist with an IPv4 address.
+	// On macOS or CI without Docker, skip gracefully.
+	if runtime.GOOS != "linux" {
+		t.Skip("docker0 interface only exists on Linux")
+	}
+	ip, err := dockerBridgeGatewayIP()
+	if err != nil {
+		t.Skipf("skipping: docker0 not available (expected without Docker): %v", err)
+	}
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected valid IP from docker0, got %q", ip)
+	}
+	t.Logf("docker0 gateway IP: %s", ip)
 }
