@@ -180,7 +180,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Use `obol model setup --provider <name> --api-key <key>` for cloud provider config
 - Wait for pod readiness AND HTTP readiness before sending inference requests
 - Clean up test instances with `obol openclaw delete --force <id>` (flag BEFORE arg)
-- Set env vars for dev mode: `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
+- Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -231,7 +231,7 @@ curl -X POST http://obol.stack:8080/services/qwen35/v1/chat/completions \
   -d '{"model":"qwen3.5:35b","messages":[{"role":"user","content":"hi"}],"stream":false}'
 
 # Run e2e test (with mock facilitator)
-export OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin
+export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin
 go test -tags integration -v -run TestIntegration_PaymentGate_FullLifecycle -timeout 5m ./internal/x402/
 ```
 
