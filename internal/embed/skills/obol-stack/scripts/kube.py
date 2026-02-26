@@ -53,8 +53,13 @@ def make_ssl_context():
     return ctx
 
 
-def api_get(path, token, ssl_ctx):
-    """GET request to the Kubernetes API."""
+def api_get(path, token, ssl_ctx, quiet=False):
+    """GET request to the Kubernetes API.
+
+    Args:
+        quiet: If True, suppress stderr output on HTTP errors (useful for
+               existence checks where a 404 is expected).
+    """
     url = f"{API_SERVER}{path}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
@@ -62,7 +67,8 @@ def api_get(path, token, ssl_ctx):
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
-        print(f"API error {e.code}: {body[:200]}", file=sys.stderr)
+        if not quiet:
+            print(f"API error {e.code}: {body[:200]}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -231,7 +231,7 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
     svc = upstream.get("service", "ollama")
     svc_ns = upstream.get("namespace", ns)
     port = upstream.get("port", 11434)
-    health_path = upstream.get("healthPath", "/health")
+    health_path = upstream.get("healthPath", "/")
 
     model_spec = spec.get("model", {})
     model_name = model_spec.get("name", "")
@@ -311,7 +311,7 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
 
     # Check if middleware already exists.
     try:
-        existing = api_get(f"{mw_path}/{middleware_name}", token, ssl_ctx)
+        existing = api_get(f"{mw_path}/{middleware_name}", token, ssl_ctx, quiet=True)
         if existing:
             print(f"  Middleware {middleware_name} already exists, updating...")
             api_patch(f"{mw_path}/{middleware_name}", middleware, token, ssl_ctx, patch_type="merge")
@@ -347,7 +347,7 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
     # Read current x402-pricing ConfigMap.
     cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
     try:
-        cm = api_get(cm_path, token, ssl_ctx)
+        cm = api_get(cm_path, token, ssl_ctx, quiet=True)
     except SystemExit:
         print(f"  Warning: x402-pricing ConfigMap not found, skipping pricing route")
         return
@@ -487,7 +487,7 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
 
     # Check if route already exists.
     try:
-        existing = api_get(f"{route_path}/{route_name}", token, ssl_ctx)
+        existing = api_get(f"{route_path}/{route_name}", token, ssl_ctx, quiet=True)
         if existing:
             print(f"  HTTPRoute {route_name} already exists, updating...")
             api_patch(f"{route_path}/{route_name}", httproute, token, ssl_ctx, patch_type="merge")
@@ -718,7 +718,7 @@ def cmd_delete(ns, name, token, ssl_ctx):
     # Read the offer to get the path before deleting.
     so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
     try:
-        so = api_get(so_path, token, ssl_ctx)
+        so = api_get(so_path, token, ssl_ctx, quiet=True)
         url_path = so.get("spec", {}).get("path", f"/services/{name}")
         _remove_pricing_route(url_path, name, token, ssl_ctx)
     except SystemExit:
@@ -734,7 +734,7 @@ def _remove_pricing_route(url_path, name, token, ssl_ctx):
 
     cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"
     try:
-        cm = api_get(cm_path, token, ssl_ctx)
+        cm = api_get(cm_path, token, ssl_ctx, quiet=True)
     except SystemExit:
         return
 
