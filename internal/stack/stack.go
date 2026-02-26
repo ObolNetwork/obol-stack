@@ -93,10 +93,17 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	// Resolve {{OLLAMA_HOST}} based on backend:
 	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
 	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
+	// Resolve {{OLLAMA_HOST_IP}} to a numeric IP for the Endpoints object:
+	// - Endpoints require an IP, not a hostname (ClusterIP+Endpoints pattern)
 	ollamaHost := ollamaHostForBackend(backendName)
+	ollamaHostIP, err := ollamaHostIPForBackend(backendName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve Ollama host IP: %w", err)
+	}
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
-		"{{OLLAMA_HOST}}": ollamaHost,
+		"{{OLLAMA_HOST}}":    ollamaHost,
+		"{{OLLAMA_HOST_IP}}": ollamaHostIP,
 	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
@@ -171,6 +178,27 @@ func ollamaHostForBackend(backendName string) string {
 		return "host.docker.internal"
 	}
 	return "host.k3d.internal"
+}
+
+// ollamaHostIPForBackend resolves the Ollama host to an IP address.
+// ClusterIP+Endpoints requires an IP (not a hostname).
+func ollamaHostIPForBackend(backendName string) (string, error) {
+	host := ollamaHostForBackend(backendName)
+
+	// If already an IP, return as-is (k3s: 127.0.0.1)
+	if net.ParseIP(host) != nil {
+		return host, nil
+	}
+
+	// Resolve hostname to IP
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\nEnsure Docker Desktop is running (macOS) or the Docker daemon is configured with host networking (Linux)", host, err)
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("Ollama host %q resolved to no addresses", host)
+	}
+	return addrs[0], nil
 }
 
 // Up starts the cluster using the configured backend

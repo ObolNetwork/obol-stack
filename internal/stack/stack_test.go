@@ -175,3 +175,44 @@ func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
 	// Should not panic or error
 	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
 }
+
+func TestOllamaHostIPForBackend_K3s(t *testing.T) {
+	// k3s backend should return 127.0.0.1 (already an IP, no DNS resolution needed)
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error for k3s backend: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected 127.0.0.1 for k3s backend, got %s", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_K3d(t *testing.T) {
+	// k3d backend should return a valid, non-empty IP (or an error if
+	// host.docker.internal / host.k3d.internal cannot be resolved, e.g.
+	// in CI without Docker Desktop).
+	ip, err := ollamaHostIPForBackend(BackendK3d)
+	if err != nil {
+		t.Skipf("skipping: DNS resolution failed (expected in CI): %v", err)
+	}
+	if ip == "" {
+		t.Fatal("expected non-empty IP for k3d backend")
+	}
+	// The result must be a parseable IP address (not a hostname)
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected a valid IP address for k3d backend, got %q", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
+	// Verify the function passes through an already-numeric IP unchanged.
+	// k3s returns "127.0.0.1" from ollamaHostForBackend, so it should
+	// short-circuit on net.ParseIP without attempting DNS.
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
+	}
+}
