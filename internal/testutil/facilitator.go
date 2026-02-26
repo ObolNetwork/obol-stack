@@ -7,12 +7,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync/atomic"
 	"testing"
 )
 
 // MockFacilitator wraps an httptest.Server that speaks the x402 facilitator protocol.
-// Accessible from inside k3d cluster via http://host.k3d.internal:<port>.
+// Accessible from inside k3d cluster via http://host.k3d.internal:<port> (Linux)
+// or http://host.docker.internal:<port> (macOS).
 type MockFacilitator struct {
 	Server     *httptest.Server
 	Port       int
@@ -20,6 +22,16 @@ type MockFacilitator struct {
 
 	VerifyCalls atomic.Int32
 	SettleCalls atomic.Int32
+}
+
+// clusterHostURL returns the URL prefix for reaching the host from inside k3d.
+// On macOS, Docker Desktop exposes the host as host.docker.internal.
+// On Linux, k3d uses host.k3d.internal with a host-gateway entry.
+func clusterHostURL() string {
+	if runtime.GOOS == "darwin" {
+		return "host.docker.internal"
+	}
+	return "host.k3d.internal"
 }
 
 // StartMockFacilitator starts a mock facilitator on a free port.
@@ -62,7 +74,7 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 	mf.Server.Start()
 
 	mf.Port = port
-	mf.ClusterURL = fmt.Sprintf("http://host.k3d.internal:%d", port)
+	mf.ClusterURL = fmt.Sprintf("http://%s:%d", clusterHostURL(), port)
 
 	t.Cleanup(mf.Server.Close)
 	return mf
@@ -78,11 +90,11 @@ func TestPaymentHeader(t *testing.T, payTo string) string {
 		"scheme":      "exact",
 		"network":     "base-sepolia",
 		"payload": map[string]interface{}{
-			"signature":  "0xmocksig",
+			"signature": "0xmocksig",
 			"authorization": map[string]interface{}{
-				"from":     "0xmockpayer",
-				"to":       payTo,
-				"value":    "1000000",
+				"from":        "0xmockpayer",
+				"to":          payTo,
+				"value":       "1000000",
 				"validAfter":  0,
 				"validBefore": 4294967295,
 				"nonce":       "0x0",

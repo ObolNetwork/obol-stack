@@ -88,11 +88,12 @@ func ValidateFacilitatorURL(u string) error {
 	if strings.HasPrefix(u, "https://") {
 		return nil
 	}
-	// Allow loopback and k3d internal addresses for local development and testing.
+	// Allow loopback and container-internal addresses for local development and testing.
 	if strings.HasPrefix(u, "http://localhost") ||
 		strings.HasPrefix(u, "http://127.0.0.1") ||
 		strings.HasPrefix(u, "http://[::1]") ||
-		strings.HasPrefix(u, "http://host.k3d.internal") {
+		strings.HasPrefix(u, "http://host.k3d.internal") ||
+		strings.HasPrefix(u, "http://host.docker.internal") {
 		return nil
 	}
 	return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)

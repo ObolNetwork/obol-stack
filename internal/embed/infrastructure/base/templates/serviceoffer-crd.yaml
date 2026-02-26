@@ -1,4 +1,3 @@
-{{- if .Values.obolAgent.enabled }}
 ---
 # ServiceOffer CRD
 # Defines a compute service the agent can expose, gate with x402, and register on-chain.
@@ -248,4 +247,3 @@ spec:
                   type: integer
                   format: int64
                   description: "The generation observed by the controller."
-{{- end }}

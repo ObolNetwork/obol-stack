@@ -20,7 +20,6 @@ repositories:
 values:
   - network: mainnet
   - gatewayApiVersion: v1.4.1
-  - x402Enabled: false
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -30,9 +29,6 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
-      # obol-agent namespace and RBAC. Set obolAgent.enabled=true to deploy.
-      - obolAgent:
-          enabled: false
 
   # Monitoring stack (Prometheus operator + Prometheus)
   - name: monitoring
@@ -159,20 +155,18 @@ releases:
                     - path:
                         type: PathPrefix
                         value: /rpc
-{{- if eq (.Values.x402Enabled | toString) "true" }}
                   filters:
                     - type: ExtensionRef
                       extensionRef:
                         group: traefik.io
                         kind: Middleware
                         name: x402-payment
-{{- end }}
                   backendRefs:
                     - name: erpc
                       port: 4000
 
-{{- if eq (.Values.x402Enabled | toString) "true" }}
-  # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier)
+  # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier).
+  # Always deployed; the verifier returns 200 for routes with no pricing rules.
   - name: erpc-x402-middleware
     namespace: erpc
     chart: bedag/raw
@@ -191,7 +185,6 @@ releases:
                 address: http://x402-verifier.x402.svc.cluster.local:8080/verify
                 authResponseHeaders:
                   - X-Payment-Response
-{{- end }}
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata
