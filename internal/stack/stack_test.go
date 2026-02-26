@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -188,12 +189,13 @@ func TestOllamaHostIPForBackend_K3s(t *testing.T) {
 }
 
 func TestOllamaHostIPForBackend_K3d(t *testing.T) {
-	// k3d backend should return a valid, non-empty IP (or an error if
-	// host.docker.internal / host.k3d.internal cannot be resolved, e.g.
-	// in CI without Docker Desktop).
+	// k3d backend should return a valid IP via one of two strategies:
+	//   macOS: DNS resolution of host.docker.internal
+	//   Linux: DNS resolution of host.k3d.internal, or docker0 bridge fallback
+	// In CI without Docker, both may fail → skip.
 	ip, err := ollamaHostIPForBackend(BackendK3d)
 	if err != nil {
-		t.Skipf("skipping: DNS resolution failed (expected in CI): %v", err)
+		t.Skipf("skipping: resolution failed (expected in CI without Docker): %v", err)
 	}
 	if ip == "" {
 		t.Fatal("expected non-empty IP for k3d backend")
@@ -215,4 +217,20 @@ func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
 	if ip != "127.0.0.1" {
 		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
 	}
+}
+
+func TestDockerBridgeGatewayIP(t *testing.T) {
+	// On Linux with Docker installed, docker0 should exist with an IPv4 address.
+	// On macOS or CI without Docker, skip gracefully.
+	if runtime.GOOS != "linux" {
+		t.Skip("docker0 interface only exists on Linux")
+	}
+	ip, err := dockerBridgeGatewayIP()
+	if err != nil {
+		t.Skipf("skipping: docker0 not available (expected without Docker): %v", err)
+	}
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected valid IP from docker0, got %q", ip)
+	}
+	t.Logf("docker0 gateway IP: %s", ip)
 }
