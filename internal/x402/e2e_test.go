@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/testutil"
 )
 
@@ -39,7 +40,7 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 	kubeconfig := filepath.Join(cfg.configDir, "kubeconfig.yaml")
 
 	// Verify x402-verifier is running.
-	out, err := kubectlOutput(kubectlBin, kubeconfig, "get", "pods", "-n", "x402",
+	out, err := kubectl.Output(kubectlBin, kubeconfig, "get", "pods", "-n", "x402",
 		"-l", "app=x402-verifier", "--no-headers")
 	if err != nil {
 		t.Fatalf("kubectl get pods: %v", err)
@@ -49,7 +50,7 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 	}
 
 	// Check that a pricing route exists (from monetize.py reconciliation).
-	cmYAML, err := kubectlOutput(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
+	cmYAML, err := kubectl.Output(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
 		"-n", "x402", "-o", `jsonpath={.data.pricing\.yaml}`)
 	if err != nil {
 		t.Fatalf("kubectl get cm: %v", err)
