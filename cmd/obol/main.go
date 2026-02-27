@@ -53,6 +53,12 @@ COMMANDS:
      network install Install and deploy network to cluster
      network delete  Remove network and clean up cluster resources
 
+   RPC Gateway:
+     rpc list        List configured chains and their upstreams
+     rpc add         Add public RPCs for a chain from ChainList
+     rpc remove      Remove public RPCs for a chain
+     rpc status      Show eRPC health and upstream counts
+
    OpenClaw (AI Agent):
      openclaw onboard   Create and deploy an OpenClaw instance
      openclaw setup     Reconfigure model providers for a deployed instance
@@ -462,6 +468,7 @@ GLOBAL OPTIONS:
 			updateCommand(cfg),
 			upgradeCommand(cfg),
 			networkCommand(cfg),
+			rpcCommand(cfg),
 			openclawCommand(cfg),
 			serviceCommand(cfg),
 			monetizeCommand(cfg),
