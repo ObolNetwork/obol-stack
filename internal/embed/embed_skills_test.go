@@ -17,7 +17,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 
 	// Core skills that must always be present
 	coreSkills := []string{
-		"addresses", "building-blocks", "concepts", "distributed-validators",
+		"addresses", "building-blocks", "concepts", "discovery", "distributed-validators",
 		"ethereum-networks", "ethereum-local-wallet", "frontend-playbook", "frontend-ux", "gas",
 		"indexing", "l2s", "monetize", "obol-stack", "orchestration", "qa", "security",
 		"ship", "standards", "testing", "tools", "wallets", "why",
@@ -47,7 +47,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"distributed-validators", "ethereum-networks", "ethereum-local-wallet", "monetize", "obol-stack", "addresses", "wallets"}
+	skills := []string{"discovery", "distributed-validators", "ethereum-networks", "ethereum-local-wallet", "monetize", "obol-stack", "addresses", "wallets"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -91,6 +91,16 @@ func TestCopySkills(t *testing.T) {
 		"monetize/scripts/monetize.py",
 		"monetize/references/serviceoffer-spec.md",
 		"monetize/references/x402-pricing.md",
+	} {
+		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
+			t.Errorf("missing %s: %v", sub, err)
+		}
+	}
+
+	// discovery must have scripts/discovery.py and references/
+	for _, sub := range []string{
+		"discovery/scripts/discovery.py",
+		"discovery/references/erc8004-registry.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)
@@ -141,6 +151,72 @@ func TestKubePy_WriteHelpers(t *testing.T) {
 	for _, fn := range []string{"def api_post", "def api_patch", "def api_delete"} {
 		if !strings.Contains(content, fn) {
 			t.Errorf("kube.py missing function %q", fn)
+		}
+	}
+}
+
+func TestDiscoveryPy_Syntax(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	discoveryPy := filepath.Join(destDir, "discovery", "scripts", "discovery.py")
+	if _, err := os.Stat(discoveryPy); err != nil {
+		t.Fatalf("discovery.py not found: %v", err)
+	}
+
+	cmd := exec.Command("python3", "-m", "py_compile", discoveryPy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("discovery.py has syntax errors:\n%s\n%v", output, err)
+	}
+}
+
+func TestDiscoverySkill_Commands(t *testing.T) {
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	discoveryPy := filepath.Join(destDir, "discovery", "scripts", "discovery.py")
+	data, err := os.ReadFile(discoveryPy)
+	if err != nil {
+		t.Fatalf("read discovery.py: %v", err)
+	}
+
+	content := string(data)
+	for _, fn := range []string{
+		"def cmd_search",
+		"def cmd_agent",
+		"def cmd_uri",
+		"def cmd_count",
+		"def get_token_uri",
+		"def get_owner",
+		"def get_agent_wallet",
+		"def search_registered_events",
+		"def fetch_agent_uri_json",
+	} {
+		if !strings.Contains(content, fn) {
+			t.Errorf("discovery.py missing function %q", fn)
+		}
+	}
+
+	// Verify key constants are present
+	for _, constant := range []string{
+		"REGISTERED_TOPIC",
+		"SEL_TOKEN_URI",
+		"SEL_OWNER_OF",
+		"SEL_GET_AGENT_WALLET",
+		"REGISTRY_MAINNET",
+		"REGISTRY_TESTNET",
+	} {
+		if !strings.Contains(content, constant) {
+			t.Errorf("discovery.py missing constant %q", constant)
 		}
 	}
 }
