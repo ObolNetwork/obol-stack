@@ -172,3 +172,88 @@ func TestResolveChain_Unsupported(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateFacilitatorURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		// HTTPS always allowed.
+		{"https standard", "https://facilitator.x402.rs", false},
+		{"https custom", "https://my-facilitator.example.com:8443/verify", false},
+
+		// Loopback/internal addresses allowed over HTTP.
+		{"http localhost", "http://localhost:4040", false},
+		{"http localhost no port", "http://localhost", false},
+		{"http 127.0.0.1", "http://127.0.0.1:4040", false},
+		{"http ipv6 loopback", "http://[::1]:4040", false},
+		{"http k3d internal", "http://host.k3d.internal:4040", false},
+		{"http docker internal", "http://host.docker.internal:4040", false},
+
+		// Issue 7 regression: prefix bypass must be caught.
+		{"bypass localhost-hacker", "http://localhost-hacker.com", true},
+		{"bypass localhost.evil", "http://localhost.evil.com:4040", true},
+
+		// Plain HTTP to external hosts rejected.
+		{"http external", "http://facilitator.x402.rs", true},
+		{"http arbitrary", "http://evil.com:4040", true},
+
+		// Invalid URLs.
+		{"empty string", "", true},
+		{"no scheme", "facilitator.x402.rs", true},
+		{"ftp scheme", "ftp://facilitator.x402.rs", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFacilitatorURL(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateFacilitatorURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_HTTPFacilitatorRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yaml := `wallet: "0x1234"
+facilitatorURL: "http://evil.example.com"
+routes:
+  - pattern: "/api/*"
+    price: "0.01"
+`
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("expected error for HTTP facilitator URL to external host")
+	}
+}
+
+func TestLoadConfig_LocalhostHTTPAllowed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yaml := `wallet: "0x1234"
+facilitatorURL: "http://localhost:4040"
+routes:
+  - pattern: "/api/*"
+    price: "0.01"
+`
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig should allow localhost HTTP: %v", err)
+	}
+	if cfg.FacilitatorURL != "http://localhost:4040" {
+		t.Errorf("facilitatorURL = %q, want http://localhost:4040", cfg.FacilitatorURL)
+	}
+}

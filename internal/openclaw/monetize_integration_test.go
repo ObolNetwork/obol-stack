@@ -358,21 +358,30 @@ func execInAgentErr(cfg *config.Config, args ...string) (string, error) {
 	return obolRunErr(cfg, fullArgs...)
 }
 
-func TestIntegration_RBAC_ClusterRoleExists(t *testing.T) {
+func TestIntegration_RBAC_ClusterRolesExist(t *testing.T) {
 	cfg := requireCluster(t)
 
-	out := obolRun(t, cfg, "kubectl", "get", "clusterrole", "openclaw-monetize", "-o", "json")
+	// Both ClusterRoles should exist after stack init.
+	for _, name := range []string{"openclaw-monetize-read", "openclaw-monetize-workload"} {
+		out := obolRun(t, cfg, "kubectl", "get", "clusterrole", name, "-o", "json")
+		var cr map[string]interface{}
+		if err := json.Unmarshal([]byte(out), &cr); err != nil {
+			t.Fatalf("parse clusterrole %s JSON: %v", name, err)
+		}
+
+		rules, ok := cr["rules"].([]interface{})
+		if !ok || len(rules) == 0 {
+			t.Errorf("ClusterRole %s has no rules", name)
+		}
+	}
+
+	// Workload role should cover key mutate apiGroups.
+	out := obolRun(t, cfg, "kubectl", "get", "clusterrole", "openclaw-monetize-workload", "-o", "json")
 	var cr map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &cr); err != nil {
 		t.Fatalf("parse clusterrole JSON: %v", err)
 	}
-
-	rules, ok := cr["rules"].([]interface{})
-	if !ok || len(rules) == 0 {
-		t.Fatal("ClusterRole has no rules")
-	}
-
-	// Verify key apiGroups are present
+	rules := cr["rules"].([]interface{})
 	apiGroups := make(map[string]bool)
 	for _, r := range rules {
 		rm := r.(map[string]interface{})
@@ -384,41 +393,42 @@ func TestIntegration_RBAC_ClusterRoleExists(t *testing.T) {
 			apiGroups[g.(string)] = true
 		}
 	}
-
 	for _, want := range []string{"obol.org", "traefik.io", "gateway.networking.k8s.io"} {
 		if !apiGroups[want] {
-			t.Errorf("ClusterRole missing apiGroup %q", want)
+			t.Errorf("workload ClusterRole missing apiGroup %q", want)
 		}
 	}
 }
 
-func TestIntegration_RBAC_BindingPatched(t *testing.T) {
+func TestIntegration_RBAC_BindingsPatched(t *testing.T) {
 	cfg := requireCluster(t)
 	requireAgent(t, cfg)
 
-	out := obolRun(t, cfg, "kubectl", "get", "clusterrolebinding", "openclaw-monetize-binding", "-o", "json")
-	var crb map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &crb); err != nil {
-		t.Fatalf("parse binding JSON: %v", err)
-	}
-
-	subjects, ok := crb["subjects"].([]interface{})
-	if !ok || len(subjects) == 0 {
-		t.Skip("ClusterRoleBinding has no subjects yet — obol agent init may not have run")
-	}
-
-	// Check that at least one subject is an openclaw service account
-	found := false
-	for _, s := range subjects {
-		sm := s.(map[string]interface{})
-		ns, _ := sm["namespace"].(string)
-		if strings.HasPrefix(ns, "openclaw-") {
-			found = true
-			break
+	// Both ClusterRoleBindings should have subjects after obol agent init.
+	for _, name := range []string{"openclaw-monetize-read-binding", "openclaw-monetize-workload-binding"} {
+		out := obolRun(t, cfg, "kubectl", "get", "clusterrolebinding", name, "-o", "json")
+		var crb map[string]interface{}
+		if err := json.Unmarshal([]byte(out), &crb); err != nil {
+			t.Fatalf("parse binding %s JSON: %v", name, err)
 		}
-	}
-	if !found {
-		t.Error("no openclaw-* service account found in binding subjects")
+
+		subjects, ok := crb["subjects"].([]interface{})
+		if !ok || len(subjects) == 0 {
+			t.Skipf("ClusterRoleBinding %s has no subjects yet — obol agent init may not have run", name)
+		}
+
+		found := false
+		for _, s := range subjects {
+			sm := s.(map[string]interface{})
+			ns, _ := sm["namespace"].(string)
+			if strings.HasPrefix(ns, "openclaw-") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no openclaw-* service account found in %s subjects", name)
+		}
 	}
 }
 

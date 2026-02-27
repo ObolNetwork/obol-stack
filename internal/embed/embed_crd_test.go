@@ -49,6 +49,16 @@ func findDoc(docs []map[string]interface{}, kind string) map[string]interface{} 
 	return nil
 }
 
+// findDocByName returns the first document matching kind and metadata.name.
+func findDocByName(docs []map[string]interface{}, kind, name string) map[string]interface{} {
+	for _, d := range docs {
+		if d["kind"] == kind && nested(d, "metadata", "name") == name {
+			return d
+		}
+	}
+	return nil
+}
+
 // nested traverses a map[string]interface{} by dot-separated keys.
 func nested(m map[string]interface{}, keys ...string) interface{} {
 	var cur interface{} = m
@@ -208,119 +218,177 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 
 	docs := multiDoc(data)
 
-	// Should have ClusterRole + ClusterRoleBinding
-	cr := findDoc(docs, "ClusterRole")
-	if cr == nil {
-		t.Fatal("no ClusterRole document found")
+	// ── Read ClusterRole ────────────────────────────────────────────────
+	readCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-read")
+	if readCR == nil {
+		t.Fatal("no ClusterRole 'openclaw-monetize-read' found")
 	}
 
-	crb := findDoc(docs, "ClusterRoleBinding")
-	if crb == nil {
-		t.Fatal("no ClusterRoleBinding document found")
+	readRules, ok := readCR["rules"].([]interface{})
+	if !ok || len(readRules) == 0 {
+		t.Fatal("read ClusterRole has no rules")
 	}
 
-	// ClusterRole name
-	if name := nested(cr, "metadata", "name"); name != "openclaw-monetize" {
-		t.Errorf("ClusterRole name = %v, want openclaw-monetize", name)
-	}
-
-	// ClusterRole should have rules for obol.org, traefik.io, gateway.networking.k8s.io
-	rules, ok := cr["rules"].([]interface{})
-	if !ok || len(rules) == 0 {
-		t.Fatal("ClusterRole has no rules")
-	}
-
-	apiGroups := make(map[string]bool)
-	for _, r := range rules {
+	// Read role should be read-only: no create/update/patch/delete verbs.
+	for _, r := range readRules {
 		rm := r.(map[string]interface{})
-		groups, ok := rm["apiGroups"].([]interface{})
+		verbs, ok := rm["verbs"].([]interface{})
 		if !ok {
 			continue
 		}
-		for _, g := range groups {
-			apiGroups[g.(string)] = true
+		for _, v := range verbs {
+			switch v.(string) {
+			case "create", "update", "patch", "delete":
+				t.Errorf("read ClusterRole has mutate verb %q — should be read-only", v)
+			}
 		}
 	}
 
-	for _, want := range []string{"obol.org", "traefik.io", "gateway.networking.k8s.io"} {
-		if !apiGroups[want] {
-			t.Errorf("ClusterRole missing apiGroup %q", want)
+	// Read role should cover obol.org (serviceoffers) and core ("") groups.
+	readGroups := collectAPIGroups(readRules)
+	if !readGroups["obol.org"] {
+		t.Error("read ClusterRole missing obol.org apiGroup")
+	}
+	if !readGroups[""] {
+		t.Error("read ClusterRole missing core API group")
+	}
+
+	// ── Workload ClusterRole ────────────────────────────────────────────
+	workloadCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-workload")
+	if workloadCR == nil {
+		t.Fatal("no ClusterRole 'openclaw-monetize-workload' found")
+	}
+
+	workloadRules, ok := workloadCR["rules"].([]interface{})
+	if !ok || len(workloadRules) == 0 {
+		t.Fatal("workload ClusterRole has no rules")
+	}
+
+	// Workload role should have mutate verbs and cover all agent-managed apiGroups.
+	workloadGroups := collectAPIGroups(workloadRules)
+	for _, want := range []string{"obol.org", "traefik.io", "gateway.networking.k8s.io", "", "apps"} {
+		if !workloadGroups[want] {
+			t.Errorf("workload ClusterRole missing apiGroup %q", want)
 		}
 	}
 
-	// Core API group ("") should have configmaps for x402-pricing management
-	if !apiGroups[""] {
-		t.Error("ClusterRole missing core API group (needed for configmaps)")
+	// Workload: apps/deployments should have create (for registration httpd).
+	if !hasVerbOnResource(workloadRules, "apps", "deployments", "create") {
+		t.Error("workload ClusterRole missing 'create' on apps/deployments")
 	}
 
-	// Verify configmaps resource is present in one of the core rules
-	hasConfigMaps := false
+	// Workload: configmaps should have create (for registration JSON).
+	if !hasVerbOnResource(workloadRules, "", "configmaps", "create") {
+		t.Error("workload ClusterRole missing 'create' on configmaps")
+	}
+
+	// ── ClusterRoleBindings ─────────────────────────────────────────────
+	readCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-read-binding")
+	if readCRB == nil {
+		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-read-binding' found")
+	}
+	if ref := nested(readCRB, "roleRef", "name"); ref != "openclaw-monetize-read" {
+		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
+	}
+
+	workloadCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-workload-binding")
+	if workloadCRB == nil {
+		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-workload-binding' found")
+	}
+	if ref := nested(workloadCRB, "roleRef", "name"); ref != "openclaw-monetize-workload" {
+		t.Errorf("workload binding roleRef.name = %v, want openclaw-monetize-workload", ref)
+	}
+
+	// ── x402 namespace Role + RoleBinding ───────────────────────────────
+	x402Role := findDocByName(docs, "Role", "openclaw-x402-pricing")
+	if x402Role == nil {
+		t.Fatal("no Role 'openclaw-x402-pricing' found")
+	}
+	if ns := nested(x402Role, "metadata", "namespace"); ns != "x402" {
+		t.Errorf("x402 Role namespace = %v, want x402", ns)
+	}
+
+	// x402 Role should be scoped to x402-pricing ConfigMap only.
+	x402Rules, ok := x402Role["rules"].([]interface{})
+	if !ok || len(x402Rules) != 1 {
+		t.Fatalf("x402 Role should have exactly 1 rule, got %d", len(x402Rules))
+	}
+	rm := x402Rules[0].(map[string]interface{})
+	resNames, ok := rm["resourceNames"].([]interface{})
+	if !ok || len(resNames) != 1 || resNames[0] != "x402-pricing" {
+		t.Errorf("x402 Role should be scoped to resourceNames: [x402-pricing], got %v", resNames)
+	}
+
+	x402RB := findDocByName(docs, "RoleBinding", "openclaw-x402-pricing-binding")
+	if x402RB == nil {
+		t.Fatal("no RoleBinding 'openclaw-x402-pricing-binding' found")
+	}
+	if ns := nested(x402RB, "metadata", "namespace"); ns != "x402" {
+		t.Errorf("x402 RoleBinding namespace = %v, want x402", ns)
+	}
+	if ref := nested(x402RB, "roleRef", "name"); ref != "openclaw-x402-pricing" {
+		t.Errorf("x402 RoleBinding roleRef.name = %v, want openclaw-x402-pricing", ref)
+	}
+}
+
+// collectAPIGroups extracts all unique apiGroup strings from a list of rules.
+func collectAPIGroups(rules []interface{}) map[string]bool {
+	groups := make(map[string]bool)
 	for _, r := range rules {
 		rm := r.(map[string]interface{})
-		groups, ok := rm["apiGroups"].([]interface{})
+		gs, ok := rm["apiGroups"].([]interface{})
 		if !ok {
 			continue
 		}
-		for _, g := range groups {
-			if g.(string) != "" {
-				continue
-			}
-			resources, ok := rm["resources"].([]interface{})
-			if !ok {
-				continue
-			}
-			for _, res := range resources {
-				if res.(string) == "configmaps" {
-					hasConfigMaps = true
-				}
-			}
+		for _, g := range gs {
+			groups[g.(string)] = true
 		}
 	}
-	if !hasConfigMaps {
-		t.Error("ClusterRole missing 'configmaps' resource in core API group")
-	}
+	return groups
+}
 
-	// apps/deployments should have create (required for agent-managed busybox httpd)
-	hasDeployCreate := false
+// hasVerbOnResource checks if any rule grants the given verb on the given
+// apiGroup + resource combination.
+func hasVerbOnResource(rules []interface{}, apiGroup, resource, verb string) bool {
 	for _, r := range rules {
 		rm := r.(map[string]interface{})
-		groups, ok := rm["apiGroups"].([]interface{})
+		gs, ok := rm["apiGroups"].([]interface{})
 		if !ok {
 			continue
 		}
-		for _, g := range groups {
-			if g.(string) != "apps" {
-				continue
+		groupMatch := false
+		for _, g := range gs {
+			if g.(string) == apiGroup {
+				groupMatch = true
 			}
-			resources, ok := rm["resources"].([]interface{})
-			if !ok {
-				continue
+		}
+		if !groupMatch {
+			continue
+		}
+		res, ok := rm["resources"].([]interface{})
+		if !ok {
+			continue
+		}
+		resMatch := false
+		for _, rr := range res {
+			if rr.(string) == resource {
+				resMatch = true
 			}
-			for _, res := range resources {
-				if res.(string) != "deployments" {
-					continue
-				}
-				verbs, ok := rm["verbs"].([]interface{})
-				if !ok {
-					continue
-				}
-				for _, v := range verbs {
-					if v.(string) == "create" {
-						hasDeployCreate = true
-					}
-				}
+		}
+		if !resMatch {
+			continue
+		}
+		verbs, ok := rm["verbs"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, v := range verbs {
+			if v.(string) == verb {
+				return true
 			}
 		}
 	}
-	if !hasDeployCreate {
-		t.Error("ClusterRole missing 'create' verb on apps/deployments (required for registration httpd)")
-	}
-
-	// ClusterRoleBinding should reference openclaw-monetize
-	roleRef := nested(crb, "roleRef", "name")
-	if roleRef != "openclaw-monetize" {
-		t.Errorf("ClusterRoleBinding roleRef.name = %v, want openclaw-monetize", roleRef)
-	}
+	return false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

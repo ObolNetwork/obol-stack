@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"bytes"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 )
 
 type LoginOptions struct {
@@ -140,13 +140,14 @@ func applyLocalManagedK8sResources(cfg *config.Config, kubeconfigPath, hostname,
 	if err != nil {
 		return err
 	}
-	if err := kubectlApply(cfg, kubeconfigPath, secretYAML); err != nil {
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	if err := kubectl.Apply(kubectlBin, kubeconfigPath, secretYAML); err != nil {
 		return err
 	}
 
 	// ConfigMap: config.yml + tunnel_id used for command arg expansion.
 	cfgYAML := buildLocalManagedConfigYAML(hostname, tunnelID)
-	if err := kubectlApply(cfg, kubeconfigPath, cfgYAML); err != nil {
+	if err := kubectl.Apply(kubectlBin, kubeconfigPath, cfgYAML); err != nil {
 		return err
 	}
 
@@ -196,18 +197,3 @@ data:
 	return []byte(cfg)
 }
 
-func kubectlApply(cfg *config.Config, kubeconfigPath string, manifest []byte) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-
-	cmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"apply", "-f", "-",
-	)
-	cmd.Stdin = bytes.NewReader(manifest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("kubectl apply failed: %w", err)
-	}
-	return nil
-}

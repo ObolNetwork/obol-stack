@@ -2,8 +2,8 @@ package x402
 
 import (
 	"fmt"
+	"net/url"
 	"os"
-	"strings"
 
 	x402lib "github.com/mark3labs/x402-go"
 	"gopkg.in/yaml.v3"
@@ -82,20 +82,29 @@ func LoadConfig(path string) (*PricingConfig, error) {
 
 // ValidateFacilitatorURL checks that the facilitator URL uses HTTPS.
 // Payment proofs sent over plain HTTP could be intercepted.
-// Loopback addresses (localhost, 127.0.0.1) and k3d internal addresses
-// (host.k3d.internal) are exempted for local development and testing.
+// Loopback addresses (localhost, 127.0.0.1, [::1]) and k3d/Docker internal
+// addresses are exempted for local development and testing.
 func ValidateFacilitatorURL(u string) error {
-	if strings.HasPrefix(u, "https://") {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return fmt.Errorf("invalid facilitator URL %q: %w", u, err)
+	}
+
+	if parsed.Scheme == "https" {
 		return nil
 	}
-	// Allow loopback and container-internal addresses for local development and testing.
-	if strings.HasPrefix(u, "http://localhost") ||
-		strings.HasPrefix(u, "http://127.0.0.1") ||
-		strings.HasPrefix(u, "http://[::1]") ||
-		strings.HasPrefix(u, "http://host.k3d.internal") ||
-		strings.HasPrefix(u, "http://host.docker.internal") {
+	if parsed.Scheme != "http" {
+		return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)
+	}
+
+	// Allow loopback and container-internal hostnames for local dev/testing.
+	host := parsed.Hostname()
+	switch host {
+	case "localhost", "127.0.0.1", "::1",
+		"host.k3d.internal", "host.docker.internal":
 		return nil
 	}
+
 	return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)
 }
 

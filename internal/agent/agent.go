@@ -1,14 +1,13 @@
 package agent
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 )
 
@@ -16,7 +15,7 @@ const agentID = "obol-agent"
 
 // Init sets up the singleton obol-agent OpenClaw instance.
 // It enforces a single agent by using a fixed deployment ID.
-// After onboarding, it patches the openclaw-monetize ClusterRoleBinding
+// After onboarding, it patches the monetize RBAC bindings
 // to grant the agent's ServiceAccount monetization permissions,
 // and injects HEARTBEAT.md to drive periodic reconciliation.
 func Init(cfg *config.Config) error {
@@ -52,33 +51,41 @@ func Init(cfg *config.Config) error {
 
 	// Patch ClusterRoleBinding to add the agent's ServiceAccount.
 	if err := patchMonetizeBinding(cfg); err != nil {
-		fmt.Printf("Warning: could not patch ClusterRoleBinding: %v\n", err)
+		return fmt.Errorf("failed to patch ClusterRoleBinding: %w", err)
 	}
 
 	// Inject HEARTBEAT.md for periodic reconciliation.
 	if err := injectHeartbeatFile(cfg); err != nil {
-		fmt.Printf("Warning: could not inject HEARTBEAT.md: %v\n", err)
+		return fmt.Errorf("failed to inject HEARTBEAT.md: %w", err)
 	}
 
 	return nil
 }
 
 // patchMonetizeBinding adds the obol-agent's OpenClaw ServiceAccount
-// as a subject on the openclaw-monetize-binding ClusterRoleBinding.
+// as a subject on the monetize ClusterRoleBindings and x402 RoleBinding.
+//
+//	ClusterRoleBindings patched:
+//	  openclaw-monetize-read-binding      (cluster-wide read)
+//	  openclaw-monetize-workload-binding  (cluster-wide mutate)
+//	RoleBindings patched:
+//	  openclaw-x402-pricing-binding       (x402 namespace, pricing ConfigMap)
 func patchMonetizeBinding(cfg *config.Config) error {
 	namespace := fmt.Sprintf("openclaw-%s", agentID)
 
+	subject := []map[string]interface{}{
+		{
+			"kind":      "ServiceAccount",
+			"name":      "openclaw",
+			"namespace": namespace,
+		},
+	}
+
 	patch := []map[string]interface{}{
 		{
-			"op":   "replace",
-			"path": "/subjects",
-			"value": []map[string]interface{}{
-				{
-					"kind":      "ServiceAccount",
-					"name":      "openclaw",
-					"namespace": namespace,
-				},
-			},
+			"op":    "replace",
+			"path":  "/subjects",
+			"value": subject,
 		},
 	}
 
@@ -87,22 +94,33 @@ func patchMonetizeBinding(cfg *config.Config) error {
 		return fmt.Errorf("failed to marshal patch: %w", err)
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	bin, kc := kubectl.Paths(cfg)
+	patchArg := fmt.Sprintf("-p=%s", string(patchData))
 
-	cmd := exec.Command(kubectlBinary,
-		"patch", "clusterrolebinding", "openclaw-monetize-binding",
-		"--type=json",
-		fmt.Sprintf("-p=%s", string(patchData)),
-	)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%v: %s", err, stderr.String())
+	// Patch both ClusterRoleBindings.
+	clusterBindings := []string{
+		"openclaw-monetize-read-binding",
+		"openclaw-monetize-workload-binding",
+	}
+	for _, name := range clusterBindings {
+		if err := kubectl.RunSilent(bin, kc,
+			"patch", "clusterrolebinding", name,
+			"--type=json", patchArg,
+		); err != nil {
+			return fmt.Errorf("patch clusterrolebinding %s: %w", name, err)
+		}
 	}
 
-	fmt.Printf("✓ ClusterRoleBinding openclaw-monetize-binding patched (SA: openclaw in %s)\n", namespace)
+	// Patch x402 namespace RoleBinding.
+	if err := kubectl.RunSilent(bin, kc,
+		"patch", "rolebinding", "openclaw-x402-pricing-binding",
+		"-n", "x402",
+		"--type=json", patchArg,
+	); err != nil {
+		return fmt.Errorf("patch rolebinding openclaw-x402-pricing-binding: %w", err)
+	}
+
+	fmt.Printf("✓ RBAC bindings patched (SA: openclaw in %s)\n", namespace)
 	return nil
 }
 

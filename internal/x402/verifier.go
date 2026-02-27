@@ -18,6 +18,7 @@ import (
 type Verifier struct {
 	config       atomic.Pointer[PricingConfig]
 	chain        atomic.Pointer[x402lib.ChainConfig]
+	chains       atomic.Pointer[map[string]x402lib.ChainConfig] // pre-resolved: chain name → config
 	registration atomic.Pointer[erc8004.AgentRegistration]
 }
 
@@ -40,7 +41,24 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	if err != nil {
 		return fmt.Errorf("resolve chain: %w", err)
 	}
+
+	// Pre-resolve all unique chain names (global + per-route overrides)
+	// so HandleVerify avoids per-request chain resolution.
+	chains := map[string]x402lib.ChainConfig{cfg.Chain: chain}
+	for _, r := range cfg.Routes {
+		if r.Network != "" {
+			if _, ok := chains[r.Network]; !ok {
+				rc, err := ResolveChain(r.Network)
+				if err != nil {
+					return fmt.Errorf("resolve chain for route %q: %w", r.Pattern, err)
+				}
+				chains[r.Network] = rc
+			}
+		}
+	}
+
 	v.chain.Store(&chain)
+	v.chains.Store(&chains)
 	v.config.Store(cfg)
 	return nil
 }
@@ -82,9 +100,11 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		chainName = rule.Network
 	}
 
-	chain, err := ResolveChain(chainName)
-	if err != nil {
-		log.Printf("x402-verifier: failed to resolve chain %q for route %q: %v", chainName, rule.Pattern, err)
+	// Look up pre-resolved chain (populated during config load).
+	chains := v.chains.Load()
+	chain, ok := (*chains)[chainName]
+	if !ok {
+		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

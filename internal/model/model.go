@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 )
 
 const (
@@ -58,7 +58,7 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	// 1. Patch the Secret with the API key
 	fmt.Printf("Configuring llmspy: setting %s key...\n", provider)
 	patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envKey, apiKey)
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "secret", secretName, "-n", namespace,
 		"-p", patchJSON, "--type=merge"); err != nil {
 		return fmt.Errorf("failed to patch llmspy secret: %w", err)
@@ -72,13 +72,13 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 
 	// 3. Restart the deployment so it picks up new Secret + ConfigMap
 	fmt.Printf("Restarting llmspy deployment...\n")
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart llmspy: %w", err)
 	}
 
 	// 4. Wait for rollout to complete
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
 		"--timeout=60s"); err != nil {
 		fmt.Printf("Warning: llmspy rollout not confirmed: %v\n", err)
@@ -101,7 +101,7 @@ if p and p.get('env'):
     print(p['env'][0])
 `, provider)
 
-	output, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
 		"python3", "-c", script)
 	if err != nil {
@@ -136,7 +136,7 @@ for pid in sorted(d):
     if env:
         print(pid + '\t' + p.get('name', pid) + '\t' + env[0])
 `
-	output, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
 		"python3", "-c", script)
 	if err != nil {
@@ -184,14 +184,14 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	}
 
 	// Read enabled/disabled state from ConfigMap
-	llmsRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	llmsRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
 	if err != nil {
 		return nil, err
 	}
 
 	// Read Secret to check which API keys are set
-	secretRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	secretRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "secret", secretName, "-n", namespace, "-o", "json")
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func buildProviderStatus(available []ProviderInfo, llmsJSON, secretJSON []byte) 
 // sets providers.<name>.enabled = true, and patches the ConfigMap back.
 func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) error {
 	// Read current llms.json from ConfigMap
-	raw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
 	if err != nil {
 		return fmt.Errorf("failed to read ConfigMap: %w", err)
@@ -293,7 +293,7 @@ func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) e
 		return fmt.Errorf("failed to marshal patch: %w", err)
 	}
 
-	return kubectl(kubectlBinary, kubeconfigPath,
+	return kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", string(patchJSON), "--type=merge")
 }
@@ -322,39 +322,6 @@ func patchLLMsJSON(llmsJSON []byte, provider string) ([]byte, error) {
 	return json.Marshal(llmsConfig)
 }
 
-// kubectl runs a kubectl command with the given kubeconfig and returns any error.
-func kubectl(binary, kubeconfig string, args ...string) error {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = os.Stdout
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return err
-	}
-	return nil
-}
-
-func kubectlOutput(binary, kubeconfig string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return "", err
-	}
-	return stdout.String(), nil
-}
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.
 // It respects the OLLAMA_HOST environment variable, falling back to http://localhost:11434.
