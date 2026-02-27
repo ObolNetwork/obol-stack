@@ -8,93 +8,10 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func TestMonetizeCommand_Structure(t *testing.T) {
-	cfg := &config.Config{
-		ConfigDir: t.TempDir(),
-		DataDir:   t.TempDir(),
-		BinDir:    t.TempDir(),
-	}
-
-	cmd := monetizeCommand(cfg)
-	if cmd.Name != "monetize" {
-		t.Fatalf("command name = %q, want monetize", cmd.Name)
-	}
-
-	expected := map[string]bool{
-		"offer":        false,
-		"list":         false,
-		"offer-status": false,
-		"stop":         false,
-		"delete":       false,
-		"register":     false,
-		"pricing":      false,
-		"status":       false,
-	}
-
-	for _, sub := range cmd.Commands {
-		if _, ok := expected[sub.Name]; ok {
-			expected[sub.Name] = true
-		}
-	}
-
-	for name, found := range expected {
-		if !found {
-			t.Errorf("missing subcommand %q", name)
-		}
-	}
-}
-
-func TestMonetizeOffer_RequiredFlags(t *testing.T) {
-	cfg := &config.Config{
-		ConfigDir: t.TempDir(),
-		DataDir:   t.TempDir(),
-		BinDir:    t.TempDir(),
-	}
-
-	cmd := monetizeCommand(cfg)
-
-	for _, sub := range cmd.Commands {
-		if sub.Name != "offer" {
-			continue
-		}
-
-		requiredFlags := map[string]bool{
-			"network": false,
-			"pay-to":  false,
-		}
-
-		for _, f := range sub.Flags {
-			for _, name := range f.Names() {
-				if _, ok := requiredFlags[name]; !ok {
-					continue
-				}
-				// Check Required field via type assertion to concrete flag types.
-				switch sf := f.(type) {
-				case *cli.StringFlag:
-					requiredFlags[name] = sf.Required
-				case *cli.IntFlag:
-					requiredFlags[name] = sf.Required
-				case *cli.BoolFlag:
-					requiredFlags[name] = sf.Required
-				}
-			}
-		}
-
-		for name, isReq := range requiredFlags {
-			if !isReq {
-				t.Errorf("flag --%s should be required", name)
-			}
-		}
-		return
-	}
-	t.Fatal("offer subcommand not found")
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// findSubcommand looks up a subcommand by name within a parent command.
 func findSubcommand(t *testing.T, parent *cli.Command, name string) *cli.Command {
 	t.Helper()
 	for _, sub := range parent.Commands {
@@ -106,8 +23,6 @@ func findSubcommand(t *testing.T, parent *cli.Command, name string) *cli.Command
 	return nil
 }
 
-// flagMap builds a map of flag name -> cli.Flag from a command's flags,
-// including all aliases.
 func flagMap(cmd *cli.Command) map[string]cli.Flag {
 	m := map[string]cli.Flag{}
 	for _, f := range cmd.Flags {
@@ -118,7 +33,6 @@ func flagMap(cmd *cli.Command) map[string]cli.Flag {
 	return m
 }
 
-// requireFlags asserts that all named flags exist in the command.
 func requireFlags(t *testing.T, flags map[string]cli.Flag, names ...string) {
 	t.Helper()
 	for _, name := range names {
@@ -128,7 +42,6 @@ func requireFlags(t *testing.T, flags map[string]cli.Flag, names ...string) {
 	}
 }
 
-// assertStringDefault checks that a flag is a *cli.StringFlag with the expected default.
 func assertStringDefault(t *testing.T, flags map[string]cli.Flag, name, want string) {
 	t.Helper()
 	f, ok := flags[name]
@@ -146,7 +59,6 @@ func assertStringDefault(t *testing.T, flags map[string]cli.Flag, name, want str
 	}
 }
 
-// assertIntDefault checks that a flag is a *cli.IntFlag with the expected default.
 func assertIntDefault(t *testing.T, flags map[string]cli.Flag, name string, want int) {
 	t.Helper()
 	f, ok := flags[name]
@@ -164,7 +76,6 @@ func assertIntDefault(t *testing.T, flags map[string]cli.Flag, name string, want
 	}
 }
 
-// assertFlagRequired checks that a flag has Required == true.
 func assertFlagRequired(t *testing.T, flags map[string]cli.Flag, name string) {
 	t.Helper()
 	f, ok := flags[name]
@@ -190,7 +101,6 @@ func assertFlagRequired(t *testing.T, flags map[string]cli.Flag, name string) {
 	}
 }
 
-// assertFlagHasAlias checks that a flag exposes a given alias.
 func assertFlagHasAlias(t *testing.T, flags map[string]cli.Flag, primary, alias string) {
 	t.Helper()
 	if _, ok := flags[alias]; !ok {
@@ -198,7 +108,6 @@ func assertFlagHasAlias(t *testing.T, flags map[string]cli.Flag, primary, alias 
 	}
 }
 
-// newTestConfig returns a throwaway config suitable for unit tests.
 func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
@@ -209,55 +118,89 @@ func newTestConfig(t *testing.T) *config.Config {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// New tests
+// Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestMonetizeOffer_AllFlags(t *testing.T) {
+func TestSellCommand_Structure(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
-	offer := findSubcommand(t, cmd, "offer")
-	flags := flagMap(offer)
+	cmd := sellCommand(cfg)
 
-	// Every expected flag must be present.
-	requireFlags(t, flags,
-		"type", "model", "runtime",
-		"per-request", "per-mtok", "per-hour",
-		"network", "pay-to",
-		"max-timeout", "namespace", "upstream", "port", "path",
-		"register", "register-name", "register-description", "register-image",
-	)
+	if cmd.Name != "sell" {
+		t.Fatalf("command name = %q, want sell", cmd.Name)
+	}
 
-	// Verify default values for flags that have them.
-	assertStringDefault(t, flags, "type", "inference")
-	assertStringDefault(t, flags, "runtime", "ollama")
-	assertStringDefault(t, flags, "namespace", "llm")
-	assertStringDefault(t, flags, "upstream", "ollama")
-	assertIntDefault(t, flags, "max-timeout", 300)
-	assertIntDefault(t, flags, "port", 11434)
+	expected := map[string]bool{
+		"inference": false,
+		"http":      false,
+		"list":      false,
+		"status":    false,
+		"stop":      false,
+		"delete":    false,
+		"pricing":   false,
+		"register":  false,
+	}
 
-	// Flags without defaults should have zero-value.
-	assertStringDefault(t, flags, "model", "")
-	assertStringDefault(t, flags, "per-request", "")
-	assertStringDefault(t, flags, "per-mtok", "")
-	assertStringDefault(t, flags, "per-hour", "")
-	assertStringDefault(t, flags, "path", "")
-	assertStringDefault(t, flags, "register-name", "")
-	assertStringDefault(t, flags, "register-description", "")
-	assertStringDefault(t, flags, "register-image", "")
-
-	// "register" is a BoolFlag, default false.
-	if bf, ok := flags["register"].(*cli.BoolFlag); ok {
-		if bf.Value {
-			t.Error("flag --register default should be false")
+	for _, sub := range cmd.Commands {
+		if _, ok := expected[sub.Name]; ok {
+			expected[sub.Name] = true
 		}
-	} else {
-		t.Errorf("flag --register is %T, want *cli.BoolFlag", flags["register"])
+	}
+
+	for name, found := range expected {
+		if !found {
+			t.Errorf("missing subcommand %q", name)
+		}
 	}
 }
 
-func TestMonetizeStop_Structure(t *testing.T) {
+func TestSellInference_Flags(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
+	cmd := sellCommand(cfg)
+	inf := findSubcommand(t, cmd, "inference")
+	flags := flagMap(inf)
+
+	requireFlags(t, flags,
+		"model", "wallet", "price", "chain", "facilitator",
+		"listen", "upstream", "enclave-tag",
+		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
+		"tee", "model-hash",
+	)
+
+	assertStringDefault(t, flags, "price", "0.001")
+	assertStringDefault(t, flags, "chain", "base-sepolia")
+	assertStringDefault(t, flags, "listen", ":8402")
+	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
+	assertStringDefault(t, flags, "facilitator", "https://facilitator.x402.rs")
+	assertStringDefault(t, flags, "vm-image", "ollama/ollama:latest")
+	assertIntDefault(t, flags, "vm-cpus", 4)
+	assertIntDefault(t, flags, "vm-memory", 8192)
+	assertIntDefault(t, flags, "vm-host-port", 11435)
+}
+
+func TestSellHTTP_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	http := findSubcommand(t, cmd, "http")
+	flags := flagMap(http)
+
+	requireFlags(t, flags,
+		"wallet", "chain", "price", "per-request", "per-hour",
+		"namespace", "upstream", "port", "health-path", "path",
+		"max-timeout",
+		"register", "register-name", "register-description", "register-image",
+	)
+
+	assertFlagRequired(t, flags, "wallet")
+	assertFlagRequired(t, flags, "chain")
+	assertStringDefault(t, flags, "namespace", "default")
+	assertStringDefault(t, flags, "health-path", "/health")
+	assertIntDefault(t, flags, "port", 8080)
+	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestSellStop_Structure(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
 	stop := findSubcommand(t, cmd, "stop")
 	flags := flagMap(stop)
 
@@ -266,9 +209,9 @@ func TestMonetizeStop_Structure(t *testing.T) {
 	assertFlagHasAlias(t, flags, "namespace", "n")
 }
 
-func TestMonetizeDelete_Structure(t *testing.T) {
+func TestSellDelete_Structure(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
+	cmd := sellCommand(cfg)
 	del := findSubcommand(t, cmd, "delete")
 	flags := flagMap(del)
 
@@ -278,9 +221,9 @@ func TestMonetizeDelete_Structure(t *testing.T) {
 	assertFlagHasAlias(t, flags, "force", "f")
 }
 
-func TestMonetizeRegister_Flags(t *testing.T) {
+func TestSellRegister_Flags(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
+	cmd := sellCommand(cfg)
 	reg := findSubcommand(t, cmd, "register")
 	flags := flagMap(reg)
 
@@ -290,9 +233,9 @@ func TestMonetizeRegister_Flags(t *testing.T) {
 	)
 }
 
-func TestMonetizePricing_Flags(t *testing.T) {
+func TestSellPricing_Flags(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
+	cmd := sellCommand(cfg)
 	pricing := findSubcommand(t, cmd, "pricing")
 	flags := flagMap(pricing)
 
@@ -301,24 +244,13 @@ func TestMonetizePricing_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "chain", "base-sepolia")
 }
 
-func TestMonetizeList_Flags(t *testing.T) {
+func TestSellList_Flags(t *testing.T) {
 	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
+	cmd := sellCommand(cfg)
 	list := findSubcommand(t, cmd, "list")
 	flags := flagMap(list)
 
 	requireFlags(t, flags, "namespace")
-	assertFlagHasAlias(t, flags, "namespace", "n")
-}
-
-func TestMonetizeOfferStatus_Flags(t *testing.T) {
-	cfg := newTestConfig(t)
-	cmd := monetizeCommand(cfg)
-	offerStatus := findSubcommand(t, cmd, "offer-status")
-	flags := flagMap(offerStatus)
-
-	requireFlags(t, flags, "namespace")
-	assertFlagRequired(t, flags, "namespace")
 	assertFlagHasAlias(t, flags, "namespace", "n")
 }
 
@@ -328,7 +260,6 @@ func TestMustMarshal_ValidJSON(t *testing.T) {
 	if got == "{}" {
 		t.Fatal("mustMarshal returned empty object for valid input")
 	}
-	// Should contain the expected fields.
 	for _, want := range []string{`"active":false`, `"name":"test"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("mustMarshal output missing %s, got: %s", want, got)
@@ -337,9 +268,35 @@ func TestMustMarshal_ValidJSON(t *testing.T) {
 }
 
 func TestMustMarshal_InvalidInput(t *testing.T) {
-	// Channels can't be JSON-marshaled.
 	got := mustMarshal(make(chan int))
 	if got != "{}" {
 		t.Errorf("mustMarshal should return {} on error, got: %s", got)
+	}
+}
+
+func TestResolveX402Chain(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"base", false},
+		{"base-mainnet", false},
+		{"base-sepolia", false},
+		{"polygon", false},
+		{"polygon-mainnet", false},
+		{"polygon-amoy", false},
+		{"avalanche", false},
+		{"avalanche-mainnet", false},
+		{"avalanche-fuji", false},
+		{"unknown-chain", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveX402Chain(tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("resolveX402Chain(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
 	}
 }

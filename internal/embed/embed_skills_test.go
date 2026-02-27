@@ -19,7 +19,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	coreSkills := []string{
 		"addresses", "building-blocks", "concepts", "discovery", "distributed-validators",
 		"ethereum-networks", "ethereum-local-wallet", "frontend-playbook", "frontend-ux", "gas",
-		"indexing", "l2s", "monetize", "obol-stack", "orchestration", "qa", "security",
+		"indexing", "l2s", "sell", "obol-stack", "orchestration", "qa", "security",
 		"ship", "standards", "testing", "tools", "wallets", "why",
 	}
 	sort.Strings(names)
@@ -47,7 +47,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"discovery", "distributed-validators", "ethereum-networks", "ethereum-local-wallet", "monetize", "obol-stack", "addresses", "wallets"}
+	skills := []string{"discovery", "distributed-validators", "ethereum-networks", "ethereum-local-wallet", "sell", "obol-stack", "addresses", "wallets"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 		info, err := os.Stat(skillMD)
@@ -86,11 +86,11 @@ func TestCopySkills(t *testing.T) {
 		t.Errorf("missing obol-stack/scripts/kube.py: %v", err)
 	}
 
-	// monetize must have scripts/monetize.py and references/
+	// sell must have scripts/monetize.py and references/
 	for _, sub := range []string{
-		"monetize/scripts/monetize.py",
-		"monetize/references/serviceoffer-spec.md",
-		"monetize/references/x402-pricing.md",
+		"sell/scripts/monetize.py",
+		"sell/references/serviceoffer-spec.md",
+		"sell/references/x402-pricing.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)
@@ -123,7 +123,7 @@ func TestMonetizePy_Syntax(t *testing.T) {
 		t.Fatalf("CopySkills: %v", err)
 	}
 
-	monetizePy := filepath.Join(destDir, "monetize", "scripts", "monetize.py")
+	monetizePy := filepath.Join(destDir, "sell", "scripts", "monetize.py")
 	if _, err := os.Stat(monetizePy); err != nil {
 		t.Fatalf("monetize.py not found: %v", err)
 	}

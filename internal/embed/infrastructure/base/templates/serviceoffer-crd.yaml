@@ -62,11 +62,12 @@ spec:
               properties:
                 type:
                   type: string
-                  description: "Workload type discriminator."
-                  default: "inference"
+                  description: "Service type. 'inference' enables model management; 'http' for any HTTP service."
+                  default: "http"
                   enum:
                     - inference
                     - fine-tuning
+                    - http
                 model:
                   type: object
                   description: "LLM model metadata. Required when the upstream serves an LLM."

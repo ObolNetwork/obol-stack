@@ -86,12 +86,10 @@ Obol Stack uses Traefik with the Kubernetes Gateway API for HTTP routing.
 obol
 ├── stack           Lifecycle: init, up, down, purge
 ├── agent           Agent: init (deploys obol-agent singleton)
-├── network         Networks: list, install <network>, delete
-├── rpc             RPC gateway: list, add, remove, status
+├── network         Networks: list, install, add, remove, status, sync, delete
+├── sell            Sell services: inference, http, list, status, stop, delete, pricing, register
 ├── openclaw        AI agent: onboard, setup, sync, list, delete, dashboard, cli, token, skills
 ├── model           LLM providers: setup, status
-├── service         Standalone gateway: create, deploy, serve, list, info, delete, pubkey
-├── monetize        Payment monetization: offer, list, status, delete, pricing, register
 ├── app             Helm apps: install, sync, list, delete
 ├── tunnel          CF tunnel: status, login, provision, restart, logs
 ├── kubectl/helm/helmfile/k9s   Passthrough with auto-configured KUBECONFIG
@@ -169,7 +167,7 @@ The monetize subsystem enables payment-gated access to any service running in th
 ┌─────────────────────────────────────────────────────────────────────┐
 │ SELLER (obol stack cluster)                                         │
 │                                                                     │
-│  obol monetize offer ──▶ ServiceOffer CR ──▶ Agent reconciles:     │
+│  obol sell http ──▶ ServiceOffer CR ──▶ Agent reconciles:          │
 │    1. ModelReady        (checks /api/tags in Ollama)               │
 │    2. UpstreamHealthy   (health-checks upstream service)           │
 │    3. PaymentGateReady  (creates x402 Middleware + pricing route)  │
@@ -195,23 +193,22 @@ The monetize subsystem enables payment-gated access to any service running in th
 
 ```bash
 # Configure payment system
-obol monetize pricing --wallet 0x... --chain base-sepolia [--facilitator-url http://...]
+obol sell pricing --wallet 0x... --chain base-sepolia [--facilitator-url http://...]
 
-# Create a monetized service offer
-obol monetize offer my-qwen \
-    --type inference --model qwen3:0.6b --runtime ollama \
-    --per-request 0.001 --network base-sepolia \
-    --pay-to 0x... --namespace llm --upstream ollama --port 11434 \
-    --path /services/my-qwen
+# Sell LLM inference (starts local x402 gateway)
+obol sell inference my-qwen --model qwen3:0.6b --wallet 0x... --price 0.001 --chain base-sepolia
+
+# Sell any HTTP service (cluster-based CRD)
+obol sell http my-api --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.01
 
 # Lifecycle
-obol monetize list -n llm
-obol monetize status my-qwen -n llm
-obol monetize stop my-qwen -n llm      # Removes pricing route, keeps CR
-obol monetize delete my-qwen -n llm    # Full cleanup + deactivates registration
+obol sell list -n llm
+obol sell status my-qwen -n llm
+obol sell stop my-qwen -n llm          # Removes pricing route, keeps CR
+obol sell delete my-qwen -n llm        # Full cleanup + deactivates registration
 
 # On-chain registration (ERC-8004)
-obol monetize register my-qwen -n llm --name "My Agent" --register-image https://...
+obol sell register --name "My Agent" --private-key-file key.hex
 ```
 
 ### ServiceOffer CRD
@@ -279,12 +276,15 @@ On-chain agent registration on Base Sepolia Identity Registry (`0xEA0fE4FCF9E301
 
 ## RPC Gateway Management
 
+Remote RPCs are managed via `obol network add/remove/status`. By default, remote upstreams are read-only (`eth_sendRawTransaction` and `eth_sendTransaction` blocked).
+
 ```bash
-obol rpc list                                           # Show configured chains
-obol rpc add base                                       # Add ChainList public RPCs
-obol rpc add base-sepolia --endpoint http://localhost:8545  # Add custom RPC
-obol rpc remove base-sepolia                            # Remove chain RPCs
-obol rpc status                                         # Show eRPC health
+obol network add base                                   # Add ChainList public RPCs (read-only)
+obol network add base --allow-writes                    # Add with write methods enabled
+obol network add base-sepolia --endpoint http://localhost:8545  # Add custom RPC
+obol network remove base-sepolia                        # Remove chain RPCs
+obol network status                                     # Show eRPC health
+obol network list                                       # Show local nodes + remote RPCs
 ```
 
 **Key functions** (`internal/network/rpc.go`):
@@ -435,12 +435,10 @@ Each OpenClaw instance gets an Ethereum signing wallet via `GenerateWallet()` in
 | File | Commands |
 |------|----------|
 | `cmd/obol/main.go` | App setup, help template, command registration |
-| `cmd/obol/monetize.go` | `obol monetize` (offer, list, status, stop, delete, pricing, register) |
-| `cmd/obol/rpc.go` | `obol rpc` (list, add, remove, status) |
+| `cmd/obol/sell.go` | `obol sell` (inference, http, list, status, stop, delete, pricing, register) |
 | `cmd/obol/network.go` | `obol network` (dynamic subcommand generation from templates) |
 | `cmd/obol/openclaw.go` | `obol openclaw` (onboard, setup, sync, skills, etc.) |
 | `cmd/obol/model.go` | `obol model` (setup, status) |
-| `cmd/obol/service.go` | `obol service` (create, deploy, serve, list, info, delete, pubkey) |
 
 **Core packages**:
 
@@ -471,7 +469,7 @@ Each OpenClaw instance gets an Ethereum signing wallet via `GenerateWallet()` in
 
 | File | Scope |
 |------|-------|
-| `cmd/obol/monetize_test.go` | Monetize CLI flags and structure |
+| `cmd/obol/sell_test.go` | Sell CLI flags and structure |
 | `internal/x402/*_test.go` | Verifier, config, matcher, setup, watcher, E2E |
 | `internal/erc8004/*_test.go` | ABI parsing, client, types |
 | `internal/embed/embed_crd_test.go` | CRD + RBAC template validation |

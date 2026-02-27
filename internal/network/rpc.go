@@ -88,9 +88,13 @@ func ListRPCNetworks(cfg *config.Config) ([]RPCNetworkInfo, error) {
 	return result, nil
 }
 
+// writeMethods are blocked by default on remote upstreams when readOnly is true.
+var writeMethods = []interface{}{"eth_sendRawTransaction", "eth_sendTransaction"}
+
 // AddCustomRPC adds a single custom RPC endpoint for a chain to the eRPC ConfigMap.
 // Uses the "custom-" prefix to distinguish from ChainList-sourced upstreams.
-func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string) error {
+// When readOnly is true, eth_sendRawTransaction and eth_sendTransaction are blocked.
+func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, readOnly bool) error {
 	erpcConfig, err := readERPCConfig(cfg)
 	if err != nil {
 		return err
@@ -122,13 +126,17 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string) e
 	}
 
 	// Add the custom upstream.
-	filtered = append(filtered, map[string]interface{}{
+	upstream := map[string]interface{}{
 		"id":       fmt.Sprintf("custom-%d-0", chainID),
 		"endpoint": endpoint,
 		"evm": map[string]interface{}{
 			"chainId": chainID,
 		},
-	})
+	}
+	if readOnly {
+		upstream["ignoreMethods"] = writeMethods
+	}
+	filtered = append(filtered, upstream)
 	project["upstreams"] = filtered
 
 	// Ensure a network entry exists for this chain ID.
@@ -163,7 +171,8 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string) e
 }
 
 // AddPublicRPCs adds ChainList RPCs for a chain to the eRPC ConfigMap.
-func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints []RPCEndpoint) error {
+// When readOnly is true, eth_sendRawTransaction and eth_sendTransaction are blocked.
+func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints []RPCEndpoint, readOnly bool) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
@@ -215,6 +224,9 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 			"evm": map[string]interface{}{
 				"chainId": chainID,
 			},
+		}
+		if readOnly {
+			newUpstream["ignoreMethods"] = writeMethods
 		}
 		filtered = append(filtered, newUpstream)
 	}

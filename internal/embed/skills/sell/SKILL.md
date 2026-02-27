@@ -1,12 +1,12 @@
 ---
-name: monetize
-description: "Monetize compute services via x402 payment gating. Create ServiceOffer CRDs that automatically pull models, health-check upstreams, create payment-gated routes, and optionally register on ERC-8004. Manages the full lifecycle: create, process, list, status, delete."
+name: sell
+description: "Sell access to services via x402 payment gating. Create ServiceOffer CRDs that automatically health-check upstreams, create payment-gated routes, and optionally pull models and register on ERC-8004. Supports inference, HTTP, and fine-tuning service types."
 metadata: { "openclaw": { "emoji": "\ud83d\udcb0", "requires": { "bins": ["python3"] } } }
 ---
 
-# Monetize
+# Sell
 
-Manage payment-gated compute services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments — the reconciliation script handles model pulling, health-checking, route creation, and payment middleware.
+Sell access to services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments — the reconciliation script handles health-checking, route creation, payment middleware, and optional model pulling for inference services.
 
 ## When to Use
 
