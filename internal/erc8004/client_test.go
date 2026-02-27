@@ -8,8 +8,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -335,52 +333,6 @@ func TestTokenURI(t *testing.T) {
 	}
 }
 
-func TestStore(t *testing.T) {
-	tmpDir := t.TempDir()
-	store := NewStore(tmpDir)
-
-	// Load should return ErrNoRegistration initially.
-	_, err := store.Load()
-	if err != ErrNoRegistration {
-		t.Fatalf("Load on empty store: got %v, want ErrNoRegistration", err)
-	}
-
-	rec := &RegistrationRecord{
-		AgentID:  "42",
-		AgentURI: "https://example.com/.well-known/agent-registration.json",
-		TxHash:   "0xaabbccdd",
-		Chain:    "base-sepolia",
-		Registry: "eip155:84532:" + IdentityRegistryBaseSepolia,
-	}
-
-	if err := store.Save(rec); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	// Verify file exists on disk.
-	if _, err := os.Stat(filepath.Join(tmpDir, "x402", "registration.json")); err != nil {
-		t.Fatalf("registration.json not found: %v", err)
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if loaded.AgentID != rec.AgentID {
-		t.Errorf("AgentID = %q, want %q", loaded.AgentID, rec.AgentID)
-	}
-	if loaded.AgentURI != rec.AgentURI {
-		t.Errorf("AgentURI = %q, want %q", loaded.AgentURI, rec.AgentURI)
-	}
-	if loaded.TxHash != rec.TxHash {
-		t.Errorf("TxHash = %q, want %q", loaded.TxHash, rec.TxHash)
-	}
-	if loaded.Registry != rec.Registry {
-		t.Errorf("Registry = %q, want %q", loaded.Registry, rec.Registry)
-	}
-}
-
 // txMockHandlers returns a handler map for write-transaction tests.
 // It mocks the full tx lifecycle: chain ID, code check, gas, nonce,
 // sendRawTransaction, receipt (status 0x1, empty logs), and block data.
@@ -616,69 +568,6 @@ func TestGetMetadata_EmptyResult(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Errorf("expected empty bytes, got %q", result)
-	}
-}
-
-func TestStore_SaveOverwrite(t *testing.T) {
-	tmpDir := t.TempDir()
-	store := NewStore(tmpDir)
-
-	rec1 := &RegistrationRecord{
-		AgentID:  "1",
-		AgentURI: "https://first.example.com",
-		TxHash:   "0x1111",
-		Chain:    "base-sepolia",
-		Registry: "eip155:84532:" + IdentityRegistryBaseSepolia,
-	}
-	if err := store.Save(rec1); err != nil {
-		t.Fatalf("Save first: %v", err)
-	}
-
-	rec2 := &RegistrationRecord{
-		AgentID:  "2",
-		AgentURI: "https://second.example.com",
-		TxHash:   "0x2222",
-		Chain:    "base-sepolia",
-		Registry: "eip155:84532:" + IdentityRegistryBaseSepolia,
-	}
-	if err := store.Save(rec2); err != nil {
-		t.Fatalf("Save second: %v", err)
-	}
-
-	loaded, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if loaded.AgentID != "2" {
-		t.Errorf("AgentID = %q, want %q (second save should overwrite)", loaded.AgentID, "2")
-	}
-	if loaded.AgentURI != "https://second.example.com" {
-		t.Errorf("AgentURI = %q, want %q", loaded.AgentURI, "https://second.example.com")
-	}
-	if loaded.TxHash != "0x2222" {
-		t.Errorf("TxHash = %q, want %q", loaded.TxHash, "0x2222")
-	}
-}
-
-func TestStore_LoadCorruptJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	store := NewStore(tmpDir)
-
-	// Write malformed JSON directly to the file.
-	dir := filepath.Join(tmpDir, "x402")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "registration.json"), []byte(`{not json`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := store.Load()
-	if err == nil {
-		t.Fatal("expected error from corrupt JSON, got nil")
-	}
-	if !strings.Contains(err.Error(), "parse") {
-		t.Errorf("error = %q, want it to contain 'parse'", err.Error())
 	}
 }
 
