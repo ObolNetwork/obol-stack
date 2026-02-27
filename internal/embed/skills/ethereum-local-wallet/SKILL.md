@@ -80,7 +80,7 @@ python3 scripts/signer.py send-tx --network hoodi \
   --from 0x... --to 0x... --value 1000000000000000000
 ```
 
-Supported networks: `mainnet`, `hoodi`, `sepolia` (depends on eRPC configuration).
+Supported networks: `mainnet`, `hoodi`, `sepolia`, `base-sepolia` (depends on eRPC configuration).
 
 ## Environment Variables
 

@@ -25,6 +25,7 @@ CHAIN_IDS = {
     "mainnet": 1,
     "hoodi": 560048,
     "sepolia": 11155111,
+    "base-sepolia": 84532,
 }
 
 

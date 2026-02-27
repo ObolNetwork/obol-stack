@@ -38,6 +38,22 @@ CRD_GROUP = "obol.org"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL = "serviceoffers"
 
+# ---------------------------------------------------------------------------
+# ERC-8004 constants
+# ---------------------------------------------------------------------------
+
+IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+BASE_SEPOLIA_CHAIN_ID = 84532
+
+# keccak256("register(string)")[:4]
+REGISTER_SELECTOR = "f2c298be"
+
+# keccak256("Registered(uint256,string,address)")
+REGISTERED_TOPIC = "0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a"
+
+SIGNER_URL = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000")
+ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
+
 CONDITION_TYPES = [
     "ModelReady",
     "UpstreamHealthy",
@@ -148,6 +164,158 @@ def get_pay_to(spec):
 def get_network(spec):
     """Return the payment network."""
     return get_payment(spec).get("network", "")
+
+
+# ---------------------------------------------------------------------------
+# ERC-8004 on-chain registration helpers
+# ---------------------------------------------------------------------------
+
+def _rpc(method, params=None, network="base-sepolia"):
+    """JSON-RPC call to eRPC for Base Sepolia."""
+    url = f"{ERPC_URL}/{network}"
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params or [],
+        "id": 1,
+    }).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+        if "error" in result:
+            raise RuntimeError(f"RPC error: {result['error']}")
+        return result.get("result")
+
+
+def _remote_signer_get(path):
+    """GET request to the remote-signer."""
+    url = f"{SIGNER_URL}{path}"
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+def _remote_signer_post(path, data):
+    """POST JSON to the remote-signer."""
+    url = f"{SIGNER_URL}{path}"
+    payload = json.dumps(data).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def _abi_encode_string(s):
+    """ABI-encode a single string parameter for a Solidity function call.
+
+    Layout:
+      [32 bytes] offset to string data (0x20)
+      [32 bytes] string length
+      [N*32 bytes] UTF-8 string data, zero-padded to 32-byte boundary
+    """
+    encoded = s.encode("utf-8")
+    offset = (32).to_bytes(32, "big")
+    length = len(encoded).to_bytes(32, "big")
+    padded_len = ((len(encoded) + 31) // 32) * 32
+    data = encoded.ljust(padded_len, b'\x00')
+    return offset + length + data
+
+
+def _get_signing_address():
+    """Get the first signing address from the remote-signer."""
+    data = _remote_signer_get("/api/v1/keys")
+    keys = data.get("keys", [])
+    if not keys:
+        raise RuntimeError("No signing keys available in remote-signer")
+    return keys[0]
+
+
+def _register_on_chain(agent_uri):
+    """Register on ERC-8004 Identity Registry via remote-signer + eRPC.
+
+    Calls register(string agentURI) on the Identity Registry contract.
+    Returns (agent_id: int, tx_hash: str).
+    """
+    from_addr = _get_signing_address()
+    print(f"    Signing address: {from_addr}")
+
+    # Build calldata: selector + abi_encode_string(agent_uri)
+    calldata = bytes.fromhex(REGISTER_SELECTOR) + _abi_encode_string(agent_uri)
+    calldata_hex = "0x" + calldata.hex()
+
+    # Get nonce.
+    nonce_hex = _rpc("eth_getTransactionCount", [from_addr, "pending"])
+    nonce = int(nonce_hex, 16)
+
+    # Get gas price.
+    base_fee_hex = _rpc("eth_gasPrice")
+    base_fee = int(base_fee_hex, 16)
+    try:
+        priority_hex = _rpc("eth_maxPriorityFeePerGas")
+        max_priority = int(priority_hex, 16)
+    except (RuntimeError, urllib.error.URLError):
+        max_priority = 1_000_000_000  # 1 gwei fallback
+    max_fee = base_fee * 2 + max_priority
+
+    # Estimate gas.
+    tx_obj = {"from": from_addr, "to": IDENTITY_REGISTRY, "data": calldata_hex}
+    gas_hex = _rpc("eth_estimateGas", [tx_obj])
+    gas_limit = int(int(gas_hex, 16) * 1.3)  # 30% buffer for contract calls
+
+    # Sign via remote-signer.
+    tx_req = {
+        "chain_id": BASE_SEPOLIA_CHAIN_ID,
+        "to": IDENTITY_REGISTRY,
+        "nonce": nonce,
+        "gas_limit": gas_limit,
+        "max_fee_per_gas": max_fee,
+        "max_priority_fee_per_gas": max_priority,
+        "value": "0x0",
+        "data": calldata_hex,
+    }
+    result = _remote_signer_post(f"/api/v1/sign/{from_addr}/transaction", tx_req)
+    signed_tx = result.get("signed_transaction", "")
+    if not signed_tx:
+        raise RuntimeError("Remote-signer returned empty signed transaction")
+
+    # Broadcast.
+    print(f"    Broadcasting registration tx to base-sepolia...")
+    tx_hash = _rpc("eth_sendRawTransaction", [signed_tx])
+    print(f"    Tx hash: {tx_hash}")
+
+    # Wait for receipt.
+    for _ in range(60):
+        receipt = _rpc("eth_getTransactionReceipt", [tx_hash])
+        if receipt is not None:
+            status = int(receipt.get("status", "0x0"), 16)
+            if status != 1:
+                raise RuntimeError(f"Registration tx reverted (tx: {tx_hash})")
+            # Parse Registered event to extract agentId.
+            agent_id = _parse_registered_event(receipt)
+            print(f"    Agent ID: {agent_id}")
+            return agent_id, tx_hash
+        time.sleep(2)
+
+    raise RuntimeError(f"Timeout waiting for receipt (tx: {tx_hash})")
+
+
+def _parse_registered_event(receipt):
+    """Extract agentId from the Registered event in the transaction receipt.
+
+    Event: Registered(uint256 indexed agentId, string agentURI, address indexed owner)
+    Topics: [event_sig, agentId_padded, owner_padded]
+    """
+    for log in receipt.get("logs", []):
+        topics = log.get("topics", [])
+        if len(topics) >= 2 and topics[0] == REGISTERED_TOPIC:
+            return int(topics[1], 16)
+
+    raise RuntimeError("Registered event not found in transaction receipt")
 
 
 # ---------------------------------------------------------------------------
@@ -502,18 +670,83 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
 
 
 def stage_registered(spec, ns, name, token, ssl_ctx):
-    """Register on ERC-8004 if registration.enabled is true."""
+    """Register on ERC-8004 Identity Registry if registration.enabled is true.
+
+    Uses the agent's remote-signer wallet to mint an agent NFT on Base Sepolia.
+    The wallet must be funded with ETH for gas on Base Sepolia (chain 84532).
+
+    Flow:
+      1. Check if already registered (status.agentId set) → skip
+      2. Get signing address from remote-signer
+      3. Build agentURI from AGENT_BASE_URL + spec.path
+      4. ABI-encode register(agentURI) → calldata
+      5. Sign + broadcast via remote-signer + eRPC/base-sepolia
+      6. Parse receipt → extract agentId
+      7. Patch CRD status: agentId, registrationTxHash
+      8. Set Registered condition to True
+    """
     registration = spec.get("registration", {})
     if not registration.get("enabled", False):
         set_condition(ns, name, "Registered", "True", "Skipped", "Registration not requested", token, ssl_ctx)
         return True
 
-    # ERC-8004 registration via the ethereum-local-wallet skill.
-    # This is a placeholder — full implementation requires the signer.py integration.
-    print(f"  ERC-8004 registration requested but not yet implemented for {name}")
-    set_condition(ns, name, "Registered", "False", "NotImplemented", "On-chain registration not yet implemented", token, ssl_ctx)
-    # Return True to allow the offer to proceed to Ready state for now.
-    # The Registered condition will show as False, but Ready can still be True.
+    # Check if already registered.
+    so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
+    obj = api_get(so_path, token, ssl_ctx)
+    existing_agent_id = obj.get("status", {}).get("agentId", "")
+    if existing_agent_id:
+        print(f"  Already registered as agent {existing_agent_id}")
+        set_condition(ns, name, "Registered", "True", "AlreadyRegistered",
+                      f"Agent {existing_agent_id} on base-sepolia", token, ssl_ctx)
+        return True
+
+    # Build the agentURI.
+    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+    url_path = spec.get("path", f"/services/{name}")
+    agent_uri = f"{base_url}/.well-known/agent-registration.json"
+
+    print(f"  Registering on ERC-8004 (Base Sepolia)...")
+    print(f"    Registry:  {IDENTITY_REGISTRY}")
+    print(f"    Agent URI: {agent_uri}")
+
+    try:
+        agent_id, tx_hash = _register_on_chain(agent_uri)
+    except urllib.error.URLError as e:
+        reason = str(e.reason) if hasattr(e, 'reason') else str(e)
+        if "remote-signer" in reason.lower() or "Connection refused" in reason:
+            msg = f"Remote-signer unavailable: {reason[:100]}"
+            print(f"  {msg}", file=sys.stderr)
+            set_condition(ns, name, "Registered", "False", "SignerUnavailable", msg, token, ssl_ctx)
+        else:
+            msg = f"RPC error: {reason[:100]}"
+            print(f"  {msg}", file=sys.stderr)
+            set_condition(ns, name, "Registered", "False", "RPCError", msg, token, ssl_ctx)
+        return True  # Don't block Ready
+    except RuntimeError as e:
+        msg = str(e)[:200]
+        if "insufficient funds" in msg.lower() or "gas" in msg.lower():
+            print(f"  Wallet not funded on Base Sepolia: {msg}", file=sys.stderr)
+            set_condition(ns, name, "Registered", "False", "InsufficientFunds",
+                          f"Fund the agent wallet on Base Sepolia: {msg}", token, ssl_ctx)
+        elif "reverted" in msg.lower():
+            print(f"  Registration tx reverted: {msg}", file=sys.stderr)
+            set_condition(ns, name, "Registered", "False", "TxReverted", msg, token, ssl_ctx)
+        else:
+            print(f"  Registration failed: {msg}", file=sys.stderr)
+            set_condition(ns, name, "Registered", "False", "RegistrationFailed", msg, token, ssl_ctx)
+        return True  # Don't block Ready
+    except Exception as e:
+        msg = f"Unexpected error: {str(e)[:150]}"
+        print(f"  {msg}", file=sys.stderr)
+        set_condition(ns, name, "Registered", "False", "RegistrationFailed", msg, token, ssl_ctx)
+        return True  # Don't block Ready
+
+    # Patch CRD status with on-chain identity.
+    set_status_field(ns, name, "agentId", str(agent_id), token, ssl_ctx)
+    set_status_field(ns, name, "registrationTxHash", tx_hash, token, ssl_ctx)
+    set_condition(ns, name, "Registered", "True", "Registered",
+                  f"Agent {agent_id} on base-sepolia (tx: {tx_hash[:18]}...)", token, ssl_ctx)
+    print(f"  Registered as agent {agent_id} (tx: {tx_hash})")
     return True
 
 

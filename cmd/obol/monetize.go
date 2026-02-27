@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -349,8 +348,14 @@ func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			// TODO: If status.agentId is set, deactivate ERC-8004 registration
-			// by calling setAgentURI with a document that has active: false.
+			// Deactivate ERC-8004 registration if agentId is set in CRD status.
+			// Read the offer to check for registration.
+			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
+				"-o", "jsonpath={.status.agentId}")
+			if err == nil && strings.TrimSpace(soOut) != "" {
+				fmt.Printf("Note: Agent %s is registered on-chain. The NFT persists after deletion.\n", strings.TrimSpace(soOut))
+				fmt.Printf("  To deactivate, update the agentURI to set active=false.\n")
+			}
 
 			return kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns)
 		},
@@ -461,20 +466,7 @@ Requires a funded Base Sepolia wallet (private key).`,
 				fmt.Printf("  Warning: failed to set x402 metadata: %v\n", err)
 			}
 
-			// Persist registration record.
-			store := erc8004.NewStore(cfg.ConfigDir)
-			rec := &erc8004.RegistrationRecord{
-				AgentID:  agentID.String(),
-				AgentURI: agentURI,
-				TxHash:   "", // TODO: capture from Register when we refactor
-				Chain:    "base-sepolia",
-				Registry: fmt.Sprintf("eip155:%d:%s", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia),
-			}
-			if err := store.Save(rec); err != nil {
-				fmt.Printf("  Warning: failed to save registration: %v\n", err)
-			} else {
-				fmt.Printf("  Saved to:  %s/x402/registration.json\n", cfg.ConfigDir)
-			}
+			fmt.Printf("  Registry:  eip155:%d:%s\n", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia)
 
 			return nil
 		},
@@ -555,26 +547,10 @@ func monetizeStatusCommand(cfg *config.Config) *cli.Command {
 
 			fmt.Println()
 
-			// Show registration status.
-			store := erc8004.NewStore(cfg.ConfigDir)
-			rec, err := store.Load()
-			if err != nil {
-				if errors.Is(err, erc8004.ErrNoRegistration) {
-					fmt.Printf("ERC-8004 Registration: not registered\n")
-					fmt.Printf("  Run 'obol monetize register' to register on Base Sepolia\n")
-				} else {
-					fmt.Printf("ERC-8004 Registration: error (%v)\n", err)
-				}
-			} else {
-				fmt.Printf("ERC-8004 Registration:\n")
-				fmt.Printf("  Agent ID:  %s\n", rec.AgentID)
-				fmt.Printf("  Agent URI: %s\n", rec.AgentURI)
-				fmt.Printf("  Chain:     %s\n", rec.Chain)
-				fmt.Printf("  Registry:  %s\n", rec.Registry)
-				if rec.TxHash != "" {
-					fmt.Printf("  Tx Hash:   %s\n", rec.TxHash)
-				}
-			}
+			// Show ERC-8004 registration from ServiceOffer CRD status (single source of truth).
+			fmt.Printf("ERC-8004 Registration:\n")
+			kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
+				"-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,AGENT_ID:.status.agentId,TX:.status.registrationTxHash,REGISTERED:.status.conditions[?(@.type=='Registered')].status")
 
 			return nil
 		},
@@ -612,6 +588,27 @@ func kubectlApply(cfg *config.Config, manifest interface{}) error {
 		return fmt.Errorf("kubectl apply failed: %w", err)
 	}
 	return nil
+}
+
+// kubectlOutput executes kubectl and captures stdout.
+func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("stack not running, use 'obol stack up' first")
+	}
+
+	proc := exec.Command(kubectlPath, args...)
+	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var stdout bytes.Buffer
+	proc.Stdout = &stdout
+	proc.Stderr = os.Stderr
+
+	if err := proc.Run(); err != nil {
+		return "", err
+	}
+	return stdout.String(), nil
 }
 
 // kubectlRun executes kubectl with the given arguments and stack kubeconfig.

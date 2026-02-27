@@ -22,9 +22,10 @@ const (
 
 // networkChainIDs maps network names to EVM chain IDs.
 var networkChainIDs = map[string]int{
-	"mainnet": 1,
-	"hoodi":   560048,
-	"sepolia": 11155111,
+	"mainnet":      1,
+	"hoodi":        560048,
+	"sepolia":      11155111,
+	"base-sepolia": 84532,
 }
 
 // RegisterERPCUpstream reads the deployed network's RPC endpoint and adds
