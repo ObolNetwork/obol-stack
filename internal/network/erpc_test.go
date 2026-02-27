@@ -14,7 +14,7 @@ projects:
   - id: rpc
     upstreams:
       - id: obol-rpc-mainnet
-        endpoint: https://erpc.gcp.obol.tech/mainnet/evm/1
+        endpoint: https://erpc.gcp.obol.tech/rpc/mainnet
         evm:
           chainId: 1
     networks:
@@ -82,7 +82,7 @@ func TestPatchERPCConfig_RemoveUpstream(t *testing.T) {
         evm:
           chainId: 1
       - id: obol-rpc-mainnet
-        endpoint: https://erpc.gcp.obol.tech/mainnet/evm/1
+        endpoint: https://erpc.gcp.obol.tech/rpc/mainnet
         evm:
           chainId: 1
 `
@@ -125,7 +125,7 @@ func TestPatchERPCConfig_Idempotent(t *testing.T) {
         evm:
           chainId: 1
       - id: obol-rpc-mainnet
-        endpoint: https://erpc.gcp.obol.tech/mainnet/evm/1
+        endpoint: https://erpc.gcp.obol.tech/rpc/mainnet
         evm:
           chainId: 1
 `
@@ -180,7 +180,7 @@ func TestPatchERPCConfig_PreservesWriteOnlySelectionPolicy(t *testing.T) {
   - id: rpc
     upstreams:
       - id: obol-rpc-mainnet
-        endpoint: https://erpc.gcp.obol.tech/mainnet/evm/1
+        endpoint: https://erpc.gcp.obol.tech/rpc/mainnet
         evm:
           chainId: 1
     networks:
