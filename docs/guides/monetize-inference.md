@@ -632,15 +632,23 @@ Missing any of these fields causes the facilitator to reject the payment before 
 
 ### RBAC: forbidden
 
-If the OpenClaw agent cannot create or patch Kubernetes resources (ServiceOffers, Middlewares, HTTPRoutes), the ClusterRoleBinding may have an empty `subjects` list. Patch it manually:
+If the OpenClaw agent cannot create or patch Kubernetes resources (ServiceOffers, Middlewares, HTTPRoutes), the ClusterRoleBindings may have empty `subjects` lists. Patch them manually:
 
 ```bash
-kubectl patch clusterrolebinding openclaw-monetize-binding \
+# Patch both ClusterRoleBindings
+for BINDING in openclaw-monetize-read-binding openclaw-monetize-workload-binding; do
+  kubectl patch clusterrolebinding "$BINDING" \
+      --type=json \
+      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
+done
+
+# Patch x402 namespace RoleBinding
+kubectl patch rolebinding openclaw-x402-pricing-binding -n x402 \
     --type=json \
-    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-default"}]}]'
+    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
 ```
 
-Replace `openclaw-default` with your actual OpenClaw namespace if different.
+Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 
 ---
 

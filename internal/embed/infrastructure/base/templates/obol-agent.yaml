@@ -1,7 +1,7 @@
 ---
 # Agent namespace — retained for backward compatibility.
 # The obol-agent OpenClaw instance runs in openclaw-obol-agent namespace;
-# RBAC is managed by the openclaw-monetize ClusterRole.
+# RBAC is managed by the openclaw-monetize-read/workload ClusterRoles.
 apiVersion: v1
 kind: Namespace
 metadata:

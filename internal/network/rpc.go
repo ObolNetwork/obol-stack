@@ -3,11 +3,10 @@ package network
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -165,15 +164,13 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string) e
 
 // AddPublicRPCs adds ChainList RPCs for a chain to the eRPC ConfigMap.
 func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints []RPCEndpoint) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running, use 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap.
-	configYAML, err := kubectlOutput(kubectlBin, kubeconfigPath,
+	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
 		"get", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-o", fmt.Sprintf("jsonpath={.data.%s}", strings.ReplaceAll(erpcConfigKey, ".", "\\.")))
 	if err != nil {
@@ -258,15 +255,13 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 
 // RemovePublicRPCs removes all ChainList RPCs for a chain from the eRPC ConfigMap.
 func RemovePublicRPCs(cfg *config.Config, chainID int) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running, use 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap.
-	configYAML, err := kubectlOutput(kubectlBin, kubeconfigPath,
+	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
 		"get", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-o", fmt.Sprintf("jsonpath={.data.%s}", strings.ReplaceAll(erpcConfigKey, ".", "\\.")))
 	if err != nil {
@@ -316,15 +311,13 @@ func RemovePublicRPCs(cfg *config.Config, chainID int) error {
 
 // GetERPCStatus returns eRPC pod status and upstream counts.
 func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int]int, err error) {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", nil, fmt.Errorf("cluster not running, use 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return "", nil, err
 	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Get pod status.
-	podStatus, err = kubectlOutput(kubectlBin, kubeconfigPath,
+	podStatus, err = kubectl.Output(kubectlBin, kubeconfigPath,
 		"get", "pods", "-n", erpcNamespace, "-l", "app.kubernetes.io/name=erpc",
 		"-o", "custom-columns=NAME:.metadata.name,STATUS:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount",
 		"--no-headers")
@@ -367,14 +360,12 @@ func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int
 
 // readERPCConfig reads and parses the eRPC ConfigMap YAML.
 func readERPCConfig(cfg *config.Config) (map[string]interface{}, error) {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running, use 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return nil, err
 	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
-	configYAML, err := kubectlOutput(kubectlBin, kubeconfigPath,
+	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
 		"get", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-o", fmt.Sprintf("jsonpath={.data.%s}", strings.ReplaceAll(erpcConfigKey, ".", "\\.")))
 	if err != nil {
@@ -391,8 +382,7 @@ func readERPCConfig(cfg *config.Config) (map[string]interface{}, error) {
 
 // writeERPCConfig serializes the eRPC config and patches the ConfigMap, then restarts eRPC.
 func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	updatedYAML, err := yaml.Marshal(erpcConfig)
 	if err != nil {
@@ -409,14 +399,14 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) erro
 		return fmt.Errorf("could not marshal patch: %w", err)
 	}
 
-	if err := kubectl(kubectlBin, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
 		"patch", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-p", string(patchJSON), "--type=merge"); err != nil {
 		return fmt.Errorf("could not patch eRPC ConfigMap: %w", err)
 	}
 
 	// Restart eRPC to pick up new config.
-	if err := kubectl(kubectlBin, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", erpcDeployment), "-n", erpcNamespace); err != nil {
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}

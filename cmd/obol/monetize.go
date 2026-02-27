@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -623,59 +621,26 @@ func kubectlApply(cfg *config.Config, manifest interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
-
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	proc := exec.Command(kubectlPath, "apply", "-f", "-")
-	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	proc.Stdin = bytes.NewReader(raw)
-	proc.Stdout = os.Stdout
-	proc.Stderr = os.Stderr
-
-	if err := proc.Run(); err != nil {
-		return fmt.Errorf("kubectl apply failed: %w", err)
-	}
-	return nil
+	bin, kc := kubectl.Paths(cfg)
+	return kubectl.Apply(bin, kc, raw)
 }
 
 // kubectlOutput executes kubectl and captures stdout.
 func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("stack not running, use 'obol stack up' first")
-	}
-
-	proc := exec.Command(kubectlPath, args...)
-	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	var stdout bytes.Buffer
-	proc.Stdout = &stdout
-	proc.Stderr = os.Stderr
-
-	if err := proc.Run(); err != nil {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return "", err
 	}
-	return stdout.String(), nil
+	bin, kc := kubectl.Paths(cfg)
+	return kubectl.Output(bin, kc, args...)
 }
 
 // kubectlRun executes kubectl with the given arguments and stack kubeconfig.
 func kubectlRun(cfg *config.Config, args ...string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
-
-	proc := exec.Command(kubectlPath, args...)
-	proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-	proc.Stdin = os.Stdin
-	proc.Stdout = os.Stdout
-	proc.Stderr = os.Stderr
-
-	return proc.Run()
+	bin, kc := kubectl.Paths(cfg)
+	return kubectl.Run(bin, kc, args...)
 }
 
 // mustMarshal JSON-encodes v, returning "{}" on error.

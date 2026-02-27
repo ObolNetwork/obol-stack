@@ -1,14 +1,13 @@
 package testutil
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 )
 
 // PatchVerifierFacilitator patches the x402-pricing ConfigMap to use the given
@@ -23,14 +22,14 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 	t.Helper()
 
 	// Read current pricing YAML from ConfigMap.
-	currentYAML, err := kubectlExecOutput(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
+	currentYAML, err := kubectl.Output(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
 		"-n", "x402", "-o", `jsonpath={.data.pricing\.yaml}`)
 	if err != nil {
 		t.Fatalf("read x402-pricing ConfigMap: %v", err)
 	}
 
 	// Save original ConfigMap JSON for restore.
-	originalJSON, err := kubectlExecOutput(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
+	originalJSON, err := kubectl.Output(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
 		"-n", "x402", "-o", "json")
 	if err != nil {
 		t.Fatalf("read x402-pricing ConfigMap (json): %v", err)
@@ -51,7 +50,7 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 			"pricing.yaml": updated,
 		},
 	})
-	if err := kubectlExecRun(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
 		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
 		t.Fatalf("patch x402-pricing ConfigMap: %v", err)
 	}
@@ -80,7 +79,7 @@ func restoreVerifierConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON
 		"data": cm.Data,
 	})
 
-	if err := kubectlExecRun(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
 		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
 		t.Logf("Warning: could not restore x402-pricing ConfigMap: %v", err)
 	} else {
@@ -94,14 +93,14 @@ func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL st
 	t.Helper()
 
 	// Force restart so the verifier picks up the new ConfigMap immediately.
-	if err := kubectlExecRun(kubectlBin, kubeconfig, "rollout", "restart",
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "rollout", "restart",
 		"deploy/x402-verifier", "-n", "x402"); err != nil {
 		t.Fatalf("rollout restart x402-verifier: %v", err)
 	}
 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		logs, err := kubectlExecOutput(kubectlBin, kubeconfig, "logs", "deploy/x402-verifier",
+		logs, err := kubectl.Output(kubectlBin, kubeconfig, "logs", "deploy/x402-verifier",
 			"-n", "x402", "--tail=10")
 		if err == nil && strings.Contains(logs, expectedURL) {
 			t.Log("x402-verifier restarted with updated facilitator URL")
@@ -112,35 +111,3 @@ func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL st
 	t.Log("Warning: did not confirm verifier restart with new URL (continuing anyway)")
 }
 
-// kubectlExecRun runs a kubectl command, returning an error if it fails.
-func kubectlExecRun(binary, kubeconfig string, args ...string) error {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return err
-	}
-	return nil
-}
-
-// kubectlExecOutput runs a kubectl command and returns its stdout.
-func kubectlExecOutput(binary, kubeconfig string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return "", err
-	}
-	return stdout.String(), nil
-}

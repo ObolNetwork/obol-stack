@@ -1,15 +1,13 @@
 package x402
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,13 +24,10 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
 	}
-
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
+	bin, kc := kubectl.Paths(cfg)
 
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
@@ -41,7 +36,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err != nil {
 		return fmt.Errorf("marshal secret patch: %w", err)
 	}
-	if err := kubectlRun(kubectlBin, kubeconfig,
+	if err := kubectl.Run(bin, kc,
 		"patch", "secret", x402SecretName, "-n", x402Namespace,
 		"-p", string(patchJSON), "--type=merge"); err != nil {
 		return fmt.Errorf("failed to patch x402 secret: %w", err)
@@ -59,7 +54,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		VerifyOnly:     false,
 		Routes:         []RouteRule{},
 	}
-	if err := patchPricingConfig(kubectlBin, kubeconfig, pricingCfg); err != nil {
+	if err := patchPricingConfig(bin, kc, pricingCfg); err != nil {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
@@ -70,11 +65,8 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 // AddRoute adds a pricing route to the x402 ConfigMap.
 // Optional per-route payTo and network override the global config when set.
 func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
 
 	// Read current pricing config.
@@ -96,7 +88,8 @@ func AddRoute(cfg *config.Config, pattern, price, description string, opts ...Ro
 	pricingCfg.Routes = append(pricingCfg.Routes, rule)
 
 	// Re-serialize and patch.
-	return patchPricingConfig(kubectlBin, kubeconfig, pricingCfg)
+	bin, kc := kubectl.Paths(cfg)
+	return patchPricingConfig(bin, kc, pricingCfg)
 }
 
 // RouteOption is a functional option for AddRoute.
@@ -114,14 +107,12 @@ func WithNetwork(network string) RouteOption {
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.
 func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return nil, err
 	}
+	bin, kc := kubectl.Paths(cfg)
 
-	raw, err := kubectlOutput(kubectlBin, kubeconfig,
+	raw, err := kubectl.Output(bin, kc,
 		"get", "configmap", pricingConfigMap, "-n", x402Namespace,
 		"-o", `jsonpath={.data.pricing\.yaml}`)
 	if err != nil {
@@ -150,12 +141,11 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 
 // WritePricingConfig writes the pricing config to the cluster ConfigMap.
 func WritePricingConfig(cfg *config.Config, pcfg *PricingConfig) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	return patchPricingConfig(kubectlBin, kubeconfig, pcfg)
+	bin, kc := kubectl.Paths(cfg)
+	return patchPricingConfig(bin, kc, pcfg)
 }
 
-func patchPricingConfig(kubectlBin, kubeconfig string, pcfg *PricingConfig) error {
+func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 	pricingBytes, err := yaml.Marshal(pcfg)
 	if err != nil {
 		return fmt.Errorf("marshal pricing config: %w", err)
@@ -171,40 +161,7 @@ func patchPricingConfig(kubectlBin, kubeconfig string, pcfg *PricingConfig) erro
 		return fmt.Errorf("marshal pricing patch: %w", err)
 	}
 
-	return kubectlRun(kubectlBin, kubeconfig,
+	return kubectl.Run(bin, kc,
 		"patch", "configmap", pricingConfigMap, "-n", x402Namespace,
 		"-p", string(cmPatchJSON), "--type=merge")
-}
-
-func kubectlRun(binary, kubeconfig string, args ...string) error {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = os.Stdout
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return err
-	}
-	return nil
-}
-
-func kubectlOutput(binary, kubeconfig string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return "", err
-	}
-	return stdout.String(), nil
 }

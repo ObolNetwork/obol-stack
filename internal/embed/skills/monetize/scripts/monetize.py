@@ -23,6 +23,7 @@ Commands:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -37,6 +38,45 @@ from kube import load_sa, make_ssl_context, api_get, api_post, api_patch, api_de
 CRD_GROUP = "obol.org"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL = "serviceoffers"
+
+# ---------------------------------------------------------------------------
+# Input validation — prevents YAML injection via f-string interpolation.
+# All values are validated before being used in YAML string construction.
+# ---------------------------------------------------------------------------
+
+_ROUTE_PATTERN_RE = re.compile(r"^/[a-zA-Z0-9_./*-]+$")
+_PRICE_RE = re.compile(r"^\d+(\.\d+)?$")
+_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+_NETWORK_RE = re.compile(r"^[a-z0-9-]+$")
+
+
+def _validate_route_pattern(pattern):
+    """Validate route pattern is safe for YAML interpolation."""
+    if not pattern or not _ROUTE_PATTERN_RE.match(pattern):
+        raise ValueError(f"invalid route pattern: {pattern!r}")
+    return pattern
+
+
+def _validate_price(price):
+    """Validate price is a numeric string safe for YAML interpolation."""
+    if not price or not _PRICE_RE.match(str(price)):
+        raise ValueError(f"invalid price: {price!r}")
+    return str(price)
+
+
+def _validate_address(addr):
+    """Validate Ethereum address if non-empty."""
+    if addr and not _ADDRESS_RE.match(addr):
+        raise ValueError(f"invalid Ethereum address: {addr!r}")
+    return addr
+
+
+def _validate_network(network):
+    """Validate network name if non-empty."""
+    if network and not _NETWORK_RE.match(network):
+        raise ValueError(f"invalid network name: {network!r}")
+    return network
+
 
 # ---------------------------------------------------------------------------
 # ERC-8004 constants
@@ -418,18 +458,33 @@ def stage_upstream_healthy(spec, ns, name, token, ssl_ctx):
     else:
         req = urllib.request.Request(health_url)
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp.read()
-            print(f"  Upstream healthy (HTTP {resp.status})")
-    except urllib.error.HTTPError as e:
-        # An HTTP error (400, 405, etc.) still proves the upstream is reachable
-        # and accepting connections — only connection failures mean "unhealthy".
-        print(f"  Upstream reachable (HTTP {e.code} — acceptable for health check)")
-    except (urllib.error.URLError, OSError) as e:
-        msg = str(e)[:200]
-        print(f"  Health-check failed: {msg}", file=sys.stderr)
-        set_condition(ns, name, "UpstreamHealthy", "False", "Unhealthy", msg, token, ssl_ctx)
+    # Retry transient connection failures (pod starting, DNS propagation).
+    max_attempts = 3
+    backoff = 2  # seconds
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+                print(f"  Upstream healthy (HTTP {resp.status})")
+                last_err = None
+                break
+        except urllib.error.HTTPError as e:
+            # An HTTP error (400, 405, etc.) still proves the upstream is reachable
+            # and accepting connections — only connection failures mean "unhealthy".
+            print(f"  Upstream reachable (HTTP {e.code} — acceptable for health check)")
+            last_err = None
+            break
+        except (urllib.error.URLError, OSError) as e:
+            last_err = str(e)[:200]
+            if attempt < max_attempts:
+                print(f"  Health-check attempt {attempt}/{max_attempts} failed: {last_err}, retrying in {backoff}s...")
+                time.sleep(backoff)
+            else:
+                print(f"  Health-check failed after {max_attempts} attempts: {last_err}", file=sys.stderr)
+
+    if last_err:
+        set_condition(ns, name, "UpstreamHealthy", "False", "Unhealthy", last_err, token, ssl_ctx)
         return False
 
     set_condition(ns, name, "UpstreamHealthy", "True", "Healthy", "Upstream responded successfully", token, ssl_ctx)
@@ -506,11 +561,11 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
     Now includes per-route payTo and network fields aligned with x402.
     """
     url_path = spec.get("path", f"/services/{name}")
-    price = get_effective_price(spec)
-    pay_to = get_pay_to(spec)
-    network = get_network(spec)
+    price = _validate_price(get_effective_price(spec))
+    pay_to = _validate_address(get_pay_to(spec))
+    network = _validate_network(get_network(spec))
 
-    route_pattern = f"{url_path}/*"
+    route_pattern = _validate_route_pattern(f"{url_path}/*")
 
     # Read current x402-pricing ConfigMap.
     cm_path = "/api/v1/namespaces/x402/configmaps/x402-pricing"

@@ -56,7 +56,7 @@ metadata:
   annotations:
     configmap.reloader.stakater.com/reload: "x402-pricing"
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: x402-verifier
@@ -126,3 +126,17 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
+
+---
+# PDB ensures at least 1 replica stays available during rollouts/evictions.
+# Without this, Traefik ForwardAuth fails open when the verifier is unavailable.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: x402-verifier
+  namespace: x402
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: x402-verifier

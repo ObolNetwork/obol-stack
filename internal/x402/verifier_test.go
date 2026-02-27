@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -610,10 +611,10 @@ func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
 	}
 }
 
-func TestVerifier_PerRouteNetwork_InvalidChain_Returns500(t *testing.T) {
+func TestVerifier_PerRouteNetwork_InvalidChain_RejectsAtLoad(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 
-	v, err := NewVerifier(&PricingConfig{
+	_, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Chain:          "base-sepolia",
 		FacilitatorURL: fac.URL,
@@ -623,18 +624,11 @@ func TestVerifier_PerRouteNetwork_InvalidChain_Returns500(t *testing.T) {
 			Network: "invalid-chain",
 		}},
 	})
-	if err != nil {
-		t.Fatalf("NewVerifier: %v", err)
+	if err == nil {
+		t.Fatal("expected NewVerifier to reject invalid per-route chain at load time")
 	}
-
-	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
-	req.Header.Set("X-Forwarded-Uri", "/services/bad/endpoint")
-	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	w := httptest.NewRecorder()
-	v.HandleVerify(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 for invalid per-route chain, got %d", w.Code)
+	if !strings.Contains(err.Error(), "unsupported chain") {
+		t.Errorf("expected 'unsupported chain' error, got: %v", err)
 	}
 }
 
