@@ -33,6 +33,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
 					provider := cmd.String("provider")
 					apiKey := cmd.String("api-key")
 
@@ -45,7 +46,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 						}
 					}
 
-					return model.ConfigureLLMSpy(cfg, provider, apiKey)
+					return model.ConfigureLLMSpy(cfg, u, provider, apiKey)
 				},
 			},
 			{

@@ -9,6 +9,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const agentID = "obol-agent"
@@ -18,7 +19,7 @@ const agentID = "obol-agent"
 // After onboarding, it patches the monetize RBAC bindings
 // to grant the agent's ServiceAccount monetization permissions,
 // and injects HEARTBEAT.md to drive periodic reconciliation.
-func Init(cfg *config.Config) error {
+func Init(cfg *config.Config, u *ui.UI) error {
 	// Check if obol-agent already exists.
 	instances, err := openclaw.ListInstanceIDs(cfg)
 	if err != nil {
@@ -41,11 +42,11 @@ func Init(cfg *config.Config) error {
 	}
 
 	if exists {
-		fmt.Println("obol-agent already exists, re-syncing...")
+		u.Info("obol-agent already exists, re-syncing...")
 		opts.Force = true
 	}
 
-	if err := openclaw.Onboard(cfg, opts); err != nil {
+	if err := openclaw.Onboard(cfg, opts, u); err != nil {
 		return fmt.Errorf("failed to onboard obol-agent: %w", err)
 	}
 
@@ -120,7 +121,7 @@ func patchMonetizeBinding(cfg *config.Config) error {
 		return fmt.Errorf("patch rolebinding openclaw-x402-pricing-binding: %w", err)
 	}
 
-	fmt.Printf("✓ RBAC bindings patched (SA: openclaw in %s)\n", namespace)
+	fmt.Printf("RBAC bindings patched (SA: openclaw in %s)\n", namespace)
 	return nil
 }
 
@@ -143,6 +144,6 @@ Report HEARTBEAT_OK if no pending offers. Otherwise report what was processed.
 		return fmt.Errorf("failed to write HEARTBEAT.md: %w", err)
 	}
 
-	fmt.Printf("✓ HEARTBEAT.md injected at %s\n", heartbeatPath)
+	fmt.Printf("HEARTBEAT.md injected at %s\n", heartbeatPath)
 	return nil
 }

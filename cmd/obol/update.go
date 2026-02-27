@@ -24,6 +24,7 @@ func updateCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 			clusterRunning := true
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -33,7 +34,7 @@ func updateCommand(cfg *config.Config) *cli.Command {
 			jsonMode := cmd.Bool("json")
 
 			if !jsonMode && clusterRunning {
-				fmt.Println("Updating helm repositories...")
+				u.Info("Updating helm repositories...")
 			}
 
 			result, err := update.CheckForUpdates(cfg, clusterRunning, jsonMode)
@@ -48,29 +49,31 @@ func updateCommand(cfg *config.Config) *cli.Command {
 			// Print helm results
 			if clusterRunning {
 				if result.HelmError != "" {
-					fmt.Printf("  Warning: %s\n", result.HelmError)
+					u.Warnf("%s", result.HelmError)
 				} else if result.HelmRepoUpdated {
-					fmt.Println("  ✓ Helm repositories updated")
+					u.Success("Helm repositories updated")
 				}
 
 				if len(result.ChartStatuses) > 0 {
-					fmt.Println("\nChecking chart versions...")
-					update.PrintUpdateTable(result.ChartStatuses)
+					u.Blank()
+					u.Info("Checking chart versions...")
+					update.PrintUpdateTable(u, result.ChartStatuses)
 				}
 			} else {
-				fmt.Println("Helm check skipped (cluster not running)")
+				u.Dim("Helm check skipped (cluster not running)")
 			}
 
 			// Print CLI status
-			fmt.Println("\nChecking CLI version...")
+			u.Blank()
+			u.Info("Checking CLI version...")
 			if result.CLIError != "" {
-				fmt.Printf("  Warning: %s\n", result.CLIError)
+				u.Warnf("%s", result.CLIError)
 			} else {
-				update.PrintCLIStatus(version.Short(), result.CLIRelease, result.IsDev)
+				update.PrintCLIStatus(u, version.Short(), result.CLIRelease, result.IsDev)
 			}
 
 			// Print summary
-			update.PrintUpdateSummary(result)
+			update.PrintUpdateSummary(u, result)
 
 			return nil
 		},
@@ -101,7 +104,8 @@ func upgradeCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("stack not running, use 'obol stack up' first")
 			}
 
-			return update.ApplyUpgrades(cfg, cmd.Bool("defaults-only"), cmd.Bool("pinned"), cmd.Bool("major"))
+			u := getUI(cmd)
+			return update.ApplyUpgrades(cfg, u, cmd.Bool("defaults-only"), cmd.Bool("pinned"), cmd.Bool("major"))
 		},
 	}
 }

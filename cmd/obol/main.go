@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +13,18 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
 )
+
+// getUI retrieves the *ui.UI instance stored in the root command metadata.
+func getUI(cmd *cli.Command) *ui.UI {
+	if u, ok := cmd.Root().Metadata["ui"]; ok {
+		return u.(*ui.UI)
+	}
+	return ui.New(false)
+}
 
 func main() {
 	// Load config with XDG defaults
@@ -115,6 +123,22 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
 		Version: version.Full(),
+		Metadata: map[string]any{},
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "verbose",
+				Usage: "Show detailed output including subprocess logs",
+			},
+			&cli.BoolFlag{
+				Name:  "quiet",
+				Usage: "Suppress all output except errors",
+			},
+		},
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			u := ui.NewWithOptions(cmd.Bool("verbose"), cmd.Bool("quiet"))
+			cmd.Root().Metadata["ui"] = u
+			return ctx, nil
+		},
 		Commands: []*cli.Command{
 			// ============================================================
 			// Hidden Bootstrap Command (for installer)
@@ -143,21 +167,24 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Init(cfg, cmd.Bool("force"), cmd.String("backend"))
+							u := getUI(cmd)
+							return stack.Init(cfg, u, cmd.Bool("force"), cmd.String("backend"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Up(cfg)
+							u := getUI(cmd)
+							return stack.Up(cfg, u)
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Down(cfg)
+							u := getUI(cmd)
+							return stack.Down(cfg, u)
 						},
 					},
 					{
@@ -171,7 +198,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Purge(cfg, cmd.Bool("force"))
+							u := getUI(cmd)
+							return stack.Purge(cfg, u, cmd.Bool("force"))
 						},
 					},
 				},
@@ -187,7 +215,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 						Name:  "init",
 						Usage: "Initialize the Obol Agent",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return agent.Init(cfg)
+							u := getUI(cmd)
+							return agent.Init(cfg, u)
 						},
 					},
 				},
@@ -203,7 +232,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 						Name:  "status",
 						Usage: "Show tunnel status and public URL",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Status(cfg)
+							u := getUI(cmd)
+							return tunnel.Status(cfg, u)
 						},
 					},
 					{
@@ -218,7 +248,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Login(cfg, tunnel.LoginOptions{
+							u := getUI(cmd)
+							return tunnel.Login(cfg, u, tunnel.LoginOptions{
 								Hostname: cmd.String("hostname"),
 							})
 						},
@@ -253,7 +284,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Provision(cfg, tunnel.ProvisionOptions{
+							u := getUI(cmd)
+							return tunnel.Provision(cfg, u, tunnel.ProvisionOptions{
 								Hostname:  cmd.String("hostname"),
 								AccountID: cmd.String("account-id"),
 								ZoneID:    cmd.String("zone-id"),
@@ -265,7 +297,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 						Name:  "restart",
 						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Restart(cfg)
+							u := getUI(cmd)
+							return tunnel.Restart(cfg, u)
 						},
 					},
 					{
@@ -519,7 +552,8 @@ Find charts at https://artifacthub.io`,
 								ID:      cmd.String("id"),
 								Force:   cmd.Bool("force"),
 							}
-							return app.Install(cfg, chartRef, opts)
+							u := getUI(cmd)
+							return app.Install(cfg, u, chartRef, opts)
 						},
 					},
 					{
@@ -530,7 +564,8 @@ Find charts at https://artifacthub.io`,
 							if cmd.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Sync(cfg, cmd.Args().First())
+							u := getUI(cmd)
+							return app.Sync(cfg, u, cmd.Args().First())
 						},
 					},
 					{
@@ -547,7 +582,8 @@ Find charts at https://artifacthub.io`,
 							opts := app.ListOptions{
 								Verbose: cmd.Bool("verbose"),
 							}
-							return app.List(cfg, opts)
+							u := getUI(cmd)
+							return app.List(cfg, u, opts)
 						},
 					},
 					{
@@ -565,7 +601,8 @@ Find charts at https://artifacthub.io`,
 							if cmd.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Delete(cfg, cmd.Args().First(), cmd.Bool("force"))
+							u := getUI(cmd)
+							return app.Delete(cfg, u, cmd.Args().First(), cmd.Bool("force"))
 						},
 					},
 				},
@@ -574,6 +611,12 @@ Find charts at https://artifacthub.io`,
 	}
 
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+		// Retrieve UI from metadata if available (Before may have stored it).
+		if u, ok := app.Metadata["ui"]; ok {
+			u.(*ui.UI).Error(err.Error())
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(1)
 	}
 }

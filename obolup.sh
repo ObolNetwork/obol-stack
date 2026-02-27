@@ -10,6 +10,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+DIM='\033[2m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Development mode detection
@@ -30,7 +32,7 @@ if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$WORKSPACE_DIR/state}"
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$WORKSPACE_DIR/bin}"
 
-	log_warn() { echo -e "${YELLOW}!${NC} $1"; }
+	log_warn() { echo -e "  ${YELLOW}!${NC} $1"; }
 	log_warn "Development mode enabled - using local .workspace directory"
 else
 	# XDG Base Directory specification
@@ -60,21 +62,27 @@ readonly OPENCLAW_VERSION="2026.2.23"
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
 
-# Logging functions
+# Logging functions — matching the Go CLI's ui package output style.
+# Info/Error are top-level (no indent), Success/Warn are subordinate (2-space indent).
 log_info() {
 	echo -e "${BLUE}==>${NC} $1"
 }
 
 log_success() {
-	echo -e "${GREEN}✓${NC} $1"
+	echo -e "  ${GREEN}✓${NC} $1"
 }
 
 log_warn() {
-	echo -e "${YELLOW}!${NC} $1"
+	echo -e "  ${YELLOW}!${NC} $1"
 }
 
 log_error() {
 	echo -e "${RED}✗${NC} $1"
+}
+
+# Print dimmed secondary text (matches Go CLI's u.Dim)
+log_dim() {
+	echo -e "${DIM}$1${NC}"
 }
 
 # Check if command exists
@@ -99,12 +107,12 @@ check_docker() {
 	if ! command_exists docker; then
 		log_error "Docker is not installed"
 		echo ""
-		echo "Obol Stack requires Docker to run k3d clusters."
+		echo "  Obol Stack requires Docker to run k3d clusters."
 		echo ""
-		echo "Install Docker:"
-		echo "  • Ubuntu/Debian: https://docs.docker.com/engine/install/ubuntu/"
-		echo "  • macOS: https://docs.docker.com/desktop/install/mac-install/"
-		echo "  • Other: https://docs.docker.com/engine/install/"
+		echo "  Install Docker:"
+		echo "    • Ubuntu/Debian: https://docs.docker.com/engine/install/ubuntu/"
+		echo "    • macOS: https://docs.docker.com/desktop/install/mac-install/"
+		echo "    • Other: https://docs.docker.com/engine/install/"
 		echo ""
 		return 1
 	fi
@@ -125,15 +133,15 @@ check_docker() {
 		if ! docker info >/dev/null 2>&1; then
 			log_error "Docker daemon is not running"
 			echo ""
-			echo "Please start the Docker daemon:"
+			echo "  Please start the Docker daemon:"
 			if [[ "$(uname -s)" == "Linux" ]]; then
-				echo "  • systemd:  sudo systemctl start docker"
-				echo "  • snap:     sudo snap start docker"
+				echo "    • systemd:  sudo systemctl start docker"
+				echo "    • snap:     sudo snap start docker"
 			else
-				echo "  • macOS/Windows: Start Docker Desktop application"
+				echo "    • macOS/Windows: Start Docker Desktop application"
 			fi
 			echo ""
-			echo "Then run this installer again."
+			log_dim "  Then run this installer again."
 			echo ""
 			return 1
 		fi
@@ -1097,116 +1105,6 @@ WRAPPER
 	return 1
 }
 
-# Install Ollama (host runtime for local AI inference)
-# Unlike other dependencies, Ollama is a full application with a background server.
-# On macOS it installs Ollama.app; on Linux it sets up a systemd service.
-# We delegate to Ollama's official installer rather than downloading a binary ourselves.
-install_ollama() {
-	# Check for existing ollama installation
-	if command_exists ollama; then
-		local version
-		version=$(ollama --version 2>/dev/null | sed 's/ollama version is //' || echo "unknown")
-		log_success "Ollama v$version already installed"
-
-		# Check if the server is running
-		if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-			log_success "Ollama server is running"
-		else
-			log_warn "Ollama is installed but the server is not running"
-			echo ""
-			case "$(uname -s)" in
-			Darwin*)
-				echo "  Start it with: open -a Ollama"
-				;;
-			Linux*)
-				echo "  Start it with: ollama serve"
-				;;
-			esac
-			echo ""
-		fi
-		return 0
-	fi
-
-	# Ollama not found — ask user if they want to install it
-	echo ""
-	log_info "Ollama is not installed"
-	echo ""
-	echo "  Ollama provides local AI inference for the Obol Stack."
-	echo "  Without it, you can still use cloud providers (Anthropic, OpenAI)"
-	echo "  via 'obol model setup'."
-	echo ""
-
-	# Check if we can prompt the user
-	if [[ -c /dev/tty ]]; then
-		local choice
-		read -p "  Install Ollama now? [Y/n]: " choice </dev/tty
-
-		case "$choice" in
-		[Nn]*)
-			log_warn "Skipping Ollama — local AI inference will be unavailable"
-			echo ""
-			echo "  Install later: curl -fsSL https://ollama.com/install.sh | sh"
-			echo "  Then pull a model: obol model pull"
-			echo ""
-			return 0
-			;;
-		*)
-			# Yes — delegate to official installer
-			log_info "Installing Ollama..."
-			echo ""
-			if curl -fsSL https://ollama.com/install.sh | sh; then
-				echo ""
-				log_success "Ollama installed"
-
-				# On macOS, the installer starts Ollama.app automatically.
-				# On Linux with systemd, the installer enables and starts the service.
-				# Give it a moment to come up.
-				local attempts=0
-				while [[ $attempts -lt 10 ]]; do
-					if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-						log_success "Ollama server is running"
-						echo ""
-						echo "  Pull a model later with: obol model pull"
-						echo ""
-						return 0
-					fi
-					sleep 1
-					attempts=$((attempts + 1))
-				done
-
-				log_warn "Ollama installed but server not yet responding"
-				echo ""
-				case "$(uname -s)" in
-				Darwin*)
-					echo "  Start it with: open -a Ollama"
-					;;
-				Linux*)
-					echo "  Start it with: ollama serve"
-					;;
-				esac
-				echo "  Then pull a model with: obol model pull"
-				echo ""
-				return 0
-			else
-				log_warn "Ollama installation failed"
-				echo ""
-				echo "  Install manually: https://ollama.com/download"
-				echo ""
-				return 1
-			fi
-			;;
-		esac
-	else
-		# Non-interactive — just warn
-		log_warn "Ollama not found — local AI inference will be unavailable"
-		echo ""
-		echo "  Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
-		echo "  Then pull a model: obol model pull"
-		echo ""
-		return 0
-	fi
-}
-
 # Install all dependencies
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
@@ -1224,7 +1122,6 @@ install_dependencies() {
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
 	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
-	install_ollama || log_warn "Ollama installation skipped (continuing...)"
 
 	echo ""
 	log_success "Dependencies check complete"
@@ -1362,17 +1259,17 @@ print_path_instructions() {
 	echo ""
 	log_info "Manual setup instructions:"
 	echo ""
-	echo "Add this line to your shell profile ($profile_file):"
+	echo "  Add this line to your shell profile ($profile_file):"
 	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo "    export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 	echo ""
-	echo "Then reload your profile:"
+	echo "  Then reload your profile:"
 	echo ""
-	echo "  source $profile_file"
+	echo "    source $profile_file"
 	echo ""
-	echo "Or export for current session only:"
+	log_dim "  Or export for current session only:"
 	echo ""
-	echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+	echo "    export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 	echo ""
 }
 
@@ -1426,11 +1323,11 @@ configure_path() {
 		echo ""
 		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
 		echo ""
-		echo "Detected shell profile: $profile"
+		log_dim "  Detected shell profile: $profile"
 		echo ""
-		echo "Options:"
-		echo "  1. Automatically add to $profile (recommended)"
-		echo "  2. Show manual instructions"
+		echo "  Options:"
+		echo "    1. Automatically add to $profile (recommended)"
+		echo "    2. Show manual instructions"
 		echo ""
 
 		local choice
@@ -1442,9 +1339,9 @@ configure_path() {
 			echo ""
 			log_info "PATH updated for future sessions"
 			echo ""
-			log_info "To use immediately in this session, run:"
+			log_dim "  To use immediately in this session, run:"
 			echo ""
-			echo "  export PATH=\"$OBOL_BIN_DIR:\$PATH\""
+			echo "    export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 			echo ""
 			;;
 		2)
@@ -1483,10 +1380,10 @@ print_instructions() {
 		echo ""
 		log_info "Would you like to start the cluster now?"
 		echo ""
-		echo "This will:"
-		echo "  • Initialize cluster configuration"
-		echo "  • Start the Obol Stack"
-		echo "  • Open your browser to http://obol.stack"
+		echo "  This will:"
+		echo "    • Initialize cluster configuration"
+		echo "    • Start the Obol Stack"
+		echo "    • Open your browser to http://obol.stack"
 		echo ""
 
 		local choice
@@ -1506,9 +1403,9 @@ print_instructions() {
 				echo ""
 				log_info "You can start the cluster manually with:"
 				echo ""
-				echo "  obol stack init"
-				echo "  obol stack up"
-				echo "  obol agent init"
+				echo "    obol stack init"
+				echo "    obol stack up"
+				echo "    obol agent init"
 				echo ""
 				return 1
 			fi
@@ -1518,25 +1415,25 @@ print_instructions() {
 			echo ""
 			log_info "To start the cluster later, run:"
 			echo ""
-			echo "  obol stack init"
-			echo "  obol stack up"
+			echo "    obol stack init"
+			echo "    obol stack up"
 			echo ""
-			log_info "Then open your browser to: http://obol.stack"
+			log_dim "  Then open your browser to: http://obol.stack"
 			echo ""
 			;;
 		esac
 	else
 		# Truly non-interactive (CI/CD, no terminal) or no binary - show manual instructions
-		echo "Verify installation:"
+		log_dim "  Verify installation:"
 		echo ""
-		echo "  obol version"
+		echo "    obol version"
 		echo ""
-		echo "To start the cluster, run:"
+		echo "  To start the cluster, run:"
 		echo ""
-		echo "  obol stack init"
-		echo "  obol stack up"
+		echo "    obol stack init"
+		echo "    obol stack up"
 		echo ""
-		log_info "Then open your browser to: http://obol.stack"
+		log_dim "  Then open your browser to: http://obol.stack"
 		echo ""
 	fi
 }
@@ -1552,11 +1449,14 @@ main() {
 	export OBOL_INSTALLING=true
 
 	echo ""
-	echo "╔═══════════════════════════════════════════╗"
-	echo "║                                           ║"
-	echo "║     Obol Stack Bootstrap Installer        ║"
-	echo "║                                           ║"
-	echo "╚═══════════════════════════════════════════╝"
+	echo -e "${BOLD}"
+	echo "   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗"
+	echo "  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝"
+	echo "  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝"
+	echo "  ██║   ██║██╔══██╗██║   ██║██║         ╚════██║   ██║   ██╔══██║██║     ██╔═██╗"
+	echo "  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗"
+	echo "   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝"
+	echo -e "${NC}"
 	echo ""
 
 	# Detect installation mode
@@ -1582,8 +1482,8 @@ main() {
 		if ! check_docker; then
 			log_error "Docker requirements not met"
 			echo ""
-			echo "If you want to use the k3s backend (no Docker required), run:"
-			echo "  OBOL_BACKEND=k3s $0"
+			log_dim "  If you want to use the k3s backend (no Docker required), run:"
+			echo "    OBOL_BACKEND=k3s $0"
 			exit 1
 		fi
 	else

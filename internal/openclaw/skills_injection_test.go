@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 func TestSkillsVolumePath(t *testing.T) {
@@ -19,9 +20,10 @@ func TestSkillsVolumePath(t *testing.T) {
 
 func TestStageDefaultSkills(t *testing.T) {
 	deploymentDir := t.TempDir()
+	u := ui.New(false)
 
 	// stageDefaultSkills should create skills/ and populate it
-	stageDefaultSkills(deploymentDir)
+	stageDefaultSkills(deploymentDir, u)
 
 	skillsDir := filepath.Join(deploymentDir, "skills")
 	if _, err := os.Stat(skillsDir); err != nil {
@@ -51,7 +53,7 @@ func TestStageDefaultSkillsSkipsExisting(t *testing.T) {
 	}
 
 	// stageDefaultSkills should skip because skills/ already exists
-	stageDefaultSkills(deploymentDir)
+	stageDefaultSkills(deploymentDir, ui.New(false))
 
 	// Marker file should still be there
 	if _, err := os.Stat(marker); err != nil {
@@ -68,12 +70,13 @@ func TestInjectSkillsToVolume(t *testing.T) {
 	deploymentDir := t.TempDir()
 	dataDir := t.TempDir()
 	cfg := &config.Config{DataDir: dataDir}
+	u := ui.New(false)
 
 	// Stage skills first
-	stageDefaultSkills(deploymentDir)
+	stageDefaultSkills(deploymentDir, u)
 
 	// Inject to volume
-	injectSkillsToVolume(cfg, "test-inject", deploymentDir)
+	injectSkillsToVolume(cfg, "test-inject", deploymentDir, u)
 
 	// Verify skills landed in the volume path
 	volumePath := skillsVolumePath(cfg, "test-inject")
@@ -104,7 +107,7 @@ func TestInjectSkillsNoopWithoutSkillsDir(t *testing.T) {
 	cfg := &config.Config{DataDir: dataDir}
 
 	// Don't stage anything — inject should be a no-op
-	injectSkillsToVolume(cfg, "empty", deploymentDir)
+	injectSkillsToVolume(cfg, "empty", deploymentDir, ui.New(false))
 
 	volumePath := skillsVolumePath(cfg, "empty")
 	if _, err := os.Stat(volumePath); err == nil {

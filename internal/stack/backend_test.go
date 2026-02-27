@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 // Compile-time interface compliance checks
@@ -204,7 +205,8 @@ func TestK3dBackendInit(t *testing.T) {
 	}
 
 	b := &K3dBackend{}
-	if err := b.Init(cfg, "test-stack"); err != nil {
+	u := ui.New(false)
+	if err := b.Init(cfg, u, "test-stack"); err != nil {
 		t.Fatalf("K3dBackend.Init() error: %v", err)
 	}
 
@@ -247,7 +249,8 @@ func TestK3sBackendInit(t *testing.T) {
 	}
 
 	b := &K3sBackend{}
-	if err := b.Init(cfg, "my-cluster"); err != nil {
+	u := ui.New(false)
+	if err := b.Init(cfg, u, "my-cluster"); err != nil {
 		t.Fatalf("K3sBackend.Init() error: %v", err)
 	}
 

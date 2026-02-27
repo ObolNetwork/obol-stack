@@ -14,6 +14,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -41,7 +42,7 @@ type ProviderStatus struct {
 // It discovers the provider's env var from the running llmspy pod,
 // patches the llms-secrets Secret with the API key, enables the provider
 // in the llmspy-config ConfigMap, and restarts the deployment.
-func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
+func ConfigureLLMSpy(cfg *config.Config, u *ui.UI, provider, apiKey string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -56,7 +57,7 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	}
 
 	// 1. Patch the Secret with the API key
-	fmt.Printf("Configuring llmspy: setting %s key...\n", provider)
+	u.Infof("Configuring llmspy: setting %s key", provider)
 	patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envKey, apiKey)
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "secret", secretName, "-n", namespace,
@@ -65,13 +66,13 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	}
 
 	// 2. Read current ConfigMap, enable the provider in llms.json
-	fmt.Printf("Enabling %s provider in llmspy config...\n", provider)
+	u.Infof("Enabling %s provider in llmspy config", provider)
 	if err := enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider); err != nil {
 		return fmt.Errorf("failed to update llmspy config: %w", err)
 	}
 
 	// 3. Restart the deployment so it picks up new Secret + ConfigMap
-	fmt.Printf("Restarting llmspy deployment...\n")
+	u.Info("Restarting llmspy deployment")
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart llmspy: %w", err)
@@ -81,10 +82,10 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
 		"--timeout=60s"); err != nil {
-		fmt.Printf("Warning: llmspy rollout not confirmed: %v\n", err)
-		fmt.Println("The deployment may still be rolling out.")
+		u.Warnf("llmspy rollout not confirmed: %v", err)
+		u.Print("The deployment may still be rolling out.")
 	} else {
-		fmt.Printf("llmspy restarted with %s provider enabled.\n", provider)
+		u.Successf("llmspy restarted with %s provider enabled", provider)
 	}
 
 	return nil
