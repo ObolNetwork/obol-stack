@@ -37,7 +37,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 						Force:       c.Bool("force"),
 						Sync:        !c.Bool("no-sync"),
 						Interactive: true,
-					})
+					}, getUI(c))
 				},
 			},
 			{
@@ -49,7 +49,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.Sync(cfg, id)
+					return openclaw.Sync(cfg, id, getUI(c))
 				},
 			},
 			{
@@ -61,14 +61,14 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.Token(cfg, id)
+					return openclaw.Token(cfg, id, getUI(c))
 				},
 			},
 			{
 				Name:  "list",
 				Usage: "List OpenClaw instances",
 				Action: func(c *cli.Context) error {
-					return openclaw.List(cfg)
+					return openclaw.List(cfg, getUI(c))
 				},
 			},
 			{
@@ -87,7 +87,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.Delete(cfg, id, c.Bool("force"))
+					return openclaw.Delete(cfg, id, c.Bool("force"), getUI(c))
 				},
 			},
 			{
@@ -99,7 +99,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.Setup(cfg, id, openclaw.SetupOptions{})
+					return openclaw.Setup(cfg, id, openclaw.SetupOptions{}, getUI(c))
 				},
 			},
 			{
@@ -130,7 +130,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 						if !noBrowser {
 							openBrowser(url)
 						}
-					})
+					}, getUI(c))
 				},
 			},
 			openclawSkillsCommand(cfg),
@@ -142,9 +142,6 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				Action: func(c *cli.Context) error {
 					args := c.Args().Slice()
 
-					// Resolve the target instance. With SkipFlagParsing, we get raw args.
-					// ResolveInstance will auto-select if single instance, or consume
-					// the instance name from args[0] if multiple instances exist.
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {
 						return fmt.Errorf("%w\n\nUsage:\n"+
@@ -163,11 +160,10 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 						}
 					}
 					if len(openclawArgs) == 0 && len(remaining) > 0 {
-						// No "--" separator found; treat all remaining args as openclaw command
 						openclawArgs = remaining
 					}
 
-					return openclaw.CLI(cfg, id, openclawArgs)
+					return openclaw.CLI(cfg, id, openclawArgs, getUI(c))
 				},
 			},
 		},
@@ -194,7 +190,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if len(remaining) == 0 {
 						return fmt.Errorf("skill package or path required\n\nUsage: obol openclaw skill add <package-or-path>")
 					}
-					return openclaw.SkillAdd(cfg, id, remaining)
+					return openclaw.SkillAdd(cfg, id, remaining, getUI(c))
 				},
 			},
 			{
@@ -211,7 +207,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if len(remaining) == 0 {
 						return fmt.Errorf("skill name required\n\nUsage: obol openclaw skill remove <skill-name>")
 					}
-					return openclaw.SkillRemove(cfg, id, remaining)
+					return openclaw.SkillRemove(cfg, id, remaining, getUI(c))
 				},
 			},
 			{
@@ -223,7 +219,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.SkillList(cfg, id)
+					return openclaw.SkillList(cfg, id, getUI(c))
 				},
 			},
 			{
@@ -242,10 +238,9 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					return openclaw.SkillsSync(cfg, id, c.String("from"))
+					return openclaw.SkillsSync(cfg, id, c.String("from"), getUI(c))
 				},
 			},
 		},
 	}
 }
-

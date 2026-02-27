@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -24,19 +25,19 @@ type Backend interface {
 	Name() string
 
 	// Init generates backend-specific cluster configuration files
-	Init(cfg *config.Config, stackID string) error
+	Init(cfg *config.Config, u *ui.UI, stackID string) error
 
 	// Up creates or starts the cluster and returns kubeconfig contents
-	Up(cfg *config.Config, stackID string) (kubeconfigData []byte, err error)
+	Up(cfg *config.Config, u *ui.UI, stackID string) (kubeconfigData []byte, err error)
 
 	// IsRunning returns true if the cluster is currently running
 	IsRunning(cfg *config.Config, stackID string) (bool, error)
 
 	// Down stops the cluster without destroying configuration or data
-	Down(cfg *config.Config, stackID string) error
+	Down(cfg *config.Config, u *ui.UI, stackID string) error
 
 	// Destroy removes the cluster entirely (containers/processes)
-	Destroy(cfg *config.Config, stackID string) error
+	Destroy(cfg *config.Config, u *ui.UI, stackID string) error
 
 	// DataDir returns the storage path for the local-path-provisioner.
 	// For k3d this is "/data" (Docker volume mount point).

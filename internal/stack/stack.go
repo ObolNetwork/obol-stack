@@ -14,6 +14,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -24,7 +25,7 @@ const (
 )
 
 // Init initializes the stack configuration
-func Init(cfg *config.Config, force bool, backendName string) error {
+func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	// Check if any stack config already exists
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	backendFilePath := filepath.Join(cfg.ConfigDir, stackBackendFile)
@@ -53,7 +54,7 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	var stackID string
 	if existingID, err := os.ReadFile(stackIDPath); err == nil {
 		stackID = strings.TrimSpace(string(existingID))
-		fmt.Printf("Preserving existing stack ID: %s (use purge to reset)\n", stackID)
+		u.Warnf("Preserving existing stack ID: %s (use purge to reset)", stackID)
 	} else {
 		stackID = petname.Generate(2, "-")
 	}
@@ -67,7 +68,7 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	// orphaned clusters (e.g., k3d containers still running after
 	// switching to k3s, or k3s process still alive after switching to k3d).
 	if hasExistingConfig && force {
-		destroyOldBackendIfSwitching(cfg, backendName, stackID)
+		destroyOldBackendIfSwitching(cfg, u, backendName, stackID)
 	}
 
 	backend, err := NewBackend(backendName)
@@ -75,9 +76,9 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 		return err
 	}
 
-	fmt.Println("Initializing cluster configuration")
-	fmt.Printf("Cluster ID: %s\n", stackID)
-	fmt.Printf("Backend: %s\n", backend.Name())
+	u.Info("Initializing cluster configuration")
+	u.Detail("Cluster ID", stackID)
+	u.Detail("Backend", backend.Name())
 
 	// Check prerequisites
 	if err := backend.Prerequisites(cfg); err != nil {
@@ -85,14 +86,11 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	}
 
 	// Generate backend-specific config
-	if err := backend.Init(cfg, stackID); err != nil {
+	if err := backend.Init(cfg, u, stackID); err != nil {
 		return err
 	}
 
 	// Copy embedded defaults (helmfile + charts for infrastructure)
-	// Resolve {{OLLAMA_HOST}} based on backend:
-	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
-	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
 	ollamaHost := ollamaHostForBackend(backendName)
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
@@ -100,7 +98,6 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
-	fmt.Printf("Defaults copied to: %s\n", defaultsDir)
 
 	// Store stack ID
 	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
@@ -112,14 +109,13 @@ func Init(cfg *config.Config, force bool, backendName string) error {
 		return fmt.Errorf("failed to save backend choice: %w", err)
 	}
 
-	fmt.Printf("Initialized stack configuration\n")
-	fmt.Printf("Stack ID: %s\n", stackID)
+	u.Success("Stack initialized")
 	return nil
 }
 
 // destroyOldBackendIfSwitching checks if the backend is changing and tears down
 // the old one to prevent orphaned clusters running side by side.
-func destroyOldBackendIfSwitching(cfg *config.Config, newBackend, stackID string) {
+func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stackID string) {
 	oldBackend, err := LoadBackend(cfg)
 	if err != nil {
 		return
@@ -128,12 +124,12 @@ func destroyOldBackendIfSwitching(cfg *config.Config, newBackend, stackID string
 		return // same backend, nothing to clean up
 	}
 
-	fmt.Printf("Switching backend from %s to %s — destroying old cluster\n", oldBackend.Name(), newBackend)
+	u.Warnf("Switching backend from %s to %s — destroying old cluster", oldBackend.Name(), newBackend)
 
 	// Destroy the old backend's cluster (best-effort, don't block init)
 	if stackID != "" {
-		if err := oldBackend.Destroy(cfg, stackID); err != nil {
-			fmt.Printf("Warning: failed to destroy old %s cluster: %v\n", oldBackend.Name(), err)
+		if err := oldBackend.Destroy(cfg, u, stackID); err != nil {
+			u.Warnf("Failed to destroy old %s cluster: %v", oldBackend.Name(), err)
 		}
 	}
 
@@ -163,10 +159,8 @@ func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 // instance from inside the cluster.
 func ollamaHostForBackend(backendName string) string {
 	if backendName == BackendK3s {
-		// k3s runs directly on the host — Ollama is at localhost
 		return "127.0.0.1"
 	}
-	// k3d runs inside Docker containers
 	if runtime.GOOS == "darwin" {
 		return "host.docker.internal"
 	}
@@ -174,7 +168,7 @@ func ollamaHostForBackend(backendName string) string {
 }
 
 // Up starts the cluster using the configured backend
-func Up(cfg *config.Config) error {
+func Up(cfg *config.Config, u *ui.UI) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
@@ -187,39 +181,43 @@ func Up(cfg *config.Config) error {
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
 
-	fmt.Printf("Starting stack (id: %s, backend: %s)\n", stackID, backend.Name())
+	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
-	kubeconfigData, err := backend.Up(cfg, stackID)
+	kubeconfigData, err := backend.Up(cfg, u, stackID)
 	if err != nil {
 		return err
 	}
 
-	// Write kubeconfig (backend may have already written it, but ensure consistency)
+	// Write kubeconfig
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
 	// Sync defaults with backend-aware dataDir
 	dataDir := backend.DataDir(cfg)
-	if err := syncDefaults(cfg, kubeconfigPath, dataDir); err != nil {
+	if err := syncDefaults(cfg, u, kubeconfigPath, dataDir); err != nil {
 		return err
 	}
 
 	// Ensure DNS resolver is running for wildcard *.obol.stack
 	if err := dns.EnsureRunning(); err != nil {
-		fmt.Printf("Warning: DNS resolver failed to start: %v\n", err)
+		u.Warnf("DNS resolver failed to start: %v", err)
 	} else if err := dns.ConfigureSystemResolver(); err != nil {
-		fmt.Printf("Warning: failed to configure system DNS resolver: %v\n", err)
+		u.Warnf("Failed to configure system DNS resolver: %v", err)
+	} else {
+		u.Success("DNS resolver configured")
 	}
 
-	fmt.Printf("\nStack ID: %s\n", stackID)
-	fmt.Printf("\nStack started successfully.\nVisit http://obol.stack in your browser to get started.\nTry setting up an agent with `obol agent init` next.\n")
+	u.Blank()
+	u.Bold("Stack started successfully.")
+	u.Print("Visit http://obol.stack in your browser to get started.")
+	u.Print("Try setting up an agent with `obol agent init` next.")
 	update.HintIfStale(cfg)
 	return nil
 }
 
 // Down stops the cluster and the DNS resolver container.
-func Down(cfg *config.Config) error {
+func Down(cfg *config.Config, u *ui.UI) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, stack may not be initialized")
@@ -230,15 +228,14 @@ func Down(cfg *config.Config) error {
 		return fmt.Errorf("failed to load backend: %w", err)
 	}
 
-	// Stop the DNS resolver container so it doesn't hold port 5553
-	// across restarts and block subsequent obol stack up runs.
+	// Stop the DNS resolver container
 	dns.Stop()
 
-	return backend.Down(cfg, stackID)
+	return backend.Down(cfg, u, stackID)
 }
 
 // Purge deletes the cluster config and optionally data
-func Purge(cfg *config.Config, force bool) error {
+func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	stackID := getStackID(cfg)
 
 	backend, err := LoadBackend(cfg)
@@ -248,13 +245,9 @@ func Purge(cfg *config.Config, force bool) error {
 
 	// Destroy cluster if we have a stack ID
 	if stackID != "" {
-		if force {
-			fmt.Printf("Force destroying cluster (id: %s)\n", stackID)
-		} else {
-			fmt.Printf("Destroying cluster (id: %s)\n", stackID)
-		}
-		if err := backend.Destroy(cfg, stackID); err != nil {
-			fmt.Printf("Failed to destroy cluster (may already be deleted): %v\n", err)
+		u.Infof("Destroying cluster (id: %s)", stackID)
+		if err := backend.Destroy(cfg, u, stackID); err != nil {
+			u.Warnf("Failed to destroy cluster (may already be deleted): %v", err)
 		}
 	}
 
@@ -266,23 +259,23 @@ func Purge(cfg *config.Config, force bool) error {
 	if err := os.RemoveAll(cfg.ConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
-	fmt.Println("Removed cluster config directory")
+	u.Success("Removed cluster config")
 
 	// Remove data directory only if force flag is set
 	if force {
-		fmt.Println("Removing data directory...")
-		rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
-		rmCmd.Stdout = os.Stdout
-		rmCmd.Stderr = os.Stderr
-		if err := rmCmd.Run(); err != nil {
+		err := u.RunWithSpinner("Removing data directory", func() error {
+			rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
+			return rmCmd.Run()
+		})
+		if err != nil {
 			return fmt.Errorf("failed to remove data directory: %w", err)
 		}
-		fmt.Println("Removed data directory")
-		fmt.Println("Cluster fully purged (binaries preserved)")
+		u.Blank()
+		u.Bold("Cluster fully purged (binaries preserved)")
 	} else {
-		fmt.Println("Cluster purged (config removed, data preserved)")
-		fmt.Printf("To delete persistent data: sudo rm -rf %s\n", cfg.DataDir)
-		fmt.Println("Or use 'obol stack purge --force' to remove everything")
+		u.Success("Cluster purged (config removed, data preserved)")
+		u.Printf("  To delete persistent data: sudo rm -rf %s", cfg.DataDir)
+		u.Print("  Or use 'obol stack purge --force' to remove everything")
 	}
 
 	return nil
@@ -305,20 +298,13 @@ func GetStackID(cfg *config.Config) string {
 
 // syncDefaults deploys the default infrastructure using helmfile
 // If deployment fails, the cluster is automatically stopped via Down()
-func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) error {
-	fmt.Println("Deploying default infrastructure with helmfile")
-
+func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir string) error {
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
-	// Compatibility migration: older defaults pinned HTTPRoutes to `obol.stack` via
-	// `spec.hostnames`. This breaks public access for:
-	// - quick tunnels (random *.trycloudflare.com host)
-	// - user-provided DNS hostnames (e.g. agent.example.com)
-	// Removing hostnames makes routes match all hostnames while preserving existing
-	// path-based routing.
+	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
-		fmt.Printf("Warning: failed to migrate defaults helmfile hostnames: %v\n", err)
+		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
 	}
 
 	helmfileCmd := exec.Command(
@@ -331,38 +317,35 @@ func syncDefaults(cfg *config.Config, kubeconfigPath string, dataDir string) err
 		"KUBECONFIG="+kubeconfigPath,
 		fmt.Sprintf("STACK_DATA_DIR=%s", dataDir),
 	)
-	helmfileCmd.Stdout = os.Stdout
-	helmfileCmd.Stderr = os.Stderr
 
-	if err := helmfileCmd.Run(); err != nil {
-		fmt.Println("Failed to apply defaults helmfile, stopping cluster")
-		if downErr := Down(cfg); downErr != nil {
-			fmt.Printf("Failed to stop cluster during cleanup: %v\n", downErr)
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Deploying default infrastructure",
+		Cmd:  helmfileCmd,
+	}); err != nil {
+		u.Warn("Helmfile sync failed, stopping cluster")
+		if downErr := Down(cfg, u); downErr != nil {
+			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
 		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
 	}
 
-	fmt.Println("Default infrastructure deployed")
-
 	// Deploy default OpenClaw instance (non-fatal on failure)
-	fmt.Println("Setting up default OpenClaw instance...")
-	if err := openclaw.SetupDefault(cfg); err != nil {
-		fmt.Printf("Warning: failed to set up default OpenClaw: %v\n", err)
-		fmt.Println("You can manually set up OpenClaw later with: obol openclaw up")
+	if err := u.RunWithSpinner("Setting up default OpenClaw instance", func() error {
+		return openclaw.SetupDefault(cfg, u)
+	}); err != nil {
+		u.Warnf("Failed to set up default OpenClaw: %v", err)
+		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
 	}
 
 	return nil
 }
 
 // checkPortsAvailable verifies that all required ports can be bound.
-// Returns an actionable error if any port is already in use.
 func checkPortsAvailable(ports []int) error {
 	var blocked []int
 	for _, port := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
-			// Permission denied (ports < 1024 on Linux require root) means the
-			// port is available but we can't bind as non-root — not a conflict.
 			if strings.Contains(err.Error(), "permission denied") {
 				continue
 			}
@@ -398,8 +381,6 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 		return err
 	}
 
-	// Only removes the legacy default single-hostname block; if users customized their
-	// helmfile with different hostnames, we leave it alone.
 	needle := "              hostnames:\n                - obol.stack\n"
 	s := string(data)
 	if !strings.Contains(s, needle) {

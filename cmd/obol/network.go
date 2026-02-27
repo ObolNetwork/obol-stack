@@ -24,7 +24,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				Name:  "list",
 				Usage: "List available networks",
 				Action: func(c *cli.Context) error {
-					return network.List(cfg)
+					return network.List(cfg, getUI(c))
 				},
 			},
 			{
@@ -41,11 +41,11 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				Usage:     "Deploy or update network configuration to cluster (no args = sync all)",
 				ArgsUsage: "[<network>/<id>]",
 				Action: func(c *cli.Context) error {
+					u := getUI(c)
 					if c.NArg() == 0 {
-						return network.SyncAll(cfg)
+						return network.SyncAll(cfg, u)
 					}
-					deploymentIdentifier := c.Args().First()
-					return network.Sync(cfg, deploymentIdentifier)
+					return network.Sync(cfg, u, c.Args().First())
 				},
 			},
 			{
@@ -56,8 +56,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if c.NArg() == 0 {
 						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
 					}
-					deploymentIdentifier := c.Args().First()
-					return network.Delete(cfg, deploymentIdentifier)
+					return network.Delete(cfg, getUI(c), c.Args().First())
 				},
 			},
 		},
@@ -162,7 +161,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 				// Get force flag
 				force := c.Bool("force")
 
-				return network.Install(cfg, netName, overrides, force)
+				return network.Install(cfg, getUI(c), netName, overrides, force)
 			},
 		})
 	}

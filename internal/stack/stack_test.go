@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/ui"
+
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
@@ -111,7 +113,7 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 
 	// Switch to k3s — k3d config should be cleaned up
 	// (Destroy will fail because no real cluster, but cleanup should still work)
-	destroyOldBackendIfSwitching(cfg, BackendK3s, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id")
 
 	if _, err := os.Stat(k3dPath); !os.IsNotExist(err) {
 		t.Error("k3d.yaml should be removed when switching to k3s")
@@ -131,7 +133,7 @@ func TestDestroyOldBackendIfSwitching_NoopSameBackend(t *testing.T) {
 	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
 
 	// Same backend — nothing should be cleaned up
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
 
 	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
 		t.Error("k3d.yaml should NOT be removed when re-initing same backend")
@@ -153,7 +155,7 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 	}
 
 	// Switch to k3d — k3s files should be cleaned up
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
 
 	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
 		if _, err := os.Stat(filepath.Join(tmpDir, f)); !os.IsNotExist(err) {
@@ -173,5 +175,5 @@ func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
 	}
 
 	// Should not panic or error
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
 }

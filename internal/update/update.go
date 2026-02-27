@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
 
@@ -83,18 +84,19 @@ func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*Upda
 // ApplyUpgrades runs helmfile sync on defaults and all installed deployments.
 // If pinned is true, only deploys the versions embedded in the binary without bumping to latest.
 // If major is true, allows bumping across major version boundaries.
-func ApplyUpgrades(cfg *config.Config, defaultsOnly bool, pinned bool, major bool) error {
+func ApplyUpgrades(cfg *config.Config, u *ui.UI, defaultsOnly bool, pinned bool, major bool) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// 1. Helm repo update
-	fmt.Println("Updating helm repositories...")
+	u.Info("Updating helm repositories...")
 	if err := UpdateHelmRepos(cfg, false); err != nil {
 		return fmt.Errorf("failed to update helm repos: %w", err)
 	}
-	fmt.Println("  ✓ Helm repositories updated")
+	u.Success("Helm repositories updated")
 
 	// 2. Re-copy embedded defaults to pick up new chart versions from binary
-	fmt.Println("\nRefreshing default infrastructure templates...")
+	u.Blank()
+	u.Info("Refreshing default infrastructure templates...")
 	ollamaHost := "host.k3d.internal"
 	if runtime.GOOS == "darwin" {
 		ollamaHost = "host.docker.internal"
@@ -105,43 +107,46 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool, pinned bool, major boo
 	}); err != nil {
 		return fmt.Errorf("failed to refresh defaults: %w", err)
 	}
-	fmt.Println("  ✓ Defaults updated from embedded assets")
+	u.Success("Defaults updated from embedded assets")
 
 	// 3. Bump chart version pins to latest (unless --pinned)
 	if !pinned {
+		u.Blank()
 		if major {
-			fmt.Println("\nBumping chart versions to latest (including major versions)...")
+			u.Info("Bumping chart versions to latest (including major versions)...")
 		} else {
-			fmt.Println("\nBumping chart versions to latest (minor/patch only)...")
+			u.Info("Bumping chart versions to latest (minor/patch only)...")
 		}
 		bumps, err := UpgradeHelmfileVersions(cfg, major)
 		if err != nil {
-			fmt.Printf("  Warning: failed to bump versions: %v\n", err)
+			u.Warnf("Failed to bump versions: %v", err)
 		} else if len(bumps) > 0 {
 			for _, b := range bumps {
-				fmt.Printf("  %s: %s → %s\n", b.Chart, b.From, b.To)
+				u.Printf("  %s: %s → %s", b.Chart, b.From, b.To)
 			}
 		} else {
-			fmt.Println("  All chart versions already at latest.")
+			u.Dim("  All chart versions already at latest.")
 		}
 
 		// Check if any major updates were skipped
 		if !major {
 			skipped := checkSkippedMajorUpdates(cfg)
 			if len(skipped) > 0 {
-				fmt.Println("\n  Major version updates available (skipped):")
+				u.Blank()
+				u.Warn("Major version updates available (skipped):")
 				for _, s := range skipped {
-					fmt.Printf("    %s: %s → %s\n", s.Chart, s.From, s.To)
+					u.Printf("    %s: %s → %s", s.Chart, s.From, s.To)
 				}
-				fmt.Println("  Use 'obol upgrade --major' to apply major version updates.")
+				u.Dim("  Use 'obol upgrade --major' to apply major version updates.")
 			}
 		}
 	} else {
-		fmt.Println("\nUsing pinned versions from embedded binary (--pinned).")
+		u.Blank()
+		u.Dim("Using pinned versions from embedded binary (--pinned).")
 	}
 
 	// 4. Helmfile sync on defaults
-	fmt.Println("\nUpgrading default infrastructure...")
+	u.Blank()
 	helmfilePath := filepath.Join(defaultsDir, "helmfile.yaml")
 	helmfileCmd := exec.Command(
 		filepath.Join(cfg.BinDir, "helmfile"),
@@ -150,38 +155,39 @@ func ApplyUpgrades(cfg *config.Config, defaultsOnly bool, pinned bool, major boo
 		"sync",
 	)
 	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	helmfileCmd.Stdout = os.Stdout
-	helmfileCmd.Stderr = os.Stderr
 
-	if err := helmfileCmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{Name: "Upgrading default infrastructure", Cmd: helmfileCmd}); err != nil {
 		return fmt.Errorf("failed to upgrade default infrastructure: %w", err)
 	}
-	fmt.Println("  ✓ Default infrastructure upgraded")
 
 	if !defaultsOnly {
 		// 5. Re-sync installed networks
-		fmt.Println("\nUpgrading installed networks...")
-		if err := upgradeNetworks(cfg); err != nil {
-			fmt.Printf("  Warning: %v\n", err)
+		u.Blank()
+		u.Info("Upgrading installed networks...")
+		if err := upgradeNetworks(cfg, u); err != nil {
+			u.Warnf("%v", err)
 		}
 
 		// 6. Re-sync installed apps
-		fmt.Println("\nUpgrading installed apps...")
-		if err := upgradeApps(cfg); err != nil {
-			fmt.Printf("  Warning: %v\n", err)
+		u.Blank()
+		u.Info("Upgrading installed apps...")
+		if err := upgradeApps(cfg, u); err != nil {
+			u.Warnf("%v", err)
 		}
 	}
 
-	fmt.Println("\n✓ All helm chart upgrades applied.")
+	u.Blank()
+	u.Success("All helm chart upgrades applied.")
 
 	// 7. Check CLI version and hint if newer available
 	release, err := CheckLatestRelease()
 	if err == nil && version.Short() != "dev" {
 		if CompareVersions(version.Short(), release.Version) < 0 {
-			fmt.Printf("\nNote: A newer version of the obol CLI is available (v%s → %s).\n", version.Short(), release.TagName)
-			fmt.Println("To update the CLI binary and dependencies, run:")
-			fmt.Println()
-			fmt.Println("  bash <(curl -s https://stack.obol.org)")
+			u.Blank()
+			u.Infof("A newer version of the obol CLI is available (v%s → %s).", version.Short(), release.TagName)
+			u.Print("To update the CLI binary and dependencies, run:")
+			u.Blank()
+			u.Print("  bash <(curl -s https://stack.obol.org)")
 		}
 	}
 
@@ -209,10 +215,10 @@ func checkSkippedMajorUpdates(cfg *config.Config) []VersionBump {
 }
 
 // upgradeNetworks iterates over installed network deployments and syncs each.
-func upgradeNetworks(cfg *config.Config) error {
+func upgradeNetworks(cfg *config.Config, u *ui.UI) error {
 	networksDir := filepath.Join(cfg.ConfigDir, "networks")
 	if _, err := os.Stat(networksDir); os.IsNotExist(err) {
-		fmt.Println("  No networks installed.")
+		u.Dim("  No networks installed.")
 		return nil
 	}
 
@@ -235,27 +241,27 @@ func upgradeNetworks(cfg *config.Config) error {
 				continue
 			}
 			identifier := fmt.Sprintf("%s/%s", netDir.Name(), dep.Name())
-			fmt.Printf("  Syncing %s...\n", identifier)
-			if err := network.Sync(cfg, identifier); err != nil {
-				fmt.Printf("  Warning: failed to sync %s: %v\n", identifier, err)
+			u.Printf("  Syncing %s...", identifier)
+			if err := network.Sync(cfg, u, identifier); err != nil {
+				u.Warnf("Failed to sync %s: %v", identifier, err)
 			} else {
-				fmt.Printf("  ✓ %s upgraded\n", identifier)
+				u.Successf("%s upgraded", identifier)
 			}
 			found = true
 		}
 	}
 
 	if !found {
-		fmt.Println("  No networks installed.")
+		u.Dim("  No networks installed.")
 	}
 	return nil
 }
 
 // upgradeApps iterates over installed applications and syncs each.
-func upgradeApps(cfg *config.Config) error {
+func upgradeApps(cfg *config.Config, u *ui.UI) error {
 	appsDir := filepath.Join(cfg.ConfigDir, "applications")
 	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
-		fmt.Println("  No apps installed.")
+		u.Dim("  No apps installed.")
 		return nil
 	}
 
@@ -278,24 +284,24 @@ func upgradeApps(cfg *config.Config) error {
 				continue
 			}
 			identifier := fmt.Sprintf("%s/%s", appDir.Name(), dep.Name())
-			fmt.Printf("  Syncing %s...\n", identifier)
-			if err := app.Sync(cfg, identifier); err != nil {
-				fmt.Printf("  Warning: failed to sync %s: %v\n", identifier, err)
+			u.Printf("  Syncing %s...", identifier)
+			if err := app.Sync(cfg, u, identifier); err != nil {
+				u.Warnf("Failed to sync %s: %v", identifier, err)
 			} else {
-				fmt.Printf("  ✓ %s upgraded\n", identifier)
+				u.Successf("%s upgraded", identifier)
 			}
 			found = true
 		}
 	}
 
 	if !found {
-		fmt.Println("  No apps installed.")
+		u.Dim("  No apps installed.")
 	}
 	return nil
 }
 
 // PrintUpdateTable prints a formatted table of chart statuses.
-func PrintUpdateTable(statuses []ChartStatus) {
+func PrintUpdateTable(u *ui.UI, statuses []ChartStatus) {
 	if len(statuses) == 0 {
 		return
 	}
@@ -315,21 +321,21 @@ func PrintUpdateTable(statuses []ChartStatus) {
 	}
 
 	// Print header
-	fmt.Printf("  %-*s  %-*s  %-*s  %s\n", chartW, "Chart", pinnedW, "Pinned", latestW, "Latest", "Status")
+	u.Printf("  %-*s  %-*s  %-*s  %s", chartW, "Chart", pinnedW, "Pinned", latestW, "Latest", "Status")
 
 	// Print rows
 	for _, s := range statuses {
-		fmt.Printf("  %-*s  %-*s  %-*s  %s\n", chartW, s.Chart, pinnedW, s.Pinned, latestW, s.Latest, s.Status)
+		u.Printf("  %-*s  %-*s  %-*s  %s", chartW, s.Chart, pinnedW, s.Pinned, latestW, s.Latest, s.Status)
 	}
 }
 
 // PrintCLIStatus prints the CLI version status line.
-func PrintCLIStatus(current string, release *LatestRelease, isDev bool) {
+func PrintCLIStatus(u *ui.UI, current string, release *LatestRelease, isDev bool) {
 	if release == nil {
 		return
 	}
 	if isDev {
-		fmt.Printf("  Obol CLI  %-10s  %-10s  Development build (skipped)\n", "dev", release.TagName)
+		u.Printf("  Obol CLI  %-10s  %-10s  Development build (skipped)", "dev", release.TagName)
 		return
 	}
 	currentDisplay := "v" + strings.TrimPrefix(current, "v")
@@ -337,17 +343,19 @@ func PrintCLIStatus(current string, release *LatestRelease, isDev bool) {
 	if CompareVersions(current, release.Version) < 0 {
 		status = "Update available"
 	}
-	fmt.Printf("  Obol CLI  %-10s  %-10s  %s\n", currentDisplay, release.TagName, status)
+	u.Printf("  Obol CLI  %-10s  %-10s  %s", currentDisplay, release.TagName, status)
 }
 
 // PrintUpdateSummary prints the actionable summary at the end of `obol update`.
-func PrintUpdateSummary(result *UpdateResult) {
+func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
 	if !result.ChartUpdatesAvail && !result.ChartMajorUpdatesAvail && !result.CLIUpdateAvail {
-		fmt.Println("\nEverything is up to date.")
+		u.Blank()
+		u.Success("Everything is up to date.")
 		return
 	}
 
-	fmt.Println("\nSummary:")
+	u.Blank()
+	u.Info("Summary:")
 	if result.ChartUpdatesAvail {
 		count := 0
 		for _, s := range result.ChartStatuses {
@@ -355,7 +363,7 @@ func PrintUpdateSummary(result *UpdateResult) {
 				count++
 			}
 		}
-		fmt.Printf("  %d chart update(s) available. Run 'obol upgrade' to apply.\n", count)
+		u.Printf("  %d chart update(s) available. Run 'obol upgrade' to apply.", count)
 	}
 	if result.ChartMajorUpdatesAvail {
 		count := 0
@@ -364,10 +372,10 @@ func PrintUpdateSummary(result *UpdateResult) {
 				count++
 			}
 		}
-		fmt.Printf("  %d major chart update(s) available. Run 'obol upgrade --major' to apply.\n", count)
+		u.Printf("  %d major chart update(s) available. Run 'obol upgrade --major' to apply.", count)
 	}
 	if result.CLIUpdateAvail && result.CLIRelease != nil {
-		fmt.Printf("  CLI update available (v%s → %s). Run:\n", version.Short(), result.CLIRelease.TagName)
-		fmt.Println("    bash <(curl -s https://stack.obol.org)")
+		u.Printf("  CLI update available (v%s → %s). Run:", version.Short(), result.CLIRelease.TagName)
+		u.Print("    bash <(curl -s https://stack.obol.org)")
 	}
 }

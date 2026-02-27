@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v2"
 )
@@ -101,10 +101,35 @@ GLOBAL OPTIONS:
    {{range $index, $option := .VisibleFlags}}{{if $index}}
    {{end}}{{$option}}{{end}}{{end}}
 `
-	app := &cli.App{
+	cliApp := &cli.App{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
 		Version: version.Full(),
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "verbose",
+				Usage:   "Show detailed subprocess output",
+				EnvVars: []string{"OBOL_VERBOSE"},
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Aliases: []string{"q"},
+				Usage:   "Suppress all output except errors and warnings",
+				EnvVars: []string{"OBOL_QUIET"},
+			},
+		},
+		Before: func(c *cli.Context) error {
+			u := ui.NewWithOptions(c.Bool("verbose"), c.Bool("quiet"))
+			c.App.Metadata = map[string]interface{}{"ui": u}
+			return nil
+		},
+		CommandNotFound: func(c *cli.Context, command string) {
+			u, _ := c.App.Metadata["ui"].(*ui.UI)
+			if u == nil {
+				u = ui.New(false)
+			}
+			u.SuggestCommand(c.App, command)
+		},
 		Commands: []*cli.Command{
 			// ============================================================
 			// Hidden Bootstrap Command (for installer)
@@ -133,21 +158,21 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return stack.Init(cfg, c.Bool("force"), c.String("backend"))
+							return stack.Init(cfg, getUI(c), c.Bool("force"), c.String("backend"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Up(cfg)
+							return stack.Up(cfg, getUI(c))
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
 						Action: func(c *cli.Context) error {
-							return stack.Down(cfg)
+							return stack.Down(cfg, getUI(c))
 						},
 					},
 					{
@@ -161,7 +186,7 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return stack.Purge(cfg, c.Bool("force"))
+							return stack.Purge(cfg, getUI(c), c.Bool("force"))
 						},
 					},
 				},
@@ -177,7 +202,7 @@ GLOBAL OPTIONS:
 						Name:  "init",
 						Usage: "Initialize the Obol Agent",
 						Action: func(c *cli.Context) error {
-							return agent.Init(cfg)
+							return agent.Init(cfg, getUI(c))
 						},
 					},
 				},
@@ -193,7 +218,7 @@ GLOBAL OPTIONS:
 						Name:  "status",
 						Usage: "Show tunnel status and public URL",
 						Action: func(c *cli.Context) error {
-							return tunnel.Status(cfg)
+							return tunnel.Status(cfg, getUI(c))
 						},
 					},
 					{
@@ -208,7 +233,7 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return tunnel.Login(cfg, tunnel.LoginOptions{
+							return tunnel.Login(cfg, getUI(c), tunnel.LoginOptions{
 								Hostname: c.String("hostname"),
 							})
 						},
@@ -243,7 +268,7 @@ GLOBAL OPTIONS:
 							},
 						},
 						Action: func(c *cli.Context) error {
-							return tunnel.Provision(cfg, tunnel.ProvisionOptions{
+							return tunnel.Provision(cfg, getUI(c), tunnel.ProvisionOptions{
 								Hostname:  c.String("hostname"),
 								AccountID: c.String("account-id"),
 								ZoneID:    c.String("zone-id"),
@@ -255,7 +280,7 @@ GLOBAL OPTIONS:
 						Name:  "restart",
 						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
 						Action: func(c *cli.Context) error {
-							return tunnel.Restart(cfg)
+							return tunnel.Restart(cfg, getUI(c))
 						},
 					},
 					{
@@ -440,6 +465,7 @@ GLOBAL OPTIONS:
 				Name:  "version",
 				Usage: "Show detailed version information",
 				Action: func(c *cli.Context) error {
+					// Version output should always be unformatted for parseability.
 					fmt.Print(version.BuildInfo())
 					return nil
 				},
@@ -509,7 +535,7 @@ Find charts at https://artifacthub.io`,
 								ID:      c.String("id"),
 								Force:   c.Bool("force"),
 							}
-							return app.Install(cfg, chartRef, opts)
+							return app.Install(cfg, getUI(c), chartRef, opts)
 						},
 					},
 					{
@@ -520,7 +546,7 @@ Find charts at https://artifacthub.io`,
 							if c.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Sync(cfg, c.Args().First())
+							return app.Sync(cfg, getUI(c), c.Args().First())
 						},
 					},
 					{
@@ -537,7 +563,7 @@ Find charts at https://artifacthub.io`,
 							opts := app.ListOptions{
 								Verbose: c.Bool("verbose"),
 							}
-							return app.List(cfg, opts)
+							return app.List(cfg, getUI(c), opts)
 						},
 					},
 					{
@@ -555,7 +581,7 @@ Find charts at https://artifacthub.io`,
 							if c.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Delete(cfg, c.Args().First(), c.Bool("force"))
+							return app.Delete(cfg, getUI(c), c.Args().First(), c.Bool("force"))
 						},
 					},
 				},
@@ -563,7 +589,22 @@ Find charts at https://artifacthub.io`,
 		},
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
+	if err := cliApp.Run(os.Args); err != nil {
+		// Use the UI instance for colored error output if available.
+		u, _ := cliApp.Metadata["ui"].(*ui.UI)
+		if u == nil {
+			u = ui.New(false)
+		}
+		u.Error(err.Error())
+		os.Exit(1)
 	}
+}
+
+// getUI extracts the *ui.UI from the CLI context metadata.
+func getUI(c *cli.Context) *ui.UI {
+	u, _ := c.App.Metadata["ui"].(*ui.UI)
+	if u == nil {
+		return ui.New(false)
+	}
+	return u
 }

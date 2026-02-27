@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 // ProvisionOptions configures `obol tunnel provision`.
@@ -25,7 +26,7 @@ type ProvisionOptions struct {
 // - POST /accounts/$ACCOUNT_ID/cfd_tunnel
 // - PUT /accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations
 // - POST /zones/$ZONE_ID/dns_records (proxied CNAME to <tunnel-id>.cfargotunnel.com)
-func Provision(cfg *config.Config, opts ProvisionOptions) error {
+func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
 		return fmt.Errorf("--hostname is required (e.g. stack.example.com)")
@@ -60,9 +61,9 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		tunnelName = st.TunnelName
 	}
 
-	fmt.Println("Provisioning Cloudflare Tunnel (API)...")
-	fmt.Printf("Hostname: %s\n", hostname)
-	fmt.Printf("Tunnel:   %s\n", tunnelName)
+	u.Info("Provisioning Cloudflare Tunnel (API)...")
+	u.Detail("Hostname", hostname)
+	u.Detail("Tunnel", tunnelName)
 
 	tunnelID := ""
 	tunnelToken := ""
@@ -72,7 +73,7 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		tok, err := client.GetTunnelToken(opts.AccountID, tunnelID)
 		if err != nil {
 			// If the tunnel no longer exists, create a new one.
-			fmt.Printf("Existing tunnel token fetch failed (%v); creating a new tunnel...\n", err)
+			u.Warnf("Existing tunnel token fetch failed (%v); creating a new tunnel...", err)
 			tunnelID = ""
 		} else {
 			tunnelToken = tok
@@ -96,12 +97,12 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		return err
 	}
 
-	if err := applyTunnelTokenSecret(cfg, kubeconfigPath, tunnelToken); err != nil {
+	if err := applyTunnelTokenSecret(cfg, u, kubeconfigPath, tunnelToken); err != nil {
 		return err
 	}
 
 	// Ensure cloudflared switches to remotely-managed mode immediately (chart defaults to mode:auto).
-	if err := helmUpgradeCloudflared(cfg, kubeconfigPath); err != nil {
+	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
 
@@ -119,9 +120,10 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		return fmt.Errorf("tunnel provisioned, but failed to save local state: %w", err)
 	}
 
-	fmt.Println("\n✓ Tunnel provisioned")
-	fmt.Printf("Persistent URL: https://%s\n", hostname)
-	fmt.Println("Tip: run 'obol tunnel status' to verify the connector is active.")
+	u.Blank()
+	u.Success("Tunnel provisioned")
+	u.Printf("Persistent URL: https://%s", hostname)
+	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
 	return nil
 }
 
@@ -145,7 +147,7 @@ func normalizeHostname(s string) string {
 	return strings.ToLower(s)
 }
 
-func applyTunnelTokenSecret(cfg *config.Config, kubeconfigPath, token string) error {
+func applyTunnelTokenSecret(cfg *config.Config, u *ui.UI, kubeconfigPath, token string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
 	createCmd := exec.Command(kubectlPath,
@@ -166,15 +168,16 @@ func applyTunnelTokenSecret(cfg *config.Config, kubeconfigPath, token string) er
 		"apply", "-f", "-",
 	)
 	applyCmd.Stdin = bytes.NewReader(out)
-	applyCmd.Stdout = os.Stdout
-	applyCmd.Stderr = os.Stderr
-	if err := applyCmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Applying tunnel token secret",
+		Cmd:  applyCmd,
+	}); err != nil {
 		return fmt.Errorf("failed to apply tunnel token secret: %w", err)
 	}
 	return nil
 }
 
-func helmUpgradeCloudflared(cfg *config.Config, kubeconfigPath string) error {
+func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string) error {
 	helmPath := filepath.Join(cfg.BinDir, "helm")
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 
@@ -197,9 +200,10 @@ func helmUpgradeCloudflared(cfg *config.Config, kubeconfigPath string) error {
 		"--timeout", "2m",
 	)
 	cmd.Dir = defaultsDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Upgrading cloudflared Helm release",
+		Cmd:  cmd,
+	}); err != nil {
 		return fmt.Errorf("failed to upgrade cloudflared release: %w", err)
 	}
 	return nil
