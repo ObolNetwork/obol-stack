@@ -233,7 +233,7 @@ For **updates** to an existing app: skip Tx 1, only do Tx 2.
 
 ```bash
 # 1. Onchain content hash matches
-ERPC="http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet"  # or https://eth.llamarpc.com
+ERPC="http://erpc.erpc.svc.cluster.local/rpc/mainnet"  # or https://eth.llamarpc.com
 RESOLVER=$(cast call 0x00000000000C2e074eC69A0dFb2997BA6C7d2e1e \
   "resolver(bytes32)(address)" $(cast namehash myapp.yourname.eth) \
   --rpc-url $ERPC)

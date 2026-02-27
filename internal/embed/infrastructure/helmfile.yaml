@@ -132,6 +132,18 @@ releases:
       - traefik/traefik
     values:
       - ./values/erpc.yaml.gotmpl
+    # Expose the Service on port 80 (default HTTP) so in-cluster callers
+    # don't need to specify :4000. The container still listens on 4000;
+    # the Service targetPort uses the named port "http" which resolves to it.
+    strategicMergePatches:
+      - apiVersion: v1
+        kind: Service
+        metadata:
+          name: erpc
+        spec:
+          ports:
+            - name: http
+              port: 80
 
   # eRPC HTTPRoute
   - name: erpc-httproute
@@ -160,7 +172,7 @@ releases:
                         value: /rpc
                   backendRefs:
                     - name: erpc
-                      port: 4000
+                      port: 80
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata
