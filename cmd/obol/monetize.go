@@ -120,6 +120,10 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 				Name:  "register-description",
 				Usage: "Agent description for ERC-8004 registration",
 			},
+			&cli.StringFlag{
+				Name:  "register-image",
+				Usage: "Agent image URL for ERC-8004 registration (REQUIRED by spec)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
@@ -185,6 +189,9 @@ func monetizeOfferCommand(cfg *config.Config) *cli.Command {
 				}
 				if d := cmd.String("register-description"); d != "" {
 					reg["description"] = d
+				}
+				if img := cmd.String("register-image"); img != "" {
+					reg["image"] = img
 				}
 				spec["registration"] = reg
 			}
@@ -274,31 +281,11 @@ func monetizeStopOfferCommand(cfg *config.Config) *cli.Command {
 
 			// Remove pricing route from x402-verifier ConfigMap.
 			// The CR and registration remain intact for restart.
-			urlPath := fmt.Sprintf("/services/%s", name)
-
-			// Try to read the offer to get the actual path.
-			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
-			if err == nil {
-				// Remove the pricing route.
-				updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
-				for _, r := range pricingCfg.Routes {
-					if !strings.Contains(r.Pattern, urlPath) {
-						updatedRoutes = append(updatedRoutes, r)
-					}
-				}
-				if len(updatedRoutes) < len(pricingCfg.Routes) {
-					pricingCfg.Routes = updatedRoutes
-					if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
-						fmt.Printf("Warning: failed to remove pricing route: %v\n", err)
-					} else {
-						fmt.Printf("Removed pricing route for %s\n", urlPath)
-					}
-				}
-			}
+			removePricingRoute(cfg, name)
 
 			// Patch the Ready condition to False via kubectl.
 			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
-			err = kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
+			err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
 				"--type=merge", "--subresource=status", "-p", patchJSON)
 			if err != nil {
 				return fmt.Errorf("failed to patch status: %w", err)
@@ -348,13 +335,42 @@ func monetizeDeleteOfferCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
+			// Remove x402 pricing route (prevents stale entries after CR deletion).
+			removePricingRoute(cfg, name)
+
 			// Deactivate ERC-8004 registration if agentId is set in CRD status.
-			// Read the offer to check for registration.
 			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
 				"-o", "jsonpath={.status.agentId}")
 			if err == nil && strings.TrimSpace(soOut) != "" {
-				fmt.Printf("Note: Agent %s is registered on-chain. The NFT persists after deletion.\n", strings.TrimSpace(soOut))
-				fmt.Printf("  To deactivate, update the agentURI to set active=false.\n")
+				agentID := strings.TrimSpace(soOut)
+				fmt.Printf("Deactivating ERC-8004 registration (agent %s)...\n", agentID)
+
+				// Set active=false in the agent-managed registration ConfigMap.
+				cmName := fmt.Sprintf("so-%s-registration", name)
+				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
+					"-o", `jsonpath={.data.agent-registration\.json}`)
+				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
+					fmt.Printf("  No registration document found. Agent %s NFT persists on-chain.\n", agentID)
+				} else {
+					// Parse, set active=false, write back.
+					var regDoc map[string]interface{}
+					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
+						fmt.Printf("  Warning: corrupt registration JSON, skipping deactivation: %v\n", jsonErr)
+					} else {
+						regDoc["active"] = false
+						patchJSON, _ := json.Marshal(map[string]interface{}{
+							"data": map[string]string{
+								"agent-registration.json": mustMarshal(regDoc),
+							},
+						})
+						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
+							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
+							fmt.Printf("  Warning: could not deactivate registration: %v\n", patchErr)
+						} else {
+							fmt.Printf("  Registration deactivated (active=false). On-chain NFT persists.\n")
+						}
+					}
+				}
 			}
 
 			return kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns)
@@ -501,13 +517,18 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 				Usage: "Payment chain (base, base-sepolia)",
 				Value: "base-sepolia",
 			},
+			&cli.StringFlag{
+				Name:    "facilitator-url",
+				Usage:   "x402 facilitator URL for payment verification (default: https://facilitator.x402.rs)",
+				Sources: cli.EnvVars("X402_FACILITATOR_URL"),
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			wallet := cmd.String("wallet")
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
 				return err
 			}
-			return x402verifier.Setup(cfg, wallet, cmd.String("chain"))
+			return x402verifier.Setup(cfg, wallet, cmd.String("chain"), cmd.String("facilitator-url"))
 		},
 	}
 }
@@ -562,6 +583,34 @@ func valueOrNone(s string) string {
 		return "(not set)"
 	}
 	return s
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// pricing route helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// removePricingRoute removes the x402-verifier pricing route matching the
+// given offer name. Used by both stop (keeps CR) and delete (removes CR).
+func removePricingRoute(cfg *config.Config, name string) {
+	urlPath := fmt.Sprintf("/services/%s", name)
+	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
+	if err != nil {
+		return // cluster pricing not available — nothing to clean up
+	}
+	updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
+	for _, r := range pricingCfg.Routes {
+		if !strings.Contains(r.Pattern, urlPath) {
+			updatedRoutes = append(updatedRoutes, r)
+		}
+	}
+	if len(updatedRoutes) < len(pricingCfg.Routes) {
+		pricingCfg.Routes = updatedRoutes
+		if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
+			fmt.Printf("Warning: failed to remove pricing route: %v\n", err)
+		} else {
+			fmt.Printf("Removed pricing route for %s\n", urlPath)
+		}
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -627,4 +676,13 @@ func kubectlRun(cfg *config.Config, args ...string) error {
 	proc.Stderr = os.Stderr
 
 	return proc.Run()
+}
+
+// mustMarshal JSON-encodes v, returning "{}" on error.
+func mustMarshal(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

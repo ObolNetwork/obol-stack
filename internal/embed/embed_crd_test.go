@@ -280,6 +280,42 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("ClusterRole missing 'configmaps' resource in core API group")
 	}
 
+	// apps/deployments should have create (required for agent-managed busybox httpd)
+	hasDeployCreate := false
+	for _, r := range rules {
+		rm := r.(map[string]interface{})
+		groups, ok := rm["apiGroups"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, g := range groups {
+			if g.(string) != "apps" {
+				continue
+			}
+			resources, ok := rm["resources"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, res := range resources {
+				if res.(string) != "deployments" {
+					continue
+				}
+				verbs, ok := rm["verbs"].([]interface{})
+				if !ok {
+					continue
+				}
+				for _, v := range verbs {
+					if v.(string) == "create" {
+						hasDeployCreate = true
+					}
+				}
+			}
+		}
+	}
+	if !hasDeployCreate {
+		t.Error("ClusterRole missing 'create' verb on apps/deployments (required for registration httpd)")
+	}
+
 	// ClusterRoleBinding should reference openclaw-monetize
 	roleRef := nested(crb, "roleRef", "name")
 	if roleRef != "openclaw-monetize" {

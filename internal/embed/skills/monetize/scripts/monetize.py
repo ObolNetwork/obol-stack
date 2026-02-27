@@ -747,7 +747,241 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
     set_condition(ns, name, "Registered", "True", "Registered",
                   f"Agent {agent_id} on base-sepolia (tx: {tx_hash[:18]}...)", token, ssl_ctx)
     print(f"  Registered as agent {agent_id} (tx: {tx_hash})")
+
+    # Publish the ERC-8004 registration JSON (agent-managed resources).
+    _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx)
     return True
+
+
+def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx):
+    """Publish the ERC-8004 AgentRegistration document.
+
+    Creates four agent-managed resources (all with ownerReferences for GC):
+      1. ConfigMap  so-<name>-registration  — the JSON document
+      2. Deployment so-<name>-registration  — busybox httpd serving the ConfigMap
+      3. Service    so-<name>-registration  — ClusterIP targeting the deployment
+      4. HTTPRoute  so-<name>-wellknown     — routes /.well-known/agent-registration.json
+
+    On ServiceOffer deletion, K8s garbage collection tears everything down.
+
+    NOTE: ERC-8004 allows multiple services in a single registration.json.
+    Currently each ServiceOffer creates its own registration document. When
+    multiple offers share one agent identity, this should evolve to aggregate
+    all offers' services into a single /.well-known/agent-registration.json.
+    """
+    registration = spec.get("registration", {})
+    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+    url_path = spec.get("path", f"/services/{name}")
+
+    # ── 1. Build the registration JSON ─────────────────────────────────────
+    # ERC-8004 REQUIRED fields: type, name, description, image, services,
+    # x402Support, active, registrations. All are always emitted.
+    doc = {
+        "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+        "name": registration.get("name", name),
+        "description": registration.get("description", f"x402 payment-gated service: {name}"),
+        "image": registration.get("image", f"{base_url}/agent-icon.png"),
+        "x402Support": True,
+        "active": True,
+        "services": [
+            {
+                "name": "web",
+                "endpoint": f"{base_url}{url_path}",
+            }
+        ],
+        "registrations": [
+            {
+                "agentId": int(agent_id),
+                "agentRegistry": f"eip155:{BASE_SEPOLIA_CHAIN_ID}:{IDENTITY_REGISTRY}",
+            }
+        ],
+    }
+    if registration.get("supportedTrust"):
+        doc["supportedTrust"] = registration["supportedTrust"]
+    if registration.get("services"):
+        for svc in registration["services"]:
+            if svc.get("endpoint"):
+                doc["services"].append(svc)
+
+    doc_json = json.dumps(doc, indent=2)
+
+    # ── Get ServiceOffer UID for ownerReferences ───────────────────────────
+    so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
+    so = api_get(so_path, token, ssl_ctx)
+    uid = so.get("metadata", {}).get("uid", "")
+    owner_ref = {
+        "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
+        "kind": "ServiceOffer",
+        "name": name,
+        "uid": uid,
+        "blockOwnerDeletion": True,
+        "controller": True,
+    }
+
+    cm_name = f"so-{name}-registration"
+    deploy_name = f"so-{name}-registration"
+    svc_name = f"so-{name}-registration"
+    route_name = f"so-{name}-wellknown"
+    labels = {"app": deploy_name, "obol.org/serviceoffer": name}
+
+    # ── 2. ConfigMap ───────────────────────────────────────────────────────
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": cm_name,
+            "namespace": ns,
+            "ownerReferences": [owner_ref],
+        },
+        "data": {
+            "agent-registration.json": doc_json,
+        },
+    }
+    _apply_resource(f"/api/v1/namespaces/{ns}/configmaps", cm_name, configmap, token, ssl_ctx)
+
+    # ── 3. Deployment (busybox httpd) ──────────────────────────────────────
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": deploy_name,
+            "namespace": ns,
+            "ownerReferences": [owner_ref],
+            "labels": labels,
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "httpd",
+                            "image": "busybox:1.36",
+                            "command": ["httpd", "-f", "-p", "8080", "-h", "/www"],
+                            "ports": [{"containerPort": 8080}],
+                            "volumeMounts": [
+                                {
+                                    "name": "registration",
+                                    "mountPath": "/www/.well-known",
+                                    "readOnly": True,
+                                }
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "5m", "memory": "8Mi"},
+                                "limits": {"cpu": "50m", "memory": "32Mi"},
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "registration",
+                            "configMap": {
+                                "name": cm_name,
+                                "items": [
+                                    {
+                                        "key": "agent-registration.json",
+                                        "path": "agent-registration.json",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+    _apply_resource(f"/apis/apps/v1/namespaces/{ns}/deployments", deploy_name, deployment, token, ssl_ctx)
+
+    # ── 4. Service ─────────────────────────────────────────────────────────
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": svc_name,
+            "namespace": ns,
+            "ownerReferences": [owner_ref],
+            "labels": labels,
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": labels,
+            "ports": [
+                {"port": 8080, "targetPort": 8080, "protocol": "TCP"},
+            ],
+        },
+    }
+    _apply_resource(f"/api/v1/namespaces/{ns}/services", svc_name, service, token, ssl_ctx)
+
+    # ── 5. HTTPRoute (no ForwardAuth — registration is public) ─────────────
+    httproute = {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "HTTPRoute",
+        "metadata": {
+            "name": route_name,
+            "namespace": ns,
+            "ownerReferences": [owner_ref],
+        },
+        "spec": {
+            "parentRefs": [
+                {
+                    "name": "traefik-gateway",
+                    "namespace": "traefik",
+                    "sectionName": "web",
+                }
+            ],
+            "rules": [
+                {
+                    "matches": [
+                        {
+                            "path": {
+                                "type": "Exact",
+                                "value": "/.well-known/agent-registration.json",
+                            }
+                        }
+                    ],
+                    "backendRefs": [
+                        {
+                            "name": svc_name,
+                            "namespace": ns,
+                            "port": 8080,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    _apply_resource(
+        f"/apis/gateway.networking.k8s.io/v1/namespaces/{ns}/httproutes",
+        route_name, httproute, token, ssl_ctx,
+    )
+
+    print(f"  Published registration at /.well-known/agent-registration.json")
+
+
+def _apply_resource(collection_path, name, resource, token, ssl_ctx):
+    """Create-or-update a Kubernetes resource (idempotent).
+
+    Uses a direct HTTP GET to distinguish 404 (create) from other errors
+    (permission denied, server error) rather than catching SystemExit from
+    api_get which treats all failures as 404.
+    """
+    api_server = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    api_port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+    url = f"https://{api_server}:{api_port}{collection_path}/{name}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
+        # Exists — patch it.
+        api_patch(f"{collection_path}/{name}", resource, token, ssl_ctx, patch_type="merge")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            api_post(collection_path, resource, token, ssl_ctx)
+        else:
+            body = e.read().decode() if e.fp else ""
+            print(f"  Failed to check {name}: HTTP {e.code}: {body[:200]}", file=sys.stderr)
+            raise RuntimeError(f"K8s API error {e.code} for {name}") from e
 
 
 def reconcile(ns, name, token, ssl_ctx):

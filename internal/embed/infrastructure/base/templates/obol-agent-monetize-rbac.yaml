@@ -27,18 +27,22 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
-  # ConfigMaps - manage x402-pricing routes in the x402 namespace
+  # ConfigMaps - x402-pricing routes + agent-managed registration JSON
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "patch"]
-  # Read workload status - pods, services, endpoints
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Services - agent-managed registration httpd + read workload status
   - apiGroups: [""]
-    resources: ["pods", "services", "endpoints"]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Pods - read workload status
+  - apiGroups: [""]
+    resources: ["pods"]
     verbs: ["get", "list"]
-  # Read deployment status
+  # Deployments - agent-managed registration httpd + read workload status
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   # Read pod logs for diagnostics
   - apiGroups: [""]
     resources: ["pods/log"]

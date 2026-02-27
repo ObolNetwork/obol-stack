@@ -21,7 +21,8 @@ const (
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
-func Setup(cfg *config.Config, wallet, chain string) error {
+// If facilitatorURL is empty, the default (https://facilitator.x402.rs) is used.
+func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
 	}
@@ -48,10 +49,13 @@ func Setup(cfg *config.Config, wallet, chain string) error {
 
 	// 2. Update the pricing ConfigMap with wallet and chain.
 	fmt.Printf("Updating x402 pricing config...\n")
+	if facilitatorURL == "" {
+		facilitatorURL = "https://facilitator.x402.rs"
+	}
 	pricingCfg := &PricingConfig{
 		Wallet:         wallet,
 		Chain:          chain,
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: facilitatorURL,
 		VerifyOnly:     false,
 		Routes:         []RouteRule{},
 	}

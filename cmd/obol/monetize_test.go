@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -223,7 +224,7 @@ func TestMonetizeOffer_AllFlags(t *testing.T) {
 		"per-request", "per-mtok", "per-hour",
 		"network", "pay-to",
 		"max-timeout", "namespace", "upstream", "port", "path",
-		"register", "register-name", "register-description",
+		"register", "register-name", "register-description", "register-image",
 	)
 
 	// Verify default values for flags that have them.
@@ -242,6 +243,7 @@ func TestMonetizeOffer_AllFlags(t *testing.T) {
 	assertStringDefault(t, flags, "path", "")
 	assertStringDefault(t, flags, "register-name", "")
 	assertStringDefault(t, flags, "register-description", "")
+	assertStringDefault(t, flags, "register-image", "")
 
 	// "register" is a BoolFlag, default false.
 	if bf, ok := flags["register"].(*cli.BoolFlag); ok {
@@ -318,4 +320,26 @@ func TestMonetizeOfferStatus_Flags(t *testing.T) {
 	requireFlags(t, flags, "namespace")
 	assertFlagRequired(t, flags, "namespace")
 	assertFlagHasAlias(t, flags, "namespace", "n")
+}
+
+func TestMustMarshal_ValidJSON(t *testing.T) {
+	doc := map[string]interface{}{"active": false, "name": "test"}
+	got := mustMarshal(doc)
+	if got == "{}" {
+		t.Fatal("mustMarshal returned empty object for valid input")
+	}
+	// Should contain the expected fields.
+	for _, want := range []string{`"active":false`, `"name":"test"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("mustMarshal output missing %s, got: %s", want, got)
+		}
+	}
+}
+
+func TestMustMarshal_InvalidInput(t *testing.T) {
+	// Channels can't be JSON-marshaled.
+	got := mustMarshal(make(chan int))
+	if got != "{}" {
+		t.Errorf("mustMarshal should return {} on error, got: %s", got)
+	}
 }

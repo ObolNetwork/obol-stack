@@ -4,17 +4,24 @@ package erc8004
 // served at agentURI (e.g., /.well-known/agent-registration.json).
 // Conforms to ERC-8004 "Trustless Agents" registration format.
 //
+// REQUIRED fields per spec: type, name, description, image, services (>=1),
+// x402Support, active, registrations (>=1).
+// OPTIONAL: supportedTrust.
+//
+// Note: Description and Image use omitempty for parsing flexibility but MUST
+// be populated when producing registration documents.
+//
 // Spec: https://eips.ethereum.org/EIPS/eip-8004
 type AgentRegistration struct {
-	Type           string        `json:"type"`
-	Name           string        `json:"name"`
-	Description    string        `json:"description,omitempty"`
-	Image          string        `json:"image,omitempty"`
-	Services       []ServiceDef  `json:"services"`
-	X402Support    bool          `json:"x402Support"`
-	Active         bool          `json:"active"`
-	Registrations  []OnChainReg  `json:"registrations,omitempty"`
-	SupportedTrust []string      `json:"supportedTrust,omitempty"`
+	Type           string        `json:"type"`                      // REQUIRED
+	Name           string        `json:"name"`                      // REQUIRED
+	Description    string        `json:"description,omitempty"`     // REQUIRED (omitempty for parsing)
+	Image          string        `json:"image,omitempty"`           // REQUIRED (omitempty for parsing)
+	Services       []ServiceDef  `json:"services"`                  // REQUIRED (>=1)
+	X402Support    bool          `json:"x402Support"`               // REQUIRED
+	Active         bool          `json:"active"`                    // REQUIRED
+	Registrations  []OnChainReg  `json:"registrations,omitempty"`   // REQUIRED (>=1, omitempty for parsing)
+	SupportedTrust []string      `json:"supportedTrust,omitempty"`  // OPTIONAL
 }
 
 // RegistrationType is the canonical type URI for ERC-8004 registration v1.

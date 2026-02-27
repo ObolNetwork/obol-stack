@@ -61,27 +61,33 @@ func rpcListCommand(cfg *config.Config) *cli.Command {
 func rpcAddCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "add",
-		Usage:     "Add public RPCs for a chain from ChainList",
+		Usage:     "Add RPCs for a chain to the eRPC gateway",
 		ArgsUsage: "<chain-name-or-id>",
-		Description: `Fetches free, public RPC endpoints from ChainList for the specified chain
-and adds them to the eRPC gateway. Supports chain names (e.g., base, arbitrum,
-optimism) or numeric chain IDs (e.g., 8453).
+		Description: `Adds RPC endpoints for the specified chain to the eRPC gateway.
+
+Without --endpoint, fetches free public RPCs from ChainList.
+With --endpoint, adds a custom RPC endpoint directly (e.g., a local Anvil fork).
 
 Examples:
   obol rpc add base
   obol rpc add arbitrum
   obol rpc add 137
-  obol rpc add --count 5 optimism`,
+  obol rpc add --count 5 optimism
+  obol rpc add base-sepolia --endpoint http://host.k3d.internal:8545`,
 		Flags: []cli.Flag{
 			&cli.IntFlag{
 				Name:  "count",
-				Usage: "Maximum number of RPCs to add",
+				Usage: "Maximum number of RPCs to add (ChainList mode only)",
 				Value: 3,
+			},
+			&cli.StringFlag{
+				Name:  "endpoint",
+				Usage: "Custom RPC endpoint URL (skips ChainList, adds directly)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol rpc add base\n  obol rpc add 8453\n  obol rpc add arbitrum")
+				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol rpc add base\n  obol rpc add base-sepolia --endpoint http://host.k3d.internal:8545")
 			}
 
 			chainArg := cmd.Args().First()
@@ -90,6 +96,18 @@ Examples:
 				return err
 			}
 
+			// Custom endpoint mode: add a single user-provided RPC.
+			if endpoint := cmd.String("endpoint"); endpoint != "" {
+				fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, endpoint)
+				if err := network.AddCustomRPC(cfg, chainID, chainName, endpoint); err != nil {
+					return fmt.Errorf("failed to add custom RPC: %w", err)
+				}
+				fmt.Printf("Added custom RPC for %s (chain ID: %d) to eRPC\n", chainName, chainID)
+				fmt.Printf("eRPC restarting to pick up new configuration.\n")
+				return nil
+			}
+
+			// ChainList mode: fetch and add public RPCs.
 			maxCount := int(cmd.Int("count"))
 			if maxCount <= 0 {
 				maxCount = 3

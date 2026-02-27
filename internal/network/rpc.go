@@ -89,6 +89,80 @@ func ListRPCNetworks(cfg *config.Config) ([]RPCNetworkInfo, error) {
 	return result, nil
 }
 
+// AddCustomRPC adds a single custom RPC endpoint for a chain to the eRPC ConfigMap.
+// Uses the "custom-" prefix to distinguish from ChainList-sourced upstreams.
+func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string) error {
+	erpcConfig, err := readERPCConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	projects, ok := erpcConfig["projects"].([]interface{})
+	if !ok || len(projects) == 0 {
+		return fmt.Errorf("eRPC config has no projects")
+	}
+	project, ok := projects[0].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("eRPC config project[0] is not a map")
+	}
+
+	// Remove any existing custom upstream for this chain ID.
+	existingUpstreams, _ := project["upstreams"].([]interface{})
+	filtered := make([]interface{}, 0, len(existingUpstreams))
+	for _, u := range existingUpstreams {
+		um, ok := u.(map[string]interface{})
+		if !ok {
+			filtered = append(filtered, u)
+			continue
+		}
+		id, _ := um["id"].(string)
+		if strings.HasPrefix(id, fmt.Sprintf("custom-%d-", chainID)) {
+			continue
+		}
+		filtered = append(filtered, u)
+	}
+
+	// Add the custom upstream.
+	filtered = append(filtered, map[string]interface{}{
+		"id":       fmt.Sprintf("custom-%d-0", chainID),
+		"endpoint": endpoint,
+		"evm": map[string]interface{}{
+			"chainId": chainID,
+		},
+	})
+	project["upstreams"] = filtered
+
+	// Ensure a network entry exists for this chain ID.
+	networksList, _ := project["networks"].([]interface{})
+	found := false
+	for _, n := range networksList {
+		nm, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if evm, ok := nm["evm"].(map[string]interface{}); ok {
+			if yamlInt(evm["chainId"]) == chainID {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		networksList = append(networksList, map[string]interface{}{
+			"architecture": "evm",
+			"evm":          map[string]interface{}{"chainId": chainID},
+			"alias":        chainName,
+			"failsafe": map[string]interface{}{
+				"timeout": map[string]interface{}{"duration": "30s"},
+				"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
+			},
+		})
+		project["networks"] = networksList
+	}
+
+	return writeERPCConfig(cfg, erpcConfig)
+}
+
 // AddPublicRPCs adds ChainList RPCs for a chain to the eRPC ConfigMap.
 func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints []RPCEndpoint) error {
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
