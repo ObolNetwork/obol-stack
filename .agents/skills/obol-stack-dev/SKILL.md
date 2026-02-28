@@ -218,7 +218,7 @@ Client request ──► Traefik ──► x402-verifier (ForwardAuth) ──►
 obol stack up && obol agent init
 
 # Create offer
-obol monetize offer qwen35 --model "qwen3.5:35b" --per-request "0.001" \
+obol sell http qwen35 --model "qwen3.5:35b" --per-request "0.001" \
   --network "base-sepolia" --pay-to "0x<wallet>"
 
 # Trigger reconciliation (or wait for heartbeat)

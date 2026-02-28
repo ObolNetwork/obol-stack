@@ -111,7 +111,7 @@ obol kubectl get rolebinding openclaw-x402-pricing-binding -n x402 \
 
 ```bash
 # 8. Configure x402 pricing (seller wallet + chain)
-obol monetize pricing \
+obol sell pricing \
     --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --chain base-sepolia
 
@@ -122,7 +122,7 @@ curl -s http://localhost:11434/api/tags | python3 -c \
 #   ollama pull qwen3:0.6b
 
 # 10. Create ServiceOffer CR
-obol monetize offer my-qwen \
+obol sell http my-qwen \
     --type inference \
     --model qwen3:0.6b \
     --runtime ollama \
@@ -160,7 +160,7 @@ obol kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
 #     ServiceOffer llm/my-qwen is Ready
 
 # 12. Verify all 6 conditions are True
-obol monetize offer-status my-qwen --namespace llm
+obol sell status my-qwen --namespace llm
 # → ModelReady=True
 #   UpstreamHealthy=True
 #   PaymentGateReady=True
@@ -348,7 +348,7 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
 
 ```bash
 # 23. Stop offer (removes pricing route from ConfigMap, keeps CR)
-obol monetize stop my-qwen --namespace llm
+obol sell stop my-qwen --namespace llm
 
 # 24. Restart verifier so removed route takes effect immediately
 obol kubectl rollout restart deploy/x402-verifier -n x402
@@ -361,7 +361,7 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
 # → HTTP 200 (free endpoint, no 402)
 
 # 26. Full delete — removes CR + Middleware + HTTPRoute (ownerRef cascade)
-obol monetize delete my-qwen --namespace llm --force
+obol sell delete my-qwen --namespace llm --force
 
 # 27. Verify everything is cleaned up
 obol kubectl get serviceoffers,middleware,httproutes -n llm

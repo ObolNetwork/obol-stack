@@ -56,7 +56,7 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 		t.Fatalf("kubectl get cm: %v", err)
 	}
 	if !strings.Contains(cmYAML, "pattern:") {
-		t.Skip("no pricing routes configured — run: obol monetize offer + monetize.py process first")
+		t.Skip("no pricing routes configured — run: obol sell http + monetize.py process first")
 	}
 
 	// Extract the route pattern to know which path to hit.

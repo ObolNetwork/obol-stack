@@ -20,7 +20,7 @@ No separate controller binary. No Go operator. The obol-agent is a regular OpenC
                   │                                    │
                   │  kubectl apply -f offer.yaml       │
                   │  OR: frontend POST to k8s API      │
-                  │  OR: obol monetize create ...       │
+                  │  OR: obol sell http ...       │
                   └──────────┬───────────────────────────┘
                              │ creates CR
                              ▼
@@ -411,16 +411,16 @@ Even if RBAC allows creating any Middleware, the admission policy ensures OpenCl
 The CLI becomes a thin CRD client — no deployment logic, no helmfile:
 
 ```bash
-obol monetize create --upstream ollama --price 0.001 --chain base
+obol sell http --upstream ollama --price 0.001 --chain base
 # → creates ServiceOffer CR (same as kubectl apply)
 
-obol monetize list
+obol sell list
 # → kubectl get serviceoffers (formatted)
 
-obol monetize status qwen-inference
+obol sell status qwen-inference
 # → shows conditions, endpoint, pricing
 
-obol monetize delete qwen-inference
+obol sell delete qwen-inference
 # → deletes CR (OwnerReference cascades cleanup)
 ```
 

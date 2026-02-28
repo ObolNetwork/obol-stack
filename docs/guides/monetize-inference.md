@@ -17,7 +17,7 @@ This guide walks you through exposing a local LLM as a paid API endpoint using t
 ```
 SELLER (obol stack cluster)
 
-  obol monetize offer --> ServiceOffer CR --> Agent reconciles:
+  obol sell http --> ServiceOffer CR --> Agent reconciles:
     1. ModelReady        (pull model in Ollama)
     2. UpstreamHealthy   (health-check Ollama)
     3. PaymentGateReady  (create x402 Middleware + pricing route)
@@ -111,7 +111,7 @@ obol kubectl rollout restart deployment/llmspy -n llm
 Configure the x402 verifier with your wallet and chain:
 
 ```bash
-obol monetize pricing \
+obol sell pricing \
     --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --chain base-sepolia
 ```
@@ -128,7 +128,7 @@ obol kubectl get pods -n x402  # verifier should have a recent restart
 **Self-hosted facilitator** -- if you're running your own x402 facilitator (see [Part 3](#part-3-self-hosted-facilitator)), pass the URL:
 
 ```bash
-obol monetize pricing \
+obol sell pricing \
     --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --chain base-sepolia \
     --facilitator-url http://host.k3d.internal:4040
@@ -139,7 +139,7 @@ obol monetize pricing \
 Declare your inference service as a Kubernetes custom resource:
 
 ```bash
-obol monetize offer my-qwen \
+obol sell http my-qwen \
     --type inference \
     --model qwen3:0.6b \
     --runtime ollama \
@@ -167,7 +167,7 @@ Watch the progress:
 
 ```bash
 # Check conditions (wait ~60s for agent heartbeat)
-obol monetize offer-status my-qwen --namespace llm
+obol sell status my-qwen --namespace llm
 
 # Verify Kubernetes resources
 obol kubectl get serviceoffer my-qwen -n llm
@@ -462,7 +462,7 @@ curl -s http://localhost:4040/supported | jq .
 Point the x402 verifier at your self-hosted facilitator:
 
 ```bash
-obol monetize pricing \
+obol sell pricing \
     --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --chain base-sepolia \
     --facilitator-url http://host.k3d.internal:4040
@@ -482,13 +482,13 @@ The k3d cluster can reach the host via `host.k3d.internal`. The HTTPS exemption 
 
 ```bash
 # List all offers across namespaces
-obol monetize list --namespace llm
+obol sell list --namespace llm
 
 # Detailed status with conditions
-obol monetize offer-status my-qwen --namespace llm
+obol sell status my-qwen --namespace llm
 
 # Cluster-wide pricing and registration status
-obol monetize status
+obol sell status
 ```
 
 ### Pausing
@@ -496,7 +496,7 @@ obol monetize status
 Stop serving an offer without deleting it. This removes the pricing route so requests pass through without payment:
 
 ```bash
-obol monetize stop my-qwen --namespace llm
+obol sell stop my-qwen --namespace llm
 ```
 
 The CR and any ERC-8004 registration remain intact. Re-create the offer with the same name to restart.
@@ -505,10 +505,10 @@ The CR and any ERC-8004 registration remain intact. Re-create the offer with the
 
 ```bash
 # Delete with confirmation prompt
-obol monetize delete my-qwen --namespace llm
+obol sell delete my-qwen --namespace llm
 
 # Delete without confirmation
-obol monetize delete my-qwen --namespace llm --force
+obol sell delete my-qwen --namespace llm --force
 ```
 
 Deletion:
@@ -741,14 +741,14 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 
 | Command | Description |
 |---------|-------------|
-| `obol monetize pricing --wallet ... --chain ...` | Configure x402 payment settings |
-| `obol monetize offer <name> --model ... --per-request ...` | Create a ServiceOffer |
-| `obol monetize list` | List all ServiceOffers |
-| `obol monetize offer-status <name> -n <ns>` | Show conditions for an offer |
-| `obol monetize stop <name> -n <ns>` | Pause an offer (remove pricing route) |
-| `obol monetize delete <name> -n <ns>` | Delete an offer and cleanup |
-| `obol monetize status` | Show cluster pricing and registration |
-| `obol monetize register --private-key-file ...` | Register on ERC-8004 |
+| `obol sell pricing --wallet ... --chain ...` | Configure x402 payment settings |
+| `obol sell http <name> --model ... --per-request ...` | Create a ServiceOffer |
+| `obol sell list` | List all ServiceOffers |
+| `obol sell status <name> -n <ns>` | Show conditions for an offer |
+| `obol sell stop <name> -n <ns>` | Pause an offer (remove pricing route) |
+| `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
+| `obol sell status` | Show cluster pricing and registration |
+| `obol sell register --private-key-file ...` | Register on ERC-8004 |
 
 ### Key Kubernetes Resources
 

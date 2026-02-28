@@ -1224,13 +1224,13 @@ func TestIntegration_E2E_OfferLifecycle(t *testing.T) {
 		"process", name, "--namespace", ns)
 
 	// Step 4: Verify offer-status shows conditions.
-	statusOut := obolRun(t, cfg, "monetize", "offer-status", name, "--namespace", ns)
+	statusOut := obolRun(t, cfg, "sell", "status", name, "--namespace", ns)
 	t.Logf("offer-status:\n%s", statusOut)
 
-	// Step 5: Verify obol monetize list shows the offer.
-	listOut := obolRun(t, cfg, "monetize", "list", "--namespace", ns)
+	// Step 5: Verify obol sell list shows the offer.
+	listOut := obolRun(t, cfg, "sell", "list", "--namespace", ns)
 	if !strings.Contains(listOut, name) {
-		t.Errorf("monetize list does not contain %q:\n%s", name, listOut)
+		t.Errorf("sell list does not contain %q:\n%s", name, listOut)
 	}
 
 	// Step 6: Add pricing route and test payment flow.
@@ -1265,7 +1265,7 @@ func TestIntegration_E2E_OfferLifecycle(t *testing.T) {
 	}
 
 	// Step 7: Delete via CLI.
-	obolRun(t, cfg, "monetize", "delete", name, "--namespace", ns, "--force")
+	obolRun(t, cfg, "sell", "delete", name, "--namespace", ns, "--force")
 
 	// Step 8: Verify CR is gone.
 	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
@@ -1334,14 +1334,14 @@ func TestIntegration_E2E_ListAndStatus(t *testing.T) {
 	applyServiceOffer(t, cfg, yaml)
 	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
 
-	// obol monetize list should show the offer.
-	listOut := obolRun(t, cfg, "monetize", "list")
+	// obol sell list should show the offer.
+	listOut := obolRun(t, cfg, "sell", "list")
 	if !strings.Contains(listOut, name) {
-		t.Errorf("monetize list does not contain %q:\n%s", name, listOut)
+		t.Errorf("sell list does not contain %q:\n%s", name, listOut)
 	}
 
-	// obol monetize offer-status should show the CR.
-	statusOut := obolRun(t, cfg, "monetize", "offer-status", name, "--namespace", ns)
+	// obol sell status should show the CR.
+	statusOut := obolRun(t, cfg, "sell", "status", name, "--namespace", ns)
 	if !strings.Contains(statusOut, "ServiceOffer") && !strings.Contains(statusOut, "serviceoffer") && !strings.Contains(statusOut, "kind") {
 		t.Logf("offer-status output (expected ServiceOffer YAML):\n%s", statusOut)
 	}

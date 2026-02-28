@@ -79,7 +79,7 @@
 | `CRD_PrinterColumns` | `kubectl get` shows TYPE, PRICE, NETWORK |
 | `CRD_Delete` | CR deletion works |
 
-**Gap vs real world**: No agent involvement. A real user runs `obol monetize offer`, not raw kubectl.
+**Gap vs real world**: No agent involvement. A real user runs `obol sell http`, not raw kubectl.
 
 ---
 
@@ -240,7 +240,7 @@
 
 ## Phase 5 — Full E2E CLI-Driven (3 tests)
 
-**What it covers**: `obol monetize offer` CLI → CR creation → agent reconciliation → 402 → 200 → `obol monetize list/status/delete`. Heartbeat auto-reconciliation (90s wait).
+**What it covers**: `obol sell http` CLI → CR creation → agent reconciliation → 402 → 200 → `obol sell list/status/delete`. Heartbeat auto-reconciliation (90s wait).
 
 **Realism**: High for the CLI path. Still uses mock facilitator for payment.
 
@@ -249,7 +249,7 @@
 │                          TEST BOUNDARY                                │
 │                                                                       │
 │  ┌────────────────┐                                                   │
-│  │ obol monetize   │                                                  │
+│  │ obol sell│                                                  │
 │  │ offer my-qwen   │ ──▶ ServiceOffer CR                             │
 │  │ --type inference │                                                 │
 │  │ --model qwen3    │                                                 │
@@ -267,9 +267,9 @@
 │         │                                                             │
 │         ▼                                                             │
 │  ┌──────────────────────────────────────────────────────────────────┐ │
-│  │ obol monetize list       → shows offer                          │ │
-│  │ obol monetize status     → shows all conditions                 │ │
-│  │ obol monetize delete     → cleans up CR + derived resources     │ │
+│  │ obol sell list       → shows offer                          │ │
+│  │ obol sell status     → shows all conditions                 │ │
+│  │ obol sell delete     → cleans up CR + derived resources     │ │
 │  └──────────────────────────────────────────────────────────────────┘ │
 │                                                                       │
 │  Still uses mock facilitator for payment verification.                │
@@ -609,7 +609,7 @@ Phase 8 (FULL)       ✓    ✓     ✓      ✓       ✓     REAL    REAL     
 | **Real USDC settlement** | Anvil fork doesn't persist transfers | Would need Base Sepolia testnet with real USDC faucet |
 | **Persistent named tunnel** | Quick tunnel URL is ephemeral | Phase 8 uses quick tunnel; persistent requires `obol tunnel provision` with CF credentials |
 | **Concurrent buyers** | All tests are single-buyer | Add load test with multiple signed payments |
-| **ERC-8004 registration** | `obol monetize register` not tested end-to-end | Would need real Base Sepolia tx (gas costs) |
+| **ERC-8004 registration** | `obol sell register` not tested end-to-end | Would need real Base Sepolia tx (gas costs) |
 | **Price change hot-reload** | Agent updates price in CR → verifier picks up new amount | Test exists partially in Phase 4 format checks |
 | **Buy-side flow** | No buyer CLI/SDK test | Planned as next phase |
 

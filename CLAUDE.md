@@ -358,12 +358,11 @@ App → llmspy.llm.svc:8000 → resolves provider → Anthropic/OpenAI/Ollama
 
 ## Service Gateway (Standalone x402)
 
-The `obol service` subsystem is a standalone OpenAI-compatible HTTP gateway with x402 payment gating, designed for running outside the cluster (e.g., on bare metal with Secure Enclave).
+The `obol sell inference` subsystem is a standalone OpenAI-compatible HTTP gateway with x402 payment gating, designed for running outside the cluster (e.g., on bare metal with Secure Enclave).
 
 ```
-obol service create --wallet <addr> [--name <id>]     # Save config
-obol service deploy [--name <id>] [--vm]               # Start gateway + optional VM
-obol service serve --wallet <addr> --model <m>         # Stateless mode
+obol sell inference --wallet <addr> --model <m>         # Start gateway
+obol sell inference --wallet <addr> --model <m> --vm    # Start gateway + VM
 ```
 
 ### Key Components
