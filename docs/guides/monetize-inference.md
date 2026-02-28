@@ -73,28 +73,38 @@ Verify the key components:
 
 | Check | Command | Expected |
 |-------|---------|----------|
-| Cluster nodes | `obol kubectl get nodes` | 4 nodes Ready |
-| Agent running | `obol kubectl get pods -n openclaw-*` | Running |
+| Cluster nodes | `obol kubectl get nodes` | 1 node Ready |
+| Agent running | `obol kubectl get pods -n openclaw-obol-agent` | Running |
 | CRD installed | `obol kubectl get crd serviceoffers.obol.org` | Found |
-| x402 verifier | `obol kubectl get pods -n x402` | Running |
+| x402 verifier | `obol kubectl get pods -n x402` | 2 replicas Running |
 | Traefik gateway | `obol kubectl get gateway -n traefik` | traefik-gateway |
-| Ollama alive | `obol kubectl exec -n llm deploy/ollama -- curl -s localhost:11434` | "Ollama is running" |
+| LLMSpy running | `obol kubectl get pods -n llm` | Running |
+| Ollama reachable | `curl -s http://localhost:11434/api/tags` | JSON model list |
 
 ### 1.2 Pull a Model
 
-Cache a model in the cluster's Ollama instance:
+Make sure the model is available in your host Ollama:
 
 ```bash
-# Pull a small model (fast to download, fast inference)
-obol kubectl exec -n llm deploy/ollama -- ollama pull qwen3:0.6b
+# Pull a model (qwen3.5:35b recommended for tool-call support)
+ollama pull qwen3.5:35b
 
-# Verify it's cached
-obol kubectl exec -n llm deploy/ollama -- ollama list
+# Or a smaller model for quick testing
+ollama pull qwen3:0.6b
+
+# Verify it's available
+curl -s http://localhost:11434/api/tags | python3 -m json.tool
+```
+
+LLMSpy discovers models from host Ollama at startup. If you pull a new model after the cluster is running, restart LLMSpy:
+
+```bash
+obol kubectl rollout restart deployment/llmspy -n llm
 ```
 
 > [!NOTE]
-> The agent can also pull models automatically during reconciliation, but
-> pre-pulling avoids the wait when the ServiceOffer is created.
+> The agent can also pull models automatically during reconciliation via
+> the Ollama API, but pre-pulling avoids the wait when the ServiceOffer is created.
 
 ### 1.3 Set Up Payment
 
@@ -214,7 +224,26 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-A **402 Payment Required** response on the monetized endpoint confirms the x402 gate is working.
+A **402 Payment Required** response confirms the x402 gate is working. The response body contains the payment requirements:
+
+```json
+{
+  "x402Version": 1,
+  "error": "Payment required for this resource",
+  "accepts": [{
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "maxAmountRequired": "1000",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "description": "Payment required for /services/my-qwen/v1/chat/completions",
+    "maxTimeoutSeconds": 300,
+    "extra": {"name": "USDC", "version": "2"}
+  }]
+}
+```
+
+The `maxAmountRequired` is in USDC micro-units (6 decimals): `1000` = 0.001 USDC.
 
 ---
 
@@ -270,9 +299,9 @@ The SDK handles the full x402 flow:
 
 1. Sends the request
 2. Receives 402 with payment requirements
-3. Signs an EIP-712 `TransferWithAuthorization` message
-4. Retries with the `PAYMENT-SIGNATURE` header
-5. Facilitator verifies and settles the payment on-chain
+3. Signs an EIP-712 `TransferWithAuthorization` message (ERC-3009)
+4. Retries with the `X-PAYMENT` header (base64-encoded x402 envelope)
+5. Facilitator verifies the signature and settles USDC on-chain
 6. Returns the inference response
 
 **Manual flow with curl** -- for debugging or custom integrations:
@@ -284,15 +313,56 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Step 2: Sign the EIP-712 payment (requires SDK or custom code)
-# The 402 body contains: payTo, amount, chain, facilitatorURL
+# The 402 body contains: payTo, maxAmountRequired, asset, network, extra.name, extra.version
+# Sign a TransferWithAuthorization (ERC-3009) message with:
+#   Domain: {name: "USDC", version: "2", chainId: 84532, verifyingContract: <USDC address>}
 
 # Step 3: Retry with payment header
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -H "PAYMENT-SIGNATURE: <base64-encoded-payment>" \
+    -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 # -> 200 OK + inference response
 ```
+
+### 2.4 Verify Payment Settlement
+
+After a successful paid request, verify the USDC transfer on-chain using Foundry's `cast`:
+
+```bash
+USDC=0x036CbD53842c5426634e7929541eC2318f3dCF7e
+BUYER=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
+PAYEE=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+
+# Check buyer balance (should have decreased by 1000 micro-units = 0.001 USDC)
+cast call "$USDC" "balanceOf(address)(uint256)" "$BUYER" --rpc-url http://localhost:8545
+
+# Check payee balance (should have increased by 1000 micro-units)
+cast call "$USDC" "balanceOf(address)(uint256)" "$PAYEE" --rpc-url http://localhost:8545
+```
+
+### 2.5 Verify Through Cloudflare Tunnel
+
+The same payment flow works through the public Cloudflare tunnel URL:
+
+```bash
+export TUNNEL_URL=$(obol tunnel status | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com')
+
+# 402 through tunnel
+curl -s -w "\nHTTP %{http_code}" -X POST \
+    "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+
+# Paid request through tunnel (with X-PAYMENT header)
+curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
+    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+# -> 200 OK + inference response
+```
+
+This proves the full public path: **Internet → Cloudflare → Traefik → x402 ForwardAuth → Facilitator settles USDC → 200 + inference**.
 
 ---
 
@@ -342,12 +412,17 @@ cast call "$USDC" "balanceOf(address)(uint256)" "$CONSUMER" --rpc-url http://loc
 The [x402-rs](https://github.com/x402-rs/x402-rs) project provides a Rust-based facilitator. Run it as a Docker container on the host:
 
 ```bash
-# Clone the repo
+# Clone and build
 cd ~/Development/R&D
 git clone https://github.com/x402-rs/x402-rs.git
+cd x402-rs
+cargo build --release
 
 # Create config for Base Sepolia
-cat > x402-rs/config-sepolia.json << 'EOF'
+# The facilitator wallet needs Base Sepolia ETH for gas when settling payments.
+export FACILITATOR_PRIVATE_KEY="0x<your-funded-private-key>"
+
+cat > config-sepolia.json << EOF
 {
   "port": 4040,
   "host": "0.0.0.0",
@@ -356,45 +431,29 @@ cat > x402-rs/config-sepolia.json << 'EOF'
       "eip1559": true,
       "flashblocks": false,
       "signers": ["$FACILITATOR_PRIVATE_KEY"],
-      "rpc": {
-        "url": "https://sepolia.base.org",
-        "rate_limit": 25
-      }
+      "rpc": [{"http": "https://sepolia.base.org", "rate_limit": 25}]
     }
   },
   "schemes": [
-    {
-      "chain_pattern": "eip155:*",
-      "x402_version": 1,
-      "scheme": "exact"
-    },
-    {
-      "chain_pattern": "eip155:*",
-      "x402_version": 2,
-      "scheme": "exact"
-    }
+    {"id": "v1-eip155-exact", "chains": "eip155:*"},
+    {"id": "v2-eip155-exact", "chains": "eip155:*"}
   ]
 }
 EOF
+
+# Start the facilitator
+./target/release/x402-facilitator --config config-sepolia.json
 ```
 
-The facilitator wallet needs Base Sepolia ETH for gas when settling payments:
-
-```bash
-export FACILITATOR_PRIVATE_KEY="0x<your-funded-private-key>"
-
-docker run -d \
-    --name x402-facilitator \
-    -p 4040:4040 \
-    -e FACILITATOR_PRIVATE_KEY="$FACILITATOR_PRIVATE_KEY" \
-    -v $(pwd)/x402-rs/config-sepolia.json:/app/config.json \
-    ghcr.io/x402-rs/x402-facilitator
-```
+> [!TIP]
+> For testing with Anvil, point the RPC at your local fork:
+> ```json
+> "rpc": [{"http": "http://127.0.0.1:8545", "rate_limit": 50}]
+> ```
 
 Verify it's running:
 
 ```bash
-curl -s http://localhost:4040/health
 curl -s http://localhost:4040/supported | jq .
 ```
 
@@ -574,13 +633,20 @@ obol kubectl logs -n openclaw-* -l app=openclaw --tail=50
 
 ### x402 verifier returning 200 instead of 402
 
-The pricing route may not have been added. Check the ConfigMap:
+The pricing route may not have been added, or was overwritten. Check the ConfigMap:
 
 ```bash
-obol kubectl get cm x402-pricing -n x402 -o yaml
+obol kubectl get cm x402-pricing -n x402 -o jsonpath='{.data.pricing\.yaml}'
 ```
 
-Ensure a route matching your path exists in the `routes` list.
+Ensure a route matching your path exists in the `routes` list. The verifier logs its route count at startup:
+
+```bash
+obol kubectl logs -n x402 -l app=x402-verifier --tail=10
+# Look for: "routes: 1" (or however many you expect)
+```
+
+If routes are missing, the agent may not have reconciled yet (heartbeat is ~60s). You can also re-trigger reconciliation by deleting and re-creating the ServiceOffer.
 
 ### Facilitator unreachable from cluster
 
@@ -594,10 +660,16 @@ obol kubectl run -n x402 curl-test --rm -it --restart=Never \
 
 ### Model not found
 
-Verify the model is cached in the cluster Ollama, not the host Ollama:
+Verify the model is available in your host Ollama:
 
 ```bash
-obol kubectl exec -n llm deploy/ollama -- ollama list
+curl -s http://localhost:11434/api/tags | python3 -c "import sys,json; [print(m['name']) for m in json.load(sys.stdin)['models']]"
+```
+
+LLMSpy discovers models at startup. If you pulled a model after the cluster started, restart LLMSpy:
+
+```bash
+obol kubectl rollout restart deployment/llmspy -n llm
 ```
 
 ### Tunnel URL changed
@@ -610,13 +682,24 @@ obol tunnel status
 
 ### FiatTokenV2: invalid signature
 
-This error occurs when the USDC contract's `SignatureChecker` tries EIP-1271 contract signature verification instead of `ecrecover`. On Anvil forks, deterministic test accounts (`0xf39F...`, `0x7099...`, `0xa0Ee...`, etc.) often have contract code at their addresses from the live chain state. Clear the code to make the address behave as a regular EOA:
+This error has two common causes:
+
+**1. Contract code at buyer address** -- On Anvil forks, deterministic test accounts (`0xf39F...`, `0x7099...`, `0xa0Ee...`, etc.) often have contract code at their addresses from the live chain state. The USDC `SignatureChecker` tries EIP-1271 contract verification instead of `ecrecover`. Clear the code:
 
 ```bash
-cast rpc anvil_setCode <consumer-address> 0x --rpc-url http://localhost:8545
+cast rpc anvil_setCode <buyer-address> 0x --rpc-url http://localhost:8545
 ```
 
-See [Part 3.2](#32-anvil-fork-setup) for full details.
+**2. Wrong EIP-712 domain name** -- The USDC contract on Base Sepolia uses the domain name `"USDC"` (not `"USD Coin"` like on Ethereum mainnet). Verify:
+
+```bash
+cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e "name()(string)" --rpc-url http://localhost:8545
+# -> "USDC"
+```
+
+Ensure your EIP-712 signing code uses the correct domain: `{name: "USDC", version: "2", chainId: 84532, verifyingContract: 0x036CbD53842c5426634e7929541eC2318f3dCF7e}`.
+
+See [Part 3.2](#32-anvil-fork-setup) for full Anvil setup details.
 
 ### Payment verification failed (400)
 
