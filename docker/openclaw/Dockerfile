@@ -3,7 +3,7 @@
 # after the base image is built from upstream source.
 #
 # Usage (CI):
-#   docker build --build-arg BASE_TAG=v2026.2.23 --build-arg FOUNDRY_TAG=v1.5.1 \
+#   docker build --build-arg BASE_TAG=v2026.2.26 --build-arg FOUNDRY_TAG=v1.5.1 \
 #     -f docker/openclaw/Dockerfile .
 #
 ARG FOUNDRY_TAG

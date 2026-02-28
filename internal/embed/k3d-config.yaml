@@ -4,7 +4,7 @@ metadata:
   name: obol-stack-{{STACK_ID}}
 servers: 1
 agents: 0
-image: rancher/k3s:v1.31.4-k3s1
+image: rancher/k3s:v1.35.1-k3s1
 volumes:
   - volume: {{DATA_DIR}}:/data
     nodeFilters:

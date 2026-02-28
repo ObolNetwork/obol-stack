@@ -202,7 +202,7 @@ func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	overlay := generateOverlayValues(hostname, nil, false, ollamaModels)
+	overlay := generateOverlayValues(hostname, nil, false, ollamaModels, "")
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		t.Fatalf("failed to write overlay: %v", err)
 	}
@@ -231,7 +231,7 @@ func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *C
 		t.Fatalf("failed to write secrets: %v", err)
 	}
 
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil)
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil, "")
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		t.Fatalf("failed to write overlay: %v", err)
 	}

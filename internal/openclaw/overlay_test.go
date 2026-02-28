@@ -135,7 +135,7 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 	// When Ollama models are available, overlay should use them
 	models := []string{"llama3.2:3b", "mistral:7b"}
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, models)
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, models, "")
 
 	if !strings.Contains(yaml, "agentModel: ollama/llama3.2:3b") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
@@ -153,7 +153,7 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 
 func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
 	// When no Ollama models are available, overlay should have empty model list
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil)
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "")
 
 	if strings.Contains(yaml, "agentModel:") {
 		t.Errorf("default overlay should not set agentModel when no models available, got:\n%s", yaml)
@@ -167,12 +167,37 @@ func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
 }
 
 func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true, nil)
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true, nil, "")
 	if !strings.Contains(yaml, "extraEnvFromSecrets") {
 		t.Errorf("overlay missing extraEnvFromSecrets, got:\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "openclaw-user-secrets") {
 		t.Errorf("overlay missing external secret ref, got:\n%s", yaml)
+	}
+}
+
+func TestGenerateOverlayValues_AgentBaseURL(t *testing.T) {
+	// When agentBaseURL is provided, it should appear in extraEnv.
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "https://mystack.example.com")
+
+	if !strings.Contains(yaml, "AGENT_BASE_URL") {
+		t.Errorf("overlay missing AGENT_BASE_URL, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "value: https://mystack.example.com") {
+		t.Errorf("overlay missing AGENT_BASE_URL value, got:\n%s", yaml)
+	}
+	// REMOTE_SIGNER_URL should still be present.
+	if !strings.Contains(yaml, "REMOTE_SIGNER_URL") {
+		t.Errorf("overlay missing REMOTE_SIGNER_URL, got:\n%s", yaml)
+	}
+}
+
+func TestGenerateOverlayValues_NoAgentBaseURL(t *testing.T) {
+	// When agentBaseURL is empty, AGENT_BASE_URL should NOT appear.
+	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "")
+
+	if strings.Contains(yaml, "AGENT_BASE_URL") {
+		t.Errorf("overlay should not contain AGENT_BASE_URL when empty, got:\n%s", yaml)
 	}
 }
 

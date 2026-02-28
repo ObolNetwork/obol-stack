@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // AnvilFork represents a running Anvil instance forking a live chain.
@@ -128,4 +132,45 @@ func (f *AnvilFork) waitReady(timeout time.Duration) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("anvil not ready after %v on port %d", timeout, f.Port)
+}
+
+// MintUSDC sets the USDC balance for the given address on the Anvil fork
+// using anvil_setStorageAt. This writes directly to the ERC-20 balanceOf
+// mapping in the USDC proxy contract.
+//
+// USDC on Base Sepolia: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+// Balance mapping slot: 9 (FiatTokenV2 uses slot 9 for balances)
+func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
+	t.Helper()
+
+	// Compute storage slot: keccak256(abi.encode(address, uint256(9)))
+	// This is the standard Solidity mapping slot for mapping(address => uint256) at slot 9.
+	addr := common.HexToAddress(to)
+	slot := big.NewInt(9)
+
+	// abi.encode(address, uint256(9)) — both padded to 32 bytes.
+	key := common.LeftPadBytes(addr.Bytes(), 32)
+	slotBytes := common.LeftPadBytes(slot.Bytes(), 32)
+	packed := append(key, slotBytes...)
+	storageSlot := crypto.Keccak256Hash(packed)
+
+	// Pad amount to 32 bytes.
+	valueHex := fmt.Sprintf("0x%064x", amount)
+
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","method":"anvil_setStorageAt","params":["%s","%s","%s"],"id":1}`,
+		USDCBaseSepolia, storageSlot.Hex(), valueHex,
+	)
+
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("anvil_setStorageAt failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("anvil_setStorageAt returned %d", resp.StatusCode)
+	}
+
+	t.Logf("minted %s USDC to %s (slot %s)", amount, to, storageSlot.Hex())
 }

@@ -332,7 +332,7 @@ When a local Ethereum node is deployed, it's automatically registered as a prior
 | `obol stack down` | `k3d cluster delete` (preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes data (root-owned PVCs) |
 
-**k3d cluster**: 1 server + 3 agent nodes, ports 8080:80 + 8443:443, `rancher/k3s:v1.31.4-k3s1`.
+**k3d cluster**: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-k3s1`.
 
 ## LLM Configuration Architecture
 

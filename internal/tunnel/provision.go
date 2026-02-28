@@ -119,6 +119,11 @@ func Provision(cfg *config.Config, opts ProvisionOptions) error {
 		return fmt.Errorf("tunnel provisioned, but failed to save local state: %w", err)
 	}
 
+	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
+	if err := SyncAgentBaseURL(cfg, fmt.Sprintf("https://%s", hostname)); err != nil {
+		fmt.Printf("Warning: could not sync AGENT_BASE_URL to obol-agent: %v\n", err)
+	}
+
 	fmt.Println("\n✓ Tunnel provisioned")
 	fmt.Printf("Persistent URL: https://%s\n", hostname)
 	fmt.Println("Tip: run 'obol tunnel status' to verify the connector is active.")

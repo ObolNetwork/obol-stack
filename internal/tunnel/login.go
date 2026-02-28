@@ -112,6 +112,11 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return fmt.Errorf("tunnel created, but failed to save local state: %w", err)
 	}
 
+	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
+	if err := SyncAgentBaseURL(cfg, fmt.Sprintf("https://%s", hostname)); err != nil {
+		fmt.Printf("Warning: could not sync AGENT_BASE_URL to obol-agent: %v\n", err)
+	}
+
 	fmt.Println("\n✓ Tunnel login complete")
 	fmt.Printf("Persistent URL: https://%s\n", hostname)
 	fmt.Println("Tip: run 'obol tunnel status' to verify the connector is active.")

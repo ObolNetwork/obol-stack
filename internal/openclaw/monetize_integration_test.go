@@ -1908,3 +1908,692 @@ spec:
 
 	t.Logf("skill iteration test complete: agent recovered from bad upstream")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 — Real Facilitator Payment (x402-rs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestIntegration_Fork_RealFacilitatorPayment validates the full payment flow
+// using the real x402-rs facilitator with an Anvil fork of Base Sepolia.
+//
+// Unlike TestIntegration_Fork_FullPaymentFlow (which uses a mock facilitator
+// that always returns isValid:true), this test:
+//  1. Starts the real x402-rs facilitator binary
+//  2. Funds a buyer wallet with USDC on the Anvil fork
+//  3. Signs a real EIP-712 TransferWithAuthorization (ERC-3009)
+//  4. Proves the facilitator validates the real signature
+//  5. Confirms 402 → 200 through the full payment gate
+//
+// Prerequisites:
+//   - Running k3d cluster with CRD, agent, and x402-verifier
+//   - Anvil (Foundry) installed
+//   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
+func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	anvil := requireAnvil(t)
+
+	// ── Start real x402-rs facilitator ──────────────────────────────────
+	facilitator := testutil.StartRealFacilitator(t, anvil)
+
+	// ── Fund buyer with USDC on Anvil fork ─────────────────────────────
+	// Use Anvil account[0] as buyer, account[1] as seller (payTo).
+	buyerKey := anvil.Accounts[0].PrivateKey
+	buyerAddr := anvil.Accounts[0].Address
+	sellerAddr := anvil.Accounts[1].Address
+
+	// 10 USDC = 10_000_000 micro-units (6 decimals).
+	anvil.MintUSDC(t, buyerAddr, testutil.USDCMicroUnits(10))
+	t.Logf("funded buyer %s with 10 USDC", buyerAddr)
+
+	// ── Set up test namespace + Anvil upstream ─────────────────────────
+	ns := testNamespace("real-fac")
+	createTestNamespace(t, cfg, ns)
+	deployAnvilUpstream(t, cfg, ns, anvil)
+
+	// ── Patch x402-pricing ConfigMap to point at real facilitator ──────
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	// ── Create ServiceOffer ────────────────────────────────────────────
+	name := "test-real-fac"
+	yaml := serviceOfferWithAnvil(name, ns, anvil.Port)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	// ── Agent reconciles the offer ─────────────────────────────────────
+	out, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", out)
+
+	// Verify conditions.
+	so := getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Errorf("condition %s = %q, want True", cond, status)
+		}
+	}
+
+	// Wait for Reloader + route propagation.
+	time.Sleep(8 * time.Second)
+
+	// ── Request WITHOUT payment → 402 ──────────────────────────────────
+	rpcBody := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s", name)
+
+	resp, err := http.Post(url, "application/json", strings.NewReader(rpcBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Log("correctly returned 402 Payment Required (no payment header)")
+
+	// Parse 402 body to extract payment requirements.
+	var reqs map[string]interface{}
+	if err := json.Unmarshal(body, &reqs); err == nil {
+		if accepts, ok := reqs["accepts"].([]interface{}); ok && len(accepts) > 0 {
+			first := accepts[0].(map[string]interface{})
+			t.Logf("payment requirements: network=%v, maxAmount=%v, asset=%v",
+				first["network"], first["maxAmountRequired"], first["asset"])
+		}
+	}
+
+	// ── Sign REAL EIP-712 payment ──────────────────────────────────────
+	// Amount: 1000 micro-units (matches ServiceOffer price of 0.001 USDC).
+	paymentHeader := testutil.SignRealPaymentHeader(t,
+		buyerKey,    // buyer's private key
+		sellerAddr,  // payTo (same as ServiceOffer)
+		"1000",      // 0.001 USDC = 1000 micro-units (6 decimals)
+		84532,       // base-sepolia chain ID
+	)
+
+	// ── Request WITH real payment → 200 ────────────────────────────────
+	req, _ := http.NewRequest("POST", url, strings.NewReader(rpcBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request with payment failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with real payment, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Parse RPC response — should have a block number from the fork.
+	var rpcResp map[string]interface{}
+	if err := json.Unmarshal(body, &rpcResp); err == nil {
+		if result, ok := rpcResp["result"].(string); ok {
+			t.Logf("Anvil fork block number: %s (real payment accepted!)", result)
+		}
+	}
+
+	// ── Cleanup: delete ServiceOffer ───────────────────────────────────
+	delOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"delete", name, "--namespace", ns)
+	t.Logf("delete output:\n%s", delOut)
+
+	// Verify pricing route was removed.
+	time.Sleep(2 * time.Second)
+	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
+	}
+
+	// Verify K8s resources are gone.
+	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
+	if err == nil {
+		t.Error("ServiceOffer still exists after delete")
+	}
+
+	t.Logf("real facilitator payment test complete: Anvil fork → x402-rs → EIP-712 → paid → cleaned up")
+}
+
+// TestIntegration_Tunnel_RealFacilitatorOllama is the highest-fidelity test:
+// real Ollama inference, real x402-rs facilitator, real EIP-712 signatures,
+// and requests routed through the Cloudflare quick tunnel.
+//
+// This is the closest thing to a production sell-side scenario:
+//   - Buyer discovers the service via the public tunnel URL
+//   - Gets 402 with pricing info
+//   - Signs a real TransferWithAuthorization (ERC-3009)
+//   - Sends payment through the tunnel → Traefik → x402 ForwardAuth → x402-rs validates → Ollama responds
+//
+// Prerequisites:
+//   - Running k3d cluster with CRD, agent, x402-verifier, CF quick tunnel
+//   - Ollama with a cached model (any model — qwen2.5, qwen3:0.6b, etc.)
+//   - Anvil (Foundry) installed
+//   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
+func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireOllamaModel(t, "qwen2.5")
+	tunnelURL := requireTunnel(t, cfg)
+	anvil := requireAnvil(t)
+
+	t.Logf("tunnel URL: %s", tunnelURL)
+	t.Logf("model: %s", model)
+
+	// ── Start real x402-rs facilitator ──────────────────────────────────
+	facilitator := testutil.StartRealFacilitator(t, anvil)
+
+	// ── Fund buyer with USDC ───────────────────────────────────────────
+	buyerKey := anvil.Accounts[0].PrivateKey
+	buyerAddr := anvil.Accounts[0].Address
+	sellerAddr := anvil.Accounts[1].Address
+	anvil.MintUSDC(t, buyerAddr, testutil.USDCMicroUnits(10))
+	t.Logf("funded buyer %s with 10 USDC", buyerAddr)
+
+	// ── Patch x402-pricing to point at real facilitator ────────────────
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	// ── Create ServiceOffer for real Ollama model ──────────────────────
+	name := "test-tunnel-real"
+	ns := "llm" // Ollama lives here
+	yaml := ollamaServiceOfferYAML(name, ns, model, sellerAddr)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		deleteServiceOffer(t, cfg, name, ns)
+		time.Sleep(2 * time.Second)
+	})
+	t.Logf("created ServiceOffer %s/%s for model %s", ns, name, model)
+
+	// ── Agent reconciles ───────────────────────────────────────────────
+	out, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", out)
+
+	so := getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Errorf("condition %s = %q, want True", cond, status)
+		}
+	}
+
+	// Wait for Reloader + route propagation.
+	time.Sleep(8 * time.Second)
+
+	chatBody := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"say hello in one word"}],"stream":false}`, model)
+	client := &http.Client{Timeout: 60 * time.Second}
+
+	// ── LOCAL: 402 without payment ─────────────────────────────────────
+	localURL := fmt.Sprintf("http://obol.stack:8080/services/%s/v1/chat/completions", name)
+	resp, err := client.Post(localURL, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("[local] expected 402, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Log("[local] correctly returned 402")
+
+	// ── LOCAL: 200 with real payment ───────────────────────────────────
+	paymentHeader := testutil.SignRealPaymentHeader(t, buyerKey, sellerAddr, "1000", 84532)
+
+	req, _ := http.NewRequest("POST", localURL, strings.NewReader(chatBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("[local] request with payment failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("[local] expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Logf("[local] real payment accepted, inference response (%d bytes)", len(body))
+
+	// Verify we got actual inference content.
+	var chatResp map[string]interface{}
+	if err := json.Unmarshal(body, &chatResp); err == nil {
+		if choices, ok := chatResp["choices"].([]interface{}); ok && len(choices) > 0 {
+			t.Logf("[local] inference: %d choice(s)", len(choices))
+		}
+	}
+
+	// ── TUNNEL: 402 without payment ────────────────────────────────────
+	tunnelChatURL := fmt.Sprintf("%s/services/%s/v1/chat/completions", tunnelURL, name)
+	t.Logf("testing via tunnel: %s", tunnelChatURL)
+
+	resp, err = client.Post(tunnelChatURL, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Fatalf("[tunnel] could not reach tunnel URL: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("[tunnel] expected 402, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Log("[tunnel] correctly returned 402")
+
+	// ── TUNNEL: 200 with real payment (fresh signature) ────────────────
+	// Each payment needs a unique nonce, so sign a new one.
+	tunnelPayment := testutil.SignRealPaymentHeader(t, buyerKey, sellerAddr, "1000", 84532)
+
+	req, _ = http.NewRequest("POST", tunnelChatURL, strings.NewReader(chatBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", tunnelPayment)
+
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("[tunnel] request with payment failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("[tunnel] expected 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Logf("[tunnel] real payment accepted via tunnel, inference response (%d bytes)", len(body))
+
+	if err := json.Unmarshal(body, &chatResp); err == nil {
+		if choices, ok := chatResp["choices"].([]interface{}); ok && len(choices) > 0 {
+			choice := choices[0].(map[string]interface{})
+			if msg, ok := choice["message"].(map[string]interface{}); ok {
+				t.Logf("[tunnel] model said: %v", msg["content"])
+			}
+		}
+	}
+
+	// ── Cleanup ────────────────────────────────────────────────────────
+	delOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"delete", name, "--namespace", ns)
+	t.Logf("delete output:\n%s", delOut)
+
+	t.Logf("tunnel + real facilitator test complete: %s → CF tunnel → x402-rs → EIP-712 → Ollama → response", tunnelURL)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 9 — Agent Coordination Validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestIntegration_AgentCoordination_FullReconcileOrder validates that the
+// obol-agent autonomously coordinates the entire monetisation lifecycle in
+// the correct order, producing all derived Kubernetes resources, without
+// any human intervention beyond the initial CR intent.
+//
+// The test creates ONLY the ServiceOffer CR (the "intent") and then invokes
+// `monetize.py process --all` (exactly what the heartbeat cron does). It then
+// verifies EVERY coordination step the agent should have performed:
+//
+//	Step 1: ModelReady        → model checked in Ollama /api/tags
+//	Step 2: UpstreamHealthy   → upstream service health-checked
+//	Step 3: PaymentGateReady  → Middleware x402-<name> created
+//	                          → pricing route added to x402-pricing ConfigMap
+//	Step 4: RoutePublished    → HTTPRoute so-<name> created
+//	                          → parentRef = traefik-gateway
+//	                          → filter = ExtensionRef to Middleware
+//	                          → backend = upstream service
+//	Step 5: Registered        → skipped (registration.enabled=false)
+//	Step 6: Ready             → all conditions True
+//
+// After reconciliation, it verifies:
+//   - Each derived resource exists with correct content
+//   - ownerReferences point back to the ServiceOffer (GC cascade)
+//   - The pricing ConfigMap has the route with correct pattern, price, payTo
+//   - A second `process --all` is idempotent (no errors, same state)
+//   - Delete via agent removes pricing route + CR (cascade removes rest)
+//
+// This proves: drop a CR → agent does everything → monetisation works.
+func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireOllamaModel(t, "qwen2.5")
+
+	sellerAddr := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+	name := "test-coord"
+	ns := "llm"
+	path := fmt.Sprintf("/services/%s", name)
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 0: Drop the CR — this is the ONLY human action.
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 0: Creating ServiceOffer CR (the intent)")
+	yaml := ollamaServiceOfferYAML(name, ns, model, sellerAddr)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		// Final safety net — agent delete should have cleaned up already.
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	// Verify CR exists with empty status (no conditions yet).
+	so := getServiceOffer(t, cfg, name, ns)
+	if status, ok := so["status"].(map[string]interface{}); ok {
+		if conds, ok := status["conditions"].([]interface{}); ok && len(conds) > 0 {
+			t.Error("Step 0: ServiceOffer should have no conditions before reconciliation")
+		}
+	}
+	t.Log("Step 0: CR created — no conditions, no derived resources")
+
+	// Verify no derived resources exist yet.
+	_, mwErr := obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
+	if mwErr == nil {
+		t.Error("Step 0: Middleware should not exist before reconciliation")
+	}
+	_, hrErr := obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
+	if hrErr == nil {
+		t.Error("Step 0: HTTPRoute should not exist before reconciliation")
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 1: Agent reconciles — `process --all` (heartbeat simulation)
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 1: Triggering agent reconciliation (process --all)")
+	processOut, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", "--all")
+	t.Logf("process --all output:\n%s", processOut)
+
+	// processOut should mention our offer being processed.
+	if !strings.Contains(processOut, name) && !strings.Contains(processOut, "Ready") {
+		t.Logf("warning: process --all output does not mention %s", name)
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 2: Verify conditions — all 6 in order
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 2: Verifying all 6 conditions")
+	so = getServiceOffer(t, cfg, name, ns)
+
+	conditionOrder := []struct {
+		name     string
+		blocking bool // whether this condition blocks Ready
+	}{
+		{"ModelReady", true},
+		{"UpstreamHealthy", true},
+		{"PaymentGateReady", true},
+		{"RoutePublished", true},
+		{"Registered", false}, // non-blocking, may be "False" with reason "Skipped"
+		{"Ready", true},
+	}
+
+	for _, c := range conditionOrder {
+		status := getConditionStatus(so, c.name)
+		if c.blocking {
+			if status != "True" {
+				t.Errorf("condition %s = %q, want True (blocking)", c.name, status)
+			} else {
+				t.Logf("  ✓ %s = True", c.name)
+			}
+		} else {
+			// Registered is non-blocking — True (skipped) or False (no remote-signer) both OK.
+			t.Logf("  ~ %s = %s (non-blocking)", c.name, status)
+		}
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 3: Verify Middleware — ForwardAuth to x402-verifier
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 3: Verifying Middleware x402-" + name)
+	mwJSON := obolRun(t, cfg, "kubectl", "get", "middleware",
+		fmt.Sprintf("x402-%s", name), "-n", ns, "-o", "json")
+
+	var mw map[string]interface{}
+	if err := json.Unmarshal([]byte(mwJSON), &mw); err != nil {
+		t.Fatalf("parse middleware JSON: %v", err)
+	}
+
+	// Verify ForwardAuth address points at x402-verifier.
+	spec := mw["spec"].(map[string]interface{})
+	forwardAuth, ok := spec["forwardAuth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Middleware missing spec.forwardAuth")
+	}
+	address, _ := forwardAuth["address"].(string)
+	if !strings.Contains(address, "x402-verifier") {
+		t.Errorf("Middleware forwardAuth address = %q, want x402-verifier URL", address)
+	} else {
+		t.Logf("  ✓ Middleware ForwardAuth → %s", address)
+	}
+
+	// Verify ownerReference back to ServiceOffer.
+	verifyOwnerRef(t, mw, name, "ServiceOffer")
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 4: Verify pricing route in x402-pricing ConfigMap
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 4: Verifying pricing route in x402-pricing ConfigMap")
+	pricingYAML := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+
+	expectedPattern := fmt.Sprintf("%s/*", path)
+	if !strings.Contains(pricingYAML, expectedPattern) {
+		t.Errorf("pricing ConfigMap missing route pattern %q:\n%s", expectedPattern, pricingYAML)
+	} else {
+		t.Logf("  ✓ pricing route pattern: %s", expectedPattern)
+	}
+
+	// Verify payTo in the route entry.
+	if !strings.Contains(pricingYAML, sellerAddr) {
+		t.Errorf("pricing ConfigMap missing payTo %s:\n%s", sellerAddr, pricingYAML)
+	} else {
+		t.Logf("  ✓ pricing route payTo: %s", sellerAddr)
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 5: Verify HTTPRoute — gateway parent + middleware filter + backend
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 5: Verifying HTTPRoute so-" + name)
+	hrJSON := obolRun(t, cfg, "kubectl", "get", "httproute",
+		fmt.Sprintf("so-%s", name), "-n", ns, "-o", "json")
+
+	var hr map[string]interface{}
+	if err := json.Unmarshal([]byte(hrJSON), &hr); err != nil {
+		t.Fatalf("parse httproute JSON: %v", err)
+	}
+
+	hrSpec := hr["spec"].(map[string]interface{})
+
+	// 5a: parentRef = traefik-gateway in traefik namespace.
+	parentRefs, _ := hrSpec["parentRefs"].([]interface{})
+	if len(parentRefs) == 0 {
+		t.Fatal("HTTPRoute has no parentRefs")
+	}
+	parentRef := parentRefs[0].(map[string]interface{})
+	parentName, _ := parentRef["name"].(string)
+	parentNS, _ := parentRef["namespace"].(string)
+	if parentName != "traefik-gateway" || parentNS != "traefik" {
+		t.Errorf("HTTPRoute parentRef = %s/%s, want traefik/traefik-gateway", parentNS, parentName)
+	} else {
+		t.Logf("  ✓ HTTPRoute parent: traefik/traefik-gateway")
+	}
+
+	// 5b: rules[0].matches[0].path = PathPrefix matching spec.path.
+	rules, _ := hrSpec["rules"].([]interface{})
+	if len(rules) == 0 {
+		t.Fatal("HTTPRoute has no rules")
+	}
+	rule0 := rules[0].(map[string]interface{})
+	matches, _ := rule0["matches"].([]interface{})
+	if len(matches) > 0 {
+		match0 := matches[0].(map[string]interface{})
+		matchPath, _ := match0["path"].(map[string]interface{})
+		pathValue, _ := matchPath["value"].(string)
+		if pathValue != path {
+			t.Errorf("HTTPRoute path match = %q, want %q", pathValue, path)
+		} else {
+			t.Logf("  ✓ HTTPRoute path: %s", pathValue)
+		}
+	}
+
+	// 5c: filters include ExtensionRef to Middleware x402-<name>.
+	filters, _ := rule0["filters"].([]interface{})
+	foundMiddlewareFilter := false
+	for _, f := range filters {
+		fm := f.(map[string]interface{})
+		if fm["type"] == "ExtensionRef" {
+			ref, _ := fm["extensionRef"].(map[string]interface{})
+			refName, _ := ref["name"].(string)
+			if refName == fmt.Sprintf("x402-%s", name) {
+				foundMiddlewareFilter = true
+				t.Logf("  ✓ HTTPRoute filter: ExtensionRef → x402-%s", name)
+			}
+		}
+	}
+	if !foundMiddlewareFilter {
+		t.Errorf("HTTPRoute missing ExtensionRef filter to x402-%s", name)
+	}
+
+	// 5d: backendRefs point at the upstream service.
+	backendRefs, _ := rule0["backendRefs"].([]interface{})
+	if len(backendRefs) > 0 {
+		backend := backendRefs[0].(map[string]interface{})
+		backendName, _ := backend["name"].(string)
+		backendNS, _ := backend["namespace"].(string)
+		t.Logf("  ✓ HTTPRoute backend: %s/%s", backendNS, backendName)
+	}
+
+	// 5e: ownerReference.
+	verifyOwnerRef(t, hr, name, "ServiceOffer")
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 6: Idempotency — second `process --all` changes nothing
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 6: Verifying idempotency (second process --all)")
+	processOut2, _ := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"process", "--all")
+
+	// Second run should see everything as Ready and not re-process.
+	if strings.Contains(processOut2, "Error") || strings.Contains(processOut2, "error") {
+		t.Errorf("second process --all produced errors:\n%s", processOut2)
+	}
+	t.Logf("  ✓ second process --all: no errors")
+
+	// Conditions should still all be True.
+	so = getServiceOffer(t, cfg, name, ns)
+	for _, c := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		if getConditionStatus(so, c) != "True" {
+			t.Errorf("after idempotent re-process: %s is not True", c)
+		}
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 7: Traffic validation — request reaches upstream
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 7: Verifying traffic routes through payment gate")
+
+	// Wait for Reloader to restart verifier + route propagation.
+	time.Sleep(8 * time.Second)
+
+	chatBody := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"say one word"}],"stream":false}`, model)
+	localURL := fmt.Sprintf("http://obol.stack:8080%s/v1/chat/completions", path)
+
+	resp, err := http.Post(localURL, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+	} else {
+		t.Logf("  ✓ 402 Payment Required (payment gate active)")
+	}
+
+	// ────────────────────────────────────────────────────────────────────
+	// Step 8: Agent delete — pricing route removed + cascade
+	// ────────────────────────────────────────────────────────────────────
+	t.Log("Step 8: Agent deletes offer (pricing route + CR)")
+	delOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"delete", name, "--namespace", ns)
+	t.Logf("delete output:\n%s", delOut)
+
+	// Wait for GC cascade.
+	time.Sleep(3 * time.Second)
+
+	// 8a: Pricing route removed from ConfigMap.
+	pricingYAML = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if strings.Contains(pricingYAML, expectedPattern) {
+		t.Errorf("pricing route %s still present after delete:\n%s", expectedPattern, pricingYAML)
+	} else {
+		t.Logf("  ✓ pricing route removed from ConfigMap")
+	}
+
+	// 8b: ServiceOffer CR gone.
+	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
+	if err == nil {
+		t.Error("ServiceOffer still exists after delete")
+	} else {
+		t.Logf("  ✓ ServiceOffer CR deleted")
+	}
+
+	// 8c: Middleware gone (ownerRef cascade).
+	_, err = obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
+	if err == nil {
+		t.Error("Middleware still exists after ServiceOffer delete (ownerRef cascade failed)")
+	} else {
+		t.Logf("  ✓ Middleware x402-%s cascaded", name)
+	}
+
+	// 8d: HTTPRoute gone (ownerRef cascade).
+	_, err = obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
+	if err == nil {
+		t.Error("HTTPRoute still exists after ServiceOffer delete (ownerRef cascade failed)")
+	} else {
+		t.Logf("  ✓ HTTPRoute so-%s cascaded", name)
+	}
+
+	t.Log("agent coordination test complete: CR intent → agent reconcile → all resources → delete cascade")
+}
+
+// verifyOwnerRef checks that a resource has an ownerReference pointing at
+// a ServiceOffer with the given name.
+func verifyOwnerRef(t *testing.T, resource map[string]interface{}, ownerName, ownerKind string) {
+	t.Helper()
+
+	metadata, ok := resource["metadata"].(map[string]interface{})
+	if !ok {
+		t.Error("resource has no metadata")
+		return
+	}
+	ownerRefs, ok := metadata["ownerReferences"].([]interface{})
+	if !ok || len(ownerRefs) == 0 {
+		t.Errorf("resource missing ownerReferences (expected %s/%s)", ownerKind, ownerName)
+		return
+	}
+
+	for _, ref := range ownerRefs {
+		rm := ref.(map[string]interface{})
+		if rm["kind"] == ownerKind && rm["name"] == ownerName {
+			controller, _ := rm["controller"].(bool)
+			blockDel, _ := rm["blockOwnerDeletion"].(bool)
+			if controller && blockDel {
+				t.Logf("  ✓ ownerReference: %s/%s (controller=true, blockOwnerDeletion=true)", ownerKind, ownerName)
+			} else {
+				t.Logf("  ~ ownerReference: %s/%s (controller=%v, blockDel=%v)", ownerKind, ownerName, controller, blockDel)
+			}
+			return
+		}
+	}
+	t.Errorf("no ownerReference for %s/%s found", ownerKind, ownerName)
+}

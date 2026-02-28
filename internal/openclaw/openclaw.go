@@ -21,6 +21,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -42,6 +43,10 @@ const (
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.5"
+
+	// openclawImageTag overrides the chart's default image tag.
+	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
+	openclawImageTag = "2026.2.26"
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
@@ -205,7 +210,20 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels)
+	// If running in agent mode, read tunnel state to inject AGENT_BASE_URL.
+	var agentBaseURL string
+	if opts.AgentMode {
+		st, _ := tunnel.LoadTunnelState(cfg)
+		if st != nil && st.Hostname != "" {
+			agentBaseURL = "https://" + st.Hostname
+		}
+		// Agent mode always needs Ollama models for local inference,
+		// even when an imported config provides cloud providers.
+		if opts.OllamaModels == nil {
+			opts.OllamaModels = listOllamaModels()
+		}
+	}
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels, agentBaseURL)
 
 	// Append heartbeat config for agent mode.
 	if opts.AgentMode {
@@ -343,6 +361,13 @@ func doSync(cfg *config.Config, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Patch ConfigMap to inject heartbeat config that the chart template
+	// does not render. The chart's _helpers.tpl only outputs
+	// agents.defaults.model and agents.defaults.workspace into openclaw.json,
+	// so heartbeat config from values-obol.yaml is silently dropped. We read
+	// the rendered ConfigMap, merge heartbeat fields, and re-apply.
+	patchHeartbeatConfig(cfg, id, deploymentDir)
 
 	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
@@ -836,7 +861,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil)
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil, "")
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -1244,7 +1269,7 @@ func deploymentPath(cfg *config.Config, id string) string {
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
-func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string) string {
+func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string, agentBaseURL string) string {
 	var b strings.Builder
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
@@ -1271,6 +1296,11 @@ rbac:
 
 `)
 
+	// Override chart default image tag when the binary pins a newer version.
+	if openclawImageTag != "" {
+		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, openclawImageTag))
+	}
+
 	// Provider and agent model configuration
 	importedOverlay := TranslateToOverlayYAML(imported)
 	if importedOverlay != "" {
@@ -1281,9 +1311,9 @@ rbac:
 		// unavailable. Without it, the gateway rejects with 1008 "requires HTTPS or
 		// localhost (secure context)". Token auth is still enforced.
 		if strings.Contains(importedOverlay, "openclaw:\n") {
-			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n", 1)
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n", 1)
 		} else {
-			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n\n")
+			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n\n")
 		}
 		b.WriteString(importedOverlay)
 	} else {
@@ -1299,6 +1329,7 @@ rbac:
     # so device identity is unavailable. Token auth is still enforced.
     controlUi:
       allowInsecureAuth: true
+      dangerouslyAllowHostHeaderOriginFallback: true
 
 # apiKeyValue is a dummy placeholder — Ollama does not require auth.
 # It is safe to inline here (unlike real cloud keys, which go to secrets).
@@ -1330,7 +1361,13 @@ erpc:
 extraEnv:
   - name: REMOTE_SIGNER_URL
     value: http://remote-signer:9000
-
+`)
+	if agentBaseURL != "" {
+		b.WriteString(fmt.Sprintf(`  - name: AGENT_BASE_URL
+    value: %s
+`, agentBaseURL))
+	}
+	b.WriteString(`
 # Skills: injected directly to the host-side PVC path at
 # $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
 # OpenClaw's file watcher picks them up; no ConfigMap needed.
@@ -1352,6 +1389,117 @@ secrets:
 	}
 
 	return b.String()
+}
+
+// patchHeartbeatConfig reads the rendered openclaw-config ConfigMap, injects
+// heartbeat configuration from values-obol.yaml, and re-applies it. This
+// compensates for the upstream Helm chart not rendering agents.defaults.heartbeat.
+func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
+	// Read values-obol.yaml to check for heartbeat config.
+	valuesPath := filepath.Join(deploymentDir, "values-obol.yaml")
+	valuesRaw, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return // No values file, nothing to patch.
+	}
+
+	// Quick check: if no heartbeat in values, skip.
+	if !strings.Contains(string(valuesRaw), "heartbeat:") {
+		return
+	}
+
+	// Extract heartbeat every/target from YAML (simple parsing, not full YAML).
+	var every, target string
+	for _, line := range strings.Split(string(valuesRaw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "every:") {
+			every = strings.TrimSpace(strings.TrimPrefix(trimmed, "every:"))
+			every = strings.Trim(every, "\"'")
+		}
+		if strings.HasPrefix(trimmed, "target:") {
+			target = strings.TrimSpace(strings.TrimPrefix(trimmed, "target:"))
+			target = strings.Trim(target, "\"'")
+		}
+	}
+	if every == "" {
+		return // No heartbeat interval configured.
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Read current ConfigMap.
+	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
+		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
+	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var out bytes.Buffer
+	getCmd.Stdout = &out
+	if err := getCmd.Run(); err != nil {
+		fmt.Printf("Warning: could not read openclaw-config ConfigMap: %v\n", err)
+		return
+	}
+
+	// Parse JSON config.
+	var cfgJSON map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
+		fmt.Printf("Warning: could not parse openclaw.json: %v\n", err)
+		return
+	}
+
+	// Navigate to agents.defaults, inject heartbeat.
+	agents, ok := cfgJSON["agents"].(map[string]interface{})
+	if !ok {
+		agents = map[string]interface{}{}
+		cfgJSON["agents"] = agents
+	}
+	defaults, ok := agents["defaults"].(map[string]interface{})
+	if !ok {
+		defaults = map[string]interface{}{}
+		agents["defaults"] = defaults
+	}
+
+	heartbeat := map[string]interface{}{
+		"every": every,
+	}
+	if target != "" {
+		heartbeat["target"] = target
+	}
+	defaults["heartbeat"] = heartbeat
+
+	// Re-serialize.
+	patched, err := json.MarshalIndent(cfgJSON, "    ", "  ")
+	if err != nil {
+		fmt.Printf("Warning: could not marshal patched config: %v\n", err)
+		return
+	}
+
+	// Apply via kubectl apply --server-side with Helm's field manager so that
+	// subsequent helm upgrade doesn't conflict on data.openclaw.json.
+	applyPayload := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "openclaw-config",
+			"namespace": namespace,
+		},
+		"data": map[string]string{
+			"openclaw.json": string(patched),
+		},
+	}
+	applyRaw, _ := json.Marshal(applyPayload)
+
+	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
+		"--server-side", "--field-manager=helm", "--force-conflicts")
+	applyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	applyCmd.Stdin = bytes.NewReader(applyRaw)
+	var applyErr bytes.Buffer
+	applyCmd.Stderr = &applyErr
+	if err := applyCmd.Run(); err != nil {
+		fmt.Printf("Warning: could not patch heartbeat config: %v\n%s\n", err, applyErr.String())
+		return
+	}
+
+	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s)\n", every, target)
 }
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.

@@ -124,11 +124,14 @@ func patchMonetizeBinding(cfg *config.Config) error {
 	return nil
 }
 
-// injectHeartbeatFile writes HEARTBEAT.md to the obol-agent's PVC path
+// injectHeartbeatFile writes HEARTBEAT.md to the obol-agent's workspace path
 // so OpenClaw runs monetize.py reconciliation on every heartbeat cycle.
+// OpenClaw reads HEARTBEAT.md from the agent workspace directory
+// (resolveAgentWorkspaceDir → /data/.openclaw/workspace/HEARTBEAT.md),
+// NOT the root .openclaw directory.
 func injectHeartbeatFile(cfg *config.Config) error {
 	namespace := fmt.Sprintf("openclaw-%s", agentID)
-	heartbeatDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw")
+	heartbeatDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
 	if err := os.MkdirAll(heartbeatDir, 0755); err != nil {
 		return fmt.Errorf("failed to create heartbeat directory: %w", err)

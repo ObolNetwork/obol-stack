@@ -54,6 +54,16 @@ func saveTunnelState(cfg *config.Config, st *tunnelState) error {
 	return os.WriteFile(tunnelStatePath(cfg), data, 0600)
 }
 
+// TunnelState is an exported alias so other packages (agent, openclaw)
+// can read tunnel state without reaching into unexported types.
+type TunnelState = tunnelState
+
+// LoadTunnelState reads the persisted tunnel state from disk.
+// Returns (nil, nil) if no state file exists.
+func LoadTunnelState(cfg *config.Config) (*TunnelState, error) {
+	return loadTunnelState(cfg)
+}
+
 func tunnelModeAndURL(st *tunnelState) (mode, url string) {
 	if st != nil && st.Hostname != "" {
 		return "dns", "https://" + st.Hostname

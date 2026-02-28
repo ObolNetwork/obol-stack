@@ -43,16 +43,22 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	}
 
 	// 2. Update the pricing ConfigMap with wallet and chain.
+	// Read existing config to preserve routes added by the ServiceOffer reconciler.
 	fmt.Printf("Updating x402 pricing config...\n")
 	if facilitatorURL == "" {
 		facilitatorURL = "https://facilitator.x402.rs"
+	}
+	existingCfg, _ := GetPricingConfig(cfg)
+	var existingRoutes []RouteRule
+	if existingCfg != nil {
+		existingRoutes = existingCfg.Routes
 	}
 	pricingCfg := &PricingConfig{
 		Wallet:         wallet,
 		Chain:          chain,
 		FacilitatorURL: facilitatorURL,
 		VerifyOnly:     false,
-		Routes:         []RouteRule{},
+		Routes:         existingRoutes,
 	}
 	if err := patchPricingConfig(bin, kc, pricingCfg); err != nil {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
