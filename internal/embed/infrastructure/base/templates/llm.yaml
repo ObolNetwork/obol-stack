@@ -99,7 +99,8 @@ data:
         "npm": "ollama",
         "api": "http://ollama.llm.svc.cluster.local:11434",
         "models": {},
-        "all_models": true
+        "all_models": true,
+        "tool_call": false
       },
       "anthropic": {
         "id": "anthropic",
@@ -150,7 +151,7 @@ spec:
         # providers.json is taken from the llmspy package (has full model definitions)
         # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
         - name: seed-config
-          image: ghcr.io/obolnetwork/llms:3.0.34-obol.1
+          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -177,22 +178,6 @@ spec:
                   json.dump(providers, f, indent=2)
               os.chmod('/data/llms.json', 0o666)
               os.chmod('/data/providers.json', 0o666)
-              # Patch: strip stream_options when forcing stream=false.
-              # OpenClaw sends stream_options with streaming requests; llmspy forces
-              # stream=false but doesn't remove stream_options. OpenAI rejects the
-              # combination. Copy the llms package to the writable volume and patch it.
-              # TODO: remove once fixed upstream in ObolNetwork/llms.
-              shutil.copytree(pkg_dir, '/data/llms', dirs_exist_ok=True)
-              main_path = '/data/llms/main.py'
-              with open(main_path) as f:
-                  code = f.read()
-              code = code.replace(
-                  'chat["stream"] = False',
-                  'chat["stream"] = False\n    chat.pop("stream_options", None)',
-                  1,
-              )
-              with open(main_path, 'w') as f:
-                  f.write(code)
           volumeMounts:
             - name: llmspy-config
               mountPath: /config
@@ -203,7 +188,7 @@ spec:
         - name: llmspy
           # Obol fork of LLMSpy with smart routing extension.
           # Pin a specific version for reproducibility.
-          image: ghcr.io/obolnetwork/llms:3.0.34-obol.1
+          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -224,9 +209,6 @@ spec:
             # Avoid surprises if the image changes its default HOME.
             - name: HOME
               value: /home/llms
-            # Load patched llms package from the init container (stream_options fix).
-            - name: PYTHONPATH
-              value: /home/llms/.llms
           volumeMounts:
             - name: llmspy-home
               mountPath: /home/llms/.llms
