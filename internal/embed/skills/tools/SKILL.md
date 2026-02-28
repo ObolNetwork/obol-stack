@@ -90,7 +90,7 @@ const response = await x402Fetch('https://api.example.com/data', {
 `cast` is pre-installed in the OpenClaw image. The local eRPC gateway is the default RPC:
 
 ```bash
-RPC="http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet"
+RPC="http://erpc.erpc.svc.cluster.local/rpc/mainnet"
 
 # Read contract (with ABI decoding)
 cast call 0xAddr "balanceOf(address)(uint256)" 0xWallet --rpc-url $RPC
@@ -126,7 +126,7 @@ For a full cast-based query tool, see the `ethereum-networks` skill (`scripts/rp
 ## RPC Providers
 
 **Obol Stack (local, preferred):**
-- `http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet` — local eRPC gateway, routes to installed networks
+- `http://erpc.erpc.svc.cluster.local/rpc/mainnet` — local eRPC gateway, routes to installed networks
 - Supports `/rpc/{network}` (mainnet, hoodi, sepolia) and `/rpc/evm/{chainId}` routing
 
 **Free (testing/fallback):**
@@ -172,7 +172,7 @@ MCP servers are composable — agents can use multiple together.
 
 **Fork mainnet locally:**
 ```bash
-anvil --fork-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+anvil --fork-url http://erpc.erpc.svc.cluster.local/rpc/mainnet
 # Now test against real contracts with fake ETH at http://localhost:8545
 # Fallback public RPC: https://eth.llamarpc.com
 ```

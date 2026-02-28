@@ -9,6 +9,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const agentID = "obol-agent"
@@ -18,7 +19,7 @@ const agentID = "obol-agent"
 // After onboarding, it patches the monetize RBAC bindings
 // to grant the agent's ServiceAccount monetization permissions,
 // and injects HEARTBEAT.md to drive periodic reconciliation.
-func Init(cfg *config.Config) error {
+func Init(cfg *config.Config, u *ui.UI) error {
 	// Check if obol-agent already exists.
 	instances, err := openclaw.ListInstanceIDs(cfg)
 	if err != nil {
@@ -41,21 +42,21 @@ func Init(cfg *config.Config) error {
 	}
 
 	if exists {
-		fmt.Println("obol-agent already exists, re-syncing...")
+		u.Warn("obol-agent already exists, re-syncing...")
 		opts.Force = true
 	}
 
-	if err := openclaw.Onboard(cfg, opts); err != nil {
+	if err := openclaw.Onboard(cfg, opts, u); err != nil {
 		return fmt.Errorf("failed to onboard obol-agent: %w", err)
 	}
 
 	// Patch ClusterRoleBinding to add the agent's ServiceAccount.
-	if err := patchMonetizeBinding(cfg); err != nil {
+	if err := patchMonetizeBinding(cfg, u); err != nil {
 		return fmt.Errorf("failed to patch ClusterRoleBinding: %w", err)
 	}
 
 	// Inject HEARTBEAT.md for periodic reconciliation.
-	if err := injectHeartbeatFile(cfg); err != nil {
+	if err := injectHeartbeatFile(cfg, u); err != nil {
 		return fmt.Errorf("failed to inject HEARTBEAT.md: %w", err)
 	}
 
@@ -70,7 +71,7 @@ func Init(cfg *config.Config) error {
 //	  openclaw-monetize-workload-binding  (cluster-wide mutate)
 //	RoleBindings patched:
 //	  openclaw-x402-pricing-binding       (x402 namespace, pricing ConfigMap)
-func patchMonetizeBinding(cfg *config.Config) error {
+func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 	namespace := fmt.Sprintf("openclaw-%s", agentID)
 
 	subject := []map[string]interface{}{
@@ -120,7 +121,7 @@ func patchMonetizeBinding(cfg *config.Config) error {
 		return fmt.Errorf("patch rolebinding openclaw-x402-pricing-binding: %w", err)
 	}
 
-	fmt.Printf("✓ RBAC bindings patched (SA: openclaw in %s)\n", namespace)
+	u.Successf("RBAC bindings patched (SA: openclaw in %s)", namespace)
 	return nil
 }
 
@@ -129,7 +130,7 @@ func patchMonetizeBinding(cfg *config.Config) error {
 // OpenClaw reads HEARTBEAT.md from the agent workspace directory
 // (resolveAgentWorkspaceDir → /data/.openclaw/workspace/HEARTBEAT.md),
 // NOT the root .openclaw directory.
-func injectHeartbeatFile(cfg *config.Config) error {
+func injectHeartbeatFile(cfg *config.Config, u *ui.UI) error {
 	namespace := fmt.Sprintf("openclaw-%s", agentID)
 	heartbeatDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
@@ -137,7 +138,7 @@ func injectHeartbeatFile(cfg *config.Config) error {
 		return fmt.Errorf("failed to create heartbeat directory: %w", err)
 	}
 
-	content := `Run: python3 /data/.openclaw/skills/monetize/scripts/monetize.py process --all
+	content := `Run: python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all
 Report HEARTBEAT_OK if no pending offers. Otherwise report what was processed.
 `
 
@@ -146,6 +147,6 @@ Report HEARTBEAT_OK if no pending offers. Otherwise report what was processed.
 		return fmt.Errorf("failed to write HEARTBEAT.md: %w", err)
 	}
 
-	fmt.Printf("✓ HEARTBEAT.md injected at %s\n", heartbeatPath)
+	u.Successf("HEARTBEAT.md injected at %s", heartbeatPath)
 	return nil
 }

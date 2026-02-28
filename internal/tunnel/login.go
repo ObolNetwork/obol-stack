@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -10,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 type LoginOptions struct {
@@ -25,7 +26,7 @@ type LoginOptions struct {
 // - Create a locally-managed tunnel: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/
 // - Configuration file for published apps: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/
 // - `origincert` run parameter (locally-managed tunnels): https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/cloudflared-parameters/run-parameters/
-func Login(cfg *config.Config, opts LoginOptions) error {
+func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
 		return fmt.Errorf("--hostname is required (e.g. stack.example.com)")
@@ -48,7 +49,7 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return fmt.Errorf("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
 	}
 
-	fmt.Println("Authenticating cloudflared (browser)...")
+	u.Info("Authenticating cloudflared (browser)...")
 	loginCmd := exec.Command(cloudflaredPath, "tunnel", "login")
 	loginCmd.Stdin = os.Stdin
 	loginCmd.Stdout = os.Stdout
@@ -57,10 +58,10 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return fmt.Errorf("cloudflared tunnel login failed: %w", err)
 	}
 
-	fmt.Printf("\nCreating tunnel: %s\n", tunnelName)
+	u.Infof("Creating tunnel: %s", tunnelName)
 	if out, err := exec.Command(cloudflaredPath, "tunnel", "create", tunnelName).CombinedOutput(); err != nil {
 		// "Already exists" is common if user re-runs. We'll recover by querying tunnel info.
-		fmt.Printf("cloudflared tunnel create returned an error (continuing): %s\n", strings.TrimSpace(string(out)))
+		u.Warnf("cloudflared tunnel create returned an error (continuing): %s", strings.TrimSpace(string(out)))
 	}
 
 	infoOut, err := exec.Command(cloudflaredPath, "tunnel", "info", tunnelName).CombinedOutput()
@@ -85,18 +86,18 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 		return fmt.Errorf("failed to read %s: %w", credPath, err)
 	}
 
-	fmt.Printf("\nCreating DNS route for %s...\n", hostname)
+	u.Infof("Creating DNS route for %s...", hostname)
 	routeOut, err := exec.Command(cloudflaredPath, "tunnel", "route", "dns", tunnelName, hostname).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s", err, strings.TrimSpace(string(routeOut)))
 	}
 
-	if err := applyLocalManagedK8sResources(cfg, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
+	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
 		return err
 	}
 
 	// Re-render the chart so it flips from quick tunnel to locally-managed.
-	if err := helmUpgradeCloudflared(cfg, kubeconfigPath); err != nil {
+	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
 
@@ -114,12 +115,13 @@ func Login(cfg *config.Config, opts LoginOptions) error {
 
 	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
 	if err := SyncAgentBaseURL(cfg, fmt.Sprintf("https://%s", hostname)); err != nil {
-		fmt.Printf("Warning: could not sync AGENT_BASE_URL to obol-agent: %v\n", err)
+		u.Warnf("could not sync AGENT_BASE_URL to obol-agent: %v", err)
 	}
 
-	fmt.Println("\n✓ Tunnel login complete")
-	fmt.Printf("Persistent URL: https://%s\n", hostname)
-	fmt.Println("Tip: run 'obol tunnel status' to verify the connector is active.")
+	u.Blank()
+	u.Success("Tunnel login complete")
+	u.Printf("Persistent URL: https://%s", hostname)
+	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
 	return nil
 }
 
@@ -139,20 +141,19 @@ func parseFirstUUID(s string) (string, error) {
 	return "", fmt.Errorf("uuid not found")
 }
 
-func applyLocalManagedK8sResources(cfg *config.Config, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
+func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
 	// Secret: account certificate + tunnel credentials (locally-managed tunnel requires origincert).
 	secretYAML, err := buildLocalManagedSecretYAML(hostname, certPEM, credJSON)
 	if err != nil {
 		return err
 	}
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	if err := kubectl.Apply(kubectlBin, kubeconfigPath, secretYAML); err != nil {
+	if err := kubectlApply(cfg, u, kubeconfigPath, secretYAML); err != nil {
 		return err
 	}
 
 	// ConfigMap: config.yml + tunnel_id used for command arg expansion.
 	cfgYAML := buildLocalManagedConfigYAML(hostname, tunnelID)
-	if err := kubectl.Apply(kubectlBin, kubeconfigPath, cfgYAML); err != nil {
+	if err := kubectlApply(cfg, u, kubeconfigPath, cfgYAML); err != nil {
 		return err
 	}
 
@@ -202,3 +203,19 @@ data:
 	return []byte(cfg)
 }
 
+func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest []byte) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"apply", "-f", "-",
+	)
+	cmd.Stdin = bytes.NewReader(manifest)
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Applying Kubernetes manifest",
+		Cmd:  cmd,
+	}); err != nil {
+		return fmt.Errorf("kubectl apply failed: %w", err)
+	}
+	return nil
+}

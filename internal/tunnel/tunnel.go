@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 )
 
 // Status displays the current tunnel status and URL.
-func Status(cfg *config.Config) error {
+func Status(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -37,9 +38,10 @@ func Status(cfg *config.Config) error {
 	podStatus, err := getPodStatus(kubectlPath, kubeconfigPath)
 	if err != nil {
 		mode, url := tunnelModeAndURL(st)
-		printStatusBox(mode, "not deployed", url, time.Now())
-		fmt.Println("\nTroubleshooting:")
-		fmt.Println("  - Start the stack: obol stack up")
+		printStatusBox(u, mode, "not deployed", url, time.Now())
+		u.Blank()
+		u.Print("Troubleshooting:")
+		u.Print("  - Start the stack: obol stack up")
 		return nil
 	}
 
@@ -51,19 +53,20 @@ func Status(cfg *config.Config) error {
 	mode, url := tunnelModeAndURL(st)
 	if mode == "quick" {
 		// Quick tunnels only: try to get URL from logs.
-		u, err := GetTunnelURL(cfg)
+		tunnelURL, err := GetTunnelURL(cfg)
 		if err != nil {
-			printStatusBox(mode, podStatus, "(not available)", time.Now())
-			fmt.Println("\nTroubleshooting:")
-			fmt.Println("  - Check logs: obol tunnel logs")
-			fmt.Println("  - Restart tunnel: obol tunnel restart")
+			printStatusBox(u, mode, podStatus, "(not available)", time.Now())
+			u.Blank()
+			u.Print("Troubleshooting:")
+			u.Print("  - Check logs: obol tunnel logs")
+			u.Print("  - Restart tunnel: obol tunnel restart")
 			return nil
 		}
-		url = u
+		url = tunnelURL
 	}
 
-	printStatusBox(mode, statusLabel, url, time.Now())
-	fmt.Printf("\nTest with: curl %s/\n", url)
+	printStatusBox(u, mode, statusLabel, url, time.Now())
+	u.Printf("Test with: curl %s/", url)
 
 	return nil
 }
@@ -99,7 +102,7 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 }
 
 // Restart restarts the cloudflared deployment.
-func Restart(cfg *config.Config) error {
+func Restart(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -108,22 +111,21 @@ func Restart(cfg *config.Config) error {
 		return fmt.Errorf("stack not running, use 'obol stack up' first")
 	}
 
-	fmt.Println("Restarting cloudflared tunnel...")
-
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"rollout", "restart", "deployment/cloudflared",
 		"-n", tunnelNamespace,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Restarting cloudflared tunnel",
+		Cmd:  cmd,
+	}); err != nil {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 
-	fmt.Println("\nTunnel restarting...")
-	fmt.Println("Run 'obol tunnel status' to see the URL once ready (may take 10-30 seconds).")
+	u.Blank()
+	u.Print("Tunnel restarting...")
+	u.Print("Run 'obol tunnel status' to see the URL once ready (may take 10-30 seconds).")
 
 	return nil
 }
@@ -179,15 +181,15 @@ func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
 }
 
 // printStatusBox prints a formatted status box.
-func printStatusBox(mode, status, url string, lastUpdated time.Time) {
-	fmt.Println()
-	fmt.Println("Cloudflare Tunnel Status")
-	fmt.Println(strings.Repeat("─", 50))
-	fmt.Printf("Mode:         %s\n", mode)
-	fmt.Printf("Status:       %s\n", status)
-	fmt.Printf("URL:          %s\n", url)
-	fmt.Printf("Last Updated: %s\n", lastUpdated.Format(time.RFC3339))
-	fmt.Println(strings.Repeat("─", 50))
+func printStatusBox(u *ui.UI, mode, status, url string, lastUpdated time.Time) {
+	u.Blank()
+	u.Bold("Cloudflare Tunnel Status")
+	u.Print(strings.Repeat("─", 50))
+	u.Detail("Mode", mode)
+	u.Detail("Status", status)
+	u.Detail("URL", url)
+	u.Detail("Last Updated", lastUpdated.Format(time.RFC3339))
+	u.Print(strings.Repeat("─", 50))
 }
 
 func parseQuickTunnelURL(logs string) (string, bool) {

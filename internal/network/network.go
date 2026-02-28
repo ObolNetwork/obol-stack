@@ -11,59 +11,56 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
 )
 
 // List displays all available networks from the embedded filesystem
-func List(cfg *config.Config) error {
-	fmt.Println("Available networks:")
-
-	// Get all available networks from embedded FS
+func List(cfg *config.Config, u *ui.UI) error {
 	availableNetworks, err := embed.GetAvailableNetworks()
 	if err != nil {
 		return fmt.Errorf("failed to get available networks: %w", err)
 	}
 
 	if len(availableNetworks) == 0 {
-		fmt.Println("No embedded networks found")
+		u.Print("No embedded networks found")
 		return nil
 	}
 
-	// Display each network
+	u.Bold("Available networks:")
 	for _, network := range availableNetworks {
-		fmt.Printf("  • %s\n", network)
+		u.Printf("  • %s", network)
 	}
-
-	fmt.Printf("\nTotal: %d network(s) available\n", len(availableNetworks))
+	u.Blank()
+	u.Dim(fmt.Sprintf("Total: %d network(s) available", len(availableNetworks)))
 
 	return nil
 }
 
 // Install creates a network configuration by executing Go templates and saving to config directory
-func Install(cfg *config.Config, network string, overrides map[string]string, force bool) error {
-	fmt.Printf("Installing network: %s\n", network)
+func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]string, force bool) error {
+	u.Infof("Installing network: %s", network)
 
 	// Generate deployment ID if not provided in overrides (use petname)
 	id, hasId := overrides["id"]
 	if !hasId || id == "" {
 		id = petname.Generate(2, "-")
 		overrides["id"] = id
-		fmt.Printf("Generated deployment ID: %s\n", id)
+		u.Detail("Deployment ID", fmt.Sprintf("%s (generated)", id))
 	} else {
-		fmt.Printf("Using deployment ID: %s\n", id)
+		u.Detail("Deployment ID", id)
 	}
 
 	// Check if deployment already exists
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", network, id)
 	if _, err := os.Stat(deploymentDir); err == nil {
-		// Directory exists
 		if !force {
 			return fmt.Errorf("deployment already exists: %s/%s\n"+
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite the existing configuration", network, id, deploymentDir)
 		}
-		fmt.Printf("⚠️  WARNING: Overwriting existing deployment at %s\n", deploymentDir)
+		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
 	// Parse embedded values template to get fields
@@ -75,28 +72,25 @@ func Install(cfg *config.Config, network string, overrides map[string]string, fo
 	// Build template data from CLI flags and defaults
 	templateData := make(map[string]string)
 
-	fmt.Println("Configuration:")
-	fmt.Printf("  deployment id: %s (from directory structure)\n", id)
+	u.Blank()
+	u.Print("Configuration:")
+	u.Detail("deployment id", fmt.Sprintf("%s (from directory structure)", id))
 
 	// Process parsed fields
 	for _, field := range fields {
 		value := field.DefaultValue
 
-		// Check if there's an override from CLI flags
 		if overrideValue, ok := overrides[field.FlagName]; ok {
 			value = overrideValue
-			fmt.Printf("  %s = %s (from --%s)\n", field.Name, value, field.FlagName)
+			u.Detail(field.Name, fmt.Sprintf("%s (from --%s)", value, field.FlagName))
 		} else if field.Required && value == "" {
-			// Required field with no value provided
 			return fmt.Errorf("missing required flag: --%s", field.FlagName)
 		} else if value != "" {
-			fmt.Printf("  %s = %s (default)\n", field.Name, value)
+			u.Detail(field.Name, fmt.Sprintf("%s (default)", value))
 		} else {
-			// Optional field with empty default
-			fmt.Printf("  %s = (empty, optional)\n", field.Name)
+			u.Detail(field.Name, "(empty, optional)")
 		}
 
-		// Add to template data using field name (e.g., "Network", "ExecutionClient")
 		templateData[field.Name] = value
 	}
 
@@ -125,15 +119,12 @@ func Install(cfg *config.Config, network string, overrides map[string]string, fo
 			"Generated content:\n%s", err, buf.String())
 	}
 
-	// Create deployment directory in config: networks/<network>/<id>/
-	// (deploymentDir already defined earlier for existence check)
+	// Create deployment directory
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	fmt.Printf("Saving configuration to: %s\n", deploymentDir)
-
-	// Write the templated values.yaml (plain YAML, no more templating)
+	// Write the templated values.yaml
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
 	if err := os.WriteFile(valuesPath, buf.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write values.yaml: %w", err)
@@ -144,28 +135,26 @@ func Install(cfg *config.Config, network string, overrides map[string]string, fo
 		return fmt.Errorf("failed to copy network files: %w", err)
 	}
 
-	// Remove values.yaml.gotmpl if it was copied (we already generated values.yaml)
+	// Remove values.yaml.gotmpl if it was copied
 	valuesTemplatePath := filepath.Join(deploymentDir, "values.yaml.gotmpl")
-	os.Remove(valuesTemplatePath) // Ignore error if file doesn't exist
+	os.Remove(valuesTemplatePath)
 
-	fmt.Printf("\nNetwork configuration saved successfully!\n")
-	fmt.Printf("Deployment: %s/%s\n", network, id)
-	fmt.Printf("Location: %s\n", deploymentDir)
-	fmt.Printf("\nFiles generated:\n")
-	fmt.Printf("  - values.yaml: Configuration values\n")
-	fmt.Printf("  - helmfile.yaml.gotmpl: Deployment definition\n")
-	fmt.Printf("\nTo deploy, run: obol network sync %s/%s\n", network, id)
+	u.Blank()
+	u.Successf("Network %s/%s configured", network, id)
+	u.Detail("Location", deploymentDir)
+	u.Blank()
+	u.Printf("To deploy, run: obol network sync %s/%s", network, id)
 
 	return nil
 }
 
 // SyncAll syncs all installed network deployments found in the config directory.
-func SyncAll(cfg *config.Config) error {
+func SyncAll(cfg *config.Config, u *ui.UI) error {
 	networksDir := filepath.Join(cfg.ConfigDir, "networks")
 	networkDirs, err := os.ReadDir(networksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("No networks installed.")
+			u.Print("No networks installed.")
 			return nil
 		}
 		return fmt.Errorf("could not read networks directory: %w", err)
@@ -185,30 +174,28 @@ func SyncAll(cfg *config.Config) error {
 				continue
 			}
 			identifier := fmt.Sprintf("%s/%s", networkDir.Name(), deployment.Name())
-			fmt.Printf("─── Syncing %s ───\n", identifier)
-			if err := Sync(cfg, identifier); err != nil {
-				fmt.Printf("  Warning: failed to sync %s: %v\n", identifier, err)
+			u.Infof("Syncing %s", identifier)
+			if err := Sync(cfg, u, identifier); err != nil {
+				u.Warnf("Failed to sync %s: %v", identifier, err)
 				continue
 			}
 			synced++
-			fmt.Println()
 		}
 	}
 
 	if synced == 0 {
-		fmt.Println("No networks installed. Use 'obol network install <network>' first.")
+		u.Print("No networks installed. Use 'obol network install <network>' first.")
 	} else {
-		fmt.Printf("✓ Synced %d network deployment(s)\n", synced)
+		u.Successf("Synced %d network deployment(s)", synced)
 	}
 	return nil
 }
 
 // Sync deploys or updates a network configuration to the cluster using helmfile
-func Sync(cfg *config.Config, deploymentIdentifier string) error {
-	// Parse deployment identifier (supports both "ethereum/knowing-wahoo" and "ethereum-knowing-wahoo")
+func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
+	// Parse deployment identifier
 	var networkName, deploymentID string
 
-	// Try slash separator first
 	if strings.Contains(deploymentIdentifier, "/") {
 		parts := strings.SplitN(deploymentIdentifier, "/", 2)
 		if len(parts) != 2 {
@@ -217,8 +204,6 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 		networkName = parts[0]
 		deploymentID = parts[1]
 	} else {
-		// Try to split by first dash that separates network from ID
-		// Network names are expected to be single words (ethereum, aztec)
 		parts := strings.SplitN(deploymentIdentifier, "-", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
@@ -227,84 +212,72 @@ func Sync(cfg *config.Config, deploymentIdentifier string) error {
 		deploymentID = parts[1]
 	}
 
-	fmt.Printf("Syncing deployment: %s/%s\n", networkName, deploymentID)
-
 	// Locate deployment directory
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", networkName, deploymentID)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
 	}
 
-	// Check if helmfile.yaml.gotmpl or helmfile.yaml exists (prefer .gotmpl for Helmfile v1+)
+	// Check helmfile exists
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-		// Fallback to helmfile.yaml for backwards compatibility
 		helmfilePath = filepath.Join(deploymentDir, "helmfile.yaml")
 		if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-			return fmt.Errorf("helmfile.yaml or helmfile.yaml.gotmpl not found in deployment directory: %s", deploymentDir)
+			return fmt.Errorf("helmfile not found in deployment directory: %s", deploymentDir)
 		}
 	}
 
-	// Check if values.yaml exists
+	// Check values.yaml exists
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
 	if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
 		return fmt.Errorf("values.yaml not found in deployment directory: %s", deploymentDir)
 	}
 
-	// Check if kubeconfig exists (cluster must be running)
+	// Check kubeconfig (cluster must be running)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
-	// Get helmfile binary path
 	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
 	}
 
-	fmt.Printf("Deployment directory: %s\n", deploymentDir)
-	fmt.Printf("Using: %s\n", filepath.Base(helmfilePath))
-	fmt.Printf("Deployment ID: %s (from directory structure)\n", deploymentID)
-	fmt.Printf("Running helmfile sync...\n\n")
-
-	// Execute helmfile sync with explicit file, state-values-file, and id from directory structure
+	// Execute helmfile sync
 	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
 		"--state-values-set", fmt.Sprintf("id=%s", deploymentID))
-	cmd.Dir = deploymentDir // Run in deployment directory
+	cmd.Dir = deploymentDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{
+		Name: fmt.Sprintf("Deploying %s/%s", networkName, deploymentID),
+		Cmd:  cmd,
+	}); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	fmt.Printf("\nDeployment synced successfully!\n")
-	fmt.Printf("Namespace: %s-%s\n", networkName, deploymentID)
-
-	// Register local node as eRPC upstream so the gateway routes through it
+	// Register local node as eRPC upstream
 	if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
-		fmt.Printf("  Warning: could not register eRPC upstream: %v\n", err)
+		u.Warnf("Could not register eRPC upstream: %v", err)
 	}
 
-	fmt.Printf("\nTo check status: obol kubectl get all -n %s-%s\n", networkName, deploymentID)
-	fmt.Printf("To view logs: obol kubectl logs -n %s-%s <pod-name>\n", networkName, deploymentID)
-	fmt.Printf("To access dashboard: obol k9s -n %s-%s\n", networkName, deploymentID)
+	u.Blank()
+	u.Successf("Deployment %s/%s synced", networkName, deploymentID)
+	u.Dim(fmt.Sprintf("  Namespace: %s-%s", networkName, deploymentID))
+	u.Dim(fmt.Sprintf("  Status:    obol kubectl get all -n %s-%s", networkName, deploymentID))
 
 	return nil
 }
 
 // Delete removes the network deployment configuration and cluster resources
-func Delete(cfg *config.Config, deploymentIdentifier string) error {
-	// Parse deployment identifier (supports both "ethereum/knowing-wahoo" and "ethereum-knowing-wahoo")
+func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
+	// Parse deployment identifier
 	var networkName, deploymentID string
 
-	// Try slash separator first
 	if strings.Contains(deploymentIdentifier, "/") {
 		parts := strings.SplitN(deploymentIdentifier, "/", 2)
 		if len(parts) != 2 {
@@ -313,7 +286,6 @@ func Delete(cfg *config.Config, deploymentIdentifier string) error {
 		networkName = parts[0]
 		deploymentID = parts[1]
 	} else {
-		// Try to split by first dash that separates network from ID
 		parts := strings.SplitN(deploymentIdentifier, "-", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
@@ -325,9 +297,7 @@ func Delete(cfg *config.Config, deploymentIdentifier string) error {
 	namespaceName := fmt.Sprintf("%s-%s", networkName, deploymentID)
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", networkName, deploymentID)
 
-	fmt.Printf("Deleting deployment: %s/%s\n", networkName, deploymentID)
-	fmt.Printf("Namespace: %s\n", namespaceName)
-	fmt.Printf("Config directory: %s\n", deploymentDir)
+	u.Infof("Deleting deployment: %s/%s", networkName, deploymentID)
 
 	// Check if config directory exists
 	configExists := false
@@ -339,7 +309,6 @@ func Delete(cfg *config.Config, deploymentIdentifier string) error {
 	namespaceExists := false
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
-		// Cluster is running, check for namespace
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
 		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
@@ -348,60 +317,44 @@ func Delete(cfg *config.Config, deploymentIdentifier string) error {
 		}
 	}
 
-	// Display what will be deleted
-	fmt.Println("\nResources to be deleted:")
-	if namespaceExists {
-		fmt.Printf("  ✓ Kubernetes namespace: %s (including all resources)\n", namespaceName)
-	} else {
-		fmt.Printf("  - Kubernetes namespace: %s (not found)\n", namespaceName)
-	}
-	if configExists {
-		fmt.Printf("  ✓ Configuration directory: %s\n", deploymentDir)
-	} else {
-		fmt.Printf("  - Configuration directory: %s (not found)\n", deploymentDir)
-	}
-
-	// Check if there's anything to delete
 	if !namespaceExists && !configExists {
 		return fmt.Errorf("deployment not found: %s", deploymentIdentifier)
 	}
 
 	// Deregister from eRPC before deleting the namespace
 	if err := DeregisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
-		fmt.Printf("  Warning: could not deregister eRPC upstream: %v\n", err)
+		u.Warnf("Could not deregister eRPC upstream: %v", err)
 	}
 
 	// Delete Kubernetes namespace
 	if namespaceExists {
-		fmt.Printf("\nDeleting namespace %s...\n", namespaceName)
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName, "--force", "--grace-period=0")
 		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := u.Exec(ui.ExecConfig{
+			Name: fmt.Sprintf("Deleting namespace %s", namespaceName),
+			Cmd:  cmd,
+		}); err != nil {
 			return fmt.Errorf("failed to delete namespace: %w", err)
 		}
-		fmt.Println("Namespace deleted successfully")
 	}
 
 	// Delete configuration directory
 	if configExists {
-		fmt.Printf("Deleting configuration directory...\n")
 		if err := os.RemoveAll(deploymentDir); err != nil {
 			return fmt.Errorf("failed to delete config directory: %w", err)
 		}
-		fmt.Println("Configuration deleted successfully")
+		u.Success("Configuration deleted")
 
-		// Check if parent network directory is empty and remove it
+		// Clean up empty parent directory
 		networkDir := filepath.Join(cfg.ConfigDir, "networks", networkName)
 		entries, err := os.ReadDir(networkDir)
 		if err == nil && len(entries) == 0 {
-			os.Remove(networkDir) // Clean up empty network directory
+			os.Remove(networkDir)
 		}
 	}
 
-	fmt.Printf("\n✓ Deployment %s/%s deleted successfully!\n", networkName, deploymentID)
+	u.Successf("Deployment %s/%s deleted", networkName, deploymentID)
 
 	return nil
 }

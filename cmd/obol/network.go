@@ -36,10 +36,11 @@ func networkCommand(cfg *config.Config) *cli.Command {
 				Usage:     "Deploy or update network configuration to cluster (no args = sync all)",
 				ArgsUsage: "[<network>/<id>]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
 					if cmd.NArg() == 0 {
-						return network.SyncAll(cfg)
+						return network.SyncAll(cfg, u)
 					}
-					return network.Sync(cfg, cmd.Args().First())
+					return network.Sync(cfg, u, cmd.Args().First())
 				},
 			},
 			{
@@ -50,7 +51,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if cmd.NArg() == 0 {
 						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
 					}
-					return network.Delete(cfg, cmd.Args().First())
+					return network.Delete(cfg, getUI(cmd), cmd.Args().First())
 				},
 			},
 			networkAddCommand(cfg),
@@ -158,7 +159,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 				// Get force flag
 				force := cmd.Bool("force")
 
-				return network.Install(cfg, netName, overrides, force)
+				return network.Install(cfg, getUI(cmd), netName, overrides, force)
 			},
 		})
 	}
@@ -177,7 +178,7 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			// Show local node deployments.
 			fmt.Println("Local Nodes:")
-			if err := network.List(cfg); err != nil {
+			if err := network.List(cfg, getUI(cmd)); err != nil {
 				fmt.Printf("  (unable to list: %v)\n", err)
 			}
 
