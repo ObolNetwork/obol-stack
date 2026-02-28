@@ -129,18 +129,8 @@ releases:
       - traefik/traefik
     values:
       - ./values/erpc.yaml.gotmpl
-    # Expose the Service on port 80 (default HTTP) so in-cluster callers
-    # don't need to specify :4000. The container still listens on 4000;
-    # the Service targetPort uses the named port "http" which resolves to it.
-    strategicMergePatches:
-      - apiVersion: v1
-        kind: Service
-        metadata:
-          name: erpc
-        spec:
-          ports:
-            - name: http
-              port: 80
+    # The chart exposes port 4000 (container) via Service port 4000.
+    # In-cluster callers use erpc.erpc.svc.cluster.local:4000.
 
   # eRPC HTTPRoute
   - name: erpc-httproute
@@ -175,7 +165,7 @@ releases:
                         name: x402-payment
                   backendRefs:
                     - name: erpc
-                      port: 80
+                      port: 4000
 
   # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier).
   # Always deployed; the verifier returns 200 for routes with no pricing rules.
