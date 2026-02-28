@@ -18,7 +18,7 @@ Discover AI agents registered on the ERC-8004 Identity Registry. Query on-chain 
 
 ## When NOT to Use
 
-- Registering your own agent on-chain -- use `monetize` (ServiceOffer with ERC-8004 registration stage)
+- Registering your own agent on-chain -- use `sell` (ServiceOffer with ERC-8004 registration stage)
 - Sending transactions or signing -- use `ethereum-local-wallet`
 - General Ethereum queries (balances, blocks) -- use `ethereum-networks`
 - Cluster diagnostics -- use `obol-stack`

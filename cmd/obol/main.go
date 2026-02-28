@@ -32,13 +32,13 @@ func main() {
    ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
 
 NAME:
-   {{.Name}}{{if .Usage}} - {{.Usage}}{{end}}
+   {{template "helpNameTemplate" .}}
 
 USAGE:
-   {{if .UsageText}}{{.UsageText}}{{else}}{{.HelpName}} {{if .VisibleFlags}}[global options]{{end}}{{if .Commands}} command [command options]{{end}}{{end}}
+   {{if .UsageText}}{{wrap .UsageText 3}}{{else}}{{.FullName}} {{if .VisibleFlags}}[global options]{{end}}{{if .VisibleCommands}} [command [command options]]{{end}}{{end}}{{if .Version}}{{if not .HideVersion}}
 
 VERSION:
-   {{.Version}}
+   {{.Version}}{{end}}{{end}}
 
 COMMANDS:
    Stack Lifecycle:
@@ -49,15 +49,12 @@ COMMANDS:
    Obol Agent:
      agent init      Initialize the Obol Agent
    Network Management:
-     network list    List available networks
-     network install Install and deploy network to cluster
-     network delete  Remove network and clean up cluster resources
-
-   RPC Gateway:
-     rpc list        List configured chains and their upstreams
-     rpc add         Add public RPCs for a chain from ChainList
-     rpc remove      Remove public RPCs for a chain
-     rpc status      Show eRPC health and upstream counts
+     network list    List all networks (local nodes + remote RPCs)
+     network install Install and deploy a local blockchain node
+     network add     Add remote RPC endpoints for a chain
+     network remove  Remove remote RPC endpoints for a chain
+     network status  Show eRPC gateway health and upstreams
+     network delete  Remove network deployment
 
    OpenClaw (AI Agent):
      openclaw onboard   Create and deploy an OpenClaw instance
@@ -74,22 +71,15 @@ COMMANDS:
      model setup        Configure cloud AI provider in llmspy gateway
      model status       Show global llmspy provider status
 
-   Service Management:
-     service create   Register a new service deployment
-     service deploy   Create (or update) and start the service gateway
-     service serve    Start the service gateway directly (no stored config)
-     service list     List all service deployments
-     service info     Show deployment details and encryption public key
-     service delete   Remove a service deployment
-     service pubkey   Print the encryption public key
-
-   Monetize:
-     monetize offer      Create a ServiceOffer CR
-     monetize list       List all ServiceOffer CRs
-     monetize status     Show conditions for a ServiceOffer
-     monetize delete     Delete a ServiceOffer CR
-     monetize pricing    Configure x402 pricing in the cluster
-     monetize register   Register service on ERC-8004 Identity Registry (Base Sepolia)
+   Sell Services (x402):
+     sell inference   Sell LLM inference via local x402 payment gateway
+     sell http        Sell access to any HTTP service (cluster-based)
+     sell list        List all ServiceOffer CRs
+     sell status      Show offer status or global pricing config
+     sell stop        Stop serving a ServiceOffer
+     sell delete      Delete a ServiceOffer CR
+     sell pricing     Configure x402 pricing in the cluster
+     sell register    Register on ERC-8004 Identity Registry
 
    App Management:
      app install     Install a Helm chart as an application
@@ -117,10 +107,9 @@ COMMANDS:
    Other:
      version         Show detailed version information
      help, h         Shows a list of commands or help for one command
-{{if .VisibleFlags}}
-GLOBAL OPTIONS:
-   {{range $index, $option := .VisibleFlags}}{{if $index}}
-   {{end}}{{$option}}{{end}}{{end}}
+{{if .VisibleFlagCategories}}
+GLOBAL OPTIONS:{{template "visibleFlagCategoryTemplate" .}}{{else if .VisibleFlags}}
+GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 `
 	app := &cli.Command{
 		Name:    "obol",
@@ -468,10 +457,8 @@ GLOBAL OPTIONS:
 			updateCommand(cfg),
 			upgradeCommand(cfg),
 			networkCommand(cfg),
-			rpcCommand(cfg),
 			openclawCommand(cfg),
-			serviceCommand(cfg),
-			monetizeCommand(cfg),
+			sellCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",

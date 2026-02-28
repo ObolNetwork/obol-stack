@@ -1358,7 +1358,7 @@ def main():
     # create
     sp_create = subparsers.add_parser("create", help="Create a new ServiceOffer CR")
     sp_create.add_argument("name", help="ServiceOffer name")
-    sp_create.add_argument("--type", default="inference", choices=["inference", "fine-tuning"], help="Workload type (default: inference)")
+    sp_create.add_argument("--type", default="http", choices=["inference", "fine-tuning", "http"], help="Service type (default: http)")
     sp_create.add_argument("--model", help="Model name (e.g. qwen3.5:35b)")
     sp_create.add_argument("--runtime", default="ollama", help="Model runtime (default: ollama)")
     sp_create.add_argument("--upstream", required=True, help="Upstream service name")
