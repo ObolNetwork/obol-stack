@@ -126,7 +126,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		// Decrypt via the SE private key.
 		plaintext, err := m.key.Decrypt(enc)
 		if err != nil {
-			log.Printf("enclave middleware: decrypt error: %v", err)
+			log.Printf("enclave middleware: decrypt error: %q", err)
 			http.Error(w, "decryption failed", http.StatusBadRequest)
 			return
 		}
