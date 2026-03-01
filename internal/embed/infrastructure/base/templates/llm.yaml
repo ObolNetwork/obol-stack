@@ -209,6 +209,9 @@ spec:
             # Avoid surprises if the image changes its default HOME.
             - name: HOME
               value: /home/llms
+            # Disable Python stdout buffering so logs appear in kubectl logs.
+            - name: PYTHONUNBUFFERED
+              value: "1"
           volumeMounts:
             - name: llmspy-home
               mountPath: /home/llms/.llms

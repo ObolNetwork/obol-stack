@@ -91,31 +91,19 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	}
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
-	// If no imported providers, query Ollama for available models
-	var ollamaModels []string
+	// No imported providers — skip automatic deployment.
+	// Local Ollama models are often too small to be useful, and the llmspy
+	// routing path has sharp edges that are better handled via explicit setup.
 	if !hasImportedProviders {
-		ollamaModels = listOllamaModels()
-		if ollamaModels != nil {
-			if len(ollamaModels) > 0 {
-				u.Successf("Local Ollama detected with %d model(s) at %s", len(ollamaModels), ollamaEndpoint())
-			} else {
-				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
-				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull llama3.2:3b")
-			}
-		} else {
-			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
-			u.Print("  Skipping default OpenClaw model provider setup.")
-			u.Print("  Run 'obol model setup' to configure a provider later.")
-			return nil
-		}
+		u.Print("  No model provider configured.")
+		u.Print("  Run 'obol openclaw onboard' to set up an OpenClaw instance.")
+		return nil
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:           "default",
-		Sync:         true,
-		IsDefault:    true,
-		OllamaModels: ollamaModels,
+		ID:        "default",
+		Sync:      true,
+		IsDefault: true,
 	}, u)
 }
 
