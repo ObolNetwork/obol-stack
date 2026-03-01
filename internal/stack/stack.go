@@ -439,6 +439,7 @@ type localImage struct {
 // localImages lists images that should be built locally and imported into k3d.
 var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
+	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 
 // buildAndImportLocalImages builds Docker images from source and imports them
