@@ -7,6 +7,10 @@
 */}}
 {{- $erpcGcpAuth := "obol:svXELzJDXQPrmgA3AopiWZWm" -}} {{/* gitleaks:allow */}}
 
+# Listen on port 80 so in-cluster callers use erpc.erpc.svc.cluster.local
+# without specifying a port. Overrides the chart default of 4000.
+httpPort: 80
+
 # Number of replicas
 replicas: 1
 
@@ -37,7 +41,7 @@ config: |-
     httpHostV4: "0.0.0.0"
     listenV6: true
     httpHostV6: "[::]"
-    httpPort: 4000
+    httpPort: 80
 
   metrics:
     enabled: true
