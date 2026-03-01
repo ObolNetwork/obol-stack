@@ -58,13 +58,16 @@ func UpdateHelmRepos(cfg *config.Config, quiet bool) error {
 	return nil
 }
 
-// CheckChartVersions parses the on-disk defaults helmfile for pinned chart versions
-// and compares each against the latest available via `helm search repo`.
+// CheckChartVersions parses all on-disk helmfiles (defaults + application instances)
+// for pinned chart versions and compares each against the latest available via `helm search repo`.
 func CheckChartVersions(cfg *config.Config) ([]ChartStatus, error) {
-	helmfilePath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
-	releases, err := parseHelmfileReleases(helmfilePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse defaults helmfile: %w", err)
+	var releases []helmfileRelease
+	for _, hf := range collectHelmfiles(cfg) {
+		rels, err := parseHelmfileReleases(hf)
+		if err != nil {
+			continue // best-effort: skip unreadable instance helmfiles
+		}
+		releases = append(releases, rels...)
 	}
 
 	helmBinary := filepath.Join(cfg.BinDir, "helm")
@@ -144,32 +147,52 @@ type VersionBump struct {
 	To    string
 }
 
-// UpgradeHelmfileVersions rewrites version pins in the on-disk defaults helmfile
-// to the latest available versions from helm repos. Uses yaml.Node to preserve
-// comments and formatting. If major is false, only bumps within the same major
-// version (like npm's ^ behavior). Returns the list of charts that were bumped.
-func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, error) {
-	helmfilePath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
+// UpgradeHelmfileVersions rewrites version pins in all on-disk helmfiles
+// (defaults + application instances) to the latest available versions from
+// helm repos. Uses yaml.Node to preserve comments and formatting. If major
+// is false, only bumps within the same major version (like npm's ^ behavior).
+// If chartFilter is non-empty, only the matching chart is bumped.
+// Returns the list of charts that were bumped.
+func UpgradeHelmfileVersions(cfg *config.Config, major bool, chartFilter string) ([]VersionBump, error) {
 	helmBinary := filepath.Join(cfg.BinDir, "helm")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
+	// Track which charts we've already reported (dedup across helmfiles).
+	reported := make(map[string]bool)
+	var allBumps []VersionBump
+
+	for _, helmfilePath := range collectHelmfiles(cfg) {
+		bumps, err := upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath, major, chartFilter, reported)
+		if err != nil {
+			continue // best-effort: skip unreadable instance helmfiles
+		}
+		allBumps = append(allBumps, bumps...)
+	}
+
+	if len(allBumps) == 0 {
+		return nil, nil
+	}
+	return allBumps, nil
+}
+
+// upgradeOneHelmfile bumps version pins in a single helmfile. Charts already
+// present in reported are skipped (dedup across files). If chartFilter is
+// non-empty, only that chart is considered.
+func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major bool, chartFilter string, reported map[string]bool) ([]VersionBump, error) {
 	data, err := os.ReadFile(helmfilePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read helmfile: %w", err)
+		return nil, err
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("failed to parse helmfile: %w", err)
+		return nil, err
 	}
-
-	// doc.Content[0] is the root mapping node
 	if doc.Content == nil || len(doc.Content) == 0 {
-		return nil, fmt.Errorf("empty helmfile document")
+		return nil, nil
 	}
 	root := doc.Content[0]
 
-	// Find the "releases" key in the root mapping
 	var releasesNode *yaml.Node
 	for i := 0; i < len(root.Content)-1; i += 2 {
 		if root.Content[i].Value == "releases" {
@@ -178,14 +201,12 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, err
 		}
 	}
 	if releasesNode == nil {
-		return nil, fmt.Errorf("no releases found in helmfile")
+		return nil, nil
 	}
 
-	// Track which charts we've already bumped (dedup bedag/raw etc.)
-	bumped := make(map[string]bool)
 	var bumps []VersionBump
+	changed := false
 
-	// Walk each release (sequence of mapping nodes)
 	for _, releaseNode := range releasesNode.Content {
 		if releaseNode.Kind != yaml.MappingNode {
 			continue
@@ -193,49 +214,39 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, err
 
 		var chartValue string
 		var versionNode *yaml.Node
-
-		// Extract chart and version from the mapping
 		for i := 0; i < len(releaseNode.Content)-1; i += 2 {
-			key := releaseNode.Content[i].Value
-			val := releaseNode.Content[i+1]
-			switch key {
+			switch releaseNode.Content[i].Value {
 			case "chart":
-				chartValue = val.Value
+				chartValue = releaseNode.Content[i+1].Value
 			case "version":
-				versionNode = val
+				versionNode = releaseNode.Content[i+1]
 			}
 		}
 
-		// Skip local charts and charts without version pins
 		if chartValue == "" || strings.HasPrefix(chartValue, "./") || strings.HasPrefix(chartValue, "/") {
 			continue
 		}
-		if versionNode == nil {
+		if chartFilter != "" && chartValue != chartFilter {
+			continue
+		}
+		if versionNode == nil || reported[chartValue] {
 			continue
 		}
 
-		// Skip if we already bumped this chart (dedup)
-		if bumped[chartValue] {
-			continue
-		}
-
-		// Query latest version
 		latest, err := helmSearchLatest(helmBinary, kubeconfigPath, chartValue)
 		if err != nil {
-			continue // best-effort, skip on failure
+			continue
 		}
 
 		currentVersion := versionNode.Value
 		if CompareVersions(currentVersion, latest) >= 0 {
-			continue // already up to date
+			continue
 		}
-
-		// Skip major version jumps unless explicitly opted in
 		if !major && MajorVersion(latest) != MajorVersion(currentVersion) {
 			continue
 		}
 
-		// Update all releases with this chart to the new version
+		// Update all releases in this file that use the same chart.
 		for _, rn := range releasesNode.Content {
 			if rn.Kind != yaml.MappingNode {
 				continue
@@ -255,7 +266,8 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, err
 			}
 		}
 
-		bumped[chartValue] = true
+		reported[chartValue] = true
+		changed = true
 		bumps = append(bumps, VersionBump{
 			Chart: chartValue,
 			From:  currentVersion,
@@ -263,21 +275,51 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool) ([]VersionBump, err
 		})
 	}
 
-	if len(bumps) == 0 {
+	if !changed {
 		return nil, nil
 	}
 
-	// Marshal back to YAML and write
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal updated helmfile: %w", err)
+		return nil, err
 	}
-
 	if err := os.WriteFile(helmfilePath, out, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write updated helmfile: %w", err)
+		return nil, err
 	}
 
 	return bumps, nil
+}
+
+// collectHelmfiles returns all helmfile paths to check: the defaults helmfile
+// plus any application instance helmfiles (e.g. openclaw instances that pin
+// obol/remote-signer).
+func collectHelmfiles(cfg *config.Config) []string {
+	paths := []string{filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")}
+
+	appsDir := filepath.Join(cfg.ConfigDir, "applications")
+	appDirs, err := os.ReadDir(appsDir)
+	if err != nil {
+		return paths
+	}
+	for _, appDir := range appDirs {
+		if !appDir.IsDir() {
+			continue
+		}
+		instances, err := os.ReadDir(filepath.Join(appsDir, appDir.Name()))
+		if err != nil {
+			continue
+		}
+		for _, inst := range instances {
+			if !inst.IsDir() {
+				continue
+			}
+			hf := filepath.Join(appsDir, appDir.Name(), inst.Name(), "helmfile.yaml")
+			if _, err := os.Stat(hf); err == nil {
+				paths = append(paths, hf)
+			}
+		}
+	}
+	return paths
 }
 
 // parseHelmfileReleases extracts release entries from a helmfile YAML.

@@ -81,10 +81,19 @@ func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*Upda
 	return result, nil
 }
 
+// UpgradeOptions controls the behaviour of ApplyUpgrades.
+type UpgradeOptions struct {
+	DefaultsOnly bool   // Only upgrade default infrastructure, skip networks and apps
+	Pinned       bool   // Deploy only the versions embedded in the binary
+	Major        bool   // Allow upgrading across major version boundaries
+	ChartFilter  string // If non-empty, only bump this chart (e.g. "obol/remote-signer")
+}
+
 // ApplyUpgrades runs helmfile sync on defaults and all installed deployments.
-// If pinned is true, only deploys the versions embedded in the binary without bumping to latest.
-// If major is true, allows bumping across major version boundaries.
-func ApplyUpgrades(cfg *config.Config, u *ui.UI, defaultsOnly bool, pinned bool, major bool) error {
+func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
+	defaultsOnly := opts.DefaultsOnly
+	pinned := opts.Pinned
+	major := opts.Major
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// 1. Helm repo update
@@ -117,7 +126,7 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, defaultsOnly bool, pinned bool,
 		} else {
 			u.Info("Bumping chart versions to latest (minor/patch only)...")
 		}
-		bumps, err := UpgradeHelmfileVersions(cfg, major)
+		bumps, err := UpgradeHelmfileVersions(cfg, major, opts.ChartFilter)
 		if err != nil {
 			u.Warnf("Failed to bump versions: %v", err)
 		} else if len(bumps) > 0 {
