@@ -4,7 +4,6 @@
 # Split into least-privilege roles:
 #   1. openclaw-monetize-read      — cluster-wide read-only (low risk)
 #   2. openclaw-monetize-workload  — cluster-wide mutate for agent-managed resources
-#   3. openclaw-x402-pricing       — namespace-scoped x402 pricing ConfigMap access
 #
 # Subjects pre-populated with obol-agent ServiceAccount.
 # Patched dynamically by `obol agent init` for additional instances.
@@ -108,41 +107,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: openclaw-monetize-workload
-subjects:
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
-
----
-#------------------------------------------------------------------------------
-# Role - x402 pricing ConfigMap access (scoped to x402 namespace)
-# Separate from the cluster-wide workload role to limit pricing config
-# mutations to the x402 namespace only.
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: openclaw-x402-pricing
-  namespace: x402
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: ["x402-pricing"]
-    verbs: ["get", "list", "update", "patch"]
-
----
-#------------------------------------------------------------------------------
-# RoleBinding - Binds x402 pricing access to agent ServiceAccount
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: openclaw-x402-pricing-binding
-  namespace: x402
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: openclaw-x402-pricing
 subjects:
   - kind: ServiceAccount
     name: openclaw

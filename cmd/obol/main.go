@@ -22,16 +22,8 @@ func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
 
-	// Custom help template with command sections
-	cli.RootCommandHelpTemplate = `
-   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗
-  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
-  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝
-  ██║   ██║██╔══██╗██║   ██║██║         ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
-  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
-   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
-
-NAME:
+	// Custom help template with branded banner and command sections.
+	cli.RootCommandHelpTemplate = "\n" + ui.Banner() + "\n\n" + `NAME:
    {{template "helpNameTemplate" .}}
 
 USAGE:

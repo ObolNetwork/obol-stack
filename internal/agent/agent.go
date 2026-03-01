@@ -112,13 +112,14 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 		}
 	}
 
-	// Patch x402 namespace RoleBinding.
+	// Patch x402 namespace RoleBinding (non-fatal: x402 is lazily deployed
+	// on first `obol sell` and may not exist yet).
 	if err := kubectl.RunSilent(bin, kc,
 		"patch", "rolebinding", "openclaw-x402-pricing-binding",
 		"-n", "x402",
 		"--type=json", patchArg,
 	); err != nil {
-		return fmt.Errorf("patch rolebinding openclaw-x402-pricing-binding: %w", err)
+		u.Warn("x402 namespace not yet deployed — pricing RBAC will be applied on first 'obol sell'")
 	}
 
 	u.Successf("RBAC bindings patched (SA: openclaw in %s)", namespace)

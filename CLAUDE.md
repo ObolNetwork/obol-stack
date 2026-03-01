@@ -135,7 +135,7 @@ infrastructure/
 │       ├── obol-agent-admission-policy.yaml
 │       ├── obol-agent-monetize-rbac.yaml  # RBAC for monetize skill
 │       ├── serviceoffer-crd.yaml    # ServiceOffer CRD definition
-│       └── x402.yaml               # x402-verifier deployment + ConfigMap
+│       └── (x402 verifier deployed lazily on first `obol sell`)
 ├── cloudflared/                     # Cloudflare tunnel chart
 └── values/
     ├── erpc.yaml.gotmpl

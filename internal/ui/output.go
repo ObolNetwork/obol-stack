@@ -6,13 +6,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Styles matching obolup.sh's log_info/log_success/log_warn/log_error.
+// Styles using Obol brand colors (see brand.go for hex values).
+// Lipgloss auto-degrades to 256/16 colors on older terminals.
 var (
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)  // blue
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)  // green
-	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)  // yellow
-	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)  // red
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))             // gray
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolCyan)).Bold(true)
+	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolGreen)).Bold(true)
+	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolAmber)).Bold(true)
+	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolRed)).Bold(true)
+	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolMuted))
 	boldStyle    = lipgloss.NewStyle().Bold(true)
 )
 

@@ -5,12 +5,14 @@ set -euo pipefail
 # obolup.sh - Bootstrap installer for Obol Stack
 # Usage: curl -sSL https://raw.githubusercontent.com/ObolNetwork/obol-stack/main/obolup.sh | bash
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-DIM='\033[2m'
+# Obol brand colors (24-bit true color — blog.obol.org/branding)
+# Degrades gracefully: modern terminals render exact hex, older ones approximate.
+OBOL_GREEN='\033[38;2;47;228;171m'     # #2FE4AB — primary brand green
+OBOL_CYAN='\033[38;2;60;210;221m'      # #3CD2DD — info / cyan
+OBOL_PURPLE='\033[38;2;145;103;228m'   # #9167E4 — accent purple
+OBOL_AMBER='\033[38;2;250;186;90m'     # #FABA5A — warning amber
+OBOL_RED='\033[38;2;221;96;60m'        # #DD603C — error red-orange
+OBOL_MUTED='\033[38;2;102;122;128m'    # #667A80 — dim / muted gray
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -32,7 +34,7 @@ if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
 	OBOL_STATE_DIR="${OBOL_STATE_DIR:-$WORKSPACE_DIR/state}"
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$WORKSPACE_DIR/bin}"
 
-	log_warn() { echo -e "  ${YELLOW}!${NC} $1"; }
+	log_warn() { echo -e "  ${OBOL_AMBER}${BOLD}!${NC} $1"; }
 	log_warn "Development mode enabled - using local .workspace directory"
 else
 	# XDG Base Directory specification
@@ -65,24 +67,24 @@ readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
 # Logging functions — matching the Go CLI's ui package output style.
 # Info/Error are top-level (no indent), Success/Warn are subordinate (2-space indent).
 log_info() {
-	echo -e "${BLUE}==>${NC} $1"
+	echo -e "${OBOL_CYAN}${BOLD}==>${NC} $1"
 }
 
 log_success() {
-	echo -e "  ${GREEN}✓${NC} $1"
+	echo -e "  ${OBOL_GREEN}${BOLD}✓${NC} $1"
 }
 
 log_warn() {
-	echo -e "  ${YELLOW}!${NC} $1"
+	echo -e "  ${OBOL_AMBER}${BOLD}!${NC} $1"
 }
 
 log_error() {
-	echo -e "${RED}✗${NC} $1"
+	echo -e "${OBOL_RED}${BOLD}✗${NC} $1"
 }
 
 # Print dimmed secondary text (matches Go CLI's u.Dim)
 log_dim() {
-	echo -e "${DIM}$1${NC}"
+	echo -e "${OBOL_MUTED}$1${NC}"
 }
 
 # Check if command exists
@@ -117,7 +119,7 @@ check_docker() {
 		return 1
 	fi
 
-	# Check if Docker daemon is running; try to start it automatically on Linux
+	# Check if Docker daemon is running; try to start it automatically
 	if ! docker info >/dev/null 2>&1; then
 		if [[ "$(uname -s)" == "Linux" ]]; then
 			log_warn "Docker daemon is not running — attempting to start..."
@@ -126,6 +128,21 @@ check_docker() {
 				sudo systemctl start docker 2>/dev/null && sleep 2
 			elif snap list docker >/dev/null 2>&1; then
 				sudo snap start docker 2>/dev/null && sleep 3
+			fi
+		elif [[ "$(uname -s)" == "Darwin" ]]; then
+			# Start Docker Desktop if it's installed but not running
+			if [[ -d "/Applications/Docker.app" ]]; then
+				log_warn "Docker Desktop is not running — starting it now..."
+				open -a Docker
+				# Docker Desktop can take a while to initialise; poll until ready
+				local wait_secs=0
+				while ! docker info >/dev/null 2>&1; do
+					if [[ $wait_secs -ge 60 ]]; then
+						break
+					fi
+					sleep 2
+					wait_secs=$((wait_secs + 2))
+				done
 			fi
 		fi
 
@@ -1560,7 +1577,7 @@ main() {
 	export OBOL_INSTALLING=true
 
 	echo ""
-	echo -e "${BOLD}"
+	echo -e "${OBOL_GREEN}${BOLD}"
 	echo "   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗"
 	echo "  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝"
 	echo "  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝"
@@ -1568,6 +1585,7 @@ main() {
 	echo "  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗"
 	echo "   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝"
 	echo -e "${NC}"
+	echo -e "   ${OBOL_MUTED}Decentralised infrastructure for AI agents${NC}"
 	echo ""
 
 	# Detect installation mode
