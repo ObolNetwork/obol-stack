@@ -59,9 +59,10 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			u.Bold("Bootstrap complete! Your Obol Stack is ready.")
 			u.Blank()
 			u.Print("Next steps:")
-			u.Print("  • View cluster: obol kubectl get pods --all-namespaces")
-			u.Print("  • Manage cluster: obol k9s")
-			u.Print("  • Stop cluster: obol stack down")
+			u.Print("  • View the stack interface at http://obol.stack")
+			u.Print("  • Give your agents more models to leverage: obol model setup")
+			u.Print("  • View what's running from the terminal (press '0'): obol k9s")
+			u.Print("  • Shut down the stack: obol stack down")
 			u.Blank()
 
 			return nil

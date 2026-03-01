@@ -17,6 +17,11 @@ type ExecConfig struct {
 
 	// Cmd is the command to run.
 	Cmd *exec.Cmd
+
+	// Interactive runs the command with stdin/stdout/stderr connected directly
+	// to the terminal. Use this for commands that may prompt for input (e.g. sudo).
+	// Disables spinner and output capture.
+	Interactive bool
 }
 
 // Exec runs a subprocess with output capture and spinner.
@@ -35,6 +40,9 @@ type ExecConfig struct {
 //   - Shows "Name..."
 //   - Streams live (no spinner)
 func (u *UI) Exec(cfg ExecConfig) error {
+	if cfg.Interactive {
+		return u.execInteractive(cfg)
+	}
 	if u.verbose {
 		return u.execVerbose(cfg)
 	}
@@ -59,6 +67,26 @@ func (u *UI) ExecOutput(cfg ExecConfig) ([]byte, error) {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
+}
+
+func (u *UI) execInteractive(cfg ExecConfig) error {
+	u.Infof("%s ...", cfg.Name)
+	if cfg.Cmd.Stdin == nil {
+		cfg.Cmd.Stdin = os.Stdin
+	}
+	if cfg.Cmd.Stdout == nil {
+		cfg.Cmd.Stdout = os.Stdout
+	}
+	if cfg.Cmd.Stderr == nil {
+		cfg.Cmd.Stderr = os.Stderr
+	}
+	err := cfg.Cmd.Run()
+	if err == nil {
+		u.Successf("%s", cfg.Name)
+	} else {
+		u.Errorf("%s", cfg.Name)
+	}
+	return err
 }
 
 func (u *UI) execCaptured(cfg ExecConfig) error {
