@@ -17,8 +17,10 @@ const (
 	x402SecretName   = "x402-secrets"
 )
 
-// x402Manifest is the Kubernetes manifest for the x402 verifier subsystem.
-// Applied idempotently on first use (obol sell pricing / obol sell http).
+// x402Manifest returns the Kubernetes manifest for the x402 verifier subsystem.
+// In development mode (OBOL_DEVELOPMENT=true) the image pull policy is IfNotPresent
+// so locally-built images imported via k3d are used. Otherwise it is Always so the
+// image is pulled from GHCR.
 var x402Manifest = []byte(`apiVersion: v1
 kind: Namespace
 metadata:
@@ -67,7 +69,7 @@ spec:
     spec:
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:latest
+          image: ghcr.io/obolnetwork/x402-verifier:799fff1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

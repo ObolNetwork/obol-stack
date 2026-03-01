@@ -92,7 +92,7 @@ REGISTER_SELECTOR = "f2c298be"
 REGISTERED_TOPIC = "0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a"
 
 SIGNER_URL = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000")
-ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
+ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local/rpc")
 
 CONDITION_TYPES = [
     "ModelReady",
