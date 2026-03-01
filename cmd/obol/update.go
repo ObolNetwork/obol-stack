@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,7 +10,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	"github.com/ObolNetwork/obol-stack/internal/version"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func updateCommand(cfg *config.Config) *cli.Command {
@@ -22,17 +23,18 @@ func updateCommand(cfg *config.Config) *cli.Command {
 				Usage: "Output results as JSON",
 			},
 		},
-		Action: func(c *cli.Context) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 			clusterRunning := true
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 				clusterRunning = false
 			}
 
-			jsonMode := c.Bool("json")
+			jsonMode := cmd.Bool("json")
 
 			if !jsonMode && clusterRunning {
-				fmt.Println("Updating helm repositories...")
+				u.Info("Updating helm repositories...")
 			}
 
 			result, err := update.CheckForUpdates(cfg, clusterRunning, jsonMode)
@@ -47,29 +49,31 @@ func updateCommand(cfg *config.Config) *cli.Command {
 			// Print helm results
 			if clusterRunning {
 				if result.HelmError != "" {
-					fmt.Printf("  Warning: %s\n", result.HelmError)
+					u.Warnf("%s", result.HelmError)
 				} else if result.HelmRepoUpdated {
-					fmt.Println("  ✓ Helm repositories updated")
+					u.Success("Helm repositories updated")
 				}
 
 				if len(result.ChartStatuses) > 0 {
-					fmt.Println("\nChecking chart versions...")
-					update.PrintUpdateTable(result.ChartStatuses)
+					u.Blank()
+					u.Info("Checking chart versions...")
+					update.PrintUpdateTable(u, result.ChartStatuses)
 				}
 			} else {
-				fmt.Println("Helm check skipped (cluster not running)")
+				u.Dim("Helm check skipped (cluster not running)")
 			}
 
 			// Print CLI status
-			fmt.Println("\nChecking CLI version...")
+			u.Blank()
+			u.Info("Checking CLI version...")
 			if result.CLIError != "" {
-				fmt.Printf("  Warning: %s\n", result.CLIError)
+				u.Warnf("%s", result.CLIError)
 			} else {
-				update.PrintCLIStatus(version.Short(), result.CLIRelease, result.IsDev)
+				update.PrintCLIStatus(u, version.Short(), result.CLIRelease, result.IsDev)
 			}
 
 			// Print summary
-			update.PrintUpdateSummary(result)
+			update.PrintUpdateSummary(u, result)
 
 			return nil
 		},
@@ -94,13 +98,13 @@ func upgradeCommand(cfg *config.Config) *cli.Command {
 				Usage: "Allow upgrading across major version boundaries (may include breaking changes)",
 			},
 		},
-		Action: func(c *cli.Context) error {
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 				return fmt.Errorf("stack not running, use 'obol stack up' first")
 			}
 
-			return update.ApplyUpgrades(cfg, c.Bool("defaults-only"), c.Bool("pinned"), c.Bool("major"))
+			return update.ApplyUpgrades(cfg, getUI(cmd), cmd.Bool("defaults-only"), cmd.Bool("pinned"), cmd.Bool("major"))
 		},
 	}
 }

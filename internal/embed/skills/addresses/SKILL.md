@@ -576,7 +576,7 @@ Full function reference and JSON ABIs for ERC-8004 registries coming soon via th
 
 ```bash
 # Check bytecode exists (use local eRPC if running in Obol Stack)
-cast code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet
+cast code 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --rpc-url http://erpc.erpc.svc.cluster.local/rpc/mainnet
 # Fallback public RPC: https://eth.llamarpc.com
 ```
 

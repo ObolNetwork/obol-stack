@@ -80,14 +80,14 @@ python3 scripts/signer.py send-tx --network hoodi \
   --from 0x... --to 0x... --value 1000000000000000000
 ```
 
-Supported networks: `mainnet`, `hoodi`, `sepolia` (depends on eRPC configuration).
+Supported networks: `mainnet`, `hoodi`, `sepolia`, `base-sepolia` (depends on eRPC configuration).
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API base URL |
-| `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway for RPC calls |
+| `ERPC_URL` | `http://erpc.erpc.svc.cluster.local/rpc` | eRPC gateway for RPC calls |
 | `ERPC_NETWORK` | `mainnet` | Default network for RPC routing |
 
 ## Security Model

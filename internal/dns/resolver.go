@@ -97,6 +97,7 @@ func RemoveSystemResolver() {
 	case "linux":
 		removeNMDnsmasq()
 	}
+	RemoveHostsEntries()
 }
 
 // IsResolverConfigured checks whether the system resolver is already set up.
@@ -110,6 +111,106 @@ func IsResolverConfigured() bool {
 	default:
 		return false
 	}
+}
+
+// --- /etc/hosts management ---
+//
+// macOS Sequoia (15.x) has a known issue where /etc/resolver/ files don't
+// reliably forward subdomain queries to custom nameservers. As a fallback,
+// we also write entries to /etc/hosts for known hostnames.
+
+const hostsMarkerBegin = "# BEGIN obol-stack managed entries"
+const hostsMarkerEnd = "# END obol-stack managed entries"
+const hostsFile = "/etc/hosts"
+
+// EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
+// Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
+// Entries are idempotent — existing managed block is replaced.
+func EnsureHostsEntries(hostnames []string) error {
+	// Always include the base domain.
+	all := []string{domain}
+	seen := map[string]bool{domain: true}
+	for _, h := range hostnames {
+		if h != "" && !seen[h] {
+			all = append(all, h)
+			seen[h] = true
+		}
+	}
+
+	// Build the managed block.
+	var block strings.Builder
+	block.WriteString(hostsMarkerBegin + "\n")
+	for _, h := range all {
+		block.WriteString(fmt.Sprintf("127.0.0.1 %s\n", h))
+	}
+	block.WriteString(hostsMarkerEnd + "\n")
+
+	data, err := os.ReadFile(hostsFile)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", hostsFile, err)
+	}
+
+	content := string(data)
+	newContent := replaceOrAppendBlock(content, block.String())
+	if newContent == content {
+		return nil // no change needed
+	}
+
+	writeCmd := exec.Command("sudo", "tee", hostsFile)
+	writeCmd.Stdin = strings.NewReader(newContent)
+	writeCmd.Stdout = nil
+	writeCmd.Stderr = os.Stderr
+	if err := writeCmd.Run(); err != nil {
+		return fmt.Errorf("write %s: %w", hostsFile, err)
+	}
+	return nil
+}
+
+// RemoveHostsEntries removes the obol-stack managed block from /etc/hosts.
+func RemoveHostsEntries() {
+	data, err := os.ReadFile(hostsFile)
+	if err != nil {
+		return
+	}
+	content := string(data)
+	cleaned := removeBlock(content)
+	if cleaned == content {
+		return
+	}
+	writeCmd := exec.Command("sudo", "tee", hostsFile)
+	writeCmd.Stdin = strings.NewReader(cleaned)
+	writeCmd.Stdout = nil
+	writeCmd.Stderr = os.Stderr
+	writeCmd.Run() //nolint:errcheck
+}
+
+// replaceOrAppendBlock replaces an existing managed block or appends a new one.
+func replaceOrAppendBlock(content, block string) string {
+	start := strings.Index(content, hostsMarkerBegin)
+	end := strings.Index(content, hostsMarkerEnd)
+	if start >= 0 && end > start {
+		return content[:start] + block + content[end+len(hostsMarkerEnd)+1:]
+	}
+	// Append with a blank line separator.
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return content + "\n" + block
+}
+
+// removeBlock strips the managed block from content.
+func removeBlock(content string) string {
+	start := strings.Index(content, hostsMarkerBegin)
+	end := strings.Index(content, hostsMarkerEnd)
+	if start < 0 || end <= start {
+		return content
+	}
+	// Remove the block plus trailing newline.
+	after := end + len(hostsMarkerEnd)
+	if after < len(content) && content[after] == '\n' {
+		after++
+	}
+	return content[:start] + content[after:]
 }
 
 // --- macOS ---

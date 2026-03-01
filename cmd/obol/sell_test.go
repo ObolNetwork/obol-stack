@@ -1,0 +1,302 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/urfave/cli/v3"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+func findSubcommand(t *testing.T, parent *cli.Command, name string) *cli.Command {
+	t.Helper()
+	for _, sub := range parent.Commands {
+		if sub.Name == name {
+			return sub
+		}
+	}
+	t.Fatalf("subcommand %q not found in %q", name, parent.Name)
+	return nil
+}
+
+func flagMap(cmd *cli.Command) map[string]cli.Flag {
+	m := map[string]cli.Flag{}
+	for _, f := range cmd.Flags {
+		for _, name := range f.Names() {
+			m[name] = f
+		}
+	}
+	return m
+}
+
+func requireFlags(t *testing.T, flags map[string]cli.Flag, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, ok := flags[name]; !ok {
+			t.Errorf("missing flag: --%s", name)
+		}
+	}
+}
+
+func assertStringDefault(t *testing.T, flags map[string]cli.Flag, name, want string) {
+	t.Helper()
+	f, ok := flags[name]
+	if !ok {
+		t.Errorf("missing flag: --%s", name)
+		return
+	}
+	sf, ok := f.(*cli.StringFlag)
+	if !ok {
+		t.Errorf("flag --%s is %T, want *cli.StringFlag", name, f)
+		return
+	}
+	if sf.Value != want {
+		t.Errorf("flag --%s default = %q, want %q", name, sf.Value, want)
+	}
+}
+
+func assertIntDefault(t *testing.T, flags map[string]cli.Flag, name string, want int) {
+	t.Helper()
+	f, ok := flags[name]
+	if !ok {
+		t.Errorf("missing flag: --%s", name)
+		return
+	}
+	sf, ok := f.(*cli.IntFlag)
+	if !ok {
+		t.Errorf("flag --%s is %T, want *cli.IntFlag", name, f)
+		return
+	}
+	if sf.Value != want {
+		t.Errorf("flag --%s default = %d, want %d", name, sf.Value, want)
+	}
+}
+
+func assertFlagRequired(t *testing.T, flags map[string]cli.Flag, name string) {
+	t.Helper()
+	f, ok := flags[name]
+	if !ok {
+		t.Errorf("missing flag: --%s", name)
+		return
+	}
+	switch sf := f.(type) {
+	case *cli.StringFlag:
+		if !sf.Required {
+			t.Errorf("flag --%s should be required", name)
+		}
+	case *cli.IntFlag:
+		if !sf.Required {
+			t.Errorf("flag --%s should be required", name)
+		}
+	case *cli.BoolFlag:
+		if !sf.Required {
+			t.Errorf("flag --%s should be required", name)
+		}
+	default:
+		t.Errorf("flag --%s has unexpected type %T", name, f)
+	}
+}
+
+func assertFlagHasAlias(t *testing.T, flags map[string]cli.Flag, primary, alias string) {
+	t.Helper()
+	if _, ok := flags[alias]; !ok {
+		t.Errorf("flag --%s missing alias %q", primary, alias)
+	}
+}
+
+func newTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	return &config.Config{
+		ConfigDir: t.TempDir(),
+		DataDir:   t.TempDir(),
+		BinDir:    t.TempDir(),
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestSellCommand_Structure(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+
+	if cmd.Name != "sell" {
+		t.Fatalf("command name = %q, want sell", cmd.Name)
+	}
+
+	expected := map[string]bool{
+		"inference": false,
+		"http":      false,
+		"list":      false,
+		"status":    false,
+		"stop":      false,
+		"delete":    false,
+		"pricing":   false,
+		"register":  false,
+	}
+
+	for _, sub := range cmd.Commands {
+		if _, ok := expected[sub.Name]; ok {
+			expected[sub.Name] = true
+		}
+	}
+
+	for name, found := range expected {
+		if !found {
+			t.Errorf("missing subcommand %q", name)
+		}
+	}
+}
+
+func TestSellInference_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	inf := findSubcommand(t, cmd, "inference")
+	flags := flagMap(inf)
+
+	requireFlags(t, flags,
+		"model", "wallet", "price", "chain", "facilitator",
+		"listen", "upstream", "enclave-tag",
+		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
+		"tee", "model-hash",
+	)
+
+	assertStringDefault(t, flags, "price", "0.001")
+	assertStringDefault(t, flags, "chain", "base-sepolia")
+	assertStringDefault(t, flags, "listen", ":8402")
+	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
+	assertStringDefault(t, flags, "facilitator", "https://facilitator.x402.rs")
+	assertStringDefault(t, flags, "vm-image", "ollama/ollama:latest")
+	assertIntDefault(t, flags, "vm-cpus", 4)
+	assertIntDefault(t, flags, "vm-memory", 8192)
+	assertIntDefault(t, flags, "vm-host-port", 11435)
+}
+
+func TestSellHTTP_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	http := findSubcommand(t, cmd, "http")
+	flags := flagMap(http)
+
+	requireFlags(t, flags,
+		"wallet", "chain", "price", "per-request", "per-hour",
+		"namespace", "upstream", "port", "health-path", "path",
+		"max-timeout",
+		"register", "register-name", "register-description", "register-image",
+	)
+
+	assertFlagRequired(t, flags, "wallet")
+	assertFlagRequired(t, flags, "chain")
+	assertStringDefault(t, flags, "namespace", "default")
+	assertStringDefault(t, flags, "health-path", "/health")
+	assertIntDefault(t, flags, "port", 8080)
+	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestSellStop_Structure(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	stop := findSubcommand(t, cmd, "stop")
+	flags := flagMap(stop)
+
+	requireFlags(t, flags, "namespace")
+	assertFlagRequired(t, flags, "namespace")
+	assertFlagHasAlias(t, flags, "namespace", "n")
+}
+
+func TestSellDelete_Structure(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	del := findSubcommand(t, cmd, "delete")
+	flags := flagMap(del)
+
+	requireFlags(t, flags, "namespace", "force")
+	assertFlagRequired(t, flags, "namespace")
+	assertFlagHasAlias(t, flags, "namespace", "n")
+	assertFlagHasAlias(t, flags, "force", "f")
+}
+
+func TestSellRegister_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	reg := findSubcommand(t, cmd, "register")
+	flags := flagMap(reg)
+
+	requireFlags(t, flags,
+		"private-key", "private-key-file", "rpc-url",
+		"endpoint", "name", "description",
+	)
+}
+
+func TestSellPricing_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	pricing := findSubcommand(t, cmd, "pricing")
+	flags := flagMap(pricing)
+
+	requireFlags(t, flags, "wallet", "chain")
+	assertFlagRequired(t, flags, "wallet")
+	assertStringDefault(t, flags, "chain", "base-sepolia")
+}
+
+func TestSellList_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	list := findSubcommand(t, cmd, "list")
+	flags := flagMap(list)
+
+	requireFlags(t, flags, "namespace")
+	assertFlagHasAlias(t, flags, "namespace", "n")
+}
+
+func TestMustMarshal_ValidJSON(t *testing.T) {
+	doc := map[string]interface{}{"active": false, "name": "test"}
+	got := mustMarshal(doc)
+	if got == "{}" {
+		t.Fatal("mustMarshal returned empty object for valid input")
+	}
+	for _, want := range []string{`"active":false`, `"name":"test"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("mustMarshal output missing %s, got: %s", want, got)
+		}
+	}
+}
+
+func TestMustMarshal_InvalidInput(t *testing.T) {
+	got := mustMarshal(make(chan int))
+	if got != "{}" {
+		t.Errorf("mustMarshal should return {} on error, got: %s", got)
+	}
+}
+
+func TestResolveX402Chain(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"base", false},
+		{"base-mainnet", false},
+		{"base-sepolia", false},
+		{"polygon", false},
+		{"polygon-mainnet", false},
+		{"polygon-amoy", false},
+		{"avalanche", false},
+		{"avalanche-mainnet", false},
+		{"avalanche-fuji", false},
+		{"unknown-chain", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveX402Chain(tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("resolveX402Chain(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}

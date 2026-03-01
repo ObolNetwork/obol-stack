@@ -180,7 +180,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Use `obol model setup --provider <name> --api-key <key>` for cloud provider config
 - Wait for pod readiness AND HTTP readiness before sending inference requests
 - Clean up test instances with `obol openclaw delete --force <id>` (flag BEFORE arg)
-- Set env vars for dev mode: `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
+- Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -189,3 +189,55 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Assume TCP connectivity means HTTP is ready (port-forward warmup race)
 - Use `app.kubernetes.io/instance=openclaw-<id>` for pod labels (Helm uses `openclaw`)
 - Run multiple integration tests without cleaning up between them (pod sandbox errors)
+
+## Sell-Side Monetize Lifecycle
+
+### Architecture
+
+The monetize subsystem enables pay-per-request access to local compute via x402:
+
+```
+ServiceOffer CR → monetize.py reconciliation → Middleware + HTTPRoute + pricing route
+                                                       │
+Client request ──► Traefik ──► x402-verifier (ForwardAuth) ──► backend (Ollama)
+                                    │                              │
+                               402 (no payment)              200 (valid payment)
+                               Payment requirements          Inference response
+```
+
+### Three-Layer Integration
+
+1. **monetize.py** (OpenClaw skill) — Creates Middleware, HTTPRoute, pricing ConfigMap route
+2. **x402-verifier** (ForwardAuth) — Checks X-PAYMENT header against facilitator
+3. **Traefik Gateway API** — Routes traffic; requires ClusterIP backends (not ExternalName)
+
+### Testing the Monetize Flow
+
+```bash
+# Prerequisites
+obol stack up && obol agent init
+
+# Create offer
+obol sell http qwen35 --model "qwen3.5:35b" --per-request "0.001" \
+  --network "base-sepolia" --pay-to "0x<wallet>"
+
+# Trigger reconciliation (or wait for heartbeat)
+obol kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
+  python3 /data/.openclaw/skills/monetize/scripts/monetize.py process qwen35 --namespace llm
+
+# Verify 402
+curl -X POST http://obol.stack:8080/services/qwen35/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3.5:35b","messages":[{"role":"user","content":"hi"}],"stream":false}'
+
+# Run e2e test (with mock facilitator)
+export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin
+go test -tags integration -v -run TestIntegration_PaymentGate_FullLifecycle -timeout 5m ./internal/x402/
+```
+
+### Known Gotchas
+
+- **ExternalName services**: Traefik Gateway API rejects ExternalName as HTTPRoute backends → 500 after valid payment. Use ClusterIP+Endpoints.
+- **Model pull timeout**: monetize.py checks `/api/tags` before `/api/pull` to avoid hanging on cached models.
+- **Facilitator HTTPS**: URLs must be HTTPS except localhost, 127.0.0.1, host.k3d.internal, host.docker.internal.
+- **ConfigMap propagation**: File watcher takes 60-120s. Force restart verifier for immediate effect.

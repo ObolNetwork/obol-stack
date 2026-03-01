@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,31 +13,24 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
 
-	// Custom help template with command sections
-	cli.AppHelpTemplate = `
-   ██████╗ ██████╗  ██████╗ ██╗         ███████╗████████╗ █████╗  ██████╗██╗  ██╗
-  ██╔═══██╗██╔══██╗██╔═══██╗██║         ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
-  ██║   ██║██████╔╝██║   ██║██║         ███████╗   ██║   ███████║██║     █████╔╝
-  ██║   ██║██╔══██╗██║   ██║██║         ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
-  ╚██████╔╝██████╔╝╚██████╔╝███████╗    ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
-   ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝    ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
-
-NAME:
-   {{.Name}}{{if .Usage}} - {{.Usage}}{{end}}
+	// Custom help template with branded banner and command sections.
+	cli.RootCommandHelpTemplate = "\n" + ui.Banner() + "\n\n" + `NAME:
+   {{template "helpNameTemplate" .}}
 
 USAGE:
-   {{if .UsageText}}{{.UsageText}}{{else}}{{.HelpName}} {{if .VisibleFlags}}[global options]{{end}}{{if .Commands}} command [command options]{{end}}{{end}}
+   {{if .UsageText}}{{wrap .UsageText 3}}{{else}}{{.FullName}} {{if .VisibleFlags}}[global options]{{end}}{{if .VisibleCommands}} [command [command options]]{{end}}{{end}}{{if .Version}}{{if not .HideVersion}}
 
 VERSION:
-   {{.Version}}
+   {{.Version}}{{end}}{{end}}
 
 COMMANDS:
    Stack Lifecycle:
@@ -48,9 +41,12 @@ COMMANDS:
    Obol Agent:
      agent init      Initialize the Obol Agent
    Network Management:
-     network list    List available networks
-     network install Install and deploy network to cluster
-     network delete  Remove network and clean up cluster resources
+     network list    List all networks (local nodes + remote RPCs)
+     network install Install and deploy a local blockchain node
+     network add     Add remote RPC endpoints for a chain
+     network remove  Remove remote RPC endpoints for a chain
+     network status  Show eRPC gateway health and upstreams
+     network delete  Remove network deployment
 
    OpenClaw (AI Agent):
      openclaw onboard   Create and deploy an OpenClaw instance
@@ -67,8 +63,15 @@ COMMANDS:
      model setup        Configure cloud AI provider in llmspy gateway
      model status       Show global llmspy provider status
 
-   Inference (x402 Pay-Per-Request):
-     inference serve  Start the x402 inference gateway
+   Sell Services (x402):
+     sell inference   Sell LLM inference via local x402 payment gateway
+     sell http        Sell access to any HTTP service (cluster-based)
+     sell list        List all ServiceOffer CRs
+     sell status      Show offer status or global pricing config
+     sell stop        Stop serving a ServiceOffer
+     sell delete      Delete a ServiceOffer CR
+     sell pricing     Configure x402 pricing in the cluster
+     sell register    Register on ERC-8004 Identity Registry
 
    App Management:
      app install     Install a Helm chart as an application
@@ -96,15 +99,32 @@ COMMANDS:
    Other:
      version         Show detailed version information
      help, h         Shows a list of commands or help for one command
-{{if .VisibleFlags}}
-GLOBAL OPTIONS:
-   {{range $index, $option := .VisibleFlags}}{{if $index}}
-   {{end}}{{$option}}{{end}}{{end}}
+{{if .VisibleFlagCategories}}
+GLOBAL OPTIONS:{{template "visibleFlagCategoryTemplate" .}}{{else if .VisibleFlags}}
+GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 `
-	app := &cli.App{
+	cliApp := &cli.Command{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
 		Version: version.Full(),
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "verbose",
+				Usage:   "Show detailed subprocess output",
+				Sources: cli.EnvVars("OBOL_VERBOSE"),
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Aliases: []string{"q"},
+				Usage:   "Suppress all output except errors and warnings",
+				Sources: cli.EnvVars("OBOL_QUIET"),
+			},
+		},
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			u := ui.NewWithOptions(cmd.Bool("verbose"), cmd.Bool("quiet"))
+			cmd.Metadata = map[string]any{"ui": u}
+			return ctx, nil
+		},
 		Commands: []*cli.Command{
 			// ============================================================
 			// Hidden Bootstrap Command (for installer)
@@ -116,7 +136,7 @@ GLOBAL OPTIONS:
 			{
 				Name:  "stack",
 				Usage: "Manage Obol Stack lifecycle",
-				Subcommands: []*cli.Command{
+				Commands: []*cli.Command{
 					{
 						Name:  "init",
 						Usage: "Initialize stack configuration",
@@ -129,25 +149,25 @@ GLOBAL OPTIONS:
 							&cli.StringFlag{
 								Name:    "backend",
 								Usage:   "Cluster backend: k3d (Docker-based) or k3s (bare-metal)",
-								EnvVars: []string{"OBOL_BACKEND"},
+								Sources: cli.EnvVars("OBOL_BACKEND"),
 							},
 						},
-						Action: func(c *cli.Context) error {
-							return stack.Init(cfg, c.Bool("force"), c.String("backend"))
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return stack.Init(cfg, getUI(cmd), cmd.Bool("force"), cmd.String("backend"))
 						},
 					},
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
-						Action: func(c *cli.Context) error {
-							return stack.Up(cfg)
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return stack.Up(cfg, getUI(cmd))
 						},
 					},
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
-						Action: func(c *cli.Context) error {
-							return stack.Down(cfg)
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return stack.Down(cfg, getUI(cmd))
 						},
 					},
 					{
@@ -160,8 +180,8 @@ GLOBAL OPTIONS:
 								Usage:   "Also delete persistent data",
 							},
 						},
-						Action: func(c *cli.Context) error {
-							return stack.Purge(cfg, c.Bool("force"))
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return stack.Purge(cfg, getUI(cmd), cmd.Bool("force"))
 						},
 					},
 				},
@@ -172,12 +192,12 @@ GLOBAL OPTIONS:
 			{
 				Name:  "agent",
 				Usage: "Manage Obol Agent",
-				Subcommands: []*cli.Command{
+				Commands: []*cli.Command{
 					{
 						Name:  "init",
 						Usage: "Initialize the Obol Agent",
-						Action: func(c *cli.Context) error {
-							return agent.Init(cfg)
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return agent.Init(cfg, getUI(cmd))
 						},
 					},
 				},
@@ -188,12 +208,12 @@ GLOBAL OPTIONS:
 			{
 				Name:  "tunnel",
 				Usage: "Manage Cloudflare tunnel for public access",
-				Subcommands: []*cli.Command{
+				Commands: []*cli.Command{
 					{
 						Name:  "status",
 						Usage: "Show tunnel status and public URL",
-						Action: func(c *cli.Context) error {
-							return tunnel.Status(cfg)
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Status(cfg, getUI(cmd))
 						},
 					},
 					{
@@ -207,9 +227,9 @@ GLOBAL OPTIONS:
 								Required: true,
 							},
 						},
-						Action: func(c *cli.Context) error {
-							return tunnel.Login(cfg, tunnel.LoginOptions{
-								Hostname: c.String("hostname"),
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{
+								Hostname: cmd.String("hostname"),
 							})
 						},
 					},
@@ -227,35 +247,35 @@ GLOBAL OPTIONS:
 								Name:    "account-id",
 								Aliases: []string{"a"},
 								Usage:   "Cloudflare account ID (or set CLOUDFLARE_ACCOUNT_ID)",
-								EnvVars: []string{"CLOUDFLARE_ACCOUNT_ID"},
+								Sources: cli.EnvVars("CLOUDFLARE_ACCOUNT_ID"),
 							},
 							&cli.StringFlag{
 								Name:    "zone-id",
 								Aliases: []string{"z"},
 								Usage:   "Cloudflare zone ID for the hostname (or set CLOUDFLARE_ZONE_ID)",
-								EnvVars: []string{"CLOUDFLARE_ZONE_ID"},
+								Sources: cli.EnvVars("CLOUDFLARE_ZONE_ID"),
 							},
 							&cli.StringFlag{
 								Name:    "api-token",
 								Aliases: []string{"t"},
 								Usage:   "Cloudflare API token (or set CLOUDFLARE_API_TOKEN)",
-								EnvVars: []string{"CLOUDFLARE_API_TOKEN"},
+								Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN"),
 							},
 						},
-						Action: func(c *cli.Context) error {
-							return tunnel.Provision(cfg, tunnel.ProvisionOptions{
-								Hostname:  c.String("hostname"),
-								AccountID: c.String("account-id"),
-								ZoneID:    c.String("zone-id"),
-								APIToken:  c.String("api-token"),
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Provision(cfg, getUI(cmd), tunnel.ProvisionOptions{
+								Hostname:  cmd.String("hostname"),
+								AccountID: cmd.String("account-id"),
+								ZoneID:    cmd.String("zone-id"),
+								APIToken:  cmd.String("api-token"),
 							})
 						},
 					},
 					{
 						Name:  "restart",
 						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
-						Action: func(c *cli.Context) error {
-							return tunnel.Restart(cfg)
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Restart(cfg, getUI(cmd))
 						},
 					},
 					{
@@ -268,8 +288,8 @@ GLOBAL OPTIONS:
 								Usage:   "Follow log output",
 							},
 						},
-						Action: func(c *cli.Context) error {
-							return tunnel.Logs(cfg, c.Bool("follow"))
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Logs(cfg, cmd.Bool("follow"))
 						},
 					},
 				},
@@ -281,7 +301,7 @@ GLOBAL OPTIONS:
 				Name:            "kubectl",
 				Usage:           "Run kubectl with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
@@ -297,13 +317,13 @@ GLOBAL OPTIONS:
 					}
 
 					// Execute kubectl directly with KUBECONFIG set
-					cmd := exec.Command(kubectlPath, c.Args().Slice()...)
-					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
+					proc := exec.Command(kubectlPath, cmd.Args().Slice()...)
+					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					proc.Stdin = os.Stdin
+					proc.Stdout = os.Stdout
+					proc.Stderr = os.Stderr
 
-					if err := cmd.Run(); err != nil {
+					if err := proc.Run(); err != nil {
 						// Preserve the exit code from kubectl
 						if exitErr, ok := err.(*exec.ExitError); ok {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -319,7 +339,7 @@ GLOBAL OPTIONS:
 				Name:            "helm",
 				Usage:           "Run helm with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
@@ -335,13 +355,13 @@ GLOBAL OPTIONS:
 					}
 
 					// Execute helm directly with KUBECONFIG set
-					cmd := exec.Command(helmPath, c.Args().Slice()...)
-					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
+					proc := exec.Command(helmPath, cmd.Args().Slice()...)
+					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					proc.Stdin = os.Stdin
+					proc.Stdout = os.Stdout
+					proc.Stderr = os.Stderr
 
-					if err := cmd.Run(); err != nil {
+					if err := proc.Run(); err != nil {
 						// Preserve the exit code from helm
 						if exitErr, ok := err.(*exec.ExitError); ok {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -357,7 +377,7 @@ GLOBAL OPTIONS:
 				Name:            "helmfile",
 				Usage:           "Run helmfile with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
@@ -374,16 +394,16 @@ GLOBAL OPTIONS:
 
 					// Execute helmfile directly with KUBECONFIG and HELMFILE_FILE_PATH set
 					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
-					cmd := exec.Command(helmfilePath, c.Args().Slice()...)
-					cmd.Env = append(os.Environ(),
+					proc := exec.Command(helmfilePath, cmd.Args().Slice()...)
+					proc.Env = append(os.Environ(),
 						fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 						fmt.Sprintf("HELMFILE_FILE_PATH=%s", helmfileConfigPath),
 					)
-					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
+					proc.Stdin = os.Stdin
+					proc.Stdout = os.Stdout
+					proc.Stderr = os.Stderr
 
-					if err := cmd.Run(); err != nil {
+					if err := proc.Run(); err != nil {
 						// Preserve the exit code from helmfile
 						if exitErr, ok := err.(*exec.ExitError); ok {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -399,7 +419,7 @@ GLOBAL OPTIONS:
 				Name:            "k9s",
 				Usage:           "Run k9s with stack kubeconfig (passthrough)",
 				SkipFlagParsing: true,
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
 					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 					// Check if kubeconfig exists
@@ -415,13 +435,13 @@ GLOBAL OPTIONS:
 					}
 
 					// Execute k9s directly with KUBECONFIG set
-					cmd := exec.Command(k9sPath, c.Args().Slice()...)
-					cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-					cmd.Stdin = os.Stdin
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = os.Stderr
+					proc := exec.Command(k9sPath, cmd.Args().Slice()...)
+					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+					proc.Stdin = os.Stdin
+					proc.Stdout = os.Stdout
+					proc.Stderr = os.Stderr
 
-					if err := cmd.Run(); err != nil {
+					if err := proc.Run(); err != nil {
 						// Preserve the exit code from k9s
 						if exitErr, ok := err.(*exec.ExitError); ok {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -439,7 +459,8 @@ GLOBAL OPTIONS:
 			{
 				Name:  "version",
 				Usage: "Show detailed version information",
-				Action: func(c *cli.Context) error {
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					// Version output should always be unformatted for parseability.
 					fmt.Print(version.BuildInfo())
 					return nil
 				},
@@ -448,12 +469,12 @@ GLOBAL OPTIONS:
 			upgradeCommand(cfg),
 			networkCommand(cfg),
 			openclawCommand(cfg),
-			inferenceCommand(cfg),
+			sellCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
 				Usage: "Manage applications",
-				Subcommands: []*cli.Command{
+				Commands: []*cli.Command{
 					{
 						Name:      "install",
 						Usage:     "Install a Helm chart as an application",
@@ -492,8 +513,8 @@ Find charts at https://artifacthub.io`,
 								Usage:   "Overwrite existing deployment",
 							},
 						},
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() == 0 {
 								return fmt.Errorf("chart reference required\n\n" +
 									"Examples:\n" +
 									"  obol app install bitnami/redis\n" +
@@ -502,25 +523,25 @@ Find charts at https://artifacthub.io`,
 									"  obol app install oci://registry-1.docker.io/bitnamicharts/redis\n\n" +
 									"Find charts at https://artifacthub.io")
 							}
-							chartRef := c.Args().First()
+							chartRef := cmd.Args().First()
 							opts := app.InstallOptions{
-								Name:    c.String("name"),
-								Version: c.String("version"),
-								ID:      c.String("id"),
-								Force:   c.Bool("force"),
+								Name:    cmd.String("name"),
+								Version: cmd.String("version"),
+								ID:      cmd.String("id"),
+								Force:   cmd.Bool("force"),
 							}
-							return app.Install(cfg, chartRef, opts)
+							return app.Install(cfg, getUI(cmd), chartRef, opts)
 						},
 					},
 					{
 						Name:      "sync",
 						Usage:     "Deploy application to cluster",
 						ArgsUsage: "<app>/<id>",
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Sync(cfg, c.Args().First())
+							return app.Sync(cfg, getUI(cmd), cmd.Args().First())
 						},
 					},
 					{
@@ -533,11 +554,11 @@ Find charts at https://artifacthub.io`,
 								Usage:   "Show detailed information",
 							},
 						},
-						Action: func(c *cli.Context) error {
+						Action: func(ctx context.Context, cmd *cli.Command) error {
 							opts := app.ListOptions{
-								Verbose: c.Bool("verbose"),
+								Verbose: cmd.Bool("verbose"),
 							}
-							return app.List(cfg, opts)
+							return app.List(cfg, getUI(cmd), opts)
 						},
 					},
 					{
@@ -551,11 +572,11 @@ Find charts at https://artifacthub.io`,
 								Usage:   "Skip confirmation prompt",
 							},
 						},
-						Action: func(c *cli.Context) error {
-							if c.NArg() == 0 {
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() == 0 {
 								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
 							}
-							return app.Delete(cfg, c.Args().First(), c.Bool("force"))
+							return app.Delete(cfg, getUI(cmd), cmd.Args().First(), cmd.Bool("force"))
 						},
 					},
 				},
@@ -563,7 +584,24 @@ Find charts at https://artifacthub.io`,
 		},
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
+	if err := cliApp.Run(context.Background(), os.Args); err != nil {
+		// Use the UI instance for colored error output if available.
+		u, _ := cliApp.Metadata["ui"].(*ui.UI)
+		if u == nil {
+			u = ui.New(false)
+		}
+		u.Error(err.Error())
+		os.Exit(1)
 	}
+}
+
+// getUI extracts the *ui.UI from the CLI command's root metadata.
+func getUI(cmd *cli.Command) *ui.UI {
+	root := cmd.Root()
+	if root != nil && root.Metadata != nil {
+		if u, ok := root.Metadata["ui"].(*ui.UI); ok {
+			return u
+		}
+	}
+	return ui.New(false)
 }

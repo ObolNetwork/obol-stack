@@ -1,0 +1,48 @@
+---
+# Admission Policy for OpenClaw-created resources
+# Ensures that when OpenClaw service accounts create Traefik middlewares or
+# Gateway API HTTPRoutes, they conform to expected patterns:
+#   - HTTPRoutes must reference the shared traefik-gateway
+#   - ForwardAuth middlewares must target x402-verifier.x402.svc
+#
+# Uses Kubernetes ValidatingAdmissionPolicy (v1, GA in 1.30+).
+
+#------------------------------------------------------------------------------
+# ValidatingAdmissionPolicy - Guards resources created by OpenClaw agents
+#------------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openclaw-resource-guard
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["traefik.io"]
+        apiVersions: ["*"]
+        resources: ["middlewares"]
+        operations: ["CREATE", "UPDATE"]
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["*"]
+        resources: ["httproutes"]
+        operations: ["CREATE", "UPDATE"]
+  matchConditions:
+    - name: only-openclaw-sa
+      expression: 'request.userInfo.username.startsWith("system:serviceaccount:openclaw-")'
+  validations:
+    - expression: '!has(object.spec.parentRefs) || object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
+      message: "HTTPRoutes created by OpenClaw must reference traefik-gateway"
+    - expression: '!has(object.spec.forwardAuth) || object.spec.forwardAuth.address.startsWith("http://x402-verifier.x402.svc")'
+      message: "ForwardAuth middlewares must target x402-verifier.x402.svc"
+
+---
+#------------------------------------------------------------------------------
+# ValidatingAdmissionPolicyBinding - Activates the guard with Deny action
+#------------------------------------------------------------------------------
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openclaw-resource-guard-binding
+spec:
+  policyName: openclaw-resource-guard
+  validationActions:
+    - Deny

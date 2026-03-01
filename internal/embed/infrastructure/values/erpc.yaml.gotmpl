@@ -60,6 +60,14 @@ config: |-
           endpoint: https://ethereum-hoodi-rpc.publicnode.com
           evm:
             chainId: 560048
+        - id: base-sepolia-official
+          endpoint: https://sepolia.base.org
+          evm:
+            chainId: 84532
+        - id: base-sepolia-publicnode
+          endpoint: https://base-sepolia-rpc.publicnode.com
+          evm:
+            chainId: 84532
       networks:
         - architecture: evm
           evm:
@@ -88,6 +96,19 @@ config: |-
           evm:
             chainId: 560048
           alias: hoodi
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+        - architecture: evm
+          evm:
+            chainId: 84532
+          alias: base-sepolia
           failsafe:
             timeout:
               duration: 30s
@@ -139,8 +160,7 @@ affinity: {}
 imagePullSecrets: []
 
 # Annotations for the Deployment
-annotations:
-  secret.reloader.stakater.com/reload: "obol-oauth-token"
+annotations: {}
 
 # Liveness probe
 livenessProbe:
@@ -165,8 +185,7 @@ nodeSelector: {}
 podLabels: {}
 
 # Pod annotations
-podAnnotations:
-  secret.reloader.stakater.com/reload: "obol-oauth-token"
+podAnnotations: {}
 
 # Pod management policy
 podManagementPolicy: OrderedReady

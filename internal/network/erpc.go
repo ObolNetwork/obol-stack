@@ -1,15 +1,14 @@
 package network
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,9 +21,10 @@ const (
 
 // networkChainIDs maps network names to EVM chain IDs.
 var networkChainIDs = map[string]int{
-	"mainnet": 1,
-	"hoodi":   560048,
-	"sepolia": 11155111,
+	"mainnet":      1,
+	"hoodi":        560048,
+	"sepolia":      11155111,
+	"base-sepolia": 84532,
 }
 
 // RegisterERPCUpstream reads the deployed network's RPC endpoint and adds
@@ -72,15 +72,13 @@ func DeregisterERPCUpstream(cfg *config.Config, networkType, id string) error {
 // restarts the eRPC deployment. When add is true, it adds/updates the
 // upstream. When false, it removes it.
 func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID int, add bool) error {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running")
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
 	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap
-	configYAML, err := kubectlOutput(kubectlBin, kubeconfigPath,
+	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
 		"get", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-o", fmt.Sprintf("jsonpath={.data.%s}", strings.ReplaceAll(erpcConfigKey, ".", "\\.")))
 	if err != nil {
@@ -197,14 +195,14 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 		return fmt.Errorf("could not marshal patch: %w", err)
 	}
 
-	if err := kubectl(kubectlBin, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
 		"patch", "configmap", erpcConfigMapName, "-n", erpcNamespace,
 		"-p", string(patchJSON), "--type=merge"); err != nil {
 		return fmt.Errorf("could not patch eRPC ConfigMap: %w", err)
 	}
 
 	// Restart eRPC to pick up new config
-	if err := kubectl(kubectlBin, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", erpcDeployment), "-n", erpcNamespace); err != nil {
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}
@@ -216,37 +214,4 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	}
 
 	return nil
-}
-
-// kubectl runs a kubectl command, capturing stderr for error messages.
-func kubectl(binary, kubeconfig string, args ...string) error {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return err
-	}
-	return nil
-}
-
-// kubectlOutput runs a kubectl command and returns stdout.
-func kubectlOutput(binary, kubeconfig string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return "", err
-	}
-	return stdout.String(), nil
 }

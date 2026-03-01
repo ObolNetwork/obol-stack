@@ -1,15 +1,20 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -37,7 +42,7 @@ type ProviderStatus struct {
 // It discovers the provider's env var from the running llmspy pod,
 // patches the llms-secrets Secret with the API key, enables the provider
 // in the llmspy-config ConfigMap, and restarts the deployment.
-func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
+func ConfigureLLMSpy(cfg *config.Config, u *ui.UI, provider, apiKey string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -52,35 +57,35 @@ func ConfigureLLMSpy(cfg *config.Config, provider, apiKey string) error {
 	}
 
 	// 1. Patch the Secret with the API key
-	fmt.Printf("Configuring llmspy: setting %s key...\n", provider)
+	u.Infof("Configuring llmspy: setting %s key", provider)
 	patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envKey, apiKey)
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "secret", secretName, "-n", namespace,
 		"-p", patchJSON, "--type=merge"); err != nil {
 		return fmt.Errorf("failed to patch llmspy secret: %w", err)
 	}
 
 	// 2. Read current ConfigMap, enable the provider in llms.json
-	fmt.Printf("Enabling %s provider in llmspy config...\n", provider)
+	u.Infof("Enabling %s provider in llmspy config", provider)
 	if err := enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider); err != nil {
 		return fmt.Errorf("failed to update llmspy config: %w", err)
 	}
 
 	// 3. Restart the deployment so it picks up new Secret + ConfigMap
-	fmt.Printf("Restarting llmspy deployment...\n")
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	u.Info("Restarting llmspy deployment")
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart llmspy: %w", err)
 	}
 
 	// 4. Wait for rollout to complete
-	if err := kubectl(kubectlBinary, kubeconfigPath,
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
 		"--timeout=60s"); err != nil {
-		fmt.Printf("Warning: llmspy rollout not confirmed: %v\n", err)
-		fmt.Println("The deployment may still be rolling out.")
+		u.Warnf("llmspy rollout not confirmed: %v", err)
+		u.Print("The deployment may still be rolling out.")
 	} else {
-		fmt.Printf("llmspy restarted with %s provider enabled.\n", provider)
+		u.Successf("llmspy restarted with %s provider enabled", provider)
 	}
 
 	return nil
@@ -97,7 +102,7 @@ if p and p.get('env'):
     print(p['env'][0])
 `, provider)
 
-	output, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
 		"python3", "-c", script)
 	if err != nil {
@@ -132,7 +137,7 @@ for pid in sorted(d):
     if env:
         print(pid + '\t' + p.get('name', pid) + '\t' + env[0])
 `
-	output, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
 		"python3", "-c", script)
 	if err != nil {
@@ -180,14 +185,14 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	}
 
 	// Read enabled/disabled state from ConfigMap
-	llmsRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	llmsRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
 	if err != nil {
 		return nil, err
 	}
 
 	// Read Secret to check which API keys are set
-	secretRaw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	secretRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "secret", secretName, "-n", namespace, "-o", "json")
 	if err != nil {
 		return nil, err
@@ -267,7 +272,7 @@ func buildProviderStatus(available []ProviderInfo, llmsJSON, secretJSON []byte) 
 // sets providers.<name>.enabled = true, and patches the ConfigMap back.
 func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) error {
 	// Read current llms.json from ConfigMap
-	raw, err := kubectlOutput(kubectlBinary, kubeconfigPath,
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
 	if err != nil {
 		return fmt.Errorf("failed to read ConfigMap: %w", err)
@@ -289,7 +294,7 @@ func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) e
 		return fmt.Errorf("failed to marshal patch: %w", err)
 	}
 
-	return kubectl(kubectlBinary, kubeconfigPath,
+	return kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", string(patchJSON), "--type=merge")
 }
@@ -318,36 +323,157 @@ func patchLLMsJSON(llmsJSON []byte, provider string) ([]byte, error) {
 	return json.Marshal(llmsConfig)
 }
 
-// kubectl runs a kubectl command with the given kubeconfig and returns any error.
-func kubectl(binary, kubeconfig string, args ...string) error {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = os.Stdout
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
+
+// ollamaEndpoint returns the base URL where host Ollama should be reachable.
+// It respects the OLLAMA_HOST environment variable, falling back to http://localhost:11434.
+func ollamaEndpoint() string {
+	if host := os.Getenv("OLLAMA_HOST"); host != "" {
+		if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+			host = "http://" + host
 		}
+		return strings.TrimRight(host, "/")
+	}
+	return "http://localhost:11434"
+}
+
+// OllamaModel describes a model pulled in the local Ollama instance.
+type OllamaModel struct {
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt string `json:"modified_at"`
+}
+
+// ListOllamaModels queries the local Ollama server for pulled models.
+// Returns nil and an error if Ollama is not reachable.
+func ListOllamaModels() ([]OllamaModel, error) {
+	endpoint := ollamaEndpoint()
+	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
+	if err != nil {
+		return nil, fmt.Errorf("invalid Ollama endpoint: %w", err)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(tagsURL)
+	if err != nil {
+		return nil, fmt.Errorf("Ollama is not running at %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Ollama returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Models []OllamaModel `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse Ollama response: %w", err)
+	}
+	return result.Models, nil
+}
+
+// PullOllamaModel pulls a model from the Ollama registry.
+// It streams progress to stdout, matching the UX of `ollama pull`.
+func PullOllamaModel(name string) error {
+	endpoint := ollamaEndpoint()
+	pullURL, err := url.JoinPath(endpoint, "api", "pull")
+	if err != nil {
+		return fmt.Errorf("invalid Ollama endpoint: %w", err)
+	}
+
+	// Check Ollama is reachable first
+	client := &http.Client{Timeout: 3 * time.Second}
+	healthResp, err := client.Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("Ollama is not running at %s — start it first", endpoint)
+	}
+	healthResp.Body.Close()
+
+	// POST /api/pull with streaming response
+	body, err := json.Marshal(map[string]interface{}{
+		"name":   name,
+		"stream": true,
+	})
+	if err != nil {
 		return err
 	}
+
+	// Use a long timeout — model downloads can take a while
+	pullClient := &http.Client{Timeout: 0}
+	resp, err := pullClient.Post(pullURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to start pull: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errBody); err == nil && errBody.Error != "" {
+			return fmt.Errorf("pull failed: %s", errBody.Error)
+		}
+		return fmt.Errorf("pull failed with status %d", resp.StatusCode)
+	}
+
+	// Stream NDJSON progress lines
+	scanner := bufio.NewScanner(resp.Body)
+	// Increase buffer for potentially large lines
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var lastStatus string
+	for scanner.Scan() {
+		var progress struct {
+			Status    string `json:"status"`
+			Total     int64  `json:"total"`
+			Completed int64  `json:"completed"`
+			Error     string `json:"error"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &progress); err != nil {
+			continue
+		}
+
+		if progress.Error != "" {
+			return fmt.Errorf("pull failed: %s", progress.Error)
+		}
+
+		if progress.Total > 0 && progress.Completed > 0 {
+			pct := float64(progress.Completed) / float64(progress.Total) * 100
+			fmt.Printf("\r  %s: %.0f%% (%s / %s)",
+				progress.Status, pct,
+				FormatBytes(progress.Completed), FormatBytes(progress.Total))
+		} else if progress.Status != lastStatus {
+			if lastStatus != "" {
+				fmt.Println()
+			}
+			fmt.Printf("  %s", progress.Status)
+			lastStatus = progress.Status
+		}
+	}
+	fmt.Println()
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading pull stream: %w", err)
+	}
+
 	return nil
 }
 
-func kubectlOutput(binary, kubeconfig string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
-		}
-		return "", err
+// FormatBytes formats a byte count as a human-readable string.
+func FormatBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = kb * 1024
+		gb = mb * 1024
+	)
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", b)
 	}
-	return stdout.String(), nil
 }

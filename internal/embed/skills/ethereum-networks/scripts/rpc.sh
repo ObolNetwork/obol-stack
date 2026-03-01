@@ -5,11 +5,11 @@
 # Usage: sh scripts/rpc.sh [--network <name>] <command> [args...]
 #
 # Environment:
-#   ERPC_URL      Base URL for eRPC gateway (default: http://erpc.erpc.svc.cluster.local:4000/rpc)
+#   ERPC_URL      Base URL for eRPC gateway (default: http://erpc.erpc.svc.cluster.local/rpc)
 #   ERPC_NETWORK  Default network (default: mainnet)
 set -eu
 
-ERPC_BASE="${ERPC_URL:-http://erpc.erpc.svc.cluster.local:4000/rpc}"
+ERPC_BASE="${ERPC_URL:-http://erpc.erpc.svc.cluster.local/rpc}"
 NETWORK="${ERPC_NETWORK:-mainnet}"
 
 # Parse --network flag

@@ -1,0 +1,113 @@
+---
+# Monetize RBAC for OpenClaw Agents
+#
+# Split into least-privilege roles:
+#   1. openclaw-monetize-read      — cluster-wide read-only (low risk)
+#   2. openclaw-monetize-workload  — cluster-wide mutate for agent-managed resources
+#
+# Subjects pre-populated with obol-agent ServiceAccount.
+# Patched dynamically by `obol agent init` for additional instances.
+
+#------------------------------------------------------------------------------
+# ClusterRole - Read-only permissions (low privilege, cluster-wide)
+# Allows reading ServiceOffers, workload status, and cluster capacity.
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openclaw-monetize-read
+rules:
+  # ServiceOffer CRD - discover and watch across namespaces
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers", "serviceoffers/status"]
+    verbs: ["get", "list", "watch"]
+  # Pods - read workload status
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Read pod logs for diagnostics
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Services/Endpoints - read workload status
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list"]
+  # Deployments - read workload status
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  # Cluster-wide read for capacity assessment
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+#------------------------------------------------------------------------------
+# ClusterRole - Workload mutate permissions for agent-managed resources
+# Cluster-wide because the agent creates resources in the upstream's namespace
+# (e.g., Middlewares in "llm", HTTPRoutes in "llm", registration ConfigMaps).
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openclaw-monetize-workload
+rules:
+  # ServiceOffer CRD - full lifecycle management
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers", "serviceoffers/status"]
+    verbs: ["create", "update", "patch", "delete"]
+  # Traefik middlewares - create ForwardAuth for x402 gating
+  - apiGroups: ["traefik.io"]
+    resources: ["middlewares"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Gateway API HTTPRoutes - expose services via traefik-gateway
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # ConfigMaps - agent-managed registration JSON (in upstream namespace)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Services + Endpoints - agent-managed registration httpd
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["create", "update", "patch", "delete"]
+  # Deployments - agent-managed registration httpd
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "update", "patch", "delete"]
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Read permissions
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openclaw-monetize-read-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openclaw-monetize-read
+subjects:
+  - kind: ServiceAccount
+    name: openclaw
+    namespace: openclaw-obol-agent
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Workload mutate permissions
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openclaw-monetize-workload-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openclaw-monetize-workload
+subjects:
+  - kind: ServiceAccount
+    name: openclaw
+    namespace: openclaw-obol-agent

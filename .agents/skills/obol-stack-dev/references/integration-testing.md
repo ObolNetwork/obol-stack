@@ -16,6 +16,7 @@ Tests exercise the full deployment path through `obol` CLI verbs: `obol openclaw
 
 # Set environment
 export $(grep -v '^#' .env | xargs)
+export OBOL_DEVELOPMENT=true
 export OBOL_CONFIG_DIR=$(pwd)/.workspace/config
 export OBOL_BIN_DIR=$(pwd)/.workspace/bin
 export OBOL_DATA_DIR=$(pwd)/.workspace/data

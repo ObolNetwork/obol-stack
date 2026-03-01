@@ -5,8 +5,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
@@ -111,7 +114,7 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 
 	// Switch to k3s — k3d config should be cleaned up
 	// (Destroy will fail because no real cluster, but cleanup should still work)
-	destroyOldBackendIfSwitching(cfg, BackendK3s, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id")
 
 	if _, err := os.Stat(k3dPath); !os.IsNotExist(err) {
 		t.Error("k3d.yaml should be removed when switching to k3s")
@@ -131,7 +134,7 @@ func TestDestroyOldBackendIfSwitching_NoopSameBackend(t *testing.T) {
 	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
 
 	// Same backend — nothing should be cleaned up
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
 
 	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
 		t.Error("k3d.yaml should NOT be removed when re-initing same backend")
@@ -153,7 +156,7 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 	}
 
 	// Switch to k3d — k3s files should be cleaned up
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
 
 	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
 		if _, err := os.Stat(filepath.Join(tmpDir, f)); !os.IsNotExist(err) {
@@ -173,5 +176,63 @@ func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
 	}
 
 	// Should not panic or error
-	destroyOldBackendIfSwitching(cfg, BackendK3d, "test-id")
+	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
+}
+
+func TestOllamaHostIPForBackend_K3s(t *testing.T) {
+	// k3s backend should return 127.0.0.1 (already an IP, no DNS resolution needed)
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error for k3s backend: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected 127.0.0.1 for k3s backend, got %s", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_K3d(t *testing.T) {
+	// k3d backend should return a valid IP via one of two strategies:
+	//   macOS: DNS resolution of host.docker.internal
+	//   Linux: DNS resolution of host.k3d.internal, or docker0 bridge fallback
+	// In CI without Docker, both may fail → skip.
+	ip, err := ollamaHostIPForBackend(BackendK3d)
+	if err != nil {
+		t.Skipf("skipping: resolution failed (expected in CI without Docker): %v", err)
+	}
+	if ip == "" {
+		t.Fatal("expected non-empty IP for k3d backend")
+	}
+	// The result must be a parseable IP address (not a hostname)
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected a valid IP address for k3d backend, got %q", ip)
+	}
+}
+
+func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
+	// Verify the function passes through an already-numeric IP unchanged.
+	// k3s returns "127.0.0.1" from ollamaHostForBackend, so it should
+	// short-circuit on net.ParseIP without attempting DNS.
+	ip, err := ollamaHostIPForBackend(BackendK3s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
+	}
+}
+
+func TestDockerBridgeGatewayIP(t *testing.T) {
+	// On Linux with Docker installed, docker0 should exist with an IPv4 address.
+	// On macOS or CI without Docker, skip gracefully.
+	if runtime.GOOS != "linux" {
+		t.Skip("docker0 interface only exists on Linux")
+	}
+	ip, err := dockerBridgeGatewayIP()
+	if err != nil {
+		t.Skipf("skipping: docker0 not available (expected without Docker): %v", err)
+	}
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected valid IP from docker0, got %q", ip)
+	}
+	t.Logf("docker0 gateway IP: %s", ip)
 }

@@ -29,9 +29,6 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
-      # obol-agent namespace and RBAC. Set obolAgent.enabled=true to deploy.
-      - obolAgent:
-          enabled: false
 
   # Monitoring stack (Prometheus operator + Prometheus)
   - name: monitoring
@@ -132,6 +129,21 @@ releases:
       - traefik/traefik
     values:
       - ./values/erpc.yaml.gotmpl
+    # Patch the eRPC Service to expose port 80 instead of the chart's
+    # hardcoded 4000 so in-cluster callers don't need :4000.
+    # The container still listens on 4000; targetPort "http" resolves to it.
+    hooks:
+      - events: ["postsync"]
+        showlogs: true
+        command: kubectl
+        args:
+          - patch
+          - svc/erpc
+          - -n
+          - erpc
+          - --type=json
+          - -p
+          - '[{"op":"replace","path":"/spec/ports/0/port","value":80}]'
 
   # eRPC HTTPRoute
   - name: erpc-httproute
@@ -160,7 +172,7 @@ releases:
                         value: /rpc
                   backendRefs:
                     - name: erpc
-                      port: 4000
+                      port: 80
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata

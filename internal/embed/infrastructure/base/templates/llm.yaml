@@ -2,25 +2,28 @@
 # LLM foundation services (OKR-1)
 #
 # This deploys:
-# - An ExternalName Service "ollama" that resolves to the host's Ollama server
+# - A ClusterIP Service + Endpoints "ollama" that routes to the host's Ollama server
 # - llms.py (LLMSpy) as an OpenAI-compatible gateway / router over providers
 #
 # Design notes:
 # - No in-cluster Ollama is deployed; the host is expected to run Ollama
 #   (or another OpenAI-compatible server) on port 11434.
-# - The ollama Service abstracts host resolution:
-#     k3d  → host.k3d.internal
-#     k3s  → resolved at stack init via node IP
+# - The ollama Service abstracts host resolution via ClusterIP + headless Endpoints:
+#     k3d  → host IP resolved at init (e.g. 192.168.65.254 on macOS Docker Desktop)
+#     k3s  → 127.0.0.1 (k3s runs directly on the host)
+# - Using ClusterIP+Endpoints instead of ExternalName for Traefik Gateway API
+#   compatibility (ExternalName services are rejected as HTTPRoute backends).
 # - LLMSpy and all consumers reference ollama.llm.svc.cluster.local:11434,
-#   which the ExternalName Service routes to the host.
+#   which the ClusterIP Service routes to the host via the Endpoints object.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: llm
 
 ---
-# ExternalName Service: routes ollama.llm.svc.cluster.local → host Ollama.
-# The externalName is resolved during `obol stack init` via the {{OLLAMA_HOST}} placeholder.
+# ClusterIP Service + Endpoints: routes ollama.llm.svc.cluster.local → host Ollama.
+# The endpoint IP is resolved during `obol stack init` via the {{OLLAMA_HOST_IP}} placeholder.
+# Using ClusterIP+Endpoints instead of ExternalName for Traefik Gateway API compatibility.
 apiVersion: v1
 kind: Service
 metadata:
@@ -29,12 +32,27 @@ metadata:
   labels:
     app: ollama
 spec:
-  type: ExternalName
-  externalName: {{OLLAMA_HOST}}
+  type: ClusterIP
   ports:
     - name: http
       port: 11434
       protocol: TCP
+      targetPort: 11434
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ollama
+  namespace: llm
+  labels:
+    app: ollama
+subsets:
+  - addresses:
+      - ip: "{{OLLAMA_HOST_IP}}"
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP
 
 ---
 # llms.py v3 configuration for Obol Stack:
@@ -81,7 +99,8 @@ data:
         "npm": "ollama",
         "api": "http://ollama.llm.svc.cluster.local:11434",
         "models": {},
-        "all_models": true
+        "all_models": true,
+        "tool_call": false
       },
       "anthropic": {
         "id": "anthropic",
@@ -132,7 +151,7 @@ spec:
         # providers.json is taken from the llmspy package (has full model definitions)
         # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
         - name: seed-config
-          image: ghcr.io/obolnetwork/llms:3.0.34-obol.1
+          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -159,22 +178,6 @@ spec:
                   json.dump(providers, f, indent=2)
               os.chmod('/data/llms.json', 0o666)
               os.chmod('/data/providers.json', 0o666)
-              # Patch: strip stream_options when forcing stream=false.
-              # OpenClaw sends stream_options with streaming requests; llmspy forces
-              # stream=false but doesn't remove stream_options. OpenAI rejects the
-              # combination. Copy the llms package to the writable volume and patch it.
-              # TODO: remove once fixed upstream in ObolNetwork/llms.
-              shutil.copytree(pkg_dir, '/data/llms', dirs_exist_ok=True)
-              main_path = '/data/llms/main.py'
-              with open(main_path) as f:
-                  code = f.read()
-              code = code.replace(
-                  'chat["stream"] = False',
-                  'chat["stream"] = False\n    chat.pop("stream_options", None)',
-                  1,
-              )
-              with open(main_path, 'w') as f:
-                  f.write(code)
           volumeMounts:
             - name: llmspy-config
               mountPath: /config
@@ -185,7 +188,7 @@ spec:
         - name: llmspy
           # Obol fork of LLMSpy with smart routing extension.
           # Pin a specific version for reproducibility.
-          image: ghcr.io/obolnetwork/llms:3.0.34-obol.1
+          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -206,9 +209,9 @@ spec:
             # Avoid surprises if the image changes its default HOME.
             - name: HOME
               value: /home/llms
-            # Load patched llms package from the init container (stream_options fix).
-            - name: PYTHONPATH
-              value: /home/llms/.llms
+            # Disable Python stdout buffering so logs appear in kubectl logs.
+            - name: PYTHONUNBUFFERED
+              value: "1"
           volumeMounts:
             - name: llmspy-home
               mountPath: /home/llms/.llms

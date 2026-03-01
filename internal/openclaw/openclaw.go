@@ -19,8 +19,11 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/dns"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -43,6 +46,10 @@ const (
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.5"
 
+	// openclawImageTag overrides the chart's default image tag.
+	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
+	openclawImageTag = "2026.2.26"
+
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
 	remoteSignerChartVersion = "0.2.0"
@@ -55,6 +62,7 @@ type OnboardOptions struct {
 	Sync         bool     // Also run helmfile sync after install
 	Interactive  bool     // true = prompt for provider choice; false = silent defaults
 	IsDefault    bool     // true = use fixed ID "default", idempotent on re-run
+	AgentMode    bool     // true = obol-agent singleton with heartbeat config
 	OllamaModels []string // Available Ollama models detected on host (nil = not queried)
 }
 
@@ -63,7 +71,7 @@ type OnboardOptions struct {
 // When Ollama is not detected on the host and no existing ~/.openclaw config
 // is found, it skips provider setup gracefully so the user can configure
 // later with `obol openclaw setup`.
-func SetupDefault(cfg *config.Config) error {
+func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	// Check whether the default deployment already exists (re-sync path).
 	// If it does, proceed unconditionally — the overlay was already written.
 	deploymentDir := deploymentPath(cfg, "default")
@@ -73,55 +81,43 @@ func SetupDefault(cfg *config.Config) error {
 			ID:        "default",
 			Sync:      true,
 			IsDefault: true,
-		})
+		}, u)
 	}
 
 	// Check if there is an existing ~/.openclaw config with providers
 	imported, importErr := DetectExistingConfig()
 	if importErr != nil {
-		fmt.Printf("  Warning: could not read existing config: %v\n", importErr)
+		u.Warnf("could not read existing config: %v", importErr)
 	}
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
-	// If no imported providers, query Ollama for available models
-	var ollamaModels []string
+	// No imported providers — skip automatic deployment.
+	// Local Ollama models are often too small to be useful, and the llmspy
+	// routing path has sharp edges that are better handled via explicit setup.
 	if !hasImportedProviders {
-		ollamaModels = listOllamaModels()
-		if ollamaModels != nil {
-			if len(ollamaModels) > 0 {
-				fmt.Printf("  ✓ Local Ollama detected with %d model(s) at %s\n", len(ollamaModels), ollamaEndpoint())
-			} else {
-				fmt.Printf("  ✓ Local Ollama detected at %s (no models pulled)\n", ollamaEndpoint())
-				fmt.Println("  Run 'obol model setup' to configure a cloud provider,")
-				fmt.Println("  or pull a model with: ollama pull llama3.2:3b")
-			}
-		} else {
-			fmt.Printf("  ⚠ Local Ollama not detected on host (%s)\n", ollamaEndpoint())
-			fmt.Println("  Skipping default OpenClaw model provider setup.")
-			fmt.Println("  Run 'obol model setup' to configure a provider later.")
-			return nil
-		}
+		u.Print("  No model provider configured.")
+		u.Print("  Run 'obol openclaw onboard' to set up an OpenClaw instance.")
+		return nil
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:           "default",
-		Sync:         true,
-		IsDefault:    true,
-		OllamaModels: ollamaModels,
-	})
+		ID:        "default",
+		Sync:      true,
+		IsDefault: true,
+	}, u)
 }
 
 // Onboard creates and optionally deploys an OpenClaw instance
-func Onboard(cfg *config.Config, opts OnboardOptions) error {
+func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	id := opts.ID
 	if opts.IsDefault {
 		id = "default"
 	}
 	if id == "" {
 		id = petname.Generate(2, "-")
-		fmt.Printf("Generated deployment ID: %s\n", id)
+		u.Infof("Generated deployment ID: %s", id)
 	} else {
-		fmt.Printf("Using deployment ID: %s\n", id)
+		u.Infof("Using deployment ID: %s", id)
 	}
 
 	deploymentDir := deploymentPath(cfg, id)
@@ -129,7 +125,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	// Idempotent re-run for default deployment: just re-sync
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
-			fmt.Println("Default OpenClaw instance already configured, re-syncing...")
+			u.Info("Default OpenClaw instance already configured, re-syncing...")
 			// Always regenerate helmfile.yaml to pick up chart version bumps.
 			// values-obol.yaml (user config) is intentionally left unchanged.
 			namespace := fmt.Sprintf("%s-%s", appName, id)
@@ -138,16 +134,16 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 			}
 			if opts.Sync {
-				if err := doSync(cfg, id); err != nil {
+				if err := doSync(cfg, id, u); err != nil {
 					return err
 				}
 				// Import workspace on re-sync too
 				imported, importErr := DetectExistingConfig()
 				if importErr != nil {
-					fmt.Printf("Warning: could not read existing config: %v\n", importErr)
+					u.Warnf("could not read existing config: %v", importErr)
 				}
 				if imported != nil && imported.WorkspaceDir != "" {
-					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
+					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
 				}
 				return nil
 			}
@@ -161,13 +157,13 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite", appName, id, deploymentDir)
 		}
-		fmt.Printf("WARNING: Overwriting existing deployment at %s\n", deploymentDir)
+		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
 	// Detect existing ~/.openclaw config
 	imported, err := DetectExistingConfig()
 	if err != nil {
-		fmt.Printf("Warning: failed to read existing config: %v\n", err)
+		u.Warnf("failed to read existing config: %v", err)
 	}
 	if imported != nil {
 		PrintImportSummary(imported)
@@ -176,7 +172,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	// Interactive setup: auto-skip prompts when existing config has providers
 	if opts.Interactive {
 		if imported != nil && len(imported.Providers) > 0 {
-			fmt.Println("\nUsing detected configuration from ~/.openclaw/")
+			u.Print("\nUsing detected configuration from ~/.openclaw/")
 		} else {
 			var cloudProvider *CloudProviderInfo
 			imported, cloudProvider, err = interactiveSetup(imported)
@@ -185,7 +181,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 			}
 			// Push cloud API key to llmspy if a cloud provider was selected
 			if cloudProvider != nil {
-				if llmErr := model.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+				if llmErr := model.ConfigureLLMSpy(cfg, u, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
 					return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 				}
 			}
@@ -199,19 +195,51 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 	// Write Obol Stack overlay values (httpRoute, provider config, eRPC, skills)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	// Ensure /etc/hosts has an entry for this subdomain.
+	// macOS Sequoia's /etc/resolver/ doesn't reliably forward subdomain queries.
+	if err := dns.EnsureHostsEntries(collectAllHostnames(cfg, hostname)); err != nil {
+		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
+	}
 	secretData := collectSensitiveData(imported)
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels)
+	// If running in agent mode, read tunnel state to inject AGENT_BASE_URL.
+	var agentBaseURL string
+	if opts.AgentMode {
+		st, _ := tunnel.LoadTunnelState(cfg)
+		if st != nil && st.Hostname != "" {
+			agentBaseURL = "https://" + st.Hostname
+		}
+		// Agent mode always needs Ollama models for local inference,
+		// even when an imported config provides cloud providers.
+		if opts.OllamaModels == nil {
+			opts.OllamaModels = listOllamaModels()
+		}
+	}
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels, agentBaseURL)
+
+	// Append heartbeat config for agent mode.
+	if opts.AgentMode {
+		overlay += `
+# Agent mode: periodic heartbeat for monetize reconciliation
+agents:
+  defaults:
+    heartbeat:
+      every: "1m"
+      target: "none"
+`
+	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
 	// Generate Ethereum signing wallet (key + remote-signer config).
-	fmt.Println("\nGenerating Ethereum wallet...")
+	u.Blank()
+	u.Info("Generating Ethereum wallet...")
 	wallet, err := GenerateWallet(cfg, id)
 	if err != nil {
 		os.RemoveAll(deploymentDir)
@@ -234,49 +262,55 @@ func Onboard(cfg *config.Config, opts OnboardOptions) error {
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
 
-	fmt.Printf("\n✓ OpenClaw instance configured!\n")
-	fmt.Printf("  Deployment: %s/%s\n", appName, id)
-	fmt.Printf("  Namespace:  %s\n", namespace)
-	fmt.Printf("  Hostname:   %s\n", hostname)
-	fmt.Printf("  Wallet:     %s\n", wallet.Address)
-	fmt.Printf("  Location:   %s\n", deploymentDir)
-	fmt.Printf("\nFiles created:\n")
-	fmt.Printf("  - values-obol.yaml           Obol Stack overlay (httpRoute, providers, eRPC)\n")
-	fmt.Printf("  - values-remote-signer.yaml  Remote-signer config (keystore password)\n")
-	fmt.Printf("  - wallet.json                Wallet metadata (address, keystore UUID)\n")
-	fmt.Printf("  - helmfile.yaml              Deployment configuration\n")
+	u.Blank()
+	u.Success("OpenClaw instance configured!")
+	u.Detail("Deployment", fmt.Sprintf("%s/%s", appName, id))
+	u.Detail("Namespace", namespace)
+	u.Detail("Hostname", hostname)
+	u.Detail("Wallet", wallet.Address)
+	u.Detail("Location", deploymentDir)
+	u.Blank()
+	u.Print("Files created:")
+	u.Print("  - values-obol.yaml           Obol Stack overlay (httpRoute, providers, eRPC)")
+	u.Print("  - values-remote-signer.yaml  Remote-signer config (keystore password)")
+	u.Print("  - wallet.json                Wallet metadata (address, keystore UUID)")
+	u.Print("  - helmfile.yaml              Deployment configuration")
 	if len(secretData) > 0 {
-		fmt.Printf("  - %s  Local secret values (used to create %s in-cluster)\n", userSecretsFileName, userSecretsK8sSecretRef)
+		u.Printf("  - %s  Local secret values (used to create %s in-cluster)", userSecretsFileName, userSecretsK8sSecretRef)
 	}
-	fmt.Printf("\n  Back up your signing key:\n")
-	fmt.Printf("    cp -r %s ~/obol-wallet-backup/\n", keystoreVolumePath(cfg, id))
+	u.Blank()
+	u.Print("  Back up your signing key:")
+	u.Printf("    cp -r %s ~/obol-wallet-backup/", keystoreVolumePath(cfg, id))
 
 	// Stage default skills to deployment directory (immediate, no cluster needed)
-	fmt.Println("\nStaging default skills...")
-	stageDefaultSkills(deploymentDir)
+	u.Blank()
+	u.Info("Staging default skills...")
+	stageDefaultSkills(deploymentDir, u)
 
 	if opts.Sync {
-		fmt.Printf("\nDeploying to cluster...\n\n")
-		if err := doSync(cfg, id); err != nil {
+		u.Blank()
+		u.Info("Deploying to cluster...")
+		u.Blank()
+		if err := doSync(cfg, id, u); err != nil {
 			return err
 		}
 		// Copy workspace files into the pod after sync succeeds
 		if imported != nil && imported.WorkspaceDir != "" {
-			copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir)
+			copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
 		}
 		return nil
 	}
 
-	fmt.Printf("\nTo deploy: obol openclaw sync %s\n", id)
+	u.Printf("\nTo deploy: obol openclaw sync %s", id)
 	return nil
 }
 
 // Sync deploys or updates an OpenClaw instance
-func Sync(cfg *config.Config, id string) error {
-	return doSync(cfg, id)
+func Sync(cfg *config.Config, id string, u *ui.UI) error {
+	return doSync(cfg, id, u)
 }
 
-func doSync(cfg *config.Config, id string) error {
+func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nDirectory: %s", appName, id, deploymentDir)
@@ -311,38 +345,47 @@ func doSync(cfg *config.Config, id string) error {
 	// predictable path ($DATA_DIR/openclaw-<id>/openclaw-data/), so we can
 	// pre-populate skills before helmfile sync runs. OpenClaw's file watcher
 	// on /data/.openclaw/skills/ picks them up at startup or at runtime.
-	stageDefaultSkills(deploymentDir)
-	injectSkillsToVolume(cfg, id, deploymentDir)
+	stageDefaultSkills(deploymentDir, u)
+	injectSkillsToVolume(cfg, id, deploymentDir, u)
 
-	fmt.Printf("Syncing OpenClaw: %s/%s\n", appName, id)
-	fmt.Printf("Deployment directory: %s\n", deploymentDir)
-	fmt.Printf("Running helmfile sync...\n\n")
+	u.Infof("Syncing OpenClaw: %s/%s", appName, id)
+	u.Detail("Deployment directory", deploymentDir)
 
 	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync")
 	cmd.Dir = deploymentDir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
 	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Running helmfile sync",
+		Cmd:  cmd,
+	}); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
+
+	// Patch ConfigMap to inject heartbeat config that the chart template
+	// does not render. The chart's _helpers.tpl only outputs
+	// agents.defaults.model and agents.defaults.workspace into openclaw.json,
+	// so heartbeat config from values-obol.yaml is silently dropped. We read
+	// the rendered ConfigMap, merge heartbeat fields, and re-apply.
+	patchHeartbeatConfig(cfg, id, deploymentDir)
 
 	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
-	fmt.Printf("\n✓ OpenClaw installed successfully!\n")
-	fmt.Printf("  Namespace: %s\n", namespace)
-	fmt.Printf("  URL:       http://%s\n", hostname)
-	fmt.Printf("\n[Optional] Retrieve a gateway token:\n")
-	fmt.Printf("  obol openclaw token %s\n", id)
-	fmt.Printf("\n[Optional] Port-forward fallback:\n")
-	fmt.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789\n", namespace)
+	u.Blank()
+	u.Success("OpenClaw installed successfully!")
+	u.Detail("Namespace", namespace)
+	u.Detail("URL", fmt.Sprintf("http://%s", hostname))
+	u.Blank()
+	u.Dim("[Optional] Retrieve a gateway token:")
+	u.Printf("  obol openclaw token %s", id)
+	u.Blank()
+	u.Dim("[Optional] Port-forward fallback:")
+	u.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789", namespace)
 
 	return nil
 }
@@ -445,29 +488,30 @@ func ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace string) erro
 // copyWorkspaceToVolume copies the local workspace directory directly to the
 // host-side PVC path that maps to /data/.openclaw/workspace/ in the container.
 // This is non-fatal: failures print a warning and continue.
-func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string) {
+func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	targetDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
-	fmt.Printf("\nImporting workspace from %s...\n", workspaceDir)
+	u.Blank()
+	u.Infof("Importing workspace from %s...", workspaceDir)
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		fmt.Printf("Warning: could not create workspace directory: %v\n", err)
+		u.Warnf("could not create workspace directory: %v", err)
 		return
 	}
 
 	if err := copyDirRecursive(workspaceDir, targetDir); err != nil {
-		fmt.Printf("Warning: workspace copy failed: %v\n", err)
+		u.Warnf("workspace copy failed: %v", err)
 		return
 	}
 
-	fmt.Printf("Imported workspace to volume\n")
+	u.Success("Imported workspace to volume")
 }
 
 // stageDefaultSkills writes embedded Obol skills to the deployment's config
 // directory on the host filesystem. These are pushed to the cluster as a
 // ConfigMap during doSync — no pod readiness required.
-func stageDefaultSkills(deploymentDir string) {
+func stageDefaultSkills(deploymentDir string, u *ui.UI) {
 	skillsDir := filepath.Join(deploymentDir, "skills")
 
 	// Don't overwrite if skills directory already exists (user may have customised)
@@ -476,18 +520,18 @@ func stageDefaultSkills(deploymentDir string) {
 	}
 
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
-		fmt.Printf("Warning: could not create skills directory: %v\n", err)
+		u.Warnf("could not create skills directory: %v", err)
 		return
 	}
 
 	if err := obolembed.CopySkills(skillsDir); err != nil {
-		fmt.Printf("Warning: could not stage default skills: %v\n", err)
+		u.Warnf("could not stage default skills: %v", err)
 		return
 	}
 
 	names, _ := obolembed.GetEmbeddedSkillNames()
 	for _, name := range names {
-		fmt.Printf("  ✓ Staged skill: %s\n", name)
+		u.Successf("Staged skill: %s", name)
 	}
 }
 
@@ -514,7 +558,7 @@ func skillsVolumePath(cfg *config.Config, id string) string {
 // path that maps to /data/.openclaw/skills/ inside the OpenClaw container.
 // This is called before helmfile sync so skills are present at first pod boot.
 // OpenClaw's file watcher detects new/changed skills at runtime.
-func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string) {
+func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u *ui.UI) {
 	skillsSrc := filepath.Join(deploymentDir, "skills")
 	info, err := os.Stat(skillsSrc)
 	if err != nil || !info.IsDir() {
@@ -538,11 +582,11 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string) {
 
 	targetDir := skillsVolumePath(cfg, id)
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		fmt.Printf("Warning: could not create skills volume directory: %v\n", err)
+		u.Warnf("could not create skills volume directory: %v", err)
 		return
 	}
 
-	fmt.Println("Injecting skills to volume...")
+	u.Info("Injecting skills to volume...")
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -550,10 +594,10 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string) {
 		src := filepath.Join(skillsSrc, e.Name())
 		dst := filepath.Join(targetDir, e.Name())
 		if err := copyDirRecursive(src, dst); err != nil {
-			fmt.Printf("Warning: could not inject skill %s: %v\n", e.Name(), err)
+			u.Warnf("could not inject skill %s: %v", e.Name(), err)
 			continue
 		}
-		fmt.Printf("  ✓ Injected skill: %s\n", e.Name())
+		u.Successf("Injected skill: %s", e.Name())
 	}
 }
 
@@ -661,12 +705,12 @@ func getToken(cfg *config.Config, id string) (string, error) {
 }
 
 // Token retrieves the gateway token for an OpenClaw instance and prints it.
-func Token(cfg *config.Config, id string) error {
+func Token(cfg *config.Config, id string, u *ui.UI) error {
 	token, err := getToken(cfg, id)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s\n", token)
+	u.Print(token)
 	return nil
 }
 
@@ -791,7 +835,7 @@ type SetupOptions struct {
 // Setup reconfigures model providers for a deployed OpenClaw instance.
 // It runs the interactive provider prompt, regenerates the overlay values,
 // and syncs via helmfile so the pod picks up the new configuration.
-func Setup(cfg *config.Config, id string, _ SetupOptions) error {
+func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw onboard' first", appName, id)
@@ -805,7 +849,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 
 	// Push cloud API key to llmspy if a cloud provider was selected
 	if cloudProvider != nil {
-		if llmErr := model.ConfigureLLMSpy(cfg, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
+		if llmErr := model.ConfigureLLMSpy(cfg, u, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
 			return fmt.Errorf("failed to configure llmspy: %w", llmErr)
 		}
 	}
@@ -823,28 +867,32 @@ func Setup(cfg *config.Config, id string, _ SetupOptions) error {
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil)
+	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil, "")
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
-	fmt.Printf("\nApplying configuration...\n\n")
-	if err := doSync(cfg, id); err != nil {
+	u.Blank()
+	u.Info("Applying configuration...")
+	u.Blank()
+	if err := doSync(cfg, id, u); err != nil {
 		return err
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
-	fmt.Printf("\nWaiting for the OpenClaw gateway to be ready...\n")
+	u.Blank()
+	u.Info("Waiting for the OpenClaw gateway to be ready...")
 	if _, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 90); err != nil {
-		fmt.Printf("Warning: pod not ready yet: %v\n", err)
-		fmt.Println("The deployment may still be rolling out. Check with: obol kubectl get pods -n", namespace)
-		fmt.Println("Or track the status from http://obol.stack")
+		u.Warnf("pod not ready yet: %v", err)
+		u.Printf("The deployment may still be rolling out. Check with: obol kubectl get pods -n %s", namespace)
+		u.Print("Or track the status from http://obol.stack")
 	} else {
-		fmt.Printf("\n✓ Setup complete!\n")
-		fmt.Printf("  Access the OpenClaw dashboard from http://obol.stack\n")
+		u.Blank()
+		u.Success("Setup complete!")
+		u.Print("  Access the OpenClaw dashboard from http://obol.stack")
 	}
 	return nil
 }
@@ -858,7 +906,7 @@ type DashboardOptions struct {
 // Dashboard port-forwards to the OpenClaw instance and opens the web dashboard.
 // The onReady callback is invoked with the dashboard URL; the CLI layer uses it
 // to open a browser.
-func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady func(url string)) error {
+func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady func(url string), u *ui.UI) error {
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
@@ -870,7 +918,7 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 	}
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	fmt.Printf("Starting port-forward to %s...\n", namespace)
+	u.Infof("Starting port-forward to %s...", namespace)
 
 	pf, err := startPortForward(cfg, namespace, opts.Port)
 	if err != nil {
@@ -879,10 +927,12 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 	defer pf.Stop()
 
 	dashboardURL := fmt.Sprintf("http://localhost:%d/#token=%s", pf.localPort, token)
-	fmt.Printf("Port-forward active: localhost:%d -> %s:18789\n", pf.localPort, namespace)
-	fmt.Printf("\nDashboard URL: %s\n", dashboardURL)
-	fmt.Printf("Gateway token: %s\n", token)
-	fmt.Printf("\nPress Ctrl+C to stop.\n")
+	u.Successf("Port-forward active: localhost:%d -> %s:18789", pf.localPort, namespace)
+	u.Blank()
+	u.Detail("Dashboard URL", dashboardURL)
+	u.Detail("Gateway token", token)
+	u.Blank()
+	u.Dim("Press Ctrl+C to stop.")
 
 	if onReady != nil {
 		onReady(dashboardURL)
@@ -894,7 +944,8 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 
 	select {
 	case <-sigCh:
-		fmt.Printf("\nShutting down...\n")
+		u.Blank()
+		u.Info("Shutting down...")
 	case err := <-pf.done:
 		if err != nil {
 			return fmt.Errorf("port-forward died unexpectedly: %w", err)
@@ -905,12 +956,12 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 }
 
 // List displays installed OpenClaw instances
-func List(cfg *config.Config) error {
+func List(cfg *config.Config, u *ui.UI) error {
 	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
 
 	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
-		fmt.Println("No OpenClaw instances installed")
-		fmt.Println("\nTo create one: obol openclaw up")
+		u.Print("No OpenClaw instances installed")
+		u.Print("\nTo create one: obol openclaw up")
 		return nil
 	}
 
@@ -920,12 +971,12 @@ func List(cfg *config.Config) error {
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("No OpenClaw instances installed")
+		u.Print("No OpenClaw instances installed")
 		return nil
 	}
 
-	fmt.Println("OpenClaw instances:")
-	fmt.Println()
+	u.Info("OpenClaw instances:")
+	u.Blank()
 
 	count := 0
 	for _, entry := range entries {
@@ -935,24 +986,24 @@ func List(cfg *config.Config) error {
 		id := entry.Name()
 		namespace := fmt.Sprintf("%s-%s", appName, id)
 		hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-		fmt.Printf("  %s\n", id)
-		fmt.Printf("    Namespace: %s\n", namespace)
-		fmt.Printf("    URL:       http://%s\n", hostname)
-		fmt.Println()
+		u.Bold("  " + id)
+		u.Detail("  Namespace", namespace)
+		u.Detail("  URL", fmt.Sprintf("http://%s", hostname))
+		u.Blank()
 		count++
 	}
 
-	fmt.Printf("Total: %d instance(s)\n", count)
+	u.Printf("Total: %d instance(s)", count)
 	return nil
 }
 
 // Delete removes an OpenClaw instance
-func Delete(cfg *config.Config, id string, force bool) error {
+func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	deploymentDir := deploymentPath(cfg, id)
 
-	fmt.Printf("Deleting OpenClaw: %s/%s\n", appName, id)
-	fmt.Printf("Namespace: %s\n", namespace)
+	u.Infof("Deleting OpenClaw: %s/%s", appName, id)
+	u.Detail("Namespace", namespace)
 
 	configExists := false
 	if _, err := os.Stat(deploymentDir); err == nil {
@@ -974,22 +1025,20 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		return fmt.Errorf("instance not found: %s", id)
 	}
 
-	fmt.Println("\nResources to be deleted:")
+	u.Blank()
+	u.Print("Resources to be deleted:")
 	if namespaceExists {
-		fmt.Printf("  [x] Kubernetes namespace: %s\n", namespace)
+		u.Printf("  [x] Kubernetes namespace: %s", namespace)
 	} else {
-		fmt.Printf("  [ ] Kubernetes namespace: %s (not found)\n", namespace)
+		u.Printf("  [ ] Kubernetes namespace: %s (not found)", namespace)
 	}
 	if configExists {
-		fmt.Printf("  [x] Configuration: %s\n", deploymentDir)
+		u.Printf("  [x] Configuration: %s", deploymentDir)
 	}
 
 	if !force {
-		fmt.Print("\nProceed with deletion? [y/N]: ")
-		var response string
-		fmt.Scanln(&response)
-		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
-			fmt.Println("Deletion cancelled")
+		if !u.Confirm("\nProceed with deletion?", false) {
+			u.Print("Deletion cancelled")
 			return nil
 		}
 	}
@@ -1001,37 +1050,38 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
 		if _, err := os.Stat(helmfilePath); err == nil {
 			if _, err := os.Stat(helmfileBinary); err == nil {
-				fmt.Printf("\nRemoving Helm releases from %s...\n", namespace)
 				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
 				destroyCmd.Dir = deploymentDir
 				destroyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-				destroyCmd.Stdout = os.Stdout
-				destroyCmd.Stderr = os.Stderr
-				if err := destroyCmd.Run(); err != nil {
-					fmt.Printf("Warning: helmfile destroy failed (will force-delete namespace): %v\n", err)
+
+				if err := u.Exec(ui.ExecConfig{
+					Name: fmt.Sprintf("Removing Helm releases from %s", namespace),
+					Cmd:  destroyCmd,
+				}); err != nil {
+					u.Warnf("helmfile destroy failed (will force-delete namespace): %v", err)
 				}
 			}
 		}
 
-		fmt.Printf("Deleting namespace %s...\n", namespace)
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
+		deleteCmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("Warning: namespace deletion may still be in progress: %v\n", err)
+		deleteCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		if err := u.Exec(ui.ExecConfig{
+			Name: fmt.Sprintf("Deleting namespace %s", namespace),
+			Cmd:  deleteCmd,
+		}); err != nil {
+			u.Warnf("namespace deletion may still be in progress: %v", err)
 		}
-		fmt.Println("Namespace deleted")
 	}
 
 	if configExists {
-		fmt.Printf("Deleting configuration...\n")
+		u.Info("Deleting configuration...")
 		if err := os.RemoveAll(deploymentDir); err != nil {
 			return fmt.Errorf("failed to delete config directory: %w", err)
 		}
-		fmt.Println("Configuration deleted")
+		u.Success("Configuration deleted")
 
 		parentDir := filepath.Join(cfg.ConfigDir, "applications", appName)
 		entries, err := os.ReadDir(parentDir)
@@ -1040,21 +1090,22 @@ func Delete(cfg *config.Config, id string, force bool) error {
 		}
 	}
 
-	fmt.Printf("\n✓ OpenClaw %s deleted successfully!\n", id)
+	u.Blank()
+	u.Successf("OpenClaw %s deleted successfully!", id)
 	return nil
 }
 
 // SkillsSync copies a local skills directory to the host-side PVC path that
 // maps to /data/.openclaw/skills/ inside the OpenClaw container. OpenClaw's
 // file watcher detects changes automatically — no pod restart needed.
-func SkillsSync(cfg *config.Config, id, skillsDir string) error {
+func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		return fmt.Errorf("skills directory not found: %s", skillsDir)
 	}
 
 	targetDir := skillsVolumePath(cfg, id)
 
-	fmt.Printf("Syncing skills from %s to volume...\n", skillsDir)
+	u.Infof("Syncing skills from %s to volume...", skillsDir)
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("failed to create skills volume directory: %w", err)
@@ -1074,30 +1125,33 @@ func SkillsSync(cfg *config.Config, id, skillsDir string) error {
 		if err := copyDirRecursive(src, dst); err != nil {
 			return fmt.Errorf("failed to copy skill %s: %w", e.Name(), err)
 		}
-		fmt.Printf("  ✓ Synced skill: %s\n", e.Name())
+		u.Successf("Synced skill: %s", e.Name())
 	}
 
-	fmt.Printf("✓ Skills synced to volume (file watcher will reload)\n")
+	u.Success("Skills synced to volume (file watcher will reload)")
 	return nil
 }
 
 // SkillAdd adds a skill to a deployed OpenClaw instance by running the native
 // openclaw CLI inside the pod via kubectl exec.
-func SkillAdd(cfg *config.Config, id string, args []string) error {
+func SkillAdd(cfg *config.Config, id string, args []string, u *ui.UI) error {
+	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "add"}, args...))
 }
 
 // SkillRemove removes a skill from a deployed OpenClaw instance by running the
 // native openclaw CLI inside the pod via kubectl exec.
-func SkillRemove(cfg *config.Config, id string, args []string) error {
+func SkillRemove(cfg *config.Config, id string, args []string, u *ui.UI) error {
+	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "remove"}, args...))
 }
 
 // SkillList lists skills installed on a deployed OpenClaw instance by running
 // the native openclaw CLI inside the pod via kubectl exec.
-func SkillList(cfg *config.Config, id string) error {
+func SkillList(cfg *config.Config, id string, u *ui.UI) error {
+	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	return cliViaKubectlExec(cfg, namespace, []string{"skills", "list"})
 }
@@ -1113,7 +1167,8 @@ var remoteCapableCommands = map[string]bool{
 // CLI runs an openclaw CLI command against a deployed instance.
 // Commands that support --url/--token are executed locally with a port-forward;
 // others are executed via kubectl exec into the pod.
-func CLI(cfg *config.Config, id string, args []string) error {
+func CLI(cfg *config.Config, id string, args []string, u *ui.UI) error {
+	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	deploymentDir := deploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
@@ -1231,7 +1286,7 @@ func deploymentPath(cfg *config.Config, id string) string {
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
-func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string) string {
+func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string, agentBaseURL string) string {
 	var b strings.Builder
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
@@ -1258,6 +1313,11 @@ rbac:
 
 `)
 
+	// Override chart default image tag when the binary pins a newer version.
+	if openclawImageTag != "" {
+		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, openclawImageTag))
+	}
+
 	// Provider and agent model configuration
 	importedOverlay := TranslateToOverlayYAML(imported)
 	if importedOverlay != "" {
@@ -1268,9 +1328,9 @@ rbac:
 		// unavailable. Without it, the gateway rejects with 1008 "requires HTTPS or
 		// localhost (secure context)". Token auth is still enforced.
 		if strings.Contains(importedOverlay, "openclaw:\n") {
-			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n", 1)
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n", 1)
 		} else {
-			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n\n")
+			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n\n")
 		}
 		b.WriteString(importedOverlay)
 	} else {
@@ -1286,6 +1346,7 @@ rbac:
     # so device identity is unavailable. Token auth is still enforced.
     controlUi:
       allowInsecureAuth: true
+      dangerouslyAllowHostHeaderOriginFallback: true
 
 # apiKeyValue is a dummy placeholder — Ollama does not require auth.
 # It is safe to inline here (unlike real cloud keys, which go to secrets).
@@ -1310,14 +1371,20 @@ models:
 
 	b.WriteString(`# eRPC integration
 erpc:
-  url: http://erpc.erpc.svc.cluster.local:4000/rpc
+  url: http://erpc.erpc.svc.cluster.local/rpc
 
 # Remote-signer wallet for Ethereum transaction signing.
 # The remote-signer runs in the same namespace as OpenClaw.
 extraEnv:
   - name: REMOTE_SIGNER_URL
     value: http://remote-signer:9000
-
+`)
+	if agentBaseURL != "" {
+		b.WriteString(fmt.Sprintf(`  - name: AGENT_BASE_URL
+    value: %s
+`, agentBaseURL))
+	}
+	b.WriteString(`
 # Skills: injected directly to the host-side PVC path at
 # $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
 # OpenClaw's file watcher picks them up; no ConfigMap needed.
@@ -1339,6 +1406,117 @@ secrets:
 	}
 
 	return b.String()
+}
+
+// patchHeartbeatConfig reads the rendered openclaw-config ConfigMap, injects
+// heartbeat configuration from values-obol.yaml, and re-applies it. This
+// compensates for the upstream Helm chart not rendering agents.defaults.heartbeat.
+func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
+	// Read values-obol.yaml to check for heartbeat config.
+	valuesPath := filepath.Join(deploymentDir, "values-obol.yaml")
+	valuesRaw, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return // No values file, nothing to patch.
+	}
+
+	// Quick check: if no heartbeat in values, skip.
+	if !strings.Contains(string(valuesRaw), "heartbeat:") {
+		return
+	}
+
+	// Extract heartbeat every/target from YAML (simple parsing, not full YAML).
+	var every, target string
+	for _, line := range strings.Split(string(valuesRaw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "every:") {
+			every = strings.TrimSpace(strings.TrimPrefix(trimmed, "every:"))
+			every = strings.Trim(every, "\"'")
+		}
+		if strings.HasPrefix(trimmed, "target:") {
+			target = strings.TrimSpace(strings.TrimPrefix(trimmed, "target:"))
+			target = strings.Trim(target, "\"'")
+		}
+	}
+	if every == "" {
+		return // No heartbeat interval configured.
+	}
+
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Read current ConfigMap.
+	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
+		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
+	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var out bytes.Buffer
+	getCmd.Stdout = &out
+	if err := getCmd.Run(); err != nil {
+		fmt.Printf("Warning: could not read openclaw-config ConfigMap: %v\n", err)
+		return
+	}
+
+	// Parse JSON config.
+	var cfgJSON map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
+		fmt.Printf("Warning: could not parse openclaw.json: %v\n", err)
+		return
+	}
+
+	// Navigate to agents.defaults, inject heartbeat.
+	agents, ok := cfgJSON["agents"].(map[string]interface{})
+	if !ok {
+		agents = map[string]interface{}{}
+		cfgJSON["agents"] = agents
+	}
+	defaults, ok := agents["defaults"].(map[string]interface{})
+	if !ok {
+		defaults = map[string]interface{}{}
+		agents["defaults"] = defaults
+	}
+
+	heartbeat := map[string]interface{}{
+		"every": every,
+	}
+	if target != "" {
+		heartbeat["target"] = target
+	}
+	defaults["heartbeat"] = heartbeat
+
+	// Re-serialize.
+	patched, err := json.MarshalIndent(cfgJSON, "    ", "  ")
+	if err != nil {
+		fmt.Printf("Warning: could not marshal patched config: %v\n", err)
+		return
+	}
+
+	// Apply via kubectl apply --server-side with Helm's field manager so that
+	// subsequent helm upgrade doesn't conflict on data.openclaw.json.
+	applyPayload := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "openclaw-config",
+			"namespace": namespace,
+		},
+		"data": map[string]string{
+			"openclaw.json": string(patched),
+		},
+	}
+	applyRaw, _ := json.Marshal(applyPayload)
+
+	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
+		"--server-side", "--field-manager=helm", "--force-conflicts")
+	applyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	applyCmd.Stdin = bytes.NewReader(applyRaw)
+	var applyErr bytes.Buffer
+	applyCmd.Stderr = &applyErr
+	if err := applyCmd.Run(); err != nil {
+		fmt.Printf("Warning: could not patch heartbeat config: %v\n%s\n", err, applyErr.String())
+		return
+	}
+
+	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s)\n", every, target)
 }
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.
@@ -1797,4 +1975,27 @@ releases:
     values:
       - values-remote-signer.yaml
 `, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
+}
+
+// collectAllHostnames gathers all openclaw subdomain hostnames that should be
+// in /etc/hosts. Scans existing deployments and includes the new hostname.
+func collectAllHostnames(cfg *config.Config, newHostname string) []string {
+	hostnames := []string{newHostname}
+	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
+	entries, err := os.ReadDir(appsDir)
+	if err != nil {
+		return hostnames
+	}
+	seen := map[string]bool{newHostname: true}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		h := fmt.Sprintf("openclaw-%s.%s", e.Name(), defaultDomain)
+		if !seen[h] {
+			hostnames = append(hostnames, h)
+			seen[h] = true
+		}
+	}
+	return hostnames
 }

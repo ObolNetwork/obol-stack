@@ -1,5 +1,0 @@
-apiVersion: v2
-name: inference-core
-description: x402-enabled inference gateway with Ollama
-type: application
-version: 0.1.0
