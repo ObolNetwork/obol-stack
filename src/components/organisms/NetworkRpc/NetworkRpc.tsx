@@ -19,11 +19,11 @@ import {
   ClientStatusType,
 } from '../../../types/dashboard';
 import {
-  TESTNETS,
   sortNetworks,
   networkToChainName,
   networkToStatus,
   chainIdFromEvmId,
+  isMainnetNetwork,
   erpcUrl,
   groupUpstreamsByNetwork,
   formatMs,
@@ -356,8 +356,9 @@ function NetworkRow({
 
   const chainName = networkToChainName(network.alias);
   const status = networkToStatus(network.state);
-  const isTestnet = TESTNETS.has(network.alias);
   const chainId = chainIdFromEvmId(network.id);
+  const isMainnet = isMainnetNetwork(network.id);
+  const isTestnet = !isMainnet;
   const endpoint = `${erpcUrl()}/${network.alias}`;
 
   // Height animation (same pattern as Accordion)
@@ -403,7 +404,16 @@ function NetworkRow({
         css={hasUpstreams ? { cursor: 'pointer' } : undefined}
       >
         <ChipSlot>
-          <ChainChip variant={chainName ?? 'mainnet'} />
+          <ChainChip
+            variant={chainName ?? (isMainnet ? 'mainnet' : 'sepolia')}
+            label={
+              chainName
+                ? undefined
+                : network.alias
+                    .replace(/-/g, ' ')
+                    .replace(/\b\w/g, c => c.toUpperCase())
+            }
+          />
         </ChipSlot>
 
         {isTestnet && <TestnetBadge>testnet</TestnetBadge>}
@@ -414,7 +424,7 @@ function NetworkRow({
 
         <Box onClick={(e: MouseEvent) => e.stopPropagation()}>
           <AddNetworkButton
-            chainName={chainName ?? 'mainnet'}
+            chainName={chainName ?? (isMainnet ? 'mainnet' : 'sepolia')}
             walletClient={chainName ? walletClient : null}
           />
         </Box>

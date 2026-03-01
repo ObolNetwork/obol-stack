@@ -8,8 +8,18 @@ import {
 export const TESTNETS = new Set(['hoodi', 'sepolia']);
 export const NETWORK_ORDER = ['mainnet', 'sepolia', 'hoodi'];
 
+export function isMainnetNetwork(networkId: string): boolean {
+  return chainIdFromEvmId(networkId) === 1;
+}
+
 export function sortNetworks(networks: ErpcNetwork[]): ErpcNetwork[] {
   return [...networks].sort((a, b) => {
+    // Mainnet (chainId 1) always comes first
+    const aMainnet = isMainnetNetwork(a.id);
+    const bMainnet = isMainnetNetwork(b.id);
+    if (aMainnet && !bMainnet) return -1;
+    if (!aMainnet && bMainnet) return 1;
+    // Then follow known order
     const ai = NETWORK_ORDER.indexOf(a.alias);
     const bi = NETWORK_ORDER.indexOf(b.alias);
     if (ai === -1 && bi === -1) return a.alias.localeCompare(b.alias);

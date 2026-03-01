@@ -11,7 +11,7 @@ export const config = {
   // Server-side base URL for the eRPC status endpoint (GET /).
   // Defaults to the in-cluster service; override with ERPC_BASE_URL for local port-forwarding.
   erpcBaseUrl:
-    process.env.ERPC_BASE_URL || 'http://erpc.erpc.svc.cluster.local:4000',
+    process.env.ERPC_BASE_URL || 'http://erpc.erpc.svc.cluster.local',
   openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
   commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',

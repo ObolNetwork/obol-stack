@@ -10,6 +10,7 @@ export interface ChainChipProps {
     | 'hoodi'
     | 'sepolia'
     | 'mainnet';
+  label?: string;
   className?: string;
 }
 
@@ -89,10 +90,14 @@ const getChipText = (variant: ChainChipProps['variant']) => {
   }
 };
 
-export function ChainChip({ variant = 'mainnet', className }: ChainChipProps) {
+export function ChainChip({
+  variant = 'mainnet',
+  label,
+  className,
+}: ChainChipProps) {
   return (
     <StyledChainChip variant={variant} className={className}>
-      {getChipText(variant)}
+      {label ?? getChipText(variant)}
     </StyledChainChip>
   );
 }

@@ -11,6 +11,14 @@ import { defineChain } from 'viem';
 import { createConfig, http } from 'wagmi';
 import { mainnet, sepolia } from 'wagmi/chains';
 
+// Route RPC calls through the local eRPC gateway where available to avoid
+// CORS issues with public RPCs (e.g. eth.merkle.io).
+const ERPC_URL = process.env.NEXT_PUBLIC_ERPC_URL ?? '/rpc';
+
+// Gentle retry settings — the dashboard is informational, not transactional.
+// Avoid hammering endpoints when the stack or a network isn't up yet.
+const rpcOpts = { retryCount: 1, retryDelay: 2000, timeout: 5000 } as const;
+
 export const hoodi = defineChain({
   id: 560048,
   name: 'Hoodi Network',
@@ -35,6 +43,14 @@ export const hoodi = defineChain({
   },
 });
 
+// Per-chain transports. Sepolia doesn't have an eRPC upstream yet,
+// so fall back to the chain default (publicnode) for now.
+const transports = {
+  [mainnet.id]: http(`${ERPC_URL}/mainnet`, rpcOpts),
+  [sepolia.id]: http(undefined, rpcOpts), // chain default (no eRPC upstream)
+  [hoodi.id]: http(`${ERPC_URL}/hoodi`, rpcOpts),
+} as const;
+
 // WalletConnect requires a project ID from https://cloud.walletconnect.com
 // This should be set via NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID environment variable
 const walletConnectProjectId =
@@ -55,11 +71,7 @@ function getConfig() {
     // Return a minimal config for SSR that doesn't use connectors
     return createConfig({
       chains: [mainnet, sepolia, hoodi],
-      transports: {
-        [mainnet.id]: http(),
-        [sepolia.id]: http(),
-        [hoodi.id]: http(),
-      },
+      transports,
       ssr: true,
     });
   }
@@ -95,20 +107,12 @@ function getConfig() {
       ? createConfig({
           connectors,
           chains: [mainnet, sepolia, hoodi],
-          transports: {
-            [mainnet.id]: http(),
-            [sepolia.id]: http(),
-            [hoodi.id]: http(),
-          },
+          transports,
           ssr: true,
         })
       : createConfig({
           chains: [mainnet, sepolia, hoodi],
-          transports: {
-            [mainnet.id]: http(),
-            [sepolia.id]: http(),
-            [hoodi.id]: http(),
-          },
+          transports,
           ssr: true,
         });
   }

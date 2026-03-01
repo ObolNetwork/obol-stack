@@ -71,7 +71,7 @@ export class ClientMetricsService {
 
   /**
    * Fetch the full eRPC status from GET / on the eRPC server.
-   * baseUrl should be the origin of the eRPC service (e.g. http://erpc.erpc.svc.cluster.local:4000)
+   * baseUrl should be the origin of the eRPC service (e.g. http://erpc.erpc.svc.cluster.local)
    */
   async getErpcStatus(baseUrl: string): Promise<ErpcStatusData> {
     try {
@@ -313,7 +313,7 @@ export class ClientMetricsService {
 
   /**
    * Fetch metrics from eRPC proxy
-   * The url should be the network-specific RPC endpoint (e.g. http://erpc.erpc.svc.cluster.local:4000/rpc/mainnet)
+   * The url should be the network-specific RPC endpoint (e.g. http://erpc.erpc.svc.cluster.local/rpc/mainnet)
    */
   private async getErpcMetrics(erpcUrl: string): Promise<ErpcClientMetrics> {
     try {
