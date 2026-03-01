@@ -52,7 +52,7 @@ const (
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.2.0"
+	remoteSignerChartVersion = "0.3.0"
 )
 
 // OnboardOptions contains options for the onboard command
