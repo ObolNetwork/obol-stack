@@ -201,7 +201,7 @@ func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels 
 // overlay routed through LiteLLM.
 func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *CloudProviderInfo) {
 	t.Helper()
-	imported := buildLLMSpyRoutedOverlay(cloud)
+	imported := buildLiteLLMRoutedOverlay(cfg, cloud)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 

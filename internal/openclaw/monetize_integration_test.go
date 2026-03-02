@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os/exec"
@@ -2631,13 +2632,18 @@ func TestIntegration_SellDiscoverBuySettle(t *testing.T) {
 	anvil.ClearCode(t, anvil.Accounts[0].Address) // facilitator signer
 	anvil.MintUSDC(t, buyerAddr, testutil.USDCMicroUnits(100))
 
-	// Read agent wallet from cluster
-	agentWallet := obolRun(t, cfg, "kubectl", "get", "configmap", "wallet-metadata",
-		"-n", agentNamespace(cfg), "-o", "jsonpath={.data.address}")
-	agentWallet = strings.TrimSpace(agentWallet)
-	if agentWallet == "" {
-		t.Skip("agent wallet-metadata not found")
+	// Read agent wallet from cluster (wallet-metadata stores addresses.json)
+	walletRaw := obolRun(t, cfg, "kubectl", "get", "configmap", "wallet-metadata",
+		"-n", agentNamespace(cfg), "-o", `jsonpath={.data.addresses\.json}`)
+	var walletData struct {
+		Addresses []struct {
+			Address string `json:"address"`
+		} `json:"addresses"`
 	}
+	if err := json.Unmarshal([]byte(walletRaw), &walletData); err != nil || len(walletData.Addresses) == 0 {
+		t.Skip("agent wallet-metadata not found or empty")
+	}
+	agentWallet := walletData.Addresses[0].Address
 	t.Logf("agent wallet: %s", agentWallet)
 
 	// Fund agent with ETH for ERC-8004 registration gas
