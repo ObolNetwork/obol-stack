@@ -104,7 +104,7 @@ releases:
           dashboard:
             enabled: false
 
-  # Cloudflare Tunnel (quick tunnel mode for public access)
+  # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision)
   - name: cloudflared
     namespace: traefik
     chart: ./cloudflared
