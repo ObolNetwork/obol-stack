@@ -168,6 +168,97 @@ func stripHexPrefix(s string) string {
 	return s
 }
 
+// SignPaymentHeaderDirect is a non-test version of SignRealPaymentHeader.
+// It panics on error instead of calling t.Fatal.
+func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) string {
+	key, err := crypto.HexToECDSA(stripHexPrefix(signerKeyHex))
+	if err != nil {
+		panic(fmt.Sprintf("parse signer key: %v", err))
+	}
+
+	fromAddr := crypto.PubkeyToAddress(key.PublicKey)
+
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		panic(fmt.Sprintf("generate nonce: %v", err))
+	}
+	nonceHex := fmt.Sprintf("0x%x", nonce)
+
+	typedData := apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+				{Name: "verifyingContract", Type: "address"},
+			},
+			"TransferWithAuthorization": {
+				{Name: "from", Type: "address"},
+				{Name: "to", Type: "address"},
+				{Name: "value", Type: "uint256"},
+				{Name: "validAfter", Type: "uint256"},
+				{Name: "validBefore", Type: "uint256"},
+				{Name: "nonce", Type: "bytes32"},
+			},
+		},
+		PrimaryType: "TransferWithAuthorization",
+		Domain: apitypes.TypedDataDomain{
+			Name:              "USDC",
+			Version:           "2",
+			ChainId:           math.NewHexOrDecimal256(chainID),
+			VerifyingContract: USDCBaseSepolia,
+		},
+		Message: apitypes.TypedDataMessage{
+			"from":        fromAddr.Hex(),
+			"to":          payTo,
+			"value":       amount,
+			"validAfter":  "0",
+			"validBefore": "4294967295",
+			"nonce":       nonceHex,
+		},
+	}
+
+	hash, _, err := apitypes.TypedDataAndHash(typedData)
+	if err != nil {
+		panic(fmt.Sprintf("TypedDataAndHash: %v", err))
+	}
+
+	sig, err := crypto.Sign(hash, key)
+	if err != nil {
+		panic(fmt.Sprintf("sign: %v", err))
+	}
+	sig[64] += 27
+
+	envelope := map[string]interface{}{
+		"x402Version": 1,
+		"scheme":      "exact",
+		"network":     chainName(chainID),
+		"payload": map[string]interface{}{
+			"signature": fmt.Sprintf("0x%x", sig),
+			"authorization": map[string]interface{}{
+				"from":        fromAddr.Hex(),
+				"to":          payTo,
+				"value":       amount,
+				"validAfter":  "0",
+				"validBefore": "4294967295",
+				"nonce":       nonceHex,
+			},
+		},
+		"resource": map[string]interface{}{
+			"payTo":             payTo,
+			"maxAmountRequired": amount,
+			"asset":             USDCBaseSepolia,
+			"network":           chainName(chainID),
+		},
+	}
+
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		panic(fmt.Sprintf("marshal: %v", err))
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
 func chainName(chainID int64) string {
 	switch chainID {
 	case 84532:

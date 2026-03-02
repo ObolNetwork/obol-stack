@@ -228,12 +228,23 @@ def get_metadata(agent_id, key, chain=None):
         return None
 
 
-def search_registered_events(chain=None, limit=20, from_block="0x0"):
+def search_registered_events(chain=None, limit=20, from_block=None, lookback=10000):
     """Query Registered events from the Identity Registry.
+
+    If from_block is not specified, scans the most recent `lookback` blocks
+    to avoid 413 errors on forked networks with large block ranges.
 
     Returns a list of dicts: {agentId, owner, blockNumber, transactionHash}
     """
     registry = _get_registry(chain or DEFAULT_CHAIN)
+
+    if from_block is None:
+        # Get latest block and scan backwards
+        latest_hex = _rpc("eth_blockNumber", [], chain)
+        latest = int(latest_hex, 16) if isinstance(latest_hex, str) else 0
+        start = max(0, latest - lookback)
+        from_block = hex(start)
+
     params = {
         "address": registry,
         "topics": [REGISTERED_TOPIC],
@@ -320,7 +331,8 @@ def cmd_search(args):
     limit = args.limit or 20
     print(f"Searching for agents on {chain} (limit: {limit})...")
 
-    events = search_registered_events(chain=chain, limit=limit)
+    lookback = getattr(args, "lookback", 10000)
+    events = search_registered_events(chain=chain, limit=limit, lookback=lookback)
     if not events:
         print("No registered agents found.")
         return
@@ -428,9 +440,9 @@ def cmd_count(args):
         print(f"\nTotal registered agents: {total}")
         return
 
-    # Fallback: count Registered events
+    # Fallback: count Registered events (scan last 50k blocks)
     print("totalSupply() not available, counting Registered events...")
-    events = search_registered_events(chain=chain, limit=0)
+    events = search_registered_events(chain=chain, limit=0, lookback=50000)
     print(f"\nRegistered events found: {len(events)}")
     if events:
         max_id = max(e["agentId"] for e in events)
@@ -451,6 +463,7 @@ def main():
     p_search = sub.add_parser("search", help="List recently registered agents")
     p_search.add_argument("--chain", default=None, help="Chain/network name (default: base-sepolia)")
     p_search.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
+    p_search.add_argument("--lookback", type=int, default=10000, help="Scan last N blocks (default: 10000)")
 
     # agent
     p_agent = sub.add_parser("agent", help="Get agent details by ID")
