@@ -9,8 +9,8 @@ import (
 // Styles using Obol brand colors (see brand.go for hex values).
 // Lipgloss auto-degrades to 256/16 colors on older terminals.
 var (
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolCyan)).Bold(true)
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolGreen)).Bold(true)
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolGreen)).Bold(true)
+	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolDarkGreen)).Bold(true)
 	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolAmber)).Bold(true)
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolRed)).Bold(true)
 	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorObolMuted))

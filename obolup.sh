@@ -8,6 +8,7 @@ set -euo pipefail
 # Obol brand colors (24-bit true color — blog.obol.org/branding)
 # Degrades gracefully: modern terminals render exact hex, older ones approximate.
 OBOL_GREEN='\033[38;2;47;228;171m'     # #2FE4AB — primary brand green
+OBOL_DARK_GREEN='\033[38;2;15;124;118m' # #0F7C76 — dark green (success)
 OBOL_CYAN='\033[38;2;60;210;221m'      # #3CD2DD — info / cyan
 OBOL_PURPLE='\033[38;2;145;103;228m'   # #9167E4 — accent purple
 OBOL_AMBER='\033[38;2;250;186;90m'     # #FABA5A — warning amber
@@ -67,11 +68,11 @@ readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
 # Logging functions — matching the Go CLI's ui package output style.
 # Info/Error are top-level (no indent), Success/Warn are subordinate (2-space indent).
 log_info() {
-	echo -e "${OBOL_CYAN}${BOLD}==>${NC} $1"
+	echo -e "${OBOL_GREEN}${BOLD}==>${NC} $1"
 }
 
 log_success() {
-	echo -e "  ${OBOL_GREEN}${BOLD}✓${NC} $1"
+	echo -e "  ${OBOL_DARK_GREEN}${BOLD}✓${NC} $1"
 }
 
 log_warn() {

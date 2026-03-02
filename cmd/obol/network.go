@@ -33,25 +33,37 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "sync",
-				Usage:     "Deploy or update network configuration to cluster (no args = sync all)",
+				Usage:     "Deploy or update a network deployment to the cluster",
 				ArgsUsage: "[<network>/<id>]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    "all",
+						Aliases: []string{"a"},
+						Usage:   "Sync all installed network deployments",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
-					if cmd.NArg() == 0 {
+					if cmd.Bool("all") {
 						return network.SyncAll(cfg, u)
 					}
-					return network.Sync(cfg, u, cmd.Args().First())
+					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return fmt.Errorf("%w\n\nOr use --all to sync all deployments", err)
+					}
+					return network.Sync(cfg, u, identifier)
 				},
 			},
 			{
 				Name:      "delete",
 				Usage:     "Remove network deployment and clean up cluster resources",
-				ArgsUsage: "<network>/<id> or <network>-<id>",
+				ArgsUsage: "[<network>/<id>]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() == 0 {
-						return fmt.Errorf("deployment identifier required (e.g., ethereum/test-deploy or ethereum-test-deploy)")
+					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
 					}
-					return network.Delete(cfg, getUI(cmd), cmd.Args().First())
+					return network.Delete(cfg, getUI(cmd), identifier)
 				},
 			},
 			networkAddCommand(cfg),

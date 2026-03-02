@@ -62,17 +62,18 @@ return cmd.Run()
 |---------|-------------|
 | `obol network list` | Show available networks |
 | `obol network install <network> [flags]` | Create deployment config |
-| `obol network sync <network>/<id>` | Deploy to cluster |
-| `obol network delete <network>/<id> --force` | Remove deployment |
+| `obol network sync [<network>[/<id>]]` | Deploy to cluster (auto-resolves: no arg, type, or type/id) |
+| `obol network sync --all` | Sync all network deployments |
+| `obol network delete [<network>[/<id>]]` | Remove deployment (auto-resolves: no arg, type, or type/id) |
 
 ### Application Management
 
 | Command | Description |
 |---------|-------------|
 | `obol app install <chart>` | Install Helm chart as app |
-| `obol app sync <app>/<id>` | Deploy to cluster |
+| `obol app sync [<app>[/<id>]]` | Deploy to cluster (auto-resolves: no arg, type, or type/id) |
 | `obol app list` | List installed apps |
-| `obol app delete <app>/<id> --force` | Remove app |
+| `obol app delete [<app>[/<id>]]` | Remove app (auto-resolves: no arg, type, or type/id) |
 
 ### Tunnel Management
 

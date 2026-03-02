@@ -66,29 +66,34 @@ Install and run blockchain networks as isolated deployments. Each installation g
 # List available networks
 obol network list
 
-# Install a network (generates a unique deployment ID)
+# Install a network (defaults to network name as ID)
 obol network install ethereum
-# → ethereum-nervous-otter
+# → ethereum/mainnet
 
-# Deploy to the cluster
-obol network sync ethereum/nervous-otter
+# Deploy to the cluster (auto-selects if only one deployment exists)
+obol network sync
 
-# Install another with different config
-obol network install ethereum --network=hoodi --execution-client=geth
-# → ethereum-happy-panda
-obol network sync ethereum/happy-panda
+# Or specify by type (auto-selects if only one ethereum deployment)
+obol network sync ethereum
+
+# Or by full identifier
+obol network sync ethereum/mainnet
+
+# Sync all deployments at once
+obol network sync --all
 ```
 
 **Available networks:** ethereum, aztec
 
-**Ethereum options:** `--network` (mainnet, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine)
+**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
 ```bash
 # View installed deployments
 obol kubectl get namespaces | grep -E "ethereum|aztec"
 
-# Delete a deployment
-obol network delete ethereum/nervous-otter --force
+# Delete a deployment (auto-selects if only one exists)
+obol network delete
+obol network delete ethereum/mainnet --force
 ```
 
 > [!TIP]
@@ -105,7 +110,13 @@ obol app install bitnami/redis
 # With specific version
 obol app install bitnami/postgresql@15.0.0
 
-# Deploy to cluster
+# Deploy to cluster (auto-selects if only one app is installed)
+obol app sync
+
+# Or specify by type (auto-selects if only one postgresql deployment)
+obol app sync postgresql
+
+# Or by full identifier
 obol app sync postgresql/eager-fox
 
 # List and manage
