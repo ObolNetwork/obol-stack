@@ -50,11 +50,12 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
-	// Build cluster-accessible Anvil RPC URL.
-	anvilClusterURL := fmt.Sprintf("http://%s:%d", clusterHostURL(), anvil.Port)
+	// The facilitator runs on the host, so it needs the localhost Anvil URL
+	// (not host.docker.internal which only resolves inside Docker/k3d).
+	anvilLocalURL := fmt.Sprintf("http://127.0.0.1:%d", anvil.Port)
 
 	// Generate config file.
-	configPath := writeRealFacilitatorConfig(t, port, anvilClusterURL, anvil.Accounts[0].PrivateKey)
+	configPath := writeRealFacilitatorConfig(t, port, anvilLocalURL, anvil.Accounts[0].PrivateKey)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

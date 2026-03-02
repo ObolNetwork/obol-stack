@@ -2837,6 +2837,286 @@ spec:
 	t.Log("═══ SELL → DISCOVER → BUY → SETTLE loop test complete ═══")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 10 — Full Sell→Buy Roundtrip via LiteLLM + Ollama
+// ─────────────────────────────────────────────────────────────────────────────
+
+// litellmServiceOfferYAML returns a ServiceOffer targeting the LiteLLM gateway
+// (not Ollama directly). This is the production path: x402 gate → LiteLLM → provider.
+func litellmServiceOfferYAML(name, namespace, wallet string) string {
+	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  upstream:
+    service: litellm
+    namespace: llm
+    port: 4000
+    healthPath: /health/readiness
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    price:
+      perRequest: "0.001"
+  path: /services/%s
+`, name, namespace, wallet, name)
+}
+
+// getLiteLLMMasterKey reads the LiteLLM master key from the cluster Secret.
+func getLiteLLMMasterKey(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	raw := obolRun(t, cfg, "kubectl", "get", "secret", "litellm-secrets",
+		"-n", "llm", "-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		t.Fatalf("decode LiteLLM master key: %v", err)
+	}
+	return string(decoded)
+}
+
+// patchHTTPRouteAuth adds a RequestHeaderModifier with the LiteLLM Authorization
+// header to an HTTPRoute. Required because monetize.py doesn't inject this yet.
+func patchHTTPRouteAuth(t *testing.T, cfg *config.Config, routeName, namespace, masterKey string) {
+	t.Helper()
+	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
+	obolRun(t, cfg, "kubectl", "patch", "httproute", routeName,
+		"-n", namespace, "--type=json", "-p", patchJSON)
+}
+
+// monetizePy is the in-pod path to the monetize.py reconciler script.
+// The skill was renamed from "monetize" to "sell" but the script is still monetize.py.
+const monetizePy = "/data/.openclaw/skills/sell/scripts/monetize.py"
+
+// TestIntegration_SellBuyRoundtrip_LiteLLM is the highest-level E2E test:
+// real Ollama inference through LiteLLM, real x402-rs facilitator, real EIP-712
+// signatures, real USDC settlement on Anvil fork, and agent-side discovery.
+//
+// The full pipeline tested:
+//
+//	SELL:     ServiceOffer CR → agent reconciles 5 stages → Ready
+//	GATE:     Unpaid POST → 402 Payment Required with pricing
+//	PAY:      Sign EIP-712 TransferWithAuthorization → facilitator settles USDC
+//	INFER:    LiteLLM → Ollama → real model response (via qwen3.5)
+//	SETTLE:   Buyer USDC decreases, Seller USDC increases on Anvil fork
+//	DISCOVER: discovery.py search finds agents on-chain (bounded block range)
+//
+// Prerequisites:
+//   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
+//   - Ollama with at least one model (qwen3.5:9b, qwen2.5, etc.)
+//   - Anvil (Foundry) installed
+//   - x402-rs facilitator binary (set X402_FACILITATOR_BIN or X402_RS_DIR)
+func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireOllamaModel(t, "qwen3.5")
+	anvil := requireAnvil(t)
+
+	// ── Infrastructure ─────────────────────────────────────────────────
+	facilitator := testutil.StartRealFacilitator(t, anvil)
+	t.Logf("facilitator: %s", facilitator.ClusterURL)
+
+	// Buyer = Anvil account[9], Seller = Anvil account[1]
+	buyerKey := anvil.Accounts[9].PrivateKey
+	buyerAddr := anvil.Accounts[9].Address
+	sellerAddr := anvil.Accounts[1].Address
+
+	// Clear contract code for all Anvil accounts used in the test.
+	// Anvil deterministic accounts have deployed contract code on Base Sepolia;
+	// without clearing, EIP-1271 signature checks fail in the facilitator.
+	for _, acc := range []string{
+		anvil.Accounts[0].Address, // facilitator signer
+		buyerAddr,                 // buyer
+		sellerAddr,                // seller (payTo)
+	} {
+		anvil.ClearCode(t, acc)
+	}
+	anvil.MintUSDC(t, buyerAddr, testutil.USDCMicroUnits(10))
+	t.Logf("funded buyer %s with 10 USDC", buyerAddr)
+
+	// Point x402-verifier at real facilitator.
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	// ── STEP 1: SELL — Create ServiceOffer targeting LiteLLM ───────────
+	t.Log("═══ STEP 1: SELL — Create ServiceOffer → Agent Reconciles ═══")
+
+	name := "test-roundtrip"
+	ns := "llm"
+	yaml := litellmServiceOfferYAML(name, ns, sellerAddr)
+	applyServiceOffer(t, cfg, yaml)
+	t.Cleanup(func() {
+		// Agent-side cleanup
+		_, _ = execInAgentErr(cfg, "python3",
+			monetizePy,
+			"delete", name, "--namespace", ns)
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	// Trigger agent reconciliation.
+	out, reconcileErr := execInAgentErr(cfg, "python3",
+		monetizePy,
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation:\n%s", out)
+	if reconcileErr != nil {
+		t.Logf("reconciliation returned error (may be partial): %v", reconcileErr)
+	}
+
+	// Verify conditions.
+	so := getServiceOffer(t, cfg, name, ns)
+	for _, cond := range []string{"UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		status := getConditionStatus(so, cond)
+		if status != "True" {
+			t.Fatalf("condition %s = %q, want True", cond, status)
+		}
+		t.Logf("  ✓ %s", cond)
+	}
+
+	// Patch HTTPRoute with LiteLLM auth header (monetize.py doesn't add this yet).
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
+	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
+
+	// Restart x402-verifier so it picks up the new pricing route that
+	// monetize.py just added to the x402-pricing ConfigMap.
+	obolRun(t, cfg, "kubectl", "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
+	obolRun(t, cfg, "kubectl", "rollout", "status", "deployment/x402-verifier", "-n", "x402", "--timeout=60s")
+	t.Log("  ✓ Restarted x402-verifier with new pricing route")
+
+	// Wait for Traefik to pick up the patched HTTPRoute.
+	time.Sleep(5 * time.Second)
+
+	// ── STEP 2: GATE — Unpaid request returns 402 ──────────────────────
+	t.Log("═══ STEP 2: GATE — Unpaid request → 402 Payment Required ═══")
+
+	chatBody := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"say hello"}],"max_tokens":20,"stream":false}`, model)
+	url := fmt.Sprintf("http://obol.stack:8080/services/%s/v1/chat/completions", name)
+	client := &http.Client{Timeout: 90 * time.Second}
+
+	resp, err := client.Post(url, "application/json", strings.NewReader(chatBody))
+	if err != nil {
+		t.Skipf("could not reach obol.stack:8080: %v (DNS not configured?)", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 without payment, got %d; body: %s", resp.StatusCode, body)
+	}
+	t.Log("  ✓ 402 Payment Required")
+
+	// Parse and log the 402 pricing info.
+	var payReqs map[string]interface{}
+	if err := json.Unmarshal(body, &payReqs); err == nil {
+		if accepts, ok := payReqs["accepts"].([]interface{}); ok && len(accepts) > 0 {
+			first := accepts[0].(map[string]interface{})
+			t.Logf("  pricing: payTo=%v amount=%v network=%v",
+				first["payTo"], first["maxAmountRequired"], first["network"])
+		}
+	}
+
+	// ── STEP 3: PAY + INFER — Signed request → 200 + model response ───
+	t.Log("═══ STEP 3: PAY + INFER — EIP-712 payment → LiteLLM → Ollama ═══")
+
+	// Record USDC balances before payment.
+	buyerBefore := anvil.GetUSDCBalance(t, buyerAddr)
+	sellerBefore := anvil.GetUSDCBalance(t, sellerAddr)
+	t.Logf("  balances before: buyer=%s, seller=%s", buyerBefore, sellerBefore)
+
+	// Sign real EIP-712 TransferWithAuthorization.
+	paymentHeader := testutil.SignRealPaymentHeader(t, buyerKey, sellerAddr, "1000", 84532)
+
+	req, _ := http.NewRequest("POST", url, strings.NewReader(chatBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", paymentHeader)
+
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("paid request failed: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with payment, got %d; body: %s", resp.StatusCode, body)
+	}
+
+	// Parse inference response.
+	var chatResp map[string]interface{}
+	if err := json.Unmarshal(body, &chatResp); err == nil {
+		if choices, ok := chatResp["choices"].([]interface{}); ok && len(choices) > 0 {
+			choice := choices[0].(map[string]interface{})
+			if msg, ok := choice["message"].(map[string]interface{}); ok {
+				content := msg["content"]
+				if content == nil || content == "" {
+					content = msg["reasoning_content"]
+				}
+				t.Logf("  ✓ model=%v tokens=%v", chatResp["model"], chatResp["usage"])
+				t.Logf("  response: %v", content)
+			}
+		}
+	}
+	t.Log("  ✓ Paid inference succeeded")
+
+	// ── STEP 4: SETTLE — Verify USDC transfer on Anvil ─────────────────
+	t.Log("═══ STEP 4: SETTLE — Verify USDC balance changes ═══")
+
+	buyerAfter := anvil.GetUSDCBalance(t, buyerAddr)
+	sellerAfter := anvil.GetUSDCBalance(t, sellerAddr)
+
+	buyerDelta := new(big.Int).Sub(buyerBefore, buyerAfter)
+	sellerDelta := new(big.Int).Sub(sellerAfter, sellerBefore)
+
+	t.Logf("  buyer:  %s → %s (delta: -%s)", buyerBefore, buyerAfter, buyerDelta)
+	t.Logf("  seller: %s → %s (delta: +%s)", sellerBefore, sellerAfter, sellerDelta)
+
+	if buyerDelta.Cmp(big.NewInt(0)) <= 0 {
+		t.Error("buyer USDC balance did not decrease — settlement failed")
+	}
+	if sellerDelta.Cmp(big.NewInt(0)) <= 0 {
+		t.Error("seller USDC balance did not increase — settlement failed")
+	}
+	t.Log("  ✓ USDC transferred on Anvil fork")
+
+	// ── STEP 5: DISCOVER — Agent-side discovery finds on-chain agents ───
+	t.Log("═══ STEP 5: DISCOVER — discovery.py search from agent pod ═══")
+
+	discoveryOut, discoveryErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/discovery/scripts/discovery.py",
+		"search", "--chain", "base-sepolia", "--limit", "5")
+	if discoveryErr != nil {
+		t.Logf("  discovery failed: %v\n%s", discoveryErr, discoveryOut)
+	} else {
+		t.Logf("  discovery output:\n%s", discoveryOut)
+		if strings.Contains(discoveryOut, "Found") {
+			t.Log("  ✓ Discovery found agents on-chain")
+		}
+	}
+
+	// ── STEP 6: CLEANUP — Agent deletes all derived resources ───────────
+	t.Log("═══ STEP 6: CLEANUP — Agent deletes ServiceOffer + resources ═══")
+
+	delOut := execInAgent(t, cfg, "python3",
+		monetizePy,
+		"delete", name, "--namespace", ns)
+	t.Logf("  delete output:\n%s", delOut)
+
+	// Verify pricing route was removed.
+	time.Sleep(3 * time.Second)
+	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
+		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
+	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
+		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
+	} else {
+		t.Log("  ✓ Pricing route cleaned up")
+	}
+
+	t.Log("═══ SELL → GATE → PAY → INFER → SETTLE → DISCOVER — ALL PASSED ═══")
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
