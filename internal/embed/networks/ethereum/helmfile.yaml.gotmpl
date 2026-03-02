@@ -58,15 +58,6 @@ releases:
             # Use existing PVC with network/client naming: consensus-{client}-{network}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
 
-  # Ingress for Ethereum node
-  - name: ethereum-ingress
-    namespace: ethereum-{{ .Values.id }}
-    chart: .
-    values:
-      - executionClient: {{ .Values.executionClient }}
-        consensusClient: {{ .Values.consensusClient }}
-        network: {{ .Values.network }}
-
   # Metadata ConfigMap for frontend discovery
   - name: ethereum-metadata
     namespace: ethereum-{{ .Values.id }}
@@ -91,7 +82,6 @@ releases:
                     "client": "{{ .Values.executionClient }}",
                     "endpoints": {
                       "rpc": {
-                        "external": "http://obol.stack/ethereum/{{ .Values.id }}/execution",
                         "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:8545"
                       }
                     }
@@ -100,7 +90,6 @@ releases:
                     "client": "{{ .Values.consensusClient }}",
                     "endpoints": {
                       "rpc": {
-                        "external": "http://obol.stack/ethereum/{{ .Values.id }}/beacon",
                         "internal": "http://ethereum-beacon.ethereum-{{ .Values.id }}.svc.cluster.local:5052"
                       }
                     }
