@@ -81,17 +81,13 @@ export async function GET() {
       const clients: ClientInfo[] = [];
 
       if (isEthereumInstance(instance)) {
-        const executionUrl = config.isInCluster
-          ? instance.execution.endpoints.rpc.internal
-          : instance.execution.endpoints.rpc.external;
+        const executionUrl = instance.execution.endpoints.rpc.internal;
         const executionClient = (await clientMetrics.getMetrics(
           'execution',
           executionUrl
         )) as ExecutionClientMetrics;
 
-        const consensusUrl = config.isInCluster
-          ? instance.consensus.endpoints.rpc.internal
-          : instance.consensus.endpoints.rpc.external;
+        const consensusUrl = instance.consensus.endpoints.rpc.internal;
         const consensusClient = (await clientMetrics.getMetrics(
           'consensus',
           consensusUrl
@@ -108,7 +104,7 @@ export async function GET() {
             : CLIENT_STATUS.SYNCING,
           icon: getClientIcon(executionClientName as ClientNameType),
           externalUrl: instance.execution.endpoints.rpc.external,
-          internalUrl: instance.execution.endpoints.rpc.internal,
+          internalUrl: executionUrl,
         });
 
         const consensusClientName = instance.consensus.client;
@@ -122,7 +118,7 @@ export async function GET() {
             : CLIENT_STATUS.SYNCING,
           icon: getClientIcon(consensusClientName as ClientNameType),
           externalUrl: instance.consensus.endpoints.rpc.external,
-          internalUrl: instance.consensus.endpoints.rpc.internal,
+          internalUrl: consensusUrl,
         });
         blockHeight = executionClient.blockNumber || 0;
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
@@ -153,9 +149,7 @@ export async function GET() {
         continue;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
-        const appUrl = config.isInCluster
-          ? instance.endpoints.rpc.internal
-          : instance.endpoints.rpc.external;
+        const appUrl = instance.endpoints.rpc.internal;
         const result = (await clientMetrics.getMetrics(
           appType as ClientType,
           appUrl
@@ -169,7 +163,7 @@ export async function GET() {
             : CLIENT_STATUS.SYNCING,
           icon: getClientIcon(appType as ClientNameType),
           externalUrl: instance.endpoints.rpc.external,
-          internalUrl: instance.endpoints.rpc.internal,
+          internalUrl: appUrl,
         });
         blockHeight = result.blockNumber || 0;
         finalizedEpoch =

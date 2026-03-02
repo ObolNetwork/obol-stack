@@ -20,7 +20,7 @@ export const BaseApplicationInstanceSchema = Type.Object({
 // Shared endpoint schema
 //
 const RpcEndpointSchema = Type.Object({
-  external: Type.String(),
+  external: Type.Optional(Type.String()),
   internal: Type.String(),
 });
 
