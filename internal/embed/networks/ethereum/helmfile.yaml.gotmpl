@@ -91,7 +91,7 @@ releases:
                     "client": "{{ .Values.executionClient }}",
                     "endpoints": {
                       "rpc": {
-                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/execution",
+                        "external": "http://obol.stack/ethereum/{{ .Values.id }}/execution",
                         "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:8545"
                       }
                     }
@@ -100,7 +100,7 @@ releases:
                     "client": "{{ .Values.consensusClient }}",
                     "endpoints": {
                       "rpc": {
-                        "external": "http://obol.stack/ethereum-{{ .Values.id }}/beacon",
+                        "external": "http://obol.stack/ethereum/{{ .Values.id }}/beacon",
                         "internal": "http://ethereum-beacon.ethereum-{{ .Values.id }}.svc.cluster.local:5052"
                       }
                     }

@@ -76,7 +76,7 @@ Obol Stack uses Traefik with the Kubernetes Gateway API for HTTP routing.
   - `/rpc` → `erpc`
   - `/services/<name>/*` → x402 ForwardAuth → upstream (monetized endpoints)
   - `/.well-known/agent-registration.json` → agent-managed httpd (ERC-8004)
-  - `/ethereum-<id>/execution` and `/ethereum-<id>/beacon`
+  - `/ethereum/<id>/execution` and `/ethereum/<id>/beacon`
 
 ## CLI Command Structure
 
