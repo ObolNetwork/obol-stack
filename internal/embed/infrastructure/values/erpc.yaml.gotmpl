@@ -53,11 +53,11 @@ config: |-
     - id: rpc
       upstreams:
         - id: obol-rpc-mainnet
-          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/mainnet/evm/1
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/rpc/mainnet
           evm:
             chainId: 1
         - id: obol-rpc-hoodi
-          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/hoodi/evm/560048
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/rpc/hoodi
           evm:
             chainId: 560048
         - id: allnodes-rpc-hoodi
