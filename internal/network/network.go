@@ -288,6 +288,8 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Register local node as eRPC upstream
 	if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
 		u.Warnf("Could not register eRPC upstream: %v", err)
+	} else {
+		u.Successf("Registered local-%s-%s with eRPC", networkName, deploymentID)
 	}
 
 	u.Blank()
@@ -349,6 +351,8 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Deregister from eRPC before deleting the namespace
 	if err := DeregisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
 		u.Warnf("Could not deregister eRPC upstream: %v", err)
+	} else {
+		u.Successf("Deregistered local-%s-%s from eRPC", networkName, deploymentID)
 	}
 
 	// Delete Kubernetes namespace

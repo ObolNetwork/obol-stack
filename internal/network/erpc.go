@@ -210,11 +210,5 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}
 
-	if add {
-		fmt.Printf("✓ Registered local upstream %s with eRPC (chainId: %d)\n", upstreamID, chainID)
-	} else {
-		fmt.Printf("✓ Deregistered upstream %s from eRPC\n", upstreamID)
-	}
-
 	return nil
 }
