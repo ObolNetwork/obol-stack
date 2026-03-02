@@ -138,8 +138,30 @@ func injectHeartbeatFile(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to create heartbeat directory: %w", err)
 	}
 
-	content := `Run: python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all
-Report HEARTBEAT_OK if no pending offers. Otherwise report what was processed.
+	content := `## Sell-Side: Reconcile ServiceOffers
+Run: python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all
+Report what was processed. If all offers are Ready, move to the next section.
+
+## Buy-Side: Discover and Buy Inference
+You are an autonomous agent managing compute infrastructure. On each heartbeat:
+
+1. DISCOVER: Search for registered agents offering inference services.
+   Run: python3 /data/.openclaw/skills/discovery/scripts/discovery.py search --chain base-sepolia --limit 10
+   For each discovered agent with x402Support=true, check if you already have that model available.
+
+2. EVALUATE: Compare discovered pricing against your current providers.
+   - Check your USDC balance: python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
+   - Check current purchased providers: python3 /data/.openclaw/skills/buy-inference/scripts/buy.py list
+   - Only buy if: the discovered model is useful AND the price is reasonable AND you have sufficient USDC.
+
+3. BUY: If a good deal is found and not already purchased:
+   - Probe the endpoint: python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe <endpoint-url>
+   - Buy access: python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy <name> --endpoint <url> --model <model-id> --count 10
+
+4. REPORT: Summarize what you did — offers reconciled, agents discovered, purchases made, or HEARTBEAT_OK if nothing to do.
+
+IMPORTANT: Do NOT buy on every heartbeat. Only buy when you discover a NEW agent you haven't purchased from yet.
+If discovery fails (e.g. network error), that's OK — just report the error and move on.
 `
 
 	heartbeatPath := filepath.Join(heartbeatDir, "HEARTBEAT.md")
