@@ -61,7 +61,7 @@ OBOL_DEVELOPMENT=true ./obolup.sh   # One-time setup, uses .workspace/ directory
 1. **Deployment-centric**: Each network installation creates a unique deployment instance with its own namespace
 2. **Local-first**: Runs entirely on local machine using k3d (Kubernetes in Docker)
 3. **XDG-compliant**: Follows Linux filesystem standards for configuration
-4. **Unique namespaces**: Petname-generated IDs prevent naming conflicts (e.g., `ethereum-nervous-otter`)
+4. **Unique namespaces**: Default ID is the network name (e.g., `ethereum-mainnet`); subsequent installs use petnames to prevent conflicts
 5. **Two-stage templating**: CLI flags → Go templates → Helmfile → Kubernetes resources
 
 ### Routing and Gateway API
@@ -103,11 +103,11 @@ The `openclaw`, `app`, and `network` subsystems share a common instance resoluti
 
 - **0 instances**: error prompting the user to install one
 - **1 instance**: auto-selects it — no identifier needed
-- **2+ instances**: expects the first positional arg to be the instance identifier; errors with a list of available instances if omitted
+- **2+ instances**: tries exact match (`ethereum/my-node`), then type-prefix match (`ethereum` → auto-selects if only one of that type), then errors with available instances
 
 Implementation: `internal/openclaw/resolve.go`, `internal/app/resolve.go`, `internal/network/resolve.go`.
 
-App and network use two-level identifiers (`<type>/<id>`, e.g., `postgresql/eager-fox`, `ethereum/my-node`). App resolution filters by `values.yaml` presence to exclude openclaw instances that share the `applications/` directory. `obol network sync` also supports `--all` to sync every deployment.
+App and network use two-level identifiers (`<type>/<id>`, e.g., `postgresql/eager-fox`, `ethereum/my-node`). Specifying just the type (e.g., `obol network sync ethereum`) auto-resolves when there's only one instance of that type. App resolution filters by `values.yaml` presence to exclude openclaw instances that share the `applications/` directory. `obol network sync` also supports `--all` to sync every deployment.
 
 ### Passthrough Commands
 
@@ -321,11 +321,13 @@ network: {{.Network}}
 
 ### Unique Namespaces
 
-Pattern: `<network>-<id>` where ID is user-specified (`--id prod`) or auto-generated petname.
+Pattern: `<network>-<id>` where ID defaults to the network name (e.g., `mainnet`), falls back to a petname if that already exists, or can be set explicitly with `--id`.
 
 ```bash
-obol network install ethereum --network=hoodi   # → ethereum-knowing-wahoo
-obol network install ethereum --id prod          # → ethereum-prod
+obol network install ethereum                    # → ethereum/mainnet (first time)
+obol network install ethereum --network=hoodi    # → ethereum/hoodi
+obol network install ethereum                    # → ethereum/gentle-fox (petname, mainnet exists)
+obol network install ethereum --id prod          # → ethereum/prod
 ```
 
 ### Dynamic eRPC Upstream Management

@@ -66,15 +66,18 @@ Install and run blockchain networks as isolated deployments. Each installation g
 # List available networks
 obol network list
 
-# Install a network (generates a unique deployment ID)
+# Install a network (defaults to network name as ID)
 obol network install ethereum
-# → ethereum-nervous-otter
+# → ethereum/mainnet
 
 # Deploy to the cluster (auto-selects if only one deployment exists)
 obol network sync
 
-# With multiple deployments, specify which one
-obol network sync ethereum/nervous-otter
+# Or specify by type (auto-selects if only one ethereum deployment)
+obol network sync ethereum
+
+# Or by full identifier
+obol network sync ethereum/mainnet
 
 # Sync all deployments at once
 obol network sync --all
@@ -82,7 +85,7 @@ obol network sync --all
 
 **Available networks:** ethereum, aztec
 
-**Ethereum options:** `--network` (mainnet, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine)
+**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
 ```bash
 # View installed deployments
@@ -90,7 +93,7 @@ obol kubectl get namespaces | grep -E "ethereum|aztec"
 
 # Delete a deployment (auto-selects if only one exists)
 obol network delete
-obol network delete ethereum/nervous-otter --force
+obol network delete ethereum/mainnet --force
 ```
 
 > [!TIP]
@@ -110,7 +113,10 @@ obol app install bitnami/postgresql@15.0.0
 # Deploy to cluster (auto-selects if only one app is installed)
 obol app sync
 
-# With multiple apps, specify which one
+# Or specify by type (auto-selects if only one postgresql deployment)
+obol app sync postgresql
+
+# Or by full identifier
 obol app sync postgresql/eager-fox
 
 # List and manage

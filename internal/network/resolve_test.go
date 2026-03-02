@@ -161,4 +161,26 @@ func TestResolveInstance(t *testing.T) {
 			t.Fatal("expected error for unknown instance name")
 		}
 	})
+
+	t.Run("type prefix selects sole instance of that type", func(t *testing.T) {
+		cfg := setupInstances(t, "ethereum/my-node", "aztec/testnet")
+		id, remaining, err := ResolveInstance(cfg, []string{"ethereum", "extra"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "ethereum/my-node" {
+			t.Fatalf("expected id 'ethereum/my-node', got '%s'", id)
+		}
+		if len(remaining) != 1 || remaining[0] != "extra" {
+			t.Fatalf("expected remaining [extra], got %v", remaining)
+		}
+	})
+
+	t.Run("type prefix errors when multiple of same type", func(t *testing.T) {
+		cfg := setupInstances(t, "ethereum/my-node", "ethereum/hoodi-prod")
+		_, _, err := ResolveInstance(cfg, []string{"ethereum"})
+		if err == nil {
+			t.Fatal("expected error when type prefix matches multiple instances")
+		}
+	})
 }

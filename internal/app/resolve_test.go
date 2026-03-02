@@ -190,4 +190,26 @@ func TestResolveInstance(t *testing.T) {
 			t.Fatal("expected error for unknown instance name")
 		}
 	})
+
+	t.Run("type prefix selects sole instance of that type", func(t *testing.T) {
+		cfg := setupInstances(t, "postgresql/eager-fox", "redis/staging")
+		id, remaining, err := ResolveInstance(cfg, []string{"redis", "extra"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if id != "redis/staging" {
+			t.Fatalf("expected id 'redis/staging', got '%s'", id)
+		}
+		if len(remaining) != 1 || remaining[0] != "extra" {
+			t.Fatalf("expected remaining [extra], got %v", remaining)
+		}
+	})
+
+	t.Run("type prefix errors when multiple of same type", func(t *testing.T) {
+		cfg := setupInstances(t, "postgresql/eager-fox", "postgresql/prod")
+		_, _, err := ResolveInstance(cfg, []string{"postgresql"})
+		if err == nil {
+			t.Fatal("expected error when type prefix matches multiple instances")
+		}
+	})
 }

@@ -68,10 +68,21 @@ func ResolveInstance(cfg *config.Config, args []string) (identifier string, rema
 		return instances[0], args, nil
 	default:
 		if len(args) > 0 {
+			// Exact match: "postgresql/eager-fox"
 			for _, inst := range instances {
 				if args[0] == inst {
 					return inst, args[1:], nil
 				}
+			}
+			// Type-prefix match: "postgresql" → auto-select if only one of that type
+			var prefixMatches []string
+			for _, inst := range instances {
+				if typ, _, ok := strings.Cut(inst, "/"); ok && typ == args[0] {
+					prefixMatches = append(prefixMatches, inst)
+				}
+			}
+			if len(prefixMatches) == 1 {
+				return prefixMatches[0], args[1:], nil
 			}
 		}
 		return "", nil, fmt.Errorf("multiple app deployments found, specify one: %s", strings.Join(instances, ", "))
