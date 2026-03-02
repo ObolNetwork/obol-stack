@@ -3,6 +3,7 @@
 package openclaw
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2650,6 +2651,13 @@ func TestIntegration_SellDiscoverBuySettle(t *testing.T) {
 	anvil.FundETH(t, agentWallet, big.NewInt(1e18))
 	anvil.ClearCode(t, agentWallet)
 
+	// ── eRPC → Anvil route ──
+	// Register the Anvil fork as a custom RPC for base-sepolia in eRPC.
+	// This is needed for: buy.py balance checks, monetize.py register tx, discovery.py queries.
+	anvilClusterURL := fmt.Sprintf("http://%s:%d", testutil.ClusterHostAddress(), anvil.Port)
+	obolRun(t, cfg, "network", "add", "base-sepolia", "--endpoint", anvilClusterURL)
+	t.Logf("eRPC route: base-sepolia → %s", anvilClusterURL)
+
 	// ── STEP 1: SELL ──
 	t.Log("═══ STEP 1: SELL — Create ServiceOffer targeting LiteLLM ═══")
 	name := "test-loop"
@@ -2705,13 +2713,26 @@ spec:
 		t.Logf("  ✓ %s", cond)
 	}
 
-	// Registration may fail on Anvil (needs eRPC routing to fork).
-	// Log but don't fail — the sell + payment path still works without registration.
+	// Registration may fail if eRPC → Anvil route isn't ready fast enough.
 	regStatus := getConditionStatus(so, "Registered")
 	t.Logf("  Registered: %s", regStatus)
 
-	// Wait for Traefik to pick up the HTTPRoute
-	time.Sleep(8 * time.Second)
+	// Patch the HTTPRoute with LiteLLM auth header (monetize.py doesn't add it yet).
+	// Without this, paid requests that pass x402 verification get 401 from LiteLLM.
+	masterKey := obolRun(t, cfg, "kubectl", "get", "secret", "litellm-secrets",
+		"-n", "llm", "-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
+	// Decode base64
+	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(masterKey)); err == nil {
+		masterKey = string(decoded)
+	}
+	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
+	obolRun(t, cfg, "kubectl", "patch", "httproute", fmt.Sprintf("so-%s", name),
+		"-n", ns, "--type=json", "-p", patchJSON)
+	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
+
+	// Wait for Traefik to pick up the HTTPRoute + Reloader to restart x402-verifier
+	t.Log("  Waiting 15s for route propagation...")
+	time.Sleep(15 * time.Second)
 
 	// ── STEP 3: DISCOVER ──
 	t.Log("═══ STEP 3: DISCOVER — Query ERC-8004 registry via discovery.py ═══")
