@@ -97,6 +97,18 @@ obol
 └── version         Show version info
 ```
 
+### Instance Resolution
+
+The `openclaw`, `app`, and `network` subsystems share a common instance resolution pattern via `ResolveInstance()`:
+
+- **0 instances**: error prompting the user to install one
+- **1 instance**: auto-selects it — no identifier needed
+- **2+ instances**: expects the first positional arg to be the instance identifier; errors with a list of available instances if omitted
+
+Implementation: `internal/openclaw/resolve.go`, `internal/app/resolve.go`, `internal/network/resolve.go`.
+
+App and network use two-level identifiers (`<type>/<id>`, e.g., `postgresql/eager-fox`, `ethereum/my-node`). App resolution filters by `values.yaml` presence to exclude openclaw instances that share the `applications/` directory. `obol network sync` also supports `--all` to sync every deployment.
+
 ### Passthrough Commands
 
 All Kubernetes tools auto-set `KUBECONFIG` to `$OBOL_CONFIG_DIR/kubeconfig.yaml`:

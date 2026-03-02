@@ -536,12 +536,13 @@ Find charts at https://artifacthub.io`,
 					{
 						Name:      "sync",
 						Usage:     "Deploy application to cluster",
-						ArgsUsage: "<app>/<id>",
+						ArgsUsage: "[<app>/<id>]",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							if cmd.NArg() == 0 {
-								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
+							identifier, _, err := app.ResolveInstance(cfg, cmd.Args().Slice())
+							if err != nil {
+								return err
 							}
-							return app.Sync(cfg, getUI(cmd), cmd.Args().First())
+							return app.Sync(cfg, getUI(cmd), identifier)
 						},
 					},
 					{
@@ -564,7 +565,7 @@ Find charts at https://artifacthub.io`,
 					{
 						Name:      "delete",
 						Usage:     "Remove application and cluster resources",
-						ArgsUsage: "<app>/<id>",
+						ArgsUsage: "[<app>/<id>]",
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
@@ -573,10 +574,11 @@ Find charts at https://artifacthub.io`,
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							if cmd.NArg() == 0 {
-								return fmt.Errorf("deployment identifier required (e.g., postgresql/eager-fox)")
+							identifier, _, err := app.ResolveInstance(cfg, cmd.Args().Slice())
+							if err != nil {
+								return err
 							}
-							return app.Delete(cfg, getUI(cmd), cmd.Args().First(), cmd.Bool("force"))
+							return app.Delete(cfg, getUI(cmd), identifier, cmd.Bool("force"))
 						},
 					},
 				},

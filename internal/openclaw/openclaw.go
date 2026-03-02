@@ -44,7 +44,7 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.5"
+	chartVersion = "0.1.6"
 
 	// openclawImageTag overrides the chart's default image tag.
 	// Must match the version in OPENCLAW_VERSION (without "v" prefix).

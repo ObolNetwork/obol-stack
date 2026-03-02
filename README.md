@@ -70,13 +70,14 @@ obol network list
 obol network install ethereum
 # → ethereum-nervous-otter
 
-# Deploy to the cluster
+# Deploy to the cluster (auto-selects if only one deployment exists)
+obol network sync
+
+# With multiple deployments, specify which one
 obol network sync ethereum/nervous-otter
 
-# Install another with different config
-obol network install ethereum --network=hoodi --execution-client=geth
-# → ethereum-happy-panda
-obol network sync ethereum/happy-panda
+# Sync all deployments at once
+obol network sync --all
 ```
 
 **Available networks:** ethereum, aztec
@@ -87,7 +88,8 @@ obol network sync ethereum/happy-panda
 # View installed deployments
 obol kubectl get namespaces | grep -E "ethereum|aztec"
 
-# Delete a deployment
+# Delete a deployment (auto-selects if only one exists)
+obol network delete
 obol network delete ethereum/nervous-otter --force
 ```
 
@@ -105,7 +107,10 @@ obol app install bitnami/redis
 # With specific version
 obol app install bitnami/postgresql@15.0.0
 
-# Deploy to cluster
+# Deploy to cluster (auto-selects if only one app is installed)
+obol app sync
+
+# With multiple apps, specify which one
 obol app sync postgresql/eager-fox
 
 # List and manage
