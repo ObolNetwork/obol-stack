@@ -10,13 +10,13 @@ import (
 )
 
 func TestBuildModelEntries(t *testing.T) {
-	t.Run("ollama models get ollama/ prefix and api_base", func(t *testing.T) {
+	t.Run("ollama models get ollama_chat/ prefix and api_base", func(t *testing.T) {
 		entries := buildModelEntries("ollama", []string{"qwen3.5:35b", "llama3.2:3b"})
 		if len(entries) != 2 {
 			t.Fatalf("got %d entries, want 2", len(entries))
 		}
-		if entries[0].LiteLLMParams.Model != "ollama/qwen3.5:35b" {
-			t.Errorf("model = %q, want ollama/qwen3.5:35b", entries[0].LiteLLMParams.Model)
+		if entries[0].LiteLLMParams.Model != "ollama_chat/qwen3.5:35b" {
+			t.Errorf("model = %q, want ollama_chat/qwen3.5:35b", entries[0].LiteLLMParams.Model)
 		}
 		if entries[0].LiteLLMParams.APIBase != "http://ollama.llm.svc.cluster.local:11434" {
 			t.Errorf("api_base = %q", entries[0].LiteLLMParams.APIBase)
@@ -61,6 +61,7 @@ func TestDetectProvider(t *testing.T) {
 		wantProv string
 	}{
 		{"ollama/llama3.2:3b", "llama3.2:3b", "ollama"},
+		{"ollama_chat/qwen3.5:35b", "qwen3.5:35b", "ollama"},
 		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929", "anthropic"},
 		{"gpt-4o", "gpt-4o", "openai"},
 		{"o1-mini", "o1-mini", "openai"},

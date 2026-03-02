@@ -384,7 +384,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 		switch provider {
 		case "ollama":
 			entry.LiteLLMParams = LiteLLMParams{
-				Model:   "ollama/" + m,
+				Model:   "ollama_chat/" + m,
 				APIBase: "http://ollama.llm.svc.cluster.local:11434",
 			}
 		case "anthropic":
@@ -461,7 +461,7 @@ func detectProvider(entry ModelEntry) string {
 		return "custom"
 	}
 	model := entry.LiteLLMParams.Model
-	if strings.HasPrefix(model, "ollama/") {
+	if strings.HasPrefix(model, "ollama/") || strings.HasPrefix(model, "ollama_chat/") {
 		return "ollama"
 	}
 	if strings.HasPrefix(model, "openai/") {

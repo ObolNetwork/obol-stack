@@ -68,7 +68,7 @@ data:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
       cache: false
-      drop_params: true
+      drop_params: false
 
 ---
 # Secret for LiteLLM master key and cloud provider API keys.
