@@ -68,8 +68,8 @@ COMMANDS:
      openclaw skills    Manage skills
 
    Model Providers:
-     model setup        Configure cloud AI provider in llmspy gateway
-     model status       Show global llmspy provider status
+     model setup        Configure LLM provider in LiteLLM gateway
+     model status       Show LiteLLM gateway provider status
 
    Sell Services (x402):
      sell inference   Sell LLM inference via local x402 payment gateway

@@ -175,9 +175,9 @@ The agent signs each auth as EIP-712 `TransferWithAuthorization` (ERC-3009 USDC)
 }
 ```
 
-## llmspy Provider Entry (plain OpenAI → sidecar)
+## LiteLLM Provider Entry (plain OpenAI → sidecar)
 
-The sidecar appears to llmspy as a standard OpenAI provider:
+The sidecar appears to LiteLLM as a standard OpenAI provider:
 
 ```json
 {
@@ -193,7 +193,7 @@ The sidecar appears to llmspy as a standard OpenAI provider:
 }
 ```
 
-No special x402 extension needed in llmspy — the sidecar handles all payment logic.
+No special x402 extension needed in LiteLLM — the sidecar handles all payment logic.
 
 ## USDC Contract Addresses
 
@@ -231,6 +231,6 @@ Other useful endpoints:
 3. Agent stores auths in x402-buyer-auths ConfigMap
 4. Agent stores upstream config in x402-buyer-config ConfigMap
 5. Agent deploys x402-buyer sidecar (or restarts if exists)
-6. Agent patches llmspy providers.json → plain OpenAI provider → sidecar
-7. At runtime: request → llmspy → sidecar → upstream (402 → pop auth → retry → 200)
+6. Agent patches LiteLLM providers.json → plain OpenAI provider → sidecar
+7. At runtime: request → LiteLLM → sidecar → upstream (402 → pop auth → retry → 200)
 ```

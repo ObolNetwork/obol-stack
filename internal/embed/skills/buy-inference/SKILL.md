@@ -1,6 +1,6 @@
 ---
 name: buy-inference
-description: "Buy remote inference from x402-gated endpoints via a risk-isolated payment sidecar. Pre-signs bounded payment authorizations, deploys a lean proxy, and wires it into llmspy. Zero signer access at runtime — spending is capped by design."
+description: "Buy remote inference from x402-gated endpoints via a risk-isolated payment sidecar. Pre-signs bounded payment authorizations, deploys a lean proxy, and wires it into LiteLLM. Zero signer access at runtime — spending is capped by design."
 metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["python3"] } } }
 ---
 
@@ -11,7 +11,7 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 ## When to Use
 
 - Probing an endpoint to check pricing before buying
-- Purchasing access to a remote model (pre-signs auths, deploys sidecar, patches llmspy)
+- Purchasing access to a remote model (pre-signs auths, deploys sidecar, patches LiteLLM)
 - Refilling payment authorizations when running low
 - Listing purchased providers and remaining auth counts
 - Checking USDC balance before buying
@@ -30,7 +30,7 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 # Probe an endpoint to see its pricing
 python3 scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
-# Buy access (probes, pre-signs 100 auths, deploys sidecar, patches llmspy)
+# Buy access (probes, pre-signs 100 auths, deploys sidecar, patches LiteLLM)
 python3 scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
@@ -61,12 +61,12 @@ python3 scripts/buy.py remove remote-qwen
 | Command | Description |
 |---------|-------------|
 | `probe <endpoint-url>` | Send request without payment, parse 402 response for pricing |
-| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, deploy sidecar, wire into llmspy |
+| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, deploy sidecar, wire into LiteLLM |
 | `refill <name> [--count <N>]` | Sign more authorizations for an existing upstream |
 | `list` | List purchased providers + remaining auth counts |
 | `status <name>` | Check sidecar pod status + remaining auths |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
-| `remove <name>` | Remove upstream from sidecar + llmspy, cleanup ConfigMaps |
+| `remove <name>` | Remove upstream from sidecar + LiteLLM, cleanup ConfigMaps |
 
 ## How It Works
 
@@ -78,7 +78,7 @@ python3 scripts/buy.py remove remote-qwen
 
 4. **Deploy**: A lean Go sidecar (`x402-buyer`) is deployed in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy.
 
-5. **Wire**: llmspy gets a plain `@ai-sdk/openai` provider pointing at the sidecar. The model appears as `<name>/<model-id>` — no special x402 extension needed in llmspy.
+5. **Wire**: LiteLLM gets a plain `@ai-sdk/openai` provider pointing at the sidecar. The model appears as `<name>/<model-id>` — no special x402 extension needed in LiteLLM.
 
 6. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller
@@ -91,11 +91,11 @@ python3 scripts/buy.py remove remote-qwen
 ```
 Agent (buy.py)                       Runtime
   |                                    |
-  +-- probe seller → 402 pricing       OpenClaw → llmspy:8000
+  +-- probe seller → 402 pricing       OpenClaw → LiteLLM:8000
   +-- sign N auths via remote-signer         |
   +-- store in ConfigMaps                    v
   +-- deploy x402-buyer sidecar        x402-buyer:8402 (plain OpenAI proxy)
-  +-- patch llmspy providers.json            |
+  +-- patch LiteLLM providers.json            |
                                              +-- pop pre-signed auth
                                              +-- X-PAYMENT header
                                              +-- forward to seller
@@ -107,7 +107,7 @@ Agent (buy.py)                       Runtime
 
 - **Zero signer access**: The sidecar reads pre-signed auths from a ConfigMap — no remote-signer access
 - **Bounded spending**: Max loss = N x price (where N = number of pre-signed auths)
-- **Risk isolation**: If sidecar crashes, llmspy routes to other providers (Ollama, etc.) — inference unaffected
+- **Risk isolation**: If sidecar crashes, LiteLLM routes to other providers (Ollama, etc.) — inference unaffected
 - **Single-use vouchers**: Each auth is consumed on-chain when settled — no replay
 
 ## Environment Variables

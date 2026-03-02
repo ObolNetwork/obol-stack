@@ -1,9 +1,9 @@
 ---
-# LLM foundation services (OKR-1)
+# LLM foundation services
 #
 # This deploys:
 # - A ClusterIP Service + Endpoints "ollama" that routes to the host's Ollama server
-# - llms.py (LLMSpy) as an OpenAI-compatible gateway / router over providers
+# - LiteLLM as an OpenAI-compatible gateway / router over providers
 #
 # Design notes:
 # - No in-cluster Ollama is deployed; the host is expected to run Ollama
@@ -13,8 +13,7 @@
 #     k3s  → 127.0.0.1 (k3s runs directly on the host)
 # - Using ClusterIP+Endpoints instead of ExternalName for Traefik Gateway API
 #   compatibility (ExternalName services are rejected as HTTPRoute backends).
-# - LLMSpy and all consumers reference ollama.llm.svc.cluster.local:11434,
-#   which the ClusterIP Service routes to the host via the Endpoints object.
+# - LiteLLM starts with an empty model_list; models are added via `obol model setup`.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -55,75 +54,34 @@ subsets:
         protocol: TCP
 
 ---
-# llms.py v3 configuration for Obol Stack:
-# - Ollama provider enabled by default (host machine via ollama Service)
-# - Anthropic and OpenAI providers available (disabled by default; enabled via `obol model setup`)
-# - No default model; users configure via `obol model setup`
+# LiteLLM configuration: empty model_list by default.
+# Models are added via `obol model setup` which patches this ConfigMap.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llmspy-config
+  name: litellm-config
   namespace: llm
 data:
-  llms.json: |
-    {
-      "version": 3,
-      "defaults": {
-        "headers": {
-          "Content-Type": "application/json",
-          "User-Agent": "llmspy.org/3.0"
-        },
-        "text": {
-          "model": "",
-          "messages": [
-            { "role": "user", "content": [{ "type": "text", "text": "" }] }
-          ]
-        }
-      },
-      "providers": {
-        "ollama": {
-          "enabled": true
-        },
-        "anthropic": {
-          "enabled": false
-        },
-        "openai": {
-          "enabled": false
-        }
-      }
-    }
-  providers.json: |
-    {
-      "ollama": {
-        "id": "ollama",
-        "npm": "ollama",
-        "api": "http://ollama.llm.svc.cluster.local:11434",
-        "models": {},
-        "all_models": true,
-        "tool_call": false
-      },
-      "anthropic": {
-        "id": "anthropic",
-        "npm": "@ai-sdk/anthropic",
-        "api_key": "$ANTHROPIC_API_KEY"
-      },
-      "openai": {
-        "id": "openai",
-        "npm": "@ai-sdk/openai",
-        "api_key": "$OPENAI_API_KEY"
-      }
-    }
+  config.yaml: |
+    model_list: []
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+    litellm_settings:
+      cache: false
+      drop_params: true
 
 ---
-# Secret for cloud provider API keys. Empty by default; patched imperatively
-# via `obol model setup` or `obol openclaw setup`.
+# Secret for LiteLLM master key and cloud provider API keys.
+# Master key is unique per cluster ({{CLUSTER_ID}} resolved at init).
+# Provider keys start empty; patched via `obol model setup`.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: llms-secrets
+  name: litellm-secrets
   namespace: llm
 type: Opaque
 stringData:
+  LITELLM_MASTER_KEY: "sk-obol-{{CLUSTER_ID}}"
   ANTHROPIC_API_KEY: ""
   OPENAI_API_KEY: ""
 
@@ -131,134 +89,94 @@ stringData:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: llmspy
+  name: litellm
   namespace: llm
   labels:
-    app: llmspy
+    app: litellm
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: llmspy
+      app: litellm
   template:
     metadata:
       labels:
-        app: llmspy
+        app: litellm
     spec:
-      initContainers:
-        # Seed ~/.llms/ from the ConfigMap + package defaults.
-        # llms.json is taken from the ConfigMap (controls which providers are enabled).
-        # providers.json is taken from the llmspy package (has full model definitions)
-        # and then merged with ConfigMap overrides (Ollama endpoint, API key refs).
-        - name: seed-config
-          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
-          imagePullPolicy: IfNotPresent
-          command:
-            - python3
-            - -c
-            - |
-              import json, os, shutil
-              os.makedirs('/data', exist_ok=True)
-              # Copy llms.json from ConfigMap (provider enabled/disabled state)
-              shutil.copy2('/config/llms.json', '/data/llms.json')
-              # Start with package providers.json (has full model definitions)
-              import llms
-              pkg_dir = os.path.dirname(llms.__file__)
-              with open(os.path.join(pkg_dir, 'providers.json')) as f:
-                  providers = json.load(f)
-              # Merge ConfigMap overrides (Ollama endpoint, API key refs)
-              with open('/config/providers.json') as f:
-                  overrides = json.load(f)
-              for pid, pcfg in overrides.items():
-                  if pid in providers:
-                      providers[pid].update(pcfg)
-                  else:
-                      providers[pid] = pcfg
-              with open('/data/providers.json', 'w') as f:
-                  json.dump(providers, f, indent=2)
-              os.chmod('/data/llms.json', 0o666)
-              os.chmod('/data/providers.json', 0o666)
-          volumeMounts:
-            - name: llmspy-config
-              mountPath: /config
-              readOnly: true
-            - name: llmspy-home
-              mountPath: /data
       containers:
-        - name: llmspy
-          # Obol fork of LLMSpy with smart routing extension.
-          # Pin a specific version for reproducibility.
-          image: ghcr.io/obolnetwork/llms:3.0.38-obol.3
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-stable
           imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 8000
-              protocol: TCP
-          command:
-            - llms
           args:
             - --config
-            - /home/llms/.llms/llms.json
-            - --serve
-            - "8000"
+            - /etc/litellm/config.yaml
+            - --port
+            - "4000"
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
           envFrom:
             - secretRef:
-                name: llms-secrets
-                optional: true
+                name: litellm-secrets
           env:
-            # Avoid surprises if the image changes its default HOME.
-            - name: HOME
-              value: /home/llms
+            - name: STORE_MODEL_IN_DB
+              value: "false"
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "true"
           volumeMounts:
-            - name: llmspy-home
-              mountPath: /home/llms/.llms
+            - name: litellm-config
+              mountPath: /etc/litellm/config.yaml
+              subPath: config.yaml
+          startupProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /
+              path: /health/readiness
               port: http
             initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /
+              path: /health/liveliness
               port: http
             initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 2
+            periodSeconds: 15
+            timeoutSeconds: 3
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 100m
+              memory: 256Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "1"
+              memory: 1Gi
       volumes:
-        - name: llmspy-config
+        - name: litellm-config
           configMap:
-            name: llmspy-config
+            name: litellm-config
             items:
-              - key: llms.json
-                path: llms.json
-              - key: providers.json
-                path: providers.json
-        - name: llmspy-home
-          emptyDir: {}
+              - key: config.yaml
+                path: config.yaml
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: llmspy
+  name: litellm
   namespace: llm
   labels:
-    app: llmspy
+    app: litellm
 spec:
   type: ClusterIP
   selector:
-    app: llmspy
+    app: litellm
   ports:
     - name: http
-      port: 8000
+      port: 4000
       targetPort: http
       protocol: TCP

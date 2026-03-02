@@ -56,9 +56,9 @@ obol
 
 ## Infrastructure Stack
 
-Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (llmspy + Ollama), `x402.yaml` (verifier + ConfigMap), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
+Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (verifier + ConfigMap), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
 
-Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), Reloader, llmspy (`llm` ns), x402-verifier (`x402` ns), obol-agent (`openclaw-obol-agent` ns), ServiceOffer CRD.
+Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), Reloader, LiteLLM (`llm` ns), x402-verifier (`x402` ns), obol-agent (`openclaw-obol-agent` ns), ServiceOffer CRD.
 
 ## Monetize Subsystem
 
@@ -101,9 +101,9 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
-Two-tier: **Tier 1** — cluster-wide llmspy gateway (`llm` ns, port 8000) routes to Ollama/Anthropic/OpenAI. ConfigMap `llmspy-config` (providers), Secret `llms-secrets` (API keys). Ollama default-enabled; cloud via `obol model setup`. `ConfigureLLMSpy()` patches Secret + ConfigMap + restarts.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). No default provider — `obol model setup` required. `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding).
 
-**Tier 2** — per-instance overlay. `buildLLMSpyRoutedOverlay()` creates virtual "llmspy" provider pointing at gateway, cloud model listed with `llmspy/` prefix and `api: openai-completions`. App → llmspy.llm.svc:8000 → resolves provider → actual API.
+**Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 
 ## Standalone Inference Gateway
 
@@ -163,7 +163,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 | `internal/x402/buyer` | `signer.go`, `proxy.go`, `config.go` | Buy-side sidecar |
 | `internal/erc8004` | `client.go`, `types.go`, `abi.go` | ERC-8004 Identity Registry |
 | `internal/agent` | `agent.go` | obol-agent singleton, RBAC patching |
-| `internal/model` | `model.go` | llmspy gateway configuration |
+| `internal/model` | `model.go` | LiteLLM gateway configuration |
 | `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution |
 | `internal/inference` | `gateway.go`, `container.go`, `store.go` | Standalone x402 gateway |
 | `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
@@ -184,4 +184,4 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 | Frontend | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-front-end` |
 | Docs | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-docs` |
 | OpenClaw | `/Users/bussyjd/Development/Obol_Workbench/openclaw` |
-| llmspy | `/Users/bussyjd/Development/R&D/llmspy` |
+| LiteLLM | `/Users/bussyjd/Development/R&D/litellm` |

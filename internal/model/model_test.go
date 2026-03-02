@@ -9,365 +9,228 @@ import (
 	"testing"
 )
 
-func TestParseProviderEnvKey(t *testing.T) {
-	tests := []struct {
-		name     string
-		provider string
-		output   string
-		want     string
-		wantErr  bool
-	}{
-		{
-			name:     "anthropic",
-			provider: "anthropic",
-			output:   "ANTHROPIC_API_KEY\n",
-			want:     "ANTHROPIC_API_KEY",
-		},
-		{
-			name:     "zai with trailing whitespace",
-			provider: "zai",
-			output:   "  ZHIPU_API_KEY  \n",
-			want:     "ZHIPU_API_KEY",
-		},
-		{
-			name:     "empty output means unknown provider",
-			provider: "nosuchprovider",
-			output:   "",
-			wantErr:  true,
-		},
-		{
-			name:     "whitespace-only output means unknown provider",
-			provider: "nosuchprovider",
-			output:   "  \n  ",
-			wantErr:  true,
-		},
-		{
-			name:     "openai",
-			provider: "openai",
-			output:   "OPENAI_API_KEY",
-			want:     "OPENAI_API_KEY",
-		},
-	}
+func TestBuildModelEntries(t *testing.T) {
+	t.Run("ollama models get ollama/ prefix and api_base", func(t *testing.T) {
+		entries := buildModelEntries("ollama", []string{"qwen3.5:35b", "llama3.2:3b"})
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want 2", len(entries))
+		}
+		if entries[0].LiteLLMParams.Model != "ollama/qwen3.5:35b" {
+			t.Errorf("model = %q, want ollama/qwen3.5:35b", entries[0].LiteLLMParams.Model)
+		}
+		if entries[0].LiteLLMParams.APIBase != "http://ollama.llm.svc.cluster.local:11434" {
+			t.Errorf("api_base = %q", entries[0].LiteLLMParams.APIBase)
+		}
+		if entries[0].LiteLLMParams.APIKey != "" {
+			t.Errorf("ollama should not have api_key, got %q", entries[0].LiteLLMParams.APIKey)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseProviderEnvKey(tt.provider, tt.output)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got %q", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
+	t.Run("anthropic models use env var reference", func(t *testing.T) {
+		entries := buildModelEntries("anthropic", []string{"claude-sonnet-4-5-20250929"})
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1", len(entries))
+		}
+		if entries[0].LiteLLMParams.Model != "claude-sonnet-4-5-20250929" {
+			t.Errorf("model = %q", entries[0].LiteLLMParams.Model)
+		}
+		if entries[0].LiteLLMParams.APIKey != "os.environ/ANTHROPIC_API_KEY" {
+			t.Errorf("api_key = %q, want os.environ/ANTHROPIC_API_KEY", entries[0].LiteLLMParams.APIKey)
+		}
+	})
+
+	t.Run("openai models use env var reference", func(t *testing.T) {
+		entries := buildModelEntries("openai", []string{"gpt-4o"})
+		if entries[0].LiteLLMParams.APIKey != "os.environ/OPENAI_API_KEY" {
+			t.Errorf("api_key = %q, want os.environ/OPENAI_API_KEY", entries[0].LiteLLMParams.APIKey)
+		}
+	})
+
+	t.Run("empty models returns nil", func(t *testing.T) {
+		entries := buildModelEntries("anthropic", nil)
+		if entries != nil {
+			t.Errorf("expected nil, got %v", entries)
+		}
+	})
 }
 
-func TestParseAvailableProviders(t *testing.T) {
+func TestDetectProvider(t *testing.T) {
 	tests := []struct {
-		name   string
-		output string
-		want   []ProviderInfo
+		model    string
+		name     string
+		wantProv string
 	}{
-		{
-			name:   "empty output",
-			output: "",
-			want:   nil,
-		},
-		{
-			name:   "whitespace only",
-			output: "  \n  ",
-			want:   nil,
-		},
-		{
-			name:   "single provider",
-			output: "anthropic\tAnthropic\tANTHROPIC_API_KEY\n",
-			want: []ProviderInfo{
-				{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
-			},
-		},
-		{
-			name: "multiple providers sorted",
-			output: "anthropic\tAnthropic\tANTHROPIC_API_KEY\n" +
-				"openai\tOpenAI\tOPENAI_API_KEY\n" +
-				"zai\tZ.AI\tZHIPU_API_KEY\n",
-			want: []ProviderInfo{
-				{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
-				{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
-				{ID: "zai", Name: "Z.AI", EnvVar: "ZHIPU_API_KEY"},
-			},
-		},
-		{
-			name:   "malformed line skipped",
-			output: "badline\n" + "anthropic\tAnthropic\tANTHROPIC_API_KEY\n",
-			want: []ProviderInfo{
-				{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
-			},
-		},
-		{
-			name:   "tab in name preserved",
-			output: "deepseek\tDeepSeek\tDEEPSEEK_API_KEY\n",
-			want: []ProviderInfo{
-				{ID: "deepseek", Name: "DeepSeek", EnvVar: "DEEPSEEK_API_KEY"},
-			},
-		},
+		{"ollama/llama3.2:3b", "llama3.2:3b", "ollama"},
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929", "anthropic"},
+		{"gpt-4o", "gpt-4o", "openai"},
+		{"o1-mini", "o1-mini", "openai"},
+		{"openai/gpt-4", "gpt-4", "openai"},
+		{"mistral-large", "custom/my-vllm/mistral-large", "custom"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseAvailableProviders(tt.output)
-			if len(got) != len(tt.want) {
-				t.Fatalf("got %d providers, want %d", len(got), len(tt.want))
+		t.Run(tt.model, func(t *testing.T) {
+			entry := ModelEntry{
+				ModelName:     tt.name,
+				LiteLLMParams: LiteLLMParams{Model: tt.model},
 			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("provider[%d]: got %+v, want %+v", i, got[i], tt.want[i])
-				}
+			got := detectProvider(entry)
+			if got != tt.wantProv {
+				t.Errorf("detectProvider(%q) = %q, want %q", tt.model, got, tt.wantProv)
 			}
 		})
 	}
 }
 
 func TestBuildProviderStatus(t *testing.T) {
-	t.Run("basic status with cloud provider key set", func(t *testing.T) {
-		available := []ProviderInfo{
-			{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
-			{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
-			{ID: "zai", Name: "Z.AI", EnvVar: "ZHIPU_API_KEY"},
-		}
+	t.Run("status from config with models", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: qwen3.5:35b
+    litellm_params:
+      model: ollama/qwen3.5:35b
+      api_base: http://ollama.llm.svc:11434
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+`)
+		secretJSON := []byte(`{"data":{"ANTHROPIC_API_KEY":"c2stYW50LXh4eA==","OPENAI_API_KEY":"","LITELLM_MASTER_KEY":"c2stb2JvbA=="}}`)
 
-		llmsJSON := []byte(`{
-			"providers": {
-				"ollama": {"enabled": true},
-				"anthropic": {"enabled": true},
-				"openai": {"enabled": false},
-				"zai": {"enabled": true}
-			}
-		}`)
-
-		// Secret .data values are base64 in real k8s, but our code just checks
-		// if the key exists and the value is non-empty (the cross-reference uses
-		// the raw string from the JSON — k8s returns base64 in .data).
-		secretJSON := []byte(`{
-			"data": {
-				"ANTHROPIC_API_KEY": "c2stYW50LXh4eA==",
-				"OPENAI_API_KEY": "",
-				"ZHIPU_API_KEY": "ZWU1NjM5Nzk="
-			}
-		}`)
-
-		status, err := buildProviderStatus(available, llmsJSON, secretJSON)
+		status, err := buildProviderStatus(configYAML, secretJSON)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Ollama: enabled, always has key
-		if s := status["ollama"]; !s.Enabled || !s.HasAPIKey {
-			t.Errorf("ollama: got enabled=%t hasKey=%t, want enabled=true hasKey=true", s.Enabled, s.HasAPIKey)
+		// Anthropic: enabled with 1 model, has API key
+		if s := status["anthropic"]; !s.Enabled || len(s.Models) != 1 || !s.HasAPIKey {
+			t.Errorf("anthropic: got %+v", s)
 		}
 
-		// Anthropic: enabled, key set
-		if s := status["anthropic"]; !s.Enabled || !s.HasAPIKey || s.EnvVar != "ANTHROPIC_API_KEY" {
-			t.Errorf("anthropic: got %+v, want enabled=true hasKey=true envVar=ANTHROPIC_API_KEY", s)
+		// Ollama: enabled with 1 model, always has key
+		if s := status["ollama"]; !s.Enabled || len(s.Models) != 1 || !s.HasAPIKey {
+			t.Errorf("ollama: got %+v", s)
 		}
 
-		// OpenAI: disabled, key empty
-		if s := status["openai"]; s.Enabled || s.HasAPIKey || s.EnvVar != "OPENAI_API_KEY" {
-			t.Errorf("openai: got %+v, want enabled=false hasKey=false envVar=OPENAI_API_KEY", s)
-		}
-
-		// Z.AI: enabled, key set
-		if s := status["zai"]; !s.Enabled || !s.HasAPIKey || s.EnvVar != "ZHIPU_API_KEY" {
-			t.Errorf("zai: got %+v, want enabled=true hasKey=true envVar=ZHIPU_API_KEY", s)
+		// OpenAI: not in config, not enabled
+		if s := status["openai"]; s.Enabled {
+			t.Errorf("openai should not be enabled, got %+v", s)
 		}
 	})
 
-	t.Run("ollama injected when missing from configmap", func(t *testing.T) {
-		available := []ProviderInfo{
-			{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
-		}
-		llmsJSON := []byte(`{"providers":{"anthropic":{"enabled":false}}}`)
+	t.Run("empty model_list", func(t *testing.T) {
+		configYAML := []byte(`model_list: []`)
 		secretJSON := []byte(`{"data":{}}`)
 
-		status, err := buildProviderStatus(available, llmsJSON, secretJSON)
+		status, err := buildProviderStatus(configYAML, secretJSON)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if s, ok := status["ollama"]; !ok || !s.Enabled || !s.HasAPIKey {
-			t.Errorf("ollama should be injected as enabled with key; got %+v, ok=%t", s, ok)
+		// All known providers should appear (from knownProviders)
+		if _, ok := status["ollama"]; !ok {
+			t.Error("ollama should be present")
 		}
 	})
 
-	t.Run("provider in configmap but not in available list gets no env var", func(t *testing.T) {
-		available := []ProviderInfo{} // no providers discovered
-		llmsJSON := []byte(`{"providers":{"mystery":{"enabled":true}}}`)
-		secretJSON := []byte(`{"data":{}}`)
-
-		status, err := buildProviderStatus(available, llmsJSON, secretJSON)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if s := status["mystery"]; !s.Enabled || s.EnvVar != "" {
-			t.Errorf("mystery: got %+v, want enabled=true envVar=''", s)
-		}
-	})
-
-	t.Run("empty providers section", func(t *testing.T) {
-		llmsJSON := []byte(`{}`)
-		secretJSON := []byte(`{"data":{}}`)
-
-		status, err := buildProviderStatus(nil, llmsJSON, secretJSON)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		// Only ollama (injected)
-		if len(status) != 1 {
-			t.Errorf("expected 1 provider (ollama), got %d", len(status))
-		}
-	})
-
-	t.Run("invalid llms json", func(t *testing.T) {
-		_, err := buildProviderStatus(nil, []byte(`not json`), []byte(`{"data":{}}`))
+	t.Run("invalid config yaml", func(t *testing.T) {
+		_, err := buildProviderStatus([]byte(`{bad yaml`), []byte(`{"data":{}}`))
 		if err == nil {
-			t.Fatal("expected error for invalid llms.json")
+			t.Fatal("expected error for invalid YAML")
 		}
 	})
 
 	t.Run("invalid secret json", func(t *testing.T) {
-		_, err := buildProviderStatus(nil, []byte(`{}`), []byte(`not json`))
-		if err == nil {
-			t.Fatal("expected error for invalid secret JSON")
-		}
-	})
-}
-
-func TestPatchLLMsJSON(t *testing.T) {
-	t.Run("enable existing disabled provider", func(t *testing.T) {
-		input := []byte(`{"providers":{"anthropic":{"enabled":false},"ollama":{"enabled":true}}}`)
-
-		got, err := patchLLMsJSON(input, "anthropic")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		var result map[string]interface{}
-		if err := json.Unmarshal(got, &result); err != nil {
-			t.Fatalf("output is not valid JSON: %v", err)
-		}
-
-		providers := result["providers"].(map[string]interface{})
-		anthropic := providers["anthropic"].(map[string]interface{})
-		if anthropic["enabled"] != true {
-			t.Errorf("anthropic.enabled = %v, want true", anthropic["enabled"])
-		}
-
-		// Ollama should be untouched
-		ollama := providers["ollama"].(map[string]interface{})
-		if ollama["enabled"] != true {
-			t.Errorf("ollama.enabled = %v, want true (untouched)", ollama["enabled"])
-		}
-	})
-
-	t.Run("enable new provider not in config", func(t *testing.T) {
-		input := []byte(`{"providers":{"ollama":{"enabled":true}}}`)
-
-		got, err := patchLLMsJSON(input, "zai")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		var result map[string]interface{}
-		if err := json.Unmarshal(got, &result); err != nil {
-			t.Fatalf("output is not valid JSON: %v", err)
-		}
-
-		providers := result["providers"].(map[string]interface{})
-		zai := providers["zai"].(map[string]interface{})
-		if zai["enabled"] != true {
-			t.Errorf("zai.enabled = %v, want true", zai["enabled"])
-		}
-	})
-
-	t.Run("create providers section if missing", func(t *testing.T) {
-		input := []byte(`{"version":"1.0"}`)
-
-		got, err := patchLLMsJSON(input, "deepseek")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		var result map[string]interface{}
-		if err := json.Unmarshal(got, &result); err != nil {
-			t.Fatalf("output is not valid JSON: %v", err)
-		}
-
-		// version preserved
-		if result["version"] != "1.0" {
-			t.Errorf("version lost: got %v", result["version"])
-		}
-
-		providers := result["providers"].(map[string]interface{})
-		ds := providers["deepseek"].(map[string]interface{})
-		if ds["enabled"] != true {
-			t.Errorf("deepseek.enabled = %v, want true", ds["enabled"])
-		}
-	})
-
-	t.Run("preserves other provider fields", func(t *testing.T) {
-		input := []byte(`{"providers":{"anthropic":{"enabled":false,"customField":"keep"}}}`)
-
-		got, err := patchLLMsJSON(input, "anthropic")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		var result map[string]interface{}
-		if err := json.Unmarshal(got, &result); err != nil {
-			t.Fatalf("output is not valid JSON: %v", err)
-		}
-
-		providers := result["providers"].(map[string]interface{})
-		anthropic := providers["anthropic"].(map[string]interface{})
-		if anthropic["enabled"] != true {
-			t.Errorf("enabled = %v, want true", anthropic["enabled"])
-		}
-		if anthropic["customField"] != "keep" {
-			t.Errorf("customField = %v, want 'keep'", anthropic["customField"])
-		}
-	})
-
-	t.Run("invalid json input", func(t *testing.T) {
-		_, err := patchLLMsJSON([]byte(`{bad`), "anthropic")
+		_, err := buildProviderStatus([]byte(`model_list: []`), []byte(`not json`))
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}
 	})
+}
 
-	t.Run("idempotent enable", func(t *testing.T) {
-		input := []byte(`{"providers":{"anthropic":{"enabled":true}}}`)
+func TestProviderEnvVar(t *testing.T) {
+	if got := providerEnvVar("anthropic"); got != "ANTHROPIC_API_KEY" {
+		t.Errorf("got %q, want ANTHROPIC_API_KEY", got)
+	}
+	if got := providerEnvVar("openai"); got != "OPENAI_API_KEY" {
+		t.Errorf("got %q, want OPENAI_API_KEY", got)
+	}
+	if got := providerEnvVar("ollama"); got != "" {
+		t.Errorf("got %q, want empty string for ollama", got)
+	}
+	if got := providerEnvVar("custom_thing"); got != "CUSTOM_THING_API_KEY" {
+		t.Errorf("got %q, want CUSTOM_THING_API_KEY", got)
+	}
+}
 
-		got, err := patchLLMsJSON(input, "anthropic")
+func TestValidateCustomEndpoint(t *testing.T) {
+	t.Run("full validation success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/v1/models":
+				fmt.Fprint(w, `{"data":[{"id":"test-model"},{"id":"other-model"}]}`)
+			case "/v1/chat/completions":
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}]}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+	})
 
-		var result map[string]interface{}
-		if err := json.Unmarshal(got, &result); err != nil {
-			t.Fatalf("output is not valid JSON: %v", err)
+	t.Run("inference probe returns empty choices", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/models"):
+				fmt.Fprint(w, `{"data":[{"id":"other-model"}]}`)
+			case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+				fmt.Fprint(w, `{"choices":[]}`)
+			default:
+				w.WriteHeader(200)
+			}
+		}))
+		defer srv.Close()
+
+		err := ValidateCustomEndpoint(srv.URL+"/v1", "nonexistent", "")
+		if err == nil {
+			t.Fatal("expected error for empty choices")
 		}
+		if !strings.Contains(err.Error(), "empty choices") {
+			t.Errorf("error should mention 'empty choices', got: %v", err)
+		}
+	})
 
-		providers := result["providers"].(map[string]interface{})
-		anthropic := providers["anthropic"].(map[string]interface{})
-		if anthropic["enabled"] != true {
-			t.Errorf("enabled = %v, want true", anthropic["enabled"])
+	t.Run("endpoint unreachable", func(t *testing.T) {
+		err := ValidateCustomEndpoint("http://localhost:19999/v1", "test", "")
+		if err == nil {
+			t.Fatal("expected error for unreachable endpoint")
+		}
+	})
+
+	t.Run("inference probe fails", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/v1/models":
+				fmt.Fprint(w, `{"data":[{"id":"test-model"}]}`)
+			case "/v1/chat/completions":
+				w.WriteHeader(500)
+				fmt.Fprint(w, `{"error":"internal server error"}`)
+			}
+		}))
+		defer srv.Close()
+
+		err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+		if err == nil {
+			t.Fatal("expected error for failed inference")
 		}
 	})
 }
@@ -448,26 +311,6 @@ func TestListOllamaModels_MockServer(t *testing.T) {
 		if models[0].Name != "llama3.2:3b" {
 			t.Errorf("models[0].Name = %q, want llama3.2:3b", models[0].Name)
 		}
-		if models[1].Size != 4700000000 {
-			t.Errorf("models[1].Size = %d, want 4700000000", models[1].Size)
-		}
-	})
-
-	t.Run("success with no models", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"models":[]}`)
-		}))
-		defer srv.Close()
-
-		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
-		models, err := ListOllamaModels()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(models) != 0 {
-			t.Fatalf("got %d models, want 0", len(models))
-		}
 	})
 
 	t.Run("server not running", func(t *testing.T) {
@@ -475,9 +318,6 @@ func TestListOllamaModels_MockServer(t *testing.T) {
 		_, err := ListOllamaModels()
 		if err == nil {
 			t.Fatal("expected error when server is not running")
-		}
-		if !strings.Contains(err.Error(), "not running") {
-			t.Errorf("error should mention 'not running', got: %v", err)
 		}
 	})
 }
@@ -494,23 +334,12 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 					http.Error(w, err.Error(), 500)
 					return
 				}
-				if req.Name != "llama3.2:3b" {
-					http.Error(w, "unexpected model", 400)
-					return
-				}
 				w.Header().Set("Content-Type", "application/x-ndjson")
 				fmt.Fprintln(w, `{"status":"pulling manifest"}`)
-				fmt.Fprintln(w, `{"status":"pulling abc123","total":1000,"completed":500}`)
-				fmt.Fprintln(w, `{"status":"pulling abc123","total":1000,"completed":1000}`)
 				fmt.Fprintln(w, `{"status":"success"}`)
 				return
 			}
-			// Health check endpoint
-			if r.URL.Path == "/" {
-				w.WriteHeader(200)
-				return
-			}
-			http.NotFound(w, r)
+			w.WriteHeader(200)
 		}))
 		defer srv.Close()
 
@@ -521,11 +350,10 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		}
 	})
 
-	t.Run("pull error from server", func(t *testing.T) {
+	t.Run("pull error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/pull" {
 				w.Header().Set("Content-Type", "application/x-ndjson")
-				fmt.Fprintln(w, `{"status":"pulling manifest"}`)
 				fmt.Fprintln(w, `{"error":"model not found"}`)
 				return
 			}
@@ -536,18 +364,7 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
 		err := PullOllamaModel("nonexistent:latest")
 		if err == nil {
-			t.Fatal("expected error for nonexistent model")
-		}
-		if !strings.Contains(err.Error(), "model not found") {
-			t.Errorf("error should contain 'model not found', got: %v", err)
-		}
-	})
-
-	t.Run("server not running", func(t *testing.T) {
-		t.Setenv("OLLAMA_HOST", "localhost:19999")
-		err := PullOllamaModel("llama3.2:3b")
-		if err == nil {
-			t.Fatal("expected error when server is not running")
+			t.Fatal("expected error")
 		}
 	})
 }

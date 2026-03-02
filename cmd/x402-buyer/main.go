@@ -1,8 +1,8 @@
 // x402-buyer is a lean sidecar that handles x402 payments using pre-signed
 // ERC-3009 TransferWithAuthorization vouchers. It runs as an OpenAI-compatible
-// reverse proxy in the llm namespace, alongside llmspy.
+// reverse proxy in the llm namespace, alongside LiteLLM.
 //
-// llmspy sees the sidecar as a plain OpenAI provider. The sidecar intercepts
+// LiteLLM sees the sidecar as a plain OpenAI provider. The sidecar intercepts
 // 402 responses from upstream sellers, attaches pre-signed payment headers,
 // and retries. It has zero signer access — spending is bounded by the number
 // of pre-signed authorizations in the pool.

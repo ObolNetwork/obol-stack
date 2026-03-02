@@ -105,6 +105,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}":    ollamaHost,
 		"{{OLLAMA_HOST_IP}}": ollamaHostIP,
+		"{{CLUSTER_ID}}":     stackID,
 	}); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
