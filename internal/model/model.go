@@ -364,7 +364,10 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 	return decoded, nil
 }
 
-// GetConfiguredModels returns the model names currently in LiteLLM's config.
+// GetConfiguredModels returns the model names available in LiteLLM.
+// Wildcard entries (e.g. anthropic/*) are expanded: first by querying
+// the running LiteLLM pod's /v1/models endpoint, falling back to the
+// baked-in WellKnownModels list if the cluster is unreachable.
 func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -383,11 +386,90 @@ func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Try live query first for accurate model list
+	liveModels := queryLiteLLMModels(kubectlBinary, kubeconfigPath)
+
 	var models []string
+	seen := make(map[string]bool)
 	for _, entry := range litellmConfig.ModelList {
-		models = append(models, entry.ModelName)
+		name := entry.ModelName
+		if strings.HasSuffix(name, "/*") {
+			// Expand wildcard: prefer live models, fall back to well-known
+			provider := strings.TrimSuffix(name, "/*")
+			expanded := expandWildcard(provider, liveModels)
+			for _, m := range expanded {
+				if !seen[m] {
+					models = append(models, m)
+					seen[m] = true
+				}
+			}
+			continue
+		}
+		if !seen[name] {
+			models = append(models, name)
+			seen[name] = true
+		}
 	}
 	return models, nil
+}
+
+// queryLiteLLMModels fetches the model list from the running LiteLLM pod
+// via kubectl port-forward. Returns nil if unavailable.
+func queryLiteLLMModels(kubectlBinary, kubeconfigPath string) []string {
+	// Use kubectl exec to query from inside the cluster (avoids port-forward)
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"exec", "-n", namespace, fmt.Sprintf("deployment/%s", deployName), "--",
+		"curl", "-sf", "http://localhost:4000/v1/models")
+	if err != nil {
+		return nil
+	}
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return nil
+	}
+	var models []string
+	for _, m := range resp.Data {
+		models = append(models, m.ID)
+	}
+	return models
+}
+
+// expandWildcard returns model names for a provider wildcard.
+// Uses live models if available, otherwise falls back to WellKnownModels.
+func expandWildcard(provider string, liveModels []string) []string {
+	// Filter live models that match this provider
+	if len(liveModels) > 0 {
+		var matched []string
+		for _, m := range liveModels {
+			p := detectProviderFromModelName(m)
+			if p == provider {
+				matched = append(matched, m)
+			}
+		}
+		if len(matched) > 0 {
+			return matched
+		}
+	}
+	// Fallback to well-known list
+	if known, ok := WellKnownModels[provider]; ok {
+		return known
+	}
+	return nil
+}
+
+// detectProviderFromModelName infers the provider from a model name string.
+func detectProviderFromModelName(name string) string {
+	if strings.Contains(name, "claude") {
+		return "anthropic"
+	}
+	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
+		return "openai"
+	}
+	return ""
 }
 
 // --- Internal helpers ---
@@ -402,34 +484,76 @@ func providerEnvVar(provider string) string {
 	return strings.ToUpper(provider) + "_API_KEY"
 }
 
+// WellKnownModels maps provider names to their commonly-used model IDs.
+// Used to populate OpenClaw's model allowlist when a wildcard is configured
+// and the LiteLLM pod is not reachable for a live /v1/models query.
+var WellKnownModels = map[string][]string{
+	"anthropic": {
+		"claude-sonnet-4-6",
+		"claude-opus-4",
+		"claude-sonnet-4-5-20250929",
+		"claude-haiku-3-5-20241022",
+	},
+	"openai": {
+		"gpt-4o",
+		"gpt-4o-mini",
+		"o3",
+		"o3-mini",
+	},
+}
+
 // buildModelEntries creates LiteLLM model_list entries for a provider.
+// Cloud providers (anthropic, openai) get a wildcard entry plus explicit
+// entries for the requested models. Ollama gets explicit entries only
+// (wildcards are broken for ollama_chat/).
 func buildModelEntries(provider string, models []string) []ModelEntry {
 	var entries []ModelEntry
-	for _, m := range models {
-		entry := ModelEntry{ModelName: m}
-		switch provider {
-		case "ollama":
-			entry.LiteLLMParams = LiteLLMParams{
-				Model:   "ollama_chat/" + m,
-				APIBase: "http://ollama.llm.svc.cluster.local:11434",
-			}
-		case "anthropic":
-			entry.LiteLLMParams = LiteLLMParams{
-				Model:  m,
-				APIKey: "os.environ/ANTHROPIC_API_KEY",
-			}
-		case "openai":
-			entry.LiteLLMParams = LiteLLMParams{
-				Model:  m,
-				APIKey: "os.environ/OPENAI_API_KEY",
-			}
-		default:
-			entry.LiteLLMParams = LiteLLMParams{
-				Model:  provider + "/" + m,
-				APIKey: fmt.Sprintf("os.environ/%s_API_KEY", strings.ToUpper(provider)),
-			}
+	switch provider {
+	case "ollama":
+		// Explicit entries — ollama_chat/* wildcards are broken in LiteLLM
+		for _, m := range models {
+			entries = append(entries, ModelEntry{
+				ModelName: m,
+				LiteLLMParams: LiteLLMParams{
+					Model:   "ollama_chat/" + m,
+					APIBase: "http://ollama.llm.svc.cluster.local:11434",
+				},
+			})
 		}
-		entries = append(entries, entry)
+	case "anthropic":
+		// Wildcard: routes any anthropic model without explicit registration
+		entries = append(entries, ModelEntry{
+			ModelName:     "anthropic/*",
+			LiteLLMParams: LiteLLMParams{Model: "anthropic/*", APIKey: "os.environ/ANTHROPIC_API_KEY"},
+		})
+		// Explicit entries for requested models (better /v1/models listing)
+		for _, m := range models {
+			entries = append(entries, ModelEntry{
+				ModelName:     m,
+				LiteLLMParams: LiteLLMParams{Model: m, APIKey: "os.environ/ANTHROPIC_API_KEY"},
+			})
+		}
+	case "openai":
+		entries = append(entries, ModelEntry{
+			ModelName:     "openai/*",
+			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
+		})
+		for _, m := range models {
+			entries = append(entries, ModelEntry{
+				ModelName:     m,
+				LiteLLMParams: LiteLLMParams{Model: "openai/" + m, APIKey: "os.environ/OPENAI_API_KEY"},
+			})
+		}
+	default:
+		for _, m := range models {
+			entries = append(entries, ModelEntry{
+				ModelName: m,
+				LiteLLMParams: LiteLLMParams{
+					Model:  provider + "/" + m,
+					APIKey: fmt.Sprintf("os.environ/%s_API_KEY", strings.ToUpper(provider)),
+				},
+			})
+		}
 	}
 	return entries
 }
@@ -482,26 +606,26 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 
 // detectProvider infers the provider name from a model_list entry.
 func detectProvider(entry ModelEntry) string {
-	// Check model_name first (custom/ prefix takes priority)
 	if strings.HasPrefix(entry.ModelName, "custom/") {
 		return "custom"
 	}
 	model := entry.LiteLLMParams.Model
+	// Wildcard entries
+	if strings.HasPrefix(model, "anthropic/") {
+		return "anthropic"
+	}
 	if strings.HasPrefix(model, "ollama/") || strings.HasPrefix(model, "ollama_chat/") {
 		return "ollama"
 	}
 	if strings.HasPrefix(model, "openai/") {
 		return "openai"
 	}
-	// Anthropic models don't have a prefix in LiteLLM
+	// Anthropic models without prefix
 	if strings.Contains(model, "claude") {
 		return "anthropic"
 	}
 	if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
 		return "openai"
-	}
-	if strings.HasPrefix(entry.ModelName, "custom/") {
-		return "custom"
 	}
 	return "unknown"
 }

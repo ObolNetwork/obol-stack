@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,6 +388,53 @@ erpc:
 		}
 		if !strings.Contains(updated, "id: llama3.2:3b") {
 			t.Errorf("missing model in updated overlay:\n%s", updated)
+		}
+	})
+}
+
+func TestPatchAgentModelsJSON(t *testing.T) {
+	t.Run("writes clean models.json", func(t *testing.T) {
+		cfg := testConfig(t)
+		id := "test"
+		namespace := fmt.Sprintf("%s-%s", appName, id)
+		agentDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "agents", "main", "agent")
+		os.MkdirAll(agentDir, 0755)
+
+		models := []string{"claude-sonnet-4-6", "gpt-4o", "llama3.2:3b"}
+		err := patchAgentModelsJSON(cfg, id, models, "sk-obol-test")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(agentDir, "models.json"))
+		if err != nil {
+			t.Fatalf("failed to read models.json: %v", err)
+		}
+
+		content := string(data)
+		if !strings.Contains(content, "claude-sonnet-4-6") {
+			t.Errorf("missing claude model in models.json")
+		}
+		if !strings.Contains(content, "litellm.llm.svc.cluster.local:4000") {
+			t.Errorf("missing LiteLLM URL in models.json")
+		}
+		if !strings.Contains(content, "sk-obol-test") {
+			t.Errorf("missing master key in models.json")
+		}
+		// Should NOT contain stale providers
+		if strings.Contains(content, "llmspy") {
+			t.Errorf("models.json should not contain llmspy")
+		}
+		if strings.Contains(content, "ollama") {
+			t.Errorf("models.json should not contain stale ollama provider")
+		}
+	})
+
+	t.Run("skips when agent dir does not exist", func(t *testing.T) {
+		cfg := testConfig(t)
+		err := patchAgentModelsJSON(cfg, "nonexistent", []string{"model"}, "key")
+		if err != nil {
+			t.Fatalf("should skip gracefully, got error: %v", err)
 		}
 	})
 }

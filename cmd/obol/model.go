@@ -22,6 +22,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 		Commands: []*cli.Command{
 			modelSetupCommand(cfg),
 			modelStatusCommand(cfg),
+			modelSyncCommand(cfg),
 			modelPullCommand(),
 			modelListCommand(cfg),
 		},
@@ -92,7 +93,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			return fmt.Errorf("Ollama is not running: %w\n\nInstall from https://ollama.ai and try again", err)
 		}
 		if len(ollamaModels) == 0 {
-			return fmt.Errorf("Ollama is running but has no models. Pull one first:\n  ollama pull qwen3.5:35b")
+			return fmt.Errorf("Ollama is running but has no models. Pull one first:\n  ollama pull qwen3.5:9b")
 		}
 		for _, m := range ollamaModels {
 			name := m.Name
@@ -150,6 +151,18 @@ func syncOpenClawModels(cfg *config.Config, u *ui.UI) error {
 		return nil // non-fatal
 	}
 	return openclaw.SyncOverlayModels(cfg, allModels, u)
+}
+
+func modelSyncCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "sync",
+		Usage: "Sync LiteLLM model list to all OpenClaw instances",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+			u.Info("Reading model list from LiteLLM...")
+			return syncOpenClawModels(cfg, u)
+		},
+	}
 }
 
 func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
@@ -324,7 +337,7 @@ func promptModelPull() (string, error) {
 		desc string
 	}
 	suggestions := []suggestion{
-		{"llama3.2:3b", "2.0 GB", "Fast, general-purpose"},
+		{"qwen3.5:9b", "5.6 GB", "Strong general-purpose (recommended)"},
 		{"qwen2.5-coder:7b", "4.7 GB", "Code generation"},
 		{"deepseek-r1:8b", "4.9 GB", "Reasoning"},
 		{"gemma3:4b", "3.3 GB", "Lightweight, multilingual"},
