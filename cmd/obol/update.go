@@ -82,8 +82,15 @@ func updateCommand(cfg *config.Config) *cli.Command {
 
 func upgradeCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "upgrade",
-		Usage: "Apply available helm chart upgrades to the running stack",
+		Name:      "upgrade",
+		Usage:     "Apply available helm chart upgrades to the running stack",
+		ArgsUsage: "[chart-name]",
+		Description: `Upgrade all charts, or a single chart by name.
+
+Examples:
+  obol upgrade                       Upgrade everything
+  obol upgrade obol/remote-signer    Upgrade only obol/remote-signer
+  obol upgrade traefik/traefik       Upgrade only traefik`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "defaults-only",
@@ -104,7 +111,17 @@ func upgradeCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("stack not running, use 'obol stack up' first")
 			}
 
-			return update.ApplyUpgrades(cfg, getUI(cmd), cmd.Bool("defaults-only"), cmd.Bool("pinned"), cmd.Bool("major"))
+			chartFilter := ""
+			if cmd.NArg() > 0 {
+				chartFilter = cmd.Args().First()
+			}
+
+			return update.ApplyUpgrades(cfg, getUI(cmd), update.UpgradeOptions{
+				DefaultsOnly: cmd.Bool("defaults-only"),
+				Pinned:       cmd.Bool("pinned"),
+				Major:        cmd.Bool("major"),
+				ChartFilter:  chartFilter,
+			})
 		},
 	}
 }
