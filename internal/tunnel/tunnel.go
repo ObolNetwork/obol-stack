@@ -38,7 +38,16 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	podStatus, err := getPodStatus(kubectlPath, kubeconfigPath)
 	if err != nil {
 		mode, url := tunnelModeAndURL(st)
-		printStatusBox(u, mode, "not deployed", url, time.Now())
+		if mode == "quick" {
+			// No tunnel credentials configured — tunnel is dormant by design.
+			printStatusBox(u, "disabled", "not running", "(no tunnel configured)", time.Now())
+			u.Blank()
+			u.Print("To expose your stack publicly, set up a tunnel:")
+			u.Print("  obol tunnel login --hostname stack.example.com")
+			u.Print("  obol tunnel provision --hostname stack.example.com --account-id ... --zone-id ... --api-token ...")
+			return nil
+		}
+		printStatusBox(u, mode, "not running", url, time.Now())
 		u.Blank()
 		u.Print("Troubleshooting:")
 		u.Print("  - Start the stack: obol stack up")

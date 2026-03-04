@@ -299,6 +299,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Errorf("workload binding roleRef.name = %v, want openclaw-monetize-workload", ref)
 	}
 
+
 	// ── x402 namespace Role + RoleBinding ───────────────────────────────
 	x402Role := findDocByName(docs, "Role", "openclaw-x402-pricing")
 	if x402Role == nil {

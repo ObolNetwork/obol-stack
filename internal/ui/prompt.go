@@ -36,17 +36,17 @@ func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
 	for i, opt := range options {
 		marker := "  "
 		if i == defaultIdx {
-			marker = dimStyle.Render("→ ")
+			marker = accentStyle.Render("→ ")
 		}
 		fmt.Fprintf(u.stdout, "  %s%s%s %s\n",
 			marker,
-			boldStyle.Render("["),
-			boldStyle.Render(strconv.Itoa(i+1)),
-			opt+boldStyle.Render("]"))
+			accentStyle.Render("["),
+			accentStyle.Render(strconv.Itoa(i+1)),
+			opt+accentStyle.Render("]"))
 	}
 
 	defDisplay := strconv.Itoa(defaultIdx + 1)
-	fmt.Fprintf(u.stdout, "\n  Choice %s: ", dimStyle.Render("["+defDisplay+"]"))
+	fmt.Fprintf(u.stdout, "\n  %s %s: ", accentStyle.Render("Choice"), dimStyle.Render("["+defDisplay+"]"))
 
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')

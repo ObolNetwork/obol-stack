@@ -364,6 +364,32 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 	return decoded, nil
 }
 
+// GetConfiguredModels returns the model names currently in LiteLLM's config.
+func GetConfiguredModels(cfg *config.Config) ([]string, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("cluster not running")
+	}
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read LiteLLM config: %w", err)
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	var models []string
+	for _, entry := range litellmConfig.ModelList {
+		models = append(models, entry.ModelName)
+	}
+	return models, nil
+}
+
 // --- Internal helpers ---
 
 // providerEnvVar returns the env var name for a provider's API key.

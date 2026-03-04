@@ -58,17 +58,16 @@
     },
     {
       "customType": "regex",
-      "description": "Update llmspy image version from ObolNetwork/llms releases",
+      "description": "Update LiteLLM image tag",
       "matchStrings": [
-        "image:\\s*ghcr\\.io/obolnetwork/llms:(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+-obol\\.[0-9]+)"
+        "image:\\s*ghcr\\.io/berriai/litellm:(?<currentValue>[\\w.-]+)"
       ],
       "fileMatch": [
         "^internal/embed/infrastructure/base/templates/llm\\.yaml$"
       ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "ObolNetwork/llms",
-      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-obol\\.(?<build>\\d+)$",
-      "extractVersionTemplate": "^v(?<version>.+)$"
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "ghcr.io/berriai/litellm",
+      "versioningTemplate": "loose"
     }
   ],
   "packageRules": [
@@ -159,20 +158,20 @@
       "groupName": "Foundry updates"
     },
     {
-      "description": "Group llmspy updates",
+      "description": "Group LiteLLM updates",
       "matchDatasources": [
-        "github-releases"
+        "docker"
       ],
       "matchPackageNames": [
-        "ObolNetwork/llms"
+        "ghcr.io/berriai/litellm"
       ],
       "labels": [
-        "renovate/llmspy"
+        "renovate/litellm"
       ],
       "schedule": [
-        "every hour"
+        "before 6am on monday"
       ],
-      "groupName": "llmspy updates"
+      "groupName": "LiteLLM updates"
     }
   ]
 }

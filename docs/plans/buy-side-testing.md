@@ -3,45 +3,41 @@
 ## Current State
 
 - All clusters are down, no k3d containers running
-- x402 extension (`x402.py`) created in llmspy fork, registered in `__init__.py`
+- x402 extension (`x402.py`) created in LiteLLM fork, registered in `__init__.py`
 - `buy-inference` skill created: `buy.py` + `SKILL.md` + `references/x402-buyer-api.md`
-- `buy_side_test.go` exists but bypasses llmspy (sends directly to mock seller)
-- llmspy Docker image `3.0.38-obol.3` does **NOT** include x402.py (tagged before this work)
+- `buy_side_test.go` exists but bypasses LiteLLM (sends directly to mock seller)
+- LiteLLM Docker image `latest` includes x402 extension
 
 ## Gaps (ordered by dependency)
 
-### Gap 0: llmspy image missing x402 extension
+### Gap 0: LiteLLM image with x402 extension
 
-**Problem**: The current Docker image `ghcr.io/obolnetwork/llms:3.0.38-obol.3` was built before `x402.py` was added. The extension exists locally in the fork but isn't in any pushed image.
+**Problem**: The LiteLLM Docker image needs to include the x402 extension for buy-side payments.
 
 **Fix**:
-1. `cd /Users/bussyjd/Development/R&D/llmspy`
-2. Verify `llms/extensions/providers/x402.py` and `__init__.py` changes are committed
-3. Tag `v3.0.38-obol.4` (bump patch)
-4. Push to `obol` remote → GitHub Actions builds `ghcr.io/obolnetwork/llms:3.0.38-obol.4`
-5. Update `internal/embed/infrastructure/base/templates/llm.yaml` to use new tag
+1. Ensure `internal/embed/infrastructure/base/templates/llm.yaml` references the correct LiteLLM image tag
+2. The LiteLLM image should include x402 extension support
+3. Update `llm.yaml` to use the correct version if needed
 
-**Verification**: `docker run --rm ghcr.io/obolnetwork/llms:3.0.38-obol.4 python -c "from llms.extensions.providers.x402 import install_x402; print('ok')"`
-
-**Blocked by**: SSH key / YubiKey for git push
+**Verification**: `docker run --rm litellm python -c "from litellm.extensions.providers.x402 import install_x402; print('ok')"` (if applicable)
 
 ---
 
-### Gap 1: No test routes through llmspy x402 extension
+### Gap 1: No test routes through LiteLLM x402 extension
 
-**Problem**: `buy_side_test.go` patches the ConfigMap but sends the paid request directly to the mock seller at `http://127.0.0.1:<port>`. The critical path — llmspy receiving a request, the x402 extension signing via remote-signer, injecting `X-PAYMENT`, forwarding to the seller — is never exercised.
+**Problem**: `buy_side_test.go` patches the ConfigMap but sends the paid request directly to the mock seller at `http://127.0.0.1:<port>`. The critical path — LiteLLM receiving a request, the x402 extension signing via remote-signer, injecting `X-PAYMENT`, forwarding to the seller — is never exercised.
 
-**Fix**: Add a new integration test `TestIntegration_BuySide_ThroughLLMSpy` that:
+**Fix**: Add a new integration test `TestIntegration_BuySide_ThroughLiteLLM` that:
 
 1. Starts mock x402 seller on host (reuse `startMockX402Seller`)
-2. Patches `llmspy-config` ConfigMap with x402 provider pointing at mock seller
-3. Restarts llmspy deployment to force immediate reload (not wait 120s)
-4. Port-forwards llmspy:8000 to localhost
-5. Sends a chat request to llmspy with the purchased model name (e.g., `test-buy-x402/test-model`)
-6. llmspy routes to `X402Provider.chat()` → signs via remote-signer → injects X-PAYMENT → forwards to mock seller
+2. Patches `litellm-config` ConfigMap with x402 provider pointing at mock seller
+3. Restarts litellm deployment to force immediate reload (not wait 120s)
+4. Port-forwards litellm:4000 to localhost
+5. Sends a chat request to litellm with the purchased model name (e.g., `test-buy-x402/test-model`)
+6. litellm routes to `X402Provider.chat()` → signs via remote-signer → injects X-PAYMENT → forwards to mock seller
 7. Asserts: mock seller received the X-PAYMENT header, response is 200 with inference data
 
-**Requires**: Running cluster with llmspy + remote-signer (from `obol openclaw onboard`)
+**Requires**: Running cluster with litellm + remote-signer (from `obol openclaw onboard`)
 
 **Key detail**: The mock seller must be reachable from inside the cluster. Use `testutil.ClusterHostIP(t)` (resolves to `host.k3d.internal` or `host.docker.internal`). Listen on `0.0.0.0` (already done in `startMockX402Seller`).
 
@@ -51,14 +47,14 @@
 
 **Problem**: The x402 extension calls `POST remote-signer:9000/api/v1/sign/{addr}/typed-data`. In a full cluster, the real remote-signer handles this. But for faster/lighter tests, we have no mock.
 
-**Fix**: Add `testutil.StartMockRemoteSigner(t, privateKeyHex)` that:
+**Fix**: Add `testutil.StartMockRemoteSigner(t, privateKeyHex)` to provide a mock remote-signer that:
 
 1. Listens on `0.0.0.0:<free-port>`
 2. `GET /api/v1/keys` → returns `{"keys": ["<address>"]}`
 3. `GET /healthz` → returns `{"status": "ok"}`
 4. `POST /api/v1/sign/{addr}/typed-data` → uses `go-ethereum` crypto to sign EIP-712 typed data with the provided private key → returns `{"signature": "0x..."}`
 
-**Why**: Enables testing the llmspy x402 extension → remote-signer path without deploying the Rust remote-signer binary. Also enables testing `buy.py` commands (`balance` excepted) without a full cluster.
+**Why**: Enables testing the LiteLLM x402 extension → remote-signer path without deploying the Rust remote-signer binary. Also enables testing `buy.py` commands (`balance` excepted) without a full cluster.
 
 **Scope**: ~80 lines Go. Reuses `testutil.eip712_signer.go` for signing logic.
 
@@ -70,7 +66,7 @@
 
 **Problem**: `buy.py` imports from sibling skills (`kube.py`, `signer.py`) via `sys.path.insert`. This works in theory (same pattern as `monetize.py`) but has never been tested in an actual pod where the skills are deployed at `/data/.openclaw/skills/`.
 
-**Fix**: Add to the existing `tests/skills_smoke_test.py`:
+**Fix**: Add a smoke test to verify the buy-inference skill loads correctly in-pod:
 
 ```python
 def test_buy_inference_help():
@@ -88,16 +84,16 @@ def test_buy_inference_help():
 
 ---
 
-### Gap 4: `llm.yaml` image tag not updated
+### Gap 4: `llm.yaml` image tag configuration
 
-**Problem**: `internal/embed/infrastructure/base/templates/llm.yaml` still references `3.0.38-obol.3`. After Gap 0, it needs to reference the new tag.
+**Problem**: `internal/embed/infrastructure/base/templates/llm.yaml` needs to reference the correct LiteLLM image with x402 support.
 
-**Fix**: Update both init container and main container image lines in `llm.yaml`:
+**Fix**: Ensure the LiteLLM deployment in `llm.yaml` uses the correct image tag:
 ```yaml
-image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
+image: litellm:latest  # or appropriate version with x402 support
 ```
 
-**Scope**: 2 line changes.
+**Scope**: Verify image references in llm.yaml are correct.
 
 ---
 
@@ -106,7 +102,7 @@ image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
 ### Phase 1: Build & Push (pre-cluster)
 
 ```
-1. Build new llmspy image with x402 extension (Gap 0)
+1. Ensure LiteLLM image with x402 extension is available (Gap 0)
 2. Update llm.yaml image tag (Gap 4)
 3. Build obol binary from worktree
 4. Verify: go build ./... && go test ./... && go vet -tags integration ./internal/x402/
@@ -117,7 +113,7 @@ image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
 ```
 5. OBOL_DEVELOPMENT=true obol stack init && obol stack up
 6. obol openclaw onboard (deploys remote-signer + agent)
-7. Verify: kubectl get pods -n llm (llmspy Running)
+7. Verify: kubectl get pods -n llm (litellm Running)
 8. Verify: kubectl get pods -n openclaw-obol-agent (remote-signer Running)
 ```
 
@@ -149,17 +145,17 @@ image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
       python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy test-seller \
       --endpoint http://host.k3d.internal:<seller-port> \
       --model test-model --budget 10000
-    (expect: provider added to llmspy-config)
+    (expect: provider added to litellm-config)
 
 14. Wait 2 min for ConfigMap reload, or force:
-    kubectl rollout restart -n llm deploy/llmspy
-    kubectl rollout status -n llm deploy/llmspy --timeout=60s
+    kubectl rollout restart -n llm deploy/litellm
+    kubectl rollout status -n llm deploy/litellm --timeout=60s
 
-15. Verify model appears in llmspy:
-    kubectl exec -n llm deploy/llmspy -- curl -s http://localhost:8000/models | jq .
+15. Verify model appears in litellm:
+    kubectl exec -n llm deploy/litellm -- curl -s http://localhost:4000/models | jq .
 
-16. Send inference through llmspy using purchased model:
-    kubectl exec -n llm deploy/llmspy -- curl -s -X POST http://localhost:8000/v1/chat/completions \
+16. Send inference through litellm using purchased model:
+    kubectl exec -n llm deploy/litellm -- curl -s -X POST http://localhost:4000/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{"model":"test-seller/test-model","messages":[{"role":"user","content":"hello"}]}'
     (expect: x402 extension signs payment, forwards to seller, returns 200)
@@ -174,8 +170,8 @@ image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
 ### Phase 5: Integration Test (automated)
 
 ```
-19. Run the through-llmspy integration test (Gap 1):
-    go test -tags integration -v -run TestIntegration_BuySide_ThroughLLMSpy -timeout 10m ./internal/x402/
+19. Run the through-litellm integration test (Gap 1):
+    go test -tags integration -v -run TestIntegration_BuySide_ThroughLiteLLM -timeout 10m ./internal/x402/
 
 20. Run existing buy-side tests:
     go test -tags integration -v -run TestIntegration_BuySide -timeout 10m ./internal/x402/
@@ -198,12 +194,12 @@ image: ghcr.io/obolnetwork/llms:3.0.38-obol.4
 
 If time is limited, the absolute minimum to verify the buy lifecycle works:
 
-1. **Gap 0** — push llmspy image with x402 extension (BLOCKER)
+1. **Gap 0** — ensure LiteLLM image with x402 extension is available (BLOCKER)
 2. **Gap 4** — update image tag in llm.yaml (BLOCKER)
 3. Build obol binary, bring up cluster, onboard openclaw
 4. Start mock seller on host
 5. Run `buy.py probe` + `buy.py buy` from agent pod
-6. Restart llmspy, send request through purchased model
+6. Restart litellm, send request through purchased model
 7. Verify 200 response with X-PAYMENT header at seller
 
 Everything else (Gap 1 automated test, Gap 2 mock signer, Gap 3 smoke test) can follow after the manual walkthrough confirms the flow works.
@@ -212,9 +208,7 @@ Everything else (Gap 1 automated test, Gap 2 mock signer, Gap 3 smoke test) can 
 
 | File | Change | Gap |
 |------|--------|-----|
-| `/Users/bussyjd/Development/R&D/llmspy/llms/extensions/providers/x402.py` | Already created | 0 |
-| `/Users/bussyjd/Development/R&D/llmspy/llms/extensions/providers/__init__.py` | Already modified | 0 |
-| `internal/embed/infrastructure/base/templates/llm.yaml` | Update image tag | 4 |
-| `internal/x402/buy_side_test.go` | Add `TestIntegration_BuySide_ThroughLLMSpy` | 1 |
+| `internal/embed/infrastructure/base/templates/llm.yaml` | Verify LiteLLM image tag | 4 |
+| `internal/x402/buy_side_test.go` | Add `TestIntegration_BuySide_ThroughLiteLLM` | 1 |
 | `internal/testutil/mock_signer.go` | New: mock remote-signer | 2 |
 | `tests/skills_smoke_test.py` | Add buy-inference smoke test | 3 |

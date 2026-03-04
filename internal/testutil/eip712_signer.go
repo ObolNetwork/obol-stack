@@ -259,6 +259,7 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+
 func chainName(chainID int64) string {
 	switch chainID {
 	case 84532:

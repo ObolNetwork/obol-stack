@@ -3,12 +3,24 @@ package network
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
+
+// sanitizeAlias converts a human-readable chain name (e.g. "OP Mainnet")
+// into a valid eRPC alias containing only [a-zA-Z0-9_-].
+var nonAlphanumeric = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+func sanitizeAlias(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = nonAlphanumeric.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	return s
+}
 
 // RPCUpstreamInfo represents an upstream in the eRPC config for display.
 type RPCUpstreamInfo struct {
@@ -158,7 +170,7 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		networksList = append(networksList, map[string]interface{}{
 			"architecture": "evm",
 			"evm":          map[string]interface{}{"chainId": chainID},
-			"alias":        chainName,
+			"alias":        sanitizeAlias(chainName),
 			"failsafe": map[string]interface{}{
 				"timeout": map[string]interface{}{"duration": "30s"},
 				"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
@@ -251,7 +263,7 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 		newNetwork := map[string]interface{}{
 			"architecture": "evm",
 			"evm":          map[string]interface{}{"chainId": chainID},
-			"alias":        chainName,
+			"alias":        sanitizeAlias(chainName),
 			"failsafe": map[string]interface{}{
 				"timeout": map[string]interface{}{"duration": "30s"},
 				"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},

@@ -11,7 +11,7 @@
 TOKEN=$(obol openclaw token <id>)
 curl -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"model":"ollama/model","messages":[{"role":"user","content":"hi"}]}' \
+     -d '{"model":"openai/model","messages":[{"role":"user","content":"hi"}]}' \
      http://localhost:18789/v1/chat/completions
 ```
 
@@ -63,7 +63,7 @@ time.Sleep(1 * time.Second)  // Retry
 # CORRECT
 obol openclaw delete --force my-instance
 
-# WRONG — --force is parsed as an argument, not a flag
+# WRONG -- --force is parsed as an argument, not a flag
 obol openclaw delete my-instance --force
 ```
 
@@ -116,7 +116,7 @@ export OBOL_DATA_DIR=$(pwd)/.workspace/data
 # CORRECT
 kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw
 
-# WRONG — label value doesn't include the instance ID
+# WRONG -- label value doesn't include the instance ID
 kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw-test-ollama
 ```
 
@@ -160,13 +160,13 @@ go build -o .workspace/bin/obol ./cmd/obol
 
 ### "Unhandled stop reason: end_turn" in Anthropic Response
 
-**Not an error**. This is llmspy's response format when translating Anthropic's `stop_reason: "end_turn"` back to OpenAI format. The inference worked successfully.
+**Not an error**. This is LiteLLM's response format when translating Anthropic's `stop_reason: "end_turn"` back to OpenAI format. The inference worked successfully.
 
 ---
 
 ### "500 status code (no body)" in OpenAI Response
 
-**Not necessarily an error in the test**. This can be the model's actual text response content, not an HTTP 500. The integration test checks HTTP status code separately (must be 200). If the test passes, the inference pipeline worked — the response content from the LLM is not validated for correctness.
+**Not necessarily an error in the test**. This can be the model's actual text response content, not an HTTP 500. The integration test checks HTTP status code separately (must be 200). If the test passes, the inference pipeline worked -- the response content from the LLM is not validated for correctness.
 
 ---
 
@@ -177,11 +177,11 @@ go build -o .workspace/bin/obol ./cmd/obol
 obol kubectl cluster-info
 obol kubectl get nodes
 
-# Check llmspy
+# Check LiteLLM
 obol kubectl get pods -n llm
-obol kubectl logs -n llm -l app=llmspy
-obol kubectl get configmap llmspy-config -n llm -o yaml
-obol kubectl get secret llms-secrets -n llm -o yaml
+obol kubectl logs -n llm deploy/litellm
+obol kubectl get configmap litellm-config -n llm -o yaml
+obol kubectl get secret litellm-secrets -n llm -o yaml
 
 # Check OpenClaw instance
 obol kubectl get pods -n openclaw-<id>
@@ -199,7 +199,7 @@ obol kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789 &
 curl -s http://localhost:18789/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"model":"ollama/glm-5:cloud","messages":[{"role":"user","content":"hello"}],"max_tokens":32}' | jq .
+  -d '{"model":"openai/glm-5:cloud","messages":[{"role":"user","content":"hello"}],"max_tokens":32}' | jq .
 
 # Check Ollama models
 curl -s http://localhost:11434/api/tags | jq '.models[].name'

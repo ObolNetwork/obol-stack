@@ -58,20 +58,20 @@ func RegisterERPCUpstream(cfg *config.Config, networkType, id string) error {
 	endpoint := fmt.Sprintf("http://ethereum-execution.%s.svc.cluster.local:8545", namespace)
 	upstreamID := fmt.Sprintf("local-%s-%s", networkType, id)
 
-	return patchERPCUpstream(cfg, upstreamID, endpoint, chainID, true)
+	return patchERPCUpstream(cfg, upstreamID, endpoint, chainID, values.Network, true)
 }
 
 // DeregisterERPCUpstream removes a previously registered local upstream
 // from the eRPC ConfigMap.
 func DeregisterERPCUpstream(cfg *config.Config, networkType, id string) error {
 	upstreamID := fmt.Sprintf("local-%s-%s", networkType, id)
-	return patchERPCUpstream(cfg, upstreamID, "", 0, false)
+	return patchERPCUpstream(cfg, upstreamID, "", 0, "", false)
 }
 
 // patchERPCUpstream adds or removes an upstream in the eRPC ConfigMap and
 // restarts the eRPC deployment. When add is true, it adds/updates the
 // upstream. When false, it removes it.
-func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID int, add bool) error {
+func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID int, networkAlias string, add bool) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
@@ -173,6 +173,9 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 					"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
 				},
 			}
+			if networkAlias != "" {
+				newNetwork["alias"] = networkAlias
+			}
 			networks = append(networks, newNetwork)
 			project["networks"] = networks
 		}
@@ -205,12 +208,6 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", erpcDeployment), "-n", erpcNamespace); err != nil {
 		return fmt.Errorf("could not restart eRPC: %w", err)
-	}
-
-	if add {
-		fmt.Printf("✓ Registered local upstream %s with eRPC (chainId: %d)\n", upstreamID, chainID)
-	} else {
-		fmt.Printf("✓ Deregistered upstream %s from eRPC\n", upstreamID)
 	}
 
 	return nil

@@ -78,7 +78,7 @@ Verify the key components:
 | CRD installed | `obol kubectl get crd serviceoffers.obol.org` | Found |
 | x402 verifier | `obol kubectl get pods -n x402` | 2 replicas Running |
 | Traefik gateway | `obol kubectl get gateway -n traefik` | traefik-gateway |
-| LLMSpy running | `obol kubectl get pods -n llm` | Running |
+| LiteLLM running | `obol kubectl get pods -n llm` | Running |
 | Ollama reachable | `curl -s http://localhost:11434/api/tags` | JSON model list |
 
 ### 1.2 Pull a Model
@@ -96,10 +96,10 @@ ollama pull qwen3:0.6b
 curl -s http://localhost:11434/api/tags | python3 -m json.tool
 ```
 
-LLMSpy discovers models from host Ollama at startup. If you pull a new model after the cluster is running, restart LLMSpy:
+LiteLLM discovers models from host Ollama at startup. If you pull a new model after the cluster is running, restart LiteLLM:
 
 ```bash
-obol kubectl rollout restart deployment/llmspy -n llm
+obol kubectl rollout restart deployment/litellm -n llm
 ```
 
 > [!NOTE]
@@ -617,6 +617,8 @@ routes:
     network: "base-sepolia"
 ```
 
+This configuration is used by the `litellm-config` ConfigMap in the `llm` namespace, which LiteLLM reads for model_list configuration.
+
 Per-route `payTo` and `network` override the global values, enabling multiple ServiceOffers with different wallets or chains.
 
 ---
@@ -666,10 +668,10 @@ Verify the model is available in your host Ollama:
 curl -s http://localhost:11434/api/tags | python3 -c "import sys,json; [print(m['name']) for m in json.load(sys.stdin)['models']]"
 ```
 
-LLMSpy discovers models at startup. If you pulled a model after the cluster started, restart LLMSpy:
+LiteLLM discovers models from the configured providers. If you pulled a model after the cluster started, you may need to restart LiteLLM:
 
 ```bash
-obol kubectl rollout restart deployment/llmspy -n llm
+obol kubectl rollout restart deployment/litellm -n llm
 ```
 
 ### Tunnel URL changed

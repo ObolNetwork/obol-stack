@@ -344,13 +344,17 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	}
 	u.Success("Removed cluster config")
 
-	// Remove data directory only if force flag is set
+	// Remove data directory only if force flag is set.
+	// Uses Exec instead of RunWithSpinner because sudo may prompt for a password,
+	// which requires an interactive terminal (stdin connected).
 	if force {
-		err := u.RunWithSpinner("Removing data directory", func() error {
-			rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
-			return rmCmd.Run()
-		})
-		if err != nil {
+		rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
+		rmCmd.Stdin = os.Stdin
+		if err := u.Exec(ui.ExecConfig{
+			Name:        "Removing data directory",
+			Cmd:         rmCmd,
+			Interactive: true,
+		}); err != nil {
 			return fmt.Errorf("failed to remove data directory: %w", err)
 		}
 		u.Blank()

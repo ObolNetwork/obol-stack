@@ -315,6 +315,82 @@ func TestBuildDirectProviderOverlay_Anthropic(t *testing.T) {
 	}
 }
 
+func TestPatchOverlayModelList(t *testing.T) {
+	overlay := `# Default model provider
+openclaw:
+  agentModel: openai/llama3.2:3b
+  gateway:
+    controlUi:
+      allowInsecureAuth: true
+
+models:
+  openai:
+    enabled: true
+    baseUrl: http://litellm.llm.svc.cluster.local:4000/v1
+    api: openai-completions
+    apiKeyEnvVar: OPENAI_API_KEY
+    apiKeyValue: sk-obol-test
+    models:
+      - id: llama3.2:3b
+        name: Llama 3.2 3B
+
+# eRPC integration
+erpc:
+  url: http://erpc.erpc.svc.cluster.local/rpc
+`
+	t.Run("add models", func(t *testing.T) {
+		updated, changed := patchOverlayModelList(overlay, []string{"llama3.2:3b", "claude-sonnet-4-5-20250929", "gpt-4o"})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "id: claude-sonnet-4-5-20250929") {
+			t.Errorf("missing claude model in updated overlay:\n%s", updated)
+		}
+		if !strings.Contains(updated, "id: gpt-4o") {
+			t.Errorf("missing gpt model in updated overlay:\n%s", updated)
+		}
+		// eRPC section should still be present
+		if !strings.Contains(updated, "erpc:") {
+			t.Errorf("eRPC section lost in updated overlay:\n%s", updated)
+		}
+	})
+
+	t.Run("empty models", func(t *testing.T) {
+		updated, changed := patchOverlayModelList(overlay, []string{})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "models: []") {
+			t.Errorf("expected empty models list:\n%s", updated)
+		}
+	})
+
+	t.Run("no litellm overlay", func(t *testing.T) {
+		nonLiteLLM := `models:
+  anthropic:
+    enabled: true
+    baseUrl: https://api.anthropic.com
+`
+		_, changed := patchOverlayModelList(nonLiteLLM, []string{"claude-sonnet-4-5-20250929"})
+		if changed {
+			t.Fatal("should not patch non-LiteLLM overlay")
+		}
+	})
+
+	t.Run("empty initial models", func(t *testing.T) {
+		emptyOverlay := strings.Replace(overlay,
+			"    models:\n      - id: llama3.2:3b\n        name: Llama 3.2 3B",
+			"    models: []", 1)
+		updated, changed := patchOverlayModelList(emptyOverlay, []string{"llama3.2:3b"})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "id: llama3.2:3b") {
+			t.Errorf("missing model in updated overlay:\n%s", updated)
+		}
+	})
+}
+
 func TestRemoteCapableCommands(t *testing.T) {
 	// Commands that should go through port-forward
 	remote := []string{"gateway", "acp", "browser", "logs"}

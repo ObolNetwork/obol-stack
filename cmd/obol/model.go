@@ -10,6 +10,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -103,7 +104,10 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 		u.Infof("Found %d Ollama model(s): %s", len(models), strings.Join(models, ", "))
 	}
 
-	return model.ConfigureLiteLLM(cfg, u, "ollama", "", models)
+	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", models); err != nil {
+		return err
+	}
+	return syncOpenClawModels(cfg, u)
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
@@ -129,7 +133,23 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 		}
 	}
 
-	return model.ConfigureLiteLLM(cfg, u, provider, apiKey, models)
+	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, models); err != nil {
+		return err
+	}
+	return syncOpenClawModels(cfg, u)
+}
+
+// syncOpenClawModels reads the full LiteLLM model list and updates all
+// deployed OpenClaw instances so their "openai" provider (LiteLLM gateway)
+// model list stays in sync. This prevents OpenClaw from trying to use
+// native provider routing for models it discovers but doesn't recognise.
+func syncOpenClawModels(cfg *config.Config, u *ui.UI) error {
+	allModels, err := model.GetConfiguredModels(cfg)
+	if err != nil {
+		u.Warnf("Could not read LiteLLM model list: %v", err)
+		return nil // non-fatal
+	}
+	return openclaw.SyncOverlayModels(cfg, allModels, u)
 }
 
 func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
@@ -149,7 +169,10 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
-			return model.AddCustomEndpoint(cfg, u, name, endpoint, modelName, apiKey)
+			if err := model.AddCustomEndpoint(cfg, u, name, endpoint, modelName, apiKey); err != nil {
+				return err
+			}
+			return syncOpenClawModels(cfg, u)
 		},
 	}
 }

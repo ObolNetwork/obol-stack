@@ -96,7 +96,7 @@ We need:
 [Next Release] Obol Doctor (debugs the obol stack) (also will be an obol doctor)
 [A plan for a skill to sensibly deploy stuff into the stack]
 Open question:
-How does llmspy handle the idea of telling llms about tools they can opt to use? Is it just dealt with at the openclaw layer and not a concern of the llm?
+How does LiteLLM handle the idea of telling llms about tools they can opt to use? Is it just dealt with at the openclaw layer and not a concern of the llm?
 Same problem as always, how do we get this folder structure on the disk for the openclaw instance.  
 We can start with:
 Embedding the skills in obol-cli (golang) and copying them to the appropriate host directory upon creation/import of a new openclaw instance

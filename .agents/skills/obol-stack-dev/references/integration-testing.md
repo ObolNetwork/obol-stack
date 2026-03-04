@@ -38,44 +38,44 @@ go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Infe
 
 | Test | Provider | Model | What It Tests |
 |------|----------|-------|---------------|
-| `TestIntegration_OllamaInference` | Ollama (local) | First available model | Default path: scaffold → sync → token → inference |
-| `TestIntegration_AnthropicInference` | Anthropic (cloud) | `claude-sonnet-4-5-20250929` | Cloud path: model setup → scaffold → sync → token → inference |
-| `TestIntegration_OpenAIInference` | OpenAI (cloud) | `gpt-4o-mini` | Cloud path: model setup → scaffold → sync → token → inference |
-| `TestIntegration_MultiInstance` | Ollama (local) | First available model | 3 instances side-by-side: scaffold → sync → list → token → inference |
+| `TestIntegration_OllamaInference` | Ollama (local) | First available model | Default path: scaffold -> sync -> token -> inference |
+| `TestIntegration_AnthropicInference` | Anthropic (cloud) | `claude-sonnet-4-5-20250929` | Cloud path: model setup -> scaffold -> sync -> token -> inference |
+| `TestIntegration_OpenAIInference` | OpenAI (cloud) | `gpt-4o-mini` | Cloud path: model setup -> scaffold -> sync -> token -> inference |
+| `TestIntegration_MultiInstance` | Ollama (local) | First available model | 3 instances side-by-side: scaffold -> sync -> list -> token -> inference |
 
 ## Test Flow (Per Test)
 
 ```
-1. requireCluster()     — Skip if no cluster
-2. requireOllama()      — Skip if no Ollama (Ollama tests)
-   requireEnvKey()      — Skip if no API key (cloud tests)
+1. requireCluster()     -- Skip if no cluster
+2. requireOllama()      -- Skip if no Ollama (Ollama tests)
+   requireEnvKey()      -- Skip if no API key (cloud tests)
 
-3. scaffoldInstance()   — Generate values-obol.yaml + helmfile.yaml
+3. scaffoldInstance()   -- Generate values-obol.yaml + helmfile.yaml
    or scaffoldCloudInstance() + obol model setup
 
-4. obol openclaw sync   — Deploy to cluster (CLI → helmfile → helm chart)
+4. obol openclaw sync   -- Deploy to cluster (CLI -> helmfile -> helm chart)
 
-5. waitForPodReady()    — obol kubectl wait --for=condition=ready
+5. waitForPodReady()    -- obol kubectl wait --for=condition=ready
 
-6. getGatewayToken()    — obol openclaw token <id>
+6. getGatewayToken()    -- obol openclaw token <id>
 
-7. portForward()        — obol kubectl port-forward (background)
+7. portForward()        -- obol kubectl port-forward (background)
                           Wait for TCP + HTTP readiness
 
-8. chatCompletion()     — POST /v1/chat/completions with Bearer token
+8. chatCompletion()     -- POST /v1/chat/completions with Bearer token
                           Assert HTTP 200 + non-empty response
 
-9. t.Cleanup()          — obol openclaw delete --force <id>
+9. t.Cleanup()          -- obol openclaw delete --force <id>
 ```
 
 ## Skip Semantics
 
 Tests use `t.Skip()` for missing prerequisites:
-- No kubeconfig → skip (cluster not running)
-- Cluster unreachable → skip
-- No Ollama → skip
-- No `ANTHROPIC_API_KEY` → skip
-- No `OPENAI_API_KEY` → skip
+- No kubeconfig -> skip (cluster not running)
+- Cluster unreachable -> skip
+- No Ollama -> skip
+- No `ANTHROPIC_API_KEY` -> skip
+- No `OPENAI_API_KEY` -> skip
 
 This means the test suite always passes in CI without infrastructure. Only tests with satisfied prerequisites actually run.
 
@@ -91,7 +91,7 @@ Same but returns `(output, error)` instead of fataling. Used for cleanup (non-fa
 Creates deployment directory with `values-obol.yaml` and `helmfile.yaml` for Ollama path. Uses internal functions for config generation only (no cluster interaction).
 
 ### `scaffoldCloudInstance(t, cfg, id, cloud)`
-Creates deployment directory with cloud provider overlay routed through llmspy. Generates secrets file for API key injection.
+Creates deployment directory with cloud provider overlay routed through LiteLLM. Generates secrets file for API key injection.
 
 ### `getGatewayToken(t, cfg, id)`
 Runs `obol openclaw token <id>` and returns the trimmed token string.
@@ -145,7 +145,7 @@ func TestIntegration_MyTest(t *testing.T) {
     baseURL := portForward(t, cfg, namespace)
 
     // Test inference
-    reply := chatCompletion(t, baseURL, "ollama/model-name", token)
+    reply := chatCompletion(t, baseURL, "openai/model-name", token)
     t.Logf("Response: %s", reply)
 }
 ```
@@ -157,7 +157,7 @@ func TestIntegration_MyTest(t *testing.T) {
 3. Create `CloudProviderInfo{Name: "newprovider", ModelID: "model-id", ...}`
 4. Use `scaffoldCloudInstance()` to generate the overlay
 5. Deploy via `obol openclaw sync`
-6. Model name format: `ollama/<model-id>` (always ollama/ prefix through llmspy)
+6. Model name format: `openai/<model-id>` (always openai/ prefix through LiteLLM)
 
 ## Timing and Timeouts
 
@@ -170,5 +170,5 @@ func TestIntegration_MyTest(t *testing.T) {
 | Chat completion (Ollama) | 1-30s | 90s |
 | Chat completion (cloud) | 2-10s | 90s |
 | `obol openclaw delete` (namespace deletion) | 5-30s | 60s |
-| Full test (single provider) | 25-60s | — |
+| Full test (single provider) | 25-60s | -- |
 | Full suite (all 3 providers) | 2-3 min | 15 min |

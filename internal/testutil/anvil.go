@@ -22,6 +22,7 @@ func jsonDecode(r io.Reader, v any) error {
 	return json.NewDecoder(r).Decode(v)
 }
 
+
 // AnvilFork represents a running Anvil instance forking a live chain.
 type AnvilFork struct {
 	Port     int

@@ -113,6 +113,7 @@ subjects:
     name: openclaw
     namespace: openclaw-obol-agent
 
+
 ---
 #------------------------------------------------------------------------------
 # Role - x402 pricing ConfigMap access (scoped to x402 namespace)

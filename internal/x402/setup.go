@@ -12,10 +12,167 @@ import (
 )
 
 const (
-	x402Namespace     = "x402"
-	pricingConfigMap  = "x402-pricing"
-	x402SecretName    = "x402-secrets"
+	x402Namespace    = "x402"
+	pricingConfigMap = "x402-pricing"
+	x402SecretName   = "x402-secrets"
 )
+
+// x402Manifest returns the Kubernetes manifest for the x402 verifier subsystem.
+// In development mode (OBOL_DEVELOPMENT=true) the image pull policy is IfNotPresent
+// so locally-built images imported via k3d are used. Otherwise it is Always so the
+// image is pulled from GHCR.
+var x402Manifest = []byte(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: x402
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: x402-pricing
+  namespace: x402
+data:
+  pricing.yaml: |
+    wallet: ""
+    chain: "base-sepolia"
+    facilitatorURL: "https://facilitator.x402.rs"
+    verifyOnly: false
+    routes: []
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: x402-secrets
+  namespace: x402
+type: Opaque
+stringData:
+  WALLET_ADDRESS: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    app: x402-verifier
+  annotations:
+    configmap.reloader.stakater.com/reload: "x402-pricing"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: x402-verifier
+  template:
+    metadata:
+      labels:
+        app: x402-verifier
+    spec:
+      containers:
+        - name: verifier
+          image: ghcr.io/obolnetwork/x402-verifier:799fff1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          args:
+            - --config=/config/pricing.yaml
+            - --listen=:8080
+          volumeMounts:
+            - name: pricing-config
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: pricing-config
+          configMap:
+            name: x402-pricing
+            items:
+              - key: pricing.yaml
+                path: pricing.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    app: x402-verifier
+spec:
+  type: ClusterIP
+  selector:
+    app: x402-verifier
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+# RBAC: namespace-scoped pricing ConfigMap access for OpenClaw agents.
+# Deployed alongside the namespace so it's always present when x402 exists.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openclaw-x402-pricing
+  namespace: x402
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["x402-pricing"]
+    verbs: ["get", "list", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openclaw-x402-pricing-binding
+  namespace: x402
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openclaw-x402-pricing
+subjects:
+  - kind: ServiceAccount
+    name: openclaw
+    namespace: openclaw-obol-agent
+`)
+
+// EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.
+// Idempotent — kubectl apply is safe to run multiple times.
+func EnsureVerifier(cfg *config.Config) error {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return err
+	}
+	bin, kc := kubectl.Paths(cfg)
+
+	// Quick check: if the namespace already exists, skip the apply.
+	if _, err := kubectl.Output(bin, kc, "get", "namespace", x402Namespace, "--no-headers"); err == nil {
+		return nil
+	}
+
+	fmt.Println("Deploying x402 payment verifier...")
+	return kubectl.Apply(bin, kc, x402Manifest)
+}
+
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
@@ -24,8 +181,8 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
 	}
-	if err := kubectl.EnsureCluster(cfg); err != nil {
-		return err
+	if err := EnsureVerifier(cfg); err != nil {
+		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 	bin, kc := kubectl.Paths(cfg)
 
@@ -71,8 +228,8 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 // AddRoute adds a pricing route to the x402 ConfigMap.
 // Optional per-route payTo and network override the global config when set.
 func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
-	if err := kubectl.EnsureCluster(cfg); err != nil {
-		return err
+	if err := EnsureVerifier(cfg); err != nil {
+		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 
 	// Read current pricing config.
@@ -122,7 +279,8 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 		"get", "configmap", pricingConfigMap, "-n", x402Namespace,
 		"-o", `jsonpath={.data.pricing\.yaml}`)
 	if err != nil {
-		return nil, fmt.Errorf("read x402 pricing ConfigMap: %w", err)
+		// x402 namespace/configmap doesn't exist yet — not an error, just no config.
+		return &PricingConfig{}, nil
 	}
 
 	if strings.TrimSpace(raw) == "" {

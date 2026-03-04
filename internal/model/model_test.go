@@ -312,6 +312,26 @@ func TestListOllamaModels_MockServer(t *testing.T) {
 		if models[0].Name != "llama3.2:3b" {
 			t.Errorf("models[0].Name = %q, want llama3.2:3b", models[0].Name)
 		}
+		if models[1].Size != 4700000000 {
+			t.Errorf("models[1].Size = %d, want 4700000000", models[1].Size)
+		}
+	})
+
+	t.Run("success with no models", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"models":[]}`)
+		}))
+		defer srv.Close()
+
+		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
+		models, err := ListOllamaModels()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(models) != 0 {
+			t.Fatalf("got %d models, want 0", len(models))
+		}
 	})
 
 	t.Run("server not running", func(t *testing.T) {
@@ -319,6 +339,9 @@ func TestListOllamaModels_MockServer(t *testing.T) {
 		_, err := ListOllamaModels()
 		if err == nil {
 			t.Fatal("expected error when server is not running")
+		}
+		if !strings.Contains(err.Error(), "not running") {
+			t.Errorf("error should mention 'not running', got: %v", err)
 		}
 	})
 }
@@ -335,12 +358,23 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 					http.Error(w, err.Error(), 500)
 					return
 				}
+				if req.Name != "llama3.2:3b" {
+					http.Error(w, "unexpected model", 400)
+					return
+				}
 				w.Header().Set("Content-Type", "application/x-ndjson")
 				fmt.Fprintln(w, `{"status":"pulling manifest"}`)
+				fmt.Fprintln(w, `{"status":"pulling abc123","total":1000,"completed":500}`)
+				fmt.Fprintln(w, `{"status":"pulling abc123","total":1000,"completed":1000}`)
 				fmt.Fprintln(w, `{"status":"success"}`)
 				return
 			}
-			w.WriteHeader(200)
+			// Health check endpoint
+			if r.URL.Path == "/" {
+				w.WriteHeader(200)
+				return
+			}
+			http.NotFound(w, r)
 		}))
 		defer srv.Close()
 
@@ -351,10 +385,11 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		}
 	})
 
-	t.Run("pull error", func(t *testing.T) {
+	t.Run("pull error from server", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/pull" {
 				w.Header().Set("Content-Type", "application/x-ndjson")
+				fmt.Fprintln(w, `{"status":"pulling manifest"}`)
 				fmt.Fprintln(w, `{"error":"model not found"}`)
 				return
 			}
@@ -365,7 +400,18 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
 		err := PullOllamaModel("nonexistent:latest")
 		if err == nil {
-			t.Fatal("expected error")
+			t.Fatal("expected error for nonexistent model")
+		}
+		if !strings.Contains(err.Error(), "model not found") {
+			t.Errorf("error should contain 'model not found', got: %v", err)
+		}
+	})
+
+	t.Run("server not running", func(t *testing.T) {
+		t.Setenv("OLLAMA_HOST", "localhost:19999")
+		err := PullOllamaModel("llama3.2:3b")
+		if err == nil {
+			t.Fatal("expected error when server is not running")
 		}
 	})
 }

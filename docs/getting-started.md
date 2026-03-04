@@ -64,7 +64,7 @@ All pods should show `Running` or `Completed` within ~2 minutes:
 |-----------|-----------|-------------|
 | **Traefik** | `traefik` | Gateway API ingress controller |
 | **Cloudflared** | `traefik` | Quick tunnel for public access |
-| **LLMSpy** | `llm` | OpenAI-compatible LLM gateway (proxies to host Ollama) |
+| **LiteLLM** | `llm` | OpenAI-compatible LLM gateway (proxies to host Ollama) |
 | **eRPC** | `erpc` | Unified RPC load balancer |
 | **Frontend** | `obol-frontend` | Web interface at http://obol.stack/ |
 | **Monitoring** | `monitoring` | Prometheus + kube-prometheus-stack |
@@ -77,7 +77,7 @@ Open the frontend: http://obol.stack/
 
 ## Step 3 -- Test LLM Inference
 
-The stack routes all LLM requests through LLMSpy, an OpenAI-compatible gateway that forwards to your host Ollama.
+The stack routes all LLM requests through LiteLLM, an OpenAI-compatible gateway that forwards to your host Ollama.
 
 ### 3a. Verify Ollama has models
 
@@ -93,7 +93,7 @@ ollama pull qwen3.5:35b   # Large model with tool-call support
 ollama pull qwen3:0.6b
 ```
 
-### 3b. Verify LLMSpy can reach Ollama
+### 3b. Verify LiteLLM can reach Ollama
 
 ```bash
 obol kubectl run -n llm ollama-test --rm -it --restart=Never \
@@ -103,12 +103,12 @@ obol kubectl run -n llm ollama-test --rm -it --restart=Never \
 
 You should see the same model list as on the host.
 
-### 3c. Test inference through LLMSpy
+### 3c. Test inference through LiteLLM
 
-Port-forward the LLMSpy service and send a request:
+Port-forward the LiteLLM service and send a request:
 
 ```bash
-obol kubectl port-forward -n llm svc/llmspy 8001:8000 &
+obol kubectl port-forward -n llm svc/litellm 8001:4000 &
 PF_PID=$!
 sleep 3
 
@@ -127,10 +127,10 @@ Replace `qwen3.5:35b` with your model name.
 
 ### 3d. Test tool-call passthrough
 
-LLMSpy preserves tool calls from capable models. Verify with:
+LiteLLM preserves tool calls from capable models. Verify with:
 
 ```bash
-obol kubectl port-forward -n llm svc/llmspy 8001:8000 &
+obol kubectl port-forward -n llm svc/litellm 8001:4000 &
 PF_PID=$!
 sleep 3
 
@@ -198,7 +198,7 @@ curl -s --max-time 120 -X POST http://localhost:18789/v1/chat/completions \
 kill $PF_PID
 ```
 
-This confirms the full inference chain: **OpenClaw → LLMSpy → Ollama**.
+This confirms the full inference chain: **OpenClaw → LiteLLM → Ollama**.
 
 ## Step 6 -- Deploy a Blockchain Network
 
@@ -274,6 +274,6 @@ Replace `{id}` with your deployment ID (e.g., `demo`, `prod`).
 
 - **Monetize your inference** -- See [How to Monetize Your Inference](guides/monetize-inference.md) for payment-gated LLM endpoints with x402.
 - **Explore the cluster** -- Run `obol k9s` for an interactive terminal UI.
-- **Configure cloud LLM providers** -- Run `obol model setup` to add Anthropic or OpenAI through LLMSpy.
+- **Configure cloud LLM providers** -- Run `obol model setup` to add Anthropic or OpenAI through LiteLLM.
 - **Check the full architecture** -- See [README.md](../README.md) for detailed architecture documentation.
 - **Contribute** -- See [CONTRIBUTING.md](../CONTRIBUTING.md) for development mode setup and adding new networks.

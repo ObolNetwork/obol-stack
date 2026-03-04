@@ -36,7 +36,11 @@ metadata:
     app.kubernetes.io/name: cloudflared
     app.kubernetes.io/part-of: obol-stack
 spec:
+  {{- if or $useLocal $useRemote }}
   replicas: 1
+  {{- else }}
+  replicas: 0
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudflared

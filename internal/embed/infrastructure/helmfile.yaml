@@ -104,7 +104,7 @@ releases:
           dashboard:
             enabled: false
 
-  # Cloudflare Tunnel (quick tunnel mode for public access)
+  # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision)
   - name: cloudflared
     namespace: traefik
     chart: ./cloudflared
@@ -165,7 +165,7 @@ releases:
                         name: x402-payment
                   backendRefs:
                     - name: erpc
-                      port: 4000
+                      port: 80
 
   # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier).
   # Always deployed; the verifier returns 200 for routes with no pricing rules.

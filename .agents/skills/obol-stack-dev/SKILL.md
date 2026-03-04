@@ -1,10 +1,10 @@
 ---
 name: obol-stack-dev
-description: Obol Stack development, testing, and LLM smart-routing validation through llmspy. Use when developing, testing, or validating inference paths (Ollama, Anthropic, OpenAI) through the llmspy gateway, writing integration tests, or working with obol CLI wrappers.
+description: Obol Stack development, testing, and LLM routing validation through LiteLLM. Use when developing, testing, or validating inference paths (Ollama, Anthropic, OpenAI) through the LiteLLM gateway, writing integration tests, or working with obol CLI wrappers.
 metadata:
-  version: "1.0.0"
+  version: "2.0.0"
   domain: infrastructure
-  triggers: obol, llmspy, openclaw, inference, integration test, model routing, smart routing, LLM proxy, provider setup
+  triggers: obol, litellm, openclaw, inference, integration test, model routing, smart routing, LLM proxy, provider setup
   role: specialist
   scope: development-and-testing
   output-format: code-and-commands
@@ -13,15 +13,15 @@ metadata:
 
 # Obol Stack Dev & LLM Routing Validation
 
-Complete guide for developing, testing, and validating the Obol Stack's LLM smart-routing through llmspy. Covers the dev environment, CLI wrappers, overlay generation, all 3 provider paths, and integration testing.
+Complete guide for developing, testing, and validating the Obol Stack's LLM routing through LiteLLM. Covers the dev environment, CLI wrappers, overlay generation, all 3 provider paths, and integration testing.
 
 ## When to Use This Skill
 
 - Setting up the Obol Stack development environment
-- Testing LLM inference through llmspy (Ollama, Anthropic, OpenAI)
+- Testing LLM inference through LiteLLM (Ollama, Anthropic, OpenAI)
 - Writing or running integration tests for OpenClaw instances
 - Debugging model routing issues (401s, 500s, provider misconfig)
-- Understanding the 2-tier LLM architecture (llmspy gateway + per-instance config)
+- Understanding the 2-tier LLM architecture (LiteLLM gateway + per-instance config)
 - Deploying and validating OpenClaw instances with different providers
 - Working with the `obol` CLI wrappers (kubectl, helm, helmfile, k9s)
 
@@ -31,14 +31,14 @@ The stack uses a **2-tier LLM routing** architecture:
 
 ```
 Tier 2: Per-Instance                Tier 1: Cluster-Wide Gateway
-(OpenClaw in openclaw-<id> ns)      (llmspy in llm ns)
+(OpenClaw in openclaw-<id> ns)      (LiteLLM in llm ns)
 
 +---------------------------+       +---------------------------+
-| OpenClaw                  |       | llmspy (port 8000)        |
-| model: ollama/<model-id>  | ----> | Routes by model name:     |
-| api: openai-completions   |       |   claude-* -> Anthropic   |
-| baseUrl: llmspy:8000/v1   |       |   gpt-*    -> OpenAI      |
-+---------------------------+       |   *        -> Ollama       |
+| OpenClaw                  |       | LiteLLM (port 4000)       |
+| model: openai/<model-id>  | ----> | Routes by model_list:     |
+| api: openai-completions   |       |   ollama_chat/* -> Ollama  |
+| baseUrl: litellm:4000/v1  |       |   claude-*  -> Anthropic   |
++---------------------------+       |   gpt-*     -> OpenAI      |
                                     +---------------------------+
                                           |       |       |
                                           v       v       v
@@ -46,32 +46,32 @@ Tier 2: Per-Instance                Tier 1: Cluster-Wide Gateway
                                        (host)   (cloud)  (cloud)
 ```
 
-**Key insight**: All traffic routes through llmspy regardless of provider. OpenClaw always uses the `ollama/` prefix and `openai-completions` API format. llmspy resolves the actual provider by model name.
+**Key insight**: All traffic routes through LiteLLM regardless of provider. OpenClaw uses the `openai` provider slot (since LiteLLM speaks the OpenAI API protocol) with `openai-completions` API format. LiteLLM resolves the actual upstream provider by model name via its `model_list` config.
 
 ## Quick Reference
 
 | Task | Reference |
 |------|-----------|
 | Dev environment setup | `references/dev-environment.md` |
-| LLM routing architecture | `references/llmspy-routing.md` |
+| LLM routing architecture | `references/litellm-routing.md` |
 | CLI wrappers and commands | `references/obol-cli.md` |
 | Overlay generation (values-obol.yaml) | `references/overlay-generation.md` |
 | Integration testing | `references/integration-testing.md` |
 | Troubleshooting | `references/troubleshooting.md` |
 
-## 3 Inference Paths (All Through llmspy)
+## 3 Inference Paths (All Through LiteLLM)
 
-| Path | Model Format | llmspy Config | Example |
-|------|-------------|---------------|---------|
-| **Ollama** (default) | `ollama/<model>` | Ollama enabled by default | `ollama/glm-5:cloud` |
-| **Anthropic** (cloud) | `ollama/<claude-model>` | `obol model setup --provider anthropic` | `ollama/claude-sonnet-4-5-20250929` |
-| **OpenAI** (cloud) | `ollama/<gpt-model>` | `obol model setup --provider openai` | `ollama/gpt-4o-mini` |
+| Path | Model Name | LiteLLM model_list | Example |
+|------|-----------|-------------------|---------|
+| **Ollama** (default) | `<model>` | `ollama_chat/<model>` → Ollama svc | `llama3.2:3b` |
+| **Anthropic** (cloud) | `<claude-model>` | `<claude-model>` → Anthropic API | `claude-sonnet-4-5-20250929` |
+| **OpenAI** (cloud) | `<gpt-model>` | `<gpt-model>` → OpenAI API | `gpt-4o` |
 
 All 3 paths use the same OpenClaw config pattern:
-- Provider name: `ollama` (repurposed to point at llmspy)
+- Provider slot: `openai` (LiteLLM is OpenAI-API-compatible)
 - API: `openai-completions`
-- Base URL: `http://llmspy.llm.svc.cluster.local:8000/v1`
-- API key: `ollama-local` (dummy; llmspy handles real auth)
+- Base URL: `http://litellm.llm.svc.cluster.local:4000/v1`
+- API key: LiteLLM master key (`sk-obol-<cluster-id>`)
 
 ## Essential Commands
 
@@ -85,9 +85,10 @@ obol stack init && obol stack up        # Start cluster
 obol stack down                         # Stop (preserves data)
 obol stack purge -f                     # Destroy everything
 
-# --- Model Provider Setup (Tier 1: llmspy) ---
+# --- Model Provider Setup (Tier 1: LiteLLM) ---
 obol model setup --provider anthropic --api-key sk-ant-...
 obol model setup --provider openai --api-key sk-proj-...
+obol model setup --provider ollama      # Auto-discovers local models
 obol model status                       # Show enabled providers
 
 # --- OpenClaw Instance Management (Tier 2) ---
@@ -155,21 +156,16 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 
 | File | Purpose |
 |------|---------|
-| `internal/openclaw/openclaw.go` | `Onboard()`, `Sync()`, `Delete()`, `buildLLMSpyRoutedOverlay()`, `generateOverlayValues()`, `stageDefaultSkills()`, `injectSkillsToVolume()` |
+| `internal/openclaw/openclaw.go` | `Onboard()`, `Sync()`, `Delete()`, `buildLiteLLMRoutedOverlay()`, `generateOverlayValues()`, `SyncOverlayModels()` |
 | `internal/openclaw/import.go` | `DetectExistingConfig()`, `TranslateToOverlayYAML()` |
 | `internal/openclaw/overlay_test.go` | Unit tests for overlay generation |
-| `internal/openclaw/skills_injection_test.go` | Unit tests for skill staging and volume injection |
-| `internal/openclaw/integration_test.go` | Full-cluster integration tests (build tag: `integration`) — includes skills + inference tests |
-| `internal/model/model.go` | `ConfigureLLMSpy()` — patches llmspy Secret + ConfigMap + restart |
-| `cmd/obol/model.go` | `obol model setup` CLI command |
+| `internal/openclaw/integration_test.go` | Full-cluster integration tests (build tag: `integration`) |
+| `internal/model/model.go` | `ConfigureLiteLLM()` — patches LiteLLM ConfigMap + Secret + restart |
+| `cmd/obol/model.go` | `obol model setup` CLI command (also syncs OpenClaw overlays) |
 | `cmd/obol/openclaw.go` | `obol openclaw` CLI commands (including `skills` subcommands) |
-| `internal/embed/infrastructure/base/templates/llm.yaml` | llmspy Kubernetes resources |
-| `internal/embed/skills/` | Embedded default skills (hello, obol-blockchain, obol-k8s, obol-dvt) |
+| `internal/embed/infrastructure/base/templates/llm.yaml` | LiteLLM + Ollama Kubernetes resources |
+| `internal/embed/skills/` | Embedded default skills |
 | `internal/embed/embed.go` | `CopySkills()`, `GetEmbeddedSkillNames()` |
-| `internal/embed/embed_skills_test.go` | Unit tests for skill embedding |
-| `internal/openclaw/chart/values.yaml` | Default per-instance model config |
-| `internal/openclaw/chart/templates/_helpers.tpl` | Renders model providers into OpenClaw JSON config |
-| `tests/skills_smoke_test.py` | In-pod Python smoke tests for all rich skills |
 
 ## Constraints
 

@@ -42,10 +42,35 @@ func List(cfg *config.Config, u *ui.UI) error {
 func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]string, force bool) error {
 	u.Infof("Installing network: %s", network)
 
-	// Generate deployment ID if not provided in overrides (use petname)
+	// Generate deployment ID if not provided.
+	// Default to the network name (e.g., "mainnet", "hoodi", "sepolia") so that
+	// the first install of each network type gets a human-readable ID. If that
+	// directory already exists, fall back to a petname.
 	id, hasId := overrides["id"]
 	if !hasId || id == "" {
-		id = petname.Generate(2, "-")
+		// Resolve the network name from --network flag or template default.
+		networkValue := overrides["network"]
+		if networkValue == "" {
+			// Fall back to the template's default value for the "network" field.
+			if fields, err := ParseTemplateFields(network); err == nil {
+				for _, f := range fields {
+					if f.FlagName == "network" && f.DefaultValue != "" {
+						networkValue = f.DefaultValue
+						break
+					}
+				}
+			}
+		}
+
+		if networkValue != "" {
+			candidateDir := filepath.Join(cfg.ConfigDir, "networks", network, networkValue)
+			if _, err := os.Stat(candidateDir); os.IsNotExist(err) {
+				id = networkValue
+			}
+		}
+		if id == "" {
+			id = petname.Generate(2, "-")
+		}
 		overrides["id"] = id
 		u.Detail("Deployment ID", fmt.Sprintf("%s (generated)", id))
 	} else {
@@ -263,6 +288,8 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Register local node as eRPC upstream
 	if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
 		u.Warnf("Could not register eRPC upstream: %v", err)
+	} else {
+		u.Successf("Registered local-%s-%s with eRPC", networkName, deploymentID)
 	}
 
 	u.Blank()
@@ -324,6 +351,8 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Deregister from eRPC before deleting the namespace
 	if err := DeregisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
 		u.Warnf("Could not deregister eRPC upstream: %v", err)
+	} else {
+		u.Successf("Deregistered local-%s-%s from eRPC", networkName, deploymentID)
 	}
 
 	// Delete Kubernetes namespace

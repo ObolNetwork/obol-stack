@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/dns"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -43,7 +44,7 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.5"
+	chartVersion = "0.1.6"
 
 	// openclawImageTag overrides the chart's default image tag.
 	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
@@ -51,7 +52,7 @@ const (
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.2.0"
+	remoteSignerChartVersion = "0.3.0"
 )
 
 // OnboardOptions contains options for the onboard command
@@ -90,7 +91,9 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	}
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
-	// If no imported providers, query Ollama for available models
+	// No imported providers — skip automatic deployment.
+	// Local Ollama models are often too small to be useful, and the LiteLLM
+	// routing path has sharp edges that are better handled via explicit setup.
 	var ollamaModels []string
 	if !hasImportedProviders {
 		ollamaModels = listOllamaModels()
@@ -206,6 +209,12 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	// Write Obol Stack overlay values (httpRoute, provider config, eRPC, skills)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	// Ensure /etc/hosts has an entry for this subdomain.
+	// macOS Sequoia's /etc/resolver/ doesn't reliably forward subdomain queries.
+	if err := dns.EnsureHostsEntries(collectAllHostnames(cfg, hostname)); err != nil {
+		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
+	}
 	secretData := collectSensitiveData(imported)
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		os.RemoveAll(deploymentDir)
@@ -298,6 +307,15 @@ agents:
 		u.Blank()
 		if err := doSync(cfg, id, u); err != nil {
 			return err
+		}
+		// Register default Ollama models in LiteLLM so the proxy can route them.
+		// This is only needed when no cloud provider was configured (the overlay
+		// points OpenClaw at LiteLLM, but LiteLLM starts with an empty model_list).
+		if len(opts.OllamaModels) > 0 && imported == nil {
+			if llmErr := model.ConfigureLiteLLM(cfg, u, "ollama", "", opts.OllamaModels); llmErr != nil {
+				u.Warnf("Failed to register Ollama models in LiteLLM: %v", llmErr)
+				u.Print("  Run 'obol model setup' to configure models manually.")
+			}
 		}
 		// Copy workspace files into the pod after sync succeeds
 		if imported != nil && imported.WorkspaceDir != "" {
@@ -1283,6 +1301,126 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 	return nil
 }
 
+// SyncOverlayModels updates all deployed OpenClaw instances' overlay model
+// lists to match the current LiteLLM model_list, then re-syncs each instance.
+// This keeps OpenClaw's "openai" provider slot (which routes through LiteLLM)
+// in sync when models are added/removed via `obol model setup`.
+func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
+	ids, err := ListInstanceIDs(cfg)
+	if err != nil || len(ids) == 0 {
+		return nil // no instances to update
+	}
+
+	for _, id := range ids {
+		overlayPath := filepath.Join(deploymentPath(cfg, id), "values-obol.yaml")
+		data, err := os.ReadFile(overlayPath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+
+		// Only patch overlays that use the LiteLLM gateway pattern
+		// (the "openai" provider slot pointing at litellm.llm.svc).
+		if !strings.Contains(content, "litellm.llm.svc") {
+			continue
+		}
+
+		updated, changed := patchOverlayModelList(content, models)
+		if !changed {
+			continue
+		}
+
+		if err := os.WriteFile(overlayPath, []byte(updated), 0644); err != nil {
+			u.Warnf("Failed to update overlay for %s: %v", id, err)
+			continue
+		}
+
+		u.Infof("Syncing OpenClaw %s with updated model list", id)
+		if err := doSync(cfg, id, u); err != nil {
+			u.Warnf("Failed to sync %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// patchOverlayModelList replaces the model list under the openai provider
+// in a values-obol.yaml overlay with the given models. Returns the updated
+// content and whether a change was made.
+func patchOverlayModelList(content string, models []string) (string, bool) {
+	// Find the "    models:" line that follows the openai provider section.
+	// The overlay structure is:
+	//   models:
+	//     openai:
+	//       ...
+	//       models:
+	//         - id: <model>
+	//           name: <display>
+	lines := strings.Split(content, "\n")
+	var result []string
+	inOpenAI := false
+	inModelList := false
+	modelListIndent := ""
+	replaced := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Track when we enter the openai provider section
+		if trimmed == "openai:" && strings.Contains(content, "litellm.llm.svc") {
+			inOpenAI = true
+			result = append(result, line)
+			continue
+		}
+
+		// Detect the models list under the openai section
+		if inOpenAI && !inModelList && (trimmed == "models:" || trimmed == "models: []") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
+			modelListIndent = indent
+			inModelList = true
+			replaced = true
+
+			// Write the new model list
+			if len(models) == 0 {
+				result = append(result, indent+"models: []")
+			} else {
+				result = append(result, indent+"models:")
+				for _, m := range models {
+					result = append(result, indent+"  - id: "+m)
+					result = append(result, indent+"    name: "+ollamaModelDisplayName(m))
+				}
+			}
+
+			// Skip old model entries
+			if trimmed == "models: []" {
+				continue
+			}
+			for i+1 < len(lines) {
+				next := lines[i+1]
+				nextTrimmed := strings.TrimSpace(next)
+				if nextTrimmed == "" || (strings.HasPrefix(next, modelListIndent+"  ") && (strings.HasPrefix(nextTrimmed, "- id:") || strings.HasPrefix(nextTrimmed, "name:"))) {
+					i++
+					continue
+				}
+				break
+			}
+			continue
+		}
+
+		// Detect when we leave the openai section (non-indented line)
+		if inOpenAI && !strings.HasPrefix(line, "    ") && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			inOpenAI = false
+		}
+
+		result = append(result, line)
+	}
+
+	if !replaced {
+		return content, false
+	}
+	return strings.Join(result, "\n"), true
+}
+
 // deploymentPath returns the path to a deployment directory
 func deploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
@@ -1388,7 +1526,7 @@ models:
 
 	b.WriteString(`# eRPC integration
 erpc:
-  url: http://erpc.erpc.svc.cluster.local:4000/rpc
+  url: http://erpc.erpc.svc.cluster.local/rpc
 
 # Remote-signer wallet for Ethereum transaction signing.
 # The remote-signer runs in the same namespace as OpenClaw.
@@ -1987,4 +2125,27 @@ releases:
     values:
       - values-remote-signer.yaml
 `, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
+}
+
+// collectAllHostnames gathers all openclaw subdomain hostnames that should be
+// in /etc/hosts. Scans existing deployments and includes the new hostname.
+func collectAllHostnames(cfg *config.Config, newHostname string) []string {
+	hostnames := []string{newHostname}
+	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
+	entries, err := os.ReadDir(appsDir)
+	if err != nil {
+		return hostnames
+	}
+	seen := map[string]bool{newHostname: true}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		h := fmt.Sprintf("openclaw-%s.%s", e.Name(), defaultDomain)
+		if !seen[h] {
+			hostnames = append(hostnames, h)
+			seen[h] = true
+		}
+	}
+	return hostnames
 }
