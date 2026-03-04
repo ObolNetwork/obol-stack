@@ -177,7 +177,7 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool, chartFilter string)
 
 // upgradeOneHelmfile bumps version pins in a single helmfile. Charts already
 // present in reported are skipped (dedup across files). If chartFilter is
-// non-empty, only that chart is considered.
+// non-empty, only that chart is considered (matched by chart name or release name).
 func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major bool, chartFilter string, reported map[string]bool) ([]VersionBump, error) {
 	data, err := os.ReadFile(helmfilePath)
 	if err != nil {
@@ -188,7 +188,7 @@ func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major b
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
-	if doc.Content == nil || len(doc.Content) == 0 {
+	if len(doc.Content) == 0 {
 		return nil, nil
 	}
 	root := doc.Content[0]
@@ -212,10 +212,12 @@ func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major b
 			continue
 		}
 
-		var chartValue string
+		var releaseName, chartValue string
 		var versionNode *yaml.Node
 		for i := 0; i < len(releaseNode.Content)-1; i += 2 {
 			switch releaseNode.Content[i].Value {
+			case "name":
+				releaseName = releaseNode.Content[i+1].Value
 			case "chart":
 				chartValue = releaseNode.Content[i+1].Value
 			case "version":
@@ -226,7 +228,7 @@ func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major b
 		if chartValue == "" || strings.HasPrefix(chartValue, "./") || strings.HasPrefix(chartValue, "/") {
 			continue
 		}
-		if chartFilter != "" && chartValue != chartFilter {
+		if chartFilter != "" && !matchesFilter(chartFilter, releaseName, chartValue) {
 			continue
 		}
 		if versionNode == nil || reported[chartValue] {
@@ -345,6 +347,33 @@ func ParseHelmfileReleasesFromBytes(data []byte) ([]helmfileRelease, error) {
 		return nil, fmt.Errorf("failed to parse helmfile YAML: %w", err)
 	}
 	return doc.Releases, nil
+}
+
+// matchesFilter returns true if the given filter matches either the release
+// name or the chart name of a helmfile release. The filter can be:
+//   - an exact release name (e.g. "reloader")
+//   - an exact chart reference (e.g. "stakater/reloader")
+func matchesFilter(filter, releaseName, chartName string) bool {
+	return filter == releaseName || filter == chartName
+}
+
+// ResolveReleaseNames parses the defaults helmfile and returns the release
+// names that match the given filter (by release name or chart name).
+// Returns nil if no matches are found.
+func ResolveReleaseNames(cfg *config.Config, filter string) []string {
+	helmfilePath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
+	releases, err := parseHelmfileReleases(helmfilePath)
+	if err != nil {
+		return nil
+	}
+
+	var names []string
+	for _, rel := range releases {
+		if matchesFilter(filter, rel.Name, rel.Chart) {
+			names = append(names, rel.Name)
+		}
+	}
+	return names
 }
 
 // helmSearchLatest queries helm for the latest version of a chart.

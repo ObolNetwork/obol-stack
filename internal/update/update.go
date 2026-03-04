@@ -157,19 +157,40 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 	// 4. Helmfile sync on defaults
 	u.Blank()
 	helmfilePath := filepath.Join(defaultsDir, "helmfile.yaml")
-	helmfileCmd := exec.Command(
-		filepath.Join(cfg.BinDir, "helmfile"),
+	helmfileArgs := []string{
 		"--file", helmfilePath,
 		"--kubeconfig", kubeconfigPath,
-		"sync",
+	}
+
+	// When a chart filter is set, resolve it to release name(s) and use --selector
+	// so helmfile only syncs the targeted release instead of everything.
+	if opts.ChartFilter != "" {
+		releaseNames := ResolveReleaseNames(cfg, opts.ChartFilter)
+		if len(releaseNames) == 0 {
+			return fmt.Errorf("no release found matching %q in defaults helmfile", opts.ChartFilter)
+		}
+		for _, name := range releaseNames {
+			helmfileArgs = append(helmfileArgs, "--selector", "name="+name)
+		}
+	}
+
+	helmfileArgs = append(helmfileArgs, "sync")
+	helmfileCmd := exec.Command(
+		filepath.Join(cfg.BinDir, "helmfile"),
+		helmfileArgs...,
 	)
 	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
-	if err := u.Exec(ui.ExecConfig{Name: "Upgrading default infrastructure", Cmd: helmfileCmd}); err != nil {
+	label := "Upgrading default infrastructure"
+	if opts.ChartFilter != "" {
+		label = fmt.Sprintf("Upgrading %s", opts.ChartFilter)
+	}
+	if err := u.Exec(ui.ExecConfig{Name: label, Cmd: helmfileCmd}); err != nil {
 		return fmt.Errorf("failed to upgrade default infrastructure: %w", err)
 	}
 
-	if !defaultsOnly {
+	// Skip networks/apps when targeting a specific chart
+	if !defaultsOnly && opts.ChartFilter == "" {
 		// 5. Re-sync installed networks
 		u.Blank()
 		u.Info("Upgrading installed networks...")
