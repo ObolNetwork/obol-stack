@@ -1,11 +1,23 @@
 package openclaw
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
-func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
+// testConfig creates a temp config dir with a .stack-id file for testing.
+func testConfig(t *testing.T) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".stack-id"), []byte("test-cluster"), 0644)
+	return &config.Config{ConfigDir: dir, DataDir: dir, BinDir: dir}
+}
+
+func TestBuildLiteLLMRoutedOverlay_Anthropic(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "anthropic",
 		APIKey:  "sk-ant-test",
@@ -13,40 +25,39 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 		Display: "Claude Sonnet 4.5",
 	}
 
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildLiteLLMRoutedOverlay(testConfig(t), cloud)
 
-	// Agent model uses ollama/ prefix — the "ollama" provider slot is repurposed
-	// to point at llmspy, so the model reference must match the provider name.
-	if result.AgentModel != "ollama/claude-sonnet-4-5-20250929" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "ollama/claude-sonnet-4-5-20250929")
+	// Agent model uses openai/ prefix — routed through LiteLLM.
+	if result.AgentModel != "openai/claude-sonnet-4-5-20250929" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "openai/claude-sonnet-4-5-20250929")
 	}
 
-	// Check 3 providers: ollama (enabled, pointing at llmspy), anthropic (disabled), openai (disabled)
+	// Check 3 providers: openai (enabled, pointing at LiteLLM), anthropic (disabled), ollama (disabled)
 	if len(result.Providers) != 3 {
 		t.Fatalf("len(Providers) = %d, want 3", len(result.Providers))
 	}
 
-	ollama := result.Providers[0]
-	if ollama.Name != "ollama" || ollama.Disabled {
-		t.Errorf("ollama: name=%q disabled=%v, want ollama/false", ollama.Name, ollama.Disabled)
+	openai := result.Providers[0]
+	if openai.Name != "openai" || openai.Disabled {
+		t.Errorf("openai: name=%q disabled=%v, want openai/false", openai.Name, openai.Disabled)
 	}
-	if ollama.BaseURL != "http://llmspy.llm.svc.cluster.local:8000/v1" {
-		t.Errorf("ollama.BaseURL = %q", ollama.BaseURL)
+	if openai.BaseURL != "http://litellm.llm.svc.cluster.local:4000/v1" {
+		t.Errorf("openai.BaseURL = %q", openai.BaseURL)
 	}
-	if ollama.APIKeyEnvVar != "OLLAMA_API_KEY" {
-		t.Errorf("ollama.APIKeyEnvVar = %q, want OLLAMA_API_KEY", ollama.APIKeyEnvVar)
+	if openai.APIKeyEnvVar != "OPENAI_API_KEY" {
+		t.Errorf("openai.APIKeyEnvVar = %q, want OPENAI_API_KEY", openai.APIKeyEnvVar)
 	}
-	if ollama.APIKey != "ollama-local" {
-		t.Errorf("ollama.APIKey = %q, want ollama-local", ollama.APIKey)
+	if openai.APIKey != "sk-obol-test-cluster" {
+		t.Errorf("openai.APIKey = %q, want sk-obol-test-cluster", openai.APIKey)
 	}
-	if ollama.API != "openai-completions" {
-		t.Errorf("ollama.API = %q, want openai-completions", ollama.API)
+	if openai.API != "openai-completions" {
+		t.Errorf("openai.API = %q, want openai-completions", openai.API)
 	}
-	if len(ollama.Models) != 1 || ollama.Models[0].ID != "claude-sonnet-4-5-20250929" {
-		t.Errorf("ollama.Models = %v", ollama.Models)
+	if len(openai.Models) != 1 || openai.Models[0].ID != "claude-sonnet-4-5-20250929" {
+		t.Errorf("openai.Models = %v", openai.Models)
 	}
 
-	// anthropic and openai should be disabled
+	// anthropic and ollama should be disabled
 	for _, idx := range []int{1, 2} {
 		if !result.Providers[idx].Disabled {
 			t.Errorf("Providers[%d] (%s) should be disabled", idx, result.Providers[idx].Name)
@@ -55,12 +66,12 @@ func TestBuildLLMSpyRoutedOverlay_Anthropic(t *testing.T) {
 	if result.Providers[1].Name != "anthropic" {
 		t.Errorf("Providers[1].Name = %q, want anthropic", result.Providers[1].Name)
 	}
-	if result.Providers[2].Name != "openai" {
-		t.Errorf("Providers[2].Name = %q, want openai", result.Providers[2].Name)
+	if result.Providers[2].Name != "ollama" {
+		t.Errorf("Providers[2].Name = %q, want ollama", result.Providers[2].Name)
 	}
 }
 
-func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
+func TestBuildLiteLLMRoutedOverlay_OpenAI(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "openai",
 		APIKey:  "sk-open-test",
@@ -68,10 +79,10 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 		Display: "GPT-5.2",
 	}
 
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildLiteLLMRoutedOverlay(testConfig(t), cloud)
 
-	if result.AgentModel != "ollama/gpt-5.2" {
-		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "ollama/gpt-5.2")
+	if result.AgentModel != "openai/gpt-5.2" {
+		t.Errorf("AgentModel = %q, want %q", result.AgentModel, "openai/gpt-5.2")
 	}
 
 	ollama := result.Providers[0]
@@ -80,31 +91,31 @@ func TestBuildLLMSpyRoutedOverlay_OpenAI(t *testing.T) {
 	}
 }
 
-func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
+func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	cloud := &CloudProviderInfo{
 		Name:    "anthropic",
 		APIKey:  "sk-ant-test",
 		ModelID: "claude-sonnet-4-5-20250929",
 		Display: "Claude Sonnet 4.5",
 	}
-	result := buildLLMSpyRoutedOverlay(cloud)
+	result := buildLiteLLMRoutedOverlay(testConfig(t), cloud)
 	yaml := TranslateToOverlayYAML(result)
 
 	// Agent model should have ollama/ prefix
-	if !strings.Contains(yaml, "agentModel: ollama/claude-sonnet-4-5-20250929") {
+	if !strings.Contains(yaml, "agentModel: openai/claude-sonnet-4-5-20250929") {
 		t.Errorf("YAML missing agentModel, got:\n%s", yaml)
 	}
 
-	// ollama should be enabled with llmspy baseUrl
-	if !strings.Contains(yaml, "ollama:\n    enabled: true") {
-		t.Errorf("YAML missing enabled ollama provider, got:\n%s", yaml)
+	// openai should be enabled with LiteLLM baseUrl
+	if !strings.Contains(yaml, "openai:\n    enabled: true") {
+		t.Errorf("YAML missing enabled openai provider, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
-		t.Errorf("YAML missing llmspy baseUrl, got:\n%s", yaml)
+	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
+		t.Errorf("YAML missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 
-	// apiKeyEnvVar should be OLLAMA_API_KEY
-	if !strings.Contains(yaml, "apiKeyEnvVar: OLLAMA_API_KEY") {
+	// apiKeyEnvVar should be OPENAI_API_KEY (LiteLLM master key injected via this env var)
+	if !strings.Contains(yaml, "apiKeyEnvVar: OPENAI_API_KEY") {
 		t.Errorf("YAML missing apiKeyEnvVar, got:\n%s", yaml)
 	}
 
@@ -113,7 +124,7 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML should not contain apiKeyValue literals, got:\n%s", yaml)
 	}
 
-	// api should be openai-completions (llmspy is OpenAI-compatible)
+	// api should be openai-completions (LiteLLM is OpenAI-compatible)
 	if !strings.Contains(yaml, "api: openai-completions") {
 		t.Errorf("YAML missing api: openai-completions, got:\n%s", yaml)
 	}
@@ -123,25 +134,25 @@ func TestOverlayYAML_LLMSpyRouted(t *testing.T) {
 		t.Errorf("YAML missing cloud model ID, got:\n%s", yaml)
 	}
 
-	// anthropic and openai should be disabled
+	// anthropic and ollama should be disabled
 	if !strings.Contains(yaml, "anthropic:\n    enabled: false") {
 		t.Errorf("YAML missing disabled anthropic, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "openai:\n    enabled: false") {
-		t.Errorf("YAML missing disabled openai, got:\n%s", yaml)
+	if !strings.Contains(yaml, "ollama:\n    enabled: false") {
+		t.Errorf("YAML missing disabled ollama, got:\n%s", yaml)
 	}
 }
 
 func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 	// When Ollama models are available, overlay should use them
 	models := []string{"llama3.2:3b", "mistral:7b"}
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, models, "")
+	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, models, "")
 
-	if !strings.Contains(yaml, "agentModel: ollama/llama3.2:3b") {
+	if !strings.Contains(yaml, "agentModel: openai/llama3.2:3b") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
-		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
+	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
+		t.Errorf("default overlay missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "id: llama3.2:3b") {
 		t.Errorf("default overlay missing first model, got:\n%s", yaml)
@@ -153,7 +164,7 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 
 func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
 	// When no Ollama models are available, overlay should have empty model list
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "")
+	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, nil, "")
 
 	if strings.Contains(yaml, "agentModel:") {
 		t.Errorf("default overlay should not set agentModel when no models available, got:\n%s", yaml)
@@ -161,13 +172,13 @@ func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
 	if !strings.Contains(yaml, "models: []") {
 		t.Errorf("default overlay should have empty models list, got:\n%s", yaml)
 	}
-	if !strings.Contains(yaml, "baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1") {
-		t.Errorf("default overlay missing llmspy baseUrl, got:\n%s", yaml)
+	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
+		t.Errorf("default overlay missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 }
 
 func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, true, nil, "")
+	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, true, nil, "")
 	if !strings.Contains(yaml, "extraEnvFromSecrets") {
 		t.Errorf("overlay missing extraEnvFromSecrets, got:\n%s", yaml)
 	}
@@ -178,7 +189,7 @@ func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
 
 func TestGenerateOverlayValues_AgentBaseURL(t *testing.T) {
 	// When agentBaseURL is provided, it should appear in extraEnv.
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "https://mystack.example.com")
+	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, nil, "https://mystack.example.com")
 
 	if !strings.Contains(yaml, "AGENT_BASE_URL") {
 		t.Errorf("overlay missing AGENT_BASE_URL, got:\n%s", yaml)
@@ -194,7 +205,7 @@ func TestGenerateOverlayValues_AgentBaseURL(t *testing.T) {
 
 func TestGenerateOverlayValues_NoAgentBaseURL(t *testing.T) {
 	// When agentBaseURL is empty, AGENT_BASE_URL should NOT appear.
-	yaml := generateOverlayValues("openclaw-default.obol.stack", nil, false, nil, "")
+	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, nil, "")
 
 	if strings.Contains(yaml, "AGENT_BASE_URL") {
 		t.Errorf("overlay should not contain AGENT_BASE_URL when empty, got:\n%s", yaml)
@@ -302,6 +313,82 @@ func TestBuildDirectProviderOverlay_Anthropic(t *testing.T) {
 	if !foundEnabled {
 		t.Fatalf("anthropic provider not found in overlay")
 	}
+}
+
+func TestPatchOverlayModelList(t *testing.T) {
+	overlay := `# Default model provider
+openclaw:
+  agentModel: openai/llama3.2:3b
+  gateway:
+    controlUi:
+      allowInsecureAuth: true
+
+models:
+  openai:
+    enabled: true
+    baseUrl: http://litellm.llm.svc.cluster.local:4000/v1
+    api: openai-completions
+    apiKeyEnvVar: OPENAI_API_KEY
+    apiKeyValue: sk-obol-test
+    models:
+      - id: llama3.2:3b
+        name: Llama 3.2 3B
+
+# eRPC integration
+erpc:
+  url: http://erpc.erpc.svc.cluster.local/rpc
+`
+	t.Run("add models", func(t *testing.T) {
+		updated, changed := patchOverlayModelList(overlay, []string{"llama3.2:3b", "claude-sonnet-4-5-20250929", "gpt-4o"})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "id: claude-sonnet-4-5-20250929") {
+			t.Errorf("missing claude model in updated overlay:\n%s", updated)
+		}
+		if !strings.Contains(updated, "id: gpt-4o") {
+			t.Errorf("missing gpt model in updated overlay:\n%s", updated)
+		}
+		// eRPC section should still be present
+		if !strings.Contains(updated, "erpc:") {
+			t.Errorf("eRPC section lost in updated overlay:\n%s", updated)
+		}
+	})
+
+	t.Run("empty models", func(t *testing.T) {
+		updated, changed := patchOverlayModelList(overlay, []string{})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "models: []") {
+			t.Errorf("expected empty models list:\n%s", updated)
+		}
+	})
+
+	t.Run("no litellm overlay", func(t *testing.T) {
+		nonLiteLLM := `models:
+  anthropic:
+    enabled: true
+    baseUrl: https://api.anthropic.com
+`
+		_, changed := patchOverlayModelList(nonLiteLLM, []string{"claude-sonnet-4-5-20250929"})
+		if changed {
+			t.Fatal("should not patch non-LiteLLM overlay")
+		}
+	})
+
+	t.Run("empty initial models", func(t *testing.T) {
+		emptyOverlay := strings.Replace(overlay,
+			"    models:\n      - id: llama3.2:3b\n        name: Llama 3.2 3B",
+			"    models: []", 1)
+		updated, changed := patchOverlayModelList(emptyOverlay, []string{"llama3.2:3b"})
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if !strings.Contains(updated, "id: llama3.2:3b") {
+			t.Errorf("missing model in updated overlay:\n%s", updated)
+		}
+	})
 }
 
 func TestRemoteCapableCommands(t *testing.T) {

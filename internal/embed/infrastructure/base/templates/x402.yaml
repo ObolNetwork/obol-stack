@@ -1,0 +1,142 @@
+---
+# x402 ForwardAuth verifier (OKR-2)
+#
+# Central x402 micropayment verifier for Traefik ForwardAuth.
+# Any HTTPRoute can be monetized by:
+#   1. Adding a Traefik Middleware CRD (forwardAuth) in its namespace
+#   2. Adding an ExtensionRef filter on the HTTPRoute rule
+#
+# The verifier reads pricing config from a ConfigMap and validates
+# x402 payment headers via the facilitator service. It returns:
+#   - 200: allow (payment valid or route is free)
+#   - 402: deny (with payment requirements JSON in body)
+#
+# Configuration is managed imperatively via `obol x402 setup`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: x402
+
+---
+# Pricing configuration. Managed imperatively via `obol x402 setup`.
+# The verifier watches this file for changes (poll-based).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: x402-pricing
+  namespace: x402
+data:
+  pricing.yaml: |
+    wallet: ""
+    chain: "base-sepolia"
+    facilitatorURL: "https://facilitator.x402.rs"
+    verifyOnly: false
+    routes: []
+
+---
+# Secret for wallet address and any future auth tokens.
+# Patched imperatively via `obol x402 setup`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: x402-secrets
+  namespace: x402
+type: Opaque
+stringData:
+  WALLET_ADDRESS: ""
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    app: x402-verifier
+  annotations:
+    configmap.reloader.stakater.com/reload: "x402-pricing"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: x402-verifier
+  template:
+    metadata:
+      labels:
+        app: x402-verifier
+    spec:
+      containers:
+        - name: verifier
+          image: ghcr.io/obolnetwork/x402-verifier:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          args:
+            - --config=/config/pricing.yaml
+            - --listen=:8080
+          volumeMounts:
+            - name: pricing-config
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: pricing-config
+          configMap:
+            name: x402-pricing
+            items:
+              - key: pricing.yaml
+                path: pricing.yaml
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    app: x402-verifier
+spec:
+  type: ClusterIP
+  selector:
+    app: x402-verifier
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+# PDB ensures at least 1 replica stays available during rollouts/evictions.
+# Without this, Traefik ForwardAuth fails open when the verifier is unavailable.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: x402-verifier
+  namespace: x402
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: x402-verifier

@@ -24,6 +24,10 @@ type MockFacilitator struct {
 	SettleCalls atomic.Int32
 }
 
+// ClusterHostAddress returns the hostname for reaching the host from inside k3d.
+// On macOS: host.docker.internal. On Linux: host.k3d.internal.
+func ClusterHostAddress() string { return clusterHostURL() }
+
 // clusterHostURL returns the hostname for reaching the host from inside k3d.
 // On macOS, Docker Desktop exposes the host as host.docker.internal.
 // On Linux, k3d uses host.k3d.internal with a host-gateway entry.

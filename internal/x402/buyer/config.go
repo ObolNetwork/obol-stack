@@ -1,0 +1,88 @@
+// Package buyer implements an x402 buyer sidecar that handles payments using
+// pre-signed ERC-3009 TransferWithAuthorization vouchers. The sidecar acts as
+// an OpenAI-compatible reverse proxy — it intercepts 402 responses from upstream
+// sellers, attaches pre-signed payment headers, and retries automatically.
+//
+// The agent pre-signs a bounded batch of authorizations and stores them in a
+// ConfigMap. The sidecar reads from this pool and has zero signer access.
+// Spending is bounded by design: max loss = N * price.
+package buyer
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+// Config is the top-level sidecar configuration, loaded from a JSON file
+// mounted from the x402-buyer-config ConfigMap.
+type Config struct {
+	Upstreams map[string]UpstreamConfig `json:"upstreams"`
+}
+
+// UpstreamConfig describes a single x402-gated upstream endpoint.
+type UpstreamConfig struct {
+	// URL is the upstream base URL (e.g. "https://seller.example.com/services/qwen").
+	URL string `json:"url"`
+
+	// Network is the blockchain network identifier (e.g. "base-sepolia").
+	Network string `json:"network"`
+
+	// PayTo is the seller's receiving address.
+	PayTo string `json:"payTo"`
+
+	// Asset is the token contract address (e.g. USDC on Base Sepolia).
+	Asset string `json:"asset"`
+
+	// Price is the amount in atomic units per request (e.g. "1000" for 0.001 USDC).
+	Price string `json:"price"`
+}
+
+// PreSignedAuth is a single pre-signed ERC-3009 TransferWithAuthorization voucher.
+// Each voucher is single-use — consumed when the facilitator calls settle() on-chain.
+type PreSignedAuth struct {
+	Signature  string `json:"signature"`
+	From       string `json:"from"`
+	To         string `json:"to"`
+	Value      string `json:"value"`
+	ValidAfter string `json:"validAfter"`
+	ValidBefore string `json:"validBefore"`
+	Nonce      string `json:"nonce"`
+}
+
+// AuthsFile is the top-level structure for the pre-signed authorizations file,
+// loaded from the x402-buyer-auths ConfigMap.
+// Keys are upstream names matching Config.Upstreams.
+type AuthsFile map[string][]*PreSignedAuth
+
+// LoadConfig reads and parses the sidecar config from a JSON file.
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if cfg.Upstreams == nil {
+		cfg.Upstreams = make(map[string]UpstreamConfig)
+	}
+	return &cfg, nil
+}
+
+// LoadAuths reads and parses the pre-signed authorizations from a JSON file.
+func LoadAuths(path string) (AuthsFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read auths %s: %w", path, err)
+	}
+	var auths AuthsFile
+	if err := json.Unmarshal(data, &auths); err != nil {
+		return nil, fmt.Errorf("parse auths %s: %w", path, err)
+	}
+	if auths == nil {
+		auths = make(AuthsFile)
+	}
+	return auths, nil
+}

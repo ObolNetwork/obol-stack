@@ -20,6 +20,7 @@ concurrency:
   group: x402-verifier-${{ github.ref }}
   cancel-in-progress: true
 
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: obolnetwork/x402-verifier

@@ -173,6 +173,7 @@ func EnsureVerifier(cfg *config.Config) error {
 	return kubectl.Apply(bin, kc, x402Manifest)
 }
 
+
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
 // If facilitatorURL is empty, the default (https://facilitator.x402.rs) is used.

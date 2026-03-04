@@ -128,7 +128,7 @@ Find charts at [Artifact Hub](https://artifacthub.io).
 
 ## Model Providers
 
-The stack runs [llmspy](https://github.com/ObolNetwork/llms) as an in-cluster gateway that proxies all LLM traffic. By default, Ollama on the host machine is used. To switch to a cloud provider:
+The stack runs [LiteLLM](https://github.com/BerriAI/litellm) as an in-cluster OpenAI-compatible gateway that proxies all LLM traffic. By default, Ollama on the host machine is used. To switch to a cloud provider:
 
 ```bash
 # Interactive — prompts for provider and API key
@@ -142,7 +142,7 @@ obol model setup --provider openai --api-key sk-proj-...
 obol model status
 ```
 
-`model setup` patches the llmspy Kubernetes Secret with your API key, enables the provider, and restarts the gateway. All OpenClaw instances automatically route through llmspy.
+`model setup` patches the LiteLLM config and Secret with your API key, adds the model to the gateway, restarts LiteLLM, and syncs all deployed OpenClaw instances.
 
 ## OpenClaw AI Agent
 

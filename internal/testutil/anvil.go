@@ -3,7 +3,9 @@ package testutil
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -15,6 +17,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+func jsonDecode(r io.Reader, v any) error {
+	return json.NewDecoder(r).Decode(v)
+}
+
 
 // AnvilFork represents a running Anvil instance forking a live chain.
 type AnvilFork struct {
@@ -173,4 +180,64 @@ func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
 	}
 
 	t.Logf("minted %s USDC to %s (slot %s)", amount, to, storageSlot.Hex())
+}
+
+// FundETH sets the ETH balance for an address on the Anvil fork using anvil_setBalance.
+func (f *AnvilFork) FundETH(t *testing.T, addr string, amount *big.Int) {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","method":"anvil_setBalance","params":["%s","0x%x"],"id":1}`,
+		addr, amount,
+	)
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("anvil_setBalance failed: %v", err)
+	}
+	resp.Body.Close()
+	t.Logf("funded %s with %s wei", addr, amount)
+}
+
+// ClearCode removes contract code from an address on Anvil.
+// Required for deterministic Anvil accounts that have proxy contracts on Base Sepolia —
+// USDC's SignatureChecker sees code → tries EIP-1271 instead of ecrecover.
+func (f *AnvilFork) ClearCode(t *testing.T, addr string) {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","method":"anvil_setCode","params":["%s","0x"],"id":1}`,
+		addr,
+	)
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("anvil_setCode failed: %v", err)
+	}
+	resp.Body.Close()
+}
+
+// GetUSDCBalance returns the USDC balance for an address via eth_call.
+func (f *AnvilFork) GetUSDCBalance(t *testing.T, addr string) *big.Int {
+	t.Helper()
+	// balanceOf(address) selector = 0x70a08231
+	paddedAddr := fmt.Sprintf("%064s", common.HexToAddress(addr).Hex()[2:])
+	calldata := "0x70a08231" + paddedAddr
+
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"%s","data":"%s"},"latest"],"id":1}`,
+		USDCBaseSepolia, calldata,
+	)
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("eth_call balanceOf failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &result); err != nil {
+		t.Fatalf("parse balanceOf response: %v", err)
+	}
+
+	balance := new(big.Int)
+	balance.SetString(strings.TrimPrefix(result.Result, "0x"), 16)
+	return balance
 }

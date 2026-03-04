@@ -73,7 +73,7 @@ Use `--chain <network>` to query a specific chain. The network name is passed to
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ERPC_URL` | `http://erpc.erpc.svc.cluster.local/rpc` | eRPC gateway base URL |
+| `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
 | `ERPC_NETWORK` | `base-sepolia` | Default chain for queries |
 
 ## Architecture

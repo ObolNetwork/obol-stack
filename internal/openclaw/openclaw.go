@@ -28,8 +28,8 @@ import (
 )
 
 // CloudProviderInfo holds the cloud provider selection from interactive setup.
-// This is used to configure llmspy with the API key separately from the
-// OpenClaw overlay (which routes through llmspy).
+// This is used to configure LiteLLM with the API key separately from the
+// OpenClaw overlay (which routes through LiteLLM).
 type CloudProviderInfo struct {
 	Name    string // "anthropic" or "openai"
 	APIKey  string
@@ -48,7 +48,7 @@ const (
 
 	// openclawImageTag overrides the chart's default image tag.
 	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
-	openclawImageTag = "2026.2.26"
+	openclawImageTag = "2026.3.1"
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
@@ -92,18 +92,32 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
 	// No imported providers — skip automatic deployment.
-	// Local Ollama models are often too small to be useful, and the llmspy
+	// Local Ollama models are often too small to be useful, and the LiteLLM
 	// routing path has sharp edges that are better handled via explicit setup.
+	var ollamaModels []string
 	if !hasImportedProviders {
-		u.Print("  No model provider configured.")
-		u.Print("  Run 'obol openclaw onboard' to set up an OpenClaw instance.")
-		return nil
+		ollamaModels = listOllamaModels()
+		if ollamaModels != nil {
+			if len(ollamaModels) > 0 {
+				u.Successf("Local Ollama detected with %d model(s) at %s", len(ollamaModels), ollamaEndpoint())
+			} else {
+				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
+				u.Print("  Run 'obol model setup' to configure a cloud provider,")
+				u.Print("  or pull a model with: ollama pull llama3.2:3b")
+			}
+		} else {
+			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
+			u.Print("  Skipping default OpenClaw model provider setup.")
+			u.Print("  Run 'obol model setup' to configure a provider later.")
+			return nil
+		}
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:        "default",
-		Sync:      true,
-		IsDefault: true,
+		ID:           "default",
+		Sync:         true,
+		IsDefault:    true,
+		OllamaModels: ollamaModels,
 	}, u)
 }
 
@@ -175,14 +189,14 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			u.Print("\nUsing detected configuration from ~/.openclaw/")
 		} else {
 			var cloudProvider *CloudProviderInfo
-			imported, cloudProvider, err = interactiveSetup(imported)
+			imported, cloudProvider, err = interactiveSetup(cfg, imported)
 			if err != nil {
 				return fmt.Errorf("interactive setup failed: %w", err)
 			}
-			// Push cloud API key to llmspy if a cloud provider was selected
+			// Push cloud API key to LiteLLM if a cloud provider was selected
 			if cloudProvider != nil {
-				if llmErr := model.ConfigureLLMSpy(cfg, u, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-					return fmt.Errorf("failed to configure llmspy: %w", llmErr)
+				if llmErr := model.ConfigureLiteLLM(cfg, u, cloudProvider.Name, cloudProvider.APIKey, []string{cloudProvider.ModelID}); llmErr != nil {
+					return fmt.Errorf("failed to configure LiteLLM: %w", llmErr)
 				}
 			}
 		}
@@ -219,7 +233,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			opts.OllamaModels = listOllamaModels()
 		}
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, opts.OllamaModels, agentBaseURL)
+	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, opts.OllamaModels, agentBaseURL)
 
 	// Append heartbeat config for agent mode.
 	if opts.AgentMode {
@@ -293,6 +307,15 @@ agents:
 		u.Blank()
 		if err := doSync(cfg, id, u); err != nil {
 			return err
+		}
+		// Register default Ollama models in LiteLLM so the proxy can route them.
+		// This is only needed when no cloud provider was configured (the overlay
+		// points OpenClaw at LiteLLM, but LiteLLM starts with an empty model_list).
+		if len(opts.OllamaModels) > 0 && imported == nil {
+			if llmErr := model.ConfigureLiteLLM(cfg, u, "ollama", "", opts.OllamaModels); llmErr != nil {
+				u.Warnf("Failed to register Ollama models in LiteLLM: %v", llmErr)
+				u.Print("  Run 'obol model setup' to configure models manually.")
+			}
 		}
 		// Copy workspace files into the pod after sync succeeds
 		if imported != nil && imported.WorkspaceDir != "" {
@@ -842,15 +865,15 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	}
 
 	// Always show the provider prompt — that's the whole point of setup.
-	imported, cloudProvider, err := interactiveSetup(nil)
+	imported, cloudProvider, err := interactiveSetup(cfg, nil)
 	if err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
-	// Push cloud API key to llmspy if a cloud provider was selected
+	// Push cloud API key to LiteLLM if a cloud provider was selected
 	if cloudProvider != nil {
-		if llmErr := model.ConfigureLLMSpy(cfg, u, cloudProvider.Name, cloudProvider.APIKey); llmErr != nil {
-			return fmt.Errorf("failed to configure llmspy: %w", llmErr)
+		if llmErr := model.ConfigureLiteLLM(cfg, u, cloudProvider.Name, cloudProvider.APIKey, []string{cloudProvider.ModelID}); llmErr != nil {
+			return fmt.Errorf("failed to configure LiteLLM: %w", llmErr)
 		}
 	}
 
@@ -867,7 +890,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil, "")
+	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, nil, "")
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
@@ -1278,6 +1301,126 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 	return nil
 }
 
+// SyncOverlayModels updates all deployed OpenClaw instances' overlay model
+// lists to match the current LiteLLM model_list, then re-syncs each instance.
+// This keeps OpenClaw's "openai" provider slot (which routes through LiteLLM)
+// in sync when models are added/removed via `obol model setup`.
+func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
+	ids, err := ListInstanceIDs(cfg)
+	if err != nil || len(ids) == 0 {
+		return nil // no instances to update
+	}
+
+	for _, id := range ids {
+		overlayPath := filepath.Join(deploymentPath(cfg, id), "values-obol.yaml")
+		data, err := os.ReadFile(overlayPath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+
+		// Only patch overlays that use the LiteLLM gateway pattern
+		// (the "openai" provider slot pointing at litellm.llm.svc).
+		if !strings.Contains(content, "litellm.llm.svc") {
+			continue
+		}
+
+		updated, changed := patchOverlayModelList(content, models)
+		if !changed {
+			continue
+		}
+
+		if err := os.WriteFile(overlayPath, []byte(updated), 0644); err != nil {
+			u.Warnf("Failed to update overlay for %s: %v", id, err)
+			continue
+		}
+
+		u.Infof("Syncing OpenClaw %s with updated model list", id)
+		if err := doSync(cfg, id, u); err != nil {
+			u.Warnf("Failed to sync %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// patchOverlayModelList replaces the model list under the openai provider
+// in a values-obol.yaml overlay with the given models. Returns the updated
+// content and whether a change was made.
+func patchOverlayModelList(content string, models []string) (string, bool) {
+	// Find the "    models:" line that follows the openai provider section.
+	// The overlay structure is:
+	//   models:
+	//     openai:
+	//       ...
+	//       models:
+	//         - id: <model>
+	//           name: <display>
+	lines := strings.Split(content, "\n")
+	var result []string
+	inOpenAI := false
+	inModelList := false
+	modelListIndent := ""
+	replaced := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Track when we enter the openai provider section
+		if trimmed == "openai:" && strings.Contains(content, "litellm.llm.svc") {
+			inOpenAI = true
+			result = append(result, line)
+			continue
+		}
+
+		// Detect the models list under the openai section
+		if inOpenAI && !inModelList && (trimmed == "models:" || trimmed == "models: []") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " "))]
+			modelListIndent = indent
+			inModelList = true
+			replaced = true
+
+			// Write the new model list
+			if len(models) == 0 {
+				result = append(result, indent+"models: []")
+			} else {
+				result = append(result, indent+"models:")
+				for _, m := range models {
+					result = append(result, indent+"  - id: "+m)
+					result = append(result, indent+"    name: "+ollamaModelDisplayName(m))
+				}
+			}
+
+			// Skip old model entries
+			if trimmed == "models: []" {
+				continue
+			}
+			for i+1 < len(lines) {
+				next := lines[i+1]
+				nextTrimmed := strings.TrimSpace(next)
+				if nextTrimmed == "" || (strings.HasPrefix(next, modelListIndent+"  ") && (strings.HasPrefix(nextTrimmed, "- id:") || strings.HasPrefix(nextTrimmed, "name:"))) {
+					i++
+					continue
+				}
+				break
+			}
+			continue
+		}
+
+		// Detect when we leave the openai section (non-indented line)
+		if inOpenAI && !strings.HasPrefix(line, "    ") && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			inOpenAI = false
+		}
+
+		result = append(result, line)
+	}
+
+	if !replaced {
+		return content, false
+	}
+	return strings.Join(result, "\n"), true
+}
+
 // deploymentPath returns the path to a deployment directory
 func deploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
@@ -1286,7 +1429,17 @@ func deploymentPath(cfg *config.Config, id string) string {
 // generateOverlayValues creates the Obol Stack-specific values overlay.
 // If imported is non-nil, provider/channel config from the import is used
 // instead of the default Ollama configuration.
-func generateOverlayValues(hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string, agentBaseURL string) string {
+// litellmMasterKey returns the LiteLLM master key derived from the cluster's stack ID.
+func litellmMasterKey(cfg *config.Config) string {
+	stackIDPath := filepath.Join(cfg.ConfigDir, ".stack-id")
+	data, err := os.ReadFile(stackIDPath)
+	if err != nil {
+		return "sk-obol-default" // fallback if stack ID not found
+	}
+	return "sk-obol-" + strings.TrimSpace(string(data))
+}
+
+func generateOverlayValues(cfg *config.Config, hostname string, imported *ImportResult, useExternalSecrets bool, ollamaModels []string, agentBaseURL string) string {
 	var b strings.Builder
 
 	b.WriteString(`# Obol Stack overlay values for OpenClaw
@@ -1334,11 +1487,12 @@ rbac:
 		}
 		b.WriteString(importedOverlay)
 	} else {
-		// Default provider: in-cluster Ollama via llmspy proxy.
+		// Default provider: LiteLLM gateway (OpenAI-compatible).
 		// Model list is populated from the host's Ollama instance (if available).
-		b.WriteString("# Default model provider: in-cluster Ollama (routed through llmspy)\nopenclaw:\n")
+		// Uses "openai" provider slot to avoid triggering Ollama /api/tags discovery.
+		b.WriteString("# Default model provider: LiteLLM gateway (OpenAI-compatible)\nopenclaw:\n")
 		if len(ollamaModels) > 0 {
-			b.WriteString(fmt.Sprintf("  agentModel: ollama/%s\n", ollamaModels[0]))
+			b.WriteString(fmt.Sprintf("  agentModel: openai/%s\n", ollamaModels[0]))
 		}
 		b.WriteString(`  gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
@@ -1348,16 +1502,17 @@ rbac:
       allowInsecureAuth: true
       dangerouslyAllowHostHeaderOriginFallback: true
 
-# apiKeyValue is a dummy placeholder — Ollama does not require auth.
-# It is safe to inline here (unlike real cloud keys, which go to secrets).
+# LiteLLM gateway: OpenAI-compatible proxy routing to all configured providers.
+# Uses "openai" provider slot — LiteLLM routes by model name, not provider type.
 models:
-  ollama:
+  openai:
     enabled: true
-    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    baseUrl: http://litellm.llm.svc.cluster.local:4000/v1
     api: openai-completions
-    apiKeyEnvVar: OLLAMA_API_KEY
-    apiKeyValue: ollama-local
+    apiKeyEnvVar: OPENAI_API_KEY
 `)
+		b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", litellmMasterKey(cfg)))
+
 		if len(ollamaModels) > 0 {
 			b.WriteString("    models:\n")
 			for _, m := range ollamaModels {
@@ -1601,8 +1756,8 @@ func ollamaModelDisplayName(name string) string {
 // interactiveSetup prompts the user for provider configuration.
 // If imported is non-nil, offers to use the detected config.
 // Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
-// when a cloud provider was selected (so the caller can configure llmspy).
-func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
+// when a cloud provider was selected (so the caller can configure LiteLLM).
+func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	if imported != nil {
@@ -1641,21 +1796,21 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 
 		switch choice {
 		case "1":
-			fmt.Println("Using global Ollama route via llmspy.")
+			fmt.Println("Using global Ollama route via LiteLLM.")
 			return nil, nil, nil
 		case "2":
 			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
-			result := buildLLMSpyRoutedOverlay(cloud)
+			result := buildLiteLLMRoutedOverlay(cfg, cloud)
 			return result, cloud, nil
 		case "3":
 			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
-			result := buildLLMSpyRoutedOverlay(cloud)
+			result := buildLiteLLMRoutedOverlay(cfg, cloud)
 			return result, cloud, nil
 		case "4":
 			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
@@ -1702,14 +1857,14 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 		if err != nil {
 			return nil, nil, err
 		}
-		result := buildLLMSpyRoutedOverlay(cloud)
+		result := buildLiteLLMRoutedOverlay(cfg, cloud)
 		return result, cloud, nil
 	case "2":
 		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
-		result := buildLLMSpyRoutedOverlay(cloud)
+		result := buildLiteLLMRoutedOverlay(cfg, cloud)
 		return result, cloud, nil
 	case "3":
 		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
@@ -1735,7 +1890,7 @@ func interactiveSetup(imported *ImportResult) (*ImportResult, *CloudProviderInfo
 }
 
 // promptForCloudProvider asks for an API key and returns cloud provider info.
-// The actual overlay (ImportResult) is built separately via buildLLMSpyRoutedOverlay.
+// The actual overlay (ImportResult) is built separately via buildLiteLLMRoutedOverlay.
 func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string) (*CloudProviderInfo, error) {
 	fmt.Printf("\n%s API key: ", display)
 	apiKey, _ := reader.ReadString('\n')
@@ -1835,30 +1990,25 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	return buildDirectProviderOverlay("openai", baseURL, apiType, apiKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
-// buildLLMSpyRoutedOverlay creates an ImportResult that routes a cloud model
-// through the llmspy proxy. OpenClaw sees an "ollama" provider pointing at the
-// cluster-wide llmspy gateway, with the cloud model in its model list. We reuse
-// the "ollama" provider name because the remote Helm chart only iterates a
-// hardcoded list (ollama, anthropic, openai) — using a custom name would cause
-// the provider to be silently dropped from the rendered config.
-// The actual cloud providers are disabled in OpenClaw — llmspy handles upstream
-// routing based on the bare model ID.
-func buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo) *ImportResult {
+// buildLiteLLMRoutedOverlay creates an ImportResult that routes a cloud model
+// through the LiteLLM proxy. Uses "openai" provider slot with api: openai-completions.
+// LiteLLM handles upstream routing based on the model name.
+func buildLiteLLMRoutedOverlay(cfg *config.Config, cloud *CloudProviderInfo) *ImportResult {
 	return &ImportResult{
-		AgentModel: "ollama/" + cloud.ModelID,
+		AgentModel: "openai/" + cloud.ModelID,
 		Providers: []ImportedProvider{
 			{
-				Name:         "ollama",
-				BaseURL:      "http://llmspy.llm.svc.cluster.local:8000/v1",
+				Name:         "openai",
+				BaseURL:      "http://litellm.llm.svc.cluster.local:4000/v1",
 				API:          "openai-completions",
-				APIKeyEnvVar: "OLLAMA_API_KEY",
-				APIKey:       "ollama-local",
+				APIKeyEnvVar: "OPENAI_API_KEY",
+				APIKey:       litellmMasterKey(cfg),
 				Models: []ImportedModel{
 					{ID: cloud.ModelID, Name: cloud.Display},
 				},
 			},
 			{Name: "anthropic", Disabled: true},
-			{Name: "openai", Disabled: true},
+			{Name: "ollama", Disabled: true},
 		},
 	}
 }

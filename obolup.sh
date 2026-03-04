@@ -88,6 +88,11 @@ log_dim() {
 	echo -e "${OBOL_MUTED}$1${NC}"
 }
 
+# Print dimmed secondary text (matches Go CLI's u.Dim)
+log_dim() {
+	echo -e "${DIM}$1${NC}"
+}
+
 # Check if command exists
 command_exists() {
 	command -v "$1" >/dev/null 2>&1

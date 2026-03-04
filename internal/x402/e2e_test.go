@@ -3,7 +3,6 @@
 package x402
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/testutil"
@@ -199,21 +197,4 @@ func extractRoutePath(pricingYAML string) string {
 	return ""
 }
 
-func httpPost(t *testing.T, url, body string, headers map[string]string) *http.Response {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBufferString(body))
-	if err != nil {
-		t.Fatalf("create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP POST %s: %v", url, err)
-	}
-	return resp
-}
+// httpPost and mustQuoteJSON are in helpers_test.go (shared with non-integration tests).

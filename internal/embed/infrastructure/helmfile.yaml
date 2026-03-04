@@ -129,6 +129,8 @@ releases:
       - traefik/traefik
     values:
       - ./values/erpc.yaml.gotmpl
+    # The chart exposes port 4000 (container) via Service port 4000.
+    # In-cluster callers use erpc.erpc.svc.cluster.local:4000.
 
   # eRPC HTTPRoute
   - name: erpc-httproute
@@ -155,9 +157,36 @@ releases:
                     - path:
                         type: PathPrefix
                         value: /rpc
+                  filters:
+                    - type: ExtensionRef
+                      extensionRef:
+                        group: traefik.io
+                        kind: Middleware
+                        name: x402-payment
                   backendRefs:
                     - name: erpc
                       port: 80
+
+  # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier).
+  # Always deployed; the verifier returns 200 for routes with no pricing rules.
+  - name: erpc-x402-middleware
+    namespace: erpc
+    chart: bedag/raw
+    version: 2.0.2
+    needs:
+      - traefik/traefik
+    values:
+      - resources:
+          - apiVersion: traefik.io/v1alpha1
+            kind: Middleware
+            metadata:
+              name: x402-payment
+              namespace: erpc
+            spec:
+              forwardAuth:
+                address: http://x402-verifier.x402.svc.cluster.local:8080/verify
+                authResponseHeaders:
+                  - X-Payment-Response
 
   # eRPC metadata ConfigMap for frontend discovery
   - name: erpc-metadata

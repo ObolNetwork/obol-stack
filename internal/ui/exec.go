@@ -89,6 +89,7 @@ func (u *UI) execInteractive(cfg ExecConfig) error {
 	return err
 }
 
+
 func (u *UI) execCaptured(cfg ExecConfig) error {
 	var buf bytes.Buffer
 	cfg.Cmd.Stdout = &buf

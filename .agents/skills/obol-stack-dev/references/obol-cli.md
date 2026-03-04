@@ -25,12 +25,12 @@ return cmd.Run()
 | `obol stack down` | Stop cluster (preserves data) | `internal/stack/stack.go:Down()` |
 | `obol stack purge -f` | Remove cluster + data | `internal/stack/stack.go:Purge()` |
 
-### Model Provider Management (Tier 1: llmspy)
+### Model Provider Management (Tier 1: LiteLLM)
 
 | Command | Description | Implementation |
 |---------|-------------|----------------|
 | `obol model setup` | Interactive provider config | `cmd/obol/model.go` |
-| `obol model setup --provider anthropic --api-key KEY` | Non-interactive | `model.ConfigureLLMSpy()` |
+| `obol model setup --provider anthropic --api-key KEY` | Non-interactive | `model.ConfigureLiteLLM()` |
 | `obol model status` | Show enabled providers | `model.GetProviderStatus()` |
 
 ### OpenClaw Instance Management (Tier 2)
@@ -93,7 +93,7 @@ return cmd.Run()
 # CORRECT
 obol openclaw delete --force my-instance
 
-# WRONG — flag is treated as argument, not parsed
+# WRONG -- flag is treated as argument, not parsed
 obol openclaw delete my-instance --force
 ```
 
@@ -141,14 +141,14 @@ When you run `obol openclaw sync <id>`, the full path is:
 
 ```
 obol CLI (cmd/obol/openclaw.go)
-  → openclaw.Sync(cfg, id)
-    → doSync(cfg, id)
-      → applyUserSecretsIfPresent()  — K8s Secret with API keys
-      → helmfile sync -f helmfile.yaml
-        → Helm chart: obol/openclaw
-          → templates/_helpers.tpl renders providers into OpenClaw JSON
-          → Deployment, Service, ConfigMap, Secret created
-          → HTTPRoute for Gateway API
+  -> openclaw.Sync(cfg, id)
+    -> doSync(cfg, id)
+      -> applyUserSecretsIfPresent()  -- K8s Secret with API keys
+      -> helmfile sync -f helmfile.yaml
+        -> Helm chart: obol/openclaw
+          -> templates/_helpers.tpl renders providers into OpenClaw JSON
+          -> Deployment, Service, ConfigMap, Secret created
+          -> HTTPRoute for Gateway API
 ```
 
-This is why testing through `obol openclaw sync` is critical — it exercises the full stack from CLI argument parsing through helm chart rendering to Kubernetes resource creation.
+This is why testing through `obol openclaw sync` is critical -- it exercises the full stack from CLI argument parsing through helm chart rendering to Kubernetes resource creation.

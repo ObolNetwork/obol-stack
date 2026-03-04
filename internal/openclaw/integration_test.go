@@ -155,33 +155,17 @@ func requireEnvKey(t *testing.T, key string) string {
 	return v
 }
 
-// requireLLMSpyProvider verifies that a provider is actually active in the
-// running llmspy pod (not auto-disabled due to invalid API key). This catches
-// the case where `obol model setup` succeeds (ConfigMap patched) but llmspy
-// auto-disables the provider at startup because provider.test() failed.
-func requireLLMSpyProvider(t *testing.T, cfg *config.Config, provider string) {
+// requireLiteLLMReady verifies that LiteLLM is running and has models configured.
+// This replaces the old requireLLMSpyProvider which exec'd into the pod.
+func requireLiteLLMReady(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	output := obolRun(t, cfg, "kubectl",
-		"exec", "-n", "llm", "deploy/llmspy", "-c", "llmspy", "--",
-		"python3", "-c", fmt.Sprintf(`import json
-with open('/home/llms/.llms/llms.json') as f:
-    d = json.load(f)
-p = d.get('providers', {}).get('%s', {})
-print('enabled' if p.get('enabled') else 'disabled')
-`, provider))
-	// Extract the last non-empty line (kubectl may prepend "Defaulted container" noise)
-	state := ""
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "enabled" || line == "disabled" {
-			state = line
-		}
+		"exec", "-n", "llm", "deploy/litellm", "--",
+		"curl", "-sf", "http://localhost:4000/health/readiness")
+	if !strings.Contains(output, "ok") && !strings.Contains(output, "healthy") {
+		t.Skipf("LiteLLM not ready: %s", output)
 	}
-	if state != "enabled" {
-		t.Skipf("llmspy provider %q is %s (API key likely invalid or expired) — "+
-			"check the key and re-run 'obol model setup --provider %s'", provider, state, provider)
-	}
-	t.Logf("llmspy provider %q is active", provider)
+	t.Log("LiteLLM gateway is ready")
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +186,7 @@ func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	overlay := generateOverlayValues(hostname, nil, false, ollamaModels, "")
+	overlay := generateOverlayValues(cfg, hostname, nil, false, ollamaModels, "")
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		t.Fatalf("failed to write overlay: %v", err)
 	}
@@ -214,10 +198,10 @@ func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels 
 }
 
 // scaffoldCloudInstance creates the deployment directory with a cloud-provider
-// overlay routed through llmspy.
+// overlay routed through LiteLLM.
 func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *CloudProviderInfo) {
 	t.Helper()
-	imported := buildLLMSpyRoutedOverlay(cloud)
+	imported := buildLiteLLMRoutedOverlay(cfg, cloud)
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
@@ -231,7 +215,7 @@ func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *C
 		t.Fatalf("failed to write secrets: %v", err)
 	}
 
-	overlay := generateOverlayValues(hostname, imported, len(secretData) > 0, nil, "")
+	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, nil, "")
 	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
 		t.Fatalf("failed to write overlay: %v", err)
 	}
@@ -396,7 +380,7 @@ func chatCompletionWithPrompt(t *testing.T, baseURL, modelName, token, prompt st
 	content := result.Choices[0].Message.Content
 
 	// Reject responses that are actually upstream errors wrapped in a 200.
-	// llmspy returns errors like "500 status code (no body)" or "Model X not found"
+	// LiteLLM returns errors like "500 status code (no body)" or "Model X not found"
 	// which OpenClaw may relay as chat content.
 	errorPatterns := []string{
 		"status code",
@@ -472,10 +456,10 @@ func TestIntegration_AnthropicInference(t *testing.T) {
 	const id = "test-anthropic"
 	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
 
-	// Configure llmspy gateway via obol model setup
-	t.Log("configuring llmspy via: obol model setup --provider anthropic")
+	// Configure LiteLLM gateway via obol model setup
+	t.Log("configuring LiteLLM via: obol model setup --provider anthropic")
 	obolRun(t, cfg, "model", "setup", "--provider", "anthropic", "--api-key", apiKey)
-	requireLLMSpyProvider(t, cfg, "anthropic")
+	requireLiteLLMReady(t, cfg)
 
 	cloud := &CloudProviderInfo{
 		Name:    "anthropic",
@@ -485,7 +469,7 @@ func TestIntegration_AnthropicInference(t *testing.T) {
 	}
 
 	// Scaffold cloud overlay + deploy via obol openclaw sync
-	t.Logf("scaffolding OpenClaw instance %q with Anthropic via llmspy", id)
+	t.Logf("scaffolding OpenClaw instance %q with Anthropic via LiteLLM", id)
 	scaffoldCloudInstance(t, cfg, id, cloud)
 
 	t.Log("deploying via: obol openclaw sync " + id)
@@ -498,21 +482,21 @@ func TestIntegration_AnthropicInference(t *testing.T) {
 	t.Logf("retrieved gateway token (%d chars)", len(token))
 
 	baseURL := portForward(t, cfg, namespace)
-	agentModel := "ollama/claude-sonnet-4-6" // routed through llmspy
+	agentModel := "ollama/claude-sonnet-4-6" // routed through LiteLLM
 	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
 
 	reply := chatCompletion(t, baseURL, agentModel, token)
 	t.Logf("Anthropic response: %s", reply)
 
 	// Known OpenClaw issue: Anthropic returns finish_reason "end_turn" which
-	// llmspy translates correctly, but OpenClaw doesn't recognize it and outputs
+	// LiteLLM translates correctly, but OpenClaw doesn't recognize it and outputs
 	// "Unhandled stop reason: end_turn" instead of the model's actual text.
-	// The inference pipeline (obol-stack → llmspy → Anthropic) works — verified
-	// via direct curl to llmspy. This is an upstream OpenClaw bug.
+	// The inference pipeline (obol-stack → LiteLLM → Anthropic) works — verified
+	// via direct curl to LiteLLM. This is an upstream OpenClaw bug.
 	if strings.Contains(reply, "Unhandled stop reason") {
 		t.Log("NOTE: response contains 'Unhandled stop reason' — this is a known " +
 			"OpenClaw issue with Anthropic's finish_reason translation, not an " +
-			"obol-stack or llmspy problem")
+			"obol-stack or LiteLLM problem")
 	}
 }
 
@@ -523,10 +507,10 @@ func TestIntegration_OpenAIInference(t *testing.T) {
 	const id = "test-openai"
 	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
 
-	// Configure llmspy gateway via obol model setup
-	t.Log("configuring llmspy via: obol model setup --provider openai")
+	// Configure LiteLLM gateway via obol model setup
+	t.Log("configuring LiteLLM via: obol model setup --provider openai")
 	obolRun(t, cfg, "model", "setup", "--provider", "openai", "--api-key", apiKey)
-	requireLLMSpyProvider(t, cfg, "openai")
+	requireLiteLLMReady(t, cfg)
 
 	cloud := &CloudProviderInfo{
 		Name:    "openai",
@@ -536,7 +520,7 @@ func TestIntegration_OpenAIInference(t *testing.T) {
 	}
 
 	// Scaffold cloud overlay + deploy via obol openclaw sync
-	t.Logf("scaffolding OpenClaw instance %q with OpenAI via llmspy", id)
+	t.Logf("scaffolding OpenClaw instance %q with OpenAI via LiteLLM", id)
 	scaffoldCloudInstance(t, cfg, id, cloud)
 
 	t.Log("deploying via: obol openclaw sync " + id)
@@ -549,7 +533,7 @@ func TestIntegration_OpenAIInference(t *testing.T) {
 	t.Logf("retrieved gateway token (%d chars)", len(token))
 
 	baseURL := portForward(t, cfg, namespace)
-	agentModel := "ollama/gpt-4o-mini" // routed through llmspy
+	agentModel := "ollama/gpt-4o-mini" // routed through LiteLLM
 	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
 
 	reply := chatCompletion(t, baseURL, agentModel, token)
@@ -563,10 +547,10 @@ func TestIntegration_GoogleInference(t *testing.T) {
 	const id = "test-google"
 	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
 
-	// Configure llmspy gateway via obol model setup
-	t.Log("configuring llmspy via: obol model setup --provider google")
+	// Configure LiteLLM gateway via obol model setup
+	t.Log("configuring LiteLLM via: obol model setup --provider google")
 	obolRun(t, cfg, "model", "setup", "--provider", "google", "--api-key", apiKey)
-	requireLLMSpyProvider(t, cfg, "google")
+	requireLiteLLMReady(t, cfg)
 
 	cloud := &CloudProviderInfo{
 		Name:    "google",
@@ -576,7 +560,7 @@ func TestIntegration_GoogleInference(t *testing.T) {
 	}
 
 	// Scaffold cloud overlay + deploy via obol openclaw sync
-	t.Logf("scaffolding OpenClaw instance %q with Google via llmspy", id)
+	t.Logf("scaffolding OpenClaw instance %q with Google via LiteLLM", id)
 	scaffoldCloudInstance(t, cfg, id, cloud)
 
 	t.Log("deploying via: obol openclaw sync " + id)
@@ -589,7 +573,7 @@ func TestIntegration_GoogleInference(t *testing.T) {
 	t.Logf("retrieved gateway token (%d chars)", len(token))
 
 	baseURL := portForward(t, cfg, namespace)
-	agentModel := "ollama/gemini-2.5-flash" // routed through llmspy
+	agentModel := "ollama/gemini-2.5-flash" // routed through LiteLLM
 	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
 
 	reply := chatCompletion(t, baseURL, agentModel, token)
@@ -603,11 +587,11 @@ func TestIntegration_ZaiInference(t *testing.T) {
 	const id = "test-zai"
 	t.Cleanup(func() { cleanupInstance(t, cfg, id) })
 
-	// Configure llmspy gateway via obol model setup — this provider was NOT in
+	// Configure LiteLLM gateway via obol model setup — this provider was NOT in
 	// the old hardcoded map, so it only works with dynamic provider discovery.
-	t.Log("configuring llmspy via: obol model setup --provider zai")
+	t.Log("configuring LiteLLM via: obol model setup --provider zai")
 	obolRun(t, cfg, "model", "setup", "--provider", "zai", "--api-key", apiKey)
-	requireLLMSpyProvider(t, cfg, "zai")
+	requireLiteLLMReady(t, cfg)
 
 	cloud := &CloudProviderInfo{
 		Name:    "zai",
@@ -617,7 +601,7 @@ func TestIntegration_ZaiInference(t *testing.T) {
 	}
 
 	// Scaffold cloud overlay + deploy via obol openclaw sync
-	t.Logf("scaffolding OpenClaw instance %q with Z.AI via llmspy", id)
+	t.Logf("scaffolding OpenClaw instance %q with Z.AI via LiteLLM", id)
 	scaffoldCloudInstance(t, cfg, id, cloud)
 
 	t.Log("deploying via: obol openclaw sync " + id)
@@ -630,7 +614,7 @@ func TestIntegration_ZaiInference(t *testing.T) {
 	t.Logf("retrieved gateway token (%d chars)", len(token))
 
 	baseURL := portForward(t, cfg, namespace)
-	agentModel := "ollama/glm-5" // routed through llmspy
+	agentModel := "ollama/glm-5" // routed through LiteLLM
 	t.Logf("testing inference with model %s at %s", agentModel, baseURL)
 
 	reply := chatCompletion(t, baseURL, agentModel, token)

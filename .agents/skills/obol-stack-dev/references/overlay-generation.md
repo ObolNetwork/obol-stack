@@ -21,20 +21,20 @@ The main overlay generator. Called for both Ollama and cloud paths.
 
 **Parameters**:
 - `hostname`: e.g., `openclaw-test-ollama.obol.stack`
-- `imported`: `*ImportResult` — provider config (nil for Ollama-only)
+- `imported`: `*ImportResult` -- provider config (nil for Ollama-only)
 - `hasSecrets`: whether to include `extraEnvFromSecrets` reference
-- `ollamaModels`: `[]string` — available Ollama models (nil for cloud)
+- `ollamaModels`: `[]string` -- available Ollama models (nil for cloud)
 
 **For Ollama path** (imported=nil, ollamaModels provided):
 ```yaml
-agentModel: ollama/glm-5:cloud
+agentModel: openai/glm-5:cloud
 models:
-  ollama:
+  openai:
     enabled: true
-    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    baseUrl: http://litellm.llm.svc.cluster.local:4000/v1
     api: openai-completions
-    apiKeyEnvVar: OLLAMA_API_KEY
-    apiKeyValue: ollama-local
+    apiKeyEnvVar: OPENAI_API_KEY
+    apiKeyValue: sk-obol-<cluster-id>
     models:
       - id: glm-5:cloud
         name: glm-5:cloud
@@ -42,54 +42,54 @@ models:
         name: llama3.2:3b
   anthropic:
     enabled: false
-  openai:
+  openai-direct:
     enabled: false
 ```
 
-**For cloud path** (imported from `buildLLMSpyRoutedOverlay`, ollamaModels=nil):
+**For cloud path** (imported from `buildLiteLLMRoutedOverlay`, ollamaModels=nil):
 ```yaml
-agentModel: ollama/claude-sonnet-4-5-20250929
+agentModel: openai/claude-sonnet-4-5-20250929
 models:
-  ollama:
+  openai:
     enabled: true
-    baseUrl: http://llmspy.llm.svc.cluster.local:8000/v1
+    baseUrl: http://litellm.llm.svc.cluster.local:4000/v1
     api: openai-completions
-    apiKeyEnvVar: OLLAMA_API_KEY
-    apiKeyValue: ollama-local
+    apiKeyEnvVar: OPENAI_API_KEY
+    apiKeyValue: sk-obol-<cluster-id>
     models:
       - id: claude-sonnet-4-5-20250929
         name: Claude Sonnet 4.5
   anthropic:
     enabled: false
-  openai:
+  openai-direct:
     enabled: false
 ```
 
-### `buildLLMSpyRoutedOverlay(cloud *CloudProviderInfo)`
+### `buildLiteLLMRoutedOverlay(cloud *CloudProviderInfo)`
 
-Builds the `ImportResult` for a cloud provider routed through llmspy.
+Builds the `ImportResult` for a cloud provider routed through LiteLLM.
 
 **Input**:
 ```go
 cloud := &CloudProviderInfo{
     Name:    "anthropic",          // Provider name
-    APIKey:  "sk-ant-...",         // API key (stored in llmspy Secret, not here)
+    APIKey:  "sk-ant-...",         // API key (stored in litellm-secrets Secret, not here)
     ModelID: "claude-sonnet-4-5-20250929",
     Display: "Claude Sonnet 4.5",
 }
 ```
 
 **Output**: An `ImportResult` with:
-- `AgentModel`: `"ollama/claude-sonnet-4-5-20250929"` (ollama/ prefix)
-- `Providers[0]`: ollama (enabled, pointing at llmspy)
-- `Providers[1]`: anthropic (disabled — handled by llmspy)
-- `Providers[2]`: openai (disabled)
+- `AgentModel`: `"openai/claude-sonnet-4-5-20250929"` (openai/ prefix)
+- `Providers[0]`: openai (enabled, pointing at LiteLLM)
+- `Providers[1]`: anthropic (disabled -- handled by LiteLLM)
+- `Providers[2]`: openai-direct (disabled)
 
 ### `buildDirectProviderOverlay(providerName, baseURL, api, envVar, modelID, display, apiKey)`
 
-Builds overlay for direct provider access (NOT through llmspy). Used when the application connects directly to the cloud API.
+Builds overlay for direct provider access (NOT through LiteLLM). Used when the application connects directly to the cloud API.
 
-**Note**: This path is NOT the default. The llmspy-routed path is preferred because it centralizes API key management.
+**Note**: This path is NOT the default. The LiteLLM-routed path is preferred because it centralizes API key management.
 
 ### `collectSensitiveData(imported *ImportResult)`
 
@@ -123,19 +123,19 @@ releases:
 
 ```go
 type ImportResult struct {
-    AgentModel   string             // e.g., "ollama/claude-sonnet-4-5-20250929"
+    AgentModel   string             // e.g., "openai/claude-sonnet-4-5-20250929"
     Providers    []ImportedProvider
     Channels     ImportedChannels
     WorkspaceDir string
 }
 
 type ImportedProvider struct {
-    Name         string   // "ollama", "anthropic", "openai"
+    Name         string   // "openai", "anthropic", "openai-direct"
     Disabled     bool     // true = provider block present but disabled
-    BaseURL      string   // e.g., "http://llmspy.llm.svc.cluster.local:8000/v1"
+    BaseURL      string   // e.g., "http://litellm.llm.svc.cluster.local:4000/v1"
     API          string   // e.g., "openai-completions"
     APIKey       string   // Literal key (stripped by collectSensitiveData)
-    APIKeyEnvVar string   // e.g., "OLLAMA_API_KEY"
+    APIKeyEnvVar string   // e.g., "OPENAI_API_KEY"
     Models       []ImportedModel
 }
 ```
@@ -159,7 +159,7 @@ func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels 
 
 // For cloud path:
 func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *CloudProviderInfo) {
-    imported := buildLLMSpyRoutedOverlay(cloud)
+    imported := buildLiteLLMRoutedOverlay(cloud)
     secretData := collectSensitiveData(imported)
     writeUserSecretsFile(deploymentDir, secretData)
 
@@ -177,12 +177,12 @@ obolRun(t, cfg, "openclaw", "sync", id)
 ## Unit Tests
 
 `internal/openclaw/overlay_test.go` covers:
-- `TestBuildLLMSpyRoutedOverlay_Anthropic` — verifies overlay structure for Anthropic
-- `TestBuildLLMSpyRoutedOverlay_OpenAI` — verifies overlay structure for OpenAI
-- `TestOverlayYAML_LLMSpyRouted` — verifies generated YAML content
-- `TestGenerateOverlayValues_OllamaDefaultWithModels` — verifies Ollama with models
-- `TestGenerateOverlayValues_OllamaDefaultNoModels` — verifies empty model list
-- `TestGenerateOverlayValues_ExternalSecrets` — verifies secret references
-- `TestCollectSensitiveData_StripsLiterals` — verifies key extraction + stripping
-- `TestBuildDirectProviderOverlay_OpenAI` — verifies direct (non-llmspy) path
-- `TestBuildDirectProviderOverlay_Anthropic` — verifies direct Anthropic path
+- `TestBuildLiteLLMRoutedOverlay_Anthropic` -- verifies overlay structure for Anthropic
+- `TestBuildLiteLLMRoutedOverlay_OpenAI` -- verifies overlay structure for OpenAI
+- `TestOverlayYAML_LiteLLMRouted` -- verifies generated YAML content
+- `TestGenerateOverlayValues_OllamaDefaultWithModels` -- verifies Ollama with models
+- `TestGenerateOverlayValues_OllamaDefaultNoModels` -- verifies empty model list
+- `TestGenerateOverlayValues_ExternalSecrets` -- verifies secret references
+- `TestCollectSensitiveData_StripsLiterals` -- verifies key extraction + stripping
+- `TestBuildDirectProviderOverlay_OpenAI` -- verifies direct (non-LiteLLM) path
+- `TestBuildDirectProviderOverlay_Anthropic` -- verifies direct Anthropic path

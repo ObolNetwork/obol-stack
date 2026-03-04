@@ -574,7 +574,7 @@
 
 ## Base Tests — Inference + Skills (12 tests)
 
-**What they cover**: Ollama/Anthropic/OpenAI/Google/Zhipu inference through llmspy, skill staging and injection, skill visibility in pod, skill-driven agent responses.
+**What they cover**: Ollama/Anthropic/OpenAI/Google/Zhipu inference through LiteLLM, skill staging and injection, skill visibility in pod, skill-driven agent responses.
 
 **Realism**: Very High for inference path. These are the "does the AI actually work" tests.
 

@@ -9,7 +9,7 @@
 ## Bootstrap
 
 ```bash
-# Development mode — uses .workspace/ instead of XDG dirs
+# Development mode -- uses .workspace/ instead of XDG dirs
 OBOL_DEVELOPMENT=true ./obolup.sh
 ```
 
@@ -77,7 +77,7 @@ obol kubectl get namespaces
 The cluster runs:
 - k3d (Kubernetes in Docker) with 1 server + 3 agent nodes
 - Traefik (ingress controller)
-- llmspy (LLM gateway in `llm` namespace)
+- LiteLLM (LLM gateway in `llm` namespace, port 4000)
 - ERPC (RPC load balancer)
 - Obol Frontend (web dashboard)
 

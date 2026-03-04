@@ -298,6 +298,38 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if ref := nested(workloadCRB, "roleRef", "name"); ref != "openclaw-monetize-workload" {
 		t.Errorf("workload binding roleRef.name = %v, want openclaw-monetize-workload", ref)
 	}
+
+
+	// ── x402 namespace Role + RoleBinding ───────────────────────────────
+	x402Role := findDocByName(docs, "Role", "openclaw-x402-pricing")
+	if x402Role == nil {
+		t.Fatal("no Role 'openclaw-x402-pricing' found")
+	}
+	if ns := nested(x402Role, "metadata", "namespace"); ns != "x402" {
+		t.Errorf("x402 Role namespace = %v, want x402", ns)
+	}
+
+	// x402 Role should be scoped to x402-pricing ConfigMap only.
+	x402Rules, ok := x402Role["rules"].([]interface{})
+	if !ok || len(x402Rules) != 1 {
+		t.Fatalf("x402 Role should have exactly 1 rule, got %d", len(x402Rules))
+	}
+	rm := x402Rules[0].(map[string]interface{})
+	resNames, ok := rm["resourceNames"].([]interface{})
+	if !ok || len(resNames) != 1 || resNames[0] != "x402-pricing" {
+		t.Errorf("x402 Role should be scoped to resourceNames: [x402-pricing], got %v", resNames)
+	}
+
+	x402RB := findDocByName(docs, "RoleBinding", "openclaw-x402-pricing-binding")
+	if x402RB == nil {
+		t.Fatal("no RoleBinding 'openclaw-x402-pricing-binding' found")
+	}
+	if ns := nested(x402RB, "metadata", "namespace"); ns != "x402" {
+		t.Errorf("x402 RoleBinding namespace = %v, want x402", ns)
+	}
+	if ref := nested(x402RB, "roleRef", "name"); ref != "openclaw-x402-pricing" {
+		t.Errorf("x402 RoleBinding roleRef.name = %v, want openclaw-x402-pricing", ref)
+	}
 }
 
 // collectAPIGroups extracts all unique apiGroup strings from a list of rules.

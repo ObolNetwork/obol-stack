@@ -3,6 +3,7 @@ package model
 import (
 	"bufio"
 	"bytes"
+	encoding_base64 "encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,34 +16,62 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"gopkg.in/yaml.v3"
 )
 
 const (
 	namespace     = "llm"
-	secretName    = "llms-secrets"
-	configMapName = "llmspy-config"
-	deployName    = "llmspy"
+	secretName    = "litellm-secrets"
+	configMapName = "litellm-config"
+	deployName    = "litellm"
 )
 
-// ProviderInfo describes an llmspy provider discovered from the running pod.
-type ProviderInfo struct {
-	ID      string // provider id (e.g. "zai", "anthropic")
-	Name    string // display name (e.g. "Z.AI", "Anthropic")
-	EnvVar  string // env var for API key (e.g. "ZHIPU_API_KEY")
+// Known provider definitions — no need to query the running pod.
+var knownProviders = []ProviderInfo{
+	{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
+	{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
+	{ID: "ollama", Name: "Ollama (local)", EnvVar: ""},
 }
 
-// ProviderStatus captures effective global llmspy provider state.
+// ProviderInfo describes an LLM provider.
+type ProviderInfo struct {
+	ID     string // provider id (e.g. "anthropic", "openai", "ollama")
+	Name   string // display name
+	EnvVar string // env var for API key (empty for Ollama)
+}
+
+// ProviderStatus captures effective global LiteLLM provider state.
 type ProviderStatus struct {
 	Enabled   bool
 	HasAPIKey bool
 	EnvVar    string // environment variable name (e.g. ANTHROPIC_API_KEY)
+	Models    []string
 }
 
-// ConfigureLLMSpy enables a cloud provider in the llmspy gateway.
-// It discovers the provider's env var from the running llmspy pod,
-// patches the llms-secrets Secret with the API key, enables the provider
-// in the llmspy-config ConfigMap, and restarts the deployment.
-func ConfigureLLMSpy(cfg *config.Config, u *ui.UI, provider, apiKey string) error {
+// LiteLLMConfig represents the LiteLLM proxy config.yaml structure.
+type LiteLLMConfig struct {
+	ModelList       []ModelEntry       `yaml:"model_list"`
+	GeneralSettings map[string]any     `yaml:"general_settings,omitempty"`
+	LiteLLMSettings map[string]any     `yaml:"litellm_settings,omitempty"`
+}
+
+// ModelEntry is a single entry in model_list.
+type ModelEntry struct {
+	ModelName    string       `yaml:"model_name"`
+	LiteLLMParams LiteLLMParams `yaml:"litellm_params"`
+}
+
+// LiteLLMParams holds the routing parameters for a model.
+type LiteLLMParams struct {
+	Model   string `yaml:"model"`
+	APIBase string `yaml:"api_base,omitempty"`
+	APIKey  string `yaml:"api_key,omitempty"`
+}
+
+// ConfigureLiteLLM adds a provider to the LiteLLM gateway.
+// For cloud providers, it patches the Secret with the API key and adds
+// the model to config.yaml. For Ollama, it discovers local models and adds them.
+func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -50,127 +79,198 @@ func ConfigureLLMSpy(cfg *config.Config, u *ui.UI, provider, apiKey string) erro
 		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
-	// Discover the env var name from the llmspy pod's providers.json
-	envKey, err := getProviderEnvKey(kubectlBinary, kubeconfigPath, provider)
-	if err != nil {
-		return err
+	// 1. Patch Secret with API key (if cloud provider)
+	envVar := providerEnvVar(provider)
+	if envVar != "" && apiKey != "" {
+		u.Infof("Setting %s API key", provider)
+		patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envVar, apiKey)
+		if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+			"patch", "secret", secretName, "-n", namespace,
+			"-p", patchJSON, "--type=merge"); err != nil {
+			return fmt.Errorf("failed to patch secret: %w", err)
+		}
 	}
 
-	// 1. Patch the Secret with the API key
-	u.Infof("Configuring llmspy: setting %s key", provider)
-	patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envKey, apiKey)
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"patch", "secret", secretName, "-n", namespace,
-		"-p", patchJSON, "--type=merge"); err != nil {
-		return fmt.Errorf("failed to patch llmspy secret: %w", err)
+	// 2. Build model entries
+	entries := buildModelEntries(provider, models)
+	if len(entries) == 0 {
+		return fmt.Errorf("no models to configure for provider %q", provider)
 	}
 
-	// 2. Read current ConfigMap, enable the provider in llms.json
-	u.Infof("Enabling %s provider in llmspy config", provider)
-	if err := enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider); err != nil {
-		return fmt.Errorf("failed to update llmspy config: %w", err)
+	// 3. Patch ConfigMap with new model_list entries
+	u.Infof("Adding %d model(s) to LiteLLM config", len(entries))
+	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, entries); err != nil {
+		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
 
-	// 3. Restart the deployment so it picks up new Secret + ConfigMap
-	u.Info("Restarting llmspy deployment")
+	// 4. Restart deployment
+	u.Info("Restarting LiteLLM")
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
-		return fmt.Errorf("failed to restart llmspy: %w", err)
+		return fmt.Errorf("failed to restart LiteLLM: %w", err)
 	}
 
-	// 4. Wait for rollout to complete
+	// 5. Wait for rollout
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
-		"--timeout=60s"); err != nil {
-		u.Warnf("llmspy rollout not confirmed: %v", err)
+		"--timeout=90s"); err != nil {
+		u.Warnf("LiteLLM rollout not confirmed: %v", err)
 		u.Print("The deployment may still be rolling out.")
 	} else {
-		u.Successf("llmspy restarted with %s provider enabled", provider)
+		u.Successf("LiteLLM configured with %s provider", provider)
 	}
 
 	return nil
 }
 
-// getProviderEnvKey queries the llmspy pod for the env var name a provider uses.
-// It reads the merged providers.json inside the pod (package defaults + ConfigMap overrides).
-func getProviderEnvKey(kubectlBinary, kubeconfigPath, provider string) (string, error) {
-	script := fmt.Sprintf(`import json
-with open('/home/llms/.llms/providers.json') as f:
-    d = json.load(f)
-p = d.get('%s')
-if p and p.get('env'):
-    print(p['env'][0])
-`, provider)
-
-	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
-		"python3", "-c", script)
-	if err != nil {
-		return "", fmt.Errorf("failed to query llmspy for provider %q: %w", provider, err)
-	}
-	return parseProviderEnvKey(provider, output)
-}
-
-// parseProviderEnvKey extracts an env var name from kubectl exec output.
-func parseProviderEnvKey(provider, output string) (string, error) {
-	envKey := strings.TrimSpace(output)
-	if envKey == "" {
-		return "", fmt.Errorf("unknown provider %q — run 'obol model status' to see available providers", provider)
-	}
-	return envKey, nil
-}
-
-// GetAvailableProviders queries the llmspy pod for all providers that accept an API key.
-func GetAvailableProviders(cfg *config.Config) ([]ProviderInfo, error) {
+// AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
+// after validating it works.
+func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, apiKey string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
-	script := `import json
-with open('/home/llms/.llms/providers.json') as f:
-    d = json.load(f)
-for pid in sorted(d):
-    p = d[pid]
-    env = p.get('env', [])
-    if env:
-        print(pid + '\t' + p.get('name', pid) + '\t' + env[0])
-`
-	output, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"exec", "-n", namespace, fmt.Sprintf("deploy/%s", deployName), "--",
-		"python3", "-c", script)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query llmspy providers: %w", err)
+	// Validate the endpoint from the host (use localhost-reachable URL)
+	u.Info("Validating custom endpoint...")
+	validationEndpoint := endpoint
+	// If the user gave a k3d-internal URL, translate for host validation
+	validationEndpoint = strings.Replace(validationEndpoint, "host.k3d.internal", "localhost", 1)
+	validationEndpoint = strings.Replace(validationEndpoint, "host.docker.internal", "localhost", 1)
+	if err := ValidateCustomEndpoint(validationEndpoint, modelName, apiKey); err != nil {
+		return fmt.Errorf("endpoint validation failed: %w", err)
+	}
+	u.Success("Endpoint validated successfully")
+
+	// For the cluster ConfigMap, translate localhost to k3d-internal
+	clusterEndpoint := localhostToClusterEndpoint(endpoint)
+	if clusterEndpoint != endpoint {
+		u.Infof("Cluster endpoint: %s (translated from %s)", clusterEndpoint, endpoint)
 	}
 
-	return parseAvailableProviders(output), nil
+	// Build model entry
+	litellmModel := "openai/" + modelName
+	modelID := fmt.Sprintf("custom/%s/%s", name, modelName)
+	entry := ModelEntry{
+		ModelName: modelID,
+		LiteLLMParams: LiteLLMParams{
+			Model:   litellmModel,
+			APIBase: clusterEndpoint,
+			APIKey:  apiKey,
+		},
+	}
+	if apiKey == "" {
+		entry.LiteLLMParams.APIKey = "none"
+	}
+
+	// Patch config
+	u.Infof("Adding custom endpoint %q to LiteLLM config", name)
+	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, []ModelEntry{entry}); err != nil {
+		return fmt.Errorf("failed to update LiteLLM config: %w", err)
+	}
+
+	// Restart
+	u.Info("Restarting LiteLLM")
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
+		return fmt.Errorf("failed to restart LiteLLM: %w", err)
+	}
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
+		"--timeout=90s"); err != nil {
+		u.Warnf("LiteLLM rollout not confirmed: %v", err)
+	} else {
+		u.Successf("Custom endpoint %q added (model: %s)", name, modelID)
+	}
+
+	return nil
 }
 
-// parseAvailableProviders parses tab-separated kubectl exec output into ProviderInfo slices.
-func parseAvailableProviders(output string) []ProviderInfo {
-	trimmed := strings.TrimSpace(output)
-	if trimmed == "" {
-		return nil
+// ValidateCustomEndpoint validates that a custom OpenAI-compatible endpoint works.
+// It runs a 2-step validation: reachability check, then inference probe.
+// The inference probe is the definitive test — some servers (e.g., mlx-lm) don't
+// list the loaded model in /models but accept it for inference.
+func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
+	client := &http.Client{Timeout: 60 * time.Second}
+	authHeader := ""
+	if apiKey != "" {
+		authHeader = "Bearer " + apiKey
 	}
-	var providers []ProviderInfo
-	for _, line := range strings.Split(trimmed, "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 {
+
+	// Step 1: Reachability check — try /models, /health, or / (in that order)
+	base := strings.TrimRight(endpoint, "/")
+	reachable := false
+	for _, path := range []string{"/models", "/health", ""} {
+		req, err := http.NewRequest("GET", base+path, nil)
+		if err != nil {
 			continue
 		}
-		providers = append(providers, ProviderInfo{
-			ID:     parts[0],
-			Name:   parts[1],
-			EnvVar: parts[2],
-		})
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 500 {
+			reachable = true
+			break
+		}
 	}
-	return providers
+	if !reachable {
+		return fmt.Errorf("endpoint unreachable — cannot connect to %s", base)
+	}
+
+	// Step 2: Inference probe — the definitive test
+	probePayload, _ := json.Marshal(map[string]any{
+		"model":      modelName,
+		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+		"max_tokens": 1,
+	})
+	completionsURL := strings.TrimRight(endpoint, "/") + "/chat/completions"
+	probeReq, err := http.NewRequest("POST", completionsURL, bytes.NewReader(probePayload))
+	if err != nil {
+		return fmt.Errorf("failed to build inference probe: %w", err)
+	}
+	probeReq.Header.Set("Content-Type", "application/json")
+	if authHeader != "" {
+		probeReq.Header.Set("Authorization", authHeader)
+	}
+	probeResp, err := client.Do(probeReq)
+	if err != nil {
+		return fmt.Errorf("inference probe failed — cannot reach %s: %w", completionsURL, err)
+	}
+	defer probeResp.Body.Close()
+	if probeResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("inference probe failed — %s returned %d", completionsURL, probeResp.StatusCode)
+	}
+
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(probeResp.Body).Decode(&chatResp); err != nil {
+		return fmt.Errorf("inference probe returned invalid response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return fmt.Errorf("inference probe returned empty choices array")
+	}
+
+	return nil
 }
 
-// GetProviderStatus reads llmspy state and returns global provider status.
-// It queries the llmspy pod for available providers and cross-references
-// with the ConfigMap (enabled/disabled) and Secret (API keys).
+// GetAvailableProviders returns the known provider list (static, no pod query needed).
+func GetAvailableProviders(_ *config.Config) ([]ProviderInfo, error) {
+	return knownProviders, nil
+}
+
+// GetProviderStatus reads LiteLLM config and returns provider status.
 func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -178,61 +278,28 @@ func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
-	// Get all available providers from llmspy (with env var names)
-	available, err := GetAvailableProviders(cfg)
+	// Read config.yaml from ConfigMap
+	configRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read LiteLLM config: %w", err)
 	}
 
-	// Read enabled/disabled state from ConfigMap
-	llmsRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
-	if err != nil {
-		return nil, err
-	}
-
-	// Read Secret to check which API keys are set
+	// Read Secret
 	secretRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "secret", secretName, "-n", namespace, "-o", "json")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read LiteLLM secret: %w", err)
 	}
 
-	return buildProviderStatus(available, []byte(llmsRaw), []byte(secretRaw))
+	return buildProviderStatus([]byte(configRaw), []byte(secretRaw))
 }
 
-// buildProviderStatus is the pure logic for building provider status from raw data.
-// available: providers discovered from the llmspy pod
-// llmsJSON: the llms.json content from the ConfigMap
-// secretJSON: the full Secret JSON (with base64-encoded .data)
-func buildProviderStatus(available []ProviderInfo, llmsJSON, secretJSON []byte) (map[string]ProviderStatus, error) {
-	envKeyByProvider := make(map[string]string)
-	for _, p := range available {
-		envKeyByProvider[p.ID] = p.EnvVar
-	}
-
-	var llmsConfig map[string]interface{}
-	if err := json.Unmarshal(llmsJSON, &llmsConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse llms.json from ConfigMap: %w", err)
-	}
-
-	status := make(map[string]ProviderStatus)
-
-	// Seed from ConfigMap providers (shows what's been configured)
-	if providers, ok := llmsConfig["providers"].(map[string]interface{}); ok {
-		for name, raw := range providers {
-			enabled := false
-			if p, ok := raw.(map[string]interface{}); ok {
-				if v, ok := p["enabled"].(bool); ok {
-					enabled = v
-				}
-			}
-			status[name] = ProviderStatus{
-				Enabled:   enabled,
-				HasAPIKey: name == "ollama",
-				EnvVar:    envKeyByProvider[name],
-			}
-		}
+// buildProviderStatus constructs provider status from raw config.yaml and secret JSON.
+func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStatus, error) {
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal(configYAML, &litellmConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse LiteLLM config: %w", err)
 	}
 
 	// Parse Secret
@@ -240,89 +307,226 @@ func buildProviderStatus(available []ProviderInfo, llmsJSON, secretJSON []byte) 
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(secretJSON, &secret); err != nil {
-		return nil, fmt.Errorf("failed to parse llms secret: %w", err)
+		return nil, fmt.Errorf("failed to parse secret: %w", err)
 	}
-
-	// Cross-reference Secret keys with provider env vars
 	secretKeys := make(map[string]bool)
 	for k, v := range secret.Data {
 		if strings.TrimSpace(v) != "" {
 			secretKeys[k] = true
 		}
 	}
-	for name, st := range status {
-		if st.EnvVar != "" && secretKeys[st.EnvVar] {
-			st.HasAPIKey = true
-			status[name] = st
-		}
+
+	// Build status from model_list
+	status := make(map[string]ProviderStatus)
+	for _, entry := range litellmConfig.ModelList {
+		provider := detectProvider(entry)
+		st := status[provider]
+		st.Enabled = true
+		st.Models = append(st.Models, entry.ModelName)
+		status[provider] = st
 	}
 
-	// Ensure Ollama always shows
-	if _, ok := status["ollama"]; !ok {
-		status["ollama"] = ProviderStatus{
-			Enabled:   true,
-			HasAPIKey: true,
+	// Add env var info and API key status
+	for _, p := range knownProviders {
+		st := status[p.ID]
+		st.EnvVar = p.EnvVar
+		if p.EnvVar != "" && secretKeys[p.EnvVar] {
+			st.HasAPIKey = true
 		}
+		if p.ID == "ollama" {
+			st.HasAPIKey = true // Ollama doesn't need a key
+		}
+		status[p.ID] = st
 	}
 
 	return status, nil
 }
 
-// enableProviderInConfigMap reads the llmspy-config ConfigMap, parses llms.json,
-// sets providers.<name>.enabled = true, and patches the ConfigMap back.
-func enableProviderInConfigMap(kubectlBinary, kubeconfigPath, provider string) error {
-	// Read current llms.json from ConfigMap
+// GetMasterKey reads the LiteLLM master key from the cluster Secret.
+func GetMasterKey(cfg *config.Config) (string, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("cluster not running")
+	}
+
+	key, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "secret", secretName, "-n", namespace,
+		"-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
+	if err != nil {
+		return "", err
+	}
+	// The value is base64-encoded in .data
+	decoded, err := decodeBase64(strings.TrimSpace(key))
+	if err != nil {
+		return key, nil // If not base64, return raw
+	}
+	return decoded, nil
+}
+
+// GetConfiguredModels returns the model names currently in LiteLLM's config.
+func GetConfiguredModels(cfg *config.Config) ([]string, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("cluster not running")
+	}
+
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.llms\\.json}")
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read LiteLLM config: %w", err)
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	var models []string
+	for _, entry := range litellmConfig.ModelList {
+		models = append(models, entry.ModelName)
+	}
+	return models, nil
+}
+
+// --- Internal helpers ---
+
+// providerEnvVar returns the env var name for a provider's API key.
+func providerEnvVar(provider string) string {
+	for _, p := range knownProviders {
+		if p.ID == provider {
+			return p.EnvVar
+		}
+	}
+	return strings.ToUpper(provider) + "_API_KEY"
+}
+
+// buildModelEntries creates LiteLLM model_list entries for a provider.
+func buildModelEntries(provider string, models []string) []ModelEntry {
+	var entries []ModelEntry
+	for _, m := range models {
+		entry := ModelEntry{ModelName: m}
+		switch provider {
+		case "ollama":
+			entry.LiteLLMParams = LiteLLMParams{
+				Model:   "ollama_chat/" + m,
+				APIBase: "http://ollama.llm.svc.cluster.local:11434",
+			}
+		case "anthropic":
+			entry.LiteLLMParams = LiteLLMParams{
+				Model:  m,
+				APIKey: "os.environ/ANTHROPIC_API_KEY",
+			}
+		case "openai":
+			entry.LiteLLMParams = LiteLLMParams{
+				Model:  m,
+				APIKey: "os.environ/OPENAI_API_KEY",
+			}
+		default:
+			entry.LiteLLMParams = LiteLLMParams{
+				Model:  provider + "/" + m,
+				APIKey: fmt.Sprintf("os.environ/%s_API_KEY", strings.ToUpper(provider)),
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// patchLiteLLMConfig reads the current config.yaml from the ConfigMap,
+// merges new model entries (replacing existing by model_name), and patches back.
+func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEntry) error {
+	// Read current config
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
 	if err != nil {
 		return fmt.Errorf("failed to read ConfigMap: %w", err)
 	}
 
-	updated, err := patchLLMsJSON([]byte(raw), provider)
-	if err != nil {
-		return err
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return fmt.Errorf("failed to parse config.yaml: %w", err)
 	}
 
-	// Build ConfigMap patch
-	patchData := map[string]interface{}{
-		"data": map[string]string{
-			"llms.json": string(updated),
-		},
+	// Merge: replace existing entries by model_name, append new ones
+	existing := make(map[string]int) // model_name → index
+	for i, e := range litellmConfig.ModelList {
+		existing[e.ModelName] = i
 	}
-	patchJSON, err := json.Marshal(patchData)
+	for _, entry := range entries {
+		if idx, ok := existing[entry.ModelName]; ok {
+			litellmConfig.ModelList[idx] = entry
+		} else {
+			litellmConfig.ModelList = append(litellmConfig.ModelList, entry)
+		}
+	}
+
+	// Marshal back to YAML
+	updated, err := yaml.Marshal(&litellmConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal patch: %w", err)
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
+
+	// Build ConfigMap patch — escape the YAML for JSON embedding
+	escapedYAML, err := json.Marshal(string(updated))
+	if err != nil {
+		return fmt.Errorf("failed to escape YAML: %w", err)
+	}
+	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
 
 	return kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", string(patchJSON), "--type=merge")
+		"-p", patchJSON, "--type=merge")
 }
 
-// patchLLMsJSON takes raw llms.json content and returns updated JSON
-// with providers.<name>.enabled = true.
-func patchLLMsJSON(llmsJSON []byte, provider string) ([]byte, error) {
-	var llmsConfig map[string]interface{}
-	if err := json.Unmarshal(llmsJSON, &llmsConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse llms.json: %w", err)
+// detectProvider infers the provider name from a model_list entry.
+func detectProvider(entry ModelEntry) string {
+	// Check model_name first (custom/ prefix takes priority)
+	if strings.HasPrefix(entry.ModelName, "custom/") {
+		return "custom"
 	}
-
-	providers, ok := llmsConfig["providers"].(map[string]interface{})
-	if !ok {
-		providers = make(map[string]interface{})
-		llmsConfig["providers"] = providers
+	model := entry.LiteLLMParams.Model
+	if strings.HasPrefix(model, "ollama/") || strings.HasPrefix(model, "ollama_chat/") {
+		return "ollama"
 	}
-
-	providerCfg, ok := providers[provider].(map[string]interface{})
-	if !ok {
-		providerCfg = make(map[string]interface{})
-		providers[provider] = providerCfg
+	if strings.HasPrefix(model, "openai/") {
+		return "openai"
 	}
-	providerCfg["enabled"] = true
-
-	return json.Marshal(llmsConfig)
+	// Anthropic models don't have a prefix in LiteLLM
+	if strings.Contains(model, "claude") {
+		return "anthropic"
+	}
+	if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
+		return "openai"
+	}
+	if strings.HasPrefix(entry.ModelName, "custom/") {
+		return "custom"
+	}
+	return "unknown"
 }
 
+func decodeBase64(s string) (string, error) {
+	decoded := make([]byte, len(s))
+	n, err := encoding_base64.StdEncoding.Decode(decoded, []byte(s))
+	if err != nil {
+		return "", err
+	}
+	return string(decoded[:n]), nil
+}
+
+// localhostToClusterEndpoint translates localhost URLs to k3d-internal URLs
+// so that services running on the host are reachable from inside the k3d cluster.
+func localhostToClusterEndpoint(endpoint string) string {
+	for _, local := range []string{"localhost", "127.0.0.1", "[::1]"} {
+		if strings.Contains(endpoint, local) {
+			return strings.Replace(endpoint, local, "host.k3d.internal", 1)
+		}
+	}
+	return endpoint
+}
+
+// --- Ollama helpers (unchanged) ---
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.
 // It respects the OLLAMA_HOST environment variable, falling back to http://localhost:11434.
