@@ -44,11 +44,11 @@ const (
 	userSecretsK8sSecretRef = "openclaw-user-secrets"
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
-	chartVersion = "0.1.6"
+	chartVersion = "0.1.7"
 
 	// openclawImageTag overrides the chart's default image tag.
 	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
-	openclawImageTag = "2026.3.1"
+	openclawImageTag = "2026.3.2"
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
@@ -103,7 +103,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			} else {
 				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
 				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull llama3.2:3b")
+				u.Print("  or pull a model with: ollama pull qwen3.5:9b")
 			}
 		} else {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
@@ -1301,15 +1301,21 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 	return nil
 }
 
-// SyncOverlayModels updates all deployed OpenClaw instances' overlay model
-// lists to match the current LiteLLM model_list, then re-syncs each instance.
-// This keeps OpenClaw's "openai" provider slot (which routes through LiteLLM)
-// in sync when models are added/removed via `obol model setup`.
+// SyncOverlayModels updates all deployed OpenClaw instances to match the
+// current LiteLLM model list. For each LiteLLM-routed instance it:
+//  1. Patches the overlay YAML model list (for helm consistency)
+//  2. Writes a clean per-agent models.json to the host PVC
+//  3. Patches the openclaw-config ConfigMap with the best primary model
+//
+// Cloud models are promoted to primary (they're added because they're better
+// than local defaults). The previous primary becomes a fallback.
 func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	ids, err := ListInstanceIDs(cfg)
 	if err != nil || len(ids) == 0 {
-		return nil // no instances to update
+		return nil
 	}
+
+	masterKey := litellmMasterKey(cfg)
 
 	for _, id := range ids {
 		overlayPath := filepath.Join(deploymentPath(cfg, id), "values-obol.yaml")
@@ -1319,28 +1325,201 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 		}
 		content := string(data)
 
-		// Only patch overlays that use the LiteLLM gateway pattern
-		// (the "openai" provider slot pointing at litellm.llm.svc).
+		// Only patch instances that use the LiteLLM gateway pattern
 		if !strings.Contains(content, "litellm.llm.svc") {
 			continue
 		}
 
+		// Update overlay YAML (for helm consistency on next sync)
 		updated, changed := patchOverlayModelList(content, models)
-		if !changed {
-			continue
+		if changed {
+			if err := os.WriteFile(overlayPath, []byte(updated), 0644); err != nil {
+				u.Warnf("Failed to update overlay for %s: %v", id, err)
+			}
 		}
 
-		if err := os.WriteFile(overlayPath, []byte(updated), 0644); err != nil {
-			u.Warnf("Failed to update overlay for %s: %v", id, err)
-			continue
+		// Write clean models.json — file watcher handles hot-reload
+		if err := patchAgentModelsJSON(cfg, id, models, masterKey); err != nil {
+			u.Warnf("Failed to patch models.json for %s: %v", id, err)
 		}
 
-		u.Infof("Syncing OpenClaw %s with updated model list", id)
-		if err := doSync(cfg, id, u); err != nil {
-			u.Warnf("Failed to sync %s: %v", id, err)
+		// Patch ConfigMap with best primary model + fallbacks
+		primary, fallbacks := rankModels(models)
+		if primary != "" {
+			patchModelHierarchy(cfg, id, primary, fallbacks, u)
 		}
+
+		u.Infof("Updated models for OpenClaw %s (%d models, primary: %s)", id, len(models), primary)
 	}
 	return nil
+}
+
+// rankModels picks the best model as primary and demotes the rest to fallbacks.
+// Cloud models (Anthropic, OpenAI) are ranked above local models (Ollama).
+// Within a tier, the first model wins.
+func rankModels(models []string) (primary string, fallbacks []string) {
+	if len(models) == 0 {
+		return "", nil
+	}
+
+	// Partition into cloud and local
+	var cloud, local []string
+	for _, m := range models {
+		if isCloudModel(m) {
+			cloud = append(cloud, m)
+		} else {
+			local = append(local, m)
+		}
+	}
+
+	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
+	if len(cloud) > 0 {
+		primary = cloud[0]
+		fallbacks = append(cloud[1:], local...)
+	} else {
+		primary = local[0]
+		fallbacks = local[1:]
+	}
+
+	// Prefix with openai/ for LiteLLM routing
+	primary = "openai/" + primary
+	for i, f := range fallbacks {
+		fallbacks[i] = "openai/" + f
+	}
+	return primary, fallbacks
+}
+
+// isCloudModel returns true if the model name looks like a cloud provider model.
+func isCloudModel(name string) bool {
+	if strings.Contains(name, "claude") {
+		return true
+	}
+	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
+		return true
+	}
+	return false
+}
+
+// patchModelHierarchy updates the openclaw-config ConfigMap with the given
+// primary model and fallbacks. This is what the frontend reads to display
+// the current model, and what OpenClaw uses for agent model selection.
+func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []string, u *ui.UI) {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Read current ConfigMap
+	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
+		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
+	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var out bytes.Buffer
+	getCmd.Stdout = &out
+	if err := getCmd.Run(); err != nil {
+		return // ConfigMap may not exist yet
+	}
+
+	var cfgJSON map[string]interface{}
+	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
+		return
+	}
+
+	// Navigate to agents.defaults.model
+	agents, ok := cfgJSON["agents"].(map[string]interface{})
+	if !ok {
+		agents = map[string]interface{}{}
+		cfgJSON["agents"] = agents
+	}
+	defaults, ok := agents["defaults"].(map[string]interface{})
+	if !ok {
+		defaults = map[string]interface{}{}
+		agents["defaults"] = defaults
+	}
+
+	modelCfg := map[string]interface{}{
+		"primary": primary,
+	}
+	if len(fallbacks) > 0 {
+		modelCfg["fallbacks"] = fallbacks
+	}
+	defaults["model"] = modelCfg
+
+	// Re-serialize and apply
+	patched, err := json.MarshalIndent(cfgJSON, "    ", "  ")
+	if err != nil {
+		return
+	}
+
+	applyPayload := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "openclaw-config",
+			"namespace": namespace,
+		},
+		"data": map[string]string{
+			"openclaw.json": string(patched),
+		},
+	}
+	applyRaw, _ := json.Marshal(applyPayload)
+
+	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
+		"--server-side", "--field-manager=helm", "--force-conflicts")
+	applyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	applyCmd.Stdin = bytes.NewReader(applyRaw)
+	if err := applyCmd.Run(); err != nil {
+		u.Warnf("Failed to patch model hierarchy in ConfigMap: %v", err)
+	}
+}
+
+// patchAgentModelsJSON writes a clean models.json to the per-agent directory
+// on the host-side PVC. This replaces any stale config and lets OpenClaw's
+// file watcher hot-reload the new model list without a pod restart.
+//
+// Path: $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/agents/main/agent/models.json
+func patchAgentModelsJSON(cfg *config.Config, id string, models []string, masterKey string) error {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	agentDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "agents", "main", "agent")
+	modelsPath := filepath.Join(agentDir, "models.json")
+
+	// Only patch if the agent directory exists (agent has been initialized)
+	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	type modelEntry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	type provider struct {
+		BaseURL string       `json:"baseUrl"`
+		APIKey  string       `json:"apiKey"`
+		API     string       `json:"api"`
+		Models  []modelEntry `json:"models"`
+	}
+
+	entries := make([]modelEntry, 0, len(models))
+	for _, m := range models {
+		entries = append(entries, modelEntry{ID: m, Name: m})
+	}
+
+	modelsJSON := map[string]interface{}{
+		"providers": map[string]interface{}{
+			"openai": provider{
+				BaseURL: "http://litellm.llm.svc.cluster.local:4000/v1",
+				APIKey:  masterKey,
+				API:     "openai-completions",
+				Models:  entries,
+			},
+		},
+	}
+
+	data, err := json.MarshalIndent(modelsJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal models.json: %w", err)
+	}
+	data = append(data, '\n')
+
+	return os.WriteFile(modelsPath, data, 0644)
 }
 
 // patchOverlayModelList replaces the model list under the openai provider

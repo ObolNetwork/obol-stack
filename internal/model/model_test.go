@@ -26,30 +26,78 @@ func TestBuildModelEntries(t *testing.T) {
 		}
 	})
 
-	t.Run("anthropic models use env var reference", func(t *testing.T) {
+	t.Run("anthropic gets wildcard plus explicit entries", func(t *testing.T) {
 		entries := buildModelEntries("anthropic", []string{"claude-sonnet-4-5-20250929"})
-		if len(entries) != 1 {
-			t.Fatalf("got %d entries, want 1", len(entries))
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want 2 (wildcard + explicit)", len(entries))
 		}
-		if entries[0].LiteLLMParams.Model != "claude-sonnet-4-5-20250929" {
-			t.Errorf("model = %q", entries[0].LiteLLMParams.Model)
+		// First entry is the wildcard
+		if entries[0].ModelName != "anthropic/*" {
+			t.Errorf("entries[0].ModelName = %q, want anthropic/*", entries[0].ModelName)
 		}
-		if entries[0].LiteLLMParams.APIKey != "os.environ/ANTHROPIC_API_KEY" {
-			t.Errorf("api_key = %q, want os.environ/ANTHROPIC_API_KEY", entries[0].LiteLLMParams.APIKey)
+		if entries[0].LiteLLMParams.Model != "anthropic/*" {
+			t.Errorf("entries[0].Model = %q, want anthropic/*", entries[0].LiteLLMParams.Model)
+		}
+		// Second entry is the explicit model
+		if entries[1].ModelName != "claude-sonnet-4-5-20250929" {
+			t.Errorf("entries[1].ModelName = %q", entries[1].ModelName)
+		}
+		if entries[1].LiteLLMParams.APIKey != "os.environ/ANTHROPIC_API_KEY" {
+			t.Errorf("api_key = %q, want os.environ/ANTHROPIC_API_KEY", entries[1].LiteLLMParams.APIKey)
 		}
 	})
 
-	t.Run("openai models use env var reference", func(t *testing.T) {
+	t.Run("openai gets wildcard plus explicit entries", func(t *testing.T) {
 		entries := buildModelEntries("openai", []string{"gpt-4o"})
-		if entries[0].LiteLLMParams.APIKey != "os.environ/OPENAI_API_KEY" {
-			t.Errorf("api_key = %q, want os.environ/OPENAI_API_KEY", entries[0].LiteLLMParams.APIKey)
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want 2 (wildcard + explicit)", len(entries))
+		}
+		if entries[0].ModelName != "openai/*" {
+			t.Errorf("entries[0].ModelName = %q, want openai/*", entries[0].ModelName)
+		}
+		if entries[1].LiteLLMParams.Model != "openai/gpt-4o" {
+			t.Errorf("entries[1].Model = %q, want openai/gpt-4o", entries[1].LiteLLMParams.Model)
 		}
 	})
 
-	t.Run("empty models returns nil", func(t *testing.T) {
+	t.Run("empty models still gets wildcard for cloud providers", func(t *testing.T) {
 		entries := buildModelEntries("anthropic", nil)
+		if len(entries) != 1 {
+			t.Fatalf("got %d entries, want 1 (wildcard only)", len(entries))
+		}
+		if entries[0].ModelName != "anthropic/*" {
+			t.Errorf("ModelName = %q, want anthropic/*", entries[0].ModelName)
+		}
+	})
+
+	t.Run("empty ollama returns nil", func(t *testing.T) {
+		entries := buildModelEntries("ollama", nil)
 		if entries != nil {
-			t.Errorf("expected nil, got %v", entries)
+			t.Errorf("expected nil for empty ollama, got %v", entries)
+		}
+	})
+}
+
+func TestExpandWildcard(t *testing.T) {
+	t.Run("uses live models when available", func(t *testing.T) {
+		live := []string{"claude-sonnet-4-6", "claude-opus-4", "gpt-4o"}
+		got := expandWildcard("anthropic", live)
+		if len(got) != 2 {
+			t.Fatalf("got %d models, want 2 (claude only)", len(got))
+		}
+	})
+
+	t.Run("falls back to well-known when no live models", func(t *testing.T) {
+		got := expandWildcard("anthropic", nil)
+		if len(got) != len(WellKnownModels["anthropic"]) {
+			t.Fatalf("got %d models, want %d", len(got), len(WellKnownModels["anthropic"]))
+		}
+	})
+
+	t.Run("returns nil for unknown provider", func(t *testing.T) {
+		got := expandWildcard("unknown-provider", nil)
+		if got != nil {
+			t.Fatalf("expected nil, got %v", got)
 		}
 	})
 }
@@ -60,6 +108,8 @@ func TestDetectProvider(t *testing.T) {
 		name     string
 		wantProv string
 	}{
+		{"anthropic/*", "anthropic/*", "anthropic"},
+		{"openai/*", "openai/*", "openai"},
 		{"ollama/llama3.2:3b", "llama3.2:3b", "ollama"},
 		{"ollama_chat/qwen3.5:35b", "qwen3.5:35b", "ollama"},
 		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929", "anthropic"},
