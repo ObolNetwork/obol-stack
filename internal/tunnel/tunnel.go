@@ -68,6 +68,13 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	printStatusBox(u, mode, statusLabel, url, time.Now())
 	u.Printf("Test with: curl %s/", url)
 
+	// Auto-inject tunnel URL into obol-agent so registration JSON uses it.
+	if url != "" && url != "(not available)" {
+		if err := InjectBaseURL(cfg, url); err == nil {
+			u.Dim("Agent base URL updated to " + url)
+		}
+	}
+
 	return nil
 }
 
@@ -99,6 +106,21 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 	}
 
 	return "", fmt.Errorf("tunnel URL not found in logs")
+}
+
+// InjectBaseURL sets AGENT_BASE_URL on the obol-agent deployment so that
+// monetize.py uses the tunnel URL in registration JSON instead of obol.stack:8080.
+func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"set", "env", "deployment/openclaw",
+		"-n", "openclaw-obol-agent",
+		fmt.Sprintf("AGENT_BASE_URL=%s", strings.TrimRight(tunnelURL, "/")),
+	)
+	return cmd.Run()
 }
 
 // Restart restarts the cloudflared deployment.

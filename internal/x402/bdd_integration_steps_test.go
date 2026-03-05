@@ -69,6 +69,10 @@ type integrationWorld struct {
 
 	// Signed payment header.
 	signedPaymentHeader string
+
+	// Discovered registration.
+	registrationJSON map[string]interface{}
+	discoveredEndpoint string
 }
 
 func newIntegrationWorld(t *testing.T) *integrationWorld {
@@ -390,6 +394,97 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			return fmt.Errorf("pricing ConfigMap does not contain route %s:\n%s", pattern, out)
 		}
 		w.t.Logf("integration: ✓ Pricing route %s present", pattern)
+		return nil
+	})
+
+	// ── Discovery + buy-side steps ───────────────────────────────────
+
+	ctx.When(`^the agent fetches the registration JSON from the tunnel$`, func() error {
+		if w.tunnelURL == "" {
+			return fmt.Errorf("tunnel URL not set")
+		}
+		regURL := w.tunnelURL + "/.well-known/agent-registration.json"
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Get(regURL)
+		if err != nil {
+			return fmt.Errorf("fetch registration JSON: %w", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("registration JSON returned %d: %s", resp.StatusCode, truncate(body, 200))
+		}
+		var reg map[string]interface{}
+		if err := json.Unmarshal(body, &reg); err != nil {
+			return fmt.Errorf("parse registration JSON: %w", err)
+		}
+		w.registrationJSON = reg
+		w.t.Logf("integration: registration JSON from tunnel: name=%v x402=%v",
+			reg["name"], reg["x402Support"])
+		return nil
+	})
+
+	ctx.Then(`^the registration contains x402Support$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		x402, _ := w.registrationJSON["x402Support"].(bool)
+		if !x402 {
+			return fmt.Errorf("registration does not have x402Support=true")
+		}
+		w.t.Log("integration: ✓ x402Support=true")
+		return nil
+	})
+
+	ctx.Then(`^the registration contains a service endpoint$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		services, ok := w.registrationJSON["services"].([]interface{})
+		if !ok || len(services) == 0 {
+			return fmt.Errorf("registration has no services")
+		}
+		svc, ok := services[0].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid service entry")
+		}
+		endpoint, _ := svc["endpoint"].(string)
+		if endpoint == "" {
+			return fmt.Errorf("service has no endpoint")
+		}
+
+		// If endpoint uses obol.stack (local), rewrite to tunnel URL for probing.
+		if strings.Contains(endpoint, "obol.stack") && w.tunnelURL != "" {
+			// Extract path from local endpoint and prepend tunnel URL.
+			parts := strings.SplitN(endpoint, "/services/", 2)
+			if len(parts) == 2 {
+				endpoint = w.tunnelURL + "/services/" + parts[1]
+			}
+		}
+		w.discoveredEndpoint = endpoint
+		w.t.Logf("integration: ✓ service endpoint: %s", endpoint)
+		return nil
+	})
+
+	ctx.When(`^the agent probes the tunnel service endpoint$`, func() error {
+		if w.discoveredEndpoint == "" {
+			return fmt.Errorf("no service endpoint discovered")
+		}
+		probeURL := w.discoveredEndpoint + "/v1/chat/completions"
+		return w.doInferencePost(probeURL, nil)
+	})
+
+	ctx.Then(`^the probe returns 402 with pricing info$`, func() error {
+		if w.lastStatusCode != 402 {
+			return fmt.Errorf("expected probe to return 402, got %d: %s",
+				w.lastStatusCode, truncate(w.lastBody, 200))
+		}
+		if w.parsed402 == nil || len(w.parsed402.Accepts) == 0 {
+			return fmt.Errorf("402 response has no accepts array")
+		}
+		a := w.parsed402.Accepts[0]
+		w.t.Logf("integration: ✓ probe 402: payTo=%s price=%s network=%s",
+			a.PayTo, a.Amount, a.Network)
 		return nil
 	})
 

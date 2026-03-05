@@ -77,6 +77,17 @@ Feature: x402 Payment Flow — Real User Journey
     Then the response status is 200
     And the response contains a real inference result
 
+  # ─── Buy-side: discover via tunnel → probe → verify ──────────────
+
+  @integration @tunnel @discover
+  Scenario: Agent discovers registered service through tunnel
+    Given the Cloudflare tunnel is reachable
+    When the agent fetches the registration JSON from the tunnel
+    Then the registration contains x402Support
+    And the registration contains a service endpoint
+    When the agent probes the tunnel service endpoint
+    Then the probe returns 402 with pricing info
+
   # ─── Cleanup: operator deletes the offer ────────────────────────────
 
   @integration @local @cleanup

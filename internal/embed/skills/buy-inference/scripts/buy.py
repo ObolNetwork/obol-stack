@@ -3,7 +3,7 @@
 
 Pre-signs a batch of ERC-3009 TransferWithAuthorization vouchers, stores them
 in a ConfigMap, deploys a lean Go sidecar that handles x402 payments at runtime,
-and wires the sidecar into llmspy as a plain OpenAI provider.
+and wires the sidecar into LiteLLM as a model_list entry.
 
 The sidecar has ZERO signer access. Spending is bounded: max loss = N × price.
 
@@ -48,9 +48,9 @@ from signer import _signer_get, _signer_post, _rpc_call  # noqa: E402
 
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
 
-# llmspy ConfigMap location
-LLMSPY_NS = "llm"
-LLMSPY_CM = "llmspy-config"
+# LiteLLM ConfigMap location
+LITELLM_NS = "llm"
+LITELLM_CM = "litellm-config"
 
 # x402-buyer sidecar
 BUYER_NS = "llm"
@@ -101,24 +101,92 @@ def _normalize_endpoint(url):
 
 
 # ---------------------------------------------------------------------------
-# llmspy ConfigMap helpers
+# LiteLLM ConfigMap helpers
 # ---------------------------------------------------------------------------
 
-def read_providers_json(token, ssl_ctx):
-    """Read providers.json from llmspy-config ConfigMap."""
-    cm = api_get(f"/api/v1/namespaces/{LLMSPY_NS}/configmaps/{LLMSPY_CM}",
+def read_litellm_config(token, ssl_ctx):
+    """Read config.yaml from litellm-config ConfigMap as a string."""
+    cm = api_get(f"/api/v1/namespaces/{LITELLM_NS}/configmaps/{LITELLM_CM}",
                  token, ssl_ctx)
-    raw = cm.get("data", {}).get("providers.json", "{}")
-    return json.loads(raw)
+    return cm.get("data", {}).get("config.yaml", "")
 
 
-def write_providers_json(providers, token, ssl_ctx):
-    """Patch providers.json in llmspy-config ConfigMap."""
+def write_litellm_config(config_yaml, token, ssl_ctx):
+    """Patch config.yaml in litellm-config ConfigMap."""
     api_patch(
-        f"/api/v1/namespaces/{LLMSPY_NS}/configmaps/{LLMSPY_CM}",
-        {"data": {"providers.json": json.dumps(providers, indent=2)}},
+        f"/api/v1/namespaces/{LITELLM_NS}/configmaps/{LITELLM_CM}",
+        {"data": {"config.yaml": config_yaml}},
         token, ssl_ctx,
+        patch_type="merge",
     )
+
+
+def add_litellm_model(name, model_id, sidecar_url, token, ssl_ctx):
+    """Add a bought model entry to LiteLLM's model_list config."""
+    config_yaml = read_litellm_config(token, ssl_ctx)
+    model_name = f"bought/{name}/{model_id}"
+
+    # Check if already present.
+    if model_name in config_yaml:
+        print(f"  Model {model_name} already in LiteLLM config")
+        return
+
+    # Build YAML entry matching LiteLLM model_list format.
+    entry = (
+        f"    - model_name: {model_name}\n"
+        f"      litellm_params:\n"
+        f"        model: openai/{model_id}\n"
+        f"        api_base: {sidecar_url}\n"
+        f"        api_key: unused\n"
+    )
+
+    # Append after existing model_list entries.
+    if "model_list:" in config_yaml:
+        config_yaml = config_yaml.rstrip() + "\n" + entry
+    else:
+        config_yaml = config_yaml.rstrip() + "\nmodel_list:\n" + entry
+
+    write_litellm_config(config_yaml, token, ssl_ctx)
+
+
+def remove_litellm_model(name, token, ssl_ctx):
+    """Remove bought model entries matching the given name from LiteLLM config."""
+    config_yaml = read_litellm_config(token, ssl_ctx)
+    prefix = f"bought/{name}/"
+
+    # Filter out lines belonging to matching model entries.
+    lines = config_yaml.splitlines()
+    filtered = []
+    skip_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("- model_name:") and prefix in stripped:
+            skip_block = True
+            continue
+        if skip_block:
+            # Skip continuation lines (indented litellm_params block).
+            if stripped.startswith("- model_name:") or not stripped.startswith(("model:", "api_base:", "api_key:", "litellm_params:")):
+                if stripped.startswith("- model_name:"):
+                    # New entry — stop skipping.
+                    skip_block = False
+                    filtered.append(line)
+                elif not line.strip():
+                    # Empty line — stop skipping.
+                    skip_block = False
+                    filtered.append(line)
+                else:
+                    # Non-indented line — stop skipping.
+                    skip_block = False
+                    filtered.append(line)
+            # else: skip the indented continuation line
+        else:
+            filtered.append(line)
+
+    new_yaml = "\n".join(filtered)
+    if new_yaml != config_yaml:
+        write_litellm_config(new_yaml, token, ssl_ctx)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -558,22 +626,12 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     # 7. Deploy sidecar (or restart if exists).
     _deploy_sidecar(token, ssl_ctx)
 
-    # 8. Patch llmspy providers.json with plain OpenAI provider → sidecar.
-    print("Patching llmspy-config ...")
-    providers = read_providers_json(token, ssl_ctx)
-    model_key = f"{name}/{model_id}"
+    # 8. Add bought model to LiteLLM config → routes through sidecar.
     sidecar_url = f"http://{BUYER_SVC}.{BUYER_NS}.svc.cluster.local:{BUYER_PORT}/upstream/{name}"
+    model_key = f"bought/{name}/{model_id}"
 
-    providers[name] = {
-        "id": name,
-        "npm": "@ai-sdk/openai",
-        "api": sidecar_url,
-        "api_key": "unused",
-        "models": {model_key: {"name": model_id}},
-        "all_models": False,
-        "tool_call": False,
-    }
-    write_providers_json(providers, token, ssl_ctx)
+    print("Adding model to LiteLLM config ...")
+    add_litellm_model(name, model_id, sidecar_url, token, ssl_ctx)
 
     print()
     print(f"Purchased provider '{name}' configured via x402-buyer sidecar.")
@@ -642,7 +700,7 @@ def cmd_refill(name, count=None):
 # ---------------------------------------------------------------------------
 
 def cmd_list():
-    """List purchased providers from sidecar status + llmspy."""
+    """List purchased providers from sidecar config."""
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
@@ -738,7 +796,7 @@ def cmd_balance(chain=None):
 # ---------------------------------------------------------------------------
 
 def cmd_remove(name):
-    """Remove a purchased upstream from the sidecar and llmspy."""
+    """Remove a purchased upstream from the sidecar and LiteLLM."""
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
@@ -757,12 +815,9 @@ def cmd_remove(name):
         _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", auths, token, ssl_ctx)
         print(f"Removed '{name}' auths.")
 
-    # Remove from llmspy providers.
-    providers = read_providers_json(token, ssl_ctx)
-    if name in providers:
-        del providers[name]
-        write_providers_json(providers, token, ssl_ctx)
-        print(f"Removed '{name}' from llmspy-config.")
+    # Remove from LiteLLM config.
+    if remove_litellm_model(name, token, ssl_ctx):
+        print(f"Removed '{name}' from litellm-config.")
 
     # If no more upstreams, consider cleaning up sidecar.
     if not buyer_config.get("upstreams"):
