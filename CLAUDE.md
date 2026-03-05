@@ -247,12 +247,14 @@ routes:
 
 ### Agent Reconciler
 
-The monetize skill (`internal/embed/skills/monetize/scripts/monetize.py`) runs inside the obol-agent pod. It watches ServiceOffer CRs and reconciles them through 6 stages, creating agent-managed resources:
+The sell skill (`internal/embed/skills/sell/scripts/monetize.py`) runs inside the obol-agent pod. It watches ServiceOffer CRs and reconciles them through 6 stages, creating agent-managed resources:
 
-- **Middleware** (`traefik.io/v1alpha1`): ForwardAuth pointing at x402-verifier
+- **Middleware** (`traefik.io/v1alpha1`): ForwardAuth pointing at x402-verifier, with `Authorization` in `authResponseHeaders`
 - **HTTPRoute**: Routes `/services/<name>/*` through the middleware to the upstream
-- **Pricing route**: Adds route to x402-pricing ConfigMap
+- **Pricing route**: Adds route to x402-pricing ConfigMap with `upstreamAuth` (LiteLLM master key)
 - **Registration resources** (if `--register`): ConfigMap + busybox httpd Deployment + Service + HTTPRoute at `/.well-known/`
+
+The `upstreamAuth` field enables the x402-verifier to inject the `Authorization` header on approved requests. This means paid requests automatically authenticate with the upstream (LiteLLM) — no manual HTTPRoute patching needed.
 
 All agent-managed resources use ownerReferences for automatic GC on ServiceOffer deletion.
 
@@ -394,15 +396,30 @@ Skills are SKILL.md files (+ optional scripts/references) embedded in the `obol`
 
 | Category | Skills |
 |----------|--------|
-| Infrastructure | `ethereum-networks`, `ethereum-local-wallet`, `obol-stack`, `distributed-validators`, `monetize`, `discovery` |
+| Infrastructure | `ethereum-networks`, `ethereum-local-wallet`, `obol-stack`, `distributed-validators`, `sell` (monetize), `discovery`, `buy-inference` |
 | Ethereum Dev | `addresses`, `building-blocks`, `concepts`, `gas`, `indexing`, `l2s`, `orchestration`, `security`, `standards`, `ship`, `testing`, `tools`, `wallets` |
 | Frontend & UX | `frontend-playbook`, `frontend-ux`, `qa`, `why` |
 
 ### Monetize Skill
 
-The `monetize` skill (`internal/embed/skills/monetize/`) is the agent-side orchestrator for the monetize subsystem. It contains:
+The `sell` skill (`internal/embed/skills/sell/`) is the agent-side orchestrator for the monetize subsystem. It contains:
 - `SKILL.md` — skill definition and usage instructions
 - `scripts/monetize.py` — 6-stage reconciliation loop (ModelReady → Ready)
+  - Stage 3 (PaymentGateReady) reads LiteLLM master key and writes `upstreamAuth` to pricing route
+  - Stage 5 (Registered) uses `AGENT_BASE_URL` env var for registration endpoint URL
+
+### Buy-Inference Skill
+
+The `buy-inference` skill (`internal/embed/skills/buy-inference/`) enables purchasing x402-gated services:
+- `scripts/buy.py` — probe, buy, refill, list, status, balance, remove
+- Deploys x402-buyer sidecar (port 8402) that attaches pre-signed ERC-3009 auths
+- Wires bought models into LiteLLM as `bought/<name>/<model>` entries
+
+### Discovery Skill
+
+The `discovery` skill (`internal/embed/skills/discovery/`) queries the ERC-8004 Identity Registry:
+- `scripts/discovery.py` — search, agent, uri, count
+- Uses bounded block range (last 10k blocks) to avoid 413 on Anvil forks
 
 ### Remote-Signer Wallet
 
@@ -472,9 +489,30 @@ Each OpenClaw instance gets an Ethereum signing wallet via `GenerateWallet()` in
 | `internal/x402/*_test.go` | Verifier, config, matcher, setup, watcher, E2E |
 | `internal/erc8004/*_test.go` | ABI parsing, client, types |
 | `internal/embed/embed_crd_test.go` | CRD + RBAC template validation |
-| `internal/openclaw/integration_test.go` | Full-cluster inference through llmspy |
+| `internal/openclaw/integration_test.go` | Full-cluster inference through LiteLLM |
 | `internal/openclaw/overlay_test.go` | Overlay generation |
 | `internal/inference/gateway_test.go` | Standalone gateway |
+| `internal/x402/bdd_integration_test.go` | BDD integration suite (Gherkin + godog) |
+| `internal/x402/bdd_integration_steps_test.go` | BDD step definitions |
+| `internal/x402/features/*.feature` | Gherkin feature files |
+
+### BDD Integration Tests (Gherkin)
+
+The BDD suite (`internal/x402/`) uses `godog` (Cucumber for Go) with Gherkin feature files.
+It follows the **real user journey** — no kubectl shortcuts:
+
+```bash
+# Full bootstrap (creates cluster from scratch, ~15min)
+go test -tags integration -v -run TestBDDIntegration -timeout 20m ./internal/x402/
+
+# Skip bootstrap (use existing cluster, ~2min)
+OBOL_INTEGRATION_SKIP_BOOTSTRAP=true OBOL_TEST_MODEL=qwen3.5:9b \
+  go test -tags integration -v -run TestBDDIntegration -timeout 10m ./internal/x402/
+```
+
+TestMain bootstrap sequence: `go build` → `obol stack init/up` → `obol model setup` → `obol sell pricing` → `obol agent init` → `obol sell http` → wait for agent reconciliation.
+
+7 scenarios covering: sell (CLI + reconciliation), payment gate (402), paid inference (200), discovery-to-payment, tunnel, tunnel discovery, and cleanup.
 
 **Documentation**:
 - `docs/guides/monetize-inference.md` — E2E monetize walkthrough (facilitator setup, Anvil, payment flow)
