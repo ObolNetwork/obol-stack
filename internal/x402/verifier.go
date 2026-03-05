@@ -131,17 +131,25 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		r.Method = method
 	}
 
-	// Reuse x402-go's middleware wrapping a dummy handler that returns 200.
+	// Reuse x402-go's middleware wrapping a handler that returns 200.
 	// The middleware either:
 	//   - Returns 402 (no/invalid payment) — Traefik forwards this to the client
 	//   - Calls the inner handler (valid payment) → 200 → Traefik allows the request
+	//
+	// When the inner handler runs (payment approved), it sets the Authorization
+	// header if the route has upstreamAuth configured. Traefik's authResponseHeaders
+	// copies this to the forwarded request, authenticating it with the upstream.
 	middleware := x402http.NewX402Middleware(&x402http.Config{
 		FacilitatorURL:      cfg.FacilitatorURL,
 		PaymentRequirements: []x402lib.PaymentRequirement{requirement},
 		VerifyOnly:          cfg.VerifyOnly,
 	})
 
+	upstreamAuth := rule.UpstreamAuth
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if upstreamAuth != "" {
+			w.Header().Set("Authorization", upstreamAuth)
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

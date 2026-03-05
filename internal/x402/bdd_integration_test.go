@@ -189,10 +189,6 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	// Patch HTTPRoute with LiteLLM auth header.
-	// The monetize.py reconciler doesn't add this yet — TODO fix in reconciler.
-	patchHTTPRouteWithAuth(kubectlBin, kubeconfigPath, serviceOfferNamespace)
-
 	// Restart x402-verifier to pick up the pricing route added by reconciliation.
 	log.Println("  Restarting x402-verifier...")
 	_ = kubectl.RunSilent(kubectlBin, kubeconfigPath, "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
@@ -332,32 +328,6 @@ func triggerReconciliation(kubectlBin, kubeconfig string) {
 		log.Printf("  manual reconciliation error: %v\n%s", err, out)
 	} else {
 		log.Printf("  reconciliation output:\n%s", out)
-	}
-}
-
-// patchHTTPRouteWithAuth injects the LiteLLM Authorization header into the
-// HTTPRoute created by the reconciler. This is a known gap in monetize.py.
-func patchHTTPRouteWithAuth(kubectlBin, kubeconfig, namespace string) {
-	masterKeyB64, err := kubectl.Output(kubectlBin, kubeconfig,
-		"get", "secret", "litellm-secrets", "-n", "llm",
-		"-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
-	if err != nil {
-		log.Printf("  Warning: could not read LiteLLM master key: %v", err)
-		return
-	}
-	masterKey := decodeBase64(masterKeyB64)
-	if masterKey == "" {
-		return
-	}
-
-	routeName := fmt.Sprintf("so-%s", serviceOfferName)
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
-	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
-		"patch", "httproute", routeName, "-n", namespace,
-		"--type=json", "-p", patchJSON); err != nil {
-		log.Printf("  Warning: could not patch HTTPRoute with auth header: %v", err)
-	} else {
-		log.Printf("  ✓ Patched HTTPRoute %s with LiteLLM auth header", routeName)
 	}
 }
 
