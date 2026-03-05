@@ -424,10 +424,14 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		buildAndImportLocalImages(cfg)
 	}
 
-	// Deploy default OpenClaw instance (non-fatal on failure)
-	if err := u.RunWithSpinner("Setting up default OpenClaw instance", func() error {
-		return openclaw.SetupDefault(cfg, u)
-	}); err != nil {
+	// Deploy default OpenClaw instance (non-fatal on failure).
+	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
+	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
+	// An outer spinner would fight with that output and block any sudo password
+	// prompt (e.g. EnsureHostsEntries writing /etc/hosts).
+	u.Blank()
+	u.Info("Setting up default OpenClaw instance")
+	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
 	}

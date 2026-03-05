@@ -156,6 +156,14 @@ func EnsureHostsEntries(hostnames []string) error {
 		return nil // no change needed
 	}
 
+	// Ensure sudo credentials are cached before running "sudo tee", which
+	// needs stdin for the file content and therefore cannot also read a
+	// password. "sudo -v" prompts interactively if needed, then the
+	// subsequent "sudo tee" reuses the cached credentials.
+	if err := ensureSudoCached(); err != nil {
+		return fmt.Errorf("sudo authentication required to update %s: %w", hostsFile, err)
+	}
+
 	writeCmd := exec.Command("sudo", "tee", hostsFile)
 	writeCmd.Stdin = strings.NewReader(newContent)
 	writeCmd.Stdout = nil
@@ -182,6 +190,22 @@ func RemoveHostsEntries() {
 	writeCmd.Stdout = nil
 	writeCmd.Stderr = os.Stderr
 	writeCmd.Run() //nolint:errcheck
+}
+
+// ensureSudoCached validates cached sudo credentials or prompts the user
+// interactively. This must be called before any "sudo <cmd>" that pipes
+// stdin from a non-terminal source (e.g. sudo tee with file content).
+func ensureSudoCached() error {
+	// Fast path: check if credentials are already cached (non-interactive).
+	if exec.Command("sudo", "-n", "true").Run() == nil {
+		return nil
+	}
+	// Credentials not cached — prompt the user interactively.
+	cmd := exec.Command("sudo", "-v")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // replaceOrAppendBlock replaces an existing managed block or appends a new one.
