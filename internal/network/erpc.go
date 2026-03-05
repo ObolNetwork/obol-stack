@@ -24,6 +24,7 @@ var networkChainIDs = map[string]int{
 	"mainnet":      1,
 	"hoodi":        560048,
 	"sepolia":      11155111,
+	"base":         8453,
 	"base-sepolia": 84532,
 }
 
