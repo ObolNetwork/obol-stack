@@ -78,6 +78,10 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "update", "patch", "delete"]
+  # Secrets - read upstream auth tokens (e.g., LiteLLM master key)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
 
 ---
 #------------------------------------------------------------------------------

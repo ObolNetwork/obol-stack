@@ -21,6 +21,7 @@ Commands:
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -516,7 +517,7 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
         "spec": {
             "forwardAuth": {
                 "address": "http://x402-verifier.x402.svc.cluster.local:8080/verify",
-                "authResponseHeaders": ["X-Payment-Status", "X-Payment-Tx"],
+                "authResponseHeaders": ["X-Payment-Status", "X-Payment-Tx", "Authorization"],
             },
         },
     }
@@ -549,6 +550,25 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
 
     set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created with pricing route", token, ssl_ctx)
     return True
+
+
+def _read_upstream_auth(spec, token, ssl_ctx):
+    """Read the LiteLLM master key from the cluster and return a Bearer token.
+
+    Returns "Bearer <key>" or empty string if the secret is not available.
+    """
+    upstream_ns = spec.get("upstream", {}).get("namespace", "llm")
+    secret_path = f"/api/v1/namespaces/{upstream_ns}/secrets/litellm-secrets"
+    try:
+        secret = api_get(secret_path, token, ssl_ctx, quiet=True)
+        encoded = secret.get("data", {}).get("LITELLM_MASTER_KEY", "")
+        if encoded:
+            key = base64.b64decode(encoded).decode("utf-8").strip()
+            if key:
+                return f"Bearer {key}"
+    except (SystemExit, Exception) as e:
+        print(f"  Note: could not read LiteLLM master key: {e}")
+    return ""
 
 
 def _add_pricing_route(spec, name, token, ssl_ctx):
@@ -585,17 +605,29 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
         print(f"  Pricing route {route_pattern} already exists")
         return
 
+    # Read upstream auth token so the x402-verifier can inject Authorization.
+    upstream_auth = _read_upstream_auth(spec, token, ssl_ctx)
+
+    # Detect indentation of existing routes.
+    indent = ""
+    for line in pricing_yaml_str.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("- pattern:"):
+            indent = line[: len(line) - len(stripped)]
+            break
+
     # Build the new route entry in YAML format.
-    # Per-route payTo and network enable multi-offer with different wallets/chains.
     route_entry = (
-        f'- pattern: "{route_pattern}"\n'
-        f'  price: "{price}"\n'
-        f'  description: "ServiceOffer {name}"\n'
+        f'{indent}- pattern: "{route_pattern}"\n'
+        f'{indent}  price: "{price}"\n'
+        f'{indent}  description: "ServiceOffer {name}"\n'
     )
     if pay_to:
-        route_entry += f'  payTo: "{pay_to}"\n'
+        route_entry += f'{indent}  payTo: "{pay_to}"\n'
     if network:
-        route_entry += f'  network: "{network}"\n'
+        route_entry += f'{indent}  network: "{network}"\n'
+    if upstream_auth:
+        route_entry += f'{indent}  upstreamAuth: "{upstream_auth}"\n'
 
     # Append route to existing routes section or create it.
     if "routes:" in pricing_yaml_str:
