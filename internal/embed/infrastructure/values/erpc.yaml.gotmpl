@@ -64,6 +64,10 @@ config: |-
           endpoint: https://ethereum-hoodi-rpc.publicnode.com
           evm:
             chainId: 560048
+        - id: obol-rpc-base
+          endpoint: https://{{ $erpcGcpAuth }}@erpc.gcp.obol.tech/rpc/base
+          evm:
+            chainId: 8453
         - id: base-sepolia-official
           endpoint: https://sepolia.base.org
           evm:
@@ -100,6 +104,29 @@ config: |-
           evm:
             chainId: 560048
           alias: hoodi
+          failsafe:
+            timeout:
+              duration: 30s
+            retry:
+              maxAttempts: 2
+              delay: 100ms
+            hedge:
+              delay: 500ms
+              maxCount: 1
+        - architecture: evm
+          evm:
+            chainId: 8453
+          alias: base
+          selectionPolicy:
+            evalInterval: 1m
+            evalPerMethod: true
+            evalFunction: |
+              (upstreams, method) => {
+                if (method === 'eth_sendRawTransaction') {
+                  return upstreams.filter(u => u.config.id === 'obol-rpc-base');
+                }
+                return upstreams;
+              }
           failsafe:
             timeout:
               duration: 30s
