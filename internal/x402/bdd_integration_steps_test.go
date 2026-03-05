@@ -303,6 +303,137 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		}
 		return nil
 	})
+
+	// ── Sell-side steps ──────────────────────────────────────────────
+	// These validate that the real `obol sell http` + agent reconciliation
+	// path works. TestMain already runs these commands during bootstrap,
+	// so these steps verify the resulting state.
+
+	ctx.When(`^the operator runs "obol sell http" to create a ServiceOffer$`, func() error {
+		// The ServiceOffer was created by TestMain via `obol sell http`.
+		// Verify it exists.
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace, "--no-headers")
+		if err != nil {
+			return fmt.Errorf("ServiceOffer not found (was obol sell http run?): %v", err)
+		}
+		w.t.Logf("integration: ServiceOffer exists: %s", strings.TrimSpace(out))
+		return nil
+	})
+
+	ctx.When(`^the agent reconciles the ServiceOffer$`, func() error {
+		// TestMain already waited for Ready. If not ready, trigger manually.
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace,
+			"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+		if err != nil || strings.TrimSpace(out) != "True" {
+			// Trigger reconciliation manually.
+			triggerReconciliation(w.kubectlBin, w.kubeconfig)
+			// Poll for Ready.
+			return waitForServiceOfferReady(w.kubectlBin, w.kubeconfig,
+				serviceOfferName, serviceOfferNamespace, 120*time.Second)
+		}
+		return nil
+	})
+
+	ctx.Then(`^the ServiceOffer status is "([^"]*)"$`, func(expected string) error {
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace,
+			"-o", "jsonpath={.status.conditions[?(@.type=='"+expected+"')].status}")
+		if err != nil {
+			return fmt.Errorf("could not read ServiceOffer status: %v", err)
+		}
+		if strings.TrimSpace(out) != "True" {
+			// Dump all conditions for debugging.
+			conds, _ := kubectl.Output(w.kubectlBin, w.kubeconfig,
+				"get", "serviceoffers.obol.org", serviceOfferName,
+				"-n", serviceOfferNamespace,
+				"-o", "jsonpath={range .status.conditions[*]}{.type}: {.status} ({.message}){\"\\n\"}{end}")
+			return fmt.Errorf("ServiceOffer condition %s is not True.\nConditions:\n%s", expected, conds)
+		}
+		w.t.Logf("integration: ServiceOffer condition %s = True", expected)
+		return nil
+	})
+
+	ctx.Then(`^a Middleware "([^"]*)" exists in the offer namespace$`, func(name string) error {
+		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "middleware", name, "-n", serviceOfferNamespace)
+		if err != nil {
+			return fmt.Errorf("Middleware %s not found in %s: %v", name, serviceOfferNamespace, err)
+		}
+		w.t.Logf("integration: ✓ Middleware %s exists", name)
+		return nil
+	})
+
+	ctx.Then(`^an HTTPRoute "([^"]*)" exists in the offer namespace$`, func(name string) error {
+		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "httproute", name, "-n", serviceOfferNamespace)
+		if err != nil {
+			return fmt.Errorf("HTTPRoute %s not found in %s: %v", name, serviceOfferNamespace, err)
+		}
+		w.t.Logf("integration: ✓ HTTPRoute %s exists", name)
+		return nil
+	})
+
+	ctx.Then(`^the x402-pricing ConfigMap contains a route for the offer$`, func() error {
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "cm", "x402-pricing", "-n", "x402",
+			"-o", "jsonpath={.data.pricing\\.yaml}")
+		if err != nil {
+			return fmt.Errorf("could not read x402-pricing: %v", err)
+		}
+		pattern := "/services/" + serviceOfferName + "/*"
+		if !strings.Contains(out, pattern) {
+			return fmt.Errorf("pricing ConfigMap does not contain route %s:\n%s", pattern, out)
+		}
+		w.t.Logf("integration: ✓ Pricing route %s present", pattern)
+		return nil
+	})
+
+	// ── Cleanup steps ────────────────────────────────────────────────
+
+	ctx.When(`^the operator deletes the ServiceOffer via CLI$`, func() error {
+		if integrationObolBin == "" {
+			return fmt.Errorf("obol binary not set")
+		}
+		err := runObol(integrationObolBin, "sell", "delete", serviceOfferName,
+			"-n", serviceOfferNamespace, "-f")
+		if err != nil {
+			return fmt.Errorf("obol sell delete failed: %v", err)
+		}
+		// Wait for deletion to propagate.
+		time.Sleep(3 * time.Second)
+		return nil
+	})
+
+	ctx.Then(`^the ServiceOffer no longer exists$`, func() error {
+		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace)
+		if err == nil {
+			return fmt.Errorf("ServiceOffer still exists after delete")
+		}
+		w.t.Log("integration: ✓ ServiceOffer deleted")
+		return nil
+	})
+
+	ctx.Then(`^the x402-pricing ConfigMap does not contain a route for the offer$`, func() error {
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "cm", "x402-pricing", "-n", "x402",
+			"-o", "jsonpath={.data.pricing\\.yaml}")
+		if err != nil {
+			return fmt.Errorf("could not read x402-pricing: %v", err)
+		}
+		pattern := "/services/" + serviceOfferName + "/*"
+		if strings.Contains(out, pattern) {
+			return fmt.Errorf("pricing route %s still present after delete:\n%s", pattern, out)
+		}
+		w.t.Log("integration: ✓ Pricing route removed")
+		return nil
+	})
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
