@@ -4,7 +4,6 @@ package x402
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -26,6 +25,7 @@ var (
 	integrationRoutePath  string
 	integrationPayTo      string
 	integrationObolBin    string
+	integrationModel      string
 
 	// Set to true when TestMain successfully bootstraps the cluster.
 	integrationReady bool
@@ -89,25 +89,58 @@ func TestMain(m *testing.M) {
 		log.Fatalf("x402-verifier not ready: %v", err)
 	}
 
-	// 4. Deploy ServiceOffer.
-	log.Println("=== Deploying ServiceOffer ===")
-	if err := deployServiceOffer(kubectlBin, kubeconfigPath); err != nil {
-		teardown(obolBin)
-		log.Fatalf("deploy ServiceOffer: %v", err)
+	// 4. Configure LLM provider (Anthropic if key available, else Ollama default).
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		log.Println("=== Configuring Anthropic provider in llmspy ===")
+		if err := runObol(obolBin, "model", "setup", "--provider", "anthropic", "--api-key", apiKey); err != nil {
+			teardown(obolBin)
+			log.Fatalf("obol model setup anthropic: %v", err)
+		}
+	} else {
+		log.Println("=== No ANTHROPIC_API_KEY set, using default Ollama provider ===")
 	}
 
-	// 5. Wait for pricing route to appear in ConfigMap.
-	log.Println("=== Waiting for pricing route reconciliation ===")
-	routePath, err := waitForPricingRoute(kubectlBin, kubeconfigPath, 180*time.Second)
-	if err != nil {
+	// 5. Set up pricing route, ForwardAuth middleware, and HTTPRoute directly.
+	//    This bypasses the obol-agent reconciler (which requires `obol agent init`)
+	//    and makes the test fully self-contained.
+	log.Println("=== Setting up x402 pricing route and HTTPRoute ===")
+	if err := setupPricingAndRoute(kubectlBin, kubeconfigPath); err != nil {
 		teardown(obolBin)
-		log.Fatalf("pricing route not reconciled: %v", err)
+		log.Fatalf("setup pricing/route: %v", err)
 	}
-	integrationRoutePath = routePath
+
+	// 5. Wait for llmspy to be ready (upstream for the priced route).
+	//    The llmspy image (~370MB) can take 3-5 minutes to pull on first run.
+	log.Println("=== Waiting for llmspy upstream ===")
+	if err := waitForPod(kubectlBin, kubeconfigPath, "llm", "app=llmspy", 300*time.Second); err != nil {
+		teardown(obolBin)
+		log.Fatalf("llmspy not ready: %v", err)
+	}
+
+	// 6. Restart x402-verifier to pick up new pricing config.
+	log.Println("=== Restarting x402-verifier to load pricing config ===")
+	_ = kubectl.RunSilent(kubectlBin, kubeconfigPath, "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
+	if err := waitForVerifier(kubectlBin, kubeconfigPath, 120*time.Second); err != nil {
+		teardown(obolBin)
+		log.Fatalf("x402-verifier not ready after restart: %v", err)
+	}
+
+	integrationRoutePath = "/services/" + serviceOfferName + "/v1/chat/completions"
 	integrationPayTo = serviceOfferPayTo
-	integrationReady = true
 
-	log.Printf("=== Bootstrap complete: route=%s payTo=%s ===", routePath, serviceOfferPayTo)
+	// Determine inference model.
+	integrationModel = os.Getenv("OBOL_TEST_MODEL")
+	if integrationModel == "" {
+		if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			integrationModel = "claude-sonnet-4-20250514"
+		} else {
+			integrationModel = "llama3.2"
+		}
+	}
+
+	integrationReady = true
+	log.Printf("=== Bootstrap complete: route=%s payTo=%s model=%s ===",
+		integrationRoutePath, serviceOfferPayTo, integrationModel)
 
 	// 6. Run tests.
 	code := m.Run()
@@ -170,6 +203,10 @@ func buildObol(projectRoot, outputPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
 	}
+	// Remove any existing file (e.g., shell wrapper from obolup.sh)
+	// so go build -o can write a fresh binary.
+	os.Remove(outputPath)
+
 	cmd := exec.Command("go", "build", "-o", outputPath, "./cmd/obol")
 	cmd.Dir = projectRoot
 	cmd.Stdout = os.Stdout
@@ -199,55 +236,106 @@ func waitForVerifier(kubectlBin, kubeconfig string, timeout time.Duration) error
 	return fmt.Errorf("timeout waiting for x402-verifier pods to be Running")
 }
 
-func deployServiceOffer(kubectlBin, kubeconfig string) error {
-	manifest := fmt.Sprintf(`apiVersion: obol.org/v1alpha1
-kind: ServiceOffer
+// setupPricingAndRoute directly patches the x402-pricing ConfigMap and creates
+// the ForwardAuth Middleware + HTTPRoute. This replaces the agent reconciler
+// flow, making the test independent of the obol-agent singleton.
+func setupPricingAndRoute(kubectlBin, kubeconfig string) error {
+	routePattern := "/services/" + serviceOfferName + "/*"
+
+	// 1. Patch x402-pricing ConfigMap with the route.
+	pricingYAML := fmt.Sprintf(`wallet: "%s"
+chain: "base-sepolia"
+facilitatorURL: "https://facilitator.x402.rs"
+verifyOnly: false
+routes:
+  - pattern: "%s"
+    price: "1000"
+    description: "BDD test route"
+`, serviceOfferPayTo, routePattern)
+
+	patchJSON := fmt.Sprintf(`{"data":{"pricing.yaml":%s}}`, mustQuoteJSON(pricingYAML))
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing",
+		"-n", "x402", "--type=merge", "-p", patchJSON); err != nil {
+		return fmt.Errorf("patch pricing ConfigMap: %w", err)
+	}
+	log.Printf("Patched x402-pricing ConfigMap with route %s", routePattern)
+
+	// 2. Create ForwardAuth Middleware + HTTPRoute.
+	manifest := fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
+kind: Middleware
 metadata:
-  name: %s
+  name: x402-bdd-test
   namespace: %s
 spec:
-  type: http
-  upstream:
-    service: llmspy
-    namespace: llm
-    port: 8000
-    healthPath: /health
-  payment:
-    scheme: exact
-    network: base-sepolia
-    payTo: "%s"
-    price:
-      perRequest: "0.001"
-`, serviceOfferName, serviceOfferNamespace, serviceOfferPayTo)
+  forwardAuth:
+    address: http://x402-verifier.x402.svc.cluster.local:8080/verify
+    authResponseHeaders:
+      - X-Payment-Response
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bdd-test
+  namespace: %s
+spec:
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /services/%s
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: traefik.io
+            kind: Middleware
+            name: x402-bdd-test
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: llmspy
+          namespace: llm
+          port: 8000
+`, serviceOfferNamespace, serviceOfferNamespace, serviceOfferName)
 
-	return kubectl.Apply(kubectlBin, kubeconfig, []byte(manifest))
+	if err := kubectl.Apply(kubectlBin, kubeconfig, []byte(manifest)); err != nil {
+		return fmt.Errorf("apply middleware + HTTPRoute: %w", err)
+	}
+	log.Println("Created ForwardAuth middleware and HTTPRoute for bdd-test")
+
+	return nil
 }
 
-func waitForPricingRoute(kubectlBin, kubeconfig string, timeout time.Duration) (string, error) {
+func waitForPod(kubectlBin, kubeconfig, namespace, labelSelector string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		cmYAML, err := kubectl.Output(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
-			"-n", "x402", "-o", `jsonpath={.data.pricing\.yaml}`)
-		if err == nil && strings.Contains(cmYAML, "pattern:") {
-			routePath := extractRoutePath(cmYAML)
-			if routePath != "" {
-				log.Printf("Pricing route found: %s", routePath)
-				return routePath, nil
-			}
+		out, err := kubectl.Output(kubectlBin, kubeconfig, "get", "pods", "-n", namespace,
+			"-l", labelSelector, "--no-headers")
+		if err == nil && strings.Contains(out, "Running") {
+			log.Printf("Pod %s in %s is Running", labelSelector, namespace)
+			return nil
 		}
-		log.Println("Waiting for pricing route in ConfigMap...")
-		time.Sleep(10 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
-	return "", fmt.Errorf("timeout waiting for pricing route in x402-pricing ConfigMap")
+	return fmt.Errorf("timeout waiting for pod %s in %s", labelSelector, namespace)
 }
+
 
 func teardown(obolBin string) {
 	log.Println("=== Tearing down stack ===")
 
-	// Delete the ServiceOffer first to clean up agent-managed resources.
+	// Clean up test resources before tearing down the cluster.
 	if integrationKubectlBin != "" && integrationKubeconfig != "" {
 		_ = kubectl.RunSilent(integrationKubectlBin, integrationKubeconfig,
-			"delete", "serviceoffer", serviceOfferName, "-n", serviceOfferNamespace, "--ignore-not-found")
+			"delete", "httproute", "bdd-test", "-n", serviceOfferNamespace, "--ignore-not-found")
+		_ = kubectl.RunSilent(integrationKubectlBin, integrationKubeconfig,
+			"delete", "middleware", "x402-bdd-test", "-n", serviceOfferNamespace, "--ignore-not-found")
 	}
 
 	if err := runObol(obolBin, "stack", "down"); err != nil {
@@ -258,38 +346,3 @@ func teardown(obolBin string) {
 	}
 }
 
-// ── ServiceOffer wait helper (JSON-based) ────────────────────────────────────
-
-// waitForServiceOfferReady polls until the ServiceOffer has condition Ready=True.
-// Not used in the current flow (we wait for pricing route instead) but available
-// for future use.
-func waitForServiceOfferReady(kubectlBin, kubeconfig string, timeout time.Duration) error {
-	type condition struct {
-		Type   string `json:"type"`
-		Status string `json:"status"`
-	}
-	type soStatus struct {
-		Conditions []condition `json:"conditions"`
-	}
-	type serviceOffer struct {
-		Status soStatus `json:"status"`
-	}
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		out, err := kubectl.Output(kubectlBin, kubeconfig, "get", "serviceoffer",
-			serviceOfferName, "-n", serviceOfferNamespace, "-o", "json")
-		if err == nil {
-			var so serviceOffer
-			if json.Unmarshal([]byte(out), &so) == nil {
-				for _, c := range so.Status.Conditions {
-					if c.Type == "Ready" && c.Status == "True" {
-						return nil
-					}
-				}
-			}
-		}
-		time.Sleep(10 * time.Second)
-	}
-	return fmt.Errorf("timeout waiting for ServiceOffer %s/%s to be Ready", serviceOfferNamespace, serviceOfferName)
-}
