@@ -51,12 +51,6 @@ type RouteRule struct {
 	// Network overrides the global chain for this route (human-friendly).
 	// If empty, falls back to PricingConfig.Chain.
 	Network string `yaml:"network,omitempty"`
-
-	// UpstreamAuth is injected as the Authorization header on approved requests.
-	// The x402-verifier sets this header in its 200 response; Traefik copies it
-	// to the forwarded request via authResponseHeaders. This lets the upstream
-	// (e.g., LiteLLM) authenticate the request without exposing the key to buyers.
-	UpstreamAuth string `yaml:"upstreamAuth,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.
