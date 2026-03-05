@@ -4,6 +4,7 @@ package x402
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -41,7 +42,22 @@ const (
 // reconciliation, runs the BDD suite, and tears everything down.
 func TestMain(m *testing.M) {
 	if os.Getenv("OBOL_INTEGRATION_SKIP_BOOTSTRAP") == "true" {
-		// Escape hatch: use a pre-existing cluster (original behavior).
+		// Escape hatch: use a pre-existing cluster.
+		// Set package-level vars from environment so scenarios can run.
+		binDir := os.Getenv("OBOL_BIN_DIR")
+		configDir := os.Getenv("OBOL_CONFIG_DIR")
+		if binDir != "" && configDir != "" {
+			integrationKubectlBin = filepath.Join(binDir, "kubectl")
+			integrationKubeconfig = filepath.Join(configDir, "kubeconfig.yaml")
+			integrationObolBin = filepath.Join(binDir, "obol")
+			integrationRoutePath = "/services/" + serviceOfferName + "/v1/chat/completions"
+			integrationPayTo = serviceOfferPayTo
+			integrationModel = os.Getenv("OBOL_TEST_MODEL")
+			if integrationModel == "" {
+				integrationModel = "qwen3.5:9b"
+			}
+			integrationReady = true
+		}
 		os.Exit(m.Run())
 	}
 
@@ -91,7 +107,7 @@ func TestMain(m *testing.M) {
 
 	// 4. Configure LLM provider (Anthropic if key available, else Ollama default).
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		log.Println("=== Configuring Anthropic provider in llmspy ===")
+		log.Println("=== Configuring Anthropic provider ===")
 		if err := runObol(obolBin, "model", "setup", "--provider", "anthropic", "--api-key", apiKey); err != nil {
 			teardown(obolBin)
 			log.Fatalf("obol model setup anthropic: %v", err)
@@ -109,12 +125,11 @@ func TestMain(m *testing.M) {
 		log.Fatalf("setup pricing/route: %v", err)
 	}
 
-	// 5. Wait for llmspy to be ready (upstream for the priced route).
-	//    The llmspy image (~370MB) can take 3-5 minutes to pull on first run.
-	log.Println("=== Waiting for llmspy upstream ===")
-	if err := waitForPod(kubectlBin, kubeconfigPath, "llm", "app=llmspy", 300*time.Second); err != nil {
+	// 5. Wait for LiteLLM to be ready (upstream for the priced route).
+	log.Println("=== Waiting for LiteLLM upstream ===")
+	if err := waitForPod(kubectlBin, kubeconfigPath, "llm", "app=litellm", 300*time.Second); err != nil {
 		teardown(obolBin)
-		log.Fatalf("llmspy not ready: %v", err)
+		log.Fatalf("LiteLLM not ready: %v", err)
 	}
 
 	// 6. Restart x402-verifier to pick up new pricing config.
@@ -260,7 +275,26 @@ routes:
 	}
 	log.Printf("Patched x402-pricing ConfigMap with route %s", routePattern)
 
-	// 2. Create ForwardAuth Middleware + HTTPRoute.
+	// 2. Read LiteLLM master key for auth header injection.
+	masterKeyB64, _ := kubectl.Output(kubectlBin, kubeconfig,
+		"get", "secret", "litellm-secrets", "-n", "llm",
+		"-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
+	masterKey := decodeBase64(masterKeyB64)
+
+	// 3. Create ForwardAuth Middleware + HTTPRoute.
+	//    The HTTPRoute includes a RequestHeaderModifier to inject the LiteLLM
+	//    Authorization header. Without this, paid requests that pass x402
+	//    verification get 401 from LiteLLM (no API key).
+	authFilter := ""
+	if masterKey != "" {
+		authFilter = fmt.Sprintf(`        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: Authorization
+                value: "Bearer %s"
+`, masterKey)
+	}
+
 	manifest := fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -298,11 +332,11 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /
-      backendRefs:
-        - name: llmspy
+%s      backendRefs:
+        - name: litellm
           namespace: llm
-          port: 8000
-`, serviceOfferNamespace, serviceOfferNamespace, serviceOfferName)
+          port: 4000
+`, serviceOfferNamespace, serviceOfferNamespace, serviceOfferName, authFilter)
 
 	if err := kubectl.Apply(kubectlBin, kubeconfig, []byte(manifest)); err != nil {
 		return fmt.Errorf("apply middleware + HTTPRoute: %w", err)
@@ -310,6 +344,18 @@ spec:
 	log.Println("Created ForwardAuth middleware and HTTPRoute for bdd-test")
 
 	return nil
+}
+
+func decodeBase64(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return s // Return raw if not base64
+	}
+	return string(decoded)
 }
 
 func waitForPod(kubectlBin, kubeconfig, namespace, labelSelector string, timeout time.Duration) error {

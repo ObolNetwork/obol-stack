@@ -18,6 +18,23 @@ import (
 	"github.com/cucumber/godog"
 )
 
+// parsed402Response maps the x402 PaymentRequired response body.
+type parsed402Response struct {
+	X402Version int `json:"x402Version"`
+	Error       string `json:"error"`
+	Accepts []struct {
+		Scheme            string `json:"scheme"`
+		Network           string `json:"network"`
+		Amount            string `json:"maxAmountRequired"`
+		Asset             string `json:"asset"`
+		PayTo             string `json:"payTo"`
+		Resource          string `json:"resource"`
+		Description       string `json:"description"`
+		MimeType          string `json:"mimeType"`
+		MaxTimeoutSeconds int    `json:"maxTimeoutSeconds"`
+	} `json:"accepts"`
+}
+
 // integrationWorld holds shared state for integration-tier BDD scenarios.
 // Each scenario gets a fresh world. Background steps bootstrap Anvil,
 // facilitator, and verifier patching per scenario.
@@ -337,8 +354,9 @@ func validateInferenceResponse(w *integrationWorld, requireText bool) error {
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content   string        `json:"content"`
-				ToolCalls []interface{} `json:"tool_calls"`
+				Content          string        `json:"content"`
+				ReasoningContent string        `json:"reasoning_content"`
+				ToolCalls        []interface{} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -350,14 +368,18 @@ func validateInferenceResponse(w *integrationWorld, requireText bool) error {
 	}
 	msg := result.Choices[0].Message
 	hasContent := msg.Content != ""
+	hasReasoning := msg.ReasoningContent != ""
 	hasToolCalls := len(msg.ToolCalls) > 0
-	if !hasContent && !hasToolCalls {
-		return fmt.Errorf("inference response has neither content nor tool_calls: %s", truncate(w.lastBody, 300))
+	if !hasContent && !hasReasoning && !hasToolCalls {
+		return fmt.Errorf("inference response has no content, reasoning, or tool_calls: %s", truncate(w.lastBody, 300))
 	}
-	if hasContent {
+	switch {
+	case hasContent:
 		w.t.Logf("integration: inference content = %s", truncateStr(msg.Content, 100))
-	} else {
-		w.t.Logf("integration: inference returned %d tool_calls (no text content)", len(msg.ToolCalls))
+	case hasReasoning:
+		w.t.Logf("integration: inference reasoning = %s", truncateStr(msg.ReasoningContent, 100))
+	default:
+		w.t.Logf("integration: inference returned %d tool_calls", len(msg.ToolCalls))
 	}
 	return nil
 }

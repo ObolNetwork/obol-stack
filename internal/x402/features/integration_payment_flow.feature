@@ -26,7 +26,7 @@ Feature: x402 Payment Flow — Full Infrastructure
     And the response body contains a valid accepts array
 
   @integration @local @payment
-  Scenario: Paid request returns real inference from llmspy
+  Scenario: Paid request returns real inference
     When the buyer sends an unpaid POST to the priced route
     Then the response status is 402
     When the buyer signs an EIP-712 payment from the 402 response
