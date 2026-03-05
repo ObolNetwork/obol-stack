@@ -466,6 +466,56 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
+	ctx.Then(`^the registration contains OASF skills$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		services, ok := w.registrationJSON["services"].([]interface{})
+		if !ok {
+			return fmt.Errorf("no services array in registration")
+		}
+		for _, s := range services {
+			svc, ok := s.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if svc["name"] == "OASF" {
+				skills, ok := svc["skills"].([]interface{})
+				if !ok || len(skills) == 0 {
+					return fmt.Errorf("OASF service entry has no skills")
+				}
+				w.t.Logf("integration: ✓ OASF skills: %v", skills)
+				return nil
+			}
+		}
+		return fmt.Errorf("no OASF service entry found in registration services")
+	})
+
+	ctx.Then(`^the registration contains OASF domains$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		services, ok := w.registrationJSON["services"].([]interface{})
+		if !ok {
+			return fmt.Errorf("no services array in registration")
+		}
+		for _, s := range services {
+			svc, ok := s.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if svc["name"] == "OASF" {
+				domains, ok := svc["domains"].([]interface{})
+				if !ok || len(domains) == 0 {
+					return fmt.Errorf("OASF service entry has no domains")
+				}
+				w.t.Logf("integration: ✓ OASF domains: %v", domains)
+				return nil
+			}
+		}
+		return fmt.Errorf("no OASF service entry found in registration services")
+	})
+
 	ctx.When(`^the agent probes the tunnel service endpoint$`, func() error {
 		if w.discoveredEndpoint == "" {
 			return fmt.Errorf("no service endpoint discovered")

@@ -279,6 +279,14 @@ Examples:
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
 			},
+			&cli.StringSliceFlag{
+				Name:  "register-skills",
+				Usage: "OASF skills for discovery (e.g. natural_language_processing/text_generation)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-domains",
+				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
@@ -338,6 +346,12 @@ Examples:
 				}
 				if img := cmd.String("register-image"); img != "" {
 					reg["image"] = img
+				}
+				if skills := cmd.StringSlice("register-skills"); len(skills) > 0 {
+					reg["skills"] = skills
+				}
+				if domains := cmd.StringSlice("register-domains"); len(domains) > 0 {
+					reg["domains"] = domains
 				}
 				spec["registration"] = reg
 			}

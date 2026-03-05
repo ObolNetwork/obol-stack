@@ -65,6 +65,9 @@ SEL_GET_METADATA = "cb4799f2"
 # Event topic: Registered(uint256 indexed agentId, string agentURI, address indexed owner)
 REGISTERED_TOPIC = "0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a"
 
+# Event topic: MetadataSet(uint256 indexed agentId, string indexed indexedMetadataKey, string metadataKey, bytes metadataValue)
+METADATA_SET_TOPIC = "0x2c149ed548c6d2993cd73efe187df6eccabe4538091b33adbd25fafdb8a1468b"
+
 
 # ---------------------------------------------------------------------------
 # RPC helpers
@@ -277,6 +280,70 @@ def search_registered_events(chain=None, limit=20, from_block=None, lookback=100
     return events
 
 
+def search_by_metadata(metadata_key, chain=None, limit=20, lookback=10000):
+    """Search for agents that have a specific on-chain metadata key set.
+
+    Uses MetadataSet events with indexed metadataKey topic for efficient filtering.
+    Returns a list of unique agentIds that have the given metadata set.
+    """
+    registry = _get_registry(chain or DEFAULT_CHAIN)
+
+    # Get latest block and scan backwards.
+    latest_hex = _rpc("eth_blockNumber", [], chain)
+    latest = int(latest_hex, 16) if isinstance(latest_hex, str) else 0
+    start = max(0, latest - lookback)
+
+    # The second topic is keccak256(metadataKey) since it's an indexed string.
+    import hashlib
+    try:
+        from Crypto.Hash import keccak as _keccak
+        h = _keccak.new(digest_bits=256)
+        h.update(metadata_key.encode("utf-8"))
+        key_topic = "0x" + h.hexdigest()
+    except ImportError:
+        # Fallback: precomputed for common keys
+        _precomputed = {
+            "x402.supported": "0x" + hashlib.sha256(b"x402.supported").hexdigest(),  # Not keccak — need proper hash
+        }
+        # Use cast if available
+        import subprocess
+        try:
+            result = subprocess.run(["cast", "keccak", metadata_key], capture_output=True, text=True, timeout=5)
+            key_topic = result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            print(f"Warning: cannot compute keccak256 for key filter '{metadata_key}'", file=sys.stderr)
+            return []
+
+    params = {
+        "address": registry,
+        "topics": [METADATA_SET_TOPIC, None, key_topic],  # [event_sig, agentId(any), metadataKey]
+        "fromBlock": hex(start),
+        "toBlock": "latest",
+    }
+    logs = _rpc("eth_getLogs", [params], chain)
+    if not logs:
+        return []
+
+    # Extract unique agentIds.
+    seen = set()
+    agents = []
+    for log in logs:
+        topics = log.get("topics", [])
+        if len(topics) >= 2:
+            agent_id = int(topics[1], 16)
+            if agent_id not in seen:
+                seen.add(agent_id)
+                agents.append({
+                    "agentId": agent_id,
+                    "blockNumber": int(log.get("blockNumber", "0x0"), 16),
+                })
+
+    agents.sort(key=lambda e: e["blockNumber"], reverse=True)
+    if limit and limit > 0:
+        agents = agents[:limit]
+    return agents
+
+
 def fetch_agent_uri_json(uri):
     """Fetch the registration JSON from an agent's URI.
 
@@ -329,9 +396,26 @@ def cmd_search(args):
     """Search for recently registered agents via Registered events."""
     chain = args.chain or DEFAULT_CHAIN
     limit = args.limit or 20
-    print(f"Searching for agents on {chain} (limit: {limit})...")
-
     lookback = getattr(args, "lookback", 10000)
+    x402_only = getattr(args, "x402_only", False)
+    filter_key = getattr(args, "filter", None)
+
+    # Metadata-filtered search (uses MetadataSet events instead of Registered).
+    if x402_only or filter_key:
+        key = filter_key or "x402.supported"
+        print(f"Searching for agents with on-chain metadata '{key}' on {chain} (limit: {limit})...")
+        agents = search_by_metadata(key, chain=chain, limit=limit, lookback=lookback)
+        if not agents:
+            print(f"No agents found with metadata key '{key}'.")
+            return
+        print(f"\nFound {len(agents)} agent(s) with '{key}':\n")
+        print(f"{'Agent ID':>10}  {'Block':>10}")
+        print(f"{'-' * 10}  {'-' * 10}")
+        for a in agents:
+            print(f"{a['agentId']:>10}  {a['blockNumber']:>10}")
+        return
+
+    print(f"Searching for agents on {chain} (limit: {limit})...")
     events = search_registered_events(chain=chain, limit=limit, lookback=lookback)
     if not events:
         print("No registered agents found.")
@@ -464,6 +548,8 @@ def main():
     p_search.add_argument("--chain", default=None, help="Chain/network name (default: base-sepolia)")
     p_search.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
     p_search.add_argument("--lookback", type=int, default=10000, help="Scan last N blocks (default: 10000)")
+    p_search.add_argument("--x402-only", action="store_true", help="Only show agents with x402.supported metadata")
+    p_search.add_argument("--filter", default=None, help="Filter by on-chain metadata key (e.g. service.type)")
 
     # agent
     p_agent = sub.add_parser("agent", help="Get agent details by ID")

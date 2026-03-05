@@ -28,10 +28,14 @@ type AgentRegistration struct {
 const RegistrationType = "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"
 
 // ServiceDef describes an endpoint the agent exposes.
+// For OASF entries (name="OASF"), Skills and Domains provide machine-readable
+// taxonomy for agent discovery. See https://schema.oasf.outshift.com/
 type ServiceDef struct {
-	Name     string `json:"name"`               // e.g., "web", "A2A", "MCP"
-	Endpoint string `json:"endpoint"`           // full URL
-	Version  string `json:"version,omitempty"`  // protocol version (SHOULD per spec)
+	Name     string   `json:"name"`               // e.g., "web", "A2A", "MCP", "OASF"
+	Endpoint string   `json:"endpoint,omitempty"`  // full URL (omitempty for OASF entries)
+	Version  string   `json:"version,omitempty"`   // protocol version (SHOULD per spec)
+	Skills   []string `json:"skills,omitempty"`    // OASF skill taxonomy paths
+	Domains  []string `json:"domains,omitempty"`   // OASF domain taxonomy paths
 }
 
 // OnChainReg links the registration to its on-chain record.

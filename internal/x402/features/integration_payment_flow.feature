@@ -85,6 +85,8 @@ Feature: x402 Payment Flow — Real User Journey
     When the agent fetches the registration JSON from the tunnel
     Then the registration contains x402Support
     And the registration contains a service endpoint
+    And the registration contains OASF skills
+    And the registration contains OASF domains
     When the agent probes the tunnel service endpoint
     Then the probe returns 402 with pricing info
 
