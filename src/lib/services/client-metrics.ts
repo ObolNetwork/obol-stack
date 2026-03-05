@@ -67,6 +67,15 @@ export interface AztecClientMetrics {
 }
 
 export class ClientMetricsService {
+  // Cache for Nimbus-specific participation data (endpoint is non-standard,
+  // only Nimbus supports it). Keyed by beacon URL, cached for 5 minutes to
+  // avoid spamming the beacon client on every dashboard poll.
+  private static participationCache = new Map<
+    string,
+    { value: number; expiresAt: number }
+  >();
+  private static readonly PARTICIPATION_TTL_MS = 60 * 1000;
+
   constructor() {}
 
   /**
@@ -228,8 +237,12 @@ export class ClientMetricsService {
       const headSlot = await this.fetchConsensusHeadSlot(consensusUrl);
       const finalizedEpoch =
         await this.fetchFinalizedEpochFromBeacon(consensusUrl);
-      const participation =
-        await this.fetchParticipationFromBeacon(consensusUrl);
+
+      // /eth/v1/validator/participation is Nimbus-specific — skip for other clients.
+      const isNimbus = version.toLowerCase().includes('nimbus');
+      const participation = isNimbus
+        ? await this.fetchParticipationCached(consensusUrl)
+        : undefined;
 
       return {
         peers,
@@ -476,18 +489,28 @@ export class ClientMetricsService {
       : 0;
   }
 
-  private async fetchParticipationFromBeacon(
-    beaconUrl: string,
-    fallback = 0
-  ): Promise<number> {
+  private async fetchParticipationCached(beaconUrl: string): Promise<number> {
+    const cached = ClientMetricsService.participationCache.get(beaconUrl);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.value;
+    }
+
     try {
-      const resp = await fetch(`${beaconUrl}/eth/v1/validator/participation`);
+      const resp = await fetch(`${beaconUrl}/eth/v1/validator/participation`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) return cached?.value ?? 0;
       const data = await resp.json();
-      return data.data?.globalParticipationRate
+      const value = data.data?.globalParticipationRate
         ? parseFloat(data.data.globalParticipationRate)
-        : fallback;
+        : 0;
+      ClientMetricsService.participationCache.set(beaconUrl, {
+        value,
+        expiresAt: Date.now() + ClientMetricsService.PARTICIPATION_TTL_MS,
+      });
+      return value;
     } catch {
-      return fallback;
+      return cached?.value ?? 0;
     }
   }
 
