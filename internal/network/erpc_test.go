@@ -259,6 +259,8 @@ func TestNetworkChainIDs(t *testing.T) {
 		{"mainnet", 1},
 		{"hoodi", 560048},
 		{"sepolia", 11155111},
+		{"base", 8453},
+		{"base-sepolia", 84532},
 	}
 
 	for _, tt := range tests {
