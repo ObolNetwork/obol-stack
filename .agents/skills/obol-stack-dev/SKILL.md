@@ -1,10 +1,10 @@
 ---
 name: obol-stack-dev
-description: Obol Stack development, testing, and LLM routing validation through LiteLLM. Use when developing, testing, or validating inference paths (Ollama, Anthropic, OpenAI) through the LiteLLM gateway, writing integration tests, or working with obol CLI wrappers.
+description: Obol Stack development, testing, and validation. Covers LLM routing through LiteLLM, x402 payment flow (sell/buy), BDD integration tests (Gherkin/godog), ERC-8004 registration, and obol CLI wrappers.
 metadata:
   version: "2.0.0"
   domain: infrastructure
-  triggers: obol, litellm, openclaw, inference, integration test, model routing, smart routing, LLM proxy, provider setup
+  triggers: obol, litellm, openclaw, inference, integration test, model routing, smart routing, LLM proxy, provider setup, x402, sell, buy, BDD, gherkin, payment, monetize
   role: specialist
   scope: development-and-testing
   output-format: code-and-commands
@@ -20,9 +20,11 @@ Complete guide for developing, testing, and validating the Obol Stack's LLM rout
 - Setting up the Obol Stack development environment
 - Testing LLM inference through LiteLLM (Ollama, Anthropic, OpenAI)
 - Writing or running integration tests for OpenClaw instances
+- Running BDD integration tests for the x402 sell→discover→buy payment flow
 - Debugging model routing issues (401s, 500s, provider misconfig)
 - Understanding the 2-tier LLM architecture (LiteLLM gateway + per-instance config)
 - Validating the paid remote-inference path through LiteLLM + `x402-buyer`
+- Testing x402 payment gating, ERC-8004 registration, OASF metadata
 - Deploying and validating OpenClaw instances with different providers
 - Working with the `obol` CLI wrappers (kubectl, helm, helmfile, k9s)
 
