@@ -123,6 +123,82 @@ func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, mod
 	return nil
 }
 
+// RemoveModel removes a model entry from the LiteLLM ConfigMap and restarts the deployment.
+func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	// Read current config
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return fmt.Errorf("failed to read LiteLLM config: %w", err)
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+
+	// Find and remove matching entries
+	var kept []ModelEntry
+	removed := 0
+	for _, entry := range litellmConfig.ModelList {
+		if entry.ModelName == modelName {
+			removed++
+			continue
+		}
+		kept = append(kept, entry)
+	}
+
+	if removed == 0 {
+		return fmt.Errorf("model %q not found in LiteLLM config", modelName)
+	}
+
+	litellmConfig.ModelList = kept
+
+	// Marshal back to YAML
+	updated, err := yaml.Marshal(&litellmConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// Build ConfigMap patch
+	escapedYAML, err := json.Marshal(string(updated))
+	if err != nil {
+		return fmt.Errorf("failed to escape YAML: %w", err)
+	}
+	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
+
+	u.Infof("Removing model %q from LiteLLM config", modelName)
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"patch", "configmap", configMapName, "-n", namespace,
+		"-p", patchJSON, "--type=merge"); err != nil {
+		return fmt.Errorf("failed to patch ConfigMap: %w", err)
+	}
+
+	// Restart deployment
+	u.Info("Restarting LiteLLM")
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
+		return fmt.Errorf("failed to restart LiteLLM: %w", err)
+	}
+
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
+		"--timeout=90s"); err != nil {
+		u.Warnf("LiteLLM rollout not confirmed: %v", err)
+	} else {
+		u.Successf("Model %q removed", modelName)
+	}
+
+	return nil
+}
+
 // AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
 // after validating it works.
 func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, apiKey string) error {
@@ -637,6 +713,19 @@ func decodeBase64(s string) (string, error) {
 		return "", err
 	}
 	return string(decoded[:n]), nil
+}
+
+// WarnAndStripV1Suffix checks if an endpoint URL has a trailing /v1 suffix,
+// warns the user, and returns the stripped URL. For OpenAI-compatible providers,
+// LiteLLM auto-appends /v1, causing double /v1/v1 if the user includes it.
+func WarnAndStripV1Suffix(endpoint string) string {
+	trimmed := strings.TrimRight(endpoint, "/")
+	if strings.HasSuffix(trimmed, "/v1") {
+		fmt.Printf("  Warning: stripping trailing /v1 from endpoint URL (LiteLLM adds it automatically)\n")
+		fmt.Printf("  %s → %s\n", trimmed, strings.TrimSuffix(trimmed, "/v1"))
+		return strings.TrimSuffix(trimmed, "/v1")
+	}
+	return endpoint
 }
 
 // localhostToClusterEndpoint translates localhost URLs to k3d-internal URLs

@@ -120,9 +120,16 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 		return fmt.Errorf("tunnel provisioned, but failed to save local state: %w", err)
 	}
 
+	tunnelURL := fmt.Sprintf("https://%s", hostname)
+
 	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
-	if err := SyncAgentBaseURL(cfg, fmt.Sprintf("https://%s", hostname)); err != nil {
+	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
 		u.Warnf("could not sync AGENT_BASE_URL to obol-agent: %v", err)
+	}
+
+	// Write tunnel URL to ConfigMap so the frontend can read it.
+	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
+		u.Warnf("could not sync tunnel URL to frontend ConfigMap: %v", err)
 	}
 
 	u.Blank()

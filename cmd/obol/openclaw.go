@@ -55,14 +55,29 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "token",
-				Usage:     "Retrieve gateway token for an OpenClaw instance",
+				Usage:     "Retrieve or regenerate gateway token for an OpenClaw instance",
 				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:  "regenerate",
+						Usage: "Delete and regenerate the gateway token (restarts the instance)",
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return err
 					}
-					return openclaw.Token(cfg, id, getUI(cmd))
+					u := getUI(cmd)
+					if cmd.Bool("regenerate") {
+						newToken, err := openclaw.RegenerateToken(cfg, id, u)
+						if err != nil {
+							return err
+						}
+						u.Print(newToken)
+						return nil
+					}
+					return openclaw.Token(cfg, id, u)
 				},
 			},
 			{
