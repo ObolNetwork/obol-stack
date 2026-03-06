@@ -53,3 +53,5 @@ temp/
 bin
 
 obol-agent
+.private_keys/
+.claude/worktrees/

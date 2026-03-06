@@ -25,6 +25,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			modelSyncCommand(cfg),
 			modelPullCommand(),
 			modelListCommand(cfg),
+			modelRemoveCommand(cfg),
 		},
 	}
 }
@@ -87,14 +88,28 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 
 func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 	if len(models) == 0 {
-		// Discover from running Ollama
+		// Diagnostic: check Ollama connectivity
+		u.Info("Checking Ollama connectivity...")
 		ollamaModels, err := model.ListOllamaModels()
 		if err != nil {
-			return fmt.Errorf("Ollama is not running: %w\n\nInstall from https://ollama.ai and try again", err)
+			u.Errorf("Ollama not reachable")
+			u.Print("")
+			u.Print("  Hint: Is Ollama running? Try: ollama serve")
+			u.Print("  Hint: Using a custom host? Set OLLAMA_HOST=http://your-host:port")
+			u.Print("  Hint: Install from https://ollama.ai")
+			return fmt.Errorf("Ollama is not running: %w", err)
 		}
+		u.Success("Ollama is reachable")
+
 		if len(ollamaModels) == 0 {
-			return fmt.Errorf("Ollama is running but has no models. Pull one first:\n  ollama pull qwen3.5:9b")
+			u.Warn("No models pulled in Ollama")
+			u.Print("")
+			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:9b")
+			u.Print("  Hint: Or run: obol model pull")
+			return fmt.Errorf("Ollama is running but has no models")
 		}
+		u.Successf("Found %d pulled model(s)", len(ollamaModels))
+
 		for _, m := range ollamaModels {
 			name := m.Name
 			if strings.HasSuffix(name, ":latest") {
@@ -102,12 +117,14 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			}
 			models = append(models, name)
 		}
-		u.Infof("Found %d Ollama model(s): %s", len(models), strings.Join(models, ", "))
+		u.Infof("Models: %s", strings.Join(models, ", "))
 	}
 
 	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", models); err != nil {
 		return err
 	}
+
+	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
 	return syncOpenClawModels(cfg, u)
 }
 
@@ -135,8 +152,13 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	}
 
 	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, models); err != nil {
+		u.Print("")
+		u.Print("  Hint: Configuration stored in: litellm-config ConfigMap (llm namespace)")
 		return err
 	}
+
+	u.Print("")
+	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 	return syncOpenClawModels(cfg, u)
 }
 
@@ -178,7 +200,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			name := cmd.String("name")
-			endpoint := cmd.String("endpoint")
+			endpoint := model.WarnAndStripV1Suffix(cmd.String("endpoint"))
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
@@ -315,6 +337,25 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 			}
 
 			return nil
+		},
+	}
+}
+
+func modelRemoveCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "remove",
+		Usage:     "Remove a model from the LiteLLM gateway",
+		ArgsUsage: "<model-name>",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+			modelName := cmd.Args().First()
+			if modelName == "" {
+				return fmt.Errorf("model name is required\n\nUsage: obol model remove <model-name>\n\nList configured models with: obol model list")
+			}
+			if err := model.RemoveModel(cfg, u, modelName); err != nil {
+				return err
+			}
+			return syncOpenClawModels(cfg, u)
 		},
 	}
 }

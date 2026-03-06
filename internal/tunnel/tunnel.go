@@ -82,6 +82,10 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		if err := InjectBaseURL(cfg, url); err == nil {
 			u.Dim("Agent base URL updated to " + url)
 		}
+		// Write tunnel URL to ConfigMap so the frontend can read it.
+		if err := SyncTunnelConfigMap(cfg, url); err != nil {
+			u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
+		}
 	}
 
 	return nil
@@ -221,6 +225,40 @@ func printStatusBox(u *ui.UI, mode, status, url string, lastUpdated time.Time) {
 	u.Detail("URL", url)
 	u.Detail("Last Updated", lastUpdated.Format(time.RFC3339))
 	u.Print(strings.Repeat("─", 50))
+}
+
+// SyncTunnelConfigMap creates or patches the obol-stack-config ConfigMap in the
+// obol-frontend namespace with the current tunnel URL. The frontend reads this
+// ConfigMap to construct the correct dashboard URL.
+func SyncTunnelConfigMap(cfg *config.Config, tunnelURL string) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Ensure the namespace exists (non-fatal if it doesn't).
+	_ = exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"create", "namespace", "obol-frontend",
+		"--dry-run=client", "-o", "yaml",
+	).Run()
+
+	manifest := fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obol-stack-config
+  namespace: obol-frontend
+data:
+  tunnelURL: %s
+`, strings.TrimRight(tunnelURL, "/"))
+
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"apply", "-f", "-",
+	)
+	cmd.Stdin = strings.NewReader(manifest)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("kubectl apply failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func parseQuickTunnelURL(logs string) (string, bool) {
