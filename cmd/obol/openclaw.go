@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/urfave/cli/v3"
 )
@@ -150,6 +151,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			openclawSkillsCommand(cfg),
+			openclawWalletCommand(cfg),
 			{
 				Name:            "cli",
 				Usage:           "Run openclaw CLI commands against a deployed instance",
@@ -180,6 +182,97 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					}
 
 					return openclaw.CLI(cfg, id, openclawArgs, getUI(cmd))
+				},
+			},
+		},
+	}
+}
+
+// openclawWalletCommand builds the "obol openclaw wallet" subcommand group.
+func openclawWalletCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "wallet",
+		Usage: "Manage OpenClaw instance wallets",
+		Commands: []*cli.Command{
+			{
+				Name:      "backup",
+				Usage:     "Back up wallet keys for an OpenClaw instance",
+				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "output",
+						Usage: "Output file path",
+					},
+					&cli.StringFlag{
+						Name:  "passphrase",
+						Usage: "Encryption passphrase (empty string = no encryption)",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := kubectl.EnsureCluster(cfg); err != nil {
+						return err
+					}
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					return openclaw.BackupWalletCmd(cfg, id, openclaw.BackupWalletOptions{
+						Output:      cmd.String("output"),
+						Passphrase:  cmd.String("passphrase"),
+						HasPassFlag: cmd.IsSet("passphrase"),
+					}, getUI(cmd))
+				},
+			},
+			{
+				Name:      "restore",
+				Usage:     "Restore wallet keys from a backup file",
+				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "input",
+						Usage:    "Backup file path",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:  "passphrase",
+						Usage: "Decryption passphrase",
+					},
+					&cli.BoolFlag{
+						Name:  "force",
+						Usage: "Overwrite existing wallet",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := kubectl.EnsureCluster(cfg); err != nil {
+						return err
+					}
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					return openclaw.RestoreWalletCmd(cfg, id, openclaw.RestoreWalletOptions{
+						Input:       cmd.String("input"),
+						Passphrase:  cmd.String("passphrase"),
+						HasPassFlag: cmd.IsSet("passphrase"),
+						Force:       cmd.Bool("force"),
+					}, getUI(cmd))
+				},
+			},
+			{
+				Name:      "list",
+				Usage:     "List wallets for OpenClaw instances",
+				ArgsUsage: "[instance-name]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+					var id string
+					if len(args) > 0 {
+						var err error
+						id, _, err = openclaw.ResolveInstance(cfg, args)
+						if err != nil {
+							return err
+						}
+					}
+					return openclaw.ListWallets(cfg, id, getUI(cmd))
 				},
 			},
 		},

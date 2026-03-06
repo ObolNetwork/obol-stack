@@ -319,6 +319,11 @@ func Down(cfg *config.Config, u *ui.UI) error {
 
 // Purge deletes the cluster config and optionally data
 func Purge(cfg *config.Config, u *ui.UI, force bool) error {
+	// When --force is set, data dir will be deleted — offer wallet backup.
+	if force {
+		openclaw.PromptBackupBeforePurge(cfg, u)
+	}
+
 	stackID := getStackID(cfg)
 
 	backend, err := LoadBackend(cfg)

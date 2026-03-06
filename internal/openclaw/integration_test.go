@@ -178,7 +178,7 @@ func requireLiteLLMReady(t *testing.T, cfg *config.Config) {
 // cluster is done separately via `obol openclaw sync`.
 func scaffoldInstance(t *testing.T, cfg *config.Config, id string, ollamaModels []string) {
 	t.Helper()
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
 		t.Fatalf("failed to create deployment dir: %v", err)
 	}
@@ -205,7 +205,7 @@ func scaffoldCloudInstance(t *testing.T, cfg *config.Config, id string, cloud *C
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
 		t.Fatalf("failed to create deployment dir: %v", err)
 	}
@@ -687,7 +687,7 @@ func TestIntegration_SkillsStagedOnSync(t *testing.T) {
 	obolRun(t, cfg, "openclaw", "sync", id)
 
 	// 1. Verify skills were staged in the deployment directory
-	deployDir := deploymentPath(cfg, id)
+	deployDir := DeploymentPath(cfg, id)
 	skillsDir := filepath.Join(deployDir, "skills")
 	expectedSkills := []string{"distributed-validators", "ethereum-networks", "obol-stack", "addresses", "wallets"}
 
@@ -848,7 +848,7 @@ func TestIntegration_SkillsIdempotentSync(t *testing.T) {
 	obolRun(t, cfg, "openclaw", "sync", id)
 
 	// Add a custom file to the staged skills directory (simulating user customisation)
-	deployDir := deploymentPath(cfg, id)
+	deployDir := DeploymentPath(cfg, id)
 	marker := filepath.Join(deployDir, "skills", "custom-user-skill", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(marker), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
