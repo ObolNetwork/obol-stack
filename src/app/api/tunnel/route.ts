@@ -14,6 +14,9 @@ export async function GET() {
     return NextResponse.json({ tunnelURL });
   } catch (error) {
     console.error('[Tunnel] Error fetching tunnel URL:', error);
-    return NextResponse.json({ tunnelURL: null });
+    return NextResponse.json(
+      { status: 500, error: 'Failed to fetch tunnel URL' },
+      { status: 500 }
+    );
   }
 }
