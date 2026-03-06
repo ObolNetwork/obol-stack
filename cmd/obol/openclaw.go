@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/urfave/cli/v3"
 )
@@ -193,6 +194,9 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := kubectl.EnsureCluster(cfg); err != nil {
+						return err
+					}
 					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return err
@@ -224,6 +228,9 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := kubectl.EnsureCluster(cfg); err != nil {
+						return err
+					}
 					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return err

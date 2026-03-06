@@ -53,3 +53,7 @@ temp/
 bin
 
 obol-agent
+
+# Wallet backups (contain keystore passwords)
+obol-wallet-backup-*.json
+obol-wallet-backup-*.enc

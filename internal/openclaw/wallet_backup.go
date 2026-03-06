@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"golang.org/x/crypto/scrypt"
 	"gopkg.in/yaml.v3"
@@ -230,8 +231,20 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	u.Success("Wallet restored")
 	u.Detail("Address", w.Address)
 	u.Detail("Instance", id)
-	u.Blank()
-	u.Printf("Run 'obol openclaw sync %s' to apply changes to the cluster.", id)
+
+	// Restart the remote-signer so it picks up the new keystore.
+	// Best-effort: cluster may not be running.
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubectlBin, kubeconfig := kubectl.Paths(cfg)
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
+	); err != nil {
+		u.Blank()
+		u.Warnf("Could not restart remote-signer (cluster may not be running)")
+		u.Printf("Run 'obol openclaw sync %s' to apply changes to the cluster.", id)
+	} else {
+		u.Success("Remote-signer restarted")
+	}
 
 	return nil
 }
@@ -477,29 +490,35 @@ func walletAddressesForPurgeWarning(cfg *config.Config) []string {
 }
 
 // PromptBackupBeforePurge checks for wallets and offers to back them up.
-// Returns true if the caller should proceed with purge.
-func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) bool {
+// Non-interactive (piped/scripted): prints a warning but does not block.
+func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) {
 	ids := FindInstancesWithWallets(cfg)
 	if len(ids) == 0 {
-		return true
+		return
 	}
 
 	addresses := walletAddressesForPurgeWarning(cfg)
-	u.Warn("The following wallets will be lost:")
+	u.Warn("The following wallets will be destroyed:")
 	for _, a := range addresses {
 		u.Print(a)
 	}
-	u.Blank()
 
+	// Non-interactive: warn but don't block scripts.
+	if !u.IsTTY() {
+		u.Warn("Run 'obol openclaw wallet backup' first to save wallet keys")
+		return
+	}
+
+	u.Blank()
 	if !u.Confirm("Back up wallets before purging?", true) {
-		return true
+		return
 	}
 
 	// Get a single passphrase for all backups.
 	passphrase, err := resolvePassphrase("", false, u)
 	if err != nil {
 		u.Warnf("Failed to get passphrase: %v", err)
-		return true
+		return
 	}
 
 	for _, id := range ids {
@@ -513,6 +532,5 @@ func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) bool {
 	}
 
 	u.Blank()
-	return true
 }
 
