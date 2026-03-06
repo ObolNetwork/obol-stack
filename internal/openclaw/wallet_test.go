@@ -216,7 +216,7 @@ func TestKeystoreVolumePath(t *testing.T) {
 	cfg := &config.Config{
 		DataDir: "/test/data",
 	}
-	path := keystoreVolumePath(cfg, "my-agent")
+	path := KeystoreVolumePath(cfg, "my-agent")
 	want := "/test/data/openclaw-my-agent/remote-signer-keystores"
 	if path != want {
 		t.Errorf("keystoreVolumePath = %q, want %q", path, want)
@@ -287,11 +287,11 @@ func TestWalletMetadataRoundTrip(t *testing.T) {
 		Password:     "should-not-serialize",
 	}
 
-	if err := writeWalletMetadata(tmpDir, wallet); err != nil {
+	if err := WriteWalletMetadata(tmpDir, wallet); err != nil {
 		t.Fatal(err)
 	}
 
-	recovered, err := readWalletMetadata(tmpDir)
+	recovered, err := ReadWalletMetadata(tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}

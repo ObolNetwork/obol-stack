@@ -74,7 +74,7 @@ type OnboardOptions struct {
 func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	// Check whether the default deployment already exists (re-sync path).
 	// If it does, proceed unconditionally — the overlay was already written.
-	deploymentDir := deploymentPath(cfg, "default")
+	deploymentDir := DeploymentPath(cfg, "default")
 	if _, err := os.Stat(deploymentDir); err == nil {
 		// Existing deployment — always re-sync regardless of Ollama status.
 		return Onboard(cfg, OnboardOptions{
@@ -134,7 +134,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		u.Infof("Using deployment ID: %s", id)
 	}
 
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 
 	// Idempotent re-run for default deployment: just re-sync
 	if opts.IsDefault && !opts.Force {
@@ -264,7 +264,7 @@ agents:
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write remote-signer values: %w", err)
 	}
-	if err := writeWalletMetadata(deploymentDir, wallet); err != nil {
+	if err := WriteWalletMetadata(deploymentDir, wallet); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write wallet metadata: %w", err)
 	}
@@ -294,7 +294,7 @@ agents:
 	}
 	u.Blank()
 	u.Print("  Back up your signing key:")
-	u.Printf("    cp -r %s ~/obol-wallet-backup/", keystoreVolumePath(cfg, id))
+	u.Printf("    cp -r %s ~/obol-wallet-backup/", KeystoreVolumePath(cfg, id))
 
 	// Stage default skills to deployment directory (immediate, no cluster needed)
 	u.Blank()
@@ -334,7 +334,7 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 }
 
 func doSync(cfg *config.Config, id string, u *ui.UI) error {
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nDirectory: %s", appName, id, deploymentDir)
 	}
@@ -859,7 +859,7 @@ type SetupOptions struct {
 // It runs the interactive provider prompt, regenerates the overlay values,
 // and syncs via helmfile so the pod picks up the new configuration.
 func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw onboard' first", appName, id)
 	}
@@ -930,7 +930,7 @@ type DashboardOptions struct {
 // The onReady callback is invoked with the dashboard URL; the CLI layer uses it
 // to open a browser.
 func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady func(url string), u *ui.UI) error {
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
 	}
@@ -1023,7 +1023,7 @@ func List(cfg *config.Config, u *ui.UI) error {
 // Delete removes an OpenClaw instance
 func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 
 	u.Infof("Deleting OpenClaw: %s/%s", appName, id)
 	u.Detail("Namespace", namespace)
@@ -1192,7 +1192,7 @@ var remoteCapableCommands = map[string]bool{
 // others are executed via kubectl exec into the pod.
 func CLI(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
-	deploymentDir := deploymentPath(cfg, id)
+	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
 	}
@@ -1318,7 +1318,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	masterKey := litellmMasterKey(cfg)
 
 	for _, id := range ids {
-		overlayPath := filepath.Join(deploymentPath(cfg, id), "values-obol.yaml")
+		overlayPath := filepath.Join(DeploymentPath(cfg, id), "values-obol.yaml")
 		data, err := os.ReadFile(overlayPath)
 		if err != nil {
 			continue
@@ -1600,8 +1600,8 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 	return strings.Join(result, "\n"), true
 }
 
-// deploymentPath returns the path to a deployment directory
-func deploymentPath(cfg *config.Config, id string) string {
+// DeploymentPath returns the path to a deployment directory.
+func DeploymentPath(cfg *config.Config, id string) string {
 	return filepath.Join(cfg.ConfigDir, "applications", appName, id)
 }
 

@@ -312,10 +312,10 @@ func generateRandomPassword(length int) (string, error) {
 	return string(result), nil
 }
 
-// keystoreVolumePath returns the host-side path where the remote-signer's
+// KeystoreVolumePath returns the host-side path where the remote-signer's
 // PVC stores keystores. This follows the local-path-provisioner pattern:
 // $DATA_DIR/<namespace>/<pvc-name>/
-func keystoreVolumePath(cfg *config.Config, id string) string {
+func KeystoreVolumePath(cfg *config.Config, id string) string {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	return filepath.Join(cfg.DataDir, namespace, "remote-signer-keystores")
 }
@@ -324,7 +324,7 @@ func keystoreVolumePath(cfg *config.Config, id string) string {
 // path before the remote-signer pod starts. Returns the absolute path to the
 // written keystore file.
 func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte) (string, error) {
-	dir := keystoreVolumePath(cfg, id)
+	dir := KeystoreVolumePath(cfg, id)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create keystore directory: %w", err)
 	}
@@ -359,9 +359,9 @@ func walletMetadataPath(deploymentDir string) string {
 	return filepath.Join(deploymentDir, "wallet.json")
 }
 
-// writeWalletMetadata writes the wallet address and UUID to a JSON file
+// WriteWalletMetadata writes the wallet address and UUID to a JSON file
 // in the deployment directory for re-sync and display purposes.
-func writeWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
+func WriteWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
 	data, err := json.MarshalIndent(wallet, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal wallet metadata: %w", err)
@@ -369,8 +369,8 @@ func writeWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
 	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0644)
 }
 
-// readWalletMetadata reads existing wallet metadata from the deployment directory.
-func readWalletMetadata(deploymentDir string) (*WalletInfo, error) {
+// ReadWalletMetadata reads existing wallet metadata from the deployment directory.
+func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 	data, err := os.ReadFile(walletMetadataPath(deploymentDir))
 	if err != nil {
 		return nil, err
@@ -411,7 +411,7 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 		return
 	}
 
-	if err := writeWalletMetadata(deploymentDir, wallet); err != nil {
+	if err := WriteWalletMetadata(deploymentDir, wallet); err != nil {
 		fmt.Printf("Warning: could not write wallet metadata: %v\n", err)
 		return
 	}
@@ -423,7 +423,7 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 // in the instance namespace. The frontend reads this to display wallet addresses.
 // Must be called after helmfile sync (namespace must exist).
 func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) {
-	wallet, err := readWalletMetadata(deploymentDir)
+	wallet, err := ReadWalletMetadata(deploymentDir)
 	if err != nil {
 		return // no wallet metadata, nothing to apply
 	}
