@@ -74,6 +74,15 @@ const ActionsRow = styled(Flex, {
   gap: '$xs',
 });
 
+const DashboardLinkWrapper = styled(Flex, {
+  alignItems: 'flex-start',
+  flexWrap: 'wrap',
+  gap: '$xxs',
+  '&:hover .dashboard-tooltip': {
+    display: 'block',
+  },
+});
+
 const BalanceText = styled(Text, {
   fontSize: '$1',
   color: '$body',
@@ -246,16 +255,30 @@ export function OpenClawInstanceCard({
         >
           Chat
         </Button>
-        <Link
-          href={dashboardUrl}
-          target="_blank"
-          css={{
-            fontSize: '13px',
-          }}
-        >
-          Dashboard
-          <OpenInNew size="sm" />
-        </Link>
+        <DashboardLinkWrapper>
+          <Link
+            href={dashboardUrl}
+            target="_blank"
+            css={{
+              fontSize: '13px',
+            }}
+          >
+            Dashboard
+            <OpenInNew size="sm" />
+          </Link>
+          <Text
+            className="dashboard-tooltip"
+            css={{
+              display: 'none',
+              fontSize: '11px',
+              color: '$textLight',
+              lineHeight: 1.3,
+              flexBasis: '100%',
+            }}
+          >
+            Connection issues? Try: obol openclaw dashboard
+          </Text>
+        </DashboardLinkWrapper>
       </ActionsRow>
 
       {instance.id === 'obol-agent' && displayStatus === 'running' && (
