@@ -28,11 +28,18 @@ import (
 
 func main() {
 	var (
-		configPath = flag.String("config", "/config/config.json", "path to upstream config JSON")
-		authsPath  = flag.String("auths", "/config/auths.json", "path to pre-signed auths JSON")
-		listen     = flag.String("listen", ":8402", "listen address")
+		configPath     = flag.String("config", "/config/config.json", "path to upstream config JSON")
+		authsPath      = flag.String("auths", "/config/auths.json", "path to pre-signed auths JSON")
+		statePath      = flag.String("state", "/state/consumed.json", "path to persisted consumed-auth state")
+		listen         = flag.String("listen", ":8402", "listen address")
+		reloadInterval = flag.Duration("reload-interval", 5*time.Second, "config/auth reload interval")
 	)
 	flag.Parse()
+
+	state, err := buyer.LoadStateStore(*statePath)
+	if err != nil {
+		log.Fatalf("load state: %v", err)
+	}
 
 	cfg, err := buyer.LoadConfig(*configPath)
 	if err != nil {
@@ -44,7 +51,7 @@ func main() {
 		log.Fatalf("load auths: %v", err)
 	}
 
-	proxy, err := buyer.NewProxy(cfg, auths)
+	proxy, err := buyer.NewProxy(cfg, auths, state)
 	if err != nil {
 		log.Fatalf("create proxy: %v", err)
 	}
@@ -74,6 +81,33 @@ func main() {
 			log.Fatalf("serve: %v", err)
 		}
 	}()
+
+	if *reloadInterval > 0 {
+		ticker := time.NewTicker(*reloadInterval)
+		defer ticker.Stop()
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					cfg, err := buyer.LoadConfig(*configPath)
+					if err != nil {
+						log.Printf("reload config: %v", err)
+						continue
+					}
+					auths, err := buyer.LoadAuths(*authsPath)
+					if err != nil {
+						log.Printf("reload auths: %v", err)
+						continue
+					}
+					if err := proxy.Reload(cfg, auths); err != nil {
+						log.Printf("reload proxy: %v", err)
+					}
+				}
+			}
+		}()
+	}
 
 	<-ctx.Done()
 	log.Println("shutting down...")

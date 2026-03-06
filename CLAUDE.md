@@ -18,6 +18,10 @@ export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_D
 go build -o .workspace/bin/obol ./cmd/obol    # MUST rebuild after code changes
 go test -tags integration -v -timeout 15m ./internal/openclaw/
 
+# Validated paid-inference commerce loop (requires qwen3.5:9b)
+# If reusing a cluster from another worktree, point OBOL_CONFIG_DIR at that cluster's .workspace/config
+go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
+
 just up    # obol stack init + up
 just down  # obol stack down + purge
 just clean # Remove build artifacts
@@ -66,13 +70,13 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Sell-side flow**: `obol sell http` → creates ServiceOffer CR → agent reconciles 6 stages: ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware + pricing route) → RoutePublished (HTTPRoute) → Registered (ERC-8004 on-chain) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy-side flow**: POST without payment → 402 + pricing → sign EIP-712 TransferWithAuthorization → POST with X-PAYMENT header → facilitator verifies → 200.
+**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price`, `obol sell http <name> --upstream --port --price`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --upstream --port --price|--per-mtok`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
-**ServiceOffer CRD** (`obol.org`): Spec fields — `type` (inference|fine-tuning), `model{name,runtime}`, `upstream{service,ns,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image}`.
+**ServiceOffer CRD** (`obol.org`): Spec fields — `type` (inference|fine-tuning), `model{name,runtime}`, `upstream{service,ns,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image}`. In phase 1, `perMTok` is accepted but enforced as `perRequest = perMTok / 1000`.
 
-**x402-verifier** (`x402` ns): ForwardAuth middleware. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Config in `x402-pricing` ConfigMap: `wallet`, `chain`, `facilitatorURL`, `verifyOnly`, `routes[]{pattern, price, description}`.
+**x402-verifier** (`x402` ns): ForwardAuth middleware. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Config in `x402-pricing` ConfigMap: `wallet`, `chain`, `facilitatorURL`, `verifyOnly`, `routes[]{pattern, price, description, priceModel, perMTok, approxTokensPerRequest, offerNamespace, offerName}`. Exposes `/metrics` and is scraped via `ServiceMonitor`.
 
 **Agent reconciler** (`internal/embed/skills/monetize/scripts/monetize.py`): Watches ServiceOffer CRs, creates Middleware (`traefik.io`), HTTPRoute, pricing route in ConfigMap, registration resources (ConfigMap + httpd + HTTPRoute at `/.well-known/`). All with ownerReferences for auto-GC.
 
@@ -101,7 +105,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). No default provider — `obol model setup` required. `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding).
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). No default provider — `obol model setup` required. `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required.
 
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 
@@ -126,7 +130,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. Agent pre-signs N USDC transfer auths → stored in ConfigMap → sidecar pops from pool per request. Zero signer access, bounded spending (max loss = N × price).
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
 
 | Component | File |
 |-----------|------|
@@ -150,6 +154,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 2. **RBAC binding empty** — `openclaw-monetize-binding` may have empty subjects if `obol agent init` races with k3s manifest apply
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
+5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
 
 ## Key Packages
 

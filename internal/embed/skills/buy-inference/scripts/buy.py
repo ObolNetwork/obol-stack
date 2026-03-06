@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""buy.py — Buy remote inference via x402 buyer sidecar.
+"""buy.py — Buy remote inference via the x402 buyer sidecar.
 
-Pre-signs a batch of ERC-3009 TransferWithAuthorization vouchers, stores them
-in a ConfigMap, deploys a lean Go sidecar that handles x402 payments at runtime,
-and wires the sidecar into LiteLLM as a plain OpenAI provider.
+Pre-signs a batch of ERC-3009 TransferWithAuthorization vouchers and stores
+them in ConfigMaps consumed by the buyer sidecar running inside the LiteLLM pod.
 
-The sidecar has ZERO signer access. Spending is bounded: max loss = N × price.
+LiteLLM exposes a static `paid/<remote-model>` namespace. The buyer sidecar
+resolves the concrete purchased upstream at runtime based on the requested
+remote model ID. Spending remains bounded: max loss = N × price.
 
 Usage:
     python3 scripts/buy.py <command> [args]
 
 Commands:
-    probe <endpoint-url>                         Parse 402 pricing info
-    buy <name> --endpoint <url> --model <id>     Pre-sign + deploy sidecar
+    probe <endpoint-url> [--model <id>]          Parse 402 pricing info
+    buy <name> --endpoint <url> --model <id>      Pre-sign + configure mapping
         [--budget <micro-units>] [--count <N>]
-    refill <name> [--count <N>]                  Sign more auths for existing upstream
-    list                                         List purchased providers + remaining auths
-    status <name>                                Check sidecar health + remaining auths
-    balance [--chain <network>]                  Check USDC balance
-    remove <name>                                Remove sidecar upstream + cleanup
+    refill <name> [--count <N>]                   Sign more auths for existing upstream
+    maintain                                      Refill low pools and remove exhausted mappings
+    list                                          List purchased providers + remaining auths
+    status <name>                                 Check sidecar health + remaining auths
+    balance [--chain <network>]                   Check USDC balance
+    remove <name>                                 Remove purchased upstream + cleanup
 """
 
 import json
@@ -39,7 +41,7 @@ SIGNER_SCRIPTS = os.path.join(os.path.dirname(SKILL_DIR), "ethereum-local-wallet
 sys.path.insert(0, KUBE_SCRIPTS)
 sys.path.insert(0, SIGNER_SCRIPTS)
 
-from kube import load_sa, make_ssl_context, api_get, api_patch, api_post  # noqa: E402
+from kube import API_SERVER, load_sa, make_ssl_context, api_get  # noqa: E402
 from signer import _signer_get, _signer_post, _rpc_call  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -48,18 +50,11 @@ from signer import _signer_get, _signer_post, _rpc_call  # noqa: E402
 
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
 
-# LiteLLM ConfigMap location
-LITELLM_NS = "llm"
-LITELLM_CM = "litellm-config"
-
-# x402-buyer sidecar
 BUYER_NS = "llm"
 BUYER_CM_CONFIG = "x402-buyer-config"
 BUYER_CM_AUTHS = "x402-buyer-auths"
-BUYER_DEPLOY = "x402-buyer"
-BUYER_SVC = "x402-buyer"
+LITELLM_DEPLOY = "litellm"
 BUYER_PORT = 8402
-BUYER_IMAGE = "ghcr.io/obolnetwork/x402-buyer:latest"
 
 USDC_CONTRACTS = {
     "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -84,6 +79,8 @@ SEL_BALANCE_OF = "70a08231"
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
 MAX_AUTH_COUNT = 1000         # Cap to prevent excessive signing time
+LOW_WATERMARK = 10
+REFILL_BATCH = 100
 
 
 # ---------------------------------------------------------------------------
@@ -101,70 +98,36 @@ def _normalize_endpoint(url):
 
 
 # ---------------------------------------------------------------------------
-# LiteLLM ConfigMap helpers
+# Buyer sidecar status helpers
 # ---------------------------------------------------------------------------
 
-def read_litellm_config(token, ssl_ctx):
-    """Read config.yaml from litellm-config ConfigMap as a dict."""
-    cm = api_get(f"/api/v1/namespaces/{LITELLM_NS}/configmaps/{LITELLM_CM}",
-                 token, ssl_ctx)
-    raw = cm.get("data", {}).get("config.yaml", "model_list: []")
-    # Use simple YAML parsing — config is simple enough for line-based handling
-    try:
-        import yaml
-        return yaml.safe_load(raw) or {}
-    except ImportError:
-        # Fallback: parse JSON-like YAML subset
-        return json.loads(raw) if raw.strip().startswith("{") else {"model_list": []}
-
-
-def write_litellm_config(config, token, ssl_ctx):
-    """Patch config.yaml in litellm-config ConfigMap."""
-    try:
-        import yaml
-        config_yaml = yaml.dump(config, default_flow_style=False)
-    except ImportError:
-        config_yaml = json.dumps(config, indent=2)
-    api_patch(
-        f"/api/v1/namespaces/{LITELLM_NS}/configmaps/{LITELLM_CM}",
-        {"data": {"config.yaml": config_yaml}},
+def _get_litellm_pod(token, ssl_ctx):
+    """Return the current LiteLLM pod object, or None if unavailable."""
+    pods = api_get(
+        f"/api/v1/namespaces/{BUYER_NS}/pods?labelSelector=app={LITELLM_DEPLOY}",
         token, ssl_ctx,
     )
+    for item in pods.get("items", []):
+        if item.get("status", {}).get("phase") == "Running" and item.get("status", {}).get("podIP"):
+            return item
+    return None
 
 
-def add_litellm_model(name, model_id, api_base, api_key, token, ssl_ctx):
-    """Add a model entry to LiteLLM's model_list."""
-    config = read_litellm_config(token, ssl_ctx)
-    model_list = config.get("model_list", [])
+def _buyer_status():
+    """Return live sidecar status JSON, or None if the sidecar is unavailable."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    pod = _get_litellm_pod(token, ssl_ctx)
+    if not pod:
+        return None
 
-    # Remove existing entry with same model_name
-    model_list = [m for m in model_list if m.get("model_name") != name]
-
-    entry = {
-        "model_name": name,
-        "litellm_params": {
-            "model": f"openai/{model_id}",
-            "api_base": api_base,
-        },
-    }
-    if api_key:
-        entry["litellm_params"]["api_key"] = api_key
-
-    model_list.append(entry)
-    config["model_list"] = model_list
-    write_litellm_config(config, token, ssl_ctx)
-
-
-def remove_litellm_model(name_or_prefix, token, ssl_ctx):
-    """Remove model entries from LiteLLM's model_list by exact name or prefix."""
-    config = read_litellm_config(token, ssl_ctx)
-    model_list = config.get("model_list", [])
-    config["model_list"] = [
-        m for m in model_list
-        if m.get("model_name") != name_or_prefix
-        and not m.get("model_name", "").startswith(name_or_prefix)
-    ]
-    write_litellm_config(config, token, ssl_ctx)
+    url = f"http://{pod['status']['podIP']}:{BUYER_PORT}/status"
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +137,12 @@ def remove_litellm_model(name_or_prefix, token, ssl_ctx):
 def _read_buyer_config(token, ssl_ctx):
     """Read x402-buyer-config ConfigMap. Returns dict or empty structure."""
     try:
-        cm = api_get(f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_CONFIG}",
-                     token, ssl_ctx)
+        cm = _kube_json(
+            "GET",
+            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_CONFIG}",
+            token,
+            ssl_ctx,
+        )
         raw = cm.get("data", {}).get("config.json", '{"upstreams":{}}')
         return json.loads(raw)
     except urllib.error.HTTPError as e:
@@ -187,8 +154,12 @@ def _read_buyer_config(token, ssl_ctx):
 def _read_buyer_auths(token, ssl_ctx):
     """Read x402-buyer-auths ConfigMap. Returns dict or empty."""
     try:
-        cm = api_get(f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_AUTHS}",
-                     token, ssl_ctx)
+        cm = _kube_json(
+            "GET",
+            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_AUTHS}",
+            token,
+            ssl_ctx,
+        )
         raw = cm.get("data", {}).get("auths.json", "{}")
         return json.loads(raw)
     except urllib.error.HTTPError as e:
@@ -206,18 +177,49 @@ def _write_buyer_configmap(name, data_key, data_value, token, ssl_ctx):
         "data": {data_key: json.dumps(data_value, indent=2)},
     }
     try:
-        # Try create first.
-        api_post(f"/api/v1/namespaces/{BUYER_NS}/configmaps", body, token, ssl_ctx)
+        _kube_json(
+            "GET",
+            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{name}",
+            token,
+            ssl_ctx,
+        )
     except urllib.error.HTTPError as e:
-        if e.code == 409:
-            # Already exists — patch.
-            api_patch(
-                f"/api/v1/namespaces/{BUYER_NS}/configmaps/{name}",
-                {"data": {data_key: json.dumps(data_value, indent=2)}},
-                token, ssl_ctx,
-            )
-        else:
+        if e.code != 404:
             raise
+        _kube_json(
+            "POST",
+            f"/api/v1/namespaces/{BUYER_NS}/configmaps",
+            token,
+            ssl_ctx,
+            body,
+        )
+        return
+
+    _kube_json(
+        "PATCH",
+        f"/api/v1/namespaces/{BUYER_NS}/configmaps/{name}",
+        token,
+        ssl_ctx,
+        {"data": {data_key: json.dumps(data_value, indent=2)}},
+        content_type="application/merge-patch+json",
+    )
+
+
+def _kube_json(method, path, token, ssl_ctx, body=None, content_type="application/json"):
+    """Issue a Kubernetes API request and return parsed JSON.
+
+    Unlike the shared skill helpers, this leaves HTTP errors as exceptions so
+    callers can handle 404/409 create-vs-patch flows.
+    """
+    url = f"{API_SERVER}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Authorization": f"Bearer {token}"}
+    if body is not None:
+        headers["Content-Type"] = content_type
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, context=ssl_ctx, timeout=30) as resp:
+        raw = resp.read()
+    return json.loads(raw) if raw else {}
 
 
 # ---------------------------------------------------------------------------
@@ -316,142 +318,34 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count):
 
 
 # ---------------------------------------------------------------------------
-# Sidecar deployment
+# Model mapping helpers
 # ---------------------------------------------------------------------------
 
-def _deploy_sidecar(token, ssl_ctx):
-    """Deploy the x402-buyer sidecar Deployment + Service if not already running."""
-    # Check if deployment exists.
-    try:
-        api_get(
-            f"/apis/apps/v1/namespaces/{BUYER_NS}/deployments/{BUYER_DEPLOY}",
-            token, ssl_ctx,
-        )
-        print("  Sidecar already deployed, restarting ...")
-        _restart_sidecar(token, ssl_ctx)
-        return
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-
-    print("  Deploying x402-buyer sidecar ...")
-
-    # Create Deployment.
-    deploy = {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {
-            "name": BUYER_DEPLOY,
-            "namespace": BUYER_NS,
-            "annotations": {
-                "configmap.reloader.stakater.com/reload":
-                    f"{BUYER_CM_CONFIG},{BUYER_CM_AUTHS}",
-            },
-        },
-        "spec": {
-            "replicas": 1,
-            "selector": {"matchLabels": {"app": BUYER_DEPLOY}},
-            "template": {
-                "metadata": {"labels": {"app": BUYER_DEPLOY}},
-                "spec": {
-                    "containers": [{
-                        "name": "buyer",
-                        "image": BUYER_IMAGE,
-                        "imagePullPolicy": "IfNotPresent",
-                        "args": [
-                            "--config=/config/config.json",
-                            "--auths=/config/auths.json",
-                            f"--listen=:{BUYER_PORT}",
-                        ],
-                        "ports": [{"name": "http", "containerPort": BUYER_PORT}],
-                        "readinessProbe": {
-                            "httpGet": {"path": "/healthz", "port": "http"},
-                            "initialDelaySeconds": 2,
-                            "periodSeconds": 5,
-                        },
-                        "livenessProbe": {
-                            "httpGet": {"path": "/healthz", "port": "http"},
-                            "initialDelaySeconds": 5,
-                            "periodSeconds": 10,
-                        },
-                        "resources": {
-                            "requests": {"cpu": "50m", "memory": "32Mi"},
-                            "limits": {"cpu": "500m", "memory": "128Mi"},
-                        },
-                        "volumeMounts": [
-                            {"name": "config", "mountPath": "/config",
-                             "readOnly": True},
-                        ],
-                    }],
-                    "volumes": [
-                        {
-                            "name": "config",
-                            "projected": {
-                                "sources": [
-                                    {"configMap": {"name": BUYER_CM_CONFIG}},
-                                    {"configMap": {"name": BUYER_CM_AUTHS}},
-                                ],
-                            },
-                        },
-                    ],
-                },
-            },
-        },
-    }
-    api_post(f"/apis/apps/v1/namespaces/{BUYER_NS}/deployments",
-             deploy, token, ssl_ctx)
-
-    # Create Service.
-    svc = {
-        "apiVersion": "v1",
-        "kind": "Service",
-        "metadata": {"name": BUYER_SVC, "namespace": BUYER_NS},
-        "spec": {
-            "type": "ClusterIP",
-            "selector": {"app": BUYER_DEPLOY},
-            "ports": [{"name": "http", "port": BUYER_PORT, "targetPort": "http"}],
-        },
-    }
-    try:
-        api_post(f"/api/v1/namespaces/{BUYER_NS}/services", svc, token, ssl_ctx)
-    except urllib.error.HTTPError as e:
-        if e.code != 409:
-            raise
-
-    print("  Sidecar deployed.")
-
-
-def _restart_sidecar(token, ssl_ctx):
-    """Restart the sidecar by patching the deployment with an annotation."""
-    patch = {
-        "spec": {
-            "template": {
-                "metadata": {
-                    "annotations": {
-                        "kubectl.kubernetes.io/restartedAt":
-                            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                },
-            },
-        },
-    }
-    api_patch(
-        f"/apis/apps/v1/namespaces/{BUYER_NS}/deployments/{BUYER_DEPLOY}",
-        patch, token, ssl_ctx,
-    )
+def _remove_conflicting_model_mappings(buyer_config, existing_auths, model_id, keep_name):
+    """Ensure one active upstream mapping per remote model ID."""
+    removed = []
+    upstreams = buyer_config.get("upstreams", {})
+    for name, upstream in list(upstreams.items()):
+        if name == keep_name:
+            continue
+        if upstream.get("remoteModel") == model_id:
+            del upstreams[name]
+            existing_auths.pop(name, None)
+            removed.append(name)
+    return removed
 
 
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_endpoint(endpoint_url):
+def _probe_endpoint(endpoint_url, model_id="test"):
     """Probe an endpoint for x402 pricing. Returns parsed 402 body or None."""
     base = _normalize_endpoint(endpoint_url)
     chat_url = f"{base}/v1/chat/completions"
 
     payload = json.dumps({
-        "model": "test",
+        "model": model_id or "test",
         "messages": [{"role": "user", "content": "ping"}],
     }).encode()
 
@@ -488,9 +382,9 @@ def _probe_endpoint(endpoint_url):
         return None
 
 
-def cmd_probe(endpoint_url):
+def cmd_probe(endpoint_url, model_id=None):
     """Probe an endpoint for x402 pricing and print results."""
-    pricing = _probe_endpoint(endpoint_url)
+    pricing = _probe_endpoint(endpoint_url, model_id)
     if not pricing:
         print("Endpoint did not return valid x402 pricing.")
         return None
@@ -522,7 +416,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     """Buy access to a remote x402 endpoint via the sidecar."""
     # 1. Probe for pricing.
     print(f"Probing {endpoint} ...")
-    pricing = _probe_endpoint(endpoint)
+    pricing = _probe_endpoint(endpoint, model_id)
     if not pricing:
         print("Failed to get pricing. Aborting.", file=sys.stderr)
         sys.exit(1)
@@ -583,12 +477,16 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
-    print("Writing sidecar ConfigMaps ...")
-    # Config.
+    print("Writing buyer ConfigMaps ...")
     buyer_config = _read_buyer_config(token, ssl_ctx)
     ep = _normalize_endpoint(endpoint)
+    existing_auths = _read_buyer_auths(token, ssl_ctx)
+    replaced = _remove_conflicting_model_mappings(
+        buyer_config, existing_auths, model_id, keep_name=name
+    )
     buyer_config["upstreams"][name] = {
         "url": ep,
+        "remoteModel": model_id,
         "network": chain,
         "payTo": pay_to,
         "asset": usdc_addr,
@@ -596,31 +494,21 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     }
     _write_buyer_configmap(BUYER_CM_CONFIG, "config.json", buyer_config, token, ssl_ctx)
 
-    # Auths (merge with existing).
-    existing_auths = _read_buyer_auths(token, ssl_ctx)
     existing_auths[name] = auths
     _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", existing_auths, token, ssl_ctx)
 
-    # 7. Deploy sidecar (or restart if exists).
-    _deploy_sidecar(token, ssl_ctx)
-
-    # 8. Add model to LiteLLM config → routes through sidecar.
-    print("Patching litellm-config ...")
-    model_key = f"{name}/{model_id}"
-    sidecar_url = f"http://{BUYER_SVC}.{BUYER_NS}.svc.cluster.local:{BUYER_PORT}/upstream/{name}"
-    add_litellm_model(model_key, model_id, sidecar_url, "unused", token, ssl_ctx)
-
     print()
-    print(f"Purchased provider '{name}' configured via x402-buyer sidecar.")
-    print(f"  Model:      {model_key}")
+    print(f"Purchased upstream '{name}' configured via x402-buyer sidecar.")
+    print(f"  Alias:      paid/{model_id}")
     print(f"  Endpoint:   {ep}")
     print(f"  Price:      {price} micro-units per request")
     print(f"  Chain:      {chain}")
     print(f"  Auths:      {n} pre-signed (max spend: {total_cost} micro-units)")
-    print(f"  Sidecar:    {sidecar_url}")
+    if replaced:
+        print(f"  Replaced:   {', '.join(replaced)}")
     print()
-    print(f"The model is now available as: {model_key}")
-    print(f"Use 'refill {name}' to sign more authorizations when running low.")
+    print(f"The model is now available as: paid/{model_id}")
+    print(f"Use 'refill {name}' or 'maintain' to top up authorizations.")
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +540,7 @@ def cmd_refill(name, count=None):
         sys.exit(1)
     signer_address = keys[0]
 
-    n = min(int(count), MAX_AUTH_COUNT) if count else DEFAULT_AUTH_COUNT
+    n = min(int(count), MAX_AUTH_COUNT) if count else REFILL_BATCH
     n = max(n, 1)
 
     # Pre-sign.
@@ -665,9 +553,6 @@ def cmd_refill(name, count=None):
     existing_auths[name] = existing
     _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", existing_auths, token, ssl_ctx)
 
-    # Restart sidecar to pick up new auths.
-    _restart_sidecar(token, ssl_ctx)
-
     total = len(existing)
     print(f"Refilled '{name}': added {n} auths (total pool: {total})")
 
@@ -677,11 +562,10 @@ def cmd_refill(name, count=None):
 # ---------------------------------------------------------------------------
 
 def cmd_list():
-    """List purchased providers from sidecar status + LiteLLM."""
+    """List purchased providers from buyer config and sidecar status."""
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
-    # Try querying sidecar /status.
     buyer_config = _read_buyer_config(token, ssl_ctx)
     upstreams = buyer_config.get("upstreams", {})
 
@@ -689,16 +573,18 @@ def cmd_list():
         print("No purchased x402 providers.")
         return
 
-    # Also read auths to show pool size.
+    live_status = _buyer_status() or {}
     auths = _read_buyer_auths(token, ssl_ctx)
 
-    print(f"{'NAME':<20} {'ENDPOINT':<45} {'PRICE':<12} {'CHAIN':<15} {'AUTHS'}")
-    print("-" * 110)
+    print(f"{'NAME':<20} {'ALIAS':<32} {'PRICE':<12} {'CHAIN':<15} {'REMAINING'}")
+    print("-" * 120)
     for name, cfg in upstreams.items():
-        auth_count = len(auths.get(name, []))
-        print(f"{name:<20} {cfg.get('url', '?'):<45} "
+        status = live_status.get(name, {})
+        remaining = status.get("remaining", len(auths.get(name, [])))
+        alias = f"paid/{cfg.get('remoteModel', name)}"
+        print(f"{name:<20} {alias:<32} "
               f"{cfg.get('price', '?'):<12} {cfg.get('network', '?'):<15} "
-              f"{auth_count}")
+              f"{remaining}")
 
 
 # ---------------------------------------------------------------------------
@@ -716,11 +602,14 @@ def cmd_status(name):
         sys.exit(1)
 
     cfg = buyer_config["upstreams"][name]
+    live_status = (_buyer_status() or {}).get(name, {})
     auths = _read_buyer_auths(token, ssl_ctx)
-    auth_count = len(auths.get(name, []))
+    auth_count = live_status.get("remaining", len(auths.get(name, [])))
 
     print(f"Upstream: {name}")
+    print(f"Alias:    paid/{cfg.get('remoteModel', name)}")
     print(f"Endpoint: {cfg.get('url', '?')}")
+    print(f"Model:    {cfg.get('remoteModel', '?')}")
     print(f"Chain:    {cfg.get('network', '?')}")
     print(f"Price:    {cfg.get('price', '?')} USDC micro-units")
     print(f"Asset:    {cfg.get('asset', '?')}")
@@ -728,20 +617,11 @@ def cmd_status(name):
     print(f"Auths remaining: {auth_count}")
     print()
 
-    # Check sidecar pod status.
-    try:
-        pods = api_get(
-            f"/api/v1/namespaces/{BUYER_NS}/pods?labelSelector=app={BUYER_DEPLOY}",
-            token, ssl_ctx,
-        )
-        items = pods.get("items", [])
-        if not items:
-            print("Sidecar: NOT RUNNING (no pods)")
-        else:
-            phase = items[0].get("status", {}).get("phase", "Unknown")
-            print(f"Sidecar: {phase}")
-    except Exception as e:
-        print(f"Sidecar: UNKNOWN ({e})")
+    pod = _get_litellm_pod(token, ssl_ctx)
+    if not pod:
+        print("Sidecar: NOT RUNNING (LiteLLM pod unavailable)")
+    else:
+        print(f"Sidecar: {pod.get('status', {}).get('phase', 'Unknown')}")
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +653,7 @@ def cmd_balance(chain=None):
 # ---------------------------------------------------------------------------
 
 def cmd_remove(name):
-    """Remove a purchased upstream from the sidecar and LiteLLM."""
+    """Remove a purchased upstream from the sidecar config."""
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
@@ -792,18 +672,64 @@ def cmd_remove(name):
         _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", auths, token, ssl_ctx)
         print(f"Removed '{name}' auths.")
 
-    # Remove from LiteLLM config.
-    model_key = f"{name}/"  # Match prefix
-    remove_litellm_model(model_key, token, ssl_ctx)
-    print(f"Removed '{name}' from litellm-config.")
-
-    # If no more upstreams, consider cleaning up sidecar.
-    if not buyer_config.get("upstreams"):
-        print("No upstreams remaining. Consider deleting the sidecar deployment.")
-    else:
-        _restart_sidecar(token, ssl_ctx)
-
     print("Done.")
+
+
+def cmd_maintain():
+    """Refill low pools, warn on low balance, and remove exhausted mappings."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+
+    buyer_config = _read_buyer_config(token, ssl_ctx)
+    upstreams = buyer_config.get("upstreams", {})
+    if not upstreams:
+        print("No purchased x402 providers.")
+        return
+
+    auths = _read_buyer_auths(token, ssl_ctx)
+    status = _buyer_status() or {}
+
+    keys_data = _signer_get("/api/v1/keys")
+    keys = keys_data.get("keys", [])
+    if not keys:
+        print("Error: no signing keys in remote-signer.", file=sys.stderr)
+        sys.exit(1)
+    signer_address = keys[0]
+
+    changed = False
+    for name, upstream in list(upstreams.items()):
+        remaining = status.get(name, {}).get("remaining", len(auths.get(name, [])))
+        if remaining > LOW_WATERMARK:
+            continue
+
+        price = int(upstream["price"])
+        target_cost = REFILL_BATCH * price
+        balance = int(_get_usdc_balance(signer_address, upstream["asset"], upstream["network"]))
+
+        if balance < target_cost:
+            print(f"WARNING {name}: balance {balance} < refill cost {target_cost}")
+            if remaining == 0:
+                del upstreams[name]
+                auths.pop(name, None)
+                changed = True
+                print(f"REMOVED {name}: exhausted and unable to refill")
+            continue
+
+        new_auths = _presign_auths(
+            signer_address,
+            upstream["payTo"],
+            upstream["price"],
+            upstream["network"],
+            upstream["asset"],
+            REFILL_BATCH,
+        )
+        auths.setdefault(name, []).extend(new_auths)
+        changed = True
+        print(f"REFILLED {name}: added {REFILL_BATCH} auths (remaining was {remaining})")
+
+    if changed:
+        _write_buyer_configmap(BUYER_CM_CONFIG, "config.json", buyer_config, token, ssl_ctx)
+        _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", auths, token, ssl_ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -840,10 +766,11 @@ def usage():
     print("Usage: python3 scripts/buy.py <command> [args]")
     print()
     print("Commands:")
-    print("  probe <endpoint-url>                         Probe x402 pricing")
-    print("  buy <name> --endpoint <url> --model <id>     Pre-sign + deploy sidecar")
+    print("  probe <endpoint-url> [--model <id>]          Probe x402 pricing")
+    print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("  refill <name> [--count <N>]                  Sign more auths")
+    print("  maintain                                     Refill low pools and remove exhausted mappings")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
     print("  balance [--chain <network>]                  Check USDC balance")
@@ -861,10 +788,11 @@ if __name__ == "__main__":
     rest = args[1:]
 
     if cmd == "probe":
-        if not rest:
-            print("Usage: probe <endpoint-url>", file=sys.stderr)
+        positional, opts = parse_flags(rest)
+        if not positional:
+            print("Usage: probe <endpoint-url> [--model <id>]", file=sys.stderr)
             sys.exit(1)
-        cmd_probe(rest[0])
+        cmd_probe(positional[0], opts.get("model"))
 
     elif cmd == "buy":
         positional, opts = parse_flags(rest)
@@ -890,6 +818,9 @@ if __name__ == "__main__":
 
     elif cmd == "list":
         cmd_list()
+
+    elif cmd == "maintain":
+        cmd_maintain()
 
     elif cmd == "status":
         if not rest:

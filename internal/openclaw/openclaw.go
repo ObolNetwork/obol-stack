@@ -371,6 +371,10 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	stageDefaultSkills(deploymentDir, u)
 	injectSkillsToVolume(cfg, id, deploymentDir, u)
 
+	if err := refreshObolHelmRepo(cfg); err != nil {
+		return err
+	}
+
 	u.Infof("Syncing OpenClaw: %s/%s", appName, id)
 	u.Detail("Deployment directory", deploymentDir)
 
@@ -409,6 +413,32 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Blank()
 	u.Dim("[Optional] Port-forward fallback:")
 	u.Printf("  obol kubectl -n %s port-forward svc/openclaw 18789:18789", namespace)
+
+	return nil
+}
+
+func refreshObolHelmRepo(cfg *config.Config) error {
+	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	if _, err := os.Stat(helmBinary); os.IsNotExist(err) {
+		return fmt.Errorf("helm not found at %s", helmBinary)
+	}
+
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	env := append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	addCmd := exec.Command(helmBinary, "repo", "add", "obol", "https://obolnetwork.github.io/helm-charts/")
+	addCmd.Env = env
+	addOut, addErr := addCmd.CombinedOutput()
+	if addErr != nil && !strings.Contains(string(addOut), `"obol" already exists`) {
+		return fmt.Errorf("helm repo add obol failed: %w\n%s", addErr, string(addOut))
+	}
+
+	updateCmd := exec.Command(helmBinary, "repo", "update", "obol")
+	updateCmd.Env = env
+	updateOut, updateErr := updateCmd.CombinedOutput()
+	if updateErr != nil {
+		return fmt.Errorf("helm repo update obol failed: %w\n%s", updateErr, string(updateOut))
+	}
 
 	return nil
 }

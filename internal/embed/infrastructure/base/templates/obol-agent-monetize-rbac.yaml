@@ -78,6 +78,10 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "update", "patch", "delete"]
+  # Monitoring resources for x402 components
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors", "podmonitors"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
 
 ---
 #------------------------------------------------------------------------------

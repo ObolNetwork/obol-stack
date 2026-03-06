@@ -50,14 +50,14 @@ type ProviderStatus struct {
 
 // LiteLLMConfig represents the LiteLLM proxy config.yaml structure.
 type LiteLLMConfig struct {
-	ModelList       []ModelEntry       `yaml:"model_list"`
-	GeneralSettings map[string]any     `yaml:"general_settings,omitempty"`
-	LiteLLMSettings map[string]any     `yaml:"litellm_settings,omitempty"`
+	ModelList       []ModelEntry   `yaml:"model_list"`
+	GeneralSettings map[string]any `yaml:"general_settings,omitempty"`
+	LiteLLMSettings map[string]any `yaml:"litellm_settings,omitempty"`
 }
 
 // ModelEntry is a single entry in model_list.
 type ModelEntry struct {
-	ModelName    string       `yaml:"model_name"`
+	ModelName     string        `yaml:"model_name"`
 	LiteLLMParams LiteLLMParams `yaml:"litellm_params"`
 }
 
@@ -608,6 +608,9 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 func detectProvider(entry ModelEntry) string {
 	if strings.HasPrefix(entry.ModelName, "custom/") {
 		return "custom"
+	}
+	if strings.HasPrefix(entry.ModelName, "paid/") {
+		return "paid"
 	}
 	model := entry.LiteLLMParams.Model
 	// Wildcard entries

@@ -236,3 +236,61 @@ func TestDockerBridgeGatewayIP(t *testing.T) {
 	}
 	t.Logf("docker0 gateway IP: %s", ip)
 }
+
+func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Fatal("project root not found")
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/infrastructure/helmfile.yaml"))
+	if err != nil {
+		t.Fatalf("read helmfile: %v", err)
+	}
+	out := string(data)
+
+	if !strings.Contains(out, "kind: PodMonitor") {
+		t.Fatalf("helmfile missing PodMonitor:\n%s", out)
+	}
+	if !strings.Contains(out, "name: litellm-x402-buyer") {
+		t.Fatalf("helmfile missing buyer PodMonitor name:\n%s", out)
+	}
+	if !strings.Contains(out, "release: monitoring") {
+		t.Fatalf("helmfile missing monitoring label:\n%s", out)
+	}
+	if !strings.Contains(out, "port: buyer-http") || !strings.Contains(out, "path: /metrics") {
+		t.Fatalf("helmfile missing buyer metrics endpoint:\n%s", out)
+	}
+}
+
+func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Fatal("project root not found")
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/infrastructure/base/templates/llm.yaml"))
+	if err != nil {
+		t.Fatalf("read llm template: %v", err)
+	}
+	out := string(data)
+
+	for _, want := range []string{
+		`model_name: "paid/*"`,
+		`model: "openai/*"`,
+		`api_base: "http://127.0.0.1:8402"`,
+		`name: x402-buyer`,
+		`containerPort: 8402`,
+		`name: buyer-http`,
+		`name: x402-buyer-config`,
+		`name: x402-buyer-auths`,
+		`emptyDir: {}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("llm template missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "custom_provider_map") {
+		t.Fatalf("llm template should not require a custom provider:\n%s", out)
+	}
+}

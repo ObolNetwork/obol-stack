@@ -13,7 +13,7 @@ metadata:
 
 # Obol Stack Dev & LLM Routing Validation
 
-Complete guide for developing, testing, and validating the Obol Stack's LLM routing through LiteLLM. Covers the dev environment, CLI wrappers, overlay generation, all 3 provider paths, and integration testing.
+Complete guide for developing, testing, and validating the Obol Stack's LLM routing through LiteLLM. Covers the dev environment, CLI wrappers, overlay generation, provider paths, paid `x402` routing, and integration testing.
 
 ## When to Use This Skill
 
@@ -22,6 +22,7 @@ Complete guide for developing, testing, and validating the Obol Stack's LLM rout
 - Writing or running integration tests for OpenClaw instances
 - Debugging model routing issues (401s, 500s, provider misconfig)
 - Understanding the 2-tier LLM architecture (LiteLLM gateway + per-instance config)
+- Validating the paid remote-inference path through LiteLLM + `x402-buyer`
 - Deploying and validating OpenClaw instances with different providers
 - Working with the `obol` CLI wrappers (kubectl, helm, helmfile, k9s)
 
@@ -59,19 +60,28 @@ Tier 2: Per-Instance                Tier 1: Cluster-Wide Gateway
 | Integration testing | `references/integration-testing.md` |
 | Troubleshooting | `references/troubleshooting.md` |
 
-## 3 Inference Paths (All Through LiteLLM)
+## 4 Inference Paths (All Through LiteLLM)
 
 | Path | Model Name | LiteLLM model_list | Example |
 |------|-----------|-------------------|---------|
 | **Ollama** (default) | `<model>` | `ollama_chat/<model>` → Ollama svc | `llama3.2:3b` |
 | **Anthropic** (cloud) | `<claude-model>` | `<claude-model>` → Anthropic API | `claude-sonnet-4-5-20250929` |
 | **OpenAI** (cloud) | `<gpt-model>` | `<gpt-model>` → OpenAI API | `gpt-4o` |
+| **Paid x402 remote** | `paid/<model>` | `paid/*` → `openai/*` → `x402-buyer` sidecar | `paid/qwen3.5:9b` |
 
-All 3 paths use the same OpenClaw config pattern:
+All 4 paths use the same OpenClaw config pattern:
 - Provider slot: `openai` (LiteLLM is OpenAI-API-compatible)
 - API: `openai-completions`
 - Base URL: `http://litellm.llm.svc.cluster.local:4000/v1`
 - API key: LiteLLM master key (`sk-obol-<cluster-id>`)
+
+### Paid Routing Notes
+
+- The paid path uses **vanilla LiteLLM**. Do not fork LiteLLM for `paid/*`.
+- `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402`.
+- `x402-buyer` runs as a **sidecar in the LiteLLM pod**, not as a separate Service.
+- `buy.py buy` updates only buyer ConfigMaps; it must not patch LiteLLM `model_list` per purchase.
+- The currently validated local OSS model is `qwen3.5:9b`. Prefer that exact model in live commerce tests.
 
 ## Essential Commands
 
@@ -107,6 +117,10 @@ obol kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789
 # --- Testing ---
 go test ./internal/openclaw/                                    # Unit tests
 go test -tags integration -v -timeout 10m ./internal/openclaw/  # Integration tests
+
+# --- Validated paid commerce loop (qwen3.5:9b) ---
+# Reuse a running cluster by pointing OBOL_CONFIG_DIR at that cluster's .workspace/config
+go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
 ## OpenClaw Skills System
@@ -177,6 +191,8 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Wait for pod readiness AND HTTP readiness before sending inference requests
 - Clean up test instances with `obol openclaw delete --force <id>` (flag BEFORE arg)
 - Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
+- Prefer `qwen3.5:9b` when validating the current local paid-inference route
+- Use unique buy-side names in reused-cluster commerce tests so the sidecar cannot inherit stale in-memory spend counters
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -206,6 +222,7 @@ Client request ──► Traefik ──► x402-verifier (ForwardAuth) ──►
 1. **monetize.py** (OpenClaw skill) — Creates Middleware, HTTPRoute, pricing ConfigMap route
 2. **x402-verifier** (ForwardAuth) — Checks X-PAYMENT header against facilitator
 3. **Traefik Gateway API** — Routes traffic; requires ClusterIP backends (not ExternalName)
+4. **x402-buyer sidecar** — Serves static `paid/<model>` aliases from LiteLLM and spends one pre-signed authorization per request
 
 ### Testing the Monetize Flow
 
@@ -229,6 +246,9 @@ curl -X POST http://obol.stack:8080/services/qwen35/v1/chat/completions \
 # Run e2e test (with mock facilitator)
 export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin
 go test -tags integration -v -run TestIntegration_PaymentGate_FullLifecycle -timeout 5m ./internal/x402/
+
+# Run the full paid commerce loop (real facilitator, discovery, buy.py, sidecar, quota, USDC settlement)
+go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
 ### Known Gotchas
@@ -237,3 +257,5 @@ go test -tags integration -v -run TestIntegration_PaymentGate_FullLifecycle -tim
 - **Model pull timeout**: monetize.py checks `/api/tags` before `/api/pull` to avoid hanging on cached models.
 - **Facilitator HTTPS**: URLs must be HTTPS except localhost, 127.0.0.1, host.k3d.internal, host.docker.internal.
 - **ConfigMap propagation**: File watcher takes 60-120s. Force restart verifier for immediate effect.
+- **Projected ConfigMap refresh**: the LiteLLM pod can take ~60s to reflect updated buyer ConfigMaps in the sidecar.
+- **eRPC balance lag**: `buy.py balance` uses `eth_call` through eRPC, and the default unfinalized cache TTL is 10s. After a paid request, poll until the reported balance catches up with the on-chain delta.

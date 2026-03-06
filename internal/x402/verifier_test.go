@@ -13,6 +13,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	x402lib "github.com/mark3labs/x402-go"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 )
 
 // ── Mock facilitator ────────────────────────────────────────────────────────
@@ -23,8 +25,8 @@ type mockFacilitatorOpts struct {
 
 type mockFacilitator struct {
 	*httptest.Server
-	verifyCalls  atomic.Int32
-	settleCalls  atomic.Int32
+	verifyCalls atomic.Int32
+	settleCalls atomic.Int32
 }
 
 func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator {
@@ -680,8 +682,8 @@ func TestVerifier_MixedRoutes_CorrectOverrides(t *testing.T) {
 		Chain:          "base-sepolia",
 		FacilitatorURL: fac.URL,
 		Routes: []RouteRule{
-			{Pattern: "/rpc/*", Price: "0.0001"},                                    // no PayTo — uses global
-			{Pattern: "/services/custom/*", Price: "0.005", PayTo: customWallet},    // per-route PayTo
+			{Pattern: "/rpc/*", Price: "0.0001"},                                 // no PayTo — uses global
+			{Pattern: "/services/custom/*", Price: "0.005", PayTo: customWallet}, // per-route PayTo
 		},
 	})
 	if err != nil {
@@ -718,5 +720,170 @@ func TestVerifier_MixedRoutes_CorrectOverrides(t *testing.T) {
 	pr2 := parse402Accepts(t, body2)
 	if pr2.PayTo != customWallet {
 		t.Errorf("custom route: payTo = %q, want custom wallet %q", pr2.PayTo, customWallet)
+	}
+}
+
+func TestVerifier_MetricsPaymentRequired(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:        "/rpc/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "paid-rpc",
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+
+	metrics := scrapeVerifierMetrics(t, v)
+	labels := map[string]string{
+		"route":           "/rpc/*",
+		"offer_namespace": "llm",
+		"offer_name":      "paid-rpc",
+	}
+	assertVerifierMetricValue(t, metrics["obol_x402_verifier_requests_total"], labels, 1)
+	assertVerifierMetricValue(t, metrics["obol_x402_verifier_payment_required_total"], labels, 1)
+	assertVerifierMetricMissing(t, metrics["obol_x402_verifier_payment_verified_total"], labels)
+	assertVerifierMetricMissing(t, metrics["obol_x402_verifier_payment_failed_total"], labels)
+	assertVerifierMetricMissing(t, metrics["obol_x402_verifier_charged_requests_total"], labels)
+}
+
+func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
+	labels := map[string]string{
+		"route":           "/rpc/*",
+		"offer_namespace": "llm",
+		"offer_name":      "paid-rpc",
+	}
+
+	okFac := newMockFacilitator(t, mockFacilitatorOpts{})
+	okVerifier := newTestVerifier(t, okFac.URL, []RouteRule{{
+		Pattern:        "/rpc/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "paid-rpc",
+	}})
+
+	okReq := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	okReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	okReq.Header.Set("X-Forwarded-Host", "obol.stack")
+	okReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	okResp := httptest.NewRecorder()
+	okVerifier.HandleVerify(okResp, okReq)
+	if okResp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", okResp.Code)
+	}
+
+	okMetrics := scrapeVerifierMetrics(t, okVerifier)
+	assertVerifierMetricValue(t, okMetrics["obol_x402_verifier_requests_total"], labels, 1)
+	assertVerifierMetricValue(t, okMetrics["obol_x402_verifier_payment_verified_total"], labels, 1)
+	assertVerifierMetricValue(t, okMetrics["obol_x402_verifier_charged_requests_total"], labels, 1)
+	assertVerifierMetricMissing(t, okMetrics["obol_x402_verifier_payment_required_total"], labels)
+	assertVerifierMetricMissing(t, okMetrics["obol_x402_verifier_payment_failed_total"], labels)
+
+	rejectFac := newMockFacilitator(t, mockFacilitatorOpts{rejectPayment: true})
+	rejectVerifier := newTestVerifier(t, rejectFac.URL, []RouteRule{{
+		Pattern:        "/rpc/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "paid-rpc",
+	}})
+
+	rejectReq := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	rejectReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	rejectReq.Header.Set("X-Forwarded-Host", "obol.stack")
+	rejectReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	rejectResp := httptest.NewRecorder()
+	rejectVerifier.HandleVerify(rejectResp, rejectReq)
+	if rejectResp.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", rejectResp.Code)
+	}
+
+	rejectMetrics := scrapeVerifierMetrics(t, rejectVerifier)
+	assertVerifierMetricValue(t, rejectMetrics["obol_x402_verifier_requests_total"], labels, 1)
+	assertVerifierMetricValue(t, rejectMetrics["obol_x402_verifier_payment_failed_total"], labels, 1)
+	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_required_total"], labels)
+	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_verified_total"], labels)
+	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_charged_requests_total"], labels)
+}
+
+func scrapeVerifierMetrics(t *testing.T, v *Verifier) map[string]*dto.MetricFamily {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	v.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", rec.Code)
+	}
+
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("parse metrics: %v", err)
+	}
+
+	return families
+}
+
+func assertVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string, wantValue float64) {
+	t.Helper()
+
+	if family == nil {
+		t.Fatalf("missing metric family")
+	}
+
+	for _, metric := range family.GetMetric() {
+		if verifierLabelsMatch(metric, wantLabels) {
+			got := verifierMetricValue(metric)
+			if got != wantValue {
+				t.Fatalf("%s labels %v = %v, want %v", family.GetName(), wantLabels, got, wantValue)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("metric %s missing labels %v", family.GetName(), wantLabels)
+}
+
+func assertVerifierMetricMissing(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) {
+	t.Helper()
+
+	if family == nil {
+		return
+	}
+
+	for _, metric := range family.GetMetric() {
+		if verifierLabelsMatch(metric, wantLabels) {
+			t.Fatalf("metric %s unexpectedly contained labels %v", family.GetName(), wantLabels)
+		}
+	}
+}
+
+func verifierLabelsMatch(metric *dto.Metric, want map[string]string) bool {
+	if len(metric.GetLabel()) != len(want) {
+		return false
+	}
+	for _, label := range metric.GetLabel() {
+		if want[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+	return true
+}
+
+func verifierMetricValue(metric *dto.Metric) float64 {
+	switch {
+	case metric.Counter != nil:
+		return metric.GetCounter().GetValue()
+	case metric.Gauge != nil:
+		return metric.GetGauge().GetValue()
+	default:
+		return 0
 	}
 }

@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from decimal import Decimal, InvalidOperation
 
 # Import shared Kubernetes helpers from the obol-stack skill.
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,7 @@ _ROUTE_PATTERN_RE = re.compile(r"^/[a-zA-Z0-9_./*-]+$")
 _PRICE_RE = re.compile(r"^\d+(\.\d+)?$")
 _ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 _NETWORK_RE = re.compile(r"^[a-z0-9-]+$")
+APPROX_TOKENS_PER_REQUEST = Decimal("1000")
 
 
 def _validate_route_pattern(pattern):
@@ -197,7 +199,44 @@ def get_price_table(spec):
 def get_effective_price(spec):
     """Return the effective per-request price for x402 gating."""
     price = get_price_table(spec)
-    return price.get("perRequest") or price.get("perMTok") or price.get("perHour") or "0"
+    if price.get("perRequest"):
+        return price["perRequest"]
+    if price.get("perMTok"):
+        return _approximate_request_price(price["perMTok"])
+    return price.get("perHour") or "0"
+
+
+def _approximate_request_price(per_mtok):
+    """Approximate a per-request price from a per-MTok price."""
+    try:
+        value = Decimal(str(per_mtok).strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid perMTok price: {per_mtok!r}") from exc
+    return _decimal_to_string(value / APPROX_TOKENS_PER_REQUEST)
+
+
+def _decimal_to_string(value):
+    """Format a Decimal without exponent notation or trailing zeros."""
+    normalized = value.normalize()
+    text = format(normalized, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def describe_price(spec):
+    """Return a human-readable description of the active pricing model."""
+    price = get_price_table(spec)
+    if price.get("perRequest"):
+        return f"{price['perRequest']} USDC/request"
+    if price.get("perMTok"):
+        return (
+            f"{get_effective_price(spec)} USDC/request "
+            f"(approx from {price['perMTok']} USDC/MTok @ {int(APPROX_TOKENS_PER_REQUEST)} tok/request)"
+        )
+    if price.get("perHour"):
+        return f"{price['perHour']} USDC/hour"
+    return "0 USDC/request"
 
 
 def get_pay_to(spec):
@@ -632,7 +671,7 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
 
     # Add pricing route to x402-verifier ConfigMap so requests are actually gated.
     # Without this, the verifier passes through all requests (200 for unmatched routes).
-    _add_pricing_route(spec, name, token, ssl_ctx)
+    _add_pricing_route(spec, ns, name, token, ssl_ctx)
 
     set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created with pricing route", token, ssl_ctx)
     return True
@@ -657,7 +696,7 @@ def _read_upstream_auth(spec, token, ssl_ctx):
     return ""
 
 
-def _add_pricing_route(spec, name, token, ssl_ctx):
+def _add_pricing_route(spec, ns, name, token, ssl_ctx):
     """Add a pricing route to the x402-verifier ConfigMap for this offer.
 
     Uses simple string manipulation for YAML to avoid a PyYAML dependency.
@@ -668,8 +707,10 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
     """
     url_path = spec.get("path", f"/services/{name}")
     price = _validate_price(get_effective_price(spec))
+    price_table = get_price_table(spec)
     pay_to = _validate_address(get_pay_to(spec))
     network = _validate_network(get_network(spec))
+    offer_ns = ns
 
     route_pattern = _validate_route_pattern(f"{url_path}/*")
 
@@ -714,6 +755,19 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
         route_entry += f'{indent}  network: "{network}"\n'
     if upstream_auth:
         route_entry += f'{indent}  upstreamAuth: "{upstream_auth}"\n'
+    if price_table.get("perMTok"):
+        route_entry += f'{indent}  priceModel: "perMTok"\n'
+        route_entry += f'{indent}  perMTok: "{price_table["perMTok"]}"\n'
+        route_entry += (
+            f"{indent}  approxTokensPerRequest: {int(APPROX_TOKENS_PER_REQUEST)}\n"
+        )
+    elif price_table.get("perRequest"):
+        route_entry += f'{indent}  priceModel: "perRequest"\n'
+    elif price_table.get("perHour"):
+        route_entry += f'{indent}  priceModel: "perHour"\n'
+    if offer_ns:
+        route_entry += f'{indent}  offerNamespace: "{offer_ns}"\n'
+    route_entry += f'{indent}  offerName: "{name}"\n'
 
     # Append route to existing routes section or create it.
     if "routes:" in pricing_yaml_str:
@@ -731,7 +785,7 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
 
     patch_body = {"data": {"pricing.yaml": pricing_yaml_str}}
     api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
-    print(f"  Added pricing route: {route_pattern} → {price} USDC (payTo={pay_to or 'global'})")
+    print(f"  Added pricing route: {route_pattern} → {describe_price(spec)} (payTo={pay_to or 'global'})")
 
 
 def stage_route_published(spec, ns, name, token, ssl_ctx):
@@ -1265,17 +1319,7 @@ def cmd_list(token, ssl_ctx):
         item_name = item["metadata"].get("name", "?")
         wtype = item.get("spec", {}).get("type", "inference")
         model = item.get("spec", {}).get("model", {}).get("name", "-")
-        price_table = get_price_table(item.get("spec", {}))
-        price = get_effective_price(item.get("spec", {}))
-        # Show which pricing type is active.
-        if price_table.get("perRequest"):
-            price_label = f"{price}/req"
-        elif price_table.get("perMTok"):
-            price_label = f"{price}/MTok"
-        elif price_table.get("perHour"):
-            price_label = f"{price}/hr"
-        else:
-            price_label = price
+        price_label = describe_price(item.get("spec", {}))
         conditions = item.get("status", {}).get("conditions", [])
         ready = "False"
         for c in conditions:
@@ -1299,7 +1343,7 @@ def cmd_status(ns, name, token, ssl_ctx):
     print(f"  Type:     {spec.get('type', 'inference')}")
     print(f"  Model:    {spec.get('model', {}).get('name', '-')}")
     print(f"  Upstream: {spec.get('upstream', {}).get('service', '-')}.{spec.get('upstream', {}).get('namespace', '-')}:{spec.get('upstream', {}).get('port', '-')}")
-    print(f"  Price:    {get_effective_price(spec)} USDC")
+    print(f"  Price:    {describe_price(spec)}")
     print(f"  PayTo:    {payment.get('payTo', '-')}")
     print(f"  Network:  {payment.get('network', '-')}")
     print(f"  Path:     {spec.get('path', f'/services/{name}')}")
@@ -1432,7 +1476,19 @@ def _remove_pricing_route(url_path, name, token, ssl_ctx):
         if skip:
             stripped = line.strip()
             # Stop skipping when we hit the next route entry or a non-indented line.
-            if stripped.startswith("- ") or (stripped and not stripped.startswith("price:") and not stripped.startswith("description:") and not stripped.startswith("payTo:") and not stripped.startswith("network:")):
+            if stripped.startswith("- ") or (
+                stripped
+                and not stripped.startswith("price:")
+                and not stripped.startswith("description:")
+                and not stripped.startswith("payTo:")
+                and not stripped.startswith("network:")
+                and not stripped.startswith("upstreamAuth:")
+                and not stripped.startswith("priceModel:")
+                and not stripped.startswith("perMTok:")
+                and not stripped.startswith("approxTokensPerRequest:")
+                and not stripped.startswith("offerNamespace:")
+                and not stripped.startswith("offerName:")
+            ):
                 skip = False
                 filtered.append(line)
             # Skip continuation lines of the removed route.

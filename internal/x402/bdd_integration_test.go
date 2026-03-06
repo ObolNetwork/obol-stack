@@ -64,7 +64,11 @@ func TestMain(m *testing.M) {
 			if integrationModel == "" {
 				integrationModel = "qwen3.5:9b"
 			}
-			integrationReady = true
+			if err := ensureExistingClusterBootstrap(integrationObolBin, integrationKubectlBin, integrationKubeconfig); err != nil {
+				log.Printf("existing-cluster bootstrap failed: %v", err)
+			} else {
+				integrationReady = true
+			}
 		}
 		os.Exit(m.Run())
 	}
@@ -158,7 +162,8 @@ func TestMain(m *testing.M) {
 
 	// Wait for the obol-agent pod to be Running.
 	log.Println("  Waiting for obol-agent pod...")
-	if err := waitForPod(kubectlBin, kubeconfigPath, "openclaw-obol-agent", "app=openclaw", 300*time.Second); err != nil {
+	if err := waitForAnyPod(kubectlBin, kubeconfigPath, "openclaw-obol-agent",
+		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 300*time.Second); err != nil {
 		teardown(obolBin)
 		log.Fatalf("obol-agent not ready: %v", err)
 	}
@@ -283,18 +288,69 @@ func runObolOutput(obolBin string, args ...string) (string, error) {
 	return string(out), err
 }
 
+func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) error {
+	if obolBin == "" || kubectlBin == "" || kubeconfig == "" {
+		return fmt.Errorf("existing cluster bootstrap requires obol, kubectl, and kubeconfig paths")
+	}
+
+	if err := waitForPod(kubectlBin, kubeconfig, "x402", "app=x402-verifier", 120*time.Second); err != nil {
+		return fmt.Errorf("x402-verifier not ready: %w", err)
+	}
+	if err := waitForAnyPod(kubectlBin, kubeconfig, "openclaw-obol-agent",
+		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 180*time.Second); err != nil {
+		return fmt.Errorf("obol-agent not ready: %w", err)
+	}
+
+	_, err := kubectl.Output(kubectlBin, kubeconfig,
+		"get", "serviceoffers.obol.org", serviceOfferName, "-n", serviceOfferNamespace, "--no-headers")
+	if err != nil {
+		log.Printf("  Creating ServiceOffer %s/%s on existing cluster...", serviceOfferNamespace, serviceOfferName)
+		if err := runObol(obolBin, "sell", "http", serviceOfferName,
+			"--wallet", serviceOfferPayTo,
+			"--chain", "base-sepolia",
+			"--price", "0.001",
+			"--upstream", "litellm",
+			"--port", "4000",
+			"--namespace", serviceOfferNamespace,
+			"--health-path", "/health/readiness"); err != nil {
+			return fmt.Errorf("obol sell http on existing cluster: %w", err)
+		}
+	}
+
+	if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 180*time.Second); err != nil {
+		log.Println("  ServiceOffer not Ready on existing cluster, triggering manual reconciliation...")
+		triggerReconciliation(kubectlBin, kubeconfig)
+		if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 120*time.Second); err != nil {
+			return fmt.Errorf("existing-cluster ServiceOffer not Ready: %w", err)
+		}
+	}
+
+	log.Println("  Restarting x402-verifier to pick up existing-cluster pricing route...")
+	_ = kubectl.RunSilent(kubectlBin, kubeconfig, "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
+	_ = waitForPod(kubectlBin, kubeconfig, "x402", "app=x402-verifier", 120*time.Second)
+	time.Sleep(5 * time.Second)
+
+	return nil
+}
+
 func waitForPod(kubectlBin, kubeconfig, namespace, labelSelector string, timeout time.Duration) error {
+	return waitForAnyPod(kubectlBin, kubeconfig, namespace, []string{labelSelector}, timeout)
+}
+
+func waitForAnyPod(kubectlBin, kubeconfig, namespace string, labelSelectors []string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := kubectl.Output(kubectlBin, kubeconfig, "get", "pods", "-n", namespace,
-			"-l", labelSelector, "--no-headers")
-		if err == nil && strings.Contains(out, "Running") {
-			log.Printf("  ✓ %s in %s is Running", labelSelector, namespace)
-			return nil
+		for _, labelSelector := range labelSelectors {
+			out, err := kubectl.Output(kubectlBin, kubeconfig, "get", "pods", "-n", namespace,
+				"-l", labelSelector, "--no-headers")
+			if err == nil && strings.Contains(out, "Running") {
+				log.Printf("  ✓ %s in %s is Running", labelSelector, namespace)
+				return nil
+			}
 		}
 		time.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("timeout waiting for pod %s in %s", labelSelector, namespace)
+	return fmt.Errorf("timeout waiting for pod in %s matching selectors %s", namespace, strings.Join(labelSelectors, ", "))
 }
 
 // waitForServiceOfferReady polls the ServiceOffer until Ready=True.

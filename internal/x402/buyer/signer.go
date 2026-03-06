@@ -20,21 +20,25 @@ type PreSignedSigner struct {
 	asset   string
 	price   string
 
+	onConsume func(*PreSignedAuth) error
+
 	mu    sync.Mutex
 	auths []*PreSignedAuth
 	spent int
 }
 
 // NewPreSignedSigner creates a signer backed by a pool of pre-signed auths.
-func NewPreSignedSigner(network, payTo, asset, price string, auths []*PreSignedAuth) *PreSignedSigner {
+func NewPreSignedSigner(network, payTo, asset, price string, auths []*PreSignedAuth, spent int, onConsume func(*PreSignedAuth) error) *PreSignedSigner {
 	pool := make([]*PreSignedAuth, len(auths))
 	copy(pool, auths)
 	return &PreSignedSigner{
-		network: network,
-		payTo:   payTo,
-		asset:   asset,
-		price:   price,
-		auths:   pool,
+		network:   network,
+		payTo:     payTo,
+		asset:     asset,
+		price:     price,
+		onConsume: onConsume,
+		auths:     pool,
+		spent:     spent,
 	}
 }
 
@@ -60,6 +64,9 @@ func (s *PreSignedSigner) CanSign(req *x402.PaymentRequirement) bool {
 	if !strings.EqualFold(req.Asset, s.asset) {
 		return false
 	}
+	if req.MaxAmountRequired != "" && req.MaxAmountRequired != s.price {
+		return false
+	}
 	s.mu.Lock()
 	remaining := len(s.auths)
 	s.mu.Unlock()
@@ -81,6 +88,13 @@ func (s *PreSignedSigner) Sign(req *x402.PaymentRequirement) (*x402.PaymentPaylo
 	auth := s.auths[0]
 	s.auths = s.auths[1:]
 	s.spent++
+	if s.onConsume != nil {
+		if err := s.onConsume(auth); err != nil {
+			s.auths = append([]*PreSignedAuth{auth}, s.auths...)
+			s.spent--
+			return nil, err
+		}
+	}
 
 	return &x402.PaymentPayload{
 		X402Version: 1,

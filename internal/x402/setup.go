@@ -128,6 +128,22 @@ spec:
       targetPort: http
       protocol: TCP
 ---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: x402-verifier
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
 # RBAC: namespace-scoped pricing ConfigMap access for OpenClaw agents.
 # Deployed alongside the namespace so it's always present when x402 exists.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -172,7 +188,6 @@ func EnsureVerifier(cfg *config.Config) error {
 	fmt.Println("Deploying x402 payment verifier...")
 	return kubectl.Apply(bin, kc, x402Manifest)
 }
-
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
@@ -266,6 +281,28 @@ func WithPayTo(payTo string) RouteOption {
 // WithNetwork sets a per-route network (overrides global chain).
 func WithNetwork(network string) RouteOption {
 	return func(r *RouteRule) { r.Network = network }
+}
+
+// WithUpstreamAuth sets the upstream Authorization header injected on success.
+func WithUpstreamAuth(upstreamAuth string) RouteOption {
+	return func(r *RouteRule) { r.UpstreamAuth = upstreamAuth }
+}
+
+// WithPriceMetadata records the source pricing model behind the enforced Price.
+func WithPriceMetadata(model, perMTok string, approxTokensPerRequest int) RouteOption {
+	return func(r *RouteRule) {
+		r.PriceModel = model
+		r.PerMTok = perMTok
+		r.ApproxTokensPerRequest = approxTokensPerRequest
+	}
+}
+
+// WithOfferInfo records the originating ServiceOffer identity.
+func WithOfferInfo(namespace, name string) RouteOption {
+	return func(r *RouteRule) {
+		r.OfferNamespace = namespace
+		r.OfferName = name
+	}
 }
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.

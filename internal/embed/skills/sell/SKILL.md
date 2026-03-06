@@ -85,6 +85,13 @@ When `delete` runs, it also removes the pricing route from the x402-pricing Conf
 - `payment.price.perHour`: Per-compute-hour price in USDC (fine-tuning)
 - `payment.scheme`: Payment scheme (default: exact)
 
+Phase 1 pricing behavior:
+
+- `perRequest` or `price` wins if explicitly provided
+- otherwise `perMTok` is accepted and converted to a temporary enforced request price using `perMTok / 1000`
+- the fixed approximation input is `approxTokensPerRequest = 1000`
+- the original `perMTok` value is still persisted in pricing metadata and shown in status output
+
 ## Architecture
 
 ```

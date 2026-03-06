@@ -39,6 +39,32 @@ releases:
     values:
       - ./values/monitoring.yaml.gotmpl
 
+  - name: llm-buyer-podmonitor
+    namespace: llm
+    createNamespace: true
+    chart: bedag/raw
+    version: 2.0.2
+    needs:
+      - monitoring/monitoring
+      - kube-system/base
+    values:
+      - resources:
+          - apiVersion: monitoring.coreos.com/v1
+            kind: PodMonitor
+            metadata:
+              name: litellm-x402-buyer
+              namespace: llm
+              labels:
+                release: monitoring
+            spec:
+              selector:
+                matchLabels:
+                  app: litellm
+              podMetricsEndpoints:
+                - port: buyer-http
+                  path: /metrics
+                  interval: 30s
+
   # Traefik ingress controller with Gateway API support
   # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
   - name: traefik

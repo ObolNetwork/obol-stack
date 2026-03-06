@@ -8,6 +8,18 @@
 // CRD specs; the reconciler translates to wire format at runtime.
 package schemas
 
+import (
+	"strings"
+
+	"github.com/shopspring/decimal"
+)
+
+// ApproxTokensPerRequest is the temporary phase-1 token estimate used to
+// convert per-million-token pricing into an x402 per-request charge.
+const ApproxTokensPerRequest = 1000
+
+var approxTokensPerRequestDecimal = decimal.NewFromInt(ApproxTokensPerRequest)
+
 // PaymentTerms defines x402 payment requirements for a ServiceOffer.
 // Field names align with x402 PaymentRequirements (V2).
 type PaymentTerms struct {
@@ -50,20 +62,39 @@ type PriceTable struct {
 }
 
 // EffectiveRequestPrice returns the per-request price to use for x402 gating.
-// If PerRequest is set, it is returned directly. Otherwise falls back to
-// PerMTok (which requires metering to convert, so returns "0" as a sentinel).
+// If PerRequest is set, it is returned directly. If only PerMTok is set, it is
+// temporarily approximated using ApproxTokensPerRequest until exact metering
+// exists. Invalid decimal inputs fall back to "0".
 func (p PriceTable) EffectiveRequestPrice() string {
-	if p.PerRequest != "" {
-		return p.PerRequest
+	price, err := p.EffectiveRequestPriceE()
+	if err != nil {
+		return "0"
 	}
-	// When only per-MTok pricing is set, the x402 gate uses a zero amount
-	// and metering settles the actual cost post-request. For now, fall back
-	// to PerMTok as a direct price (close enough for early implementation).
+	return price
+}
+
+// EffectiveRequestPriceE returns the per-request price to use for x402 gating.
+// It performs the same conversion as EffectiveRequestPrice but returns parsing
+// errors to callers that need to validate input.
+func (p PriceTable) EffectiveRequestPriceE() (string, error) {
+	if p.PerRequest != "" {
+		return p.PerRequest, nil
+	}
 	if p.PerMTok != "" {
-		return p.PerMTok
+		return ApproximateRequestPriceFromPerMTok(p.PerMTok)
 	}
 	if p.PerHour != "" {
-		return p.PerHour
+		return p.PerHour, nil
 	}
-	return "0"
+	return "0", nil
+}
+
+// ApproximateRequestPriceFromPerMTok converts a per-million-token price into a
+// temporary per-request x402 charge using ApproxTokensPerRequest.
+func ApproximateRequestPriceFromPerMTok(perMTok string) (string, error) {
+	value, err := decimal.NewFromString(strings.TrimSpace(perMTok))
+	if err != nil {
+		return "", err
+	}
+	return value.Div(approxTokensPerRequestDecimal).String(), nil
 }

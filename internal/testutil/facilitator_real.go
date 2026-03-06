@@ -32,7 +32,8 @@ type RealFacilitator struct {
 //
 // Binary discovery order:
 //  1. X402_FACILITATOR_BIN env var (explicit path to binary)
-//  2. Pre-built binary at $X402_RS_DIR/target/release/facilitator
+//  2. Pre-built binary at $X402_RS_DIR/target/release/x402-facilitator
+//     (or the legacy $X402_RS_DIR/target/release/facilitator)
 //  3. cargo build --release in $X402_RS_DIR (if Cargo.toml exists)
 //  4. Skip test
 //
@@ -113,10 +114,15 @@ func discoverFacilitatorBinary(t *testing.T) string {
 	}
 
 	// 2. Pre-built binary.
-	prebuilt := filepath.Join(rsDir, "target", "release", "facilitator")
-	if _, err := os.Stat(prebuilt); err == nil {
-		t.Logf("using pre-built facilitator at %s", prebuilt)
-		return prebuilt
+	prebuiltCandidates := []string{
+		filepath.Join(rsDir, "target", "release", "x402-facilitator"),
+		filepath.Join(rsDir, "target", "release", "facilitator"),
+	}
+	for _, prebuilt := range prebuiltCandidates {
+		if _, err := os.Stat(prebuilt); err == nil {
+			t.Logf("using pre-built facilitator at %s", prebuilt)
+			return prebuilt
+		}
 	}
 
 	// 3. Build from source.
@@ -126,17 +132,32 @@ func discoverFacilitatorBinary(t *testing.T) string {
 			t.Skip("x402-rs source found but cargo not installed")
 		}
 		t.Logf("building x402-rs facilitator from %s (this may take a while)...", rsDir)
-		build := exec.Command("cargo", "build", "--release", "-p", "facilitator")
-		build.Dir = rsDir
-		build.Stdout = os.Stderr
-		build.Stderr = os.Stderr
-		if err := build.Run(); err != nil {
-			t.Fatalf("cargo build --release failed: %v", err)
+		buildCommands := [][]string{
+			{"build", "--release", "-p", "x402-facilitator"},
+			{"build", "--release", "-p", "facilitator"},
 		}
-		if _, err := os.Stat(prebuilt); err == nil {
-			return prebuilt
+		var buildErr error
+		for _, args := range buildCommands {
+			build := exec.Command("cargo", args...)
+			build.Dir = rsDir
+			build.Stdout = os.Stderr
+			build.Stderr = os.Stderr
+			if err := build.Run(); err == nil {
+				buildErr = nil
+				break
+			} else {
+				buildErr = err
+			}
 		}
-		t.Fatalf("cargo build succeeded but binary not found at %s", prebuilt)
+		if buildErr != nil {
+			t.Fatalf("cargo build --release failed: %v", buildErr)
+		}
+		for _, prebuilt := range prebuiltCandidates {
+			if _, err := os.Stat(prebuilt); err == nil {
+				return prebuilt
+			}
+		}
+		t.Fatalf("cargo build succeeded but binary not found at any expected path: %v", prebuiltCandidates)
 	}
 
 	t.Skip("x402-rs facilitator not available — set X402_FACILITATOR_BIN or X402_RS_DIR, " +

@@ -43,6 +43,14 @@ type Deployment struct {
 	// PricePerRequest is the USDC price per inference call (default "0.001").
 	PricePerRequest string `json:"price_per_request"`
 
+	// PricePerMTok is the original per-million-token price when request pricing
+	// was derived from the temporary phase-1 approximation.
+	PricePerMTok string `json:"price_per_mtok,omitempty"`
+
+	// ApproxTokensPerRequest records the fixed approximation used to derive the
+	// charged request price from PricePerMTok.
+	ApproxTokensPerRequest int `json:"approx_tokens_per_request,omitempty"`
+
 	// Chain is the x402 payment chain name (e.g. "base-sepolia").
 	Chain string `json:"chain"`
 

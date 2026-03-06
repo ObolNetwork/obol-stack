@@ -10,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 )
 
 func TestProxy_HealthAndStatus(t *testing.T) {
@@ -28,7 +31,7 @@ func TestProxy_HealthAndStatus(t *testing.T) {
 		"test": {makeAuth("0xsig1"), makeAuth("0xsig2")},
 	}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -93,7 +96,7 @@ func TestProxy_ForwardsToUpstream(t *testing.T) {
 	}
 	auths := AuthsFile{"free": {makeAuth("0xsig1")}}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -185,7 +188,7 @@ func TestProxy_Handles402WithPayment(t *testing.T) {
 	}
 	auths := AuthsFile{"paid": {makeAuth("0xrealsig")}}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -227,7 +230,7 @@ func TestProxy_UnknownUpstream(t *testing.T) {
 	cfg := &Config{Upstreams: map[string]UpstreamConfig{}}
 	auths := AuthsFile{}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -338,7 +341,7 @@ func TestProxy_AuthPoolExhaustion(t *testing.T) {
 	// Only 2 auths in the pool.
 	auths := AuthsFile{"limited": {makeAuth("0xsig1"), makeAuth("0xsig2")}}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -418,7 +421,7 @@ func TestProxy_MultipleUpstreams(t *testing.T) {
 		"beta":  {makeAuth("0xsig_b")},
 	}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -504,7 +507,7 @@ func TestProxy_StatusAfterPayments(t *testing.T) {
 	}
 	auths := AuthsFile{"tracked": {makeAuth("0xs1"), makeAuth("0xs2"), makeAuth("0xs3")}}
 
-	proxy, err := NewProxy(cfg, auths)
+	proxy, err := NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -543,6 +546,420 @@ func TestProxy_StatusAfterPayments(t *testing.T) {
 	resp.Body.Close()
 
 	checkStatus(1, 2)
+}
+
+func TestProxy_ModelRoutingAndMetrics(t *testing.T) {
+	var seenModel string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-PAYMENT") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		seenModel = payload.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"seller-qwen": {
+				URL:         upstream.URL,
+				RemoteModel: "qwen3:32b",
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"seller-qwen": {makeAuth("0xpaid1")}}
+
+	state, err := LoadStateStore(t.TempDir() + "/consumed.json")
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	proxy, err := NewProxy(cfg, auths, state)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/qwen3:32b","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if seenModel != "qwen3:32b" {
+		t.Fatalf("upstream model = %q, want qwen3:32b", seenModel)
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
+	var status map[string]struct {
+		RemoteModel string `json:"remote_model"`
+		PublicModel string `json:"public_model"`
+		Remaining   int    `json:"remaining"`
+		Spent       int    `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	gotStatus := status["seller-qwen"]
+	if gotStatus.RemoteModel != "qwen3:32b" {
+		t.Fatalf("remote_model = %q, want qwen3:32b", gotStatus.RemoteModel)
+	}
+	if gotStatus.PublicModel != "paid/qwen3:32b" {
+		t.Fatalf("public_model = %q, want paid/qwen3:32b", gotStatus.PublicModel)
+	}
+	if gotStatus.Remaining != 0 || gotStatus.Spent != 1 {
+		t.Fatalf("status remaining/spent = %d/%d, want 0/1", gotStatus.Remaining, gotStatus.Spent)
+	}
+
+	metrics := scrapeMetricFamilies(t, proxy)
+	labels := map[string]string{"upstream": "seller-qwen", "remote_model": "qwen3:32b"}
+	assertMetricValue(t, metrics["obol_x402_buyer_requests_total"], labels, 1)
+	assertMetricValue(t, metrics["obol_x402_buyer_payment_attempts_total"], labels, 1)
+	assertMetricValue(t, metrics["obol_x402_buyer_payment_success_total"], labels, 1)
+	assertMetricValue(t, metrics["obol_x402_buyer_auth_remaining"], labels, 0)
+	assertMetricValue(t, metrics["obol_x402_buyer_auth_spent"], labels, 1)
+	assertMetricValue(t, metrics["obol_x402_buyer_active_model_mappings"], labels, 1)
+}
+
+func TestProxy_ModelRoutingSupportsChatCompletionsAlias(t *testing.T) {
+	var seenPath string
+	var seenModel string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-PAYMENT") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+
+		seenPath = r.URL.Path
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		seenModel = payload.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"seller-qwen": {
+				URL:         upstream.URL,
+				RemoteModel: "qwen3.5:9b",
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"seller-qwen": {makeAuth("0xpaid1")}}
+
+	state, err := LoadStateStore(t.TempDir() + "/consumed.json")
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	proxy, err := NewProxy(cfg, auths, state)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/qwen3.5:9b","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	if seenPath != "/chat/completions" {
+		t.Fatalf("upstream path = %q, want /chat/completions", seenPath)
+	}
+	if seenModel != "qwen3.5:9b" {
+		t.Fatalf("upstream model = %q, want qwen3.5:9b", seenModel)
+	}
+}
+
+func TestProxy_ReloadSkipsConsumedAuthsAndReplacesModelMapping(t *testing.T) {
+	oldUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-PAYMENT") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	defer oldUpstream.Close()
+
+	newUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":"new"}`)
+	}))
+	defer newUpstream.Close()
+
+	state, err := LoadStateStore(t.TempDir() + "/consumed.json")
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"seller-old": {
+				URL:         oldUpstream.URL,
+				RemoteModel: "old-model",
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"seller-old": {makeAuth("0xold1"), makeAuth("0xold2")}}
+
+	proxy, err := NewProxy(cfg, auths, state)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/old-model","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("old-model request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("old-model expected 200, got %d", resp.StatusCode)
+	}
+
+	if err := proxy.Reload(cfg, auths); err != nil {
+		t.Fatalf("Reload same config: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest("GET", "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status["seller-old"].Remaining != 1 || status["seller-old"].Spent != 1 {
+		t.Fatalf("reload should preserve consumed state, got remaining/spent %d/%d",
+			status["seller-old"].Remaining, status["seller-old"].Spent)
+	}
+
+	newCfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"seller-new": {
+				URL:         newUpstream.URL,
+				RemoteModel: "new-model",
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+			},
+		},
+	}
+	newAuths := AuthsFile{"seller-new": {makeAuth("0xnew1")}}
+	if err := proxy.Reload(newCfg, newAuths); err != nil {
+		t.Fatalf("Reload new config: %v", err)
+	}
+
+	oldResp, err := http.Post(
+		srv.URL+"/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/old-model","messages":[{"role":"user","content":"old"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("old model after reload: %v", err)
+	}
+	oldResp.Body.Close()
+	if oldResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("old model after reload expected 404, got %d", oldResp.StatusCode)
+	}
+
+	newResp, err := http.Post(
+		srv.URL+"/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/new-model","messages":[{"role":"user","content":"new"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("new model after reload: %v", err)
+	}
+	newResp.Body.Close()
+	if newResp.StatusCode != http.StatusOK {
+		t.Fatalf("new model after reload expected 200, got %d", newResp.StatusCode)
+	}
+
+	metrics := scrapeMetricFamilies(t, proxy)
+	activeMappings := metrics["obol_x402_buyer_active_model_mappings"]
+	if metricFamilyLen(activeMappings) != 1 {
+		t.Fatalf("active model mapping series = %d, want 1", metricFamilyLen(activeMappings))
+	}
+	assertMetricValue(t, activeMappings, map[string]string{"upstream": "seller-new", "remote_model": "new-model"}, 1)
+	assertMetricMissing(t, activeMappings, map[string]string{"upstream": "seller-old", "remote_model": "old-model"})
+	assertMetricValue(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-new", "remote_model": "new-model"}, 1)
+	assertMetricMissing(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-old", "remote_model": "old-model"})
+}
+
+func scrapeMetricFamilies(t *testing.T, proxy *Proxy) map[string]*dto.MetricFamily {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", rec.Code)
+	}
+
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(rec.Body.String()))
+	if err != nil {
+		t.Fatalf("parse metrics: %v", err)
+	}
+
+	return families
+}
+
+func assertMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string, wantValue float64) {
+	t.Helper()
+
+	if family == nil {
+		t.Fatalf("missing metric family")
+	}
+
+	for _, metric := range family.GetMetric() {
+		if labelsMatch(metric, wantLabels) {
+			got := metricValue(metric)
+			if got != wantValue {
+				t.Fatalf("%s labels %v = %v, want %v", family.GetName(), wantLabels, got, wantValue)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("metric %s missing labels %v", family.GetName(), wantLabels)
+}
+
+func assertMetricMissing(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) {
+	t.Helper()
+
+	if family == nil {
+		return
+	}
+
+	for _, metric := range family.GetMetric() {
+		if labelsMatch(metric, wantLabels) {
+			t.Fatalf("metric %s unexpectedly contained labels %v", family.GetName(), wantLabels)
+		}
+	}
+}
+
+func labelsMatch(metric *dto.Metric, want map[string]string) bool {
+	if len(metric.GetLabel()) != len(want) {
+		return false
+	}
+	for _, label := range metric.GetLabel() {
+		if want[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+	return true
+}
+
+func metricValue(metric *dto.Metric) float64 {
+	switch {
+	case metric.Counter != nil:
+		return metric.GetCounter().GetValue()
+	case metric.Gauge != nil:
+		return metric.GetGauge().GetValue()
+	default:
+		return 0
+	}
+}
+
+func metricFamilyLen(family *dto.MetricFamily) int {
+	if family == nil {
+		return 0
+	}
+	return len(family.GetMetric())
 }
 
 func writeFile(t *testing.T, path, content string) error {

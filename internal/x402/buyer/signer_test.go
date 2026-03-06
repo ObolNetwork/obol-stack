@@ -14,6 +14,8 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
 		[]*PreSignedAuth{makeAuth("0x1")},
+		0,
+		nil,
 	)
 
 	tests := []struct {
@@ -69,6 +71,16 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "wrong amount",
+			req: &x402.PaymentRequirement{
+				Network:           "base-sepolia",
+				PayTo:             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				MaxAmountRequired: "999",
+			},
+			want: false,
+		},
+		{
 			name: "nil requirement",
 			req:  nil,
 			want: false,
@@ -96,6 +108,8 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
 		auths,
+		0,
+		nil,
 	)
 
 	req := &x402.PaymentRequirement{
@@ -161,6 +175,8 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
 		auths,
+		0,
+		nil,
 	)
 
 	req := &x402.PaymentRequirement{
@@ -205,7 +221,7 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 }
 
 func TestPreSignedSigner_Interface(t *testing.T) {
-	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", nil)
+	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", nil, 0, nil)
 
 	// Verify interface compliance.
 	var _ x402.Signer = signer
@@ -236,6 +252,6 @@ func makeAuth(sig string) *PreSignedAuth {
 		Value:       "1000",
 		ValidAfter:  "0",
 		ValidBefore: "4294967295",
-		Nonce:       "0xdeadbeef",
+		Nonce:       "0xdeadbeef" + sig,
 	}
 }
