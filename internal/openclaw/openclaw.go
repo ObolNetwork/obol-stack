@@ -737,6 +737,59 @@ func Token(cfg *config.Config, id string, u *ui.UI) error {
 	return nil
 }
 
+// RegenerateToken restarts the OpenClaw pod to generate a new gateway token,
+// then retrieves and returns the new token.
+func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Delete the existing secret so a fresh token is generated on restart.
+	u.Info("Deleting existing gateway token...")
+	deleteCmd := exec.Command(kubectlBinary, "delete", "secret",
+		"-n", namespace,
+		"-l", fmt.Sprintf("app.kubernetes.io/name=%s", appName),
+		"--ignore-not-found")
+	deleteCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if out, err := deleteCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to delete secret: %w\n%s", err, string(out))
+	}
+
+	// Restart the deployment to regenerate the token.
+	u.Info("Restarting OpenClaw to regenerate token...")
+	restartCmd := exec.Command(kubectlBinary, "rollout", "restart",
+		"deployment/openclaw", "-n", namespace)
+	restartCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if out, err := restartCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to restart deployment: %w\n%s", err, string(out))
+	}
+
+	// Wait for rollout to complete.
+	u.Info("Waiting for new pod to start...")
+	waitCmd := exec.Command(kubectlBinary, "rollout", "status",
+		"deployment/openclaw", "-n", namespace, "--timeout=120s")
+	waitCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if out, err := waitCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("rollout not confirmed: %w\n%s", err, string(out))
+	}
+
+	// Wait briefly for the token secret to be created.
+	time.Sleep(5 * time.Second)
+
+	// Retrieve the new token.
+	newToken, err := getToken(cfg, id)
+	if err != nil {
+		return "", fmt.Errorf("token regenerated but could not retrieve it: %w", err)
+	}
+
+	u.Success("Token regenerated successfully")
+	return newToken, nil
+}
+
 // findOpenClawBinary locates the openclaw CLI binary.
 // Search order: PATH, then cfg.BinDir.
 func findOpenClawBinary(cfg *config.Config) (string, error) {
@@ -2115,6 +2168,8 @@ func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaul
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
+	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
+	baseURL = model.WarnAndStripV1Suffix(baseURL)
 
 	return buildDirectProviderOverlay(providerName, baseURL, defaultAPI, defaultAPIKeyEnvVar, modelID, modelName, apiKey), nil
 }
@@ -2127,6 +2182,8 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("custom base URL is required")
 	}
+	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
+	baseURL = model.WarnAndStripV1Suffix(baseURL)
 
 	fmt.Printf("Custom model ID: ")
 	modelID, _ := reader.ReadString('\n')

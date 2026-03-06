@@ -60,6 +60,8 @@ func Init(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to inject HEARTBEAT.md: %w", err)
 	}
 
+	u.Print("")
+	u.Success("Agent initialized. To reconfigure, you can safely re-run: obol agent init")
 	return nil
 }
 
