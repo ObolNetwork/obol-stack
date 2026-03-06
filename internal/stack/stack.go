@@ -410,6 +410,14 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		fmt.Sprintf("STACK_DATA_DIR=%s", dataDir),
 	)
 
+	// In development mode, build and import local Docker images that aren't
+	// on a public registry yet (e.g. x402-verifier and the LiteLLM custom image).
+	// This must happen before helmfile sync so pods do not try to pull tags that
+	// only exist in the local k3d image store.
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		buildAndImportLocalImages(cfg)
+	}
+
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Deploying default infrastructure",
 		Cmd:  helmfileCmd,
@@ -422,12 +430,6 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	u.Success("Default infrastructure deployed")
-
-	// In development mode, build and import local Docker images that aren't
-	// on a public registry yet (e.g. x402-verifier built from source).
-	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		buildAndImportLocalImages(cfg)
-	}
 
 	// Deploy default OpenClaw instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
@@ -476,6 +478,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 
 	for _, img := range localImages {
+		contextDir := projectRoot
 		dockerfilePath := filepath.Join(projectRoot, img.dockerfile)
 		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			continue // Dockerfile not present (production install without source)
@@ -485,7 +488,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		buildCmd := exec.Command("docker", "build",
 			"-f", dockerfilePath,
 			"-t", img.tag,
-			projectRoot,
+			contextDir,
 		)
 		buildCmd.Stdout = os.Stdout
 		buildCmd.Stderr = os.Stderr

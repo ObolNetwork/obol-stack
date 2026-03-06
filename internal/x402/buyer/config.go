@@ -25,6 +25,11 @@ type UpstreamConfig struct {
 	// URL is the upstream base URL (e.g. "https://seller.example.com/services/qwen").
 	URL string `json:"url"`
 
+	// RemoteModel is the concrete upstream model served by this purchased route.
+	// The LiteLLM paid/* namespace resolves to this model before the sidecar
+	// forwards the request to the seller.
+	RemoteModel string `json:"remoteModel,omitempty"`
+
 	// Network is the blockchain network identifier (e.g. "base-sepolia").
 	Network string `json:"network"`
 
@@ -41,13 +46,13 @@ type UpstreamConfig struct {
 // PreSignedAuth is a single pre-signed ERC-3009 TransferWithAuthorization voucher.
 // Each voucher is single-use — consumed when the facilitator calls settle() on-chain.
 type PreSignedAuth struct {
-	Signature  string `json:"signature"`
-	From       string `json:"from"`
-	To         string `json:"to"`
-	Value      string `json:"value"`
-	ValidAfter string `json:"validAfter"`
+	Signature   string `json:"signature"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	ValidAfter  string `json:"validAfter"`
 	ValidBefore string `json:"validBefore"`
-	Nonce      string `json:"nonce"`
+	Nonce       string `json:"nonce"`
 }
 
 // AuthsFile is the top-level structure for the pre-signed authorizations file,

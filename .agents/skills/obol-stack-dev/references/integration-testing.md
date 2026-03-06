@@ -2,7 +2,7 @@
 
 ## Overview
 
-Integration tests live in `internal/openclaw/integration_test.go` with build tag `//go:build integration`. They require a running k3d cluster, Ollama on the host, and optionally cloud API keys.
+Integration tests live primarily in `internal/openclaw/integration_test.go` and `internal/openclaw/monetize_integration_test.go` with build tag `//go:build integration`. They require a running k3d cluster, Ollama on the host, and optionally cloud API keys.
 
 Tests exercise the full deployment path through `obol` CLI verbs: `obol openclaw sync`, `obol model setup`, `obol openclaw token`, `obol openclaw delete`.
 
@@ -32,6 +32,9 @@ go test -tags integration -v -run 'TestIntegration_OllamaInference' -timeout 10m
 
 # Run only inference tests (all 3 providers)
 go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Inference' -timeout 15m ./internal/openclaw/
+
+# Run the validated paid commerce loop (requires qwen3.5:9b and a running obol-agent)
+go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
 ## Test Matrix
@@ -42,6 +45,8 @@ go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Infe
 | `TestIntegration_AnthropicInference` | Anthropic (cloud) | `claude-sonnet-4-5-20250929` | Cloud path: model setup -> scaffold -> sync -> token -> inference |
 | `TestIntegration_OpenAIInference` | OpenAI (cloud) | `gpt-4o-mini` | Cloud path: model setup -> scaffold -> sync -> token -> inference |
 | `TestIntegration_MultiInstance` | Ollama (local) | First available model | 3 instances side-by-side: scaffold -> sync -> list -> token -> inference |
+| `TestIntegration_SellBuyRoundtrip_LiteLLM` | LiteLLM + Ollama + x402 | `qwen3.5:9b` | Sell -> 402 -> pay -> inference -> settlement |
+| `TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance` | LiteLLM + x402-buyer + ERC-8004 | `qwen3.5:9b` | Register -> discover -> buy -> `paid/<model>` -> quota decrement -> USDC movement |
 
 ## Test Flow (Per Test)
 
@@ -78,6 +83,23 @@ Tests use `t.Skip()` for missing prerequisites:
 - No `OPENAI_API_KEY` -> skip
 
 This means the test suite always passes in CI without infrastructure. Only tests with satisfied prerequisites actually run.
+
+## Paid Commerce Loop
+
+`TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance` is the best end-to-end check for the current paid-inference stack. It validates:
+
+1. Sell and reconcile a `ServiceOffer` through the LiteLLM gateway
+2. Register the offer on ERC-8004 and discover it again from the agent
+3. Probe pricing and buy it with `buy.py`
+4. Serve the model as `paid/qwen3.5:9b` through vanilla LiteLLM and the in-pod `x402-buyer` sidecar
+5. Confirm the sidecar quota moves `remaining 3 -> 2` and `spent 0 -> 1`
+6. Confirm USDC moves buyer -> seller and that `buy.py balance` eventually matches the on-chain balance
+
+Important runtime caveats:
+
+- Use a **unique buyer name** per run on reused clusters. The sidecar can keep in-memory spend counters for still-loaded mappings.
+- `buy.py balance` reads through eRPC. Because eRPC caches unfinalized `eth_call` responses for about 10 seconds, the balance check must poll rather than assume instant visibility after settlement.
+- The reused-cluster path may still show the known shared-agent-URI registration limitation; that is logged but not treated as a failure in this test.
 
 ## Helper Functions
 

@@ -63,12 +63,39 @@ metadata:
   namespace: llm
 data:
   config.yaml: |
-    model_list: []
+    model_list:
+      - model_name: "paid/*"
+        litellm_params:
+          model: "openai/*"
+          api_base: "http://127.0.0.1:8402"
+          api_key: "unused"
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
       cache: false
       drop_params: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: x402-buyer-config
+  namespace: llm
+data:
+  config.json: |
+    {
+      "upstreams": {}
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: x402-buyer-auths
+  namespace: llm
+data:
+  auths.json: |
+    {}
 
 ---
 # Secret for LiteLLM master key and cloud provider API keys.
@@ -155,6 +182,43 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+        - name: x402-buyer
+          image: ghcr.io/obolnetwork/x402-buyer:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/config/config.json
+            - --auths=/config/auths.json
+            - --state=/state/consumed.json
+            - --listen=:8402
+          ports:
+            - name: buyer-http
+              containerPort: 8402
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: buyer-http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: buyer-http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: x402-buyer-config
+              mountPath: /config
+              readOnly: true
+            - name: x402-buyer-state
+              mountPath: /state
       volumes:
         - name: litellm-config
           configMap:
@@ -162,6 +226,15 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
+        - name: x402-buyer-config
+          projected:
+            sources:
+              - configMap:
+                  name: x402-buyer-config
+              - configMap:
+                  name: x402-buyer-auths
+        - name: x402-buyer-state
+          emptyDir: {}
 
 ---
 apiVersion: v1

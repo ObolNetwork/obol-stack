@@ -160,7 +160,7 @@ func TestSellInference_Flags(t *testing.T) {
 	flags := flagMap(inf)
 
 	requireFlags(t, flags,
-		"model", "wallet", "price", "chain", "facilitator",
+		"model", "wallet", "price", "per-request", "per-mtok", "chain", "facilitator",
 		"listen", "upstream", "enclave-tag",
 		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
 		"tee", "model-hash",
@@ -184,7 +184,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 	flags := flagMap(http)
 
 	requireFlags(t, flags,
-		"wallet", "chain", "price", "per-request", "per-hour",
+		"wallet", "chain", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "register-name", "register-description", "register-image",

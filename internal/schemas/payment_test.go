@@ -16,8 +16,8 @@ func TestEffectiveRequestPrice_PerRequest(t *testing.T) {
 
 func TestEffectiveRequestPrice_PerMTok(t *testing.T) {
 	p := PriceTable{PerMTok: "0.50"}
-	if got := p.EffectiveRequestPrice(); got != "0.50" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.50")
+	if got := p.EffectiveRequestPrice(); got != "0.0005" {
+		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.0005")
 	}
 }
 
@@ -39,6 +39,22 @@ func TestEffectiveRequestPrice_PerRequestPrecedence(t *testing.T) {
 	p := PriceTable{PerRequest: "0.001", PerMTok: "0.50"}
 	if got := p.EffectiveRequestPrice(); got != "0.001" {
 		t.Errorf("EffectiveRequestPrice() = %q, want %q (PerRequest should take precedence)", got, "0.001")
+	}
+}
+
+func TestApproximateRequestPriceFromPerMTok(t *testing.T) {
+	got, err := ApproximateRequestPriceFromPerMTok("1.25")
+	if err != nil {
+		t.Fatalf("ApproximateRequestPriceFromPerMTok() error = %v", err)
+	}
+	if got != "0.00125" {
+		t.Errorf("ApproximateRequestPriceFromPerMTok() = %q, want %q", got, "0.00125")
+	}
+}
+
+func TestApproximateRequestPriceFromPerMTok_Invalid(t *testing.T) {
+	if _, err := ApproximateRequestPriceFromPerMTok("bad"); err == nil {
+		t.Fatal("ApproximateRequestPriceFromPerMTok() error = nil, want non-nil")
 	}
 }
 

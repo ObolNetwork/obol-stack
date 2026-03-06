@@ -57,6 +57,24 @@ type RouteRule struct {
 	// to the forwarded request via authResponseHeaders. This lets the upstream
 	// (e.g., LiteLLM) authenticate the request without exposing the key to buyers.
 	UpstreamAuth string `yaml:"upstreamAuth,omitempty"`
+
+	// PriceModel records which price field produced the enforced request price.
+	// It is metadata only; the verifier always enforces Price.
+	PriceModel string `yaml:"priceModel,omitempty"`
+
+	// PerMTok stores the original per-million-token price when Price was
+	// approximated for phase 1 request-based gating.
+	PerMTok string `yaml:"perMTok,omitempty"`
+
+	// ApproxTokensPerRequest stores the fixed token estimate used to derive
+	// Price from PerMTok during phase 1.
+	ApproxTokensPerRequest int `yaml:"approxTokensPerRequest,omitempty"`
+
+	// OfferNamespace identifies the originating ServiceOffer namespace.
+	OfferNamespace string `yaml:"offerNamespace,omitempty"`
+
+	// OfferName identifies the originating ServiceOffer name.
+	OfferName string `yaml:"offerName,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

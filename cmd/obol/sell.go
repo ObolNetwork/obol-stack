@@ -15,6 +15,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -70,6 +71,14 @@ Examples:
 				Name:  "price",
 				Usage: "USDC price per request",
 				Value: "0.001",
+			},
+			&cli.StringFlag{
+				Name:  "per-request",
+				Usage: "Per-request price in USDC (alias for --price)",
+			},
+			&cli.StringFlag{
+				Name:  "per-mtok",
+				Usage: "Per-million-tokens price in USDC (charged as an approximation at 1000 tok/request)",
 			},
 			&cli.StringFlag{
 				Name:  "chain",
@@ -164,13 +173,23 @@ Examples:
 				return err
 			}
 
+			priceTable, err := resolvePriceTable(cmd, false)
+			if err != nil {
+				return err
+			}
+			perRequest, err := priceTable.EffectiveRequestPriceE()
+			if err != nil {
+				return fmt.Errorf("invalid pricing: %w", err)
+			}
+
 			d := &inference.Deployment{
 				Name:            name,
 				EnclaveTag:      cmd.String("enclave-tag"),
 				ListenAddr:      cmd.String("listen"),
 				UpstreamURL:     cmd.String("upstream"),
 				WalletAddress:   wallet,
-				PricePerRequest: cmd.String("price"),
+				PricePerRequest: perRequest,
+				PricePerMTok:    priceTable.PerMTok,
 				Chain:           cmd.String("chain"),
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
@@ -180,6 +199,9 @@ Examples:
 				VMHostPort:      int(cmd.Int("vm-host-port")),
 				TEEType:         teeType,
 				ModelHash:       modelHash,
+			}
+			if priceTable.PerMTok != "" {
+				d.ApproxTokensPerRequest = schemas.ApproxTokensPerRequest
 			}
 
 			// Persist the deployment config for later reference.
@@ -228,6 +250,10 @@ Examples:
 			&cli.StringFlag{
 				Name:  "per-request",
 				Usage: "Per-request price in USDC (alias for --price)",
+			},
+			&cli.StringFlag{
+				Name:  "per-mtok",
+				Usage: "Per-million-tokens price in USDC (charged as an approximation at 1000 tok/request)",
 			},
 			&cli.StringFlag{
 				Name:  "per-hour",
@@ -279,6 +305,14 @@ Examples:
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
 			},
+			&cli.StringSliceFlag{
+				Name:  "register-skills",
+				Usage: "OASF skills for discovery (e.g. natural_language_processing/text_generation)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-domains",
+				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
@@ -287,22 +321,18 @@ Examples:
 			name := cmd.Args().First()
 			ns := cmd.String("namespace")
 
-			// Resolve price: --price takes precedence, then --per-request.
-			perRequest := cmd.String("price")
-			if perRequest == "" {
-				perRequest = cmd.String("per-request")
+			priceTable, err := resolvePriceTable(cmd, true)
+			if err != nil {
+				return err
 			}
-			perHour := cmd.String("per-hour")
-			if perRequest == "" && perHour == "" {
-				return fmt.Errorf("price required: use --price or --per-hour")
-			}
-
 			price := map[string]interface{}{}
-			if perRequest != "" {
-				price["perRequest"] = perRequest
-			}
-			if perHour != "" {
-				price["perHour"] = perHour
+			switch {
+			case priceTable.PerRequest != "":
+				price["perRequest"] = priceTable.PerRequest
+			case priceTable.PerMTok != "":
+				price["perMTok"] = priceTable.PerMTok
+			case priceTable.PerHour != "":
+				price["perHour"] = priceTable.PerHour
 			}
 
 			spec := map[string]interface{}{
@@ -339,6 +369,12 @@ Examples:
 				if img := cmd.String("register-image"); img != "" {
 					reg["image"] = img
 				}
+				if skills := cmd.StringSlice("register-skills"); len(skills) > 0 {
+					reg["skills"] = skills
+				}
+				if domains := cmd.StringSlice("register-domains"); len(domains) > 0 {
+					reg["domains"] = domains
+				}
 				spec["registration"] = reg
 			}
 
@@ -356,6 +392,9 @@ Examples:
 				return err
 			}
 			fmt.Printf("ServiceOffer %s/%s created (type: http)\n", ns, name)
+			if priceTable.PerMTok != "" {
+				fmt.Printf("Requests will be charged at %s\n", formatPriceTableSummary(priceTable))
+			}
 			fmt.Printf("The agent will reconcile: health-check → payment gate → route\n")
 			fmt.Printf("Check status: obol sell status %s -n %s\n", name, ns)
 			return nil
@@ -438,7 +477,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 					if payTo == "" {
 						payTo = "(global)"
 					}
-					fmt.Printf("    %s → %s USDC  payTo=%s  %s\n", r.Pattern, r.Price, payTo, desc)
+					fmt.Printf("    %s → %s  payTo=%s  %s\n", r.Pattern, formatRoutePriceSummary(r), payTo, desc)
 				}
 			}
 
@@ -454,8 +493,8 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			if len(deployments) > 0 {
 				fmt.Printf("\nLocal Inference Gateways:\n")
 				for _, d := range deployments {
-					fmt.Printf("  %-20s %s → %s  %s USDC/req  chain=%s\n",
-						d.Name, d.ListenAddr, d.UpstreamURL, d.PricePerRequest, d.Chain)
+					fmt.Printf("  %-20s %s → %s  %s  chain=%s\n",
+						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d), d.Chain)
 				}
 			}
 
@@ -826,17 +865,19 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 
 			if cmd.Bool("json") {
 				out := map[string]any{
-					"name":              d.Name,
-					"enclave_tag":       d.EnclaveTag,
-					"listen_addr":       d.ListenAddr,
-					"upstream_url":      d.UpstreamURL,
-					"wallet_address":    d.WalletAddress,
-					"price_per_request": d.PricePerRequest,
-					"chain":             d.Chain,
-					"facilitator_url":   d.FacilitatorURL,
-					"created_at":        d.CreatedAt,
-					"updated_at":        d.UpdatedAt,
-					"algorithm":         "ECIES-P256-HKDF-SHA256-AES256GCM",
+					"name":                      d.Name,
+					"enclave_tag":               d.EnclaveTag,
+					"listen_addr":               d.ListenAddr,
+					"upstream_url":              d.UpstreamURL,
+					"wallet_address":            d.WalletAddress,
+					"price_per_request":         d.PricePerRequest,
+					"price_per_mtok":            d.PricePerMTok,
+					"approx_tokens_per_request": d.ApproxTokensPerRequest,
+					"chain":                     d.Chain,
+					"facilitator_url":           d.FacilitatorURL,
+					"created_at":                d.CreatedAt,
+					"updated_at":                d.UpdatedAt,
+					"algorithm":                 "ECIES-P256-HKDF-SHA256-AES256GCM",
 				}
 				if keyErr == nil {
 					out["pubkey"] = hex.EncodeToString(k.PublicKeyBytes())
@@ -862,7 +903,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 			fmt.Printf("Listen:       %s\n", d.ListenAddr)
 			fmt.Printf("Upstream:     %s\n", d.UpstreamURL)
 			fmt.Printf("Wallet:       %s\n", d.WalletAddress)
-			fmt.Printf("Price:        %s USDC/request\n", d.PricePerRequest)
+			fmt.Printf("Price:        %s\n", formatInferencePriceSummary(d))
 			fmt.Printf("Chain:        %s\n", d.Chain)
 			fmt.Printf("Facilitator:  %s\n", d.FacilitatorURL)
 			fmt.Printf("Created:      %s\n", d.CreatedAt)
@@ -916,6 +957,71 @@ func valueOrNone(s string) string {
 		return "(not set)"
 	}
 	return s
+}
+
+func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable, error) {
+	perRequest := cmd.String("price")
+	if perRequest == "" {
+		perRequest = cmd.String("per-request")
+	}
+	perMTok := cmd.String("per-mtok")
+	var perHour string
+	if allowPerHour {
+		perHour = cmd.String("per-hour")
+	}
+
+	switch {
+	case perRequest != "":
+		return schemas.PriceTable{PerRequest: perRequest}, nil
+	case perMTok != "":
+		if _, err := schemas.ApproximateRequestPriceFromPerMTok(perMTok); err != nil {
+			return schemas.PriceTable{}, fmt.Errorf("invalid --per-mtok value %q: %w", perMTok, err)
+		}
+		return schemas.PriceTable{PerMTok: perMTok}, nil
+	case perHour != "":
+		return schemas.PriceTable{PerHour: perHour}, nil
+	default:
+		if allowPerHour {
+			return schemas.PriceTable{}, fmt.Errorf("price required: use --price, --per-request, --per-mtok, or --per-hour")
+		}
+		return schemas.PriceTable{}, fmt.Errorf("price required: use --price, --per-request, or --per-mtok")
+	}
+}
+
+func formatPriceTableSummary(priceTable schemas.PriceTable) string {
+	switch {
+	case priceTable.PerRequest != "":
+		return fmt.Sprintf("%s USDC/request", priceTable.PerRequest)
+	case priceTable.PerMTok != "":
+		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
+			priceTable.EffectiveRequestPrice(),
+			priceTable.PerMTok,
+			schemas.ApproxTokensPerRequest,
+		)
+	case priceTable.PerHour != "":
+		return fmt.Sprintf("%s USDC/hour", priceTable.PerHour)
+	default:
+		return "0 USDC/request"
+	}
+}
+
+func formatRoutePriceSummary(route x402verifier.RouteRule) string {
+	if route.PriceModel == "perMTok" && route.PerMTok != "" && route.ApproxTokensPerRequest > 0 {
+		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
+			route.Price, route.PerMTok, route.ApproxTokensPerRequest)
+	}
+	if route.Price != "" {
+		return fmt.Sprintf("%s USDC/request", route.Price)
+	}
+	return "0 USDC/request"
+}
+
+func formatInferencePriceSummary(d *inference.Deployment) string {
+	if d.PricePerMTok != "" && d.ApproxTokensPerRequest > 0 {
+		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
+			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
+	}
+	return fmt.Sprintf("%s USDC/request", d.PricePerRequest)
 }
 
 // removePricingRoute removes the x402-verifier pricing route for the given offer.

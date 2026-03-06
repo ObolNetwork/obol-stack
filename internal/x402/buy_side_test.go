@@ -51,7 +51,7 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	}
 	auths := buyer.AuthsFile{"test-seller": {auth}}
 
-	proxy, err := buyer.NewProxy(cfg, auths)
+	proxy, err := buyer.NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestBuySidecar_MultiplePayments(t *testing.T) {
 	}
 	auths := buyer.AuthsFile{"multi": authPool}
 
-	proxy, err := buyer.NewProxy(cfg, auths)
+	proxy, err := buyer.NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestBuySidecar_PoolExhaustion(t *testing.T) {
 	}
 	auths := buyer.AuthsFile{"exhaust": {auth}}
 
-	proxy, err := buyer.NewProxy(cfg, auths)
+	proxy, err := buyer.NewProxy(cfg, auths, nil)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}

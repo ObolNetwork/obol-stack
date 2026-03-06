@@ -17,6 +17,7 @@ import (
 	"time"
 
 	petname "github.com/dustinkirkland/golang-petname"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/testutil"
@@ -358,6 +359,381 @@ func execInAgentErr(cfg *config.Config, args ...string) (string, error) {
 		"-n", ns, "deploy/openclaw",
 		"-c", "openclaw", "--"}, args...)
 	return obolRunErr(cfg, fullArgs...)
+}
+
+func getAgentWalletAddress(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+
+	walletRaw := obolRun(t, cfg, "kubectl", "get", "configmap", "wallet-metadata",
+		"-n", agentNamespace(cfg), "-o", `jsonpath={.data.addresses\.json}`)
+	var walletData struct {
+		Addresses []struct {
+			Address string `json:"address"`
+		} `json:"addresses"`
+	}
+	if err := json.Unmarshal([]byte(walletRaw), &walletData); err != nil || len(walletData.Addresses) == 0 {
+		t.Fatalf("agent wallet-metadata not found or empty: %v", err)
+	}
+	return walletData.Addresses[0].Address
+}
+
+func getERPCConfigYAML(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	return obolRun(t, cfg, "kubectl", "get", "configmap", "erpc-config", "-n", "erpc",
+		"-o", "jsonpath={.data.erpc\\.yaml}")
+}
+
+func setERPCConfigYAML(t *testing.T, cfg *config.Config, configYAML string) {
+	t.Helper()
+
+	patch := map[string]interface{}{
+		"data": map[string]string{
+			"erpc.yaml": configYAML,
+		},
+	}
+	patchJSON, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatalf("marshal eRPC config patch: %v", err)
+	}
+
+	obolRun(t, cfg, "kubectl", "patch", "configmap", "erpc-config", "-n", "erpc",
+		"-p", string(patchJSON), "--type=merge")
+	if out, err := obolRunErr(cfg, "kubectl", "rollout", "restart", "deployment/erpc", "-n", "erpc"); err != nil &&
+		!strings.Contains(out, "restart has already been triggered within the past second") {
+		t.Fatalf("restart erpc: %v\n%s", err, out)
+	}
+	obolRun(t, cfg, "kubectl", "rollout", "status", "deployment/erpc", "-n", "erpc", "--timeout=60s")
+}
+
+func yamlInt(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func pinERPCChainToSingleUpstream(t *testing.T, cfg *config.Config, chainID int, upstreamID string) {
+	t.Helper()
+
+	configYAML := getERPCConfigYAML(t, cfg)
+	var erpcConfig map[string]interface{}
+	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
+		t.Fatalf("parse eRPC config: %v", err)
+	}
+
+	projects, ok := erpcConfig["projects"].([]interface{})
+	if !ok || len(projects) == 0 {
+		t.Fatal("eRPC config has no projects")
+	}
+	project, ok := projects[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("eRPC config project[0] is not a map")
+	}
+
+	upstreams, _ := project["upstreams"].([]interface{})
+	filtered := make([]interface{}, 0, len(upstreams))
+	var selected map[string]interface{}
+	for _, upstream := range upstreams {
+		um, ok := upstream.(map[string]interface{})
+		if !ok {
+			filtered = append(filtered, upstream)
+			continue
+		}
+
+		id, _ := um["id"].(string)
+		evm, _ := um["evm"].(map[string]interface{})
+		if yamlInt(evm["chainId"]) != chainID {
+			filtered = append(filtered, upstream)
+			continue
+		}
+		if id == upstreamID {
+			selected = um
+		}
+	}
+
+	if selected == nil {
+		t.Fatalf("eRPC upstream %q for chain %d not found", upstreamID, chainID)
+	}
+
+	project["upstreams"] = append([]interface{}{selected}, filtered...)
+	updatedYAML, err := yaml.Marshal(erpcConfig)
+	if err != nil {
+		t.Fatalf("marshal pinned eRPC config: %v", err)
+	}
+	setERPCConfigYAML(t, cfg, string(updatedYAML))
+}
+
+func parseUSDCMicroUnits(t *testing.T, output string) *big.Int {
+	t.Helper()
+
+	start := strings.Index(output, "(")
+	end := strings.Index(output, " micro-units)")
+	if start == -1 || end == -1 || end <= start+1 {
+		t.Fatalf("could not parse balance output: %s", output)
+	}
+
+	value := strings.TrimSpace(output[start+1 : end])
+	n, ok := new(big.Int).SetString(value, 10)
+	if !ok {
+		t.Fatalf("invalid balance micro-units %q in output: %s", value, output)
+	}
+	return n
+}
+
+func parseAuthsRemaining(t *testing.T, output string) int {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Auths remaining:") {
+			continue
+		}
+		var remaining int
+		if _, err := fmt.Sscanf(line, "Auths remaining: %d", &remaining); err != nil {
+			t.Fatalf("parse auth count from %q: %v", line, err)
+		}
+		return remaining
+	}
+
+	t.Fatalf("could not find auth count in output: %s", output)
+	return 0
+}
+
+func waitForBuyerReportedBalance(t *testing.T, cfg *config.Config, want *big.Int, timeout time.Duration) string {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"balance", "--chain", "base-sepolia")
+		last = out
+		if err == nil {
+			reported := parseUSDCMicroUnits(t, out)
+			if reported.Cmp(want) == 0 {
+				return out
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for buy.py balance=%s\nlast output:\n%s", want, last)
+	return ""
+}
+
+func waitForUSDCSettlement(
+	t *testing.T,
+	anvil *testutil.AnvilFork,
+	buyerAddr string,
+	sellerAddr string,
+	buyerBefore *big.Int,
+	sellerBefore *big.Int,
+	timeout time.Duration,
+) (*big.Int, *big.Int) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var buyerAfter, sellerAfter *big.Int
+	for time.Now().Before(deadline) {
+		buyerAfter = anvil.GetUSDCBalance(t, buyerAddr)
+		sellerAfter = anvil.GetUSDCBalance(t, sellerAddr)
+		if buyerAfter.Cmp(buyerBefore) < 0 && sellerAfter.Cmp(sellerBefore) > 0 {
+			return buyerAfter, sellerAfter
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf(
+		"timed out waiting for USDC settlement: buyer before=%s after=%s seller before=%s after=%s",
+		buyerBefore, buyerAfter, sellerBefore, sellerAfter,
+	)
+	return nil, nil
+}
+
+func waitForBuyerAuthCount(t *testing.T, cfg *config.Config, name string, want int, timeout time.Duration) string {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"status", name)
+		last = out
+		if err == nil && parseAuthsRemaining(t, out) == want {
+			return out
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for %s auths=%d\nlast output:\n%s", name, want, last)
+	return ""
+}
+
+func waitForBuyerLiveAuthCount(t *testing.T, cfg *config.Config, name string, want int, timeout time.Duration) string {
+	t.Helper()
+
+	script := `
+import json
+import sys
+sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+import buy
+print(json.dumps(buy._buyer_status() or {}))
+`
+
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(cfg, "python3", "-c", script)
+		last = out
+		if err == nil {
+			var status map[string]struct {
+				Remaining int `json:"remaining"`
+			}
+			if json.Unmarshal([]byte(out), &status) == nil {
+				if live, ok := status[name]; ok && live.Remaining == want {
+					return out
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for live buyer sidecar %s auths=%d\nlast output:\n%s", name, want, last)
+	return ""
+}
+
+func waitForAgentCommand(t *testing.T, cfg *config.Config, timeout time.Duration, args ...string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastOut string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(cfg, args...)
+		if err == nil {
+			return out
+		}
+		lastOut = out
+		lastErr = err
+		time.Sleep(3 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for agent command to succeed: %v\nlast output:\n%s", lastErr, lastOut)
+	return ""
+}
+
+func waitForBuyerProbePricing(t *testing.T, cfg *config.Config, timeout time.Duration, endpointURL, model string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastOut string
+	for time.Now().Before(deadline) {
+		out, _ := execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"probe", endpointURL, "--model", model)
+		lastOut = out
+		if strings.Contains(out, "402") && strings.Contains(out, "payTo:") {
+			return out
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for x402 pricing from %s\nlast output:\n%s", endpointURL, lastOut)
+	return ""
+}
+
+type buyerLiveUpstream struct {
+	URL         string `json:"url"`
+	RemoteModel string `json:"remote_model"`
+	PublicModel string `json:"public_model"`
+	Remaining   int    `json:"remaining"`
+	Spent       int    `json:"spent"`
+	Network     string `json:"network"`
+}
+
+func parseBuyerLiveUpstream(t *testing.T, output, name string) buyerLiveUpstream {
+	t.Helper()
+
+	var status map[string]buyerLiveUpstream
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("parse buyer live status: %v\nraw: %s", err, output)
+	}
+	upstream, ok := status[name]
+	if !ok {
+		t.Fatalf("buyer live status missing %q:\n%s", name, output)
+	}
+	return upstream
+}
+
+func getStatusFieldString(so map[string]interface{}, field string) string {
+	status, ok := so["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	value, _ := status[field].(string)
+	return value
+}
+
+func callLiteLLMPaidModelFromAgent(t *testing.T, cfg *config.Config, masterKey, model, prompt string) (int, []byte) {
+	t.Helper()
+
+	script := fmt.Sprintf(`
+import json
+import sys
+import urllib.error
+import urllib.request
+
+payload = json.dumps({
+    "model": %q,
+    "messages": [{"role": "user", "content": %q}],
+    "max_tokens": 16,
+    "stream": False,
+}).encode()
+
+req = urllib.request.Request(
+    %q,
+    data=payload,
+    method="POST",
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": %q,
+    },
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        sys.stdout.write(json.dumps({
+            "status": resp.status,
+            "body": resp.read().decode(),
+        }))
+except urllib.error.HTTPError as err:
+    sys.stdout.write(json.dumps({
+        "status": err.code,
+        "body": err.read().decode(),
+    }))
+    sys.exit(1)
+`, model, prompt, "http://litellm.llm.svc.cluster.local:4000/v1/chat/completions", "Bearer "+masterKey)
+
+	out, err := execInAgentErr(cfg, "python3", "-c", script)
+	var result struct {
+		Status int    `json:"status"`
+		Body   string `json:"body"`
+	}
+	if unmarshalErr := json.Unmarshal([]byte(out), &result); unmarshalErr != nil {
+		t.Fatalf("parse LiteLLM response wrapper: %v\nraw: %s", unmarshalErr, out)
+	}
+	if err != nil && result.Status == 0 {
+		t.Fatalf("LiteLLM paid request failed: %v\nraw: %s", err, out)
+	}
+	return result.Status, []byte(result.Body)
 }
 
 func TestIntegration_RBAC_ClusterRolesExist(t *testing.T) {
@@ -1396,6 +1772,20 @@ func requireOllamaModel(t *testing.T, targetModel string) string {
 	return models[0]
 }
 
+func requireExactOllamaModel(t *testing.T, targetModel string) string {
+	t.Helper()
+
+	models := requireOllama(t)
+	for _, m := range models {
+		if strings.EqualFold(m, targetModel) {
+			return m
+		}
+	}
+
+	t.Skipf("required Ollama model %q not available (have: %s)", targetModel, strings.Join(models, ", "))
+	return ""
+}
+
 // ollamaServiceOfferYAML returns a ServiceOffer YAML for an Ollama model.
 // Field names align with the CRD schema (payment.payTo, payment.price.perRequest).
 func ollamaServiceOfferYAML(name, namespace, model, wallet string) string {
@@ -1420,6 +1810,64 @@ spec:
       perRequest: "0.001"
   path: /services/%s
 `, name, namespace, model, wallet, name)
+}
+
+func registeredOllamaServiceOfferYAML(name, namespace, model, wallet, registerName, registerDesc string) string {
+	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  type: inference
+  model:
+    name: %s
+    runtime: ollama
+  upstream:
+    service: ollama
+    namespace: llm
+    port: 11434
+    healthPath: /api/generate
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    price:
+      perRequest: "0.001"
+  path: /services/%s
+  registration:
+    enabled: true
+    name: %s
+    description: %q
+`, name, namespace, model, wallet, name, registerName, registerDesc)
+}
+
+func registeredLiteLLMServiceOfferYAML(name, namespace, model, wallet, registerName, registerDesc string) string {
+	return fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  type: inference
+  model:
+    name: %s
+    runtime: vllm
+  upstream:
+    service: litellm
+    namespace: llm
+    port: 4000
+    healthPath: /health/readiness
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    price:
+      perRequest: "0.001"
+  path: /services/%s
+  registration:
+    enabled: true
+    name: %s
+    description: %q
+`, name, namespace, model, wallet, name, registerName, registerDesc)
 }
 
 // TestIntegration_Tunnel_OllamaMonetized is the full E2E test:
@@ -2014,10 +2462,10 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 	// ── Sign REAL EIP-712 payment ──────────────────────────────────────
 	// Amount: 1000 micro-units (matches ServiceOffer price of 0.001 USDC).
 	paymentHeader := testutil.SignRealPaymentHeader(t,
-		buyerKey,    // buyer's private key
-		sellerAddr,  // payTo (same as ServiceOffer)
-		"1000",      // 0.001 USDC = 1000 micro-units (6 decimals)
-		84532,       // base-sepolia chain ID
+		buyerKey,   // buyer's private key
+		sellerAddr, // payTo (same as ServiceOffer)
+		"1000",     // 0.001 USDC = 1000 micro-units (6 decimals)
+		84532,      // base-sepolia chain ID
 	)
 
 	// ── Request WITH real payment → 200 ────────────────────────────────
@@ -2837,6 +3285,222 @@ spec:
 	t.Log("═══ SELL → DISCOVER → BUY → SETTLE loop test complete ═══")
 }
 
+// TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance validates the
+// full commerce path with public registration/discovery and in-cluster buy-side
+// spending:
+//   - Sell the current qwen3.5:9b model through the LiteLLM gateway with ERC-8004 registration enabled
+//   - Discover that registration on-chain
+//   - Verify the public agent URI is reachable, while logging the current
+//     shared-registration limitation on reused clusters
+//   - Buy the service through the in-cluster Traefik route with buy.py
+//   - Consume the purchased model via LiteLLM's paid/<model> alias
+//   - Verify the buyer sidecar quota decreases and USDC moves buyer -> seller
+func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireExactOllamaModel(t, "qwen3.5:9b")
+	tunnelURL := requireTunnel(t, cfg)
+	anvil := requireAnvil(t)
+
+	facilitator := testutil.StartRealFacilitator(t, anvil)
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	agentWallet := getAgentWalletAddress(t, cfg)
+	sellerAddr := anvil.Accounts[1].Address
+	for _, addr := range []string{
+		anvil.Accounts[0].Address, // facilitator signer
+		agentWallet,               // buyer / registrant
+		sellerAddr,                // seller payTo
+	} {
+		anvil.ClearCode(t, addr)
+	}
+	anvil.FundETH(t, agentWallet, big.NewInt(1e18))
+	anvil.MintUSDC(t, agentWallet, testutil.USDCMicroUnits(10))
+	t.Logf("funded agent wallet %s with 10 USDC for buy-side settlement", agentWallet)
+
+	originalERPCConfig := getERPCConfigYAML(t, cfg)
+	t.Cleanup(func() {
+		setERPCConfigYAML(t, cfg, originalERPCConfig)
+	})
+
+	anvilClusterURL := fmt.Sprintf("http://%s:%d", testutil.ClusterHostAddress(), anvil.Port)
+	obolRun(t, cfg, "network", "add", "base-sepolia", "--endpoint", anvilClusterURL, "--allow-writes")
+	pinERPCChainToSingleUpstream(t, cfg, 84532, "custom-84532-0")
+	t.Logf("eRPC route: base-sepolia -> %s", anvilClusterURL)
+
+	runID := petname.Generate(2, "-")
+	name := "test-sidecar-tunnel-" + runID
+	buyerName := "tunnel-sidecar-" + runID
+	ns := "llm"
+	offerYAML := registeredLiteLLMServiceOfferYAML(
+		name,
+		ns,
+		model,
+		sellerAddr,
+		"Tunnel Sidecar Seller",
+		"Self-test: register -> discover -> buy via tunnel -> paid alias -> settle",
+	)
+	applyServiceOffer(t, cfg, offerYAML)
+	t.Cleanup(func() {
+		_, _ = execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"remove", buyerName)
+		_, _ = execInAgentErr(cfg, "python3",
+			monetizePy,
+			"delete", name, "--namespace", ns)
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	processOut, processErr := execInAgentErr(cfg, "python3",
+		monetizePy,
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", processOut)
+	if processErr != nil {
+		t.Fatalf("reconcile ServiceOffer: %v", processErr)
+	}
+
+	for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Registered", "Ready"} {
+		waitForCondition(t, cfg, name, ns, cond, "True", 2*time.Minute)
+	}
+
+	so := getServiceOffer(t, cfg, name, ns)
+	agentID := getStatusFieldString(so, "agentId")
+	if agentID == "" {
+		t.Fatal("ServiceOffer status.agentId is empty after registration")
+	}
+	t.Logf("registered ServiceOffer as agent ID %s", agentID)
+
+	searchOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/discovery/scripts/discovery.py",
+		"search", "--chain", "base-sepolia", "--limit", "20", "--lookback", "20000")
+	t.Logf("discovery search output:\n%s", searchOut)
+	if !strings.Contains(searchOut, agentID) {
+		t.Fatalf("discovery search did not contain agent ID %s:\n%s", agentID, searchOut)
+	}
+
+	uriOut := waitForAgentCommand(t, cfg, 90*time.Second, "python3",
+		"/data/.openclaw/skills/discovery/scripts/discovery.py",
+		"uri", agentID, "--chain", "base-sepolia")
+	t.Logf("discovery uri output:\n%s", uriOut)
+	if !strings.Contains(uriOut, `"x402Support": true`) {
+		t.Fatalf("registration JSON did not expose x402 support:\n%s", uriOut)
+	}
+	if !strings.Contains(uriOut, tunnelURL+"/services/"+name) {
+		t.Logf("registration JSON still points at another offer on the shared agent URI (known multi-offer limitation on reused clusters):\n%s", uriOut)
+	}
+
+	localBaseURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
+	probeURL := localBaseURL + "/v1/chat/completions"
+	probeOut := waitForBuyerProbePricing(t, cfg, 90*time.Second, probeURL, model)
+	t.Logf("probe output:\n%s", probeOut)
+	if !strings.Contains(probeOut, "402") || !strings.Contains(probeOut, "payTo") {
+		t.Fatalf("probe did not return pricing info:\n%s", probeOut)
+	}
+
+	buyOut, buyErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", buyerName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "3")
+	t.Logf("buy output:\n%s", buyOut)
+	if buyErr != nil {
+		t.Fatalf("buy.py buy failed: %v", buyErr)
+	}
+	if !strings.Contains(buyOut, "paid/"+model) {
+		t.Fatalf("buy output did not advertise paid/%s:\n%s", model, buyOut)
+	}
+
+	liveBefore := waitForBuyerLiveAuthCount(t, cfg, buyerName, 3, 90*time.Second)
+	t.Logf("buyer live status before inference:\n%s", liveBefore)
+	liveBeforeStatus := parseBuyerLiveUpstream(t, liveBefore, buyerName)
+	if liveBeforeStatus.Spent != 0 {
+		t.Fatalf("buyer live status spent=%d before inference, want 0:\n%s", liveBeforeStatus.Spent, liveBefore)
+	}
+	statusBefore := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"status", buyerName)
+	t.Logf("buyer status before inference:\n%s", statusBefore)
+	if !strings.Contains(statusBefore, "Alias:    paid/"+model) {
+		t.Fatalf("buyer status missing paid alias:\n%s", statusBefore)
+	}
+	if !strings.Contains(statusBefore, "Sidecar: Running") {
+		t.Fatalf("buyer sidecar not running:\n%s", statusBefore)
+	}
+
+	balanceBeforeOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"balance", "--chain", "base-sepolia")
+	t.Logf("buyer balance before:\n%s", balanceBeforeOut)
+	if !strings.Contains(balanceBeforeOut, agentWallet) {
+		t.Fatalf("buy.py balance did not report the agent wallet:\n%s", balanceBeforeOut)
+	}
+
+	buyerBefore := anvil.GetUSDCBalance(t, agentWallet)
+	sellerBefore := anvil.GetUSDCBalance(t, sellerAddr)
+	balanceBeforeOut = waitForBuyerReportedBalance(t, cfg, buyerBefore, 20*time.Second)
+	t.Logf("buyer balance before (confirmed):\n%s", balanceBeforeOut)
+	buyerScriptBefore := parseUSDCMicroUnits(t, balanceBeforeOut)
+	if buyerBefore.Cmp(buyerScriptBefore) != 0 {
+		t.Fatalf("buy.py balance (%s) != on-chain balance (%s) before request", buyerScriptBefore, buyerBefore)
+	}
+
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "reply with one short paid word")
+	if statusCode != http.StatusOK {
+		t.Fatalf("paid alias request returned %d: %s", statusCode, string(body))
+	}
+
+	var chatResp map[string]interface{}
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		t.Fatalf("parse paid alias response: %v\nbody: %s", err, string(body))
+	}
+	choices, _ := chatResp["choices"].([]interface{})
+	if len(choices) == 0 {
+		t.Fatalf("paid alias response contained no choices: %s", string(body))
+	}
+	t.Logf("paid alias response: %s", string(body)[:min(200, len(body))])
+
+	liveAfter := waitForBuyerLiveAuthCount(t, cfg, buyerName, 2, 60*time.Second)
+	t.Logf("buyer live status after inference:\n%s", liveAfter)
+	liveAfterStatus := parseBuyerLiveUpstream(t, liveAfter, buyerName)
+	if liveAfterStatus.Spent != 1 {
+		t.Fatalf("buyer live status spent=%d after one inference, want 1:\n%s", liveAfterStatus.Spent, liveAfter)
+	}
+	statusAfter := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"status", buyerName)
+	t.Logf("buyer status after inference:\n%s", statusAfter)
+
+	balanceAfterOut := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"balance", "--chain", "base-sepolia")
+	t.Logf("buyer balance after:\n%s", balanceAfterOut)
+
+	buyerAfter, sellerAfter := waitForUSDCSettlement(t, anvil, agentWallet, sellerAddr, buyerBefore, sellerBefore, 20*time.Second)
+	balanceAfterOut = waitForBuyerReportedBalance(t, cfg, buyerAfter, 20*time.Second)
+	t.Logf("buyer balance after (confirmed):\n%s", balanceAfterOut)
+	buyerScriptAfter := parseUSDCMicroUnits(t, balanceAfterOut)
+	if buyerAfter.Cmp(buyerScriptAfter) != 0 {
+		t.Fatalf("buy.py balance (%s) != on-chain balance (%s) after request", buyerScriptAfter, buyerAfter)
+	}
+
+	buyerDelta := new(big.Int).Sub(buyerBefore, buyerAfter)
+	sellerDelta := new(big.Int).Sub(sellerAfter, sellerBefore)
+	t.Logf("buyer delta: -%s, seller delta: +%s", buyerDelta, sellerDelta)
+	if buyerDelta.Cmp(big.NewInt(0)) <= 0 {
+		t.Fatal("buyer balance did not decrease after auto-paid request")
+	}
+	if sellerDelta.Cmp(big.NewInt(0)) <= 0 {
+		t.Fatal("seller balance did not increase after auto-paid request")
+	}
+
+	t.Logf("tunnel sidecar flow complete: registered agent %s, discovered endpoint, bought paid/%s, auths 3->2, spent 0->1", agentID, model)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 10 — Full Sell→Buy Roundtrip via LiteLLM + Ollama
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2898,20 +3562,20 @@ const monetizePy = "/data/.openclaw/skills/sell/scripts/monetize.py"
 //	SELL:     ServiceOffer CR → agent reconciles 5 stages → Ready
 //	GATE:     Unpaid POST → 402 Payment Required with pricing
 //	PAY:      Sign EIP-712 TransferWithAuthorization → facilitator settles USDC
-//	INFER:    LiteLLM → Ollama → real model response (via qwen3.5)
+//	INFER:    LiteLLM → Ollama → real model response (via qwen3.5:9b)
 //	SETTLE:   Buyer USDC decreases, Seller USDC increases on Anvil fork
 //	DISCOVER: discovery.py search finds agents on-chain (bounded block range)
 //
 // Prerequisites:
 //   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
-//   - Ollama with at least one model (qwen3.5:9b, qwen2.5, etc.)
+//   - Ollama with qwen3.5:9b available locally
 //   - Anvil (Foundry) installed
 //   - x402-rs facilitator binary (set X402_FACILITATOR_BIN or X402_RS_DIR)
 func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
 	requireAgent(t, cfg)
-	model := requireOllamaModel(t, "qwen3.5")
+	model := requireExactOllamaModel(t, "qwen3.5:9b")
 	anvil := requireAnvil(t)
 
 	// ── Infrastructure ─────────────────────────────────────────────────

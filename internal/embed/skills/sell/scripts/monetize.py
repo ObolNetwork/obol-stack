@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from decimal import Decimal, InvalidOperation
 
 # Import shared Kubernetes helpers from the obol-stack skill.
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,7 @@ _ROUTE_PATTERN_RE = re.compile(r"^/[a-zA-Z0-9_./*-]+$")
 _PRICE_RE = re.compile(r"^\d+(\.\d+)?$")
 _ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 _NETWORK_RE = re.compile(r"^[a-z0-9-]+$")
+APPROX_TOKENS_PER_REQUEST = Decimal("1000")
 
 
 def _validate_route_pattern(pattern):
@@ -88,6 +90,9 @@ BASE_SEPOLIA_CHAIN_ID = 84532
 
 # keccak256("register(string)")[:4]
 REGISTER_SELECTOR = "f2c298be"
+
+# keccak256("setMetadata(uint256,string,bytes)")[:4]
+SET_METADATA_SELECTOR = "ce1b815f"
 
 # keccak256("Registered(uint256,string,address)")
 REGISTERED_TOPIC = "0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a"
@@ -194,7 +199,44 @@ def get_price_table(spec):
 def get_effective_price(spec):
     """Return the effective per-request price for x402 gating."""
     price = get_price_table(spec)
-    return price.get("perRequest") or price.get("perMTok") or price.get("perHour") or "0"
+    if price.get("perRequest"):
+        return price["perRequest"]
+    if price.get("perMTok"):
+        return _approximate_request_price(price["perMTok"])
+    return price.get("perHour") or "0"
+
+
+def _approximate_request_price(per_mtok):
+    """Approximate a per-request price from a per-MTok price."""
+    try:
+        value = Decimal(str(per_mtok).strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid perMTok price: {per_mtok!r}") from exc
+    return _decimal_to_string(value / APPROX_TOKENS_PER_REQUEST)
+
+
+def _decimal_to_string(value):
+    """Format a Decimal without exponent notation or trailing zeros."""
+    normalized = value.normalize()
+    text = format(normalized, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def describe_price(spec):
+    """Return a human-readable description of the active pricing model."""
+    price = get_price_table(spec)
+    if price.get("perRequest"):
+        return f"{price['perRequest']} USDC/request"
+    if price.get("perMTok"):
+        return (
+            f"{get_effective_price(spec)} USDC/request "
+            f"(approx from {price['perMTok']} USDC/MTok @ {int(APPROX_TOKENS_PER_REQUEST)} tok/request)"
+        )
+    if price.get("perHour"):
+        return f"{price['perHour']} USDC/hour"
+    return "0 USDC/request"
 
 
 def get_pay_to(spec):
@@ -357,6 +399,89 @@ def _parse_registered_event(receipt):
             return int(topics[1], 16)
 
     raise RuntimeError("Registered event not found in transaction receipt")
+
+
+def _abi_encode_uint256(n):
+    """ABI-encode a uint256 as 32 bytes."""
+    return n.to_bytes(32, byteorder="big")
+
+
+def _abi_encode_bytes(data):
+    """ABI-encode a bytes value (offset + length + padded data)."""
+    length = len(data)
+    padded = data + b"\x00" * (32 - length % 32) if length % 32 != 0 else data
+    return length.to_bytes(32, byteorder="big") + padded
+
+
+def _set_metadata_on_chain(agent_id, key, value_bytes):
+    """Call setMetadata(uint256, string, bytes) on the Identity Registry.
+
+    Sets indexed on-chain metadata that buyers can filter via MetadataSet events.
+    Uses the same remote-signer + eRPC pattern as _register_on_chain.
+    """
+    from_addr = _get_signing_address()
+
+    # ABI-encode setMetadata(uint256 agentId, string metadataKey, bytes metadataValue)
+    # Layout: selector + agentId(32) + offset_key(32) + offset_value(32) + key_data + value_data
+    agent_id_enc = _abi_encode_uint256(agent_id)
+    key_enc = _abi_encode_string(key)
+    value_enc = _abi_encode_bytes(value_bytes)
+
+    # Dynamic offsets: key starts at 3*32=96, value starts at 96+len(key_enc)
+    offset_key = (96).to_bytes(32, byteorder="big")
+    offset_value = (96 + len(key_enc)).to_bytes(32, byteorder="big")
+
+    calldata = (
+        bytes.fromhex(SET_METADATA_SELECTOR)
+        + agent_id_enc
+        + offset_key
+        + offset_value
+        + key_enc
+        + value_enc
+    )
+    calldata_hex = "0x" + calldata.hex()
+
+    nonce_hex = _rpc("eth_getTransactionCount", [from_addr, "pending"])
+    nonce = int(nonce_hex, 16)
+
+    base_fee = int(_rpc("eth_gasPrice"), 16)
+    try:
+        max_priority = int(_rpc("eth_maxPriorityFeePerGas"), 16)
+    except (RuntimeError, urllib.error.URLError):
+        max_priority = 1_000_000_000
+    max_fee = base_fee * 2 + max_priority
+
+    tx_obj = {"from": from_addr, "to": IDENTITY_REGISTRY, "data": calldata_hex}
+    gas_limit = int(int(_rpc("eth_estimateGas", [tx_obj]), 16) * 1.3)
+
+    tx_req = {
+        "chain_id": BASE_SEPOLIA_CHAIN_ID,
+        "to": IDENTITY_REGISTRY,
+        "nonce": nonce,
+        "gas_limit": gas_limit,
+        "max_fee_per_gas": max_fee,
+        "max_priority_fee_per_gas": max_priority,
+        "value": "0x0",
+        "data": calldata_hex,
+    }
+    result = _remote_signer_post(f"/api/v1/sign/{from_addr}/transaction", tx_req)
+    signed_tx = result.get("signed_transaction", "")
+    if not signed_tx:
+        raise RuntimeError("Remote-signer returned empty signed transaction")
+
+    tx_hash = _rpc("eth_sendRawTransaction", [signed_tx])
+
+    # Wait for receipt (short timeout — metadata is non-critical).
+    for _ in range(30):
+        receipt = _rpc("eth_getTransactionReceipt", [tx_hash])
+        if receipt is not None:
+            status = int(receipt.get("status", "0x0"), 16)
+            if status != 1:
+                print(f"    Warning: setMetadata tx reverted (tx: {tx_hash})")
+                return
+            return
+        time.sleep(2)
+    print(f"    Warning: setMetadata receipt timeout (tx: {tx_hash})")
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +671,7 @@ def stage_payment_gate(spec, ns, name, token, ssl_ctx):
 
     # Add pricing route to x402-verifier ConfigMap so requests are actually gated.
     # Without this, the verifier passes through all requests (200 for unmatched routes).
-    _add_pricing_route(spec, name, token, ssl_ctx)
+    _add_pricing_route(spec, ns, name, token, ssl_ctx)
 
     set_condition(ns, name, "PaymentGateReady", "True", "Created", f"Middleware {middleware_name} created with pricing route", token, ssl_ctx)
     return True
@@ -571,7 +696,7 @@ def _read_upstream_auth(spec, token, ssl_ctx):
     return ""
 
 
-def _add_pricing_route(spec, name, token, ssl_ctx):
+def _add_pricing_route(spec, ns, name, token, ssl_ctx):
     """Add a pricing route to the x402-verifier ConfigMap for this offer.
 
     Uses simple string manipulation for YAML to avoid a PyYAML dependency.
@@ -582,8 +707,10 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
     """
     url_path = spec.get("path", f"/services/{name}")
     price = _validate_price(get_effective_price(spec))
+    price_table = get_price_table(spec)
     pay_to = _validate_address(get_pay_to(spec))
     network = _validate_network(get_network(spec))
+    offer_ns = ns
 
     route_pattern = _validate_route_pattern(f"{url_path}/*")
 
@@ -628,6 +755,19 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
         route_entry += f'{indent}  network: "{network}"\n'
     if upstream_auth:
         route_entry += f'{indent}  upstreamAuth: "{upstream_auth}"\n'
+    if price_table.get("perMTok"):
+        route_entry += f'{indent}  priceModel: "perMTok"\n'
+        route_entry += f'{indent}  perMTok: "{price_table["perMTok"]}"\n'
+        route_entry += (
+            f"{indent}  approxTokensPerRequest: {int(APPROX_TOKENS_PER_REQUEST)}\n"
+        )
+    elif price_table.get("perRequest"):
+        route_entry += f'{indent}  priceModel: "perRequest"\n'
+    elif price_table.get("perHour"):
+        route_entry += f'{indent}  priceModel: "perHour"\n'
+    if offer_ns:
+        route_entry += f'{indent}  offerNamespace: "{offer_ns}"\n'
+    route_entry += f'{indent}  offerName: "{name}"\n'
 
     # Append route to existing routes section or create it.
     if "routes:" in pricing_yaml_str:
@@ -645,7 +785,7 @@ def _add_pricing_route(spec, name, token, ssl_ctx):
 
     patch_body = {"data": {"pricing.yaml": pricing_yaml_str}}
     api_patch(cm_path, patch_body, token, ssl_ctx, patch_type="merge")
-    print(f"  Added pricing route: {route_pattern} → {price} USDC (payTo={pay_to or 'global'})")
+    print(f"  Added pricing route: {route_pattern} → {describe_price(spec)} (payTo={pay_to or 'global'})")
 
 
 def stage_route_published(spec, ns, name, token, ssl_ctx):
@@ -835,6 +975,16 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
                   f"Agent {agent_id} on base-sepolia (tx: {tx_hash[:18]}...)", token, ssl_ctx)
     print(f"  Registered as agent {agent_id} (tx: {tx_hash})")
 
+    # Set on-chain metadata for indexed discovery (MetadataSet events).
+    # Buyers can filter agents by these keys without fetching every registration JSON.
+    offer_type = spec.get("type", "http")
+    try:
+        print(f"  Setting on-chain metadata: x402.supported=true, service.type={offer_type}")
+        _set_metadata_on_chain(agent_id, "x402.supported", b"\x01")
+        _set_metadata_on_chain(agent_id, "service.type", offer_type.encode("utf-8"))
+    except Exception as e:
+        print(f"  Warning: on-chain metadata failed (non-blocking): {e}")
+
     # Publish the ERC-8004 registration JSON (agent-managed resources).
     _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx)
     return True
@@ -863,10 +1013,29 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
     # ── 1. Build the registration JSON ─────────────────────────────────────
     # ERC-8004 REQUIRED fields: type, name, description, image, services,
     # x402Support, active, registrations. All are always emitted.
+    # Build a richer description from spec fields.
+    offer_type = spec.get("type", "http")
+    price_info = get_effective_price(spec)
+    model_info = spec.get("model", {})
+    default_desc = f"x402 payment-gated {offer_type} service: {name}"
+    if model_info.get("name"):
+        default_desc = f"{model_info['name']} inference via x402 micropayments ({price_info} USDC/request)"
+
+    # OASF skills and domains for machine-readable capability discovery.
+    # Defaults based on service type; overridden by spec.registration.skills/domains.
+    default_skills = {
+        "inference": ["natural_language_processing/text_generation/chat_completion"],
+    }
+    default_domains = {
+        "inference": ["technology/artificial_intelligence"],
+    }
+    skills = registration.get("skills", default_skills.get(offer_type, []))
+    domains = registration.get("domains", default_domains.get(offer_type, []))
+
     doc = {
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": registration.get("name", name),
-        "description": registration.get("description", f"x402 payment-gated service: {name}"),
+        "description": registration.get("description", default_desc),
         "image": registration.get("image", f"{base_url}/agent-icon.png"),
         "x402Support": True,
         "active": True,
@@ -874,7 +1043,7 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
             {
                 "name": "web",
                 "endpoint": f"{base_url}{url_path}",
-            }
+            },
         ],
         "registrations": [
             {
@@ -882,9 +1051,18 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
                 "agentRegistry": f"eip155:{BASE_SEPOLIA_CHAIN_ID}:{IDENTITY_REGISTRY}",
             }
         ],
+        "supportedTrust": registration.get("supportedTrust", []),
     }
-    if registration.get("supportedTrust"):
-        doc["supportedTrust"] = registration["supportedTrust"]
+
+    # Add OASF service entry for structured capability discovery.
+    if skills or domains:
+        oasf_entry = {"name": "OASF", "version": "0.8"}
+        if skills:
+            oasf_entry["skills"] = skills
+        if domains:
+            oasf_entry["domains"] = domains
+        doc["services"].append(oasf_entry)
+
     if registration.get("services"):
         for svc in registration["services"]:
             if svc.get("endpoint"):
@@ -1141,17 +1319,7 @@ def cmd_list(token, ssl_ctx):
         item_name = item["metadata"].get("name", "?")
         wtype = item.get("spec", {}).get("type", "inference")
         model = item.get("spec", {}).get("model", {}).get("name", "-")
-        price_table = get_price_table(item.get("spec", {}))
-        price = get_effective_price(item.get("spec", {}))
-        # Show which pricing type is active.
-        if price_table.get("perRequest"):
-            price_label = f"{price}/req"
-        elif price_table.get("perMTok"):
-            price_label = f"{price}/MTok"
-        elif price_table.get("perHour"):
-            price_label = f"{price}/hr"
-        else:
-            price_label = price
+        price_label = describe_price(item.get("spec", {}))
         conditions = item.get("status", {}).get("conditions", [])
         ready = "False"
         for c in conditions:
@@ -1175,7 +1343,7 @@ def cmd_status(ns, name, token, ssl_ctx):
     print(f"  Type:     {spec.get('type', 'inference')}")
     print(f"  Model:    {spec.get('model', {}).get('name', '-')}")
     print(f"  Upstream: {spec.get('upstream', {}).get('service', '-')}.{spec.get('upstream', {}).get('namespace', '-')}:{spec.get('upstream', {}).get('port', '-')}")
-    print(f"  Price:    {get_effective_price(spec)} USDC")
+    print(f"  Price:    {describe_price(spec)}")
     print(f"  PayTo:    {payment.get('payTo', '-')}")
     print(f"  Network:  {payment.get('network', '-')}")
     print(f"  Path:     {spec.get('path', f'/services/{name}')}")
@@ -1308,7 +1476,19 @@ def _remove_pricing_route(url_path, name, token, ssl_ctx):
         if skip:
             stripped = line.strip()
             # Stop skipping when we hit the next route entry or a non-indented line.
-            if stripped.startswith("- ") or (stripped and not stripped.startswith("price:") and not stripped.startswith("description:") and not stripped.startswith("payTo:") and not stripped.startswith("network:")):
+            if stripped.startswith("- ") or (
+                stripped
+                and not stripped.startswith("price:")
+                and not stripped.startswith("description:")
+                and not stripped.startswith("payTo:")
+                and not stripped.startswith("network:")
+                and not stripped.startswith("upstreamAuth:")
+                and not stripped.startswith("priceModel:")
+                and not stripped.startswith("perMTok:")
+                and not stripped.startswith("approxTokensPerRequest:")
+                and not stripped.startswith("offerNamespace:")
+                and not stripped.startswith("offerName:")
+            ):
                 skip = False
                 filtered.append(line)
             # Skip continuation lines of the removed route.

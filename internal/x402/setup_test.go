@@ -42,6 +42,9 @@ func TestRouteOption_Multiple(t *testing.T) {
 	opts := []RouteOption{
 		WithPayTo("0x1111111111111111111111111111111111111111"),
 		WithNetwork("base-sepolia"),
+		WithUpstreamAuth("Bearer test"),
+		WithPriceMetadata("perMTok", "0.50", 1000),
+		WithOfferInfo("default", "api-offer"),
 	}
 	for _, opt := range opts {
 		opt(&r)
@@ -52,6 +55,24 @@ func TestRouteOption_Multiple(t *testing.T) {
 	}
 	if r.Network != "base-sepolia" {
 		t.Errorf("Network = %q, want base-sepolia", r.Network)
+	}
+	if r.UpstreamAuth != "Bearer test" {
+		t.Errorf("UpstreamAuth = %q, want %q", r.UpstreamAuth, "Bearer test")
+	}
+	if r.PriceModel != "perMTok" {
+		t.Errorf("PriceModel = %q, want %q", r.PriceModel, "perMTok")
+	}
+	if r.PerMTok != "0.50" {
+		t.Errorf("PerMTok = %q, want %q", r.PerMTok, "0.50")
+	}
+	if r.ApproxTokensPerRequest != 1000 {
+		t.Errorf("ApproxTokensPerRequest = %d, want %d", r.ApproxTokensPerRequest, 1000)
+	}
+	if r.OfferNamespace != "default" {
+		t.Errorf("OfferNamespace = %q, want %q", r.OfferNamespace, "default")
+	}
+	if r.OfferName != "api-offer" {
+		t.Errorf("OfferName = %q, want %q", r.OfferName, "api-offer")
 	}
 }
 
@@ -69,11 +90,17 @@ func TestRouteOption_NoOptions(t *testing.T) {
 
 func TestRouteRule_YAMLRoundTrip(t *testing.T) {
 	original := RouteRule{
-		Pattern:     "/inference-*/v1/*",
-		Price:       "0.001",
-		Description: "Inference gateway",
-		PayTo:       "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		Network:     "base",
+		Pattern:                "/inference-*/v1/*",
+		Price:                  "0.001",
+		Description:            "Inference gateway",
+		PayTo:                  "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Network:                "base",
+		UpstreamAuth:           "Bearer sk-obol",
+		PriceModel:             "perMTok",
+		PerMTok:                "0.50",
+		ApproxTokensPerRequest: 1000,
+		OfferNamespace:         "llm",
+		OfferName:              "paid-qwen",
 	}
 
 	data, err := yaml.Marshal(original)
@@ -101,6 +128,24 @@ func TestRouteRule_YAMLRoundTrip(t *testing.T) {
 	if decoded.Network != original.Network {
 		t.Errorf("Network = %q, want %q", decoded.Network, original.Network)
 	}
+	if decoded.UpstreamAuth != original.UpstreamAuth {
+		t.Errorf("UpstreamAuth = %q, want %q", decoded.UpstreamAuth, original.UpstreamAuth)
+	}
+	if decoded.PriceModel != original.PriceModel {
+		t.Errorf("PriceModel = %q, want %q", decoded.PriceModel, original.PriceModel)
+	}
+	if decoded.PerMTok != original.PerMTok {
+		t.Errorf("PerMTok = %q, want %q", decoded.PerMTok, original.PerMTok)
+	}
+	if decoded.ApproxTokensPerRequest != original.ApproxTokensPerRequest {
+		t.Errorf("ApproxTokensPerRequest = %d, want %d", decoded.ApproxTokensPerRequest, original.ApproxTokensPerRequest)
+	}
+	if decoded.OfferNamespace != original.OfferNamespace {
+		t.Errorf("OfferNamespace = %q, want %q", decoded.OfferNamespace, original.OfferNamespace)
+	}
+	if decoded.OfferName != original.OfferName {
+		t.Errorf("OfferName = %q, want %q", decoded.OfferName, original.OfferName)
+	}
 }
 
 func TestRouteRule_OmitEmpty(t *testing.T) {
@@ -122,6 +167,9 @@ func TestRouteRule_OmitEmpty(t *testing.T) {
 	}
 	if strings.Contains(out, "network") {
 		t.Errorf("YAML output should omit network when empty, got:\n%s", out)
+	}
+	if strings.Contains(out, "priceModel") {
+		t.Errorf("YAML output should omit priceModel when empty, got:\n%s", out)
 	}
 	// Verify required fields are present.
 	if !strings.Contains(out, "pattern:") {
@@ -145,11 +193,16 @@ func TestPricingConfig_YAMLRoundTrip(t *testing.T) {
 				Description: "RPC endpoint",
 			},
 			{
-				Pattern:     "/inference-*/v1/*",
-				Price:       "0.001",
-				Description: "Inference gateway",
-				PayTo:       "0xROUTEROUTEROUTEROUTEROUTEROUTEROUTEROU",
-				Network:     "base",
+				Pattern:                "/inference-*/v1/*",
+				Price:                  "0.001",
+				Description:            "Inference gateway",
+				PayTo:                  "0xROUTEROUTEROUTEROUTEROUTEROUTEROUTEROU",
+				Network:                "base",
+				PriceModel:             "perMTok",
+				PerMTok:                "0.50",
+				ApproxTokensPerRequest: 1000,
+				OfferNamespace:         "default",
+				OfferName:              "offer-a",
 			},
 		},
 	}
@@ -194,6 +247,21 @@ func TestPricingConfig_YAMLRoundTrip(t *testing.T) {
 	}
 	if decoded.Routes[1].Network != original.Routes[1].Network {
 		t.Errorf("Routes[1].Network = %q, want %q", decoded.Routes[1].Network, original.Routes[1].Network)
+	}
+	if decoded.Routes[1].PriceModel != original.Routes[1].PriceModel {
+		t.Errorf("Routes[1].PriceModel = %q, want %q", decoded.Routes[1].PriceModel, original.Routes[1].PriceModel)
+	}
+	if decoded.Routes[1].PerMTok != original.Routes[1].PerMTok {
+		t.Errorf("Routes[1].PerMTok = %q, want %q", decoded.Routes[1].PerMTok, original.Routes[1].PerMTok)
+	}
+	if decoded.Routes[1].ApproxTokensPerRequest != original.Routes[1].ApproxTokensPerRequest {
+		t.Errorf("Routes[1].ApproxTokensPerRequest = %d, want %d", decoded.Routes[1].ApproxTokensPerRequest, original.Routes[1].ApproxTokensPerRequest)
+	}
+	if decoded.Routes[1].OfferNamespace != original.Routes[1].OfferNamespace {
+		t.Errorf("Routes[1].OfferNamespace = %q, want %q", decoded.Routes[1].OfferNamespace, original.Routes[1].OfferNamespace)
+	}
+	if decoded.Routes[1].OfferName != original.Routes[1].OfferName {
+		t.Errorf("Routes[1].OfferName = %q, want %q", decoded.Routes[1].OfferName, original.Routes[1].OfferName)
 	}
 }
 
@@ -254,5 +322,21 @@ func TestPricingConfig_YAMLWithPerRouteOverrides(t *testing.T) {
 	}
 	if strings.Contains(rpcSection, "network") {
 		t.Errorf("RPC route section should not contain network:\n%s", rpcSection)
+	}
+}
+
+func TestX402Manifest_IncludesVerifierServiceMonitor(t *testing.T) {
+	manifest := string(x402Manifest)
+	if !strings.Contains(manifest, "kind: ServiceMonitor") {
+		t.Fatalf("x402 manifest missing ServiceMonitor:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "name: x402-verifier") {
+		t.Fatalf("x402 manifest missing x402-verifier monitor name:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "release: monitoring") {
+		t.Fatalf("x402 manifest missing monitoring release label:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, "path: /metrics") {
+		t.Fatalf("x402 manifest missing metrics scrape path:\n%s", manifest)
 	}
 }

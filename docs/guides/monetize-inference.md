@@ -7,6 +7,13 @@ This guide walks you through exposing a local LLM as a paid API endpoint using t
 - A public URL via Cloudflare tunnel
 - An ERC-8004 agent registration document for discoverability
 
+> [!NOTE]
+> `--per-mtok` is supported for inference pricing, but phase 1 still charges an
+> approximate flat request price derived as `perMTok / 1000` using a fixed
+> `1000 tok/request` assumption. Exact token metering is deferred to the
+> follow-up `x402-meter` design described in
+> [`docs/plans/per-token-metering.md`](../plans/per-token-metering.md).
+
 > [!IMPORTANT]
 > The monetize subsystem is alpha software on the `feat/secure-enclave-inference` branch.
 > If you encounter an issue, please open a
@@ -152,6 +159,30 @@ obol sell http my-qwen \
     --path /services/my-qwen
 ```
 
+If you want to price by million tokens instead of explicitly setting a flat
+request price, use `--per-mtok`. In phase 1, the verifier still enforces a
+derived per-request price:
+
+```bash
+obol sell http my-qwen \
+    --type inference \
+    --model qwen3:0.6b \
+    --runtime ollama \
+    --per-mtok 1.25 \
+    --network base-sepolia \
+    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --namespace llm \
+    --upstream ollama \
+    --port 11434 \
+    --path /services/my-qwen
+```
+
+That stores both values in the pricing config:
+
+- source model: `perMTok = 1.25 USDC / 1M tokens`
+- enforced phase-1 charge: `price = 0.00125 USDC / request`
+- approximation input: `approxTokensPerRequest = 1000`
+
 The agent automatically reconciles the offer through six stages:
 
 ```
@@ -244,6 +275,22 @@ A **402 Payment Required** response confirms the x402 gate is working. The respo
 ```
 
 The `maxAmountRequired` is in USDC micro-units (6 decimals): `1000` = 0.001 USDC.
+
+### 1.7 Monitoring
+
+The seller-side verifier now exports Prometheus metrics on its existing Service:
+
+```bash
+obol kubectl get --raw /api/v1/namespaces/x402/services/x402-verifier:8080/proxy/metrics | head
+```
+
+Prometheus scrapes it through a `ServiceMonitor` in `x402`. Key verifier metrics:
+
+- `obol_x402_verifier_requests_total`
+- `obol_x402_verifier_payment_required_total`
+- `obol_x402_verifier_payment_verified_total`
+- `obol_x402_verifier_payment_failed_total`
+- `obol_x402_verifier_charged_requests_total`
 
 ---
 

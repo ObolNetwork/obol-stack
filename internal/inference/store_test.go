@@ -47,6 +47,37 @@ func TestStoreCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestStoreCreate_PersistsPerMTokMetadata(t *testing.T) {
+	dir := t.TempDir()
+	store := inference.NewStore(dir)
+
+	d := &inference.Deployment{
+		Name:                   "priced",
+		WalletAddress:          "0xdeadbeef",
+		PricePerRequest:        "0.0005",
+		PricePerMTok:           "0.50",
+		ApproxTokensPerRequest: 1000,
+	}
+
+	if err := store.Create(d, false); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.Get("priced")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PricePerRequest != "0.0005" {
+		t.Errorf("PricePerRequest = %q, want %q", got.PricePerRequest, "0.0005")
+	}
+	if got.PricePerMTok != "0.50" {
+		t.Errorf("PricePerMTok = %q, want %q", got.PricePerMTok, "0.50")
+	}
+	if got.ApproxTokensPerRequest != 1000 {
+		t.Errorf("ApproxTokensPerRequest = %d, want %d", got.ApproxTokensPerRequest, 1000)
+	}
+}
+
 func TestStoreCreateDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	store := inference.NewStore(dir)

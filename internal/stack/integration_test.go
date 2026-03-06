@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ import (
 func TestK3sUserFlows(t *testing.T) {
 	if os.Getenv("OBOL_DEVELOPMENT") != "true" {
 		t.Skip("OBOL_DEVELOPMENT not set, skipping integration test")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("k3s backend integration test only runs on Linux")
 	}
 
 	projectRoot := findProjectRoot(t)

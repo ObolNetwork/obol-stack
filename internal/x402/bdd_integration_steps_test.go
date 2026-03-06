@@ -20,9 +20,9 @@ import (
 
 // parsed402Response maps the x402 PaymentRequired response body.
 type parsed402Response struct {
-	X402Version int `json:"x402Version"`
+	X402Version int    `json:"x402Version"`
 	Error       string `json:"error"`
-	Accepts []struct {
+	Accepts     []struct {
 		Scheme            string `json:"scheme"`
 		Network           string `json:"network"`
 		Amount            string `json:"maxAmountRequired"`
@@ -71,7 +71,7 @@ type integrationWorld struct {
 	signedPaymentHeader string
 
 	// Discovered registration.
-	registrationJSON map[string]interface{}
+	registrationJSON   map[string]interface{}
 	discoveredEndpoint string
 }
 
@@ -173,7 +173,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 	// ── When (local cluster) ─────────────────────────────────────────
 
 	ctx.When(`^the buyer sends an unpaid POST to the priced route$`, func() error {
-		url := fmt.Sprintf("http://localhost:8080%s", w.routePath)
+		url := fmt.Sprintf("http://obol.stack:8080%s", w.routePath)
 		return w.doInferencePost(url, nil)
 	})
 
@@ -217,7 +217,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		if w.signedPaymentHeader == "" {
 			return fmt.Errorf("no signed payment header")
 		}
-		url := fmt.Sprintf("http://localhost:8080%s", w.routePath)
+		url := fmt.Sprintf("http://obol.stack:8080%s", w.routePath)
 		return w.doInferencePost(url, map[string]string{"X-PAYMENT": w.signedPaymentHeader})
 	})
 
@@ -314,15 +314,35 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 	// so these steps verify the resulting state.
 
 	ctx.When(`^the operator runs "obol sell http" to create a ServiceOffer$`, func() error {
-		// The ServiceOffer was created by TestMain via `obol sell http`.
-		// Verify it exists.
 		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
 			"get", "serviceoffers.obol.org", serviceOfferName,
 			"-n", serviceOfferNamespace, "--no-headers")
-		if err != nil {
-			return fmt.Errorf("ServiceOffer not found (was obol sell http run?): %v", err)
+		if err == nil {
+			w.t.Logf("integration: ServiceOffer exists: %s", strings.TrimSpace(out))
+			return nil
 		}
-		w.t.Logf("integration: ServiceOffer exists: %s", strings.TrimSpace(out))
+
+		if integrationObolBin == "" {
+			return fmt.Errorf("ServiceOffer not found and obol binary is not configured: %v", err)
+		}
+		if err := runObol(integrationObolBin, "sell", "http", serviceOfferName,
+			"--wallet", serviceOfferPayTo,
+			"--chain", "base-sepolia",
+			"--price", "0.001",
+			"--upstream", "litellm",
+			"--port", "4000",
+			"--namespace", serviceOfferNamespace,
+			"--health-path", "/health/readiness"); err != nil {
+			return fmt.Errorf("obol sell http failed: %w", err)
+		}
+
+		out, err = kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace, "--no-headers")
+		if err != nil {
+			return fmt.Errorf("ServiceOffer not found after obol sell http: %v", err)
+		}
+		w.t.Logf("integration: ServiceOffer created: %s", strings.TrimSpace(out))
 		return nil
 	})
 
@@ -466,6 +486,55 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
+	ctx.Then(`^the registration contains OASF skills$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		services, ok := w.registrationJSON["services"].([]interface{})
+		if !ok {
+			return fmt.Errorf("no services array in registration")
+		}
+		for _, s := range services {
+			svc, ok := s.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if svc["name"] == "OASF" {
+				skills, ok := svc["skills"].([]interface{})
+				if !ok || len(skills) == 0 {
+					return fmt.Errorf("OASF service entry has no skills")
+				}
+				w.t.Logf("integration: ✓ OASF skills: %v", skills)
+				return nil
+			}
+		}
+		return fmt.Errorf("no OASF service entry found in registration services")
+	})
+
+	ctx.Then(`^the registration contains OASF domains$`, func() error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		services, ok := w.registrationJSON["services"].([]interface{})
+		if !ok {
+			return fmt.Errorf("no services array in registration")
+		}
+		for _, s := range services {
+			svc, ok := s.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if svc["name"] == "OASF" {
+				domains, ok := svc["domains"].([]interface{})
+				if !ok || len(domains) == 0 {
+					return fmt.Errorf("OASF service entry has no domains")
+				}
+				w.t.Logf("integration: ✓ OASF domains: %v", domains)
+				return nil
+			}
+		}
+		return fmt.Errorf("no OASF service entry found in registration services")
+	})
 	ctx.When(`^the agent probes the tunnel service endpoint$`, func() error {
 		if w.discoveredEndpoint == "" {
 			return fmt.Errorf("no service endpoint discovered")

@@ -1,6 +1,6 @@
 ---
 name: buy-inference
-description: "Buy remote inference from x402-gated endpoints via a risk-isolated payment sidecar. Pre-signs bounded payment authorizations, deploys a lean proxy, and wires it into LiteLLM. Zero signer access at runtime — spending is capped by design."
+description: "Buy remote inference from x402-gated endpoints via a risk-isolated payment sidecar. Pre-signs bounded payment authorizations, stores them in ConfigMaps, and exposes purchased models through the static LiteLLM namespace `paid/<remote-model>`. Zero signer access at runtime — spending is capped by design."
 metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["python3"] } } }
 ---
 
@@ -11,8 +11,9 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 ## When to Use
 
 - Probing an endpoint to check pricing before buying
-- Purchasing access to a remote model (pre-signs auths, deploys sidecar, patches LiteLLM)
+- Purchasing access to a remote model (pre-signs auths, updates buyer ConfigMaps, exposes `paid/<remote-model>`)
 - Refilling payment authorizations when running low
+- Running maintenance to refill low pools and remove exhausted mappings
 - Listing purchased providers and remaining auth counts
 - Checking USDC balance before buying
 - Removing purchased providers and cleaning up
@@ -30,7 +31,10 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 # Probe an endpoint to see its pricing
 python3 scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
-# Buy access (probes, pre-signs 100 auths, deploys sidecar, patches LiteLLM)
+# Probe with the concrete remote model when the seller validates model IDs
+python3 scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
+
+# Buy access (probes, pre-signs 100 auths, updates buyer ConfigMaps)
 python3 scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
@@ -49,6 +53,9 @@ python3 scripts/buy.py status remote-qwen
 # Sign more authorizations when running low
 python3 scripts/buy.py refill remote-qwen --count 200
 
+# Maintain all purchased mappings (refill low pools, drop exhausted ones)
+python3 scripts/buy.py maintain
+
 # Check your USDC balance
 python3 scripts/buy.py balance
 
@@ -60,13 +67,14 @@ python3 scripts/buy.py remove remote-qwen
 
 | Command | Description |
 |---------|-------------|
-| `probe <endpoint-url>` | Send request without payment, parse 402 response for pricing |
-| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, deploy sidecar, wire into LiteLLM |
+| `probe <endpoint-url> [--model <id>]` | Send request without payment, parse 402 response for pricing |
+| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, update buyer ConfigMaps, expose `paid/<model>` |
 | `refill <name> [--count <N>]` | Sign more authorizations for an existing upstream |
+| `maintain` | Refill mappings at or below the low watermark, warn on low balance, remove exhausted mappings |
 | `list` | List purchased providers + remaining auth counts |
 | `status <name>` | Check sidecar pod status + remaining auths |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
-| `remove <name>` | Remove upstream from sidecar + LiteLLM, cleanup ConfigMaps |
+| `remove <name>` | Remove upstream from the buyer sidecar mapping, cleanup ConfigMaps |
 
 ## How It Works
 
@@ -76,9 +84,9 @@ python3 scripts/buy.py remove remote-qwen
 
 3. **Store**: Pre-signed authorizations are stored in the `x402-buyer-auths` ConfigMap. Upstream config is stored in `x402-buyer-config`. Both are in the `llm` namespace.
 
-4. **Deploy**: A lean Go sidecar (`x402-buyer`) is deployed in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy.
+4. **Deploy**: A lean Go sidecar (`x402-buyer`) runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
 
-5. **Wire**: LiteLLM gets a plain `@ai-sdk/openai` provider pointing at the sidecar. The model appears as `<name>/<model-id>` — no special x402 extension needed in LiteLLM.
+5. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402`. LiteLLM expands the wildcard to the concrete requested model and the buyer sidecar routes that model to the purchased upstream. Buying a model updates only buyer ConfigMaps; the public model name is always `paid/<remote-model>`.
 
 6. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller
@@ -94,8 +102,9 @@ Agent (buy.py)                       Runtime
   +-- probe seller → 402 pricing       OpenClaw → LiteLLM:8000
   +-- sign N auths via remote-signer         |
   +-- store in ConfigMaps                    v
-  +-- deploy x402-buyer sidecar        x402-buyer:8402 (plain OpenAI proxy)
-  +-- patch LiteLLM providers.json            |
+  +-- update buyer ConfigMaps          litellm pod
+                                      |- LiteLLM paid/* route
+                                      |- x402-buyer:8402
                                              +-- pop pre-signed auth
                                              +-- X-PAYMENT header
                                              +-- forward to seller
@@ -123,6 +132,7 @@ Agent (buy.py)                       Runtime
 - **Python stdlib only** — no pip install, no external packages
 - **Requires remote-signer** — must have agent wallet provisioned via `obol openclaw onboard`
 - **Requires x402-buyer image** — `ghcr.io/obolnetwork/x402-buyer:latest` must be available in cluster
+- **Static public interface** — purchased models are always addressed as `paid/<remote-model>`
 - **Max 1000 auths per batch** — signing takes ~50s at 1000; use `refill` for more
 - **Auth pool is finite** — monitor via `status` or `list`, refill before exhaustion
 
