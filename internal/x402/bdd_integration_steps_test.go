@@ -535,7 +535,6 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		}
 		return fmt.Errorf("no OASF service entry found in registration services")
 	})
-
 	ctx.When(`^the agent probes the tunnel service endpoint$`, func() error {
 		if w.discoveredEndpoint == "" {
 			return fmt.Errorf("no service endpoint discovered")
