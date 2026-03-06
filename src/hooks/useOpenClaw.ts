@@ -91,6 +91,20 @@ export function useOpenClawToken(instanceId: string) {
       } else if (response.status === 404) {
         setToken(null);
         setTokenError('Token not found');
+      } else {
+        setToken(null);
+        let message = 'Failed to fetch token';
+        try {
+          const bodyText = await response.text();
+          if (bodyText) {
+            message += `: ${response.status} ${bodyText}`;
+          } else {
+            message += `: ${response.status}`;
+          }
+        } catch {
+          // Ignore errors while reading the response body
+        }
+        setTokenError(message);
       }
     } catch {
       setToken(null);
