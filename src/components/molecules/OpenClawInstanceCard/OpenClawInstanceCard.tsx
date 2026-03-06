@@ -75,11 +75,11 @@ const ActionsRow = styled(Flex, {
 });
 
 const DashboardLinkWrapper = styled(Flex, {
-  alignItems: 'flex-start',
-  flexWrap: 'wrap',
-  gap: '$xxs',
+  position: 'relative',
+  alignItems: 'center',
   '&:hover .dashboard-tooltip': {
-    display: 'block',
+    opacity: 1,
+    visibility: 'visible',
   },
 });
 
@@ -269,11 +269,24 @@ export function OpenClawInstanceCard({
           <Text
             className="dashboard-tooltip"
             css={{
-              display: 'none',
+              position: 'absolute',
+              left: 'calc(100% + 8px)',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: '$bg02',
+              border: '1px solid $bg04',
+              borderRadius: '$1',
+              padding: '$xxs $xs',
               fontSize: '11px',
               color: '$textLight',
               lineHeight: 1.3,
-              flexBasis: '100%',
+              width: 'max-content',
+              maxWidth: '220px',
+              opacity: 0,
+              visibility: 'hidden',
+              transition: 'opacity 0.2s ease',
+              pointerEvents: 'none',
+              zIndex: 10,
             }}
           >
             Connection issues? Try: obol openclaw dashboard
