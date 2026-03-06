@@ -16,6 +16,7 @@ import {
   useOpenClawStatus,
   useOpenClawToken,
   useWalletMetadata,
+  useTunnelURL,
 } from '../../../hooks/useOpenClaw';
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
 import type { OpenClawInstance } from '@/types/openclaw';
@@ -151,13 +152,16 @@ export function OpenClawInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const { token } = useOpenClawToken(instance.id);
+  const { token, tokenError } = useOpenClawToken(instance.id);
   const { metadata } = useWalletMetadata(instance.id);
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balance: balanceInfo } = useAddressBalance(primaryAddress);
+  const { tunnelURL } = useTunnelURL();
 
-  const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
+  const dashboardUrl = tunnelURL
+    ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
+    : `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
     <CardContainer>
@@ -191,6 +195,18 @@ export function OpenClawInstanceCard({
           <MetaValue>{status.model}</MetaValue>
         </MetaItem>
       )}
+      {!loading && status && (
+        <MetaItem>
+          <MetaLabel>LLM:</MetaLabel>
+          <MetaValue>
+            {status.llmConnected === undefined
+              ? 'Checking...'
+              : status.llmConnected
+                ? `Connected${status.provider ? ` (${status.provider})` : ''}`
+                : `Error${status.llmError ? ` — ${status.llmError}` : ''}`}
+          </MetaValue>
+        </MetaItem>
+      )}
       {metadata && metadata.addresses.length > 0 && (
         <MetaItem>
           <MetaLabel>Wallet:</MetaLabel>
@@ -209,6 +225,15 @@ export function OpenClawInstanceCard({
               {balanceInfo.balance} ETH ({balanceInfo.network})
             </BalanceText>
           )}
+        </MetaItem>
+      )}
+
+      {tokenError && (
+        <MetaItem>
+          <MetaLabel css={{ color: '$error' }}>Token:</MetaLabel>
+          <MetaValue css={{ color: '$error' }}>
+            {tokenError} — run: obol openclaw token --regenerate
+          </MetaValue>
         </MetaItem>
       )}
 

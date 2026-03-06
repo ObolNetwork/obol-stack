@@ -79,6 +79,7 @@ export function useOpenClawStatus(id: string) {
 
 export function useOpenClawToken(instanceId: string) {
   const [token, setToken] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const fetchToken = useCallback(async () => {
     try {
@@ -86,9 +87,14 @@ export function useOpenClawToken(instanceId: string) {
       if (response.ok) {
         const data = await response.json();
         setToken(data?.token ?? null);
+        setTokenError(null);
+      } else if (response.status === 404) {
+        setToken(null);
+        setTokenError('Token not found');
       }
     } catch {
       setToken(null);
+      setTokenError('Failed to fetch token');
     }
   }, [instanceId]);
 
@@ -96,7 +102,29 @@ export function useOpenClawToken(instanceId: string) {
     fetchToken();
   }, [fetchToken]);
 
-  return { token };
+  return { token, tokenError };
+}
+
+export function useTunnelURL() {
+  const [tunnelURL, setTunnelURL] = useState<string | null>(null);
+
+  const fetchTunnelURL = useCallback(async () => {
+    try {
+      const response = await fetch('/api/tunnel');
+      if (response.ok) {
+        const data = await response.json();
+        setTunnelURL(data?.tunnelURL ?? null);
+      }
+    } catch {
+      setTunnelURL(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTunnelURL();
+  }, [fetchTunnelURL]);
+
+  return { tunnelURL, refetch: fetchTunnelURL };
 }
 
 export function useWalletMetadata(instanceId: string) {
