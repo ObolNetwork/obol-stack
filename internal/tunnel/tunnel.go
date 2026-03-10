@@ -136,6 +136,74 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 	return "", fmt.Errorf("tunnel URL not found in logs")
 }
 
+// EnsureRunning scales the cloudflared deployment to 1 replica if it's at 0,
+// waits for the pod to be ready, and returns the tunnel URL once available.
+// If the tunnel is already running, it returns the current URL immediately.
+func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("stack not running")
+	}
+
+	// Check if already running.
+	if podStatus, err := getPodStatus(kubectlPath, kubeconfigPath); err == nil && podStatus == "running" {
+		if url, err := GetTunnelURL(cfg); err == nil {
+			return url, nil
+		}
+	}
+
+	// Scale to 1 replica.
+	scaleCmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"scale", "deployment/cloudflared",
+		"-n", tunnelNamespace,
+		"--replicas=1",
+	)
+	if err := scaleCmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to scale cloudflared: %w", err)
+	}
+
+	// Wait for rollout.
+	waitCmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"rollout", "status", "deployment/cloudflared",
+		"-n", tunnelNamespace,
+		"--timeout=30s",
+	)
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Starting Cloudflare tunnel",
+		Cmd:  waitCmd,
+	}); err != nil {
+		return "", fmt.Errorf("cloudflared rollout failed: %w", err)
+	}
+
+	// Poll for tunnel URL (quick tunnels take a few seconds to register).
+	var tunnelURL string
+	for i := 0; i < 20; i++ {
+		time.Sleep(time.Second)
+		if url, err := GetTunnelURL(cfg); err == nil {
+			tunnelURL = url
+			break
+		}
+	}
+
+	if tunnelURL == "" {
+		return "", fmt.Errorf("tunnel started but URL not available yet — run 'obol tunnel status' in a few seconds")
+	}
+
+	// Inject into obol-agent.
+	if err := InjectBaseURL(cfg, tunnelURL); err == nil {
+		u.Dim("Agent base URL updated to " + tunnelURL)
+	}
+	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
+		u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
+	}
+
+	return tunnelURL, nil
+}
+
 // Restart restarts the cloudflared deployment.
 func Restart(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")

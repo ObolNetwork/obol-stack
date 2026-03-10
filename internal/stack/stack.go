@@ -16,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	petname "github.com/dustinkirkland/golang-petname"
@@ -457,6 +458,17 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := agent.Init(cfg, u); err != nil {
 		u.Warnf("Failed to deploy obol-agent: %v", err)
 		u.Dim("  You can manually deploy later with: obol agent init")
+	}
+
+	// Start the Cloudflare tunnel so the stack is publicly accessible.
+	// Non-fatal: the user can start it later with `obol tunnel restart`.
+	u.Blank()
+	u.Info("Starting Cloudflare tunnel")
+	if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
+		u.Warnf("Tunnel not started: %v", err)
+		u.Dim("  Start manually with: obol tunnel restart")
+	} else {
+		u.Successf("Tunnel active: %s", tunnelURL)
 	}
 
 	return nil
