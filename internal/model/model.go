@@ -68,6 +68,31 @@ type LiteLLMParams struct {
 	APIKey  string `yaml:"api_key,omitempty"`
 }
 
+// HasConfiguredModels returns true if LiteLLM has at least one non-catch-all
+// model configured (i.e., something other than the "paid/*" route).
+func HasConfiguredModels(cfg *config.Config) bool {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return false
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return false
+	}
+
+	for _, entry := range litellmConfig.ModelList {
+		if !strings.Contains(entry.ModelName, "*") {
+			return true
+		}
+	}
+	return false
+}
+
 // ConfigureLiteLLM adds a provider to the LiteLLM gateway.
 // For cloud providers, it patches the Secret with the API key and adds
 // the model to config.yaml. For Ollama, it discovers local models and adds them.

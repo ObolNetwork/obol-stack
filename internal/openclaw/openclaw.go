@@ -1733,37 +1733,40 @@ rbac:
 		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, openclawImageTag))
 	}
 
-	// Provider and agent model configuration
-	importedOverlay := TranslateToOverlayYAML(imported)
-	if importedOverlay != "" {
-		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
-		// Inject gateway controlUi settings for Traefik reverse proxy.
-		// dangerouslyDisableDeviceAuth is required because the browser accesses
-		// OpenClaw via http://<instance>.obol.stack through Traefik (non-localhost,
-		// non-HTTPS). The gateway sees the request from the k3d bridge IP, not
-		// localhost, so allowInsecureAuth alone is insufficient. Device identity
-		// requires crypto.subtle which needs a secure context (HTTPS or localhost).
-		// Token auth is still enforced as the primary authentication mechanism.
-		if strings.Contains(importedOverlay, "openclaw:\n") {
-			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n", 1)
-		} else {
-			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n\n")
+	// Provider and agent model configuration.
+	//
+	// All inference is routed through the LiteLLM gateway (openai provider slot).
+	// This ensures OpenClaw never tries to call Anthropic/OpenAI natively (which
+	// would require its own API keys in the auth store). Instead, LiteLLM handles
+	// provider routing and API key management via its own Secret.
+	//
+	// If the user has an imported ~/.openclaw/openclaw.json, we extract non-model
+	// config (channels, etc.) but always override the provider to LiteLLM.
+
+	// Determine agent model: prefer imported model, fallback to first Ollama model.
+	agentModel := ""
+	if imported != nil && imported.AgentModel != "" {
+		// Rewrite native provider prefix to openai/ so it routes through LiteLLM.
+		// e.g. "anthropic/claude-sonnet-4-6" → "openai/claude-sonnet-4-6"
+		agentModel = imported.AgentModel
+		if i := strings.Index(agentModel, "/"); i >= 0 {
+			agentModel = "openai/" + agentModel[i+1:]
+		} else if !strings.HasPrefix(agentModel, "openai/") {
+			agentModel = "openai/" + agentModel
 		}
-		b.WriteString(importedOverlay)
-	} else {
-		// Default provider: LiteLLM gateway (OpenAI-compatible).
-		// Model list is populated from the host's Ollama instance (if available).
-		// Uses "openai" provider slot to avoid triggering Ollama /api/tags discovery.
-		b.WriteString("# Default model provider: LiteLLM gateway (OpenAI-compatible)\nopenclaw:\n")
-		if len(ollamaModels) > 0 {
-			b.WriteString(fmt.Sprintf("  agentModel: openai/%s\n", ollamaModels[0]))
-		}
-		b.WriteString(`  gateway:
+	} else if len(ollamaModels) > 0 {
+		agentModel = "openai/" + ollamaModels[0]
+	}
+
+	b.WriteString("# All models route through LiteLLM gateway (openai provider slot).\n")
+	b.WriteString("openclaw:\n")
+	if agentModel != "" {
+		b.WriteString(fmt.Sprintf("  agentModel: %s\n", agentModel))
+	}
+	b.WriteString(`  gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
-    # Required: browser on non-localhost HTTP has no crypto.subtle,
-    # so device identity is unavailable. dangerouslyDisableDeviceAuth
-    # is needed because Traefik proxies from the k3d bridge IP, not
-    # localhost. Token auth is still enforced.
+    # dangerouslyDisableDeviceAuth is needed because Traefik proxies from
+    # the k3d bridge IP, not localhost. Token auth is still enforced.
     controlUi:
       allowInsecureAuth: true
       dangerouslyDisableDeviceAuth: true
@@ -1778,17 +1781,47 @@ models:
     api: openai-completions
     apiKeyEnvVar: OPENAI_API_KEY
 `)
-		b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", litellmMasterKey(cfg)))
+	b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", litellmMasterKey(cfg)))
 
-		if len(ollamaModels) > 0 {
-			b.WriteString("    models:\n")
-			for _, m := range ollamaModels {
-				b.WriteString(fmt.Sprintf("      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m)))
-			}
-		} else {
-			b.WriteString("    models: []\n")
+	if len(ollamaModels) > 0 {
+		b.WriteString("    models:\n")
+		for _, m := range ollamaModels {
+			b.WriteString(fmt.Sprintf("      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m)))
 		}
-		b.WriteString("\n")
+	} else {
+		b.WriteString("    models: []\n")
+	}
+	b.WriteString("\n")
+
+	// Append non-model imported config (channels, etc.)
+	if imported != nil {
+		importedOverlay := TranslateToOverlayYAML(imported)
+		// Strip the openclaw: and models: sections — we already wrote those above.
+		// Keep only channel config and other non-provider settings.
+		lines := strings.Split(importedOverlay, "\n")
+		var kept []string
+		skip := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			// Skip openclaw: block (agentModel) and models: block (providers)
+			if trimmed == "openclaw:" || trimmed == "models:" {
+				skip = true
+				continue
+			}
+			// Stop skipping when we hit a new top-level key
+			if skip && len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+				skip = false
+			}
+			if !skip {
+				kept = append(kept, line)
+			}
+		}
+		extra := strings.TrimSpace(strings.Join(kept, "\n"))
+		if extra != "" {
+			b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
+			b.WriteString(extra)
+			b.WriteString("\n\n")
+		}
 	}
 
 	b.WriteString(`# eRPC integration

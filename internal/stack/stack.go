@@ -13,6 +13,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
@@ -431,6 +432,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
+	// Auto-configure LiteLLM with Ollama models if available.
+	// This ensures the inference path works out of the box when the user
+	// has Ollama running — no separate `obol model setup` step required.
+	// Non-fatal: the user can always run `obol model setup` later.
+	autoConfigureLLM(cfg, u)
+
 	// Deploy default OpenClaw instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
 	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
@@ -444,6 +451,40 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	return nil
+}
+
+// autoConfigureLLM detects the host Ollama and auto-configures LiteLLM with
+// available models so that inference works out of the box. Skipped silently
+// if Ollama is unreachable, has no models, or LiteLLM already has non-paid
+// models configured.
+func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
+	ollamaModels, err := model.ListOllamaModels()
+	if err != nil || len(ollamaModels) == 0 {
+		// Ollama not running or no models — skip silently.
+		return
+	}
+
+	// Check if LiteLLM already has real models (not just the paid/* catch-all).
+	if model.HasConfiguredModels(cfg) {
+		return
+	}
+
+	u.Blank()
+	u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
+
+	var names []string
+	for _, m := range ollamaModels {
+		name := m.Name
+		if strings.HasSuffix(name, ":latest") {
+			name = strings.TrimSuffix(name, ":latest")
+		}
+		names = append(names, name)
+	}
+
+	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
+		u.Warnf("Auto-configure LiteLLM failed: %v", err)
+		u.Dim("  Run 'obol model setup' to configure manually.")
+	}
 }
 
 // localImage describes a Docker image built from source in this repo.
