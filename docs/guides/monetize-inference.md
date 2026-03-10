@@ -147,16 +147,12 @@ Declare your inference service as a Kubernetes custom resource:
 
 ```bash
 obol sell http my-qwen \
-    --type inference \
-    --model qwen3:0.6b \
-    --runtime ollama \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --chain base-sepolia \
     --per-request 0.001 \
-    --network base-sepolia \
-    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --namespace llm \
     --upstream ollama \
-    --port 11434 \
-    --path /services/my-qwen
+    --port 11434
 ```
 
 If you want to price by million tokens instead of explicitly setting a flat
@@ -165,16 +161,12 @@ derived per-request price:
 
 ```bash
 obol sell http my-qwen \
-    --type inference \
-    --model qwen3:0.6b \
-    --runtime ollama \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --chain base-sepolia \
     --per-mtok 1.25 \
-    --network base-sepolia \
-    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --namespace llm \
     --upstream ollama \
-    --port 11434 \
-    --path /services/my-qwen
+    --port 11434
 ```
 
 That stores both values in the pricing config:

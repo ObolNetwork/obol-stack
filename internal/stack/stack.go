@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -295,7 +296,6 @@ func Up(cfg *config.Config, u *ui.UI) error {
 	u.Blank()
 	u.Bold("Stack started successfully.")
 	u.Print("Visit http://obol.stack in your browser to get started.")
-	u.Print("Try setting up an agent with `obol agent init` next.")
 	update.HintIfStale(cfg)
 	return nil
 }
@@ -448,6 +448,15 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
+	}
+
+	// Deploy the obol-agent singleton (monetize reconciliation, heartbeat).
+	// Non-fatal: the user can always run `obol agent init` later.
+	u.Blank()
+	u.Info("Deploying obol-agent")
+	if err := agent.Init(cfg, u); err != nil {
+		u.Warnf("Failed to deploy obol-agent: %v", err)
+		u.Dim("  You can manually deploy later with: obol agent init")
 	}
 
 	return nil
