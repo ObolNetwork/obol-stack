@@ -1743,7 +1743,7 @@ rbac:
 	// If the user has an imported ~/.openclaw/openclaw.json, we extract non-model
 	// config (channels, etc.) but always override the provider to LiteLLM.
 
-	// Determine agent model: prefer imported model, fallback to first Ollama model.
+	// Determine agent model: prefer imported model, fallback to preferred Ollama model.
 	agentModel := ""
 	if imported != nil && imported.AgentModel != "" {
 		// Rewrite native provider prefix to openai/ so it routes through LiteLLM.
@@ -1755,7 +1755,7 @@ rbac:
 			agentModel = "openai/" + agentModel
 		}
 	} else if len(ollamaModels) > 0 {
-		agentModel = "openai/" + ollamaModels[0]
+		agentModel = "openai/" + preferredOllamaModel(ollamaModels)
 	}
 
 	b.WriteString("# All models route through LiteLLM gateway (openai provider slot).\n")
@@ -2037,6 +2037,20 @@ func listOllamaModels() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// preferredOllamaModel picks the best default model from available Ollama models.
+// Prefers qwen3.5:9b if available, otherwise falls back to the first model.
+func preferredOllamaModel(models []string) string {
+	preferred := []string{"qwen3.5:9b", "qwen3.5:35b", "qwen3.5:27b"}
+	for _, p := range preferred {
+		for _, m := range models {
+			if m == p {
+				return m
+			}
+		}
+	}
+	return models[0]
 }
 
 // ollamaModelDisplayName converts an Ollama model name (e.g. "llama3.2:3b")
