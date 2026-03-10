@@ -1738,14 +1738,16 @@ rbac:
 	if importedOverlay != "" {
 		b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
 		// Inject gateway controlUi settings for Traefik reverse proxy.
-		// allowInsecureAuth is required because the browser accesses OpenClaw via
-		// http://<instance>.obol.stack (non-localhost HTTP), where crypto.subtle is
-		// unavailable. Without it, the gateway rejects with 1008 "requires HTTPS or
-		// localhost (secure context)". Token auth is still enforced.
+		// dangerouslyDisableDeviceAuth is required because the browser accesses
+		// OpenClaw via http://<instance>.obol.stack through Traefik (non-localhost,
+		// non-HTTPS). The gateway sees the request from the k3d bridge IP, not
+		// localhost, so allowInsecureAuth alone is insufficient. Device identity
+		// requires crypto.subtle which needs a secure context (HTTPS or localhost).
+		// Token auth is still enforced as the primary authentication mechanism.
 		if strings.Contains(importedOverlay, "openclaw:\n") {
-			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n", 1)
+			importedOverlay = strings.Replace(importedOverlay, "openclaw:\n", "openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n", 1)
 		} else {
-			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n\n")
+			b.WriteString("openclaw:\n  gateway:\n    controlUi:\n      allowInsecureAuth: true\n      dangerouslyDisableDeviceAuth: true\n      dangerouslyAllowHostHeaderOriginFallback: true\n\n")
 		}
 		b.WriteString(importedOverlay)
 	} else {
@@ -1759,9 +1761,12 @@ rbac:
 		b.WriteString(`  gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
     # Required: browser on non-localhost HTTP has no crypto.subtle,
-    # so device identity is unavailable. Token auth is still enforced.
+    # so device identity is unavailable. dangerouslyDisableDeviceAuth
+    # is needed because Traefik proxies from the k3d bridge IP, not
+    # localhost. Token auth is still enforced.
     controlUi:
       allowInsecureAuth: true
+      dangerouslyDisableDeviceAuth: true
       dangerouslyAllowHostHeaderOriginFallback: true
 
 # LiteLLM gateway: OpenAI-compatible proxy routing to all configured providers.
