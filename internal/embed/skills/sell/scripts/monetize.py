@@ -932,6 +932,10 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
     url_path = spec.get("path", f"/services/{name}")
     agent_uri = f"{base_url}/.well-known/agent-registration.json"
 
+    # Publish the registration JSON immediately so `.well-known` is available
+    # for discovery even before the on-chain NFT mint completes (or if it fails).
+    _publish_registration_json(spec, ns, name, "", "", token, ssl_ctx)
+
     print(f"  Registering on ERC-8004 (Base Sepolia)...")
     print(f"    Registry:  {IDENTITY_REGISTRY}")
     print(f"    Agent URI: {agent_uri}")
@@ -941,32 +945,28 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
     except urllib.error.URLError as e:
         reason = str(e.reason) if hasattr(e, 'reason') else str(e)
         if "remote-signer" in reason.lower() or "Connection refused" in reason:
-            msg = f"Remote-signer unavailable: {reason[:100]}"
-            print(f"  {msg}", file=sys.stderr)
-            set_condition(ns, name, "Registered", "False", "SignerUnavailable", msg, token, ssl_ctx)
+            msg = f"Off-chain only (remote-signer unavailable): {reason[:80]}"
         else:
-            msg = f"RPC error: {reason[:100]}"
-            print(f"  {msg}", file=sys.stderr)
-            set_condition(ns, name, "Registered", "False", "RPCError", msg, token, ssl_ctx)
-        return True  # Don't block Ready
+            msg = f"Off-chain only (RPC error): {reason[:80]}"
+        print(f"  {msg}", file=sys.stderr)
+        set_condition(ns, name, "Registered", "True", "OffChainOnly", msg, token, ssl_ctx)
+        return True
     except RuntimeError as e:
         msg = str(e)[:200]
         if "insufficient funds" in msg.lower() or "gas" in msg.lower():
-            print(f"  Wallet not funded on Base Sepolia: {msg}", file=sys.stderr)
-            set_condition(ns, name, "Registered", "False", "InsufficientFunds",
-                          f"Fund the agent wallet on Base Sepolia: {msg}", token, ssl_ctx)
+            reason = f"Off-chain only (wallet not funded): {msg[:80]}"
         elif "reverted" in msg.lower():
-            print(f"  Registration tx reverted: {msg}", file=sys.stderr)
-            set_condition(ns, name, "Registered", "False", "TxReverted", msg, token, ssl_ctx)
+            reason = f"Off-chain only (tx reverted): {msg[:80]}"
         else:
-            print(f"  Registration failed: {msg}", file=sys.stderr)
-            set_condition(ns, name, "Registered", "False", "RegistrationFailed", msg, token, ssl_ctx)
-        return True  # Don't block Ready
+            reason = f"Off-chain only: {msg[:80]}"
+        print(f"  {reason}", file=sys.stderr)
+        set_condition(ns, name, "Registered", "True", "OffChainOnly", reason, token, ssl_ctx)
+        return True
     except Exception as e:
-        msg = f"Unexpected error: {str(e)[:150]}"
+        msg = f"Off-chain only (unexpected): {str(e)[:120]}"
         print(f"  {msg}", file=sys.stderr)
-        set_condition(ns, name, "Registered", "False", "RegistrationFailed", msg, token, ssl_ctx)
-        return True  # Don't block Ready
+        set_condition(ns, name, "Registered", "True", "OffChainOnly", msg, token, ssl_ctx)
+        return True
 
     # Patch CRD status with on-chain identity.
     set_status_field(ns, name, "agentId", str(agent_id), token, ssl_ctx)

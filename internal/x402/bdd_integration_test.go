@@ -177,7 +177,10 @@ func TestMain(m *testing.M) {
 		"--upstream", "litellm",
 		"--port", "4000",
 		"--namespace", serviceOfferNamespace,
-		"--health-path", "/health/readiness"); err != nil {
+		"--health-path", "/health/readiness",
+		"--register",
+		"--register-name", "BDD Test Inference",
+		"--register-description", "Integration test inference endpoint"); err != nil {
 		teardown(obolBin)
 		log.Fatalf("obol sell http: %v", err)
 	}
@@ -301,9 +304,16 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 		return fmt.Errorf("obol-agent not ready: %w", err)
 	}
 
-	_, err := kubectl.Output(kubectlBin, kubeconfig,
-		"get", "serviceoffers.obol.org", serviceOfferName, "-n", serviceOfferNamespace, "--no-headers")
-	if err != nil {
+	soOut, err := kubectl.Output(kubectlBin, kubeconfig,
+		"get", "serviceoffers.obol.org", serviceOfferName, "-n", serviceOfferNamespace, "-o", "jsonpath={.spec.registration.enabled}")
+	needsCreate := err != nil
+	if !needsCreate && soOut != "true" {
+		// ServiceOffer exists but registration not enabled — delete and recreate.
+		log.Printf("  Existing ServiceOffer %s/%s has no registration, recreating...", serviceOfferNamespace, serviceOfferName)
+		_ = runObol(obolBin, "sell", "delete", serviceOfferName, "-n", serviceOfferNamespace, "-f")
+		needsCreate = true
+	}
+	if needsCreate {
 		log.Printf("  Creating ServiceOffer %s/%s on existing cluster...", serviceOfferNamespace, serviceOfferName)
 		if err := runObol(obolBin, "sell", "http", serviceOfferName,
 			"--wallet", serviceOfferPayTo,
@@ -312,15 +322,20 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 			"--upstream", "litellm",
 			"--port", "4000",
 			"--namespace", serviceOfferNamespace,
-			"--health-path", "/health/readiness"); err != nil {
+			"--health-path", "/health/readiness",
+			"--register",
+			"--register-name", "BDD Test Inference",
+			"--register-description", "Integration test inference endpoint"); err != nil {
 			return fmt.Errorf("obol sell http on existing cluster: %w", err)
 		}
 	}
 
-	if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 180*time.Second); err != nil {
+	// Wait up to 5min for Ready. The Registered stage may call real Base Sepolia
+	// via eRPC, which takes ~120s to fail when the wallet isn't funded.
+	if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 300*time.Second); err != nil {
 		log.Println("  ServiceOffer not Ready on existing cluster, triggering manual reconciliation...")
 		triggerReconciliation(kubectlBin, kubeconfig)
-		if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 120*time.Second); err != nil {
+		if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 180*time.Second); err != nil {
 			return fmt.Errorf("existing-cluster ServiceOffer not Ready: %w", err)
 		}
 	}

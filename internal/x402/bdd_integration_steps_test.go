@@ -332,7 +332,10 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			"--upstream", "litellm",
 			"--port", "4000",
 			"--namespace", serviceOfferNamespace,
-			"--health-path", "/health/readiness"); err != nil {
+			"--health-path", "/health/readiness",
+			"--register",
+			"--register-name", "BDD Test Inference",
+			"--register-description", "Integration test inference endpoint"); err != nil {
 			return fmt.Errorf("obol sell http failed: %w", err)
 		}
 
