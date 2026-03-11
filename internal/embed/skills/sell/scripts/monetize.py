@@ -1047,10 +1047,10 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
         ],
         "registrations": [
             {
-                "agentId": int(agent_id),
+                "agentId": int(agent_id) if agent_id else 0,
                 "agentRegistry": f"eip155:{BASE_SEPOLIA_CHAIN_ID}:{IDENTITY_REGISTRY}",
             }
-        ],
+        ] if agent_id else [],
         "supportedTrust": registration.get("supportedTrust", []),
     }
 

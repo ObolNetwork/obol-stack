@@ -48,7 +48,7 @@ const (
 
 	// openclawImageTag overrides the chart's default image tag.
 	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
-	openclawImageTag = "2026.3.2"
+	openclawImageTag = "2026.3.8"
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
