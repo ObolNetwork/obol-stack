@@ -242,7 +242,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 agents:
   defaults:
     heartbeat:
-      every: "1m"
+      every: "2m"
       target: "none"
 `
 	}

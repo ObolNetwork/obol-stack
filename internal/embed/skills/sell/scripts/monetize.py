@@ -1513,15 +1513,21 @@ def _remove_pricing_route(url_path, name, token, ssl_ctx):
     print(f"  Removed pricing route: {route_pattern}")
 
 
-def cmd_process(ns, name, all_offers, token, ssl_ctx):
-    """Reconcile one or all ServiceOffers."""
+def cmd_process(ns, name, all_offers, quick, token, ssl_ctx):
+    """Reconcile one or all ServiceOffers.
+
+    --quick: single-line summary for heartbeat efficiency.
+      READY: 3/3 offers
+      RECONCILED: my-qwen (PaymentGateReady→RoutePublished)
+      PENDING: my-qwen stuck at UpstreamHealthy
+    """
     if all_offers:
         path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/{CRD_PLURAL}"
         data = api_get(path, token, ssl_ctx)
         items = data.get("items", [])
 
         if not items:
-            print("HEARTBEAT_OK: No ServiceOffers found")
+            print("READY: 0/0 offers" if quick else "HEARTBEAT_OK: No ServiceOffers found")
             return
 
         pending = []
@@ -1531,17 +1537,40 @@ def cmd_process(ns, name, all_offers, token, ssl_ctx):
                 pending.append(item)
 
         if not pending:
-            print("HEARTBEAT_OK: All offers are Ready")
+            print(f"READY: {len(items)}/{len(items)} offers" if quick else "HEARTBEAT_OK: All offers are Ready")
             return
 
-        print(f"Processing {len(pending)} pending offer(s)...")
-        for item in pending:
-            item_ns = item["metadata"]["namespace"]
-            item_name = item["metadata"]["name"]
-            try:
-                reconcile(item_ns, item_name, token, ssl_ctx)
-            except Exception as e:
-                print(f"  Error reconciling {item_ns}/{item_name}: {e}", file=sys.stderr)
+        if quick:
+            # In quick mode, reconcile silently and report a compact summary.
+            results = []
+            for item in pending:
+                item_ns = item["metadata"]["namespace"]
+                item_name = item["metadata"]["name"]
+                try:
+                    reconcile(item_ns, item_name, token, ssl_ctx)
+                    # Re-read conditions after reconciliation.
+                    so_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{item_ns}/{CRD_PLURAL}/{item_name}"
+                    obj = api_get(so_path, token, ssl_ctx)
+                    conds = obj.get("status", {}).get("conditions", [])
+                    last = next((c for c in reversed(conds) if c.get("status") == "True"), None)
+                    stage = last["type"] if last else "Unknown"
+                    if is_condition_true(conds, "Ready"):
+                        results.append(f"{item_name} (Ready)")
+                    else:
+                        results.append(f"{item_name} ({stage})")
+                except Exception as e:
+                    results.append(f"{item_name} (error: {str(e)[:40]})")
+            ready_count = len(items) - len(pending) + sum(1 for r in results if "Ready" in r)
+            print(f"RECONCILED: {ready_count}/{len(items)} ready — {', '.join(results)}")
+        else:
+            print(f"Processing {len(pending)} pending offer(s)...")
+            for item in pending:
+                item_ns = item["metadata"]["namespace"]
+                item_name = item["metadata"]["name"]
+                try:
+                    reconcile(item_ns, item_name, token, ssl_ctx)
+                except Exception as e:
+                    print(f"  Error reconciling {item_ns}/{item_name}: {e}", file=sys.stderr)
     else:
         if not ns or not name:
             print("Error: --namespace and name are required (or use --all)", file=sys.stderr)
@@ -1596,6 +1625,7 @@ def main():
     sp_process.add_argument("name", nargs="?", help="ServiceOffer name (or use --all)")
     sp_process.add_argument("--namespace", help="Namespace")
     sp_process.add_argument("--all", dest="all_offers", action="store_true", help="Process all non-Ready offers")
+    sp_process.add_argument("--quick", action="store_true", help="Single-line summary output (for heartbeat efficiency)")
 
     args = parser.parse_args()
 
@@ -1619,6 +1649,7 @@ def main():
             getattr(args, "namespace", None),
             getattr(args, "name", None),
             getattr(args, "all_offers", False),
+            getattr(args, "quick", False),
             token,
             ssl_ctx,
         )
