@@ -10,10 +10,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	petname "github.com/dustinkirkland/golang-petname"
@@ -294,7 +297,6 @@ func Up(cfg *config.Config, u *ui.UI) error {
 	u.Blank()
 	u.Bold("Stack started successfully.")
 	u.Print("Visit http://obol.stack in your browser to get started.")
-	u.Print("Try setting up an agent with `obol agent init` next.")
 	update.HintIfStale(cfg)
 	return nil
 }
@@ -431,6 +433,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
+	// Auto-configure LiteLLM with Ollama models if available.
+	// This ensures the inference path works out of the box when the user
+	// has Ollama running — no separate `obol model setup` step required.
+	// Non-fatal: the user can always run `obol model setup` later.
+	autoConfigureLLM(cfg, u)
+
 	// Deploy default OpenClaw instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
 	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
@@ -443,7 +451,61 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
 	}
 
+	// Deploy the obol-agent singleton (monetize reconciliation, heartbeat).
+	// Non-fatal: the user can always run `obol agent init` later.
+	u.Blank()
+	u.Info("Deploying obol-agent")
+	if err := agent.Init(cfg, u); err != nil {
+		u.Warnf("Failed to deploy obol-agent: %v", err)
+		u.Dim("  You can manually deploy later with: obol agent init")
+	}
+
+	// Start the Cloudflare tunnel so the stack is publicly accessible.
+	// Non-fatal: the user can start it later with `obol tunnel restart`.
+	u.Blank()
+	u.Info("Starting Cloudflare tunnel")
+	if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
+		u.Warnf("Tunnel not started: %v", err)
+		u.Dim("  Start manually with: obol tunnel restart")
+	} else {
+		u.Successf("Tunnel active: %s", tunnelURL)
+	}
+
 	return nil
+}
+
+// autoConfigureLLM detects the host Ollama and auto-configures LiteLLM with
+// available models so that inference works out of the box. Skipped silently
+// if Ollama is unreachable, has no models, or LiteLLM already has non-paid
+// models configured.
+func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
+	ollamaModels, err := model.ListOllamaModels()
+	if err != nil || len(ollamaModels) == 0 {
+		// Ollama not running or no models — skip silently.
+		return
+	}
+
+	// Check if LiteLLM already has real models (not just the paid/* catch-all).
+	if model.HasConfiguredModels(cfg) {
+		return
+	}
+
+	u.Blank()
+	u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
+
+	var names []string
+	for _, m := range ollamaModels {
+		name := m.Name
+		if strings.HasSuffix(name, ":latest") {
+			name = strings.TrimSuffix(name, ":latest")
+		}
+		names = append(names, name)
+	}
+
+	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
+		u.Warnf("Auto-configure LiteLLM failed: %v", err)
+		u.Dim("  Run 'obol model setup' to configure manually.")
+	}
 }
 
 // localImage describes a Docker image built from source in this repo.

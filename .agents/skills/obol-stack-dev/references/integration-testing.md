@@ -181,6 +181,81 @@ func TestIntegration_MyTest(t *testing.T) {
 5. Deploy via `obol openclaw sync`
 6. Model name format: `openai/<model-id>` (always openai/ prefix through LiteLLM)
 
+## BDD Integration Tests (x402 Payment Flow)
+
+A separate BDD test suite validates the full sell→discover→buy payment flow using Gherkin scenarios and godog. These tests live in `internal/x402/` and follow the **real user journey** — no kubectl shortcuts.
+
+### Running BDD Tests
+
+```bash
+# Against existing cluster (fast, ~2min)
+export OBOL_DEVELOPMENT=true
+export OBOL_CONFIG_DIR=$(pwd)/.workspace/config
+export OBOL_BIN_DIR=$(pwd)/.workspace/bin
+export OBOL_DATA_DIR=$(pwd)/.workspace/data
+export OBOL_INTEGRATION_SKIP_BOOTSTRAP=true
+export OBOL_TEST_MODEL=qwen3.5:9b
+
+go test -tags integration -v -run TestBDDIntegration -timeout 10m ./internal/x402/
+
+# Full bootstrap from scratch (~15min, creates cluster)
+go test -tags integration -v -run TestBDDIntegration -timeout 20m ./internal/x402/
+```
+
+### BDD Scenarios (7 total, 77 steps)
+
+| Scenario | What it validates |
+|----------|------------------|
+| Operator sells inference via CLI + agent reconciles | `obol sell http` → CRD → 6-stage reconciliation |
+| Unpaid request returns 402 | x402 payment gate |
+| Paid request returns real inference | EIP-712 → verify → LiteLLM → Ollama |
+| Discovery-to-payment cycle | Parse 402 → sign → pay → 200 |
+| Paid request through Cloudflare tunnel | Full flow via tunnel |
+| Agent discovers service through tunnel | `.well-known` → x402Support → OASF skills/domains → probe 402 |
+| Operator deletes + cleanup | CR + pricing route removed |
+
+### BDD Test Files
+
+| File | Role |
+|------|------|
+| `internal/x402/features/integration_payment_flow.feature` | Gherkin scenarios |
+| `internal/x402/bdd_integration_test.go` | TestMain bootstrap (builds binary, stack init/up, agent init, sell) |
+| `internal/x402/bdd_integration_steps_test.go` | Step definitions (Anvil, facilitator, payment signing) |
+
+### BDD TestMain Bootstrap (Full Mode)
+
+```
+1. go build ./cmd/obol
+2. obol stack init + up
+3. obol model setup (Anthropic/OpenAI/Ollama)
+4. obol sell pricing --wallet ... --chain base-sepolia
+5. obol agent init (deploys agent + RBAC + monetize skill)
+6. obol sell http bdd-test --upstream litellm --port 4000 ...
+7. Wait for agent reconciliation (6 stages → Ready)
+8. Restart x402-verifier
+```
+
+### Skip-Bootstrap Mode
+
+Set `OBOL_INTEGRATION_SKIP_BOOTSTRAP=true` to use an existing cluster. Requires:
+- ServiceOffer `bdd-test` in `llm` namespace (Ready)
+- x402-verifier running
+- LiteLLM running with at least one model
+- Ollama running (for inference)
+
+### Per-Scenario Infrastructure
+
+Each scenario gets a fresh:
+- Anvil fork (Base Sepolia, on random port)
+- Mock facilitator (accepts all payments)
+- x402-verifier patched to use the scenario's facilitator
+
+### Key Dependency
+
+```bash
+go get github.com/cucumber/godog@v0.15.1
+```
+
 ## Timing and Timeouts
 
 | Operation | Typical Time | Timeout |

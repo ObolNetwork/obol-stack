@@ -72,7 +72,7 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --upstream --port --price|--per-mtok`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
 **ServiceOffer CRD** (`obol.org`): Spec fields — `type` (inference|fine-tuning), `model{name,runtime}`, `upstream{service,ns,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image}`. In phase 1, `perMTok` is accepted but enforced as `perRequest = perMTok / 1000`.
 
@@ -97,7 +97,7 @@ Two-stage templating: `values.yaml.gotmpl` with `@enum/@default/@description` an
 | Command | Action |
 |---------|--------|
 | `obol stack init` | Generate cluster ID, resolve absolute paths, write k3d.yaml, copy infrastructure |
-| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests |
+| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models, deploys obol-agent, starts Cloudflare tunnel (default agent model: `qwen3.5:9b`) |
 | `obol stack down` | `k3d cluster delete` (preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs |
 
@@ -105,7 +105,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). No default provider — `obol model setup` required. `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 

@@ -65,12 +65,10 @@ BUYER (curl / blockrun-llm SDK)
 Start from a clean state:
 
 ```bash
-# Initialize and start
+# Initialize and start (automatically deploys obol-agent, configures LiteLLM
+# with Ollama models, and starts a Cloudflare tunnel — no manual setup needed)
 obol stack init
 obol stack up
-
-# Deploy the AI agent (manages ServiceOffer reconciliation)
-obol agent init
 
 # Wait for all pods to be ready
 obol kubectl get pods -A
@@ -93,8 +91,8 @@ Verify the key components:
 Make sure the model is available in your host Ollama:
 
 ```bash
-# Pull a model (qwen3.5:35b recommended for tool-call support)
-ollama pull qwen3.5:35b
+# Pull a model (qwen3.5:9b is the default agent model)
+ollama pull qwen3.5:9b
 
 # Or a smaller model for quick testing
 ollama pull qwen3:0.6b
@@ -103,7 +101,7 @@ ollama pull qwen3:0.6b
 curl -s http://localhost:11434/api/tags | python3 -m json.tool
 ```
 
-LiteLLM discovers models from host Ollama at startup. If you pull a new model after the cluster is running, restart LiteLLM:
+`obol stack up` automatically configures LiteLLM with all available Ollama models (no manual `obol model setup` needed). If you pull a new model after the cluster is running, restart LiteLLM to pick it up:
 
 ```bash
 obol kubectl rollout restart deployment/litellm -n llm
@@ -147,16 +145,12 @@ Declare your inference service as a Kubernetes custom resource:
 
 ```bash
 obol sell http my-qwen \
-    --type inference \
-    --model qwen3:0.6b \
-    --runtime ollama \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --chain base-sepolia \
     --per-request 0.001 \
-    --network base-sepolia \
-    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --namespace llm \
     --upstream ollama \
-    --port 11434 \
-    --path /services/my-qwen
+    --port 11434
 ```
 
 If you want to price by million tokens instead of explicitly setting a flat
@@ -165,16 +159,12 @@ derived per-request price:
 
 ```bash
 obol sell http my-qwen \
-    --type inference \
-    --model qwen3:0.6b \
-    --runtime ollama \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --chain base-sepolia \
     --per-mtok 1.25 \
-    --network base-sepolia \
-    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
     --namespace llm \
     --upstream ollama \
-    --port 11434 \
-    --path /services/my-qwen
+    --port 11434
 ```
 
 That stores both values in the pricing config:
@@ -208,7 +198,7 @@ obol kubectl get httproute -n llm            # so-my-qwen
 
 ### 1.5 Expose via Cloudflare Tunnel
 
-The stack deploys a Cloudflare Quick Tunnel automatically. Get the public URL:
+`obol stack up` automatically starts a Cloudflare Quick Tunnel. Get the public URL:
 
 ```bash
 obol tunnel status
@@ -791,7 +781,7 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 | Command | Description |
 |---------|-------------|
 | `obol sell pricing --wallet ... --chain ...` | Configure x402 payment settings |
-| `obol sell http <name> --model ... --per-request ...` | Create a ServiceOffer |
+| `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer |
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
 | `obol sell stop <name> -n <ns>` | Pause an offer (remove pricing route) |
