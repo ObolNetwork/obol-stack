@@ -2,6 +2,7 @@ import { Box, styled } from '@obolnetwork/obol-ui';
 import { NetworksSection } from '../NetworksSection/NetworksSection';
 import { NodeOverview } from '../NodeOverview';
 import { OpenClawList } from '../OpenClawList';
+import { AgentRegistry } from '../AgentRegistry';
 import { DashboardData } from '../../../types/dashboard';
 import { OpenClawChatSidebar } from '../../molecules/OpenClawChatSidebar';
 import { ErrorState } from '../../molecules/ErrorState';
@@ -82,6 +83,7 @@ export function DashboardContent({
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
           <OpenClawList onInstanceSelect={handleInstanceSelect} />
+          <AgentRegistry />
           {error && <ErrorState onRetry={onRetry} />}
           {data && data.apps.length > 0 && <NetworksSection apps={data.apps} />}
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
