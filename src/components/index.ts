@@ -1,9 +1,17 @@
 // Atoms
+export { Avatar } from './atoms/Avatar';
+export { Badge } from './atoms/Badge';
 export { Card } from './atoms/Card';
+export { EmptyMessage } from './atoms/EmptyMessage';
 export { ChainChip } from './atoms/ChainChip';
 export { CopyButton } from './atoms/CopyButton';
 export { ChainIcon } from './atoms/ChainIcon';
+export { CountBadge } from './atoms/CountBadge';
+export { FilterChip } from './atoms/FilterChip';
+export { ItemCard } from './atoms/ItemCard';
 export { PercentageChip } from './atoms/PercentageChip';
+export { SearchInput } from './atoms/SearchInput';
+export { SectionTitle } from './atoms/SectionTitle';
 export { StatusIndicator } from './atoms/StatusIndicator';
 export { Tooltip } from './atoms/Tooltip';
 
@@ -27,7 +35,7 @@ export { DashboardTemplate } from './templates/DashboardTemplate';
 export { DashboardHeader } from './organisms/DashboardHeader';
 export { DashboardContent } from './organisms/DashboardContent';
 export { FooterBar } from './organisms/FooterBar';
-export { NetworkRpc } from './organisms/NetworkRpc';
+export { ErpcStatus } from './organisms/ErpcStatus';
 export { NetworksSection } from './organisms/NetworksSection/NetworksSection';
 export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
 export { NodeOverview } from './organisms/NodeOverview';

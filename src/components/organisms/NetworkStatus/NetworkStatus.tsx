@@ -4,10 +4,10 @@ import { ChainChip } from '../../atoms/ChainChip';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
-import { AppData } from '../../../types/dashboard';
+import { AppData, NODE_MODES } from '../../../types/dashboard';
 import { useWalletClient } from 'wagmi';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
-import { AppIcon } from '../../atoms/AppIcon';
+import { AppIcon, CardAppType, CardAppId } from '../../atoms/AppIcon';
 
 export interface NetworkStatusProps {
   appData: AppData;
@@ -19,22 +19,6 @@ const NetworkHeader = styled(Flex, {
   gap: '$md',
   marginBottom: '$2xl',
   flexWrap: 'wrap',
-});
-
-const CardAppType = styled(Text, {
-  fontSize: '$2',
-  fontWeight: '$medium',
-  color: '$body',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-});
-
-const CardAppId = styled(Text, {
-  fontSize: '$5',
-  fontWeight: '$semibold',
-  color: '$light',
-  fontFamily: 'monospace',
-  lineHeight: '$tight',
 });
 
 const MetricsGrid = styled(Box, {
@@ -96,13 +80,20 @@ const ClientsContainer = styled(Box, {
 
 export function NetworkStatus({ appData }: NetworkStatusProps) {
   const { data: walletClient } = useWalletClient();
-
+  const title =
+    appData.nodeMode === NODE_MODES.LIGHT_MODE
+      ? 'Local Light Client'
+      : appData.nodeMode === NODE_MODES.FULL_MODE
+        ? 'Local Full Node'
+        : appData.nodeMode === NODE_MODES.AZTEC_SEQUENCER
+          ? 'Aztec Sequencer'
+          : '';
   return (
     <Card
       css={{
         position: 'relative',
         overflow: 'hidden',
-        backgroundColor: '$bg03',
+        backgroundColor: '$bg04',
         borderRadius: '$2',
         padding: '$sm $md',
       }}
@@ -120,12 +111,11 @@ export function NetworkStatus({ appData }: NetworkStatusProps) {
 
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
             <CardAppType>
-              {appData.app.charAt(0).toUpperCase() + appData.app.slice(1)}
+              {title} {appData.app}
             </CardAppType>
             <CardAppId>{appData.appId}</CardAppId>
           </Flex>
 
-          <ChainChip variant={appData.chainName} />
           <ChainChip variant={appData.nodeMode} />
         </Flex>
 

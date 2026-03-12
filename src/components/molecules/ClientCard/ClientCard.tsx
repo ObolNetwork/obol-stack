@@ -19,7 +19,7 @@ const Card = styled(Box, {
   alignItems: 'flex-start',
   gap: '$xxs',
   borderRadius: '$3',
-  background: '$bg04',
+  background: '$bg03',
   border: '1px solid $stroke',
 });
 

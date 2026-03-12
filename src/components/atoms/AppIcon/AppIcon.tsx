@@ -1,6 +1,22 @@
 import React from 'react';
 import { AppInstanceType } from '../../../types/dashboard';
-import { Box } from '@obolnetwork/obol-ui';
+import { Box, Text, styled } from '@obolnetwork/obol-ui';
+
+export const CardAppType = styled(Text, {
+  fontSize: '$2',
+  fontWeight: '$medium',
+  color: '$body',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+});
+
+export const CardAppId = styled(Text, {
+  fontSize: '$5',
+  fontWeight: '$semibold',
+  color: '$light',
+  fontFamily: 'monospace',
+  lineHeight: '$tight',
+});
 
 export interface AppIconProps {
   app: AppInstanceType;

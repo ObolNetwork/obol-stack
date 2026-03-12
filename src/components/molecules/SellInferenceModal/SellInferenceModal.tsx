@@ -54,7 +54,7 @@ const ModalBody = styled(Box, {
 const FieldGroup = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '4px',
+  gap: '$xxxs',
 });
 
 const FieldLabel = styled(Text, {
@@ -67,12 +67,12 @@ const FieldLabel = styled(Text, {
 
 const StyledInput = styled('input', {
   width: '100%',
-  padding: '8px 12px',
+  padding: '$xxs $xs',
   backgroundColor: '$bg01',
   border: '1px solid $stroke',
-  borderRadius: '8px',
+  borderRadius: '$3',
   color: '$light',
-  fontSize: '14px',
+  fontSize: '$3',
   fontFamily: 'monospace',
   outline: 'none',
   transition: 'border-color 0.15s ease',
@@ -83,7 +83,7 @@ const StyledInput = styled('input', {
   },
 
   '&:focus': {
-    borderColor: '#2FE4AB',
+    borderColor: '$obolGreen',
     boxShadow: '0 0 0 1px rgba(47, 228, 171, 0.15)',
   },
 });
@@ -105,8 +105,8 @@ const CloseButton = styled('button', {
   border: 'none',
   color: '$body',
   cursor: 'pointer',
-  padding: '4px',
-  borderRadius: '4px',
+  padding: '$xxxs',
+  borderRadius: '$1',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -128,7 +128,7 @@ const SuccessCard = styled(Flex, {
 const PulseRing = styled(Box, {
   width: 56,
   height: 56,
-  borderRadius: '50%',
+  borderRadius: '$round',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -137,11 +137,11 @@ const PulseRing = styled(Box, {
 });
 
 const ErrorMessage = styled(Text, {
-  fontSize: '13px',
-  color: '#FF6B6B',
-  padding: '8px 12px',
+  fontSize: '$2',
+  color: '$test',
+  padding: '$xxs $xs',
   backgroundColor: 'rgba(255, 107, 107, 0.08)',
-  borderRadius: '6px',
+  borderRadius: '$2',
   border: '1px solid rgba(255, 107, 107, 0.15)',
 });
 
@@ -242,7 +242,9 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
         {submitState === 'success' ? (
           <SuccessCard>
             <PulseRing>
-              <Text css={{ color: '#2FE4AB', fontSize: '24px' }}>&#10003;</Text>
+              <Text css={{ color: '$obolGreen', fontSize: '$8' }}>
+                &#10003;
+              </Text>
             </PulseRing>
             <Box>
               <Text
@@ -258,7 +260,7 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
               <Text css={{ fontSize: '$2', color: '$body' }}>
                 <Text
                   as="span"
-                  css={{ color: '#2FE4AB', fontFamily: 'monospace' }}
+                  css={{ color: '$obolGreen', fontFamily: 'monospace' }}
                 >
                   {form.name}
                 </Text>{' '}
