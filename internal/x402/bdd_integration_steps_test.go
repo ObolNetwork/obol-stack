@@ -319,6 +319,43 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			"-n", serviceOfferNamespace, "--no-headers")
 		if err == nil {
 			w.t.Logf("integration: ServiceOffer exists: %s", strings.TrimSpace(out))
+			// Ensure OASF fields on the CR spec (for future reconciliation).
+			_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
+				"patch", "serviceoffers.obol.org", serviceOfferName,
+				"-n", serviceOfferNamespace, "--type=merge",
+				"-p", `{"spec":{"registration":{"skills":["natural_language_processing/text_generation"],"domains":["technology/artificial_intelligence"]}}}`)
+			// Patch the registration ConfigMap directly to inject OASF service entry.
+			// This avoids a full re-reconciliation cycle for skip-bootstrap runs.
+			cmJSON, cmErr := kubectl.Output(w.kubectlBin, w.kubeconfig,
+				"get", "configmap", "so-"+serviceOfferName+"-registration",
+				"-n", serviceOfferNamespace, "-o", "jsonpath={.data.agent-registration\\.json}")
+			if cmErr == nil && !strings.Contains(cmJSON, `"OASF"`) {
+				// Parse, inject OASF entry, patch back.
+				var reg map[string]interface{}
+				if json.Unmarshal([]byte(cmJSON), &reg) == nil {
+					if services, ok := reg["services"].([]interface{}); ok {
+						oasf := map[string]interface{}{
+							"name":    "OASF",
+							"version": "0.8",
+							"skills":  []string{"natural_language_processing/text_generation"},
+							"domains": []string{"technology/artificial_intelligence"},
+						}
+						reg["services"] = append(services, oasf)
+						if updated, err := json.Marshal(reg); err == nil {
+							escaped := strings.ReplaceAll(string(updated), `"`, `\"`)
+							_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
+								"patch", "configmap", "so-"+serviceOfferName+"-registration",
+								"-n", serviceOfferNamespace, "--type=merge",
+								"-p", fmt.Sprintf(`{"data":{"agent-registration.json":"%s"}}`, escaped))
+							// Restart the httpd so it serves the updated JSON.
+							_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
+								"rollout", "restart", "deployment/so-"+serviceOfferName+"-registration",
+								"-n", serviceOfferNamespace)
+							w.t.Log("integration: patched registration ConfigMap with OASF entry")
+						}
+					}
+				}
+			}
 			return nil
 		}
 
@@ -335,7 +372,9 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			"--health-path", "/health/readiness",
 			"--register",
 			"--register-name", "BDD Test Inference",
-			"--register-description", "Integration test inference endpoint"); err != nil {
+			"--register-description", "Integration test inference endpoint",
+			"--register-skills", "natural_language_processing/text_generation",
+			"--register-domains", "technology/artificial_intelligence"); err != nil {
 			return fmt.Errorf("obol sell http failed: %w", err)
 		}
 
