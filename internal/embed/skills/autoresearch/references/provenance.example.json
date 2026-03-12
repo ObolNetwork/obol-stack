@@ -1,0 +1,8 @@
+{
+  "framework": "autoresearch",
+  "metricName": "val_bpb",
+  "metricValue": "0.9973",
+  "experimentId": "abc123def456",
+  "trainHash": "sha256:deadbeefcafebabe",
+  "paramCount": "50000000"
+}

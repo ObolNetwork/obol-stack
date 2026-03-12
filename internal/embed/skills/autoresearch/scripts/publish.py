@@ -134,20 +134,16 @@ def generate_provenance(
     train_hash: str,
     param_count: int | None,
 ) -> Path:
-    """Generate provenance JSON and write it to the workdir."""
+    """Generate canonical provenance JSON and write it to the workdir."""
     provenance = {
         "framework": "autoresearch",
-        "metric": {
-            "name": "val_bpb",
-            "value": float(best["val_bpb"]),
-            "description": "Validation bits per byte (lower is better)",
-        },
-        "trainHash": train_hash,
+        "metricName": "val_bpb",
+        "metricValue": str(best["val_bpb"]),
         "experimentId": best["commit_hash"].strip(),
-        "description": best.get("description", "").strip(),
+        "trainHash": f"sha256:{train_hash}",
     }
     if param_count is not None:
-        provenance["paramCount"] = param_count
+        provenance["paramCount"] = str(param_count)
 
     out_path = Path(workdir) / "provenance.json"
     with open(out_path, "w") as f:

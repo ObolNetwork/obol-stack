@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -212,7 +213,7 @@ Examples:
 				}
 				d.Provenance = prov
 				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
-					prov.Framework, prov.MetricName, prov.Metric, prov.ParamCount)
+					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 			if priceTable.PerMTok != "" {
 				d.ApproxTokensPerRequest = schemas.ApproxTokensPerRequest
@@ -387,11 +388,11 @@ Examples:
 				if prov.Framework != "" {
 					provMap["framework"] = prov.Framework
 				}
-				if prov.Metric != "" {
-					provMap["metric"] = prov.Metric
-				}
 				if prov.MetricName != "" {
 					provMap["metricName"] = prov.MetricName
+				}
+				if prov.MetricValue != "" {
+					provMap["metricValue"] = prov.MetricValue
 				}
 				if prov.ExperimentID != "" {
 					provMap["experimentId"] = prov.ExperimentID
@@ -404,7 +405,7 @@ Examples:
 				}
 				spec["provenance"] = provMap
 				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
-					prov.Framework, prov.MetricName, prov.Metric, prov.ParamCount)
+					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
 			if cmd.Bool("register") || cmd.String("register-name") != "" {
@@ -1108,7 +1109,9 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var prov inference.Provenance
-	if err := json.Unmarshal(data, &prov); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&prov); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return &prov, nil

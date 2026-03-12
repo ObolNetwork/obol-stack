@@ -87,9 +87,10 @@ These tags help buyers discover optimized models through the agent discovery pro
 The `publish.py` script generates a provenance JSON file that records:
 
 - **framework**: `autoresearch`
-- **metric**: `val_bpb` and its value
-- **trainHash**: SHA-256 of `train.py` at the winning commit (reproducibility proof)
-- **paramCount**: model parameter count (when available from checkpoint metadata)
+- **metricName**: `val_bpb`
+- **metricValue**: the winning `val_bpb` value as a string
+- **trainHash**: `sha256:` hash of `train.py` at the winning commit (reproducibility proof)
+- **paramCount**: model parameter count as a string (when available from checkpoint metadata)
 - **experimentId**: git commit hash of the winning experiment
 
 This provenance file can be passed to `obol sell inference --provenance-file` so that buyers can verify the optimization lineage of the model they are purchasing.

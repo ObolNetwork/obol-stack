@@ -78,6 +78,45 @@ func TestStoreCreate_PersistsPerMTokMetadata(t *testing.T) {
 	}
 }
 
+func TestStoreCreate_PersistsCanonicalProvenance(t *testing.T) {
+	dir := t.TempDir()
+	store := inference.NewStore(dir)
+
+	d := &inference.Deployment{
+		Name:          "prov",
+		WalletAddress: "0xdeadbeef",
+		Provenance: &inference.Provenance{
+			Framework:    "autoresearch",
+			MetricName:   "val_bpb",
+			MetricValue:  "0.9973",
+			ExperimentID: "abc123",
+			TrainHash:    "sha256:deadbeef",
+			ParamCount:   "50000000",
+		},
+	}
+
+	if err := store.Create(d, false); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.Get("prov")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Provenance == nil {
+		t.Fatal("Provenance should be persisted")
+	}
+	if got.Provenance.MetricName != "val_bpb" {
+		t.Errorf("MetricName = %q, want %q", got.Provenance.MetricName, "val_bpb")
+	}
+	if got.Provenance.MetricValue != "0.9973" {
+		t.Errorf("MetricValue = %q, want %q", got.Provenance.MetricValue, "0.9973")
+	}
+	if got.Provenance.TrainHash != "sha256:deadbeef" {
+		t.Errorf("TrainHash = %q, want %q", got.Provenance.TrainHash, "sha256:deadbeef")
+	}
+}
+
 func TestStoreCreateDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	store := inference.NewStore(dir)

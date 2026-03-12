@@ -83,9 +83,10 @@ python3 scripts/publish.py /path/to/autoresearch \
 
 3. **Provenance**: A JSON provenance file is generated with:
    - `framework`: training framework used
-   - `metric`: `val_bpb` and its value
-   - `trainHash`: SHA-256 of the `train.py` at the winning commit
-   - `paramCount`: model parameter count (from checkpoint metadata)
+   - `metricName`: metric identifier (`val_bpb`)
+   - `metricValue`: winning metric value as a string
+   - `trainHash`: `sha256:` hash of the `train.py` at the winning commit
+   - `paramCount`: model parameter count as a string
    - `experimentId`: git commit hash of the winning experiment
 
 4. **Ollama registration**: A Modelfile is generated from the checkpoint and `ollama create` registers the model locally.

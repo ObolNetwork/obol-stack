@@ -98,13 +98,15 @@ type Deployment struct {
 }
 
 // Provenance tracks how a model or service was produced.
+// JSON field names use camelCase so the same document can flow through
+// publish.py -> --provenance-file -> ServiceOffer -> agent-registration.json.
 type Provenance struct {
-	Framework    string `json:"framework,omitempty"`     // e.g. "autoresearch"
-	Metric       string `json:"metric,omitempty"`        // e.g. "0.997" (val_bpb)
-	MetricName   string `json:"metric_name,omitempty"`   // e.g. "val_bpb"
-	ExperimentID string `json:"experiment_id,omitempty"` // commit hash or UUID
-	TrainHash    string `json:"train_hash,omitempty"`    // sha256 of training code
-	ParamCount   string `json:"param_count,omitempty"`   // e.g. "50M"
+	Framework    string `json:"framework,omitempty"`    // e.g. "autoresearch"
+	MetricName   string `json:"metricName,omitempty"`   // e.g. "val_bpb"
+	MetricValue  string `json:"metricValue,omitempty"`  // e.g. "0.9973"
+	ExperimentID string `json:"experimentId,omitempty"` // commit hash or UUID
+	TrainHash    string `json:"trainHash,omitempty"`    // e.g. "sha256:..."
+	ParamCount   string `json:"paramCount,omitempty"`   // e.g. "50000000"
 }
 
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,
