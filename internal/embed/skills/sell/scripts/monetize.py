@@ -203,7 +203,9 @@ def get_effective_price(spec):
         return price["perRequest"]
     if price.get("perMTok"):
         return _approximate_request_price(price["perMTok"])
-    return price.get("perHour") or "0"
+    if price.get("perHour"):
+        return _approximate_request_price_from_per_hour(price["perHour"])
+    return "0"
 
 
 def _approximate_request_price(per_mtok):
@@ -213,6 +215,23 @@ def _approximate_request_price(per_mtok):
     except InvalidOperation as exc:
         raise ValueError(f"invalid perMTok price: {per_mtok!r}") from exc
     return _decimal_to_string(value / APPROX_TOKENS_PER_REQUEST)
+
+
+# Autoresearch experiment budget: 5 minutes per experiment.
+APPROX_MINUTES_PER_REQUEST = 5
+
+
+def _approximate_request_price_from_per_hour(per_hour):
+    """Approximate a per-request price from a per-hour price.
+
+    Uses APPROX_MINUTES_PER_REQUEST (5 min, matching autoresearch budget).
+    Formula: perRequest = perHour * (minutesPerRequest / 60)
+    """
+    try:
+        value = Decimal(str(per_hour).strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid perHour price: {per_hour!r}") from exc
+    return _decimal_to_string(value * APPROX_MINUTES_PER_REQUEST / 60)
 
 
 def _decimal_to_string(value):
@@ -235,7 +254,10 @@ def describe_price(spec):
             f"(approx from {price['perMTok']} USDC/MTok @ {int(APPROX_TOKENS_PER_REQUEST)} tok/request)"
         )
     if price.get("perHour"):
-        return f"{price['perHour']} USDC/hour"
+        return (
+            f"{get_effective_price(spec)} USDC/request "
+            f"(approx from {price['perHour']} USDC/hour @ {APPROX_MINUTES_PER_REQUEST} min/request)"
+        )
     return "0 USDC/request"
 
 

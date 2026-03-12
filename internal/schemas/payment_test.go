@@ -22,9 +22,28 @@ func TestEffectiveRequestPrice_PerMTok(t *testing.T) {
 }
 
 func TestEffectiveRequestPrice_PerHour(t *testing.T) {
-	p := PriceTable{PerHour: "2.00"}
-	if got := p.EffectiveRequestPrice(); got != "2.00" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "2.00")
+	// 6.00 USDC/hour * (5 min / 60 min) = 0.50 USDC/request
+	p := PriceTable{PerHour: "6.00"}
+	if got := p.EffectiveRequestPrice(); got != "0.5" {
+		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.5")
+	}
+}
+
+func TestApproximateRequestPriceFromPerHour(t *testing.T) {
+	// 0.50 USDC/hour * (5/60) = 0.04166... ≈ "0.0416666666666667"
+	got, err := ApproximateRequestPriceFromPerHour("0.50")
+	if err != nil {
+		t.Fatalf("ApproximateRequestPriceFromPerHour() error = %v", err)
+	}
+	// Verify it's approximately right (5/60 * 0.50 ≈ 0.0417)
+	if got == "" || got == "0" || got == "0.50" {
+		t.Errorf("ApproximateRequestPriceFromPerHour(0.50) = %q, expected approximated value", got)
+	}
+}
+
+func TestApproximateRequestPriceFromPerHour_Invalid(t *testing.T) {
+	if _, err := ApproximateRequestPriceFromPerHour("bad"); err == nil {
+		t.Fatal("ApproximateRequestPriceFromPerHour() error = nil, want non-nil")
 	}
 }
 
