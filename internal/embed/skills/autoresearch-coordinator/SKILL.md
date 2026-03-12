@@ -19,7 +19,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 
 ## When NOT to Use
 
-- Selling your own GPU as a worker -- use `sell` (ServiceOffer with `obol sell http`)
+- Selling your own GPU as a worker -- use `autoresearch-worker` (then monetize it with `obol sell http`)
 - Buying generic inference (chat completions) -- use `buy-inference`
 - Discovering agents without running experiments -- use `discovery`
 - Signing transactions directly -- use `ethereum-local-wallet`
