@@ -106,7 +106,7 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
             {p}
           </Badge>
         ))}
-        {agent.supported_trust_models.map(t => (
+        {(agent.supported_trust_models ?? []).map(t => (
           <Badge key={t} variant="yellow">
             {t}
           </Badge>

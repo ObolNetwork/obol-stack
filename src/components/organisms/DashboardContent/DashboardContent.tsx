@@ -85,7 +85,12 @@ export function DashboardContent({
           <OpenClawList onInstanceSelect={handleInstanceSelect} />
           <AgentRegistry />
           {error && <ErrorState onRetry={onRetry} />}
-          {data && data.apps.length > 0 && <NetworksSection apps={data.apps} />}
+          {data && (data.localNodes.length > 0 || data.remoteNode) && (
+            <NetworksSection
+              localNodes={data.localNodes}
+              remoteNode={data.remoteNode}
+            />
+          )}
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
         </SectionContainer>
       </MainSection>

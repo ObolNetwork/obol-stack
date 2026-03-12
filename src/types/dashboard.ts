@@ -98,7 +98,7 @@ export interface ClientInfo {
   internalUrl?: string;
 }
 
-export interface AppData {
+export interface LocalNodeData {
   chainName: ChainName;
   app: AppInstanceType;
   appId: string;
@@ -107,13 +107,13 @@ export interface AppData {
   blocks?: number;
   finalized?: number;
   participation?: number;
-  clients?: ClientInfo[]; // Array of clients for this chain
-  distance?: number; // Distance to justified
-  erpcStatus?: ErpcStatusData; // eRPC: network status from GET /
+  clients?: ClientInfo[];
+  distance?: number;
 }
 
 export interface DashboardData {
-  apps: AppData[];
+  localNodes: LocalNodeData[];
+  remoteNode: ErpcStatusData | null;
   nodeOverview: {
     diskUsage: {
       value: number;

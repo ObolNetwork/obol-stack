@@ -1,7 +1,7 @@
 'use client';
 
-import { WalletClient } from 'viem';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { useWalletClient } from 'wagmi';
 import { AppIcon, CardAppType, CardAppId } from '../../atoms/AppIcon';
 import { Badge } from '../../atoms/Badge';
 import { ChainChip } from '../../atoms/ChainChip';
@@ -78,12 +78,11 @@ const UpstreamSection = styled(Box, {
 });
 
 const UpstreamSectionLabel = styled(Text, {
-  fontSize: '$1',
+  fontSize: '$2',
   fontWeight: '$semibold',
   color: '$body',
   textTransform: 'uppercase',
-  letterSpacing: '$wider',
-  marginBottom: '$xs',
+  marginBottom: '$md',
 });
 
 const UpstreamsGrid = styled(Box, {
@@ -96,7 +95,7 @@ const UpstreamsGrid = styled(Box, {
 });
 
 const UpstreamCardBox = styled(Box, {
-  padding: '$xs $sm',
+  padding: '$sm',
   borderRadius: '$3',
   background: '$bg05',
   border: '1px solid $stroke',
@@ -107,31 +106,38 @@ const UpstreamCardBox = styled(Box, {
 
 const UpstreamCardHeader = styled(Flex, {
   justifyContent: 'space-between',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   width: '100%',
 });
 
 const UpstreamName = styled(Text, {
-  color: '$light',
-  fontSize: '$2',
+  color: '$white',
+  fontSize: '$4',
   fontWeight: '$semibold',
-  fontFamily: 'monospace',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 });
 
+const UpstreamMetrics = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$2',
+  width: '100%',
+});
+
 const MetricRow = styled(Flex, {
   justifyContent: 'space-between',
   alignItems: 'center',
-  fontSize: '$1',
+  fontSize: '$3',
+  paddingTop: '$xxs',
 });
 
-const MetricLabel = styled(Text, { color: '$body', fontSize: '$1' });
+const MetricLabel = styled(Text, { color: '$body', fontSize: '$3' });
 const MetricValue = styled(Text, {
   color: '$light',
   fontFamily: 'monospace',
-  fontSize: '$1',
+  fontSize: '$3',
 });
 
 // ── UpstreamDetail ──────────────────────────────────────────────────────────
@@ -160,7 +166,7 @@ function UpstreamDetail({ upstream }: { upstream: ErpcUpstream }) {
         </Badge>
       </UpstreamCardHeader>
 
-      <Box css={{ borderTop: '1px solid $stroke', paddingTop: '$xxs' }}>
+      <UpstreamMetrics>
         <MetricRow>
           <MetricLabel>p50 / p90</MetricLabel>
           <MetricValue>
@@ -204,7 +210,7 @@ function UpstreamDetail({ upstream }: { upstream: ErpcUpstream }) {
             </MetricValue>
           </MetricRow>
         )}
-      </Box>
+      </UpstreamMetrics>
     </UpstreamCardBox>
   );
 }
@@ -213,13 +219,12 @@ function UpstreamDetail({ upstream }: { upstream: ErpcUpstream }) {
 
 export function ErpcStatus({
   network,
-  walletClient,
   upstreams,
 }: {
   network: ErpcNetwork;
-  walletClient: WalletClient | null | undefined;
   upstreams?: ErpcUpstream[];
 }) {
+  const { data: walletClient } = useWalletClient();
   const chainName = networkToChainName(network.alias);
   const status = networkToStatus(network.state);
   const chainId = chainIdFromEvmId(network.id);
@@ -236,6 +241,7 @@ export function ErpcStatus({
             <CardAppType>Remote Node erpc</CardAppType>
             <CardAppId>{network.alias}</CardAppId>
           </Flex>
+          <ChainChip variant="erpcProxy" />
         </Flex>
 
         <Flex css={{ alignItems: 'center', gap: '$xxs', width: 'auto' }}>

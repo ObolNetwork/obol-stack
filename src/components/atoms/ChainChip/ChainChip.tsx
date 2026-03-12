@@ -44,8 +44,8 @@ const StyledChainChip = styled(Box, {
         color: '#D4FF28',
       },
       erpcProxy: {
-        background: 'rgba(145, 103, 228, 0.20)',
-        color: '#9167E4',
+        background: 'rgba(145, 103, 228, 0.30)',
+        color: '#C4A8F5',
       },
       hoodi: {
         border: '1px solid $bg05',

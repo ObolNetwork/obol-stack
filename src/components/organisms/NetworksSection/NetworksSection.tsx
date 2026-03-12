@@ -1,19 +1,17 @@
 'use client';
 
-import { Box, Text, styled } from '@obolnetwork/obol-ui';
-import { WalletClient } from 'viem';
-import { useWalletClient } from 'wagmi';
+import { Box, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { NetworkStatus } from '../NetworkStatus';
 import { ErpcStatus } from '../ErpcStatus';
 import {
-  AppData,
+  LocalNodeData,
+  ErpcStatusData,
   ChainName,
   ErpcNetwork,
   ErpcUpstream,
-  NODE_MODES,
 } from '../../../types/dashboard';
 import {
   sortNetworks,
@@ -23,26 +21,24 @@ import {
 } from '../../../lib/utils/network-rpc';
 
 export interface NetworksSectionProps {
-  apps: AppData[];
+  localNodes: LocalNodeData[];
+  remoteNode: ErpcStatusData | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function collectChains(apps: AppData[]): ChainName[] {
+function collectChains(
+  localNodes: LocalNodeData[],
+  remoteNode: ErpcStatusData | null
+): ChainName[] {
   const chains = new Set<ChainName>();
 
-  apps
-    .filter(a => a.nodeMode !== NODE_MODES.ERPC_PROXY)
-    .forEach(a => chains.add(a.chainName));
+  localNodes.forEach(a => chains.add(a.chainName));
 
-  apps
-    .filter(a => a.nodeMode === NODE_MODES.ERPC_PROXY)
-    .forEach(erpcApp =>
-      erpcApp.erpcStatus?.networks.forEach(n => {
-        const cn = networkToChainName(n.alias);
-        if (cn) chains.add(cn);
-      })
-    );
+  remoteNode?.networks.forEach(n => {
+    const cn = networkToChainName(n.alias);
+    if (cn) chains.add(cn);
+  });
 
   return NETWORK_ORDER.filter(c => chains.has(c as ChainName)) as ChainName[];
 }
@@ -58,25 +54,22 @@ const ChainsList = styled(Box, {
 const AppsList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$xs',
-  marginTop: '$xs',
+  gap: '$md',
+  marginTop: '$md',
 });
 
 // ── NetworksSection ───────────────────────────────────────────────────────────
 
-export function NetworksSection({ apps }: NetworksSectionProps) {
-  const { data: walletClient } = useWalletClient();
+export function NetworksSection({
+  localNodes,
+  remoteNode,
+}: NetworksSectionProps) {
+  const chains = collectChains(localNodes, remoteNode);
 
-  const chains = collectChains(apps);
-
-  const erpcAppData = apps
-    .filter(a => a.nodeMode === NODE_MODES.ERPC_PROXY)
-    .map(app => ({
-      networks: sortNetworks(app.erpcStatus?.networks ?? []),
-      upstreamsByNetwork: groupUpstreamsByNetwork(
-        app.erpcStatus?.upstreams ?? []
-      ),
-    }));
+  const erpcNetworks = remoteNode ? sortNetworks(remoteNode.networks) : [];
+  const erpcUpstreamsByNetwork = remoteNode
+    ? groupUpstreamsByNetwork(remoteNode.upstreams ?? [])
+    : new Map();
 
   return (
     <Card css={{ padding: '$lg' }}>
@@ -86,19 +79,14 @@ export function NetworksSection({ apps }: NetworksSectionProps) {
           const erpcEntries: {
             network: ErpcNetwork;
             upstreams?: ErpcUpstream[];
-          }[] = erpcAppData.flatMap(({ networks, upstreamsByNetwork }) =>
-            networks
-              .filter(n => networkToChainName(n.alias) === chainName)
-              .map(n => ({
-                network: n,
-                upstreams: upstreamsByNetwork.get(n.id),
-              }))
-          );
+          }[] = erpcNetworks
+            .filter(n => networkToChainName(n.alias) === chainName)
+            .map(n => ({
+              network: n,
+              upstreams: erpcUpstreamsByNetwork.get(n.id),
+            }));
 
-          const nodeApps = apps.filter(
-            a =>
-              a.chainName === chainName && a.nodeMode !== NODE_MODES.ERPC_PROXY
-          );
+          const nodeApps = localNodes.filter(a => a.chainName === chainName);
 
           return (
             <Card key={chainName} css={{ backgroundColor: '$bg03' }}>
@@ -116,7 +104,6 @@ export function NetworksSection({ apps }: NetworksSectionProps) {
                       <ErpcStatus
                         key={network.id}
                         network={network}
-                        walletClient={walletClient}
                         upstreams={upstreams}
                       />
                     ))}

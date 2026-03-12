@@ -4,13 +4,13 @@ import { ChainChip } from '../../atoms/ChainChip';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { ParticipationNumber } from '../../molecules/ParticipationNumber';
 import { ClientCard } from '../../molecules/ClientCard';
-import { AppData, NODE_MODES } from '../../../types/dashboard';
+import { LocalNodeData, NODE_MODES } from '../../../types/dashboard';
 import { useWalletClient } from 'wagmi';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
 import { AppIcon, CardAppType, CardAppId } from '../../atoms/AppIcon';
 
 export interface NetworkStatusProps {
-  appData: AppData;
+  appData: LocalNodeData;
 }
 
 const NetworkHeader = styled(Flex, {
