@@ -1026,6 +1026,9 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 		}
 		return schemas.PriceTable{PerMTok: perMTok}, nil
 	case perHour != "":
+		if _, err := schemas.ApproximateRequestPriceFromPerHour(perHour); err != nil {
+			return schemas.PriceTable{}, fmt.Errorf("invalid --per-hour value %q: %w", perHour, err)
+		}
 		return schemas.PriceTable{PerHour: perHour}, nil
 	default:
 		if allowPerHour {
@@ -1046,7 +1049,11 @@ func formatPriceTableSummary(priceTable schemas.PriceTable) string {
 			schemas.ApproxTokensPerRequest,
 		)
 	case priceTable.PerHour != "":
-		return fmt.Sprintf("%s USDC/hour", priceTable.PerHour)
+		return fmt.Sprintf("%s USDC/request (approx from %s USDC/hour @ %d min/request)",
+			priceTable.EffectiveRequestPrice(),
+			priceTable.PerHour,
+			schemas.ApproxMinutesPerRequest,
+		)
 	default:
 		return "0 USDC/request"
 	}
