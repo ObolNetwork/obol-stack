@@ -20,12 +20,14 @@ Commands:
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -112,6 +114,24 @@ def _http_post(url, body, headers=None, timeout=120):
 # 8004scan API
 # ---------------------------------------------------------------------------
 
+def build_scan_api_url(protocol="OASF", search=None, limit=20, chain_id=None,
+                       sort_by=None, owner_address=None):
+    """Build the 8004scan /agents query URL."""
+    params = {"limit": limit}
+    if protocol:
+        params["protocol"] = protocol
+    if search:
+        params["search"] = search
+    if chain_id:
+        params["chainId"] = chain_id
+    if sort_by:
+        params["sortBy"] = sort_by
+    if owner_address:
+        params["ownerAddress"] = owner_address
+    base = SCAN_API_URL.rstrip("/")
+    return f"{base}/agents?{urllib.parse.urlencode(params)}"
+
+
 def query_8004scan(protocol="OASF", search=None, limit=20, chain_id=None,
                    sort_by=None, owner_address=None):
     """Query the 8004scan public API for registered agents.
@@ -119,26 +139,24 @@ def query_8004scan(protocol="OASF", search=None, limit=20, chain_id=None,
     Supports filtering by protocol (MCP/A2A/OASF/Web/Email), keyword search,
     chainId, ownerAddress, and sorting.
 
-    Returns list of agent registration objects.
+    Returns list of agent summary objects.
     """
-    params = [f"limit={limit}"]
-    if protocol:
-        params.append(f"protocol={protocol}")
-    if search:
-        params.append(f"search={urllib.request.quote(search)}")
-    if chain_id:
-        params.append(f"chainId={chain_id}")
-    if sort_by:
-        params.append(f"sortBy={sort_by}")
-    if owner_address:
-        params.append(f"ownerAddress={owner_address}")
-
-    url = f"{SCAN_API_URL}?{'&'.join(params)}"
+    url = build_scan_api_url(protocol, search, limit, chain_id, sort_by, owner_address)
     try:
         result = _http_get(url)
-        # API may return {data: [...]} or directly [...]
         if isinstance(result, dict):
-            return result.get("data", result.get("items", []))
+            data = result.get("data", result.get("items", []))
+            if isinstance(data, list):
+                if not data and search:
+                    # Fall back to protocol-only listing if the keyword search is too strict.
+                    fallback = _http_get(build_scan_api_url(protocol, None, limit, chain_id, sort_by, owner_address))
+                    if isinstance(fallback, dict):
+                        fallback_data = fallback.get("data", fallback.get("items", []))
+                        if isinstance(fallback_data, list):
+                            return fallback_data
+                    elif isinstance(fallback, list):
+                        return fallback
+                return data
         if isinstance(result, list):
             return result
         return []
@@ -151,6 +169,15 @@ def fetch_registration_json(uri):
     """Fetch the .well-known/agent-registration.json from a worker's URI."""
     if not uri:
         return None
+    if isinstance(uri, dict):
+        return uri
+    if uri.startswith("data:application/json;base64,"):
+        try:
+            raw = uri.split(",", 1)[1]
+            return json.loads(base64.b64decode(raw).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"  Warning: Failed to decode registration data URI: {e}", file=sys.stderr)
+            return None
     if not (uri.startswith("http://") or uri.startswith("https://")):
         return None
     try:
@@ -158,6 +185,21 @@ def fetch_registration_json(uri):
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as e:
         print(f"  Warning: Failed to fetch {uri}: {e}", file=sys.stderr)
         return None
+
+
+def extract_registration_from_agent(agent):
+    """Extract the registration document from a current 8004scan agent summary."""
+    raw = agent.get("raw_metadata", {}) if isinstance(agent, dict) else {}
+    offchain = raw.get("offchain_content") if isinstance(raw, dict) else None
+    if isinstance(offchain, dict):
+        return offchain
+    uri = (
+        agent.get("uri")
+        or agent.get("tokenURI")
+        or (raw.get("offchain_uri") if isinstance(raw, dict) else None)
+        or agent.get("agent_url")
+    )
+    return fetch_registration_json(uri)
 
 
 def extract_worker_endpoint(registration):
@@ -183,16 +225,45 @@ def extract_worker_endpoint(registration):
 
 
 def extract_oasf_skills(registration):
-    """Extract OASF skill domains from registration metadata."""
-    skills = []
-    oasf = registration.get("oasf", registration.get("skills", []))
+    """Extract OASF skills/domains from registration metadata."""
+    found = []
+
+    services = registration.get("services", []) if isinstance(registration, dict) else []
+    if isinstance(services, list):
+        for svc in services:
+            if not isinstance(svc, dict):
+                continue
+            if str(svc.get("name", "")).upper() != "OASF":
+                continue
+            for key in ("skills", "domains"):
+                value = svc.get(key, [])
+                if isinstance(value, list):
+                    for item in value:
+                        if item is not None:
+                            found.append(str(item))
+
+    if found:
+        return found
+
+    oasf = registration.get("oasf", registration.get("skills", [])) if isinstance(registration, dict) else []
     if isinstance(oasf, list):
         for s in oasf:
             if isinstance(s, dict):
-                skills.append(s.get("domain", s.get("name", str(s))))
+                for key in ("skills", "domains"):
+                    value = s.get(key, [])
+                    if isinstance(value, list):
+                        for item in value:
+                            if item is not None:
+                                found.append(str(item))
+                domain = s.get("domain")
+                if domain is not None:
+                    found.append(str(domain))
+                name = s.get("name")
+                if name is not None:
+                    found.append(str(name))
             elif isinstance(s, str):
-                skills.append(s)
-    return skills
+                found.append(s)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +325,17 @@ def sign_erc3009_auth(pay_to, amount, chain=None):
         print(f"Error: unsupported chain '{network}' for payment", file=sys.stderr)
         return None
 
-    # Get signer address
+    # Get signer address using the same API as ethereum-local-wallet.
     try:
-        info = _signer_get("/api/v1/eth2/publicKeys")
-        if not info:
+        info = _signer_get("/api/v1/keys")
+        if isinstance(info, dict):
+            keys = info.get("keys", [])
+            signer_address = keys[0] if keys else None
+        elif isinstance(info, list):
+            signer_address = info[0] if info else None
+        else:
+            signer_address = None
+        if not signer_address:
             print("Error: no keys in remote-signer", file=sys.stderr)
             return None
     except Exception as e:
@@ -297,7 +375,7 @@ def sign_erc3009_auth(pay_to, amount, chain=None):
             "verifyingContract": usdc,
         },
         "message": {
-            "from": info[0] if isinstance(info, list) else info,
+            "from": signer_address,
             "to": pay_to,
             "value": str(amount),
             "validAfter": str(valid_after),
@@ -307,12 +385,13 @@ def sign_erc3009_auth(pay_to, amount, chain=None):
     }
 
     try:
-        sig = _signer_post("/api/v1/eth2/sign", typed_data)
-        if not sig:
+        sig_data = _signer_post(f"/api/v1/sign/{signer_address}/typed-data", typed_data)
+        signature = sig_data.get("signature") if isinstance(sig_data, dict) else sig_data
+        if not signature:
             print("Error: remote-signer returned empty signature", file=sys.stderr)
             return None
         return {
-            "signature": sig,
+            "signature": signature,
             "authorization": typed_data["message"],
             "chain": network,
             "token": usdc,
@@ -404,15 +483,15 @@ class ObolCoordinator:
 
         workers = []
         for agent in agents:
-            uri = agent.get("uri", agent.get("tokenURI", ""))
-            name = agent.get("name", f"agent-{agent.get('agentId', '?')}")
-            agent_id = agent.get("agentId", agent.get("id"))
+            raw = agent.get("raw_metadata", {}) if isinstance(agent, dict) else {}
+            uri = agent.get("uri", agent.get("tokenURI", "")) or (raw.get("offchain_uri", "") if isinstance(raw, dict) else "")
+            agent_id = agent.get("agentId") or agent.get("agent_id") or agent.get("id") or agent.get("token_id")
+            name = agent.get("name", f"agent-{agent_id or '?'}")
 
-            # Fetch full registration to get endpoint
-            registration = fetch_registration_json(uri) if uri else None
+            registration = extract_registration_from_agent(agent)
             endpoint = extract_worker_endpoint(registration) if registration else None
             skills = extract_oasf_skills(registration) if registration else []
-            x402 = (registration or {}).get("x402Support", False)
+            x402 = bool((registration or {}).get("x402Support", agent.get("x402_supported", False)))
 
             workers.append({
                 "name": name,
@@ -571,23 +650,25 @@ class ObolCoordinator:
 
         entries = []
         for agent in agents:
-            uri = agent.get("uri", agent.get("tokenURI", ""))
-            name = agent.get("name", f"agent-{agent.get('agentId', '?')}")
-            registration = fetch_registration_json(uri) if uri else None
+            raw = agent.get("raw_metadata", {}) if isinstance(agent, dict) else {}
+            uri = agent.get("uri", agent.get("tokenURI", "")) or (raw.get("offchain_uri", "") if isinstance(raw, dict) else "")
+            agent_id = agent.get("agentId") or agent.get("agent_id") or agent.get("id") or agent.get("token_id")
+            name = agent.get("name", f"agent-{agent_id or '?'}")
+            registration = extract_registration_from_agent(agent)
             if not registration:
                 continue
 
-            # Look for autoresearch results in metadata
+            # Look for autoresearch results in registration metadata.
             meta = registration.get("metadata", registration.get("autoresearch", {}))
             if isinstance(meta, dict):
                 val_bpb = meta.get("best_val_bpb", meta.get("val_bpb"))
                 if val_bpb is not None:
                     entries.append({
                         "name": name,
-                        "agent_id": agent.get("agentId", agent.get("id")),
+                        "agent_id": agent_id,
                         "val_bpb": float(val_bpb),
                         "uri": uri,
-                        "updated": meta.get("updated", ""),
+                        "updated": meta.get("updated", agent.get("updated_at", "")),
                     })
 
         # Sort by val_bpb ascending (lower is better)
