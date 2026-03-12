@@ -999,11 +999,11 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
 
     # Set on-chain metadata for indexed discovery (MetadataSet events).
     # Buyers can filter agents by these keys without fetching every registration JSON.
-    offer_type = spec.get("type", "http")
     try:
-        print(f"  Setting on-chain metadata: x402.supported=true, service.type={offer_type}")
-        _set_metadata_on_chain(agent_id, "x402.supported", b"\x01")
-        _set_metadata_on_chain(agent_id, "service.type", offer_type.encode("utf-8"))
+        indexed = build_indexed_metadata(spec)
+        print("  Setting on-chain metadata for indexed discovery")
+        for key, value in indexed.items():
+            _set_metadata_on_chain(agent_id, key, value)
     except Exception as e:
         print(f"  Warning: on-chain metadata failed (non-blocking): {e}")
 
@@ -1012,30 +1012,42 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
     return True
 
 
-def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx):
-    """Publish the ERC-8004 AgentRegistration document.
+def _coerce_registration_metadata(registration):
+    """Return registration metadata as a string-key/string-value dict."""
+    raw = registration.get("metadata", {}) if isinstance(registration, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    meta = {}
+    for key, value in raw.items():
+        if key is None:
+            continue
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        if value is None:
+            continue
+        meta[key_text] = str(value)
+    return meta
 
-    Creates four agent-managed resources (all with ownerReferences for GC):
-      1. ConfigMap  so-<name>-registration  — the JSON document
-      2. Deployment so-<name>-registration  — busybox httpd serving the ConfigMap
-      3. Service    so-<name>-registration  — ClusterIP targeting the deployment
-      4. HTTPRoute  so-<name>-wellknown     — routes /.well-known/agent-registration.json
 
-    On ServiceOffer deletion, K8s garbage collection tears everything down.
-
-    NOTE: ERC-8004 allows multiple services in a single registration.json.
-    Currently each ServiceOffer creates its own registration document. When
-    multiple offers share one agent identity, this should evolve to aggregate
-    all offers' services into a single /.well-known/agent-registration.json.
-    """
+def build_indexed_metadata(spec):
+    """Build metadata entries for indexed on-chain discovery."""
+    offer_type = spec.get("type", "http")
     registration = spec.get("registration", {})
-    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+    entries = {
+        "x402.supported": b"\x01",
+        "service.type": str(offer_type).encode("utf-8"),
+    }
+    for key, value in _coerce_registration_metadata(registration).items():
+        entries[f"metadata.{key}"] = value.encode("utf-8")
+    return entries
+
+
+def build_registration_doc(spec, name, agent_id, base_url):
+    """Build the ERC-8004 registration document for a ServiceOffer."""
+    registration = spec.get("registration", {})
     url_path = spec.get("path", f"/services/{name}")
 
-    # ── 1. Build the registration JSON ─────────────────────────────────────
-    # ERC-8004 REQUIRED fields: type, name, description, image, services,
-    # x402Support, active, registrations. All are always emitted.
-    # Build a richer description from spec fields.
     offer_type = spec.get("type", "http")
     price_info = get_effective_price(spec)
     model_info = spec.get("model", {})
@@ -1043,8 +1055,6 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
     if model_info.get("name"):
         default_desc = f"{model_info['name']} inference via x402 micropayments ({price_info} USDC/request)"
 
-    # OASF skills and domains for machine-readable capability discovery.
-    # Defaults based on service type; overridden by spec.registration.skills/domains.
     default_skills = {
         "inference": ["natural_language_processing/text_generation/chat_completion"],
     }
@@ -1076,7 +1086,6 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
         "supportedTrust": registration.get("supportedTrust", []),
     }
 
-    # Add OASF service entry for structured capability discovery.
     if skills or domains:
         oasf_entry = {"name": "OASF", "version": "0.8"}
         if skills:
@@ -1090,13 +1099,37 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
             if svc.get("endpoint"):
                 doc["services"].append(svc)
 
-    # Include provenance metadata if present on the ServiceOffer spec.
+    metadata = _coerce_registration_metadata(registration)
+    if metadata:
+        doc["metadata"] = metadata
+
     provenance = spec.get("provenance")
     if provenance:
-        doc["provenance"] = {
-            k: v for k, v in provenance.items() if v
-        }
+        doc["provenance"] = {k: v for k, v in provenance.items() if v}
 
+    return doc
+
+
+def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx):
+    """Publish the ERC-8004 AgentRegistration document.
+
+    Creates four agent-managed resources (all with ownerReferences for GC):
+      1. ConfigMap  so-<name>-registration  — the JSON document
+      2. Deployment so-<name>-registration  — busybox httpd serving the ConfigMap
+      3. Service    so-<name>-registration  — ClusterIP targeting the deployment
+      4. HTTPRoute  so-<name>-wellknown     — routes /.well-known/agent-registration.json
+
+    On ServiceOffer deletion, K8s garbage collection tears everything down.
+
+    NOTE: ERC-8004 allows multiple services in a single registration.json.
+    Currently each ServiceOffer creates its own registration document. When
+    multiple offers share one agent identity, this should evolve to aggregate
+    all offers' services into a single /.well-known/agent-registration.json.
+    """
+    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+
+    # ── 1. Build the registration JSON ─────────────────────────────────────
+    doc = build_registration_doc(spec, name, agent_id, base_url)
     doc_json = json.dumps(doc, indent=2)
 
     # ── Get ServiceOffer UID for ownerReferences ───────────────────────────

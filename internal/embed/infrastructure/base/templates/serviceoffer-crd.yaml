@@ -227,6 +227,14 @@ spec:
                         Valid values: reputation, crypto-economic, tee-attestation.
                       items:
                         type: string
+                    metadata:
+                      type: object
+                      description: >-
+                        Additional registration metadata published into the generated
+                        agent-registration.json for discovery and ranking (for example:
+                        gpu, framework, best_val_bpb, total_experiments).
+                      additionalProperties:
+                        type: string
             status:
               type: object
               properties:

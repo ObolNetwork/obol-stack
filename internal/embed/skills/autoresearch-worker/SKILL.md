@@ -77,7 +77,11 @@ obol sell http autoresearch-worker \
   --register-name "GPU Worker Alpha" \
   --register-description "A GPU worker for paid autoresearch experiments" \
   --register-skills machine_learning/model_optimization \
-  --register-domains technology/artificial_intelligence/research
+  --register-domains technology/artificial_intelligence/research \
+  --register-metadata gpu=A100-80GB \
+  --register-metadata framework=pytorch \
+  --register-metadata best_val_bpb=1.234 \
+  --register-metadata total_experiments=42
 ```
 
 This creates a `ServiceOffer` that:

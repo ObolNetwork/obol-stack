@@ -84,6 +84,7 @@ When `delete` runs, it also removes the pricing route from the x402-pricing Conf
 - `payment.price.perMTok`: Per-million-tokens price in USDC (inference)
 - `payment.price.perHour`: Per-compute-hour price in USDC (fine-tuning)
 - `payment.scheme`: Payment scheme (default: exact)
+- `registration.metadata`: Optional string key/value metadata published into the generated `agent-registration.json` and mirrored into indexed on-chain metadata as `metadata.<key>`
 
 Phase 1 pricing behavior:
 

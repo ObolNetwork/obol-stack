@@ -327,6 +327,10 @@ Examples:
 				Name:  "register-domains",
 				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
 			},
+			&cli.StringSliceFlag{
+				Name:  "register-metadata",
+				Usage: "Additional registration metadata as key=value pairs (repeatable, e.g. gpu=A100-80GB)",
+			},
 			&cli.StringFlag{
 				Name:  "provenance-file",
 				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
@@ -421,6 +425,13 @@ Examples:
 				}
 				if domains := cmd.StringSlice("register-domains"); len(domains) > 0 {
 					reg["domains"] = domains
+				}
+				if metaPairs := cmd.StringSlice("register-metadata"); len(metaPairs) > 0 {
+					meta, err := parseMetadataPairs(metaPairs)
+					if err != nil {
+						return err
+					}
+					reg["metadata"] = meta
 				}
 				spec["registration"] = reg
 			}
@@ -1004,6 +1015,18 @@ func valueOrNone(s string) string {
 		return "(not set)"
 	}
 	return s
+}
+
+func parseMetadataPairs(values []string) (map[string]string, error) {
+	meta := make(map[string]string, len(values))
+	for _, raw := range values {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("invalid --register-metadata value %q: expected key=value", raw)
+		}
+		meta[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return meta, nil
 }
 
 func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable, error) {
