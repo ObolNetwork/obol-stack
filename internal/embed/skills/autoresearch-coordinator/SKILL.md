@@ -35,13 +35,13 @@ python3 scripts/coordinate.py discover
 python3 scripts/coordinate.py discover --limit 5
 
 # Probe a specific worker for pricing
-python3 scripts/coordinate.py probe https://worker.example.com/services/autoresearch
+python3 scripts/coordinate.py probe https://worker.example.com/services/autoresearch-worker
 
 # Submit a single experiment to a worker
-python3 scripts/coordinate.py submit https://worker.example.com/services/autoresearch train.py
+python3 scripts/coordinate.py submit https://worker.example.com/services/autoresearch-worker train.py
 
 # Submit with custom config overrides
-python3 scripts/coordinate.py submit https://worker.example.com/services/autoresearch train.py \
+python3 scripts/coordinate.py submit https://worker.example.com/services/autoresearch-worker train.py \
   --config '{"batch_size": 64, "learning_rate": 0.001}'
 
 # View global leaderboard (best val_bpb across all workers)
@@ -51,7 +51,7 @@ python3 scripts/coordinate.py leaderboard
 python3 scripts/coordinate.py loop train.py
 
 # Loop with worker preference and max rounds
-python3 scripts/coordinate.py loop train.py --prefer https://worker.example.com/services/autoresearch --rounds 10
+python3 scripts/coordinate.py loop train.py --prefer https://worker.example.com/services/autoresearch-worker --rounds 10
 ```
 
 ## Commands
@@ -80,23 +80,26 @@ Each step is atomic and idempotent. If a worker fails mid-experiment, the coordi
 Workers register on-chain via ERC-8004 and advertise capabilities through OASF (Open Agent Skills Framework) metadata. The coordinator queries the 8004scan public API:
 
 ```
-GET https://www.8004scan.io/api/v1/public
+GET https://www.8004scan.io/api/v1/public/agents
     ?protocol=OASF
     &search=machine_learning/model_optimization
     &limit=20
 ```
 
-Each result includes the worker's registration URI, which points to a `.well-known/agent-registration.json` containing:
-- Service endpoints (where to POST experiments)
+The API returns agent summary objects. The coordinator then prefers the embedded registration document in `raw_metadata.offchain_content` and falls back to the off-chain registration URI when needed.
+
+From the registration document it extracts:
+- service endpoints (where to POST experiments)
 - x402 support flag (payment-gated access)
-- OASF skill metadata (GPU type, supported frameworks, pricing tiers)
+- OASF capability metadata from the `services[]` entry with `name: OASF`
+- leaderboard metadata such as `best_val_bpb`
 
 ## How Payment Works
 
 Experiment submission uses the same x402 payment flow as `buy-inference`:
 
 1. **Probe** -- Send unauthenticated POST to worker endpoint, receive `402 Payment Required` with pricing
-2. **Sign** -- Pre-sign an ERC-3009 `TransferWithAuthorization` voucher via the remote-signer wallet
+2. **Sign** -- Pre-sign an ERC-3009 `TransferWithAuthorization` voucher via the current remote-signer API (`GET /api/v1/keys`, `POST /api/v1/sign/<address>/typed-data`)
 3. **Submit** -- Re-send the POST with the `X-PAYMENT` header containing the signed voucher
 4. **Settle** -- Worker's x402 verifier validates payment via the facilitator, forwards request to GPU
 
@@ -124,7 +127,7 @@ Results are appended to `$DATA_DIR/autoresearch/results.jsonl` (one JSON object 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | 8004scan public API endpoint |
+| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | 8004scan public API base URL; the coordinator queries `/agents` under this base |
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API for payment signing |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
 | `ERPC_NETWORK` | `base-sepolia` | Default chain for payment |
@@ -163,7 +166,7 @@ coordinate.py
 
 - **Requires remote-signer** -- must have agent wallet provisioned via `obol openclaw onboard`
 - **Requires network access** -- 8004scan API and worker endpoints must be reachable
-- **Python stdlib + requests** -- uses `requests` if available, falls back to `urllib`
+- **Python stdlib only** -- uses `urllib`; no third-party Python dependencies required
 - **Per-experiment payment** -- each submission costs one x402 payment; monitor balance via `buy-inference balance`
 - **Worker availability** -- workers may go offline between discovery and submission; coordinator retries automatically
 - **Result storage is local** -- provenance metadata stored on-disk, not on-chain (future: IPFS/on-chain attestations)

@@ -20,19 +20,21 @@ How the autoresearch coordinator maps from the original Ensue-based shared-memor
 ```
 Coordinator                          8004scan                        Worker
     |                                    |                              |
-    |-- GET /api/v1/public ------------->|                              |
+    |-- GET /api/v1/public/agents ------>|                              |
     |   ?protocol=OASF                   |                              |
     |   &search=machine_learning/        |                              |
     |     model_optimization             |                              |
     |   &limit=20                        |                              |
     |                                    |                              |
-    |<-- [{agentId, name, uri}, ...] ----|                              |
+    |<-- {data: [agent summaries]} ------|                              |
     |                                    |                              |
-    |-- GET <uri> (registration JSON) -------------------------------->|
+    |   (prefer raw_metadata.offchain_content when present)             |
+    |                                    |                              |
+    |-- GET <offchain_uri> (fallback only) ---------------------------->|
     |                                                                   |
-    |<-- {services: [{endpoint}], x402Support: true, oasf: [...]} -----|
+    |<-- {services: [...], x402Support: true, metadata: {...}} ---------|
     |                                                                   |
-    |   (extract endpoint, verify x402 + OASF skill match)             |
+    |   (extract endpoint, verify x402 + OASF service entry)            |
 ```
 
 ### 8004scan API Parameters
@@ -57,23 +59,23 @@ Workers advertise capabilities in their `.well-known/agent-registration.json`:
   "description": "A100 GPU worker for autoresearch experiments",
   "services": [
     {
-      "name": "autoresearch",
-      "endpoint": "https://worker.example.com/services/autoresearch",
+      "name": "web",
+      "endpoint": "https://worker.example.com/services/autoresearch-worker",
       "version": "1.0.0"
+    },
+    {
+      "name": "OASF",
+      "version": "0.8",
+      "skills": ["machine_learning/model_optimization"],
+      "domains": ["technology/artificial_intelligence/research"]
     }
   ],
   "x402Support": true,
-  "oasf": [
-    {
-      "domain": "machine_learning/model_optimization",
-      "capabilities": ["training", "hyperparameter_search", "validation"]
-    }
-  ],
   "metadata": {
     "gpu": "A100-80GB",
     "framework": "pytorch",
-    "best_val_bpb": 1.234,
-    "total_experiments": 42,
+    "best_val_bpb": "1.234",
+    "total_experiments": "42",
     "updated": "2026-03-12T10:30:00Z"
   },
   "active": true
@@ -93,7 +95,8 @@ Coordinator                   Worker (x402 gate)           Facilitator          
     |    maxAmountRequired}        |                           |                  |
     |                              |                           |                  |
     |-- sign ERC-3009 auth --------|---------------------------|----------------->|
-    |   (via remote-signer)        |                           |                  |
+    |   (GET /api/v1/keys +        |                           |                  |
+    |    POST /api/v1/sign/<addr>/typed-data)                  |                  |
     |                              |                           |                  |
     |-- POST /experiment --------->|                           |                  |
     |   X-PAYMENT: {signature,     |                           |                  |
