@@ -154,6 +154,32 @@ spec:
                         perEpoch:
                           type: string
                           description: "Per-training-epoch price in USDC. Fine-tuning only."
+                provenance:
+                  type: object
+                  description: >-
+                    Optional provenance metadata for the service. Tracks how the
+                    model or service was produced (e.g. autoresearch experiment data).
+                    Included in the ERC-8004 registration document when present.
+                  properties:
+                    framework:
+                      type: string
+                      description: "Optimization framework (e.g. autoresearch)."
+                    metric:
+                      type: string
+                      description: "Primary quality metric value (e.g. val_bpb score)."
+                    metricName:
+                      type: string
+                      description: "Name of the metric (e.g. val_bpb)."
+                      default: "val_bpb"
+                    experimentId:
+                      type: string
+                      description: "Experiment or commit identifier."
+                    trainHash:
+                      type: string
+                      description: "SHA-256 hash of the training code that produced this model."
+                    paramCount:
+                      type: string
+                      description: "Model parameter count (e.g. 50M, 1.3B)."
                 path:
                   type: string
                   description: "URL path prefix for the HTTPRoute, defaults to /services/<name>."

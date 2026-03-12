@@ -85,11 +85,26 @@ type Deployment struct {
 	// Required when TEEType is set. Bound into the TEE attestation user_data.
 	ModelHash string `json:"model_hash,omitempty"`
 
+	// Provenance holds optional metadata about how the model was produced
+	// (e.g. autoresearch experiment results). Stored alongside the deployment
+	// config and passed to the registration document when selling.
+	Provenance *Provenance `json:"provenance,omitempty"`
+
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 
 	// UpdatedAt is the RFC3339 timestamp of the most recent update.
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// Provenance tracks how a model or service was produced.
+type Provenance struct {
+	Framework    string `json:"framework,omitempty"`     // e.g. "autoresearch"
+	Metric       string `json:"metric,omitempty"`        // e.g. "0.997" (val_bpb)
+	MetricName   string `json:"metric_name,omitempty"`   // e.g. "val_bpb"
+	ExperimentID string `json:"experiment_id,omitempty"` // commit hash or UUID
+	TrainHash    string `json:"train_hash,omitempty"`    // sha256 of training code
+	ParamCount   string `json:"param_count,omitempty"`   // e.g. "50M"
 }
 
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,

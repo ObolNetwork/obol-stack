@@ -142,6 +142,10 @@ Examples:
 				Usage:   "SHA-256 of model weights for TEE attestation (required with --tee)",
 				Sources: cli.EnvVars("OBOL_MODEL_HASH"),
 			},
+			&cli.StringFlag{
+				Name:  "provenance-file",
+				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			name := cmd.Args().First()
@@ -199,6 +203,16 @@ Examples:
 				VMHostPort:      int(cmd.Int("vm-host-port")),
 				TEEType:         teeType,
 				ModelHash:       modelHash,
+			}
+
+			if pf := cmd.String("provenance-file"); pf != "" {
+				prov, err := loadProvenance(pf)
+				if err != nil {
+					return fmt.Errorf("load provenance: %w", err)
+				}
+				d.Provenance = prov
+				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
+					prov.Framework, prov.MetricName, prov.Metric, prov.ParamCount)
 			}
 			if priceTable.PerMTok != "" {
 				d.ApproxTokensPerRequest = schemas.ApproxTokensPerRequest
@@ -313,6 +327,10 @@ Examples:
 				Name:  "register-domains",
 				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
 			},
+			&cli.StringFlag{
+				Name:  "provenance-file",
+				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
@@ -354,6 +372,35 @@ Examples:
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			if pf := cmd.String("provenance-file"); pf != "" {
+				prov, err := loadProvenance(pf)
+				if err != nil {
+					return fmt.Errorf("load provenance: %w", err)
+				}
+				provMap := map[string]interface{}{}
+				if prov.Framework != "" {
+					provMap["framework"] = prov.Framework
+				}
+				if prov.Metric != "" {
+					provMap["metric"] = prov.Metric
+				}
+				if prov.MetricName != "" {
+					provMap["metricName"] = prov.MetricName
+				}
+				if prov.ExperimentID != "" {
+					provMap["experimentId"] = prov.ExperimentID
+				}
+				if prov.TrainHash != "" {
+					provMap["trainHash"] = prov.TrainHash
+				}
+				if prov.ParamCount != "" {
+					provMap["paramCount"] = prov.ParamCount
+				}
+				spec["provenance"] = provMap
+				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
+					prov.Framework, prov.MetricName, prov.Metric, prov.ParamCount)
 			}
 
 			if cmd.Bool("register") || cmd.String("register-name") != "" {
@@ -1022,6 +1069,19 @@ func formatInferencePriceSummary(d *inference.Deployment) string {
 			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
 	}
 	return fmt.Sprintf("%s USDC/request", d.PricePerRequest)
+}
+
+// loadProvenance reads a provenance JSON file and returns the parsed struct.
+func loadProvenance(path string) (*inference.Provenance, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var prov inference.Provenance
+	if err := json.Unmarshal(data, &prov); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return &prov, nil
 }
 
 // removePricingRoute removes the x402-verifier pricing route for the given offer.

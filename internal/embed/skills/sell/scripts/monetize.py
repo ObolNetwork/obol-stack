@@ -1068,6 +1068,13 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
             if svc.get("endpoint"):
                 doc["services"].append(svc)
 
+    # Include provenance metadata if present on the ServiceOffer spec.
+    provenance = spec.get("provenance")
+    if provenance:
+        doc["provenance"] = {
+            k: v for k, v in provenance.items() if v
+        }
+
     doc_json = json.dumps(doc, indent=2)
 
     # ── Get ServiceOffer UID for ownerReferences ───────────────────────────
