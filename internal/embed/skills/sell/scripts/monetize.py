@@ -821,6 +821,13 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
     port = upstream.get("port", 11434)
     url_path = spec.get("path", f"/services/{name}")
 
+    # Derive the HTTPRoute request timeout from payment.maxTimeoutSeconds.
+    # GPU workers may need 300s+ for experiments; Traefik's default is 30s.
+    # Add 120s overhead for facilitator verification + network latency.
+    payment = spec.get("payment", {})
+    max_timeout = int(payment.get("maxTimeoutSeconds", 0) or 0)
+    route_timeout_seconds = max(max_timeout + 120, 60) if max_timeout > 30 else 0
+
     # Build the HTTPRoute resource.
     # Use ExtensionRef filter (not traefik.io/middleware annotation) because
     # Traefik's Gateway API provider ignores annotations — only ExtensionRef
@@ -890,6 +897,14 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
             ],
         },
     }
+
+    # Set request timeout on the HTTPRoute rule when the upstream may take
+    # longer than Traefik's default 30s (e.g. GPU experiment workers).
+    if route_timeout_seconds > 0:
+        httproute["spec"]["rules"][0]["timeouts"] = {
+            "request": f"{route_timeout_seconds}s",
+        }
+        print(f"  HTTPRoute timeout: {route_timeout_seconds}s (from maxTimeoutSeconds={max_timeout})")
 
     # Get UID for OwnerReference.
     so = api_get(

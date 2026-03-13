@@ -17,7 +17,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 
 WORKDIR /app
 
-COPY internal/embed/skills/autoresearch-worker/scripts/worker_api.py /app/worker_api.py
+# Copy the worker API script. Build context should be the skill directory:
+#   docker build -f docker/Dockerfile -t autoresearch-worker ..
+COPY scripts/worker_api.py /app/worker_api.py
 
 ENV DATA_DIR=/data \
     AUTORESEARCH_REPO=/data/autoresearch \

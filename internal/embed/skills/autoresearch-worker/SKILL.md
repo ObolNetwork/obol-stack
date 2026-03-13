@@ -117,7 +117,7 @@ If the request makes it through the x402 gate, the worker runs the experiment sy
 
 - `scripts/worker_api.py` — HTTP worker service
 - `references/worker-api.md` — endpoint and deployment details
-- `Dockerfile.worker` (repo root) — container image for the worker
+- `docker/Dockerfile` — container image for the worker
 
 ## References
 

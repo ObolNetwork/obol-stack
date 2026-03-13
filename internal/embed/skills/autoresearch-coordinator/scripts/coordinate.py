@@ -107,7 +107,8 @@ def _http_post(url, body, headers=None, timeout=120):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, dict(resp.headers), resp.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read()
+        with e:
+            return e.code, dict(e.headers), e.read()
 
 
 # ---------------------------------------------------------------------------

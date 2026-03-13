@@ -35,12 +35,13 @@ def post_json(url: str, payload: dict, headers: dict | None = None):
         with urlopen(req, timeout=10) as resp:
             return resp.status, dict(resp.headers), json.loads(resp.read())
     except HTTPError as e:
-        body = e.read()
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            parsed = body.decode("utf-8", errors="replace")
-        return e.code, dict(e.headers), parsed
+        with e:
+            body = e.read()
+            try:
+                parsed = json.loads(body)
+            except json.JSONDecodeError:
+                parsed = body.decode("utf-8", errors="replace")
+            return e.code, dict(e.headers), parsed
 
 
 def get_json(url: str):

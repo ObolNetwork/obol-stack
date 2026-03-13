@@ -112,7 +112,8 @@ This is the cleanest production path because:
 1. Build the image:
 
 ```bash
-docker build -f Dockerfile.worker -t autoresearch-worker:dev .
+cd internal/embed/skills/autoresearch-worker
+docker build -f docker/Dockerfile -t autoresearch-worker:dev .
 ```
 
 2. Run it on a GPU host with the autoresearch repo mounted at `/data/autoresearch`.
