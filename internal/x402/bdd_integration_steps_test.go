@@ -71,8 +71,10 @@ type integrationWorld struct {
 	signedPaymentHeader string
 
 	// Discovered registration.
-	registrationJSON   map[string]interface{}
-	discoveredEndpoint string
+	registrationJSON     map[string]interface{}
+	discoveredEndpoint   string
+	registeredAgentID    string
+	registrySearchOutput string
 }
 
 func newIntegrationWorld(t *testing.T) *integrationWorld {
@@ -319,21 +321,22 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			"-n", serviceOfferNamespace, "--no-headers")
 		if err == nil {
 			w.t.Logf("integration: ServiceOffer exists: %s", strings.TrimSpace(out))
-			// Ensure OASF fields on the CR spec (for future reconciliation).
+			// Ensure OASF fields + metadata on the CR spec (for future reconciliation).
 			_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
 				"patch", "serviceoffers.obol.org", serviceOfferName,
 				"-n", serviceOfferNamespace, "--type=merge",
-				"-p", `{"spec":{"registration":{"skills":["natural_language_processing/text_generation"],"domains":["technology/artificial_intelligence"]}}}`)
+				"-p", `{"spec":{"registration":{"skills":["natural_language_processing/text_generation"],"domains":["technology/artificial_intelligence"],"metadata":{"best_val_bpb":"1.111","gpu":"T4","framework":"autoresearch"}}}}`)
 			// Patch the registration ConfigMap directly to inject OASF service entry.
 			// This avoids a full re-reconciliation cycle for skip-bootstrap runs.
 			cmJSON, cmErr := kubectl.Output(w.kubectlBin, w.kubeconfig,
 				"get", "configmap", "so-"+serviceOfferName+"-registration",
 				"-n", serviceOfferNamespace, "-o", "jsonpath={.data.agent-registration\\.json}")
-			if cmErr == nil && !strings.Contains(cmJSON, `"OASF"`) {
-				// Parse, inject OASF entry, patch back.
+			if cmErr == nil {
+				// Parse, inject OASF entry + metadata when missing, patch back.
 				var reg map[string]interface{}
 				if json.Unmarshal([]byte(cmJSON), &reg) == nil {
-					if services, ok := reg["services"].([]interface{}); ok {
+					updatedAny := false
+					if services, ok := reg["services"].([]interface{}); ok && !strings.Contains(cmJSON, `"OASF"`) {
 						oasf := map[string]interface{}{
 							"name":    "OASF",
 							"version": "0.8",
@@ -341,6 +344,20 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 							"domains": []string{"technology/artificial_intelligence"},
 						}
 						reg["services"] = append(services, oasf)
+						updatedAny = true
+					}
+					meta, _ := reg["metadata"].(map[string]interface{})
+					if meta == nil {
+						meta = map[string]interface{}{}
+					}
+					for k, v := range map[string]interface{}{"best_val_bpb": "1.111", "gpu": "T4", "framework": "autoresearch"} {
+						if _, ok := meta[k]; !ok {
+							meta[k] = v
+							updatedAny = true
+						}
+					}
+					reg["metadata"] = meta
+					if updatedAny {
 						if updated, err := json.Marshal(reg); err == nil {
 							escaped := strings.ReplaceAll(string(updated), `"`, `\"`)
 							_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
@@ -351,7 +368,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 							_ = kubectl.Run(w.kubectlBin, w.kubeconfig,
 								"rollout", "restart", "deployment/so-"+serviceOfferName+"-registration",
 								"-n", serviceOfferNamespace)
-							w.t.Log("integration: patched registration ConfigMap with OASF entry")
+							w.t.Log("integration: patched registration ConfigMap with OASF/metadata")
 						}
 					}
 				}
@@ -601,6 +618,83 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
+	ctx.Then(`^the ServiceOffer has a registered agent ID$`, func() error {
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "serviceoffers.obol.org", serviceOfferName,
+			"-n", serviceOfferNamespace,
+			"-o", "jsonpath={.status.agentId}")
+		if err != nil {
+			return fmt.Errorf("could not read ServiceOffer agentId: %v", err)
+		}
+		id := strings.TrimSpace(out)
+		if id == "" {
+			return fmt.Errorf("ServiceOffer status.agentId is empty")
+		}
+		w.registeredAgentID = id
+		w.t.Logf("integration: ✓ registered agent ID %s", id)
+		return nil
+	})
+
+	ctx.When(`^the agent searches the ERC-8004 registry for the offer$`, func() error {
+		out, err := execInAgentErr(w, "python3",
+			"/data/.openclaw/skills/discovery/scripts/discovery.py",
+			"search", "--chain", "base-sepolia", "--limit", "20", "--lookback", "20000")
+		w.registrySearchOutput = out
+		if err != nil {
+			return fmt.Errorf("discovery search failed: %v\n%s", err, out)
+		}
+		w.t.Logf("integration: registry search output:\n%s", out)
+		return nil
+	})
+
+	ctx.Then(`^the registry search contains the agent ID$`, func() error {
+		if w.registeredAgentID == "" {
+			return fmt.Errorf("registered agent ID not captured")
+		}
+		if !strings.Contains(w.registrySearchOutput, w.registeredAgentID) {
+			return fmt.Errorf("registry search did not contain agent ID %s:\n%s", w.registeredAgentID, w.registrySearchOutput)
+		}
+		return nil
+	})
+
+	ctx.When(`^the agent fetches the registration JSON from the registry$`, func() error {
+		if w.registeredAgentID == "" {
+			return fmt.Errorf("registered agent ID not captured")
+		}
+		out, err := waitForAgentCommand(w, 90*time.Second, "python3",
+			"/data/.openclaw/skills/discovery/scripts/discovery.py",
+			"uri", w.registeredAgentID, "--chain", "base-sepolia")
+		if err != nil {
+			return fmt.Errorf("discovery uri failed: %v\n%s", err, out)
+		}
+		var reg map[string]interface{}
+		if err := json.Unmarshal([]byte(out), &reg); err != nil {
+			return fmt.Errorf("parse registration JSON from discovery.py: %w\n%s", err, out)
+		}
+		w.registrationJSON = reg
+		w.t.Logf("integration: registration JSON from registry: name=%v x402=%v", reg["name"], reg["x402Support"])
+		return nil
+	})
+
+	ctx.Then(`^the registration contains metadata field "([^"]*)"$`, func(field string) error {
+		if w.registrationJSON == nil {
+			return fmt.Errorf("no registration JSON fetched")
+		}
+		meta, ok := w.registrationJSON["metadata"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("registration has no metadata object")
+		}
+		value, ok := meta[field]
+		if !ok {
+			return fmt.Errorf("registration metadata missing field %s: %v", field, meta)
+		}
+		if strings.TrimSpace(fmt.Sprint(value)) == "" {
+			return fmt.Errorf("registration metadata field %s is empty", field)
+		}
+		w.t.Logf("integration: ✓ metadata %s=%v", field, value)
+		return nil
+	})
+
 	// ── Cleanup steps ────────────────────────────────────────────────
 
 	ctx.When(`^the operator deletes the ServiceOffer via CLI$`, func() error {
@@ -645,6 +739,30 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+func execInAgentErr(w *integrationWorld, args ...string) (string, error) {
+	fullArgs := append([]string{"exec", "-i", "-n", "openclaw-obol-agent", "deploy/openclaw", "-c", "openclaw", "--"}, args...)
+	return kubectl.Output(w.kubectlBin, w.kubeconfig, fullArgs...)
+}
+
+func waitForAgentCommand(w *integrationWorld, timeout time.Duration, args ...string) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var lastOut string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(w, args...)
+		if err == nil {
+			return out, nil
+		}
+		lastOut = out
+		lastErr = err
+		time.Sleep(3 * time.Second)
+	}
+	if lastErr != nil {
+		return lastOut, lastErr
+	}
+	return lastOut, fmt.Errorf("timeout waiting for agent command")
+}
 
 // doInferencePost sends a POST to the given URL with an OpenAI-compatible body.
 func (w *integrationWorld) doInferencePost(url string, headers map[string]string) error {

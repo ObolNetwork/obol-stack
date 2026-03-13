@@ -180,7 +180,12 @@ func TestMain(m *testing.M) {
 		"--health-path", "/health/readiness",
 		"--register",
 		"--register-name", "BDD Test Inference",
-		"--register-description", "Integration test inference endpoint"); err != nil {
+		"--register-description", "Integration test inference endpoint",
+		"--register-skills", "natural_language_processing/text_generation",
+		"--register-domains", "technology/artificial_intelligence",
+		"--register-metadata", "best_val_bpb=1.111",
+		"--register-metadata", "gpu=T4",
+		"--register-metadata", "framework=autoresearch"); err != nil {
 		teardown(obolBin)
 		log.Fatalf("obol sell http: %v", err)
 	}
@@ -325,7 +330,12 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 			"--health-path", "/health/readiness",
 			"--register",
 			"--register-name", "BDD Test Inference",
-			"--register-description", "Integration test inference endpoint"); err != nil {
+			"--register-description", "Integration test inference endpoint",
+			"--register-skills", "natural_language_processing/text_generation",
+			"--register-domains", "technology/artificial_intelligence",
+			"--register-metadata", "best_val_bpb=1.111",
+			"--register-metadata", "gpu=T4",
+			"--register-metadata", "framework=autoresearch"); err != nil {
 			return fmt.Errorf("obol sell http on existing cluster: %w", err)
 		}
 	}

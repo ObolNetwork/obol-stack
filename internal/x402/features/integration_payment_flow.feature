@@ -87,8 +87,23 @@ Feature: x402 Payment Flow — Real User Journey
     And the registration contains a service endpoint
     And the registration contains OASF skills
     And the registration contains OASF domains
+    And the registration contains metadata field "best_val_bpb"
     When the agent probes the tunnel service endpoint
     Then the probe returns 402 with pricing info
+
+  @integration @registry @discover
+  Scenario: Agent discovers registered service through the ERC-8004 registry
+    When the operator runs "obol sell http" to create a ServiceOffer
+    And the agent reconciles the ServiceOffer
+    Then the ServiceOffer has a registered agent ID
+    When the agent searches the ERC-8004 registry for the offer
+    Then the registry search contains the agent ID
+    When the agent fetches the registration JSON from the registry
+    Then the registration contains x402Support
+    And the registration contains a service endpoint
+    And the registration contains OASF skills
+    And the registration contains OASF domains
+    And the registration contains metadata field "best_val_bpb"
 
   # ─── Cleanup: operator deletes the offer ────────────────────────────
 
