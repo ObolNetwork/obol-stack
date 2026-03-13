@@ -123,5 +123,6 @@ If the request makes it through the x402 gate, the worker runs the experiment sy
 
 - `references/worker-api.md` — worker endpoints, result schema, and deployment notes
 - `references/k3s-gpu-worker.md` — minimal k3s Deployment + Service example
+- `references/claude-code-seller-prompt.md` — prompt to turn a plain autoresearch@home join flow into a real seller-oriented flow
 - See also: `sell` for ServiceOffer monetization
 - See also: `autoresearch-coordinator` for the buyer/coordinator side of remote experiments
