@@ -24,7 +24,7 @@ const AgentList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$xs',
-  padding: '$sm $lg $md',
+  paddingTop: '$lg',
 });
 
 const ToolBar = styled(Flex, {
