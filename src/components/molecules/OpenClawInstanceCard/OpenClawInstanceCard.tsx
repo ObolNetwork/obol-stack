@@ -207,7 +207,7 @@ export function OpenClawInstanceCard({
         </Link>
       </ActionsRow>
 
-      {instance.id === 'obol-agent' && displayStatus === 'running' && (
+      {instance.id === 'obol-agent' && (
         <>
           <SellDivider />
           <SellCtaRow>

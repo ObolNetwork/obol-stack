@@ -1,54 +1,27 @@
 'use client';
 
-import { useState, useCallback } from 'react';
 import {
   Box,
   Flex,
   Text,
   Button,
+  TextField,
   styled,
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-  DialogTitle,
-  DialogClose,
-  CloseIcon,
+  ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
+import { SectionTitle } from '../../atoms/SectionTitle';
+import { useSellInferenceModal } from './useSellInferenceModal';
 
 interface SellInferenceModalProps {
   trigger: React.ReactNode;
 }
-
-type FormState = {
-  name: string;
-  wallet: string;
-  chain: string;
-  price: string;
-  upstream: string;
-  port: string;
-};
-
-type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
-
-const ModalHeader = styled(Flex, {
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '$md $lg',
-  borderBottom: '1px solid $stroke',
-  background:
-    'linear-gradient(180deg, rgba(47, 228, 171, 0.06) 0%, transparent 100%)',
-});
-
-const HeaderLeft = styled(Flex, {
-  alignItems: 'center',
-  gap: '$sm',
-});
 
 const ModalBody = styled(Box, {
   padding: '$lg',
   display: 'flex',
   flexDirection: 'column',
   gap: '$md',
+  flex: 1,
 });
 
 const FieldGroup = styled(Box, {
@@ -65,29 +38,6 @@ const FieldLabel = styled(Text, {
   textTransform: 'uppercase',
 });
 
-const StyledInput = styled('input', {
-  width: '100%',
-  padding: '$xxs $xs',
-  backgroundColor: '$bg01',
-  border: '1px solid $stroke',
-  borderRadius: '$3',
-  color: '$light',
-  fontSize: '$3',
-  fontFamily: 'monospace',
-  outline: 'none',
-  transition: 'border-color 0.15s ease',
-  boxSizing: 'border-box',
-
-  '&::placeholder': {
-    color: '$muted',
-  },
-
-  '&:focus': {
-    borderColor: '$obolGreen',
-    boxShadow: '0 0 0 1px rgba(47, 228, 171, 0.15)',
-  },
-});
-
 const InlineFields = styled(Flex, {
   gap: '$sm',
   '& > *': { flex: 1 },
@@ -100,28 +50,12 @@ const ModalFooter = styled(Flex, {
   gap: '$xs',
 });
 
-const CloseButton = styled('button', {
-  background: 'none',
-  border: 'none',
-  color: '$body',
-  cursor: 'pointer',
-  padding: '$xxxs',
-  borderRadius: '$1',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  transition: 'color 0.15s ease',
-
-  '&:hover': {
-    color: '$light',
-  },
-});
-
 const SuccessCard = styled(Flex, {
+  height: '100%',
   flexDirection: 'column',
   alignItems: 'center',
   gap: '$md',
-  padding: '$xl $lg',
+  padding: '$4xl $lg',
   textAlign: 'center',
 });
 
@@ -145,236 +79,164 @@ const ErrorMessage = styled(Text, {
   border: '1px solid rgba(255, 107, 107, 0.15)',
 });
 
-const INITIAL_FORM: FormState = {
-  name: '',
-  wallet: '',
-  chain: 'base-sepolia',
-  price: '0.001',
-  upstream: 'litellm',
-  port: '4000',
-};
-
 export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<FormState>(INITIAL_FORM);
-  const [submitState, setSubmitState] = useState<SubmitState>('idle');
-  const [errorMsg, setErrorMsg] = useState('');
-
-  const updateField = useCallback(
-    (field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) => {
-      setForm(prev => ({ ...prev, [field]: e.target.value }));
-    },
-    []
-  );
-
-  const handleSubmit = useCallback(async () => {
-    setSubmitState('submitting');
-    setErrorMsg('');
-
-    try {
-      const res = await fetch('/api/sell/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: form.name,
-          namespace: 'llm',
-          wallet: form.wallet,
-          chain: form.chain,
-          pricePerRequest: form.price,
-          upstream: form.upstream,
-          port: parseInt(form.port, 10) || 4000,
-          healthPath: '/health/readiness',
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-
-      setSubmitState('success');
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to create ServiceOffer');
-      setSubmitState('error');
-    }
-  }, [form]);
-
-  const handleClose = useCallback(() => {
-    setOpen(false);
-    setTimeout(() => {
-      setForm(INITIAL_FORM);
-      setSubmitState('idle');
-      setErrorMsg('');
-    }, 200);
-  }, []);
-
-  const isValid =
-    form.name.length > 0 &&
-    form.wallet.startsWith('0x') &&
-    form.wallet.length === 42 &&
-    parseFloat(form.price) > 0;
+  const {
+    open,
+    setOpen,
+    submitState,
+    errorMsg,
+    nameValue,
+    isValid,
+    register,
+    handleSubmit,
+    onSubmit,
+    handleClose,
+  } = useSellInferenceModal();
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent>
-        <ModalHeader>
-          <HeaderLeft>
-            <DialogTitle asChild>
-              <Text
-                css={{
-                  fontSize: '$5',
-                  fontWeight: '$semibold',
-                  color: '$light',
-                }}
-              >
-                Sell Inference
-              </Text>
-            </DialogTitle>
-          </HeaderLeft>
-          <DialogClose asChild>
-            <CloseButton onClick={handleClose}>
-              <CloseIcon />
-            </CloseButton>
-          </DialogClose>
-        </ModalHeader>
+    <ResponsiveDialog
+      open={open}
+      setOpen={setOpen}
+      triggerElement={trigger as any}
+    >
+      <Flex css={{ paddingLeft: '$xs' }}>
+        <SectionTitle>Sell Inference</SectionTitle>
+      </Flex>
 
-        {submitState === 'success' ? (
-          <SuccessCard>
-            <PulseRing>
-              <Text css={{ color: '$obolGreen', fontSize: '$8' }}>
-                &#10003;
-              </Text>
-            </PulseRing>
-            <Box>
+      {submitState === 'success' ? (
+        <SuccessCard>
+          <PulseRing>
+            <Text css={{ color: '$obolGreen', fontSize: '$8' }}>&#10003;</Text>
+          </PulseRing>
+          <Box>
+            <Text
+              css={{
+                fontSize: '$5',
+                fontWeight: '$semibold',
+                color: '$light',
+                marginBottom: '$md',
+              }}
+            >
+              ServiceOffer Created
+            </Text>
+            <Text css={{ fontSize: '$2', color: '$body', marginBottom: '$md' }}>
               <Text
+                as="span"
                 css={{
-                  fontSize: '$5',
-                  fontWeight: '$semibold',
-                  color: '$light',
-                  marginBottom: '$xxs',
-                }}
-              >
-                ServiceOffer Created
-              </Text>
-              <Text css={{ fontSize: '$2', color: '$body' }}>
-                <Text
-                  as="span"
-                  css={{ color: '$obolGreen', fontFamily: 'monospace' }}
-                >
-                  {form.name}
-                </Text>{' '}
-                is being reconciled by the agent.
-              </Text>
-              <Text
-                css={{
-                  fontSize: '$1',
-                  color: '$muted',
-                  marginTop: '$xs',
+                  color: '$obolGreen',
                   fontFamily: 'monospace',
+                  marginBottom: '$md',
                 }}
               >
-                obol sell status {form.name} -n llm
-              </Text>
-            </Box>
+                {nameValue}
+              </Text>{' '}
+              is being reconciled by the agent.
+            </Text>
+            <Text
+              css={{
+                fontSize: '$1',
+                color: '$muted',
+                marginTop: '$xs',
+                fontFamily: 'monospace',
+              }}
+            >
+              obol sell status {nameValue} -n llm
+            </Text>
+          </Box>
+          <Button
+            color="primary"
+            onClick={handleClose}
+            css={{ marginTop: '$sm' }}
+          >
+            Done
+          </Button>
+        </SuccessCard>
+      ) : (
+        <form
+          onSubmit={handleSubmit(onSubmit)}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            height: '100%',
+          }}
+        >
+          <ModalBody>
+            <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
+              Expose a service behind an x402 payment gate. Buyers pay
+              per-request in USDC.
+            </Text>
+
+            <FieldGroup>
+              <FieldLabel>Service Name</FieldLabel>
+              <TextField
+                placeholder="my-inference"
+                autoFocus
+                {...register('name', { required: true })}
+              />
+            </FieldGroup>
+
+            <FieldGroup>
+              <FieldLabel>USDC Wallet Address</FieldLabel>
+              <TextField
+                placeholder="0x..."
+                {...register('wallet', {
+                  required: true,
+                  validate: v => v.startsWith('0x') && v.length === 42,
+                })}
+              />
+            </FieldGroup>
+
+            <InlineFields>
+              <FieldGroup>
+                <FieldLabel>Chain</FieldLabel>
+                <TextField {...register('chain', { required: true })} />
+              </FieldGroup>
+              <FieldGroup>
+                <FieldLabel>Price / Request (USDC)</FieldLabel>
+                <TextField
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  {...register('price', {
+                    required: true,
+                    validate: v => parseFloat(v) > 0,
+                  })}
+                />
+              </FieldGroup>
+            </InlineFields>
+
+            <InlineFields>
+              <FieldGroup>
+                <FieldLabel>Upstream Service</FieldLabel>
+                <TextField {...register('upstream', { required: true })} />
+              </FieldGroup>
+              <FieldGroup>
+                <FieldLabel>Port</FieldLabel>
+                <TextField
+                  type="number"
+                  {...register('port', { required: true })}
+                />
+              </FieldGroup>
+            </InlineFields>
+
+            {submitState === 'error' && <ErrorMessage>{errorMsg}</ErrorMessage>}
+          </ModalBody>
+
+          <ModalFooter>
+            <Button color="secondary" type="button" onClick={handleClose}>
+              Cancel
+            </Button>
             <Button
               color="primary"
-              onClick={handleClose}
-              css={{ marginTop: '$sm' }}
+              type="submit"
+              disabled={!isValid || submitState === 'submitting'}
             >
-              Done
+              {submitState === 'submitting' ? 'Creating...' : 'Create Offer'}
             </Button>
-          </SuccessCard>
-        ) : (
-          <>
-            <ModalBody>
-              <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
-                Expose a service behind an x402 payment gate. Buyers pay
-                per-request in USDC.
-              </Text>
-
-              <FieldGroup>
-                <FieldLabel>Service Name</FieldLabel>
-                <StyledInput
-                  placeholder="my-inference"
-                  value={form.name}
-                  onChange={updateField('name')}
-                  autoFocus
-                />
-              </FieldGroup>
-
-              <FieldGroup>
-                <FieldLabel>USDC Wallet Address</FieldLabel>
-                <StyledInput
-                  placeholder="0x..."
-                  value={form.wallet}
-                  onChange={updateField('wallet')}
-                />
-              </FieldGroup>
-
-              <InlineFields>
-                <FieldGroup>
-                  <FieldLabel>Chain</FieldLabel>
-                  <StyledInput
-                    value={form.chain}
-                    onChange={updateField('chain')}
-                  />
-                </FieldGroup>
-                <FieldGroup>
-                  <FieldLabel>Price / Request (USDC)</FieldLabel>
-                  <StyledInput
-                    type="number"
-                    step="0.0001"
-                    min="0"
-                    value={form.price}
-                    onChange={updateField('price')}
-                  />
-                </FieldGroup>
-              </InlineFields>
-
-              <InlineFields>
-                <FieldGroup>
-                  <FieldLabel>Upstream Service</FieldLabel>
-                  <StyledInput
-                    value={form.upstream}
-                    onChange={updateField('upstream')}
-                  />
-                </FieldGroup>
-                <FieldGroup>
-                  <FieldLabel>Port</FieldLabel>
-                  <StyledInput
-                    type="number"
-                    value={form.port}
-                    onChange={updateField('port')}
-                  />
-                </FieldGroup>
-              </InlineFields>
-
-              {submitState === 'error' && (
-                <ErrorMessage>{errorMsg}</ErrorMessage>
-              )}
-            </ModalBody>
-
-            <ModalFooter>
-              <Button
-                color="secondary"
-                onClick={handleClose}
-                css={{ fontSize: '$3', height: '$sm' }}
-              >
-                Cancel
-              </Button>
-              <Button
-                color="primary"
-                disabled={!isValid || submitState === 'submitting'}
-                onClick={handleSubmit}
-                css={{ fontSize: '$3', height: '$sm', minWidth: 120 }}
-              >
-                {submitState === 'submitting' ? 'Creating...' : 'Create Offer'}
-              </Button>
-            </ModalFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+          </ModalFooter>
+        </form>
+      )}
+    </ResponsiveDialog>
   );
 }

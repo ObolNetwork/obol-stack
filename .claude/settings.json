@@ -10,7 +10,14 @@
       "Bash(grep -o \"obol[A-Z][a-zA-Z]*.*:\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/stitches.config.d.ts)",
       "Bash(cat /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/package.json)",
       "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui* -type f -name \"stitches.config.js\")",
-      "Bash(grep -o obolGreen[^:]*:[^,}]* /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)"
+      "Bash(grep -o obolGreen[^:]*:[^,}]* /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)",
+      "Bash(claude auth:*)",
+      "Bash(pnpm config:*)",
+      "Bash(npm install:*)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist -name \"ResponsiveDialog.js\" -o -name \"index.js\")",
+      "Bash(grep -r \"ResponsiveDialogStyledContent\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist --include=\"*.js\")",
+      "Bash(grep -A 50 ResponsiveDialogStyledContents*= /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui -name \"ResponsiveDialog.tsx\" -o -name \"ResponsiveDialog.ts\")"
     ]
   }
 }
