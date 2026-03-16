@@ -28,10 +28,6 @@ const MainSection = styled(Box, {
   '@media (min-width: 1500px) and (max-width: 1900px)': {
     transition: 'margin 0.3s ease-in-out',
 
-    '&[data-sidebar-open="false"]': {
-      marginLeft: '25%',
-    },
-
     '&[data-sidebar-open="true"]': {
       marginLeft: '0px', // smooth animation now works
     },
@@ -85,10 +81,10 @@ export function DashboardContent({
           <OpenClawList onInstanceSelect={handleInstanceSelect} />
           <AgentRegistry />
           {error && <ErrorState onRetry={onRetry} />}
-          {data && (data.localNodes.length > 0 || data.remoteNode) && (
+          {data && (data.localNodes.length > 0 || data.erpcData) && (
             <NetworksSection
               localNodes={data.localNodes}
-              remoteNode={data.remoteNode}
+              erpcData={data.erpcData}
             />
           )}
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}

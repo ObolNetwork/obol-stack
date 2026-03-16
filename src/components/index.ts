@@ -37,7 +37,7 @@ export { DashboardContent } from './organisms/DashboardContent';
 export { FooterBar } from './organisms/FooterBar';
 export { ErpcStatus } from './organisms/ErpcStatus';
 export { NetworksSection } from './organisms/NetworksSection/NetworksSection';
-export { NetworkStatus } from './organisms/NetworkStatus/NetworkStatus';
+export { LocalNodeStatus } from './organisms/LocalNodeStatus/LocalNodeStatus';
 export { NodeOverview } from './organisms/NodeOverview';
 export { OpenClawList } from './organisms/OpenClawList';
 

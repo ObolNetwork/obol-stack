@@ -7,10 +7,12 @@ export interface ChainChipProps {
     | 'lightMode'
     | 'aztecSequencer'
     | 'erpcProxy'
+    | 'remoteNode'
     | 'hoodi'
     | 'sepolia'
     | 'mainnet';
   label?: string;
+  small?: boolean;
   className?: string;
 }
 
@@ -47,6 +49,10 @@ const StyledChainChip = styled(Box, {
         background: 'rgba(145, 103, 228, 0.30)',
         color: '#C4A8F5',
       },
+      remoteNode: {
+        background: 'rgba(91, 158, 255, 0.15)',
+        color: '#5B9EFF',
+      },
       hoodi: {
         border: '1px solid $bg05',
         background: '$bg02',
@@ -72,9 +78,9 @@ const StyledChainChip = styled(Box, {
 const getChipText = (variant: ChainChipProps['variant']) => {
   switch (variant) {
     case 'fullMode':
-      return 'Full Mode';
+      return 'Local Full Mode';
     case 'lightMode':
-      return 'Light Mode';
+      return 'Local Light Mode';
     case 'hoodi':
       return 'Hoodi';
     case 'sepolia':
@@ -83,6 +89,8 @@ const getChipText = (variant: ChainChipProps['variant']) => {
       return 'Mainnet';
     case 'aztecSequencer':
       return 'Sequencer';
+    case 'remoteNode':
+      return 'Remote Node';
     case 'erpcProxy':
       return 'RPC Proxy';
     default:
@@ -93,10 +101,19 @@ const getChipText = (variant: ChainChipProps['variant']) => {
 export function ChainChip({
   variant = 'mainnet',
   label,
+  small,
   className,
 }: ChainChipProps) {
   return (
-    <StyledChainChip variant={variant} className={className}>
+    <StyledChainChip
+      variant={variant}
+      className={className}
+      css={
+        small
+          ? { height: 'auto', padding: '$xxxs $xxs', fontSize: '$1' }
+          : undefined
+      }
+    >
       {label ?? getChipText(variant)}
     </StyledChainChip>
   );

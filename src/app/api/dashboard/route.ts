@@ -72,7 +72,7 @@ export async function GET() {
 
     // Build nodes
     const localNodes: LocalNodeData[] = [];
-    let remoteNode = null;
+    let erpcData = null;
     for (const instance of instances) {
       const nodeMode = getNodeModeFromAppInstance(instance.app);
 
@@ -125,7 +125,7 @@ export async function GET() {
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
       } else if (isErpcInstance(instance)) {
-        remoteNode = await clientMetrics.getErpcStatus(config.erpcBaseUrl);
+        erpcData = await clientMetrics.getErpcStatus(config.erpcBaseUrl);
         continue;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
@@ -211,7 +211,7 @@ export async function GET() {
 
     return NextResponse.json({
       localNodes,
-      remoteNode,
+      erpcData,
       nodeOverview,
       ports: portInfo,
     } as DashboardData);
@@ -221,7 +221,7 @@ export async function GET() {
     return NextResponse.json(
       {
         localNodes: [],
-        remoteNode: null,
+        erpcData: null,
         nodeOverview: {
           diskUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
           memoryUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },

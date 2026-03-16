@@ -1,1 +1,2 @@
-export { AppIcon, CardAppType, CardAppId } from './AppIcon';
+export { ChainIcon, CardAppType, CardAppId } from './AppIcon';
+export type { ChainIconProps } from './AppIcon';

@@ -1,127 +1,155 @@
 'use client';
 
-import { Box, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
-import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle } from '../../atoms/SectionTitle';
-import { NetworkStatus } from '../NetworkStatus';
+import { LocalNodeStatus } from '../LocalNodeStatus';
 import { ErpcStatus } from '../ErpcStatus';
 import {
   LocalNodeData,
   ErpcStatusData,
-  ChainName,
   ErpcNetwork,
   ErpcUpstream,
 } from '../../../types/dashboard';
 import {
-  sortNetworks,
   networkToChainName,
   groupUpstreamsByNetwork,
-  NETWORK_ORDER,
 } from '../../../lib/utils/network-rpc';
 
 export interface NetworksSectionProps {
   localNodes: LocalNodeData[];
-  remoteNode: ErpcStatusData | null;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function collectChains(
-  localNodes: LocalNodeData[],
-  remoteNode: ErpcStatusData | null
-): ChainName[] {
-  const chains = new Set<ChainName>();
-
-  localNodes.forEach(a => chains.add(a.chainName));
-
-  remoteNode?.networks.forEach(n => {
-    const cn = networkToChainName(n.alias);
-    if (cn) chains.add(cn);
-  });
-
-  return NETWORK_ORDER.filter(c => chains.has(c as ChainName)) as ChainName[];
+  erpcData: ErpcStatusData | null;
 }
 
 // ── Styled components ─────────────────────────────────────────────────────────
 
-const ChainsList = styled(Box, {
+const SectionsList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$md',
+  gap: '$lg',
 });
 
-const AppsList = styled(Box, {
+const ItemsList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$md',
-  marginTop: '$md',
+  paddingTop: '$lg',
+});
+
+const LocalOnlyCard = styled(Box, {
+  borderRadius: '$3',
+  background: '$bg04',
+  border: '1px solid $stroke',
+  overflow: 'hidden',
+});
+
+const LocalOnlyCardHeader = styled(Flex, {
+  alignItems: 'center',
+  gap: '$sm',
+  padding: '$xs $sm',
+});
+
+const LocalOnlyCardTitle = styled(Text, {
+  fontSize: '$4',
+  fontWeight: '$semibold',
+  color: '$white',
+});
+
+const LocalNodesSection = styled(Box, {
+  borderTop: '1px solid $stroke',
+  padding: '$sm',
+});
+
+const LocalNodesSectionLabel = styled(Text, {
+  fontSize: '$2',
+  fontWeight: '$semibold',
+  color: '$body',
+  textTransform: 'uppercase',
+  marginBottom: '$md',
+});
+
+const LocalNodesList = styled(Box, {
+  display: 'grid',
+  gap: '$xs',
+  gridTemplateColumns: '1fr',
+  '@media (min-width: 640px)': {
+    gridTemplateColumns: 'repeat(2, 1fr)',
+  },
+  paddingTop: '$lg',
 });
 
 // ── NetworksSection ───────────────────────────────────────────────────────────
 
 export function NetworksSection({
   localNodes,
-  remoteNode,
+  erpcData,
 }: NetworksSectionProps) {
-  const chains = collectChains(localNodes, remoteNode);
-
-  const erpcNetworks = remoteNode ? sortNetworks(remoteNode.networks) : [];
-  const erpcUpstreamsByNetwork = remoteNode
-    ? groupUpstreamsByNetwork(remoteNode.upstreams ?? [])
+  const erpcNetworks = erpcData?.networks ?? [];
+  const erpcUpstreamsByNetwork = erpcData
+    ? groupUpstreamsByNetwork(erpcData.upstreams ?? [])
     : new Map();
 
+  // Chains covered by eRPC
+  const erpcChainNames = new Set(
+    erpcNetworks.map(n => networkToChainName(n.alias)).filter(Boolean)
+  );
+
+  // eRPC entries with their embedded local nodes
+  const erpcItems: {
+    network: ErpcNetwork;
+    upstreams?: ErpcUpstream[];
+    localNodes: LocalNodeData[];
+  }[] = erpcNetworks.map(n => ({
+    network: n,
+    upstreams: erpcUpstreamsByNetwork.get(n.id),
+    localNodes: localNodes.filter(
+      a => a.chainName === networkToChainName(n.alias)
+    ),
+  }));
+
+  // Local nodes for chains not covered by eRPC, grouped by chain
+  const localOnlyNodes = localNodes.filter(
+    a => !erpcChainNames.has(a.chainName)
+  );
+  const localOnlyChains = [...new Set(localOnlyNodes.map(a => a.chainName))];
+
+  const hasNetworks = erpcItems.length > 0;
+  const hasLocalOnly = localOnlyChains.length > 0;
+
   return (
-    <Card css={{ padding: '$lg' }}>
-      <SectionTitle>Networks</SectionTitle>
-      <ChainsList css={{ paddingTop: '$lg' }}>
-        {chains.map(chainName => {
-          const erpcEntries: {
-            network: ErpcNetwork;
-            upstreams?: ErpcUpstream[];
-          }[] = erpcNetworks
-            .filter(n => networkToChainName(n.alias) === chainName)
-            .map(n => ({
-              network: n,
-              upstreams: erpcUpstreamsByNetwork.get(n.id),
-            }));
+    <SectionsList>
+      {hasNetworks && (
+        <Card css={{ padding: '$lg' }}>
+          <SectionTitle>Networks</SectionTitle>
+          <ItemsList>
+            {erpcItems.map(({ network, upstreams, localNodes: nodes }) => (
+              <ErpcStatus
+                key={network.id}
+                network={network}
+                upstreams={upstreams}
+                localNodes={nodes}
+              />
+            ))}
+          </ItemsList>
+        </Card>
+      )}
 
-          const nodeApps = localNodes.filter(a => a.chainName === chainName);
-
-          return (
-            <Card key={chainName} css={{ backgroundColor: '$bg03' }}>
-              <Accordion
-                header={
-                  <SectionTitle>
-                    {chainName.charAt(0).toUpperCase() + chainName.slice(1)}
-                  </SectionTitle>
-                }
-                defaultExpanded={true}
-              >
-                {erpcEntries.length > 0 && (
-                  <AppsList>
-                    {erpcEntries.map(({ network, upstreams }) => (
-                      <ErpcStatus
-                        key={network.id}
-                        network={network}
-                        upstreams={upstreams}
-                      />
-                    ))}
-                  </AppsList>
-                )}
-
-                {nodeApps.length > 0 && (
-                  <AppsList>
-                    {nodeApps.map(app => (
-                      <NetworkStatus key={app.appId} appData={app} />
-                    ))}
-                  </AppsList>
-                )}
-              </Accordion>
-            </Card>
-          );
-        })}
-      </ChainsList>
-    </Card>
+      {hasLocalOnly && (
+        <Card css={{ padding: '$lg' }}>
+          <SectionTitle>Applications</SectionTitle>
+          <ItemsList>
+            {localOnlyChains.map(chainName => (
+              <LocalNodesList key={chainName}>
+                {localOnlyNodes
+                  .filter(a => a.chainName === chainName)
+                  .map(app => (
+                    <LocalNodeStatus key={app.appId} appData={app} />
+                  ))}
+              </LocalNodesList>
+            ))}
+          </ItemsList>
+        </Card>
+      )}
+    </SectionsList>
   );
 }
