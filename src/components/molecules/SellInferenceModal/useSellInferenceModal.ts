@@ -31,6 +31,7 @@ export function useSellInferenceModal() {
     handleSubmit,
     watch,
     reset,
+    setValue,
     formState: { isValid },
   } = useForm<FormState>({
     defaultValues: INITIAL_FORM,
@@ -38,6 +39,7 @@ export function useSellInferenceModal() {
   });
 
   const nameValue = watch('name');
+  const chainValue = watch('chain');
 
   const onSubmit = useCallback(async (data: FormState) => {
     setSubmitState('submitting');
@@ -86,8 +88,10 @@ export function useSellInferenceModal() {
     submitState,
     errorMsg,
     nameValue,
+    chainValue,
     isValid,
     register,
+    setValue,
     handleSubmit,
     onSubmit,
     handleClose,

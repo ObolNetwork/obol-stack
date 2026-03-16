@@ -6,7 +6,7 @@ import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
 import { Badge } from '../../atoms/Badge';
 import { Card } from '../../atoms/Card';
-import { ChainChip } from '../../atoms/ChainChip';
+import { ChainSelector } from '../../atoms/ChainSelector';
 import { CountBadge } from '../../atoms/CountBadge';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ItemCard } from '../../atoms/ItemCard';
@@ -14,11 +14,12 @@ import { SearchInput } from '../../atoms/SearchInput';
 import { FilterChip } from '../../atoms/FilterChip';
 import { Avatar } from '../../atoms/Avatar';
 import { EmptyMessage } from '../../atoms/EmptyMessage';
+import { Pagination } from '../../atoms/Pagination';
 import { useRegistryAgents } from '../../../hooks/useRegistryAgents';
+import { useAgentFilters } from '../../../hooks/useAgentFilters';
 import { useSearch } from '../../../hooks/useSearch';
 import { truncateAddress } from '../../../utils/address';
 import type { Agent8004 } from '@/types/registry';
-import { useState, useMemo } from 'react';
 
 const AgentList = styled(Box, {
   display: 'flex',
@@ -138,24 +139,18 @@ const PROTOCOL_FILTERS = ['MCP', 'A2A', 'Web'] as const;
 
 export function AgentRegistry() {
   const { search, debouncedSearch, handleSearchChange } = useSearch();
-  const [x402Only, setX402Only] = useState(false);
-  const [protocolFilter, setProtocolFilter] = useState<string | undefined>();
-
-  const { agents, loading, error } = useRegistryAgents(
-    20,
-    debouncedSearch || undefined,
-    protocolFilter
-  );
-
-  // Client-side x402 filter (8004scan doesn't support server-side)
-  const filtered = useMemo(
-    () => (x402Only ? agents.filter(a => a.x402_supported) : agents),
-    [agents, x402Only]
-  );
-
-  const toggleProtocol = (p: string) => {
-    setProtocolFilter(prev => (prev === p ? undefined : p));
-  };
+  const { agents, loading, error, page, totalPages, nextPage, prevPage } =
+    useRegistryAgents(debouncedSearch || undefined);
+  const {
+    x402Only,
+    setX402Only,
+    protocolFilters,
+    toggleProtocol,
+    chainFilter,
+    setChainFilter,
+    filtered,
+    hasActiveFilters,
+  } = useAgentFilters(agents);
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm' }}>
@@ -183,7 +178,7 @@ export function AgentRegistry() {
             {PROTOCOL_FILTERS.map(p => (
               <FilterChip
                 key={p}
-                active={protocolFilter === p}
+                active={protocolFilters.has(p)}
                 onClick={() => toggleProtocol(p)}
               >
                 {p}
@@ -196,7 +191,11 @@ export function AgentRegistry() {
               value={search}
               onChange={handleSearchChange}
             />
-            <ChainChip variant="sepolia" />
+            <ChainSelector
+              value={chainFilter}
+              onChange={setChainFilter}
+              allowDeselect
+            />
           </ToolBar>
         </Flex>
         <AgentList>
@@ -206,7 +205,7 @@ export function AgentRegistry() {
           {error && <ErrorState message={`Registry unavailable: ${error}`} />}
           {!loading && !error && filtered.length === 0 && (
             <EmptyMessage>
-              {search || x402Only || protocolFilter
+              {search || hasActiveFilters
                 ? 'No agents match your filters'
                 : 'No registered agents found'}
             </EmptyMessage>
@@ -215,6 +214,13 @@ export function AgentRegistry() {
             <AgentCardItem key={agent.token_id} agent={agent} />
           ))}
         </AgentList>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPrev={prevPage}
+          onNext={nextPage}
+          disabled={loading}
+        />
       </Accordion>
     </Card>
   );

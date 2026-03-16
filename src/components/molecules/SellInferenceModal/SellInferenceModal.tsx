@@ -10,6 +10,7 @@ import {
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
 import { SectionTitle } from '../../atoms/SectionTitle';
+import { ChainSelector } from '../../atoms/ChainSelector';
 import { useSellInferenceModal } from './useSellInferenceModal';
 
 interface SellInferenceModalProps {
@@ -86,8 +87,10 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
     submitState,
     errorMsg,
     nameValue,
+    chainValue,
     isValid,
     register,
+    setValue,
     handleSubmit,
     onSubmit,
     handleClose,
@@ -190,7 +193,10 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
             <InlineFields>
               <FieldGroup>
                 <FieldLabel>Chain</FieldLabel>
-                <TextField {...register('chain', { required: true })} />
+                <ChainSelector
+                  value={chainValue as 'base-sepolia' | 'base-mainnet'}
+                  onChange={v => v && setValue('chain', v)}
+                />
               </FieldGroup>
               <FieldGroup>
                 <FieldLabel>Price / Request (USDC)</FieldLabel>
