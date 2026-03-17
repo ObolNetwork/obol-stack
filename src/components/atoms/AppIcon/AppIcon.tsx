@@ -1,12 +1,22 @@
 import React from 'react';
-import { AppInstanceType } from '../../../types/dashboard';
-import { Box } from '@obolnetwork/obol-ui';
+import { ChainName } from '../../../types/dashboard';
+import { Text, styled } from '@obolnetwork/obol-ui';
 
-export interface AppIconProps {
-  app: AppInstanceType;
-  size?: number;
-  className?: string;
-}
+export const CardAppType = styled(Text, {
+  fontSize: '$2',
+  fontWeight: '$medium',
+  color: '$body',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+});
+
+export const CardAppId = styled(Text, {
+  fontSize: '$5',
+  fontWeight: '$semibold',
+  color: '$light',
+  fontFamily: 'monospace',
+  lineHeight: '$tight',
+});
 
 const EthereumIcon = ({ size = 32 }: { size?: number }) => (
   <svg
@@ -73,23 +83,7 @@ const AztecIcon = ({ size = 32 }: { size?: number }) => (
   </svg>
 );
 
-const HeliosIcon = () => (
-  <Box
-    css={{
-      width: '$lg',
-      height: '$lg',
-      borderRadius: '$round',
-      backgroundColor: '$secondaryBgDefault',
-      backgroundImage:
-        'url(https://avatars.githubusercontent.com/u/745163?s=200&v=4)',
-      backgroundSize: 'contain',
-      backgroundPosition: 'center',
-      backgroundRepeat: 'no-repeat',
-    }}
-  />
-);
-
-const ErpcIcon = ({ size = 32 }: { size?: number }) => (
+const BaseIcon = ({ size = 32 }: { size?: number }) => (
   <svg
     width={size}
     height={size}
@@ -97,60 +91,33 @@ const ErpcIcon = ({ size = 32 }: { size?: number }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
   >
-    <circle cx="16" cy="16" r="16" fill="#1A1032" />
-    <circle cx="16" cy="16" r="6" stroke="#9167E4" strokeWidth="2" />
-    <circle cx="7" cy="10" r="2.5" fill="#9167E4" />
-    <circle cx="25" cy="10" r="2.5" fill="#9167E4" />
-    <circle cx="7" cy="22" r="2.5" fill="#9167E4" />
-    <circle cx="25" cy="22" r="2.5" fill="#9167E4" />
-    <line
-      x1="9.2"
-      y1="11.2"
-      x2="13"
-      y2="13.5"
-      stroke="#9167E4"
-      strokeWidth="1.5"
-    />
-    <line
-      x1="22.8"
-      y1="11.2"
-      x2="19"
-      y2="13.5"
-      stroke="#9167E4"
-      strokeWidth="1.5"
-    />
-    <line
-      x1="9.2"
-      y1="20.8"
-      x2="13"
-      y2="18.5"
-      stroke="#9167E4"
-      strokeWidth="1.5"
-    />
-    <line
-      x1="22.8"
-      y1="20.8"
-      x2="19"
-      y2="18.5"
-      stroke="#9167E4"
-      strokeWidth="1.5"
+    <circle cx="16" cy="16" r="16" fill="#0052FF" />
+    <path
+      d="M16.08 6.4C10.72 6.4 6.4 10.72 6.4 16.08C6.4 21.44 10.72 25.76 16.08 25.76C20.88 25.76 24.88 22.4 25.6 17.84H19.04C18.4 19.28 17.36 19.84 16.08 19.84C13.92 19.84 12.24 18.16 12.24 16C12.24 13.84 13.92 12.16 16.08 12.16C17.36 12.16 18.4 12.72 19.04 14.16H25.6C24.88 9.6 20.88 6.4 16.08 6.4Z"
+      fill="white"
     />
   </svg>
 );
 
-const appIcons: Record<
-  AppInstanceType,
-  React.ComponentType<{ size?: number }>
+const chainIcons: Partial<
+  Record<ChainName, React.ComponentType<{ size?: number }>>
 > = {
-  ethereum: EthereumIcon,
+  mainnet: EthereumIcon,
+  sepolia: EthereumIcon,
+  hoodi: EthereumIcon,
+  base: BaseIcon,
+  'base-sepolia': BaseIcon,
   aztec: AztecIcon,
-  helios: HeliosIcon,
-  erpc: ErpcIcon,
 };
 
-export function AppIcon({ app, size = 32, className }: AppIconProps) {
-  const IconComponent = appIcons[app] || EthereumIcon; // Fallback to Ethereum icon
+export interface ChainIconProps {
+  chain: ChainName;
+  size?: number;
+  className?: string;
+}
 
+export function ChainIcon({ chain, size = 32, className }: ChainIconProps) {
+  const IconComponent = chainIcons[chain] ?? EthereumIcon;
   return (
     <div
       className={className}

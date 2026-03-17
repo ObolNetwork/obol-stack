@@ -7,6 +7,7 @@ export interface CardProps {
   className?: string;
   title?: string;
   hover?: boolean;
+  section?: boolean;
   css?: CSS;
 }
 
@@ -24,6 +25,13 @@ const StyledCard = styled(Box, {
         },
       },
     },
+    section: {
+      true: {
+        position: 'relative',
+        overflow: 'hidden',
+        padding: '0',
+      },
+    },
   },
 });
 
@@ -38,10 +46,11 @@ export function Card({
   className,
   title,
   hover = false,
+  section = false,
   css,
 }: CardProps) {
   return (
-    <StyledCard hover={hover} className={className} css={css}>
+    <StyledCard hover={hover} section={section} className={className} css={css}>
       {title && <CardTitle as="h2">{title}</CardTitle>}
       {children}
     </StyledCard>

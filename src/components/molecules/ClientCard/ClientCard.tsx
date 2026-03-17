@@ -19,7 +19,7 @@ const Card = styled(Box, {
   alignItems: 'flex-start',
   gap: '$xxs',
   borderRadius: '$3',
-  background: '$bg04',
+  background: '$bg05',
   border: '1px solid $stroke',
 });
 
@@ -75,7 +75,7 @@ const ClientMetricRow = styled(Flex, {
 });
 
 const ClientMetricLabel = styled(Text, {
-  color: '$muted',
+  color: '$body',
 });
 
 const ClientMetricValueContainer = styled(Flex, {

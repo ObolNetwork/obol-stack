@@ -3,6 +3,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useDisconnect } from 'wagmi';
 import { Box, Button, Flex, Text, styled, Image } from '@obolnetwork/obol-ui';
 import { WalletModal } from '../WalletModal';
+import { truncateAddress } from '../../../utils/address';
 
 const ConnectedButton = styled('button', {
   display: 'flex',
@@ -12,9 +13,9 @@ const ConnectedButton = styled('button', {
   alignItems: 'center',
   gap: '$xs',
   borderRadius: '$3',
-  border: '1px solid #2D4D53',
+  border: '1px solid $bg05',
   opacity: 0.9,
-  background: '#091011',
+  background: '$bg01',
   backdropFilter: 'blur(2px)',
   color: '$light',
   cursor: 'pointer',
@@ -144,7 +145,7 @@ export function WalletConnection() {
                         }}
                       >
                         {account.displayName ||
-                          `${account.address?.slice(0, 6)}...${account.address?.slice(-4)}`}
+                          truncateAddress(account.address ?? '')}
                       </Text>
                     </ConnectedButton>
                   </Flex>

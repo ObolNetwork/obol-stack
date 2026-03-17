@@ -12,7 +12,7 @@ import {
 import { config } from '@/lib/config/environment';
 import {
   DashboardData,
-  AppData,
+  LocalNodeData,
   ClientInfo,
   CLIENT_STATUS,
   PORT_STATUS,
@@ -70,8 +70,9 @@ export async function GET() {
       },
     };
 
-    // Build apps
-    const apps: AppData[] = [];
+    // Build nodes
+    const localNodes: LocalNodeData[] = [];
+    let erpcData = null;
     for (const instance of instances) {
       const nodeMode = getNodeModeFromAppInstance(instance.app);
 
@@ -124,28 +125,7 @@ export async function GET() {
         finalizedEpoch = consensusClient.finalizedEpoch || 0;
         participation = consensusClient.participation || 0;
       } else if (isErpcInstance(instance)) {
-        const erpcStatus = await clientMetrics.getErpcStatus(
-          config.erpcBaseUrl
-        );
-
-        const hasNetworks = erpcStatus.networks.length > 0;
-        const allOk =
-          hasNetworks && erpcStatus.networks.every(n => n.state === 'OK');
-        const anyOk =
-          hasNetworks && erpcStatus.networks.some(n => n.state === 'OK');
-
-        apps.push({
-          chainName: instance.network,
-          app: instance.app,
-          appId: instance.id,
-          nodeMode,
-          status: allOk
-            ? CLIENT_STATUS.SYNCED
-            : anyOk
-              ? CLIENT_STATUS.SYNCING
-              : CLIENT_STATUS.ERROR,
-          erpcStatus,
-        });
+        erpcData = await clientMetrics.getErpcStatus(config.erpcBaseUrl);
         continue;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
@@ -171,7 +151,7 @@ export async function GET() {
         participation =
           ('participation' in result ? result.participation : 0) || 0;
 
-        apps.push({
+        localNodes.push({
           chainName: instance.network,
           app: instance.app,
           appId: instance.id,
@@ -186,7 +166,7 @@ export async function GET() {
         continue;
       }
 
-      apps.push({
+      localNodes.push({
         chainName: instance.network,
         app: instance.app,
         appId: instance.id,
@@ -230,7 +210,8 @@ export async function GET() {
     };
 
     return NextResponse.json({
-      apps,
+      localNodes,
+      erpcData,
       nodeOverview,
       ports: portInfo,
     } as DashboardData);
@@ -239,7 +220,8 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        apps: [],
+        localNodes: [],
+        erpcData: null,
         nodeOverview: {
           diskUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
           memoryUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },

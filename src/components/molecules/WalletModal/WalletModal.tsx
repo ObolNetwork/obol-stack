@@ -7,6 +7,7 @@ import { useTokenPrices } from '../../../hooks/useTokenPrices';
 import { ChainIcon } from '../../atoms/ChainIcon';
 import { getChainName } from '../../../types/dashboard';
 import { TOKEN_ADDRESSES } from '../../../lib/constants/tokens';
+import { truncateAddress } from '../../../utils/address';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -55,7 +56,7 @@ const formatChange = (change: number): string => {
 
 const ModalContent = styled('div', {
   position: 'absolute',
-  top: 'calc(100% + 16px)',
+  top: 'calc(100% + $sm)',
   right: 0,
   display: 'flex',
   width: '351px',
@@ -71,8 +72,8 @@ const ModalContent = styled('div', {
 
 const CloseButton = styled('button', {
   position: 'absolute',
-  top: '16px',
-  right: '16px',
+  top: '$sm',
+  right: '$sm',
   background: 'transparent',
   border: 'none',
   cursor: 'pointer',
@@ -247,9 +248,7 @@ export function WalletModal({
 
       <WalletName>
         {account.displayName ||
-          (account.address
-            ? `${account.address.slice(0, 6)}...${account.address.slice(-4)}`
-            : 'Unknown')}
+          (account.address ? truncateAddress(account.address) : 'Unknown')}
       </WalletName>
 
       <BalanceText>$ {totalBalanceUsd}</BalanceText>
