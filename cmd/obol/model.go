@@ -60,10 +60,15 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 
 			// Interactive mode if flags not provided
 			if provider == "" {
+				creds := detectCredentials()
 				providers, _ := model.GetAvailableProviders(cfg)
 				options := make([]string, len(providers))
 				for i, p := range providers {
-					options[i] = fmt.Sprintf("%s (%s)", p.Name, p.ID)
+					label := fmt.Sprintf("%s (%s)", p.Name, p.ID)
+					if det, ok := creds[p.ID]; ok {
+						label += fmt.Sprintf(" — detected: %s", det.source)
+					}
+					options[i] = label
 				}
 
 				idx, err := u.Select("Select a provider:", options, 0)
@@ -71,6 +76,14 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 					return err
 				}
 				provider = providers[idx].ID
+
+				// If a credential was detected for the chosen provider, offer to use it
+				if det, ok := creds[provider]; ok && det.key != "" && apiKey == "" {
+					u.Infof("%s API key detected (%s)", providers[idx].Name, det.source)
+					if u.Confirm("Use detected credential?", true) {
+						apiKey = det.key
+					}
+				}
 			}
 
 			// Provider-specific flow
@@ -368,6 +381,40 @@ func providerInfo(id string) model.ProviderInfo {
 		}
 	}
 	return model.ProviderInfo{ID: id, Name: id}
+}
+
+// detectedCredential describes a credential found in the environment.
+type detectedCredential struct {
+	key    string // the actual API key value (empty for Ollama)
+	source string // human-readable description of where it was found
+}
+
+// detectCredentials checks the environment for existing provider credentials.
+// It returns a map of provider ID to detected credential info. Only providers
+// with a detected credential appear in the map.
+func detectCredentials() map[string]detectedCredential {
+	creds := make(map[string]detectedCredential)
+
+	// Anthropic: check ANTHROPIC_API_KEY, then CLAUDE_CODE_OAUTH_TOKEN
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		creds["anthropic"] = detectedCredential{key: key, source: "ANTHROPIC_API_KEY"}
+	} else if key := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); key != "" {
+		creds["anthropic"] = detectedCredential{key: key, source: "CLAUDE_CODE_OAUTH_TOKEN"}
+	}
+
+	// OpenAI: check OPENAI_API_KEY
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		creds["openai"] = detectedCredential{key: key, source: "OPENAI_API_KEY"}
+	}
+
+	// Ollama: check if reachable with models
+	if ollamaModels, err := model.ListOllamaModels(); err == nil && len(ollamaModels) > 0 {
+		creds["ollama"] = detectedCredential{
+			source: fmt.Sprintf("%d model(s) available", len(ollamaModels)),
+		}
+	}
+
+	return creds
 }
 
 // promptModelPull interactively asks the user which Ollama model to pull.
