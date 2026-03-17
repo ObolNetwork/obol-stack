@@ -482,12 +482,15 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 // autoConfigureLLM detects host Ollama and imported cloud providers, then
 // auto-configures LiteLLM so inference works out of the box.
+// Patches all providers first, then does a single restart.
 func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
-	// --- Ollama auto-configuration ---
+	var configured []string // provider names that were patched
+
+	// --- Ollama ---
 	ollamaModels, err := model.ListOllamaModels()
 	if err == nil && len(ollamaModels) > 0 && !model.HasConfiguredModels(cfg) {
 		u.Blank()
-		u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
+		u.Infof("Ollama detected with %d model(s)", len(ollamaModels))
 
 		var names []string
 		for _, m := range ollamaModels {
@@ -498,29 +501,40 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 			names = append(names, name)
 		}
 
-		if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
-			u.Warnf("Auto-configure LiteLLM failed: %v", err)
-			u.Dim("  Run 'obol model setup' to configure manually.")
+		if err := model.PatchLiteLLMProvider(cfg, u, "ollama", "", names); err != nil {
+			u.Warnf("Auto-configure Ollama failed: %v", err)
+		} else {
+			configured = append(configured, "ollama")
 		}
 	}
 
-	// --- Cloud provider auto-configuration from ~/.openclaw ---
-	autoConfigureCloudProviders(cfg, u)
+	// --- Cloud provider from ~/.openclaw ---
+	if cloudProvider := autoDetectCloudProvider(cfg, u); cloudProvider != "" {
+		configured = append(configured, cloudProvider)
+	}
+
+	// --- Single restart for all providers ---
+	if len(configured) > 0 {
+		label := strings.Join(configured, " + ")
+		if err := model.RestartLiteLLM(cfg, u, label); err != nil {
+			u.Warnf("LiteLLM restart failed: %v", err)
+			u.Dim("  Run 'obol model setup' to configure manually.")
+		}
+	}
 }
 
-// autoConfigureCloudProviders reads the imported ~/.openclaw config and, if a
-// cloud model is the agent's primary model, auto-configures LiteLLM with the
-// matching provider when an API key is available in the environment (or .env
-// in dev mode).
-func autoConfigureCloudProviders(cfg *config.Config, u *ui.UI) {
+// autoDetectCloudProvider reads ~/.openclaw config, resolves the cloud
+// provider API key, and patches LiteLLM (without restart). Returns the
+// provider name on success, or "" if nothing was configured.
+func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 	imported, err := openclaw.DetectExistingConfig()
 	if err != nil || imported == nil {
-		return
+		return ""
 	}
 
 	agentModel := imported.AgentModel
 	if agentModel == "" {
-		return
+		return ""
 	}
 
 	// Extract provider and model name from "anthropic/claude-sonnet-4-6".
@@ -534,17 +548,17 @@ func autoConfigureCloudProviders(cfg *config.Config, u *ui.UI) {
 	}
 
 	if provider == "" || provider == "ollama" {
-		return
+		return ""
 	}
 
 	// Already configured — skip.
 	if model.HasProviderConfigured(cfg, provider) {
-		return
+		return ""
 	}
 
 	envVar := model.ProviderEnvVar(provider)
 	if envVar == "" {
-		return
+		return ""
 	}
 
 	// Resolve API key: environment first, .env in dev mode only.
@@ -559,16 +573,19 @@ func autoConfigureCloudProviders(cfg *config.Config, u *ui.UI) {
 		u.Warnf("Agent model %s detected but %s is not set", agentModel, envVar)
 		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", envVar))
 		u.Dim(fmt.Sprintf("  Or configure after startup: obol model setup --provider %s", provider))
-		return
+		return ""
 	}
 
 	u.Blank()
-	u.Infof("Cloud model %s detected — auto-configuring LiteLLM with %s provider", agentModel, provider)
+	u.Infof("Cloud model %s detected — configuring %s provider", agentModel, provider)
 
-	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, []string{modelName}); err != nil {
-		u.Warnf("Auto-configure LiteLLM for %s failed: %v", provider, err)
+	if err := model.PatchLiteLLMProvider(cfg, u, provider, apiKey, []string{modelName}); err != nil {
+		u.Warnf("Auto-configure %s failed: %v", provider, err)
 		u.Dim(fmt.Sprintf("  Run 'obol model setup --provider %s' to configure manually.", provider))
+		return ""
 	}
+
+	return provider
 }
 
 // localImage describes a Docker image built from source in this repo.

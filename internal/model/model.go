@@ -159,7 +159,19 @@ func LoadDotEnv(path string) map[string]string {
 // ConfigureLiteLLM adds a provider to the LiteLLM gateway.
 // For cloud providers, it patches the Secret with the API key and adds
 // the model to config.yaml. For Ollama, it discovers local models and adds them.
+// Restarts the deployment after patching. Use PatchLiteLLMProvider +
+// RestartLiteLLM to batch multiple providers with a single restart.
 func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
+	if err := PatchLiteLLMProvider(cfg, u, provider, apiKey, models); err != nil {
+		return err
+	}
+	return RestartLiteLLM(cfg, u, provider)
+}
+
+// PatchLiteLLMProvider patches the LiteLLM Secret (API key) and ConfigMap
+// (model_list) for a provider without restarting the deployment. Call
+// RestartLiteLLM afterwards (once, after batching multiple providers).
+func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -191,14 +203,20 @@ func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, mod
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
 
-	// 4. Restart deployment
+	return nil
+}
+
+// RestartLiteLLM restarts the LiteLLM deployment and waits for rollout.
+func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
 	u.Info("Restarting LiteLLM")
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart LiteLLM: %w", err)
 	}
 
-	// 5. Wait for rollout
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
 		"--timeout=90s"); err != nil {
