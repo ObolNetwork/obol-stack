@@ -14,6 +14,7 @@ import {
 import {
   networkToChainName,
   groupUpstreamsByNetwork,
+  sortNetworks,
 } from '../../../lib/utils/network-rpc';
 
 export interface NetworksSectionProps {
@@ -52,7 +53,7 @@ export function NetworksSection({
   localNodes,
   erpcData,
 }: NetworksSectionProps) {
-  const erpcNetworks = erpcData?.networks ?? [];
+  const erpcNetworks = sortNetworks(erpcData?.networks ?? []);
   const erpcUpstreamsByNetwork = erpcData
     ? groupUpstreamsByNetwork(erpcData.upstreams ?? [])
     : new Map();
