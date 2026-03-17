@@ -21,6 +21,19 @@ import {
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
 import type { OpenClawInstance } from '@/types/openclaw';
 
+/** Strip the LiteLLM routing prefix that leaks from the backend overlay. */
+function displayModelName(raw: string): string {
+  return raw.replace(/^openai\//, '');
+}
+
+/** Infer the real provider from the model name (not the LiteLLM routing prefix). */
+function inferProvider(modelName: string): string {
+  const name = displayModelName(modelName);
+  if (name.includes('claude')) return 'Anthropic';
+  if (/^(gpt|o[1-4])/.test(name)) return 'OpenAI';
+  return 'Ollama';
+}
+
 interface OpenClawInstanceCardProps {
   instance: OpenClawInstance;
   onSelect?: (instance: OpenClawInstance) => void;
@@ -201,7 +214,7 @@ export function OpenClawInstanceCard({
       {!loading && status?.model && (
         <MetaItem>
           <MetaLabel>Model:</MetaLabel>
-          <MetaValue>{status.model}</MetaValue>
+          <MetaValue>{displayModelName(status.model)}</MetaValue>
         </MetaItem>
       )}
       {!loading && status && (
@@ -211,7 +224,7 @@ export function OpenClawInstanceCard({
             {status.llmConnected === undefined
               ? 'Checking...'
               : status.llmConnected
-                ? `Connected${status.provider ? ` (${status.provider})` : ''}`
+                ? `Connected${status.model ? ` (${inferProvider(status.model)})` : ''}`
                 : `Error${status.llmError ? ` — ${status.llmError}` : ''}`}
           </MetaValue>
         </MetaItem>
