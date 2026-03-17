@@ -433,10 +433,10 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
-	// Auto-configure LiteLLM with Ollama models if available.
-	// This ensures the inference path works out of the box when the user
-	// has Ollama running — no separate `obol model setup` step required.
-	// Non-fatal: the user can always run `obol model setup` later.
+	// Auto-configure LiteLLM with Ollama models and any cloud providers
+	// whose API keys are found in the environment. This ensures the
+	// inference path works out of the box — no separate `obol model setup`
+	// step required. Non-fatal: the user can always run `obol model setup` later.
 	autoConfigureLLM(cfg, u)
 
 	// Deploy default OpenClaw instance (non-fatal on failure).
@@ -556,28 +556,32 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 		return ""
 	}
 
-	envVar := model.ProviderEnvVar(provider)
-	if envVar == "" {
-		return ""
-	}
-
-	// Resolve API key: environment first, .env in dev mode only.
-	apiKey := os.Getenv(envVar)
+	// Resolve API key: try primary + alt env vars, then .env in dev mode.
+	apiKey, envVarUsed := model.ResolveAPIKey(provider)
 	if apiKey == "" && os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		envVar := model.ProviderEnvVar(provider)
 		dotEnv := model.LoadDotEnv(filepath.Join(".", ".env"))
 		apiKey = dotEnv[envVar]
+		if apiKey != "" {
+			envVarUsed = envVar + " (.env)"
+		}
 	}
 
 	if apiKey == "" {
 		u.Blank()
-		u.Warnf("Agent model %s detected but %s is not set", agentModel, envVar)
-		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", envVar))
+		primaryEnv := model.ProviderEnvVar(provider)
+		u.Warnf("Agent model %s detected but %s is not set", agentModel, primaryEnv)
+		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", primaryEnv))
 		u.Dim(fmt.Sprintf("  Or configure after startup: obol model setup --provider %s", provider))
 		return ""
 	}
 
 	u.Blank()
-	u.Infof("Cloud model %s detected — configuring %s provider", agentModel, provider)
+	if envVarUsed != model.ProviderEnvVar(provider) {
+		u.Infof("Cloud model %s detected via %s — configuring %s provider", agentModel, envVarUsed, provider)
+	} else {
+		u.Infof("Cloud model %s detected — configuring %s provider", agentModel, provider)
+	}
 
 	if err := model.PatchLiteLLMProvider(cfg, u, provider, apiKey, []string{modelName}); err != nil {
 		u.Warnf("Auto-configure %s failed: %v", provider, err)
@@ -587,6 +591,7 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 
 	return provider
 }
+
 
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {

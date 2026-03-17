@@ -28,16 +28,17 @@ const (
 
 // Known provider definitions — no need to query the running pod.
 var knownProviders = []ProviderInfo{
-	{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY"},
+	{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
 	{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
 	{ID: "ollama", Name: "Ollama (local)", EnvVar: ""},
 }
 
 // ProviderInfo describes an LLM provider.
 type ProviderInfo struct {
-	ID     string // provider id (e.g. "anthropic", "openai", "ollama")
-	Name   string // display name
-	EnvVar string // env var for API key (empty for Ollama)
+	ID         string   // provider id (e.g. "anthropic", "openai", "ollama")
+	Name       string   // display name
+	EnvVar     string   // primary env var for API key (empty for Ollama)
+	AltEnvVars []string // fallback env vars checked in order (e.g. CLAUDE_CODE_OAUTH_TOKEN)
 }
 
 // ProviderStatus captures effective global LiteLLM provider state.
@@ -655,6 +656,29 @@ func ProviderFromModelName(name string) string {
 }
 
 // --- Internal helpers ---
+
+// ResolveAPIKey checks the primary env var and each AltEnvVar in order for
+// the given provider. Returns the key value and the env var it was found in.
+// Both are empty if no key is available.
+func ResolveAPIKey(provider string) (key, envVarUsed string) {
+	for _, p := range knownProviders {
+		if p.ID != provider {
+			continue
+		}
+		if p.EnvVar != "" {
+			if v := os.Getenv(p.EnvVar); v != "" {
+				return v, p.EnvVar
+			}
+		}
+		for _, alt := range p.AltEnvVars {
+			if v := os.Getenv(alt); v != "" {
+				return v, alt
+			}
+		}
+		return "", ""
+	}
+	return "", ""
+}
 
 // ProviderEnvVar returns the env var name for a provider's API key.
 func ProviderEnvVar(provider string) string {
