@@ -5,10 +5,14 @@ import { Box, Text, Button, theme } from '@obolnetwork/obol-ui';
 import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {
+  message?: string;
   onRetry?: () => void;
 }
 
-export const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => {
+export const ErrorState: React.FC<ErrorStateProps> = ({
+  message = 'Failed to fetch',
+  onRetry,
+}) => {
   return (
     <Box
       css={{
@@ -32,7 +36,7 @@ export const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => {
           marginBottom: '$xxxs',
         }}
       >
-        API connection failed. Using cached data
+        API connection failed
       </Text>
       <Text
         css={{
@@ -44,7 +48,7 @@ export const ErrorState: React.FC<ErrorStateProps> = ({ onRetry }) => {
           marginBottom: '$sm',
         }}
       >
-        Error: Failed to fetch
+        {message}
       </Text>
       {onRetry && (
         <Button onClick={onRetry} color="secondary" size="md">

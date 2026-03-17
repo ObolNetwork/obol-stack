@@ -1,74 +1,124 @@
-import React from 'react';
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+'use client';
+
+import { Box, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
-import { Accordion } from '../../molecules/Accordion';
-import { CountBadge } from '../../atoms/CountBadge';
-import { NetworkStatus } from '../NetworkStatus';
-import { NetworkRpc } from '../NetworkRpc';
-import { AppData } from '../../../types/dashboard';
+import { SectionTitle } from '../../atoms/SectionTitle';
+import { LocalNodeStatus } from '../LocalNodeStatus';
+import { ErpcStatus } from '../ErpcStatus';
+import {
+  LocalNodeData,
+  ErpcStatusData,
+  ErpcNetwork,
+  ErpcUpstream,
+} from '../../../types/dashboard';
+import {
+  networkToChainName,
+  groupUpstreamsByNetwork,
+  sortNetworks,
+} from '../../../lib/utils/network-rpc';
 
 export interface NetworksSectionProps {
-  apps: AppData[];
+  localNodes: LocalNodeData[];
+  erpcData: ErpcStatusData | null;
 }
 
-const SectionTitle = styled(Text, {
-  fontSize: '$5',
-  fontWeight: '$semibold',
-  color: '$light',
+// ── Styled components ─────────────────────────────────────────────────────────
+
+const SectionsList = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$lg',
 });
 
-const AddNetworkButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxs',
-  height: '$xl',
-  padding: '$xxxs $xs',
-  borderRadius: '$3',
-  border: '1px dashed $stroke',
-  background: 'transparent',
-  color: '$body',
-  fontFamily: '$fonts$body',
-  fontSize: '$2',
-  fontWeight: '$medium',
-  cursor: 'not-allowed',
-  opacity: 0.5,
-  flexShrink: 0,
-});
-
-const NetworksList = styled(Box, {
+const ItemsList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$md',
   paddingTop: '$lg',
 });
 
-export function NetworksSection({ apps }: NetworksSectionProps) {
-  const headerContent = (
-    <Flex
-      css={{
-        alignItems: 'center',
-        gap: '$sm',
-        paddingRight: '$xl',
-      }}
-    >
-      <SectionTitle>Networks</SectionTitle>
-      <CountBadge count={apps.length} />
-    </Flex>
+const LocalNodesList = styled(Box, {
+  display: 'grid',
+  gap: '$xs',
+  gridTemplateColumns: '1fr',
+  '@media (min-width: 640px)': {
+    gridTemplateColumns: 'repeat(2, 1fr)',
+  },
+  paddingTop: '$lg',
+});
+
+// ── NetworksSection ───────────────────────────────────────────────────────────
+
+export function NetworksSection({
+  localNodes,
+  erpcData,
+}: NetworksSectionProps) {
+  const erpcNetworks = sortNetworks(erpcData?.networks ?? []);
+  const erpcUpstreamsByNetwork = erpcData
+    ? groupUpstreamsByNetwork(erpcData.upstreams ?? [])
+    : new Map();
+
+  // Chains covered by eRPC
+  const erpcChainNames = new Set(
+    erpcNetworks.map(n => networkToChainName(n.alias)).filter(Boolean)
   );
 
+  // eRPC entries with their embedded local nodes
+  const erpcItems: {
+    network: ErpcNetwork;
+    upstreams?: ErpcUpstream[];
+    localNodes: LocalNodeData[];
+  }[] = erpcNetworks.map(n => ({
+    network: n,
+    upstreams: erpcUpstreamsByNetwork.get(n.id),
+    localNodes: localNodes.filter(
+      a => a.chainName === networkToChainName(n.alias)
+    ),
+  }));
+
+  // Local nodes for chains not covered by eRPC, grouped by chain
+  const localOnlyNodes = localNodes.filter(
+    a => !erpcChainNames.has(a.chainName)
+  );
+  const localOnlyChains = [...new Set(localOnlyNodes.map(a => a.chainName))];
+
+  const hasNetworks = erpcItems.length > 0;
+  const hasLocalOnly = localOnlyChains.length > 0;
+
   return (
-    <Card css={{ position: 'relative', overflow: 'hidden', padding: '0' }}>
-      <Accordion header={headerContent} defaultExpanded={true}>
-        <NetworksList>
-          {apps.map(app =>
-            app.app === 'erpc' ? (
-              <NetworkRpc key={app.appId} appData={app} />
-            ) : (
-              <NetworkStatus key={app.appId} appData={app} />
-            )
-          )}
-        </NetworksList>
-      </Accordion>
-    </Card>
+    <SectionsList>
+      {hasNetworks && (
+        <Card css={{ padding: '$lg' }}>
+          <SectionTitle>Networks</SectionTitle>
+          <ItemsList>
+            {erpcItems.map(({ network, upstreams, localNodes: nodes }) => (
+              <ErpcStatus
+                key={network.id}
+                network={network}
+                upstreams={upstreams}
+                localNodes={nodes}
+              />
+            ))}
+          </ItemsList>
+        </Card>
+      )}
+
+      {hasLocalOnly && (
+        <Card css={{ padding: '$lg' }}>
+          <SectionTitle>Applications</SectionTitle>
+          <ItemsList>
+            {localOnlyChains.map(chainName => (
+              <LocalNodesList key={chainName}>
+                {localOnlyNodes
+                  .filter(a => a.chainName === chainName)
+                  .map(app => (
+                    <LocalNodeStatus key={app.appId} appData={app} />
+                  ))}
+              </LocalNodesList>
+            ))}
+          </ItemsList>
+        </Card>
+      )}
+    </SectionsList>
   );
 }

@@ -16,9 +16,23 @@ import {
   useOpenClawStatus,
   useOpenClawToken,
   useWalletMetadata,
+  useTunnelURL,
 } from '../../../hooks/useOpenClaw';
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
 import type { OpenClawInstance } from '@/types/openclaw';
+
+/** Strip the LiteLLM routing prefix that leaks from the backend overlay. */
+function displayModelName(raw: string): string {
+  return raw.replace(/^openai\//, '');
+}
+
+/** Infer the real provider from the model name (not the LiteLLM routing prefix). */
+function inferProvider(modelName: string): string {
+  const name = displayModelName(modelName);
+  if (name.includes('claude')) return 'Anthropic';
+  if (/^(gpt|o[1-4])/.test(name)) return 'OpenAI';
+  return 'Ollama';
+}
 
 interface OpenClawInstanceCardProps {
   instance: OpenClawInstance;
@@ -71,6 +85,15 @@ const ActionsRow = styled(Flex, {
   paddingTop: '$lg',
   alignItems: 'center',
   gap: '$xs',
+});
+
+const DashboardLinkWrapper = styled(Flex, {
+  position: 'relative',
+  alignItems: 'center',
+  '&:hover .dashboard-tooltip': {
+    opacity: 1,
+    visibility: 'visible',
+  },
 });
 
 const BalanceText = styled(Text, {
@@ -151,13 +174,16 @@ export function OpenClawInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const { token } = useOpenClawToken(instance.id);
+  const { token, tokenError } = useOpenClawToken(instance.id);
   const { metadata } = useWalletMetadata(instance.id);
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balance: balanceInfo } = useAddressBalance(primaryAddress);
+  const { tunnelURL } = useTunnelURL();
 
-  const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
+  const dashboardUrl = tunnelURL
+    ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
+    : `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
     <CardContainer>
@@ -188,7 +214,19 @@ export function OpenClawInstanceCard({
       {!loading && status?.model && (
         <MetaItem>
           <MetaLabel>Model:</MetaLabel>
-          <MetaValue>{status.model}</MetaValue>
+          <MetaValue>{displayModelName(status.model)}</MetaValue>
+        </MetaItem>
+      )}
+      {!loading && status && (
+        <MetaItem>
+          <MetaLabel>LLM:</MetaLabel>
+          <MetaValue>
+            {status.llmConnected === undefined
+              ? 'Checking...'
+              : status.llmConnected
+                ? `Connected${status.model ? ` (${inferProvider(status.model)})` : ''}`
+                : `Error${status.llmError ? ` — ${status.llmError}` : ''}`}
+          </MetaValue>
         </MetaItem>
       )}
       {metadata && metadata.addresses.length > 0 && (
@@ -212,6 +250,15 @@ export function OpenClawInstanceCard({
         </MetaItem>
       )}
 
+      {tokenError && (
+        <MetaItem>
+          <MetaLabel css={{ color: '$error' }}>Token:</MetaLabel>
+          <MetaValue css={{ color: '$error' }}>
+            {tokenError} — run: obol openclaw token --regenerate
+          </MetaValue>
+        </MetaItem>
+      )}
+
       <ActionsRow>
         <Button
           disabled={displayStatus !== 'running'}
@@ -221,24 +268,52 @@ export function OpenClawInstanceCard({
         >
           Chat
         </Button>
-        <Link
-          href={dashboardUrl}
-          target="_blank"
-          css={{
-            fontSize: '13px',
-          }}
-        >
-          Dashboard
-          <OpenInNew size="sm" />
-        </Link>
+        <DashboardLinkWrapper>
+          <Link
+            href={dashboardUrl}
+            target="_blank"
+            css={{
+              fontSize: '13px',
+            }}
+          >
+            Dashboard
+            <OpenInNew size="sm" />
+          </Link>
+          <Text
+            className="dashboard-tooltip"
+            css={{
+              position: 'absolute',
+              left: 'calc(100% + 8px)',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: '$bg02',
+              border: '1px solid $bg04',
+              borderRadius: '$1',
+              padding: '$xxs $xs',
+              fontSize: '11px',
+              color: '$textLight',
+              lineHeight: 1.3,
+              width: 'max-content',
+              maxWidth: '220px',
+              opacity: 0,
+              visibility: 'hidden',
+              transition: 'opacity 0.2s ease',
+              pointerEvents: 'none',
+              zIndex: 10,
+            }}
+          >
+            Connection issues? Try: obol openclaw dashboard
+          </Text>
+        </DashboardLinkWrapper>
       </ActionsRow>
 
-      {instance.id === 'obol-agent' && displayStatus === 'running' && (
+      {instance.id === 'default' && displayStatus === 'running' && (
         <>
           <SellDivider />
           <SellCtaRow>
-            <SellLabel>Monetize inference with x402</SellLabel>
+            <SellLabel>Sell access to your models</SellLabel>
             <SellInferenceModal
+              defaultWallet={primaryAddress ?? undefined}
               trigger={
                 <SellButton>
                   <svg

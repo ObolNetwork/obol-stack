@@ -32,12 +32,12 @@ const STATUS_CONFIG: Record<
     pulse: true,
   },
   syncing: {
-    color: '#F5A623',
+    color: theme.colors.obolGold.value,
     label: 'Syncing',
     pulse: true,
   },
   error: {
-    color: '#FF6B6B',
+    color: theme.colors.test.value,
     label: 'Error',
     pulse: false,
   },
@@ -79,7 +79,7 @@ const InnerDot = styled(Box, {
 const PillContainer = styled(Flex, {
   alignItems: 'center',
   width: 'fit-content',
-  gap: '6px',
+  gap: '$xxs',
   borderRadius: '$pill',
   paddingTop: '$xxxs',
   paddingBottom: '$xxxs',

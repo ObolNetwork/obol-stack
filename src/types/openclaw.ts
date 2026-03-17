@@ -14,6 +14,8 @@ export interface OpenClawInstanceHealth {
   podStatus?: string;
   restarts?: number;
   error?: string;
+  llmConnected?: boolean;
+  llmError?: string;
 }
 
 export interface OpenClawToken {

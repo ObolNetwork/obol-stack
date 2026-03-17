@@ -1,11 +1,14 @@
 'use client';
 
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { CountBadge } from '../../atoms/CountBadge';
+import { SectionTitle } from '../../atoms/SectionTitle';
+import { EmptyMessage } from '../../atoms/EmptyMessage';
 import { OpenClawInstanceCard } from '../../molecules/OpenClawInstanceCard';
 import { LoadingState } from '../../molecules/LoadingState';
+import { ErrorState } from '../../molecules/ErrorState';
 import { useOpenClawInstances } from '../../../hooks/useOpenClaw';
 import type { OpenClawInstance } from '@/types/openclaw';
 
@@ -13,24 +16,11 @@ interface OpenClawListProps {
   onInstanceSelect?: (instance: OpenClawInstance) => void;
 }
 
-const SectionTitle = styled(Text, {
-  fontSize: '$5',
-  fontWeight: '$semibold',
-  color: '$light',
-});
-
 const InstancesList = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$xs',
   paddingTop: '$lg',
-});
-
-const EmptyMessage = styled(Text, {
-  color: '$body',
-  fontSize: '$3',
-  textAlign: 'center',
-  padding: '$lg 0',
 });
 
 export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
@@ -46,13 +36,13 @@ export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
   );
 
   return (
-    <Card css={{ position: 'relative', overflow: 'hidden', padding: '0' }}>
+    <Card section>
       <Accordion header={headerContent} defaultExpanded={true}>
         <InstancesList>
           {loading && (
             <LoadingState size="small" message="Loading instances..." />
           )}
-          {error && <EmptyMessage>Failed to load instances</EmptyMessage>}
+          {error && <ErrorState message="Failed to load instances" />}
           {!loading && !error && instances.length === 0 && (
             <EmptyMessage>
               No OpenClaw instances found. Run the command '

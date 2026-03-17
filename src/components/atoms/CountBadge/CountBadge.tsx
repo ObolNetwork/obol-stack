@@ -2,7 +2,8 @@ import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
 
 export interface CountBadgeProps {
-  count: number;
+  count?: number;
+  children?: React.ReactNode;
   className?: string;
 }
 
@@ -13,11 +14,11 @@ const BadgeRoot = styled(Box, {
   minWidth: '22px',
   height: '22px',
   padding: '0 7px',
-  borderRadius: '6px',
+  borderRadius: '$2',
   border: '1px solid rgba(47, 228, 171, 0.25)',
   backgroundColor: 'rgba(47, 228, 171, 0.08)',
-  color: '#2FE4AB',
-  fontSize: '11px',
+  color: '$obolGreen',
+  fontSize: '$1',
   fontWeight: '$semibold',
   fontVariantNumeric: 'tabular-nums',
   letterSpacing: '0.02em',
@@ -26,6 +27,6 @@ const BadgeRoot = styled(Box, {
   transition: 'border-color 150ms ease, background-color 150ms ease',
 });
 
-export function CountBadge({ count, className }: CountBadgeProps) {
-  return <BadgeRoot className={className}>{count}</BadgeRoot>;
+export function CountBadge({ count, children, className }: CountBadgeProps) {
+  return <BadgeRoot className={className}>{children ?? count}</BadgeRoot>;
 }

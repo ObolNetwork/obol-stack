@@ -3,6 +3,9 @@ export const CHAINS = {
   ETHEREUM: 'mainnet',
   SEPOLIA: 'sepolia',
   HOODI: 'hoodi',
+  BASE: 'base',
+  BASE_SEPOLIA: 'base-sepolia',
+  AZTEC: 'aztec',
 } as const;
 
 // Chain ID to Chain Name mapping
@@ -10,6 +13,9 @@ export const CHAIN_ID_TO_NAME: Record<number, ChainName> = {
   1: CHAINS.ETHEREUM,
   11155111: CHAINS.SEPOLIA,
   560048: CHAINS.HOODI,
+  8453: CHAINS.BASE,
+  84532: CHAINS.BASE_SEPOLIA,
+  // Aztec is not EVM-compatible and has no standard numeric chain ID
 } as const;
 
 // Helper function to get chain name by ID
@@ -84,7 +90,6 @@ export type ChainName = (typeof CHAINS)[keyof typeof CHAINS];
 export type NodeModeType = (typeof NODE_MODES)[keyof typeof NODE_MODES];
 export type ClientStatusType =
   (typeof CLIENT_STATUS)[keyof typeof CLIENT_STATUS];
-export type ClientRoleType = (typeof CLIENT_ROLES)[keyof typeof CLIENT_ROLES];
 export type ClientNameType = (typeof CLIENT_NAMES)[keyof typeof CLIENT_NAMES];
 export type PortStatusType = (typeof PORT_STATUS)[keyof typeof PORT_STATUS];
 
@@ -98,7 +103,7 @@ export interface ClientInfo {
   internalUrl?: string;
 }
 
-export interface AppData {
+export interface LocalNodeData {
   chainName: ChainName;
   app: AppInstanceType;
   appId: string;
@@ -107,13 +112,13 @@ export interface AppData {
   blocks?: number;
   finalized?: number;
   participation?: number;
-  clients?: ClientInfo[]; // Array of clients for this chain
-  distance?: number; // Distance to justified
-  erpcStatus?: ErpcStatusData; // eRPC: network status from GET /
+  clients?: ClientInfo[];
+  distance?: number;
 }
 
 export interface DashboardData {
-  apps: AppData[];
+  localNodes: LocalNodeData[];
+  erpcData: ErpcStatusData | null;
   nodeOverview: {
     diskUsage: {
       value: number;
@@ -145,7 +150,7 @@ export interface DashboardData {
 
 export interface ErpcNetwork {
   id: string; // "evm:1", "evm:560048", etc.
-  alias: string; // "mainnet", "hoodi", "sepolia"
+  alias: string; // ChainName: "mainnet", "base", "sepolia", "hoodi", "base-sepolia", "aztec"
   state: string; // "OK" | error string
 }
 
@@ -186,14 +191,4 @@ export interface ErpcStatusData {
   networkCount?: number;
   upstreamCount?: number;
   upstreams?: ErpcUpstream[];
-}
-
-export interface MetricCardProps {
-  label: string;
-  value: string | number;
-  unit?: string;
-  percentage?: number;
-  status?: 'success' | 'warning' | 'error';
-  trend?: 'up' | 'down' | 'stable';
-  icon?: React.ReactNode;
 }

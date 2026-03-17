@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text, Flex, styled, theme } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
+import { SectionTitle as CardTitle } from '../../atoms/SectionTitle';
 import { PercentageChip } from '../../atoms/PercentageChip';
 import { ProgressBar } from '../../molecules/ProgressBar';
 import { NodeDisk, NodeMemory, NodeCpu, NodeUptime } from '@/icons';
@@ -18,12 +19,6 @@ const NodeHeader = styled(Box, {
   gap: '$lg',
 });
 
-const CardTitle = styled(Text, {
-  fontSize: '$5',
-  fontWeight: '$semibold',
-  color: '$light',
-});
-
 const NodeContent = styled(Box, {
   paddingTop: '$xs',
 });
@@ -34,7 +29,7 @@ const MetricsGrid = styled(Box, {
   gap: '$xxs',
   marginBottom: '$xl',
 
-  '@media (max-width: 1200px)': {
+  '@md': {
     gridTemplateColumns: 'repeat(2, 1fr)',
   },
 
@@ -187,7 +182,7 @@ const PortsList = styled(Box, {
   gridTemplateColumns: 'repeat(4, 1fr)',
   gap: '$xxs',
 
-  '@media (max-width: 1200px)': {
+  '@md': {
     gridTemplateColumns: 'repeat(2, 1fr)',
   },
 
@@ -338,13 +333,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
   );
 
   return (
-    <Card
-      css={{
-        position: 'relative',
-        overflow: 'hidden',
-        padding: '0',
-      }}
-    >
+    <Card section>
       <Accordion
         header={headerContent}
         defaultExpanded={true}

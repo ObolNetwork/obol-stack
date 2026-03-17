@@ -1,6 +1,6 @@
 {
   "name": "obol-stack-front-end",
-  "version": "0.1.11",
+  "version": "0.1.13",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
@@ -39,6 +39,7 @@
     "pino": "^10.2.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-hook-form": "^7.71.2",
     "react-toastify": "^11.0.5",
     "shiki": "^3.21.0",
     "thread-stream": "^4.0.0",
