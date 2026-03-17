@@ -133,7 +133,7 @@ export function FooterBar({ className }: FooterBarProps) {
 
       <Flex css={{ alignItems: 'center', gap: '$sm', width: 'fit-content' }}>
         <StyledLink
-          href="https://github.com/obolnetwork"
+          href="https://github.com/obolnetwork/obol-stack"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -153,7 +153,7 @@ export function FooterBar({ className }: FooterBarProps) {
           Discord
         </StyledLink>
         <StyledLink
-          href="https://docs.obol.org/"
+          href="https://docs.obol.org/obol-stack"
           target="_blank"
           rel="noopener noreferrer"
         >

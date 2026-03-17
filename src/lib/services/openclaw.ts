@@ -132,11 +132,12 @@ export class OpenClawClient {
       };
     }
 
-    // Get pod status
-    const podInfo = await this.getPodInfo(namespace);
-
-    // Get model configuration from ConfigMap
-    const configInfo = await this.getConfigInfo(namespace);
+    // Get pod status, model config, and LLM health in parallel
+    const [podInfo, configInfo, llmHealth] = await Promise.all([
+      this.getPodInfo(namespace),
+      this.getConfigInfo(namespace),
+      this.getLLMHealth(),
+    ]);
 
     return {
       id,
@@ -146,6 +147,8 @@ export class OpenClawClient {
       endpoint: url,
       podStatus: podInfo.phase,
       restarts: podInfo.restarts,
+      llmConnected: llmHealth.connected,
+      llmError: llmHealth.error,
     };
   }
 
@@ -283,6 +286,52 @@ export class OpenClawClient {
       return {
         reachable: false,
         error: error instanceof Error ? error.message : 'Connection failed',
+      };
+    }
+  }
+
+  /**
+   * Get the tunnel URL from the obol-stack-config ConfigMap in obol-frontend namespace.
+   * Written by the CLI via `obol tunnel status`, `obol tunnel login`, or `obol tunnel provision`.
+   */
+  public async getTunnelURL(): Promise<string | null> {
+    try {
+      const response = await this.coreV1Api.readNamespacedConfigMap({
+        name: 'obol-stack-config',
+        namespace: 'obol-frontend',
+      });
+      return response.data?.['tunnelURL'] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get LLM health status by querying the LiteLLM gateway readiness endpoint.
+   * Uses /health/readiness which does NOT require API key authentication
+   * (unlike /health which requires the master key).
+   */
+  public async getLLMHealth(): Promise<{
+    connected: boolean;
+    provider?: string;
+    error?: string;
+  }> {
+    try {
+      const response = await fetch(
+        'http://litellm.llm.svc.cluster.local:4000/health/readiness',
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (response.ok) {
+        return { connected: true };
+      }
+      return {
+        connected: false,
+        error: `LiteLLM returned HTTP ${response.status}`,
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        error: error instanceof Error ? error.message : 'LiteLLM not reachable',
       };
     }
   }

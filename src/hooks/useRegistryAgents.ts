@@ -2,16 +2,29 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { Agent8004 } from '@/types/registry';
+import type { ChainOption } from '@/components/atoms/ChainSelector';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 
-export function useRegistryAgents(search?: string) {
+const CHAIN_ID_MAP: Record<string, number> = {
+  'base-sepolia': 84532,
+  base: 8453,
+};
+
+export function useRegistryAgents(
+  search?: string,
+  chainFilter?: ChainOption,
+  protocolFilter?: string,
+  x402Only?: boolean
+) {
   const [agents, setAgents] = useState<Agent8004[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+
+  const chainId = chainFilter ? (CHAIN_ID_MAP[chainFilter] ?? 84532) : 84532;
 
   const fetchAgents = useCallback(
     async (currentPage: number) => {
@@ -22,8 +35,11 @@ export function useRegistryAgents(search?: string) {
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
           page: String(currentPage),
+          chainId: String(chainId),
         });
         if (search) params.set('search', search);
+        if (protocolFilter) params.set('protocol', protocolFilter);
+        if (x402Only) params.set('x402_supported', 'true');
         const res = await fetch(`/api/registry/agents?${params}`);
         if (!res.ok) {
           const data = await res.json();
@@ -40,13 +56,13 @@ export function useRegistryAgents(search?: string) {
         setLoading(false);
       }
     },
-    [search]
+    [search, chainId, protocolFilter, x402Only]
   );
 
-  // Reset to page 1 when search changes
+  // Reset to page 1 when any filter changes
   useEffect(() => {
     setPage(1);
-  }, [search]);
+  }, [search, chainId, protocolFilter, x402Only]);
 
   useEffect(() => {
     fetchAgents(page);

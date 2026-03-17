@@ -102,7 +102,7 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
 
       <MetaRow>
         {agent.x402_supported && <Badge variant="green">x402</Badge>}
-        {agent.supported_protocols.map(p => (
+        {agent.supported_protocols?.map(p => (
           <Badge key={p} variant="purple">
             {p}
           </Badge>
@@ -139,78 +139,93 @@ const PROTOCOL_FILTERS = ['MCP', 'A2A', 'Web'] as const;
 
 export function AgentRegistry() {
   const { search, debouncedSearch, handleSearchChange } = useSearch();
-  const { agents, loading, error, page, totalPages, nextPage, prevPage } =
-    useRegistryAgents(debouncedSearch || undefined);
   const {
     x402Only,
     setX402Only,
-    protocolFilters,
+    protocolFilter,
     toggleProtocol,
     chainFilter,
     setChainFilter,
-    filtered,
     hasActiveFilters,
-  } = useAgentFilters(agents);
+  } = useAgentFilters();
+  const {
+    agents,
+    loading,
+    error,
+    page,
+    totalPages,
+    nextPage,
+    prevPage,
+    total,
+  } = useRegistryAgents(
+    debouncedSearch || undefined,
+    chainFilter,
+    protocolFilter,
+    x402Only
+  );
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm' }}>
       <SectionTitle>Agent Registry</SectionTitle>
-      {!loading && filtered.length > 0 && (
-        <CountBadge count={filtered.length} />
-      )}
+      {!loading && total > 0 && <CountBadge count={total} />}
     </Flex>
   );
 
   return (
     <Card section>
       <Accordion header={headerContent} defaultExpanded={true}>
-        <Flex
-          css={{
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            paddingTop: '$lg',
-          }}
-        >
-          <ToolBar>
-            <FilterChip active={x402Only} onClick={() => setX402Only(v => !v)}>
-              x402
-            </FilterChip>
-            {PROTOCOL_FILTERS.map(p => (
+        {agents.length > 0 && (
+          <Flex
+            css={{
+              flexWrap: 'wrap',
+              justifyContent: 'space-between',
+              paddingTop: '$lg',
+            }}
+          >
+            <ToolBar>
               <FilterChip
-                key={p}
-                active={protocolFilters.has(p)}
-                onClick={() => toggleProtocol(p)}
+                active={x402Only}
+                onClick={() => setX402Only(v => !v)}
               >
-                {p}
+                x402
               </FilterChip>
-            ))}
-          </ToolBar>
-          <ToolBar>
-            <SearchInput
-              placeholder="Search agents..."
-              value={search}
-              onChange={handleSearchChange}
-            />
-            <ChainSelector
-              value={chainFilter}
-              onChange={setChainFilter}
-              allowDeselect
-            />
-          </ToolBar>
-        </Flex>
+              {PROTOCOL_FILTERS.map(p => (
+                <FilterChip
+                  key={p}
+                  active={protocolFilter === p}
+                  onClick={() => toggleProtocol(p)}
+                >
+                  {p}
+                </FilterChip>
+              ))}
+            </ToolBar>
+            <ToolBar>
+              <SearchInput
+                placeholder="Search agents..."
+                value={search}
+                onChange={handleSearchChange}
+              />
+              <ChainSelector
+                value={chainFilter}
+                onChange={setChainFilter}
+                allowDeselect
+              />
+            </ToolBar>
+          </Flex>
+        )}
         <AgentList>
           {loading && (
             <LoadingState size="small" message="Querying agent registry..." />
           )}
           {error && <ErrorState message={`Registry unavailable: ${error}`} />}
-          {!loading && !error && filtered.length === 0 && (
+          {!loading && !error && agents.length === 0 && (
             <EmptyMessage>
               {search || hasActiveFilters
                 ? 'No agents match your filters'
                 : 'No registered agents found'}
             </EmptyMessage>
           )}
-          {filtered.map(agent => (
+          {agents.map(agent => (
             <AgentCardItem key={agent.token_id} agent={agent} />
           ))}
         </AgentList>

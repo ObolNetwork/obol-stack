@@ -11,22 +11,32 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
-import { ItemCard } from '../../atoms/ItemCard';
-import { CountBadge } from '../../atoms/CountBadge';
 import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useOpenClawStatus,
   useOpenClawToken,
   useWalletMetadata,
+  useTunnelURL,
 } from '../../../hooks/useOpenClaw';
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
-import { truncateAddress } from '../../../utils/address';
 import type { OpenClawInstance } from '@/types/openclaw';
 
 interface OpenClawInstanceCardProps {
   instance: OpenClawInstance;
   onSelect?: (instance: OpenClawInstance) => void;
 }
+
+const CardContainer = styled(Box, {
+  padding: '$sm $md',
+  borderRadius: '$2',
+  backgroundColor: '$bg03',
+  border: '1px solid $stroke',
+  transition: 'border-color 0.2s ease',
+
+  '&:hover': {
+    borderColor: '$body',
+  },
+});
 
 const TopRow = styled(Flex, {
   alignItems: 'center',
@@ -64,14 +74,40 @@ const ActionsRow = styled(Flex, {
   gap: '$xs',
 });
 
+const DashboardLinkWrapper = styled(Flex, {
+  position: 'relative',
+  alignItems: 'center',
+  '&:hover .dashboard-tooltip': {
+    opacity: 1,
+    visibility: 'visible',
+  },
+});
+
 const BalanceText = styled(Text, {
   fontSize: '$1',
   color: '$body',
   whiteSpace: 'nowrap',
 });
 
+const KeysBadge = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '$obolGreen',
+  backgroundColor: 'rgba(47, 228, 171, 0.08)',
+  border: '1px solid rgba(47, 228, 171, 0.25)',
+  borderRadius: '4px',
+  padding: '1px 5px',
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+});
+
+function truncateAddress(address: string): string {
+  if (address.length <= 10) return address;
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 const SellDivider = styled(Box, {
-  height: '$1',
+  height: '1px',
   backgroundColor: '$stroke',
   marginTop: '$md',
 });
@@ -91,12 +127,12 @@ const SellLabel = styled(Text, {
 const SellButton = styled('button', {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '$xxs',
+  gap: '6px',
   padding: '$xxxs $sm',
   borderRadius: '$pill',
   border: '1px solid rgba(47, 228, 171, 0.3)',
   background: 'rgba(47, 228, 171, 0.08)',
-  color: '$obolGreen',
+  color: '#2FE4AB',
   fontSize: '$2',
   fontWeight: '$semibold',
   cursor: 'pointer',
@@ -125,16 +161,19 @@ export function OpenClawInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const { token } = useOpenClawToken(instance.id);
+  const { token, tokenError } = useOpenClawToken(instance.id);
   const { metadata } = useWalletMetadata(instance.id);
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balance: balanceInfo } = useAddressBalance(primaryAddress);
+  const { tunnelURL } = useTunnelURL();
 
-  const dashboardUrl = `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
+  const dashboardUrl = tunnelURL
+    ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
+    : `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
-    <ItemCard>
+    <CardContainer>
       <TopRow>
         <Flex css={{ alignItems: 'center', gap: '$xs' }}>
           <InstanceName>
@@ -165,6 +204,18 @@ export function OpenClawInstanceCard({
           <MetaValue>{status.model}</MetaValue>
         </MetaItem>
       )}
+      {!loading && status && (
+        <MetaItem>
+          <MetaLabel>LLM:</MetaLabel>
+          <MetaValue>
+            {status.llmConnected === undefined
+              ? 'Checking...'
+              : status.llmConnected
+                ? `Connected${status.provider ? ` (${status.provider})` : ''}`
+                : `Error${status.llmError ? ` — ${status.llmError}` : ''}`}
+          </MetaValue>
+        </MetaItem>
+      )}
       {metadata && metadata.addresses.length > 0 && (
         <MetaItem>
           <MetaLabel>Wallet:</MetaLabel>
@@ -176,13 +227,22 @@ export function OpenClawInstanceCard({
             title="Copy address"
           />
           {metadata.count > 1 && (
-            <CountBadge>+{metadata.count - 1} keys</CountBadge>
+            <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
           )}
           {balanceInfo && (
             <BalanceText>
               {balanceInfo.balance} ETH ({balanceInfo.network})
             </BalanceText>
           )}
+        </MetaItem>
+      )}
+
+      {tokenError && (
+        <MetaItem>
+          <MetaLabel css={{ color: '$error' }}>Token:</MetaLabel>
+          <MetaValue css={{ color: '$error' }}>
+            {tokenError} — run: obol openclaw token --regenerate
+          </MetaValue>
         </MetaItem>
       )}
 
@@ -195,24 +255,52 @@ export function OpenClawInstanceCard({
         >
           Chat
         </Button>
-        <Link
-          href={dashboardUrl}
-          target="_blank"
-          css={{
-            fontSize: '$2',
-          }}
-        >
-          Dashboard
-          <OpenInNew size="sm" />
-        </Link>
+        <DashboardLinkWrapper>
+          <Link
+            href={dashboardUrl}
+            target="_blank"
+            css={{
+              fontSize: '13px',
+            }}
+          >
+            Dashboard
+            <OpenInNew size="sm" />
+          </Link>
+          <Text
+            className="dashboard-tooltip"
+            css={{
+              position: 'absolute',
+              left: 'calc(100% + 8px)',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: '$bg02',
+              border: '1px solid $bg04',
+              borderRadius: '$1',
+              padding: '$xxs $xs',
+              fontSize: '11px',
+              color: '$textLight',
+              lineHeight: 1.3,
+              width: 'max-content',
+              maxWidth: '220px',
+              opacity: 0,
+              visibility: 'hidden',
+              transition: 'opacity 0.2s ease',
+              pointerEvents: 'none',
+              zIndex: 10,
+            }}
+          >
+            Connection issues? Try: obol openclaw dashboard
+          </Text>
+        </DashboardLinkWrapper>
       </ActionsRow>
 
-      {instance.id === 'obol-agent' && (
+      {instance.id === 'default' && displayStatus === 'running' && (
         <>
           <SellDivider />
           <SellCtaRow>
-            <SellLabel>Monetize inference with x402</SellLabel>
+            <SellLabel>Sell access to your models</SellLabel>
             <SellInferenceModal
+              defaultWallet={primaryAddress ?? undefined}
               trigger={
                 <SellButton>
                   <svg
@@ -236,6 +324,6 @@ export function OpenClawInstanceCard({
           </SellCtaRow>
         </>
       )}
-    </ItemCard>
+    </CardContainer>
   );
 }
