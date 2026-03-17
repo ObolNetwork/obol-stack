@@ -17,6 +17,7 @@ import {
 
 interface SellInferenceModalProps {
   trigger: React.ReactNode;
+  defaultWallet?: string;
 }
 
 type FormState = {
@@ -148,15 +149,21 @@ const ErrorMessage = styled(Text, {
 const INITIAL_FORM: FormState = {
   name: '',
   wallet: '',
-  chain: 'base-sepolia',
+  chain: 'base',
   price: '0.001',
   upstream: 'litellm',
   port: '4000',
 };
 
-export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
+export function SellInferenceModal({
+  trigger,
+  defaultWallet,
+}: SellInferenceModalProps) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<FormState>(INITIAL_FORM);
+  const [form, setForm] = useState<FormState>({
+    ...INITIAL_FORM,
+    wallet: defaultWallet ?? '',
+  });
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -202,11 +209,11 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
   const handleClose = useCallback(() => {
     setOpen(false);
     setTimeout(() => {
-      setForm(INITIAL_FORM);
+      setForm({ ...INITIAL_FORM, wallet: defaultWallet ?? '' });
       setSubmitState('idle');
       setErrorMsg('');
     }, 200);
-  }, []);
+  }, [defaultWallet]);
 
   const isValid =
     form.name.length > 0 &&

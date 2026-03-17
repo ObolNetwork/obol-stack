@@ -294,12 +294,13 @@ export function OpenClawInstanceCard({
         </DashboardLinkWrapper>
       </ActionsRow>
 
-      {instance.id === 'obol-agent' && displayStatus === 'running' && (
+      {instance.id === 'default' && displayStatus === 'running' && (
         <>
           <SellDivider />
           <SellCtaRow>
-            <SellLabel>Monetize inference with x402</SellLabel>
+            <SellLabel>Sell access to your models</SellLabel>
             <SellInferenceModal
+              defaultWallet={primaryAddress ?? undefined}
               trigger={
                 <SellButton>
                   <svg

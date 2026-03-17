@@ -236,12 +236,12 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
 
       <MetaRow>
         {agent.x402_supported && <Tag variant="x402">x402</Tag>}
-        {agent.supported_protocols.map(p => (
+        {agent.supported_protocols?.map(p => (
           <Tag key={p} variant="protocol">
             {p}
           </Tag>
         ))}
-        {agent.supported_trust_models.map(t => (
+        {agent.supported_trust_models?.map(t => (
           <Tag key={t} variant="trust">
             {t}
           </Tag>
@@ -278,7 +278,7 @@ export function AgentRegistry() {
   const [protocolFilter, setProtocolFilter] = useState<string | undefined>();
 
   const { agents, loading, error } = useRegistryAgents(
-    20,
+    10,
     debouncedSearch || undefined,
     protocolFilter
   );
@@ -322,13 +322,15 @@ export function AgentRegistry() {
         )}
       </Flex>
       <Flex css={{ alignItems: 'center', gap: '$sm' }}>
-        <SearchInput
-          placeholder="Search agents..."
-          value={search}
-          onChange={handleSearchChange}
-          onClick={(e: React.MouseEvent) => e.stopPropagation()}
-        />
-        <ChainBadge>Base Sepolia</ChainBadge>
+        {agents.length > 0 && (
+          <SearchInput
+            placeholder="Search agents..."
+            value={search}
+            onChange={handleSearchChange}
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          />
+        )}
+        <ChainBadge>Base</ChainBadge>
       </Flex>
     </Flex>
   );
