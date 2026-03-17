@@ -451,24 +451,30 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
 	}
 
-	// Deploy the obol-agent singleton (monetize reconciliation, heartbeat).
+	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
 	// Non-fatal: the user can always run `obol agent init` later.
 	u.Blank()
-	u.Info("Deploying obol-agent")
+	u.Info("Applying agent capabilities")
 	if err := agent.Init(cfg, u); err != nil {
-		u.Warnf("Failed to deploy obol-agent: %v", err)
-		u.Dim("  You can manually deploy later with: obol agent init")
+		u.Warnf("Failed to apply agent capabilities: %v", err)
+		u.Dim("  You can manually apply later with: obol agent init")
 	}
 
-	// Start the Cloudflare tunnel so the stack is publicly accessible.
-	// Non-fatal: the user can start it later with `obol tunnel restart`.
+	// Start the Cloudflare tunnel only if a persistent DNS tunnel is provisioned.
+	// Quick tunnels are dormant by default and activate on first `obol sell`.
 	u.Blank()
-	u.Info("Starting Cloudflare tunnel")
-	if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
-		u.Warnf("Tunnel not started: %v", err)
-		u.Dim("  Start manually with: obol tunnel restart")
+	if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Mode == "dns" && st.Hostname != "" {
+		u.Info("Starting persistent Cloudflare tunnel")
+		if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
+			u.Warnf("Tunnel not started: %v", err)
+			u.Dim("  Start manually with: obol tunnel restart")
+		} else {
+			u.Successf("Tunnel active: %s", tunnelURL)
+		}
 	} else {
-		u.Successf("Tunnel active: %s", tunnelURL)
+		u.Dim("Tunnel dormant (activates on first 'obol sell http')")
+		u.Dim("  Start manually with: obol tunnel restart")
+		u.Dim("  For a persistent URL: obol tunnel login --hostname stack.example.com")
 	}
 
 	return nil

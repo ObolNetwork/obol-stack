@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -210,6 +212,63 @@ Examples:
 				return err
 			}
 
+			// If a cluster is available, route through the cluster's x402 flow
+			// (tunnel → Traefik → x402-verifier → host gateway → Ollama).
+			// The gateway's built-in x402 is disabled to avoid double-gating.
+			kubeconfigPath := fmt.Sprintf("%s/kubeconfig.yaml", cfg.ConfigDir)
+			clusterAvailable := false
+			if _, statErr := os.Stat(kubeconfigPath); statErr == nil {
+				clusterAvailable = true
+			}
+
+			if clusterAvailable {
+				d.NoPaymentGate = true
+
+				// Resolve the gateway port from the listen address.
+				listenAddr := d.ListenAddr
+				port := "8402"
+				if idx := strings.LastIndex(listenAddr, ":"); idx >= 0 {
+					port = listenAddr[idx+1:]
+				}
+
+				// Create a K8s Service + Endpoints pointing to the host.
+				svcNs := "llm" // co-locate with LiteLLM for simplicity
+				if err := createHostService(cfg, name, svcNs, port); err != nil {
+					fmt.Printf("Warning: could not create cluster service: %v\n", err)
+					fmt.Println("Falling back to standalone mode with built-in x402 payment gate.")
+					d.NoPaymentGate = false
+				} else {
+					// Create a ServiceOffer CR pointing at the host service.
+					soSpec := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					soManifest := map[string]interface{}{
+						"apiVersion": "obol.org/v1alpha1",
+						"kind":       "ServiceOffer",
+						"metadata": map[string]interface{}{
+							"name":      name,
+							"namespace": svcNs,
+						},
+						"spec": soSpec,
+					}
+					if err := kubectlApply(cfg, soManifest); err != nil {
+						fmt.Printf("Warning: could not create ServiceOffer: %v\n", err)
+						d.NoPaymentGate = false
+					} else {
+						fmt.Printf("ServiceOffer %s/%s created (type: inference, routed via cluster)\n", svcNs, name)
+
+						// Ensure tunnel is active.
+						u := getUI(cmd)
+						u.Blank()
+						u.Info("Ensuring tunnel is active for public access...")
+						if tunnelURL, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
+							u.Warnf("Tunnel not started: %v", tErr)
+							u.Dim("  Start manually with: obol tunnel restart")
+						} else {
+							u.Successf("Tunnel active: %s", tunnelURL)
+						}
+					}
+				}
+			}
+
 			return runInferenceGateway(d, chain)
 		},
 	}
@@ -397,6 +456,17 @@ Examples:
 			}
 			fmt.Printf("The agent will reconcile: health-check → payment gate → route\n")
 			fmt.Printf("Check status: obol sell status %s -n %s\n", name, ns)
+
+			// Ensure tunnel is active for public access.
+			u := getUI(cmd)
+			u.Blank()
+			u.Info("Ensuring tunnel is active for public access...")
+			if tunnelURL, err := tunnel.EnsureTunnelForSell(cfg, u); err != nil {
+				u.Warnf("Tunnel not started: %v", err)
+				u.Dim("  Start manually with: obol tunnel restart")
+			} else {
+				u.Successf("Tunnel active: %s", tunnelURL)
+			}
 			return nil
 		},
 	}
@@ -621,7 +691,24 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			return kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns)
+			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
+				return err
+			}
+
+			// Auto-stop quick tunnel when no ServiceOffers remain.
+			remaining, listErr := kubectlOutput(cfg, "get", "serviceoffers.obol.org", "-A",
+				"-o", "jsonpath={.items}")
+			if listErr == nil && (remaining == "[]" || strings.TrimSpace(remaining) == "") {
+				st, _ := tunnel.LoadTunnelState(cfg)
+				if st == nil || st.Mode != "dns" {
+					u := getUI(cmd)
+					u.Blank()
+					u.Info("No ServiceOffers remaining. Stopping quick tunnel.")
+					_ = tunnel.Stop(cfg, u)
+					_ = tunnel.DeleteStorefront(cfg)
+				}
+			}
+			return nil
 		},
 	}
 }
@@ -791,6 +878,7 @@ func runInferenceGateway(d *inference.Deployment, chain x402.ChainConfig) error 
 		VMHostPort:      d.VMHostPort,
 		TEEType:         d.TEEType,
 		ModelHash:       d.ModelHash,
+		NoPaymentGate:   d.NoPaymentGate,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)
@@ -1022,6 +1110,121 @@ func formatInferencePriceSummary(d *inference.Deployment) string {
 			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
 	}
 	return fmt.Sprintf("%s USDC/request", d.PricePerRequest)
+}
+
+// createHostService creates a headless Service + Endpoints in the cluster
+// pointing to the Docker host IP on the given port, so that the cluster can
+// route traffic to a host-side inference gateway.
+//
+// Kubernetes Endpoints require an IP address, not a hostname. We resolve the
+// host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
+func createHostService(cfg *config.Config, name, ns, port string) error {
+	hostIP, err := resolveHostIP()
+	if err != nil {
+		return fmt.Errorf("cannot resolve host IP for cluster routing: %w", err)
+	}
+
+	svc := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]interface{}{
+			"ports": []map[string]interface{}{
+				{"port": 8402, "targetPort": 8402, "protocol": "TCP"},
+			},
+		},
+	}
+	ep := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Endpoints",
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": ns,
+		},
+		"subsets": []map[string]interface{}{
+			{
+				"addresses": []map[string]interface{}{
+					{"ip": hostIP},
+				},
+				"ports": []map[string]interface{}{
+					{"port": 8402, "protocol": "TCP"},
+				},
+			},
+		},
+	}
+
+	if err := kubectlApply(cfg, svc); err != nil {
+		return fmt.Errorf("failed to create service: %w", err)
+	}
+	if err := kubectlApply(cfg, ep); err != nil {
+		return fmt.Errorf("failed to create endpoints: %w", err)
+	}
+	return nil
+}
+
+// resolveHostIP returns the Docker host IP reachable from k3d containers.
+// Same resolution strategy as stack.ollamaHostIPForBackend.
+func resolveHostIP() (string, error) {
+	// Try DNS resolution of host.docker.internal (macOS) or host.k3d.internal (Linux).
+	for _, host := range []string{"host.docker.internal", "host.k3d.internal"} {
+		if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
+			return addrs[0], nil
+		}
+	}
+	// macOS Docker Desktop fallback: well-known VM gateway.
+	if runtime.GOOS == "darwin" {
+		return "192.168.65.254", nil
+	}
+	// Linux fallback: docker0 bridge IP.
+	if iface, err := net.InterfaceByName("docker0"); err == nil {
+		if addrs, err := iface.Addrs(); err == nil {
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+					return ipNet.IP.String(), nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("cannot determine Docker host IP; ensure Docker is running")
+}
+
+// buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
+// inference gateway routed through the cluster's x402 flow.
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]interface{} {
+	spec := map[string]interface{}{
+		"type": "inference",
+		"upstream": map[string]interface{}{
+			"service":    d.Name,
+			"namespace":  ns,
+			"port":       8402,
+			"healthPath": "/health",
+		},
+		"payment": map[string]interface{}{
+			"scheme":  "exact",
+			"network": d.Chain,
+			"payTo":   d.WalletAddress,
+			"price":   map[string]interface{}{},
+		},
+		"path": fmt.Sprintf("/services/%s", d.Name),
+	}
+
+	price := spec["payment"].(map[string]interface{})["price"].(map[string]interface{})
+	if pt.PerMTok != "" {
+		price["perMTok"] = pt.PerMTok
+	} else {
+		price["perRequest"] = d.PricePerRequest
+	}
+
+	if d.UpstreamURL != "" {
+		spec["model"] = map[string]interface{}{
+			"name":    "ollama",
+			"runtime": "ollama",
+		}
+	}
+	return spec
 }
 
 // removePricingRoute removes the x402-verifier pricing route for the given offer.

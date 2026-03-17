@@ -93,6 +93,12 @@ type GatewayConfig struct {
 	// Required when TEEType is set. Bound into the TEE attestation user_data
 	// so verifiers can confirm the model identity.
 	ModelHash string
+
+	// NoPaymentGate disables the built-in x402 payment middleware. Use this
+	// when the gateway runs behind the cluster's x402 verifier (via Traefik
+	// ForwardAuth) to avoid double-gating requests. Enclave/TEE encryption
+	// middleware remains active when enabled.
+	NoPaymentGate bool
 }
 
 // Gateway is an x402-enabled reverse proxy for LLM inference with optional
@@ -212,7 +218,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		if em != nil {
 			h = em.wrap(h)
 		}
-		return paymentMiddleware(h)
+		if !g.config.NoPaymentGate {
+			h = paymentMiddleware(h)
+		}
+		return h
 	}
 
 	// Build HTTP mux.

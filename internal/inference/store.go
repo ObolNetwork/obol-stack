@@ -85,6 +85,10 @@ type Deployment struct {
 	// Required when TEEType is set. Bound into the TEE attestation user_data.
 	ModelHash string `json:"model_hash,omitempty"`
 
+	// NoPaymentGate disables the built-in x402 payment middleware when the
+	// gateway is routed through the cluster's x402 verifier via Traefik.
+	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
+
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 

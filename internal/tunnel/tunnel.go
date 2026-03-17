@@ -1,7 +1,9 @@
 package tunnel
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,12 +41,12 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	if err != nil {
 		mode, url := tunnelModeAndURL(st)
 		if mode == "quick" {
-			// No tunnel credentials configured — tunnel is dormant by design.
-			printStatusBox(u, "disabled", "not running", "(no tunnel configured)", time.Now())
+			// Quick tunnel is dormant — activates on first `obol sell`.
+			printStatusBox(u, "quick", "dormant", "(activates on 'obol sell')", time.Now())
 			u.Blank()
-			u.Print("To expose your stack publicly, set up a tunnel:")
-			u.Print("  obol tunnel login --hostname stack.example.com")
-			u.Print("  obol tunnel provision --hostname stack.example.com --account-id ... --zone-id ... --api-token ...")
+			u.Print("The tunnel will start automatically when you sell a service.")
+			u.Print("  Start manually: obol tunnel restart")
+			u.Print("  Persistent URL: obol tunnel login --hostname stack.example.com")
 			return nil
 		}
 		printStatusBox(u, mode, "not running", url, time.Now())
@@ -91,7 +93,7 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// InjectBaseURL sets AGENT_BASE_URL on the obol-agent deployment so that
+// InjectBaseURL sets AGENT_BASE_URL on the default OpenClaw deployment so that
 // monetize.py uses the tunnel URL in registration JSON.
 func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -100,7 +102,7 @@ func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"set", "env", "deployment/openclaw",
-		"-n", "openclaw-obol-agent",
+		"-n", "openclaw-default",
 		fmt.Sprintf("AGENT_BASE_URL=%s", strings.TrimRight(tunnelURL, "/")),
 	)
 	return cmd.Run()
@@ -325,6 +327,241 @@ data:
 	cmd.Stdin = strings.NewReader(manifest)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kubectl apply failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// EnsureTunnelForSell ensures the tunnel is running and propagates the URL to
+// all downstream consumers (obol-agent env, frontend ConfigMap, agent overlay).
+// It also creates a storefront landing page at the tunnel hostname.
+func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
+	tunnelURL, err := EnsureRunning(cfg, u)
+	if err != nil {
+		return "", err
+	}
+	// EnsureRunning already calls InjectBaseURL + SyncTunnelConfigMap.
+	// Also sync the agent overlay for helmfile consistency.
+	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
+		u.Warnf("could not sync AGENT_BASE_URL to obol-agent overlay: %v", err)
+	}
+	// Create the storefront landing page for the tunnel hostname.
+	if err := CreateStorefront(cfg, tunnelURL); err != nil {
+		u.Warnf("could not create storefront: %v", err)
+	}
+	return tunnelURL, nil
+}
+
+// Stop scales the cloudflared deployment to 0 replicas.
+func Stop(cfg *config.Config, u *ui.UI) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil // stack not running, nothing to stop
+	}
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"scale", "deployment/cloudflared",
+		"-n", tunnelNamespace,
+		"--replicas=0",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to scale cloudflared to 0: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	u.Success("Tunnel stopped")
+	return nil
+}
+
+// storefrontNamespace is where the storefront landing page resources live.
+const storefrontNamespace = "traefik"
+
+// CreateStorefront creates (or updates) a simple HTML landing page served at
+// the tunnel hostname's root path. This uses the same busybox-httpd + ConfigMap
+// pattern as the .well-known registration in monetize.py.
+func CreateStorefront(cfg *config.Config, tunnelURL string) error {
+	parsed, err := url.Parse(tunnelURL)
+	if err != nil {
+		return fmt.Errorf("invalid tunnel URL: %w", err)
+	}
+	hostname := parsed.Hostname()
+
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Obol Stack</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    a { color: #0066cc; }
+    code { background: #f0f0f0; padding: 0.2em 0.4em; border-radius: 3px; }
+    .services { margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Obol Stack</h1>
+  <p>This node sells services via <a href="https://www.x402.org">x402</a> micropayments.</p>
+  <div class="services">
+    <h2>Available Services</h2>
+    <p>See the machine-readable catalog: <a href="%s/skill.md">/skill.md</a></p>
+    <p>Agent registration: <a href="%s/.well-known/agent-registration.json">/.well-known/agent-registration.json</a></p>
+  </div>
+</body>
+</html>`, tunnelURL, tunnelURL)
+
+	// Build the resources as a multi-document YAML manifest.
+	resources := []map[string]interface{}{
+		// ConfigMap with HTML content + httpd mime config.
+		{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "tunnel-storefront",
+				"namespace": storefrontNamespace,
+			},
+			"data": map[string]string{
+				"index.html":  html,
+				"httpd.conf":  "",
+				"mime.types":  "text/html\thtml htm\n",
+			},
+		},
+		// Deployment: busybox httpd serving the ConfigMap.
+		{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]interface{}{
+				"name":      "tunnel-storefront",
+				"namespace": storefrontNamespace,
+			},
+			"spec": map[string]interface{}{
+				"replicas": 1,
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]string{"app": "tunnel-storefront"},
+				},
+				"template": map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"labels": map[string]string{"app": "tunnel-storefront"},
+					},
+					"spec": map[string]interface{}{
+						"containers": []map[string]interface{}{
+							{
+								"name":    "httpd",
+								"image":   "busybox:1.37",
+								"command": []string{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"ports": []map[string]interface{}{
+									{"containerPort": 8080},
+								},
+								"volumeMounts": []map[string]interface{}{
+									{"name": "html", "mountPath": "/www"},
+								},
+								"resources": map[string]interface{}{
+									"requests": map[string]string{"cpu": "5m", "memory": "8Mi"},
+									"limits":   map[string]string{"cpu": "20m", "memory": "16Mi"},
+								},
+							},
+						},
+						"volumes": []map[string]interface{}{
+							{
+								"name": "html",
+								"configMap": map[string]interface{}{
+									"name": "tunnel-storefront",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		// Service
+		{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]interface{}{
+				"name":      "tunnel-storefront",
+				"namespace": storefrontNamespace,
+			},
+			"spec": map[string]interface{}{
+				"selector": map[string]string{"app": "tunnel-storefront"},
+				"ports": []map[string]interface{}{
+					{"port": 8080, "targetPort": 8080},
+				},
+			},
+		},
+		// HTTPRoute: tunnel hostname → storefront (more specific than frontend catch-all).
+		{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]interface{}{
+				"name":      "tunnel-storefront",
+				"namespace": storefrontNamespace,
+			},
+			"spec": map[string]interface{}{
+				"hostnames": []string{hostname},
+				"parentRefs": []map[string]interface{}{
+					{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []map[string]interface{}{
+					{
+						"matches": []map[string]interface{}{
+							{"path": map[string]string{"type": "PathPrefix", "value": "/"}},
+						},
+						"backendRefs": []map[string]interface{}{
+							{
+								"name": "tunnel-storefront",
+								"port": 8080,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Apply each resource via kubectl apply.
+	for _, res := range resources {
+		data, err := json.Marshal(res)
+		if err != nil {
+			return fmt.Errorf("failed to marshal resource: %w", err)
+		}
+		cmd := exec.Command(kubectlPath,
+			"--kubeconfig", kubeconfigPath,
+			"apply", "-f", "-",
+		)
+		cmd.Stdin = strings.NewReader(string(data))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to apply storefront resource: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// DeleteStorefront removes the storefront landing page resources.
+func DeleteStorefront(cfg *config.Config) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil
+	}
+
+	for _, resource := range []string{
+		"httproute/tunnel-storefront",
+		"service/tunnel-storefront",
+		"deployment/tunnel-storefront",
+		"configmap/tunnel-storefront",
+	} {
+		cmd := exec.Command(kubectlPath,
+			"--kubeconfig", kubeconfigPath,
+			"delete", resource,
+			"-n", storefrontNamespace,
+			"--ignore-not-found",
+		)
+		_ = cmd.Run() // best-effort cleanup
 	}
 	return nil
 }

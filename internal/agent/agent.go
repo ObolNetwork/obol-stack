@@ -8,49 +8,19 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-const agentID = "obol-agent"
+// DefaultInstanceID is the canonical OpenClaw instance that runs both
+// user-facing inference and agent-mode monetize/heartbeat reconciliation.
+const DefaultInstanceID = "default"
 
-// Init sets up the singleton obol-agent OpenClaw instance.
-// It enforces a single agent by using a fixed deployment ID.
-// After onboarding, it patches the monetize RBAC bindings
-// to grant the agent's ServiceAccount monetization permissions,
-// and injects HEARTBEAT.md to drive periodic reconciliation.
+// Init patches the default OpenClaw instance with agent capabilities:
+// monetize RBAC bindings and HEARTBEAT.md for periodic reconciliation.
+// The actual OpenClaw deployment is created by openclaw.SetupDefault()
+// during `obol stack up`; Init() adds the agent superpowers on top.
 func Init(cfg *config.Config, u *ui.UI) error {
-	// Check if obol-agent already exists.
-	instances, err := openclaw.ListInstanceIDs(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to list OpenClaw instances: %w", err)
-	}
-
-	exists := false
-	for _, id := range instances {
-		if id == agentID {
-			exists = true
-			break
-		}
-	}
-
-	opts := openclaw.OnboardOptions{
-		ID:          agentID,
-		Sync:        true,
-		Interactive: true,
-		AgentMode:   true,
-	}
-
-	if exists {
-		u.Warn("obol-agent already exists, re-syncing...")
-		opts.Force = true
-	}
-
-	if err := openclaw.Onboard(cfg, opts, u); err != nil {
-		return fmt.Errorf("failed to onboard obol-agent: %w", err)
-	}
-
-	// Patch ClusterRoleBinding to add the agent's ServiceAccount.
+	// Patch ClusterRoleBinding to add the default instance's ServiceAccount.
 	if err := patchMonetizeBinding(cfg, u); err != nil {
 		return fmt.Errorf("failed to patch ClusterRoleBinding: %w", err)
 	}
@@ -60,12 +30,11 @@ func Init(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to inject HEARTBEAT.md: %w", err)
 	}
 
-	u.Print("")
-	u.Success("Agent initialized. To reconfigure, you can safely re-run: obol agent init")
+	u.Success("Agent capabilities applied to default OpenClaw instance")
 	return nil
 }
 
-// patchMonetizeBinding adds the obol-agent's OpenClaw ServiceAccount
+// patchMonetizeBinding adds the default OpenClaw instance's ServiceAccount
 // as a subject on the monetize ClusterRoleBindings and x402 RoleBinding.
 //
 //	ClusterRoleBindings patched:
@@ -74,7 +43,7 @@ func Init(cfg *config.Config, u *ui.UI) error {
 //	RoleBindings patched:
 //	  openclaw-x402-pricing-binding       (x402 namespace, pricing ConfigMap)
 func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
-	namespace := fmt.Sprintf("openclaw-%s", agentID)
+	namespace := fmt.Sprintf("openclaw-%s", DefaultInstanceID)
 
 	subject := []map[string]interface{}{
 		{
@@ -128,13 +97,13 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// injectHeartbeatFile writes HEARTBEAT.md to the obol-agent's workspace path
+// injectHeartbeatFile writes HEARTBEAT.md to the default instance's workspace
 // so OpenClaw runs monetize.py reconciliation on every heartbeat cycle.
 // OpenClaw reads HEARTBEAT.md from the agent workspace directory
 // (resolveAgentWorkspaceDir → /data/.openclaw/workspace/HEARTBEAT.md),
 // NOT the root .openclaw directory.
 func injectHeartbeatFile(cfg *config.Config, u *ui.UI) error {
-	namespace := fmt.Sprintf("openclaw-%s", agentID)
+	namespace := fmt.Sprintf("openclaw-%s", DefaultInstanceID)
 	heartbeatDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
 	if err := os.MkdirAll(heartbeatDir, 0755); err != nil {
