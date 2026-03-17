@@ -1497,7 +1497,8 @@ configure_path() {
 
 # Print post-install instructions
 # Check if ~/.openclaw/openclaw.json specifies a cloud model that needs an API key.
-# Prints guidance before the "start cluster" prompt so the user can set the key first.
+# If the key is missing and we have a TTY, prompt for it interactively and export
+# it so the subsequent obol bootstrap / stack up picks it up via autoConfigureLLM.
 check_agent_model_api_key() {
 	local config_file="$HOME/.openclaw/openclaw.json"
 	[[ -f "$config_file" ]] || return 0
@@ -1517,18 +1518,35 @@ except: pass
 	[[ -n "$primary_model" ]] || return 0
 
 	# Determine provider and required env var
-	local provider="" env_var=""
+	local provider="" env_var="" provider_name=""
 	case "$primary_model" in
-		*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY" ;;
-		gpt*|o1*|o3*) provider="openai"; env_var="OPENAI_API_KEY" ;;
+		*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY"; provider_name="Anthropic" ;;
+		gpt*|o1*|o3*|o4*) provider="openai"; env_var="OPENAI_API_KEY"; provider_name="OpenAI" ;;
 		*) return 0 ;;
 	esac
 
 	echo ""
 	if [[ -n "${!env_var:-}" ]]; then
 		log_success "$env_var detected for $primary_model"
+		return 0
+	fi
+
+	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
+	if [[ -c /dev/tty ]]; then
+		log_info "Your agent uses $primary_model ($provider_name)"
+		echo ""
+		local api_key=""
+		read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
+		if [[ -n "$api_key" ]]; then
+			export "$env_var=$api_key"
+			log_success "$env_var configured"
+		else
+			echo ""
+			log_dim "  Skipped. Configure later: obol model setup --provider $provider"
+		fi
 	else
-		log_warn "Your agent uses $primary_model but $env_var is not set."
+		# Non-interactive: just warn
+		log_warn "Agent uses $primary_model but $env_var is not set."
 		log_dim "  Set it before starting: export $env_var=..."
 		log_dim "  Or configure after startup: obol model setup --provider $provider"
 	fi
