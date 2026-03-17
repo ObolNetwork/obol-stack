@@ -253,6 +253,8 @@ releases:
               name: obol-frontend
               namespace: obol-frontend
             spec:
+              hostnames:
+                - "obol.stack"
               parentRefs:
                 - name: traefik-gateway
                   namespace: traefik
