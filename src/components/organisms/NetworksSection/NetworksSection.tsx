@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Box, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { LocalNodeStatus } from '../LocalNodeStatus';
@@ -34,38 +34,6 @@ const ItemsList = styled(Box, {
   flexDirection: 'column',
   gap: '$md',
   paddingTop: '$lg',
-});
-
-const LocalOnlyCard = styled(Box, {
-  borderRadius: '$3',
-  background: '$bg04',
-  border: '1px solid $stroke',
-  overflow: 'hidden',
-});
-
-const LocalOnlyCardHeader = styled(Flex, {
-  alignItems: 'center',
-  gap: '$sm',
-  padding: '$xs $sm',
-});
-
-const LocalOnlyCardTitle = styled(Text, {
-  fontSize: '$4',
-  fontWeight: '$semibold',
-  color: '$white',
-});
-
-const LocalNodesSection = styled(Box, {
-  borderTop: '1px solid $stroke',
-  padding: '$sm',
-});
-
-const LocalNodesSectionLabel = styled(Text, {
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  color: '$body',
-  textTransform: 'uppercase',
-  marginBottom: '$md',
 });
 
 const LocalNodesList = styled(Box, {

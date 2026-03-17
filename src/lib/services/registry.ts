@@ -12,7 +12,8 @@ export class RegistryClient {
     page = 1,
     search?: string,
     protocol?: string,
-    chainId = 84532
+    chainId = 84532,
+    x402Supported?: boolean
   ): Promise<{ agents: Agent8004[]; total: number; hasMore: boolean }> {
     const params = new URLSearchParams({
       chainId: String(chainId),
@@ -24,6 +25,7 @@ export class RegistryClient {
 
     if (search) params.set('search', search);
     if (protocol) params.set('protocol', protocol);
+    if (x402Supported) params.set('x402_supported', 'true');
 
     const res = await fetch(`${SCAN_API}/agents?${params}`, {
       signal: AbortSignal.timeout(10000),

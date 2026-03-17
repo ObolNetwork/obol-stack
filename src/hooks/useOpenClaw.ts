@@ -15,6 +15,7 @@ export function useOpenClawInstances() {
   const fetchInstances = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
       const response = await fetch('/api/openclaw/instances');
 
       if (!response.ok) {
@@ -24,7 +25,6 @@ export function useOpenClawInstances() {
       const data = await response.json();
       console.log('Fetch OpenClaw Instances Response:', data);
       setInstances(data.instances || []);
-      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {

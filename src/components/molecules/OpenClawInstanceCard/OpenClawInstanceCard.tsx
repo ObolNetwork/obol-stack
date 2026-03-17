@@ -11,8 +11,6 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
-import { ItemCard } from '../../atoms/ItemCard';
-import { CountBadge } from '../../atoms/CountBadge';
 import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useOpenClawStatus,
@@ -21,13 +19,24 @@ import {
   useTunnelURL,
 } from '../../../hooks/useOpenClaw';
 import { useAddressBalance } from '../../../hooks/useAddressBalance';
-import { truncateAddress } from '../../../utils/address';
 import type { OpenClawInstance } from '@/types/openclaw';
 
 interface OpenClawInstanceCardProps {
   instance: OpenClawInstance;
   onSelect?: (instance: OpenClawInstance) => void;
 }
+
+const CardContainer = styled(Box, {
+  padding: '$sm $md',
+  borderRadius: '$2',
+  backgroundColor: '$bg03',
+  border: '1px solid $stroke',
+  transition: 'border-color 0.2s ease',
+
+  '&:hover': {
+    borderColor: '$body',
+  },
+});
 
 const TopRow = styled(Flex, {
   alignItems: 'center',
@@ -80,8 +89,25 @@ const BalanceText = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
+const KeysBadge = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '$obolGreen',
+  backgroundColor: 'rgba(47, 228, 171, 0.08)',
+  border: '1px solid rgba(47, 228, 171, 0.25)',
+  borderRadius: '4px',
+  padding: '1px 5px',
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+});
+
+function truncateAddress(address: string): string {
+  if (address.length <= 10) return address;
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 const SellDivider = styled(Box, {
-  height: '$1',
+  height: '1px',
   backgroundColor: '$stroke',
   marginTop: '$md',
 });
@@ -101,12 +127,12 @@ const SellLabel = styled(Text, {
 const SellButton = styled('button', {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '$xxs',
+  gap: '6px',
   padding: '$xxxs $sm',
   borderRadius: '$pill',
   border: '1px solid rgba(47, 228, 171, 0.3)',
   background: 'rgba(47, 228, 171, 0.08)',
-  color: '$obolGreen',
+  color: '#2FE4AB',
   fontSize: '$2',
   fontWeight: '$semibold',
   cursor: 'pointer',
@@ -147,7 +173,7 @@ export function OpenClawInstanceCard({
     : `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
 
   return (
-    <ItemCard>
+    <CardContainer>
       <TopRow>
         <Flex css={{ alignItems: 'center', gap: '$xs' }}>
           <InstanceName>
@@ -201,7 +227,7 @@ export function OpenClawInstanceCard({
             title="Copy address"
           />
           {metadata.count > 1 && (
-            <CountBadge>+{metadata.count - 1} keys</CountBadge>
+            <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
           )}
           {balanceInfo && (
             <BalanceText>
@@ -298,6 +324,6 @@ export function OpenClawInstanceCard({
           </SellCtaRow>
         </>
       )}
-    </ItemCard>
+    </CardContainer>
   );
 }

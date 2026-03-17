@@ -198,7 +198,7 @@ export function SellInferenceModal({
               <FieldGroup>
                 <FieldLabel>Chain</FieldLabel>
                 <ChainSelector
-                  value={chainValue as 'base-sepolia' | 'base-mainnet'}
+                  value={chainValue}
                   onChange={v => v && setValue('chain', v)}
                 />
               </FieldGroup>

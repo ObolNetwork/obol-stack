@@ -1,17 +1,16 @@
 import { styled } from '@obolnetwork/obol-ui';
-
-export type ChainOption = 'base-sepolia' | 'base-mainnet';
+import { ChainName } from '../../../types/dashboard';
 
 export interface ChainSelectorProps {
-  value: ChainOption | undefined;
-  onChange: (value: ChainOption | undefined) => void;
+  value: ChainName | undefined;
+  onChange: (value: ChainName | undefined) => void;
   /** Allow clicking the active option to deselect (for use as a filter) */
   allowDeselect?: boolean;
 }
 
-const CHAINS: { value: ChainOption; label: string }[] = [
+const CHAINS: { value: ChainName; label: string }[] = [
   { value: 'base-sepolia', label: 'Base Sepolia' },
-  { value: 'base-mainnet', label: 'Base Mainnet' },
+  { value: 'base', label: 'Base Mainnet' },
 ];
 
 const Container = styled('div', {
@@ -62,7 +61,7 @@ export function ChainSelector({
   onChange,
   allowDeselect = false,
 }: ChainSelectorProps) {
-  const handleClick = (chain: ChainOption) => {
+  const handleClick = (chain: ChainName) => {
     if (allowDeselect && value === chain) {
       onChange(undefined);
     } else {

@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
+import { ChainName } from '@/types/dashboard';
 
 export type FormState = {
   name: string;
   wallet: string;
-  chain: string;
+  chain: ChainName;
   price: string;
   upstream: string;
   port: string;
@@ -15,7 +16,7 @@ export type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
 const INITIAL_FORM: FormState = {
   name: '',
   wallet: '',
-  chain: 'base-sepolia',
+  chain: 'base',
   price: '0.001',
   upstream: 'litellm',
   port: '4000',
@@ -76,11 +77,11 @@ export function useSellInferenceModal(defaultWallet?: string) {
   const handleClose = useCallback(() => {
     setOpen(false);
     setTimeout(() => {
-      reset(INITIAL_FORM);
+      reset({ ...INITIAL_FORM, wallet: defaultWallet ?? '' });
       setSubmitState('idle');
       setErrorMsg('');
     }, 200);
-  }, [reset]);
+  }, [reset, defaultWallet]);
 
   return {
     open,
