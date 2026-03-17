@@ -60,7 +60,7 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
-readonly OPENCLAW_VERSION="2026.3.11"
+readonly OPENCLAW_VERSION="2026.3.13-1"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
