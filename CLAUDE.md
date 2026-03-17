@@ -37,7 +37,7 @@ Integration tests use `//go:build integration` and skip gracefully when prerequi
 
 **Design**: Deployment-centric (unique namespaces via petnames), local-first (k3d), XDG-compliant, two-stage templating (CLI flags → Go templates → Helmfile → K8s).
 
-**Routing**: Traefik + Kubernetes Gateway API. GatewayClass `traefik`, Gateway `traefik-gateway` in `traefik` ns. Routes: `/` → frontend, `/rpc` → eRPC, `/services/<name>/*` → x402 ForwardAuth → upstream, `/.well-known/agent-registration.json` → ERC-8004 httpd, `/ethereum-<id>/execution|beacon`.
+**Routing**: Traefik + Kubernetes Gateway API. GatewayClass `traefik`, Gateway `traefik-gateway` in `traefik` ns. Local-only routes (restricted to `hostnames: ["obol.stack"]`): `/` → frontend, `/rpc` → eRPC. Public routes (accessible via tunnel, no hostname restriction): `/services/<name>/*` → x402 ForwardAuth → upstream, `/.well-known/agent-registration.json` → ERC-8004 httpd, `/skill.md` → service catalog. Tunnel hostname gets a storefront landing page at `/`. NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes — exposing the frontend/RPC to the public internet is a critical security flaw.
 
 **Config**: `Config{ConfigDir, DataDir, BinDir}`. Precedence: `OBOL_CONFIG_DIR` > `XDG_CONFIG_HOME/obol` > `~/.config/obol`. `OBOL_DEVELOPMENT=true` → `.workspace/` dirs. All K8s tools auto-set `KUBECONFIG=$OBOL_CONFIG_DIR/kubeconfig.yaml`.
 
@@ -155,6 +155,22 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
+
+### Security: Tunnel Exposure
+
+The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gated endpoints and discovery metadata should be reachable via the tunnel hostname. Internal services (frontend, eRPC, LiteLLM, monitoring) MUST have `hostnames: ["obol.stack"]` on their HTTPRoutes to restrict them to local access.
+
+**NEVER**:
+- Remove `hostnames` restrictions from frontend or eRPC HTTPRoutes
+- Create HTTPRoutes without `hostnames` for internal services
+- Expose the frontend UI, Prometheus/monitoring, or LiteLLM admin to the tunnel
+- Run `obol stack down` or `obol stack purge` unless explicitly asked
+
+**Public routes** (no hostname restriction, intentional):
+- `/services/*` — x402 payment-gated, safe by design
+- `/.well-known/agent-registration.json` — ERC-8004 discovery
+- `/skill.md` — machine-readable service catalog
+- `/` on tunnel hostname — static storefront landing page (busybox httpd)
 
 ## Key Packages
 
