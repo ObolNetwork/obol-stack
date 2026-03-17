@@ -1,6 +1,8 @@
 import { styled } from '@obolnetwork/obol-ui';
 import { ChainName } from '../../../types/dashboard';
 
+export type ChainOption = ChainName;
+
 export interface ChainSelectorProps {
   value: ChainName | undefined;
   onChange: (value: ChainName | undefined) => void;
