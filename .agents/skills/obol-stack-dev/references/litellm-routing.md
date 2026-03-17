@@ -29,7 +29,9 @@ A cluster-wide OpenAI-compatible proxy that routes LLM traffic to actual provide
 obol model setup --provider anthropic --api-key sk-ant-...
 obol model setup --provider openai --api-key sk-proj-...
 obol model setup custom --name my-model --endpoint http://example.com --model model-id
-obol model status  # Show which providers are enabled
+obol model status                                    # Show which providers are enabled
+obol model prefer qwen3.5:35b,qwen3.5:9b,llama3:8b  # Set model preference order
+obol model prefer --list                             # View current model order
 ```
 
 ### Tier 2: Per-Instance Config (per OpenClaw namespace)

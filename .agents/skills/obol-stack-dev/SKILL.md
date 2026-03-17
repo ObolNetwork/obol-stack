@@ -102,6 +102,9 @@ obol model setup --provider anthropic --api-key sk-ant-...
 obol model setup --provider openai --api-key sk-proj-...
 obol model setup --provider ollama      # Auto-discovers local models
 obol model status                       # Show enabled providers
+obol model prefer qwen3.5:35b           # Set preferred model (becomes primary)
+obol model prefer qwen3.5:35b,llama3:8b # Set preference order (comma-separated)
+obol model prefer --list                # View current model order
 
 # --- OpenClaw Instance Management (Tier 2) ---
 obol openclaw onboard --id my-agent     # Interactive deploy

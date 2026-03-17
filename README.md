@@ -140,9 +140,15 @@ obol model setup --provider openai --api-key sk-proj-...
 
 # Check which providers are enabled
 obol model status
+
+# Set model preference order (first = primary, rest = fallbacks)
+obol model prefer qwen3.5:35b,qwen3.5:9b,llama3:8b
+
+# View current model order
+obol model prefer --list
 ```
 
-`model setup` patches the LiteLLM config and Secret with your API key, adds the model to the gateway, restarts LiteLLM, and syncs all deployed OpenClaw instances.
+`model setup` patches the LiteLLM config and Secret with your API key, adds the model to the gateway, restarts LiteLLM, and syncs all deployed OpenClaw instances. `model prefer` reorders the model list — the first model becomes OpenClaw's primary, and the rest become fallbacks.
 
 ## OpenClaw AI Agent
 

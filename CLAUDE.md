@@ -50,9 +50,9 @@ obol
 ├── network         list, install, add, remove, status, sync, delete
 ├── sell            inference, http, list, status, stop, delete, pricing, register
 ├── openclaw        onboard, setup, sync, list, delete, dashboard, cli, token, skills
-├── model           setup, status
+├── model           setup, status, prefer, sync, list, remove, pull
 ├── app             install, sync, list, delete
-├── tunnel          status, login, provision, restart, logs
+├── tunnel          status, login, provision, restart, stop, logs
 ├── kubectl/helm/helmfile/k9s   Passthrough (auto KUBECONFIG)
 ├── update/upgrade
 └── version
@@ -105,7 +105,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Model preference: `obol model prefer <model>[,<model>,...]` reorders `model_list` entries (pinned wildcards stay first, then preferred models, then rest). `PreferModels()` in `internal/model/model.go`. OpenClaw's `rankModels()` respects LiteLLM config order — first non-wildcard model becomes primary, rest are fallbacks. Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 

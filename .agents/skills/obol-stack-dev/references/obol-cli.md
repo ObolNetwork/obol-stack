@@ -32,6 +32,8 @@ return cmd.Run()
 | `obol model setup` | Interactive provider config | `cmd/obol/model.go` |
 | `obol model setup --provider anthropic --api-key KEY` | Non-interactive | `model.ConfigureLiteLLM()` |
 | `obol model status` | Show enabled providers | `model.GetProviderStatus()` |
+| `obol model prefer <model>[,<model>,...]` | Set model preference order | `model.PreferModels()` |
+| `obol model prefer --list` | View current model order | `model.ListModelOrder()` |
 
 ### OpenClaw Instance Management (Tier 2)
 
