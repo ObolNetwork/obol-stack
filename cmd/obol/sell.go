@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -230,6 +232,11 @@ Examples:
 				if idx := strings.LastIndex(listenAddr, ":"); idx >= 0 {
 					port = listenAddr[idx+1:]
 				}
+
+				// Bind to loopback only — the cluster reaches us via the
+				// K8s Service+Endpoints bridge; there is no reason to expose
+				// the unpaid gateway on all interfaces.
+				d.ListenAddr = "127.0.0.1:" + port
 
 				// Create a K8s Service + Endpoints pointing to the host.
 				svcNs := "llm" // co-locate with LiteLLM for simplicity
@@ -1119,10 +1126,12 @@ func formatInferencePriceSummary(d *inference.Deployment) string {
 // Kubernetes Endpoints require an IP address, not a hostname. We resolve the
 // host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
 func createHostService(cfg *config.Config, name, ns, port string) error {
-	hostIP, err := resolveHostIP()
+	hostIP, err := resolveHostIP(cfg)
 	if err != nil {
 		return fmt.Errorf("cannot resolve host IP for cluster routing: %w", err)
 	}
+
+	portNum, _ := strconv.Atoi(port)
 
 	svc := map[string]interface{}{
 		"apiVersion": "v1",
@@ -1133,7 +1142,7 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 		},
 		"spec": map[string]interface{}{
 			"ports": []map[string]interface{}{
-				{"port": 8402, "targetPort": 8402, "protocol": "TCP"},
+				{"port": portNum, "targetPort": portNum, "protocol": "TCP"},
 			},
 		},
 	}
@@ -1150,7 +1159,7 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 					{"ip": hostIP},
 				},
 				"ports": []map[string]interface{}{
-					{"port": 8402, "protocol": "TCP"},
+					{"port": portNum, "protocol": "TCP"},
 				},
 			},
 		},
@@ -1165,10 +1174,16 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 	return nil
 }
 
-// resolveHostIP returns the Docker host IP reachable from k3d containers.
-// Same resolution strategy as stack.ollamaHostIPForBackend.
-func resolveHostIP() (string, error) {
-	// Try DNS resolution of host.docker.internal (macOS) or host.k3d.internal (Linux).
+// resolveHostIP returns the host IP reachable from cluster containers.
+// For k3s (bare-metal) the host is localhost; for k3d the host is
+// reachable via Docker networking.
+func resolveHostIP(cfg *config.Config) (string, error) {
+	// Check if this is a k3s (bare-metal) backend — host is localhost.
+	if backend := stack.DetectExistingBackend(cfg); backend == stack.BackendK3s {
+		return "127.0.0.1", nil
+	}
+
+	// k3d / Docker: try DNS resolution of host.docker.internal or host.k3d.internal.
 	for _, host := range []string{"host.docker.internal", "host.k3d.internal"} {
 		if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
 			return addrs[0], nil
@@ -1188,18 +1203,19 @@ func resolveHostIP() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("cannot determine Docker host IP; ensure Docker is running")
+	return "", fmt.Errorf("cannot determine host IP; ensure Docker is running or using k3s backend")
 }
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
 func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]interface{} {
+	portNum, _ := strconv.Atoi(port)
 	spec := map[string]interface{}{
 		"type": "inference",
 		"upstream": map[string]interface{}{
 			"service":    d.Name,
 			"namespace":  ns,
-			"port":       8402,
+			"port":       portNum,
 			"healthPath": "/health",
 		},
 		"payment": map[string]interface{}{

@@ -76,11 +76,11 @@ type OnboardOptions struct {
 func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	// Check whether the default deployment already exists (re-sync path).
 	// If it does, proceed unconditionally — the overlay was already written.
-	deploymentDir := DeploymentPath(cfg, "default")
+	deploymentDir := DeploymentPath(cfg, "obol-agent")
 	if _, err := os.Stat(deploymentDir); err == nil {
 		// Existing deployment — always re-sync regardless of Ollama status.
 		return Onboard(cfg, OnboardOptions{
-			ID:        "default",
+			ID:        "obol-agent",
 			Sync:      true,
 			IsDefault: true,
 			AgentMode: true,
@@ -117,7 +117,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:           "default",
+		ID:           "obol-agent",
 		Sync:         true,
 		IsDefault:    true,
 		AgentMode:    true,
@@ -129,7 +129,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	id := opts.ID
 	if opts.IsDefault {
-		id = "default"
+		id = "obol-agent"
 	}
 	if id == "" {
 		id = petname.Generate(2, "-")

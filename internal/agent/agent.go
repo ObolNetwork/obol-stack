@@ -13,7 +13,7 @@ import (
 
 // DefaultInstanceID is the canonical OpenClaw instance that runs both
 // user-facing inference and agent-mode monetize/heartbeat reconciliation.
-const DefaultInstanceID = "default"
+const DefaultInstanceID = "obol-agent"
 
 // Init patches the default OpenClaw instance with agent capabilities:
 // monetize RBAC bindings and HEARTBEAT.md for periodic reconciliation.
