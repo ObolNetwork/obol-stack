@@ -21,7 +21,7 @@ const INITIAL_FORM: FormState = {
   port: '4000',
 };
 
-export function useSellInferenceModal() {
+export function useSellInferenceModal(defaultWallet?: string) {
   const [open, setOpen] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -34,7 +34,7 @@ export function useSellInferenceModal() {
     setValue,
     formState: { isValid },
   } = useForm<FormState>({
-    defaultValues: INITIAL_FORM,
+    defaultValues: { ...INITIAL_FORM, wallet: defaultWallet ?? '' },
     mode: 'onChange',
   });
 

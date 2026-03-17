@@ -15,6 +15,7 @@ import { useSellInferenceModal } from './useSellInferenceModal';
 
 interface SellInferenceModalProps {
   trigger: React.ReactNode;
+  defaultWallet?: string;
 }
 
 const ModalBody = styled(Box, {
@@ -80,7 +81,10 @@ const ErrorMessage = styled(Text, {
   border: '1px solid rgba(255, 107, 107, 0.15)',
 });
 
-export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
+export function SellInferenceModal({
+  trigger,
+  defaultWallet,
+}: SellInferenceModalProps) {
   const {
     open,
     setOpen,
@@ -94,7 +98,7 @@ export function SellInferenceModal({ trigger }: SellInferenceModalProps) {
     handleSubmit,
     onSubmit,
     handleClose,
-  } = useSellInferenceModal();
+  } = useSellInferenceModal(defaultWallet);
 
   return (
     <ResponsiveDialog

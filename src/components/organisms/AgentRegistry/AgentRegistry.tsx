@@ -102,7 +102,7 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
 
       <MetaRow>
         {agent.x402_supported && <Badge variant="green">x402</Badge>}
-        {agent.supported_protocols.map(p => (
+        {agent.supported_protocols?.map(p => (
           <Badge key={p} variant="purple">
             {p}
           </Badge>
