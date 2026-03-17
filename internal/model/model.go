@@ -922,3 +922,142 @@ func FormatBytes(b int64) string {
 		return fmt.Sprintf("%d B", b)
 	}
 }
+
+// isPinnedEntry returns true for model_list entries that should not be reordered
+// (wildcard catch-all routes like paid/*, anthropic/*, openai/*).
+func isPinnedEntry(name string) bool {
+	return strings.Contains(name, "*")
+}
+
+// readLiteLLMConfig reads and parses the LiteLLM config from the cluster ConfigMap.
+func readLiteLLMConfig(cfg *config.Config) (*LiteLLMConfig, error) {
+	bin := filepath.Join(cfg.BinDir, "kubectl")
+	kc := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	raw, err := kubectl.Output(bin, kc,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ConfigMap: %w", err)
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+	return &litellmConfig, nil
+}
+
+// writeLiteLLMConfig writes the full LiteLLM config back to the cluster ConfigMap.
+func writeLiteLLMConfig(cfg *config.Config, litellmConfig *LiteLLMConfig) error {
+	bin := filepath.Join(cfg.BinDir, "kubectl")
+	kc := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	updated, err := yaml.Marshal(litellmConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	escapedYAML, err := json.Marshal(string(updated))
+	if err != nil {
+		return fmt.Errorf("failed to escape YAML: %w", err)
+	}
+	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
+
+	return kubectl.Run(bin, kc,
+		"patch", "configmap", configMapName, "-n", namespace,
+		"-p", patchJSON, "--type=merge")
+}
+
+// ListModelOrder prints the current model preference order.
+func ListModelOrder(cfg *config.Config, u *ui.UI) error {
+	litellmConfig, err := readLiteLLMConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	u.Bold("LiteLLM Model Order")
+	u.Print(strings.Repeat("─", 40))
+	for i, entry := range litellmConfig.ModelList {
+		label := entry.ModelName
+		if isPinnedEntry(entry.ModelName) {
+			label += "  (pinned)"
+		}
+		u.Printf("  %d. %s", i+1, label)
+	}
+	u.Print(strings.Repeat("─", 40))
+	return nil
+}
+
+// PreferModels reorders the LiteLLM model_list so that the given models
+// appear first (after pinned entries like wildcards and paid/*).
+// Models not in the preferred list retain their original relative order.
+func PreferModels(cfg *config.Config, u *ui.UI, preferred []string) error {
+	litellmConfig, err := readLiteLLMConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// Trim whitespace from preferred names.
+	for i := range preferred {
+		preferred[i] = strings.TrimSpace(preferred[i])
+	}
+
+	// Build a lookup of existing model_name → entry.
+	entryMap := make(map[string]ModelEntry)
+	for _, e := range litellmConfig.ModelList {
+		entryMap[e.ModelName] = e
+	}
+
+	// Validate all preferred models exist.
+	for _, name := range preferred {
+		if _, ok := entryMap[name]; !ok {
+			return fmt.Errorf("model %q not found in LiteLLM config; available: %s",
+				name, modelNames(litellmConfig.ModelList))
+		}
+		if isPinnedEntry(name) {
+			return fmt.Errorf("model %q is a wildcard/catch-all and cannot be reordered", name)
+		}
+	}
+
+	// Partition: pinned entries | preferred entries | remaining entries.
+	preferredSet := make(map[string]bool)
+	for _, name := range preferred {
+		preferredSet[name] = true
+	}
+
+	var pinned, remaining []ModelEntry
+	for _, e := range litellmConfig.ModelList {
+		if isPinnedEntry(e.ModelName) {
+			pinned = append(pinned, e)
+		} else if !preferredSet[e.ModelName] {
+			remaining = append(remaining, e)
+		}
+	}
+
+	// Build preferred entries in the requested order.
+	preferredEntries := make([]ModelEntry, 0, len(preferred))
+	for _, name := range preferred {
+		preferredEntries = append(preferredEntries, entryMap[name])
+	}
+
+	// Reassemble: pinned → preferred → remaining.
+	litellmConfig.ModelList = append(pinned, append(preferredEntries, remaining...)...)
+
+	if err := writeLiteLLMConfig(cfg, litellmConfig); err != nil {
+		return err
+	}
+
+	u.Success("Model preference updated")
+	return ListModelOrder(cfg, u)
+}
+
+// modelNames returns a comma-separated list of non-pinned model names.
+func modelNames(entries []ModelEntry) string {
+	var names []string
+	for _, e := range entries {
+		if !isPinnedEntry(e.ModelName) {
+			names = append(names, e.ModelName)
+		}
+	}
+	return strings.Join(names, ", ")
+}

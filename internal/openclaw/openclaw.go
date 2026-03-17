@@ -1449,29 +1449,11 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 		return "", nil
 	}
 
-	// Partition into cloud and local
-	var cloud, local []string
-	for _, m := range models {
-		if isCloudModel(m) {
-			cloud = append(cloud, m)
-		} else {
-			local = append(local, m)
-		}
-	}
-
-	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
-	if len(cloud) > 0 {
-		primary = cloud[0]
-		fallbacks = append(cloud[1:], local...)
-	} else {
-		primary = local[0]
-		fallbacks = local[1:]
-	}
-
-	// Prefix with openai/ for LiteLLM routing
-	primary = "openai/" + primary
-	for i, f := range fallbacks {
-		fallbacks[i] = "openai/" + f
+	// Respect the input order from LiteLLM config (set by `obol model prefer`).
+	// The first model is primary; the rest are fallbacks.
+	primary = "openai/" + models[0]
+	for _, m := range models[1:] {
+		fallbacks = append(fallbacks, "openai/"+m)
 	}
 	return primary, fallbacks
 }
@@ -2046,15 +2028,12 @@ func listOllamaModels() []string {
 // preferredOllamaModel picks the best default model from available Ollama models.
 // Prefers qwen3.5:9b if available, otherwise falls back to the first model.
 func preferredOllamaModel(models []string) string {
-	preferred := []string{"qwen3.5:9b", "qwen3.5:35b", "qwen3.5:27b"}
-	for _, p := range preferred {
-		for _, m := range models {
-			if m == p {
-				return m
-			}
-		}
+	// Models arrive in LiteLLM config order (set by `obol model prefer`).
+	// The first model in the list is the preferred one — respect that order.
+	if len(models) > 0 {
+		return models[0]
 	}
-	return models[0]
+	return ""
 }
 
 // ollamaModelDisplayName converts an Ollama model name (e.g. "llama3.2:3b")

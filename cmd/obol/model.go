@@ -26,6 +26,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			modelPullCommand(),
 			modelListCommand(cfg),
 			modelRemoveCommand(cfg),
+			modelPreferCommand(cfg),
 		},
 	}
 }
@@ -417,4 +418,50 @@ func promptModelPull() (string, error) {
 		return "", fmt.Errorf("model name is required")
 	}
 	return name, nil
+}
+
+func modelPreferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "prefer",
+		Usage:     "Set model preference order in LiteLLM",
+		ArgsUsage: "<model>[,<model>,...]",
+		Description: `Reorders the LiteLLM model list so preferred models appear first.
+Wildcard entries (paid/*, anthropic/*, etc.) are pinned and not reordered.
+
+Examples:
+  obol model prefer qwen3.5:35b
+  obol model prefer qwen3.5:35b,qwen3.5:9b,llama3:8b
+  obol model prefer --list`,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "list",
+				Aliases: []string{"l"},
+				Usage:   "Show current model order",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if cmd.Bool("list") {
+				return model.ListModelOrder(cfg, u)
+			}
+
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("model name(s) required: obol model prefer <model>[,<model>,...]")
+			}
+
+			preferred := strings.Split(cmd.Args().First(), ",")
+			if err := model.PreferModels(cfg, u, preferred); err != nil {
+				return err
+			}
+
+			// Sync to OpenClaw so primary/fallback hierarchy matches.
+			u.Blank()
+			u.Info("Syncing model preference to OpenClaw...")
+			if err := syncOpenClawModels(cfg, u); err != nil {
+				u.Warnf("OpenClaw sync failed: %v", err)
+			}
+			return nil
+		},
+	}
 }
