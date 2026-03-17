@@ -93,6 +93,69 @@ func HasConfiguredModels(cfg *config.Config) bool {
 	return false
 }
 
+// HasProviderConfigured returns true if LiteLLM already has at least one
+// model entry for the given provider (e.g., "anthropic", "openai").
+func HasProviderConfigured(cfg *config.Config, provider string) bool {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return false
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return false
+	}
+
+	for _, entry := range litellmConfig.ModelList {
+		// Check wildcard entries like "anthropic/*"
+		if entry.ModelName == provider+"/*" {
+			return true
+		}
+		// Check if the model's litellm_params.model starts with "provider/"
+		if strings.HasPrefix(entry.LiteLLMParams.Model, provider+"/") {
+			return true
+		}
+		// Check via model name inference
+		if ProviderFromModelName(entry.ModelName) == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// LoadDotEnv reads KEY=value pairs from a .env file.
+// Returns an empty map if the file doesn't exist or is unreadable.
+// Skips comments (#) and blank lines. Does not call os.Setenv.
+func LoadDotEnv(path string) map[string]string {
+	result := make(map[string]string)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.IndexByte(line, '=')
+		if idx < 1 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		// Strip surrounding quotes
+		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		result[key] = val
+	}
+	return result
+}
+
 // ConfigureLiteLLM adds a provider to the LiteLLM gateway.
 // For cloud providers, it patches the Secret with the API key and adds
 // the model to config.yaml. For Ollama, it discovers local models and adds them.
@@ -105,7 +168,7 @@ func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, mod
 	}
 
 	// 1. Patch Secret with API key (if cloud provider)
-	envVar := providerEnvVar(provider)
+	envVar := ProviderEnvVar(provider)
 	if envVar != "" && apiKey != "" {
 		u.Infof("Setting %s API key", provider)
 		patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envVar, apiKey)
@@ -546,7 +609,7 @@ func expandWildcard(provider string, liveModels []string) []string {
 	if len(liveModels) > 0 {
 		var matched []string
 		for _, m := range liveModels {
-			p := detectProviderFromModelName(m)
+			p := ProviderFromModelName(m)
 			if p == provider {
 				matched = append(matched, m)
 			}
@@ -562,12 +625,12 @@ func expandWildcard(provider string, liveModels []string) []string {
 	return nil
 }
 
-// detectProviderFromModelName infers the provider from a model name string.
-func detectProviderFromModelName(name string) string {
+// ProviderFromModelName infers the provider from a model name string.
+func ProviderFromModelName(name string) string {
 	if strings.Contains(name, "claude") {
 		return "anthropic"
 	}
-	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
+	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
 		return "openai"
 	}
 	return ""
@@ -575,8 +638,8 @@ func detectProviderFromModelName(name string) string {
 
 // --- Internal helpers ---
 
-// providerEnvVar returns the env var name for a provider's API key.
-func providerEnvVar(provider string) string {
+// ProviderEnvVar returns the env var name for a provider's API key.
+func ProviderEnvVar(provider string) string {
 	for _, p := range knownProviders {
 		if p.ID == provider {
 			return p.EnvVar
@@ -590,16 +653,17 @@ func providerEnvVar(provider string) string {
 // and the LiteLLM pod is not reachable for a live /v1/models query.
 var WellKnownModels = map[string][]string{
 	"anthropic": {
+		"claude-opus-4-6",
 		"claude-sonnet-4-6",
-		"claude-opus-4",
+		"claude-haiku-4-5-20251001",
 		"claude-sonnet-4-5-20250929",
-		"claude-haiku-3-5-20241022",
 	},
 	"openai": {
-		"gpt-4o",
-		"gpt-4o-mini",
+		"gpt-5.4",
+		"gpt-4.1",
+		"gpt-4.1-mini",
+		"o4-mini",
 		"o3",
-		"o3-mini",
 	},
 }
 

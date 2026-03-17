@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -201,18 +203,85 @@ general_settings:
 }
 
 func TestProviderEnvVar(t *testing.T) {
-	if got := providerEnvVar("anthropic"); got != "ANTHROPIC_API_KEY" {
+	if got := ProviderEnvVar("anthropic"); got != "ANTHROPIC_API_KEY" {
 		t.Errorf("got %q, want ANTHROPIC_API_KEY", got)
 	}
-	if got := providerEnvVar("openai"); got != "OPENAI_API_KEY" {
+	if got := ProviderEnvVar("openai"); got != "OPENAI_API_KEY" {
 		t.Errorf("got %q, want OPENAI_API_KEY", got)
 	}
-	if got := providerEnvVar("ollama"); got != "" {
+	if got := ProviderEnvVar("ollama"); got != "" {
 		t.Errorf("got %q, want empty string for ollama", got)
 	}
-	if got := providerEnvVar("custom_thing"); got != "CUSTOM_THING_API_KEY" {
+	if got := ProviderEnvVar("custom_thing"); got != "CUSTOM_THING_API_KEY" {
 		t.Errorf("got %q, want CUSTOM_THING_API_KEY", got)
 	}
+}
+
+func TestProviderFromModelName(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    string
+		expected string
+	}{
+		{"anthropic claude", "claude-sonnet-4-6", "anthropic"},
+		{"anthropic full", "claude-opus-4", "anthropic"},
+		{"openai gpt", "gpt-4o", "openai"},
+		{"openai o3", "o3-mini", "openai"},
+		{"ollama model", "qwen3.5:9b", ""},
+		{"unknown", "llama-3.2", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProviderFromModelName(tt.model); got != tt.expected {
+				t.Errorf("ProviderFromModelName(%q) = %q, want %q", tt.model, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".env")
+		os.WriteFile(path, []byte("FOO=bar\nBAZ=qux\n"), 0o644)
+		m := LoadDotEnv(path)
+		if m["FOO"] != "bar" {
+			t.Errorf("FOO = %q, want bar", m["FOO"])
+		}
+		if m["BAZ"] != "qux" {
+			t.Errorf("BAZ = %q, want qux", m["BAZ"])
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		m := LoadDotEnv("/nonexistent/.env")
+		if len(m) != 0 {
+			t.Errorf("expected empty map, got %v", m)
+		}
+	})
+
+	t.Run("comments and blanks", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".env")
+		os.WriteFile(path, []byte("# comment\n\nKEY=val\n"), 0o644)
+		m := LoadDotEnv(path)
+		if len(m) != 1 || m["KEY"] != "val" {
+			t.Errorf("expected {KEY:val}, got %v", m)
+		}
+	})
+
+	t.Run("quoted values", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".env")
+		os.WriteFile(path, []byte(`KEY="hello world"`+"\n"+`KEY2='single'`+"\n"), 0o644)
+		m := LoadDotEnv(path)
+		if m["KEY"] != "hello world" {
+			t.Errorf("KEY = %q, want 'hello world'", m["KEY"])
+		}
+		if m["KEY2"] != "single" {
+			t.Errorf("KEY2 = %q, want 'single'", m["KEY2"])
+		}
+	})
 }
 
 func TestValidateCustomEndpoint(t *testing.T) {

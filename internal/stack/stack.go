@@ -480,37 +480,94 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	return nil
 }
 
-// autoConfigureLLM detects the host Ollama and auto-configures LiteLLM with
-// available models so that inference works out of the box. Skipped silently
-// if Ollama is unreachable, has no models, or LiteLLM already has non-paid
-// models configured.
+// autoConfigureLLM detects host Ollama and imported cloud providers, then
+// auto-configures LiteLLM so inference works out of the box.
 func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
+	// --- Ollama auto-configuration ---
 	ollamaModels, err := model.ListOllamaModels()
-	if err != nil || len(ollamaModels) == 0 {
-		// Ollama not running or no models — skip silently.
+	if err == nil && len(ollamaModels) > 0 && !model.HasConfiguredModels(cfg) {
+		u.Blank()
+		u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
+
+		var names []string
+		for _, m := range ollamaModels {
+			name := m.Name
+			if strings.HasSuffix(name, ":latest") {
+				name = strings.TrimSuffix(name, ":latest")
+			}
+			names = append(names, name)
+		}
+
+		if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
+			u.Warnf("Auto-configure LiteLLM failed: %v", err)
+			u.Dim("  Run 'obol model setup' to configure manually.")
+		}
+	}
+
+	// --- Cloud provider auto-configuration from ~/.openclaw ---
+	autoConfigureCloudProviders(cfg, u)
+}
+
+// autoConfigureCloudProviders reads the imported ~/.openclaw config and, if a
+// cloud model is the agent's primary model, auto-configures LiteLLM with the
+// matching provider when an API key is available in the environment (or .env
+// in dev mode).
+func autoConfigureCloudProviders(cfg *config.Config, u *ui.UI) {
+	imported, err := openclaw.DetectExistingConfig()
+	if err != nil || imported == nil {
 		return
 	}
 
-	// Check if LiteLLM already has real models (not just the paid/* catch-all).
-	if model.HasConfiguredModels(cfg) {
+	agentModel := imported.AgentModel
+	if agentModel == "" {
+		return
+	}
+
+	// Extract provider and model name from "anthropic/claude-sonnet-4-6".
+	provider, modelName := "", agentModel
+	if i := strings.Index(agentModel, "/"); i >= 0 {
+		provider = agentModel[:i]
+		modelName = agentModel[i+1:]
+	}
+	if provider == "" {
+		provider = model.ProviderFromModelName(agentModel)
+	}
+
+	if provider == "" || provider == "ollama" {
+		return
+	}
+
+	// Already configured — skip.
+	if model.HasProviderConfigured(cfg, provider) {
+		return
+	}
+
+	envVar := model.ProviderEnvVar(provider)
+	if envVar == "" {
+		return
+	}
+
+	// Resolve API key: environment first, .env in dev mode only.
+	apiKey := os.Getenv(envVar)
+	if apiKey == "" && os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		dotEnv := model.LoadDotEnv(filepath.Join(".", ".env"))
+		apiKey = dotEnv[envVar]
+	}
+
+	if apiKey == "" {
+		u.Blank()
+		u.Warnf("Agent model %s detected but %s is not set", agentModel, envVar)
+		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", envVar))
+		u.Dim(fmt.Sprintf("  Or configure after startup: obol model setup --provider %s", provider))
 		return
 	}
 
 	u.Blank()
-	u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
+	u.Infof("Cloud model %s detected — auto-configuring LiteLLM with %s provider", agentModel, provider)
 
-	var names []string
-	for _, m := range ollamaModels {
-		name := m.Name
-		if strings.HasSuffix(name, ":latest") {
-			name = strings.TrimSuffix(name, ":latest")
-		}
-		names = append(names, name)
-	}
-
-	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
-		u.Warnf("Auto-configure LiteLLM failed: %v", err)
-		u.Dim("  Run 'obol model setup' to configure manually.")
+	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, []string{modelName}); err != nil {
+		u.Warnf("Auto-configure LiteLLM for %s failed: %v", provider, err)
+		u.Dim(fmt.Sprintf("  Run 'obol model setup --provider %s' to configure manually.", provider))
 	}
 }
 

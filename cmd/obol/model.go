@@ -145,9 +145,9 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 		// Sensible defaults
 		switch provider {
 		case "anthropic":
-			models = []string{"claude-sonnet-4-5-20250929"}
+			models = []string{"claude-sonnet-4-6"}
 		case "openai":
-			models = []string{"gpt-4o"}
+			models = []string{"gpt-4.1"}
 		}
 	}
 
