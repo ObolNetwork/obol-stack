@@ -162,7 +162,7 @@ func TestMain(m *testing.M) {
 
 	// Wait for the obol-agent pod to be Running.
 	log.Println("  Waiting for obol-agent pod...")
-	if err := waitForAnyPod(kubectlBin, kubeconfigPath, "openclaw-obol-agent",
+	if err := waitForAnyPod(kubectlBin, kubeconfigPath, "openclaw-default",
 		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 300*time.Second); err != nil {
 		teardown(obolBin)
 		log.Fatalf("obol-agent not ready: %v", err)
@@ -299,7 +299,7 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 	if err := waitForPod(kubectlBin, kubeconfig, "x402", "app=x402-verifier", 120*time.Second); err != nil {
 		return fmt.Errorf("x402-verifier not ready: %w", err)
 	}
-	if err := waitForAnyPod(kubectlBin, kubeconfig, "openclaw-obol-agent",
+	if err := waitForAnyPod(kubectlBin, kubeconfig, "openclaw-default",
 		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 180*time.Second); err != nil {
 		return fmt.Errorf("obol-agent not ready: %w", err)
 	}
@@ -393,7 +393,7 @@ func waitForServiceOfferReady(kubectlBin, kubeconfig, name, namespace string, ti
 // This simulates the heartbeat cron firing.
 func triggerReconciliation(kubectlBin, kubeconfig string) {
 	out, err := kubectl.Output(kubectlBin, kubeconfig,
-		"exec", "-i", "-n", "openclaw-obol-agent", "deploy/openclaw", "-c", "openclaw",
+		"exec", "-i", "-n", "openclaw-default", "deploy/openclaw", "-c", "openclaw",
 		"--", "python3", "/data/.openclaw/skills/sell/scripts/monetize.py", "process", "--all")
 	if err != nil {
 		log.Printf("  manual reconciliation error: %v\n%s", err, out)

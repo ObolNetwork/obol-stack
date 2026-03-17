@@ -6,8 +6,8 @@
 #   2. openclaw-monetize-workload  — cluster-wide mutate for agent-managed resources
 #   3. openclaw-x402-pricing       — namespace-scoped x402 pricing ConfigMap access
 #
-# Subjects pre-populated with obol-agent ServiceAccount.
-# Patched dynamically by `obol agent init` for additional instances.
+# Subjects pre-populated with default OpenClaw instance ServiceAccount.
+# Patched dynamically by `obol agent init` if needed.
 
 #------------------------------------------------------------------------------
 # ClusterRole - Read-only permissions (low privilege, cluster-wide)
@@ -98,7 +98,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-obol-agent
+    namespace: openclaw-default
 
 ---
 #------------------------------------------------------------------------------
@@ -115,7 +115,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-obol-agent
+    namespace: openclaw-default
 
 
 ---
@@ -151,7 +151,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-obol-agent
+    namespace: openclaw-default
 
 ---
 #------------------------------------------------------------------------------
@@ -186,4 +186,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-obol-agent
+    namespace: openclaw-default

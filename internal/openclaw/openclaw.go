@@ -66,7 +66,9 @@ type OnboardOptions struct {
 	OllamaModels []string // Available Ollama models detected on host (nil = not queried)
 }
 
-// SetupDefault deploys a default OpenClaw instance as part of stack setup.
+// SetupDefault deploys the default OpenClaw instance as part of stack setup.
+// This is the single canonical instance that handles both user-facing inference
+// and agent-mode monetize/heartbeat reconciliation.
 // It is idempotent: if a "default" deployment already exists, it re-syncs.
 // When Ollama is not detected on the host and no existing ~/.openclaw config
 // is found, it skips provider setup gracefully so the user can configure
@@ -81,6 +83,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			ID:        "default",
 			Sync:      true,
 			IsDefault: true,
+			AgentMode: true,
 		}, u)
 	}
 
@@ -117,6 +120,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 		ID:           "default",
 		Sync:         true,
 		IsDefault:    true,
+		AgentMode:    true,
 		OllamaModels: ollamaModels,
 	}, u)
 }
