@@ -1533,7 +1533,7 @@ except: pass
 
 	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
 	if [[ -c /dev/tty ]]; then
-		log_info "Your agent uses $primary_model ($provider_name)"
+		log_success "Your agent uses $primary_model ($provider_name)"
 		echo ""
 		local api_key=""
 		read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
