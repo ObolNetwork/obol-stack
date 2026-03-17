@@ -169,7 +169,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-default
+    namespace: openclaw-obol-agent
 `)
 
 // EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.

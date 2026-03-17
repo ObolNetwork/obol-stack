@@ -10,7 +10,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
-const agentDeploymentID = "default"
+const agentDeploymentID = "obol-agent"
 
 // SyncAgentBaseURL patches AGENT_BASE_URL in the obol-agent's values-obol.yaml
 // and runs helmfile sync to apply the change. It is a no-op if the obol-agent

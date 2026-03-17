@@ -123,7 +123,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			} else {
 				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
 				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull qwen3.5:9b")
+				u.Print("  or pull a model with: ollama pull qwen3.5:4b")
 			}
 		} else {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
@@ -2061,17 +2061,14 @@ func listOllamaModels() []string {
 }
 
 // preferredOllamaModel picks the best default model from available Ollama models.
-// Prefers qwen3.5:9b if available, otherwise falls back to the first model.
+// Models arrive in LiteLLM config order (set by `obol model prefer`), so the
+// first model is the user's preferred choice. Falls back to a hardcoded
+// preference list only for initial setup when no preference has been set.
 func preferredOllamaModel(models []string) string {
-	preferred := []string{"qwen3.5:9b", "qwen3.5:35b", "qwen3.5:27b"}
-	for _, p := range preferred {
-		for _, m := range models {
-			if m == p {
-				return m
-			}
-		}
+	if len(models) > 0 {
+		return models[0]
 	}
-	return models[0]
+	return ""
 }
 
 // ollamaModelDisplayName converts an Ollama model name (e.g. "llama3.2:3b")

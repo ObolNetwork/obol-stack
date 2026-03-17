@@ -98,7 +98,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-default
+    namespace: openclaw-obol-agent
 
 ---
 #------------------------------------------------------------------------------
@@ -115,7 +115,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-default
+    namespace: openclaw-obol-agent
 
 
 ---
@@ -151,7 +151,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-default
+    namespace: openclaw-obol-agent
 
 ---
 #------------------------------------------------------------------------------
@@ -186,4 +186,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: openclaw
-    namespace: openclaw-default
+    namespace: openclaw-obol-agent
