@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,14 +47,30 @@ const (
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.7"
 
-	// openclawImageTag overrides the chart's default image tag.
-	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
-	openclawImageTag = "2026.3.13-1"
-
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
 	remoteSignerChartVersion = "0.3.0"
 )
+
+// openclawVersionRaw is the single source of truth for the upstream OpenClaw
+// version. It is read by CI (docker-publish-openclaw.yml), obolup.sh, and
+// the Go binary at compile time via go:embed.
+//
+//go:embed OPENCLAW_VERSION
+var openclawVersionRaw string
+
+// openclawImageTag returns the image tag derived from OPENCLAW_VERSION,
+// stripping the leading "v" and any whitespace/comments.
+func openclawImageTag() string {
+	for _, line := range strings.Split(openclawVersionRaw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return strings.TrimPrefix(line, "v")
+	}
+	return ""
+}
 
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
@@ -1733,8 +1750,8 @@ rbac:
 `)
 
 	// Override chart default image tag when the binary pins a newer version.
-	if openclawImageTag != "" {
-		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, openclawImageTag))
+	if tag := openclawImageTag(); tag != "" {
+		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, tag))
 	}
 
 	// Provider and agent model configuration.
