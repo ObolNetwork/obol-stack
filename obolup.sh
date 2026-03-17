@@ -1531,6 +1531,13 @@ except: pass
 		return 0
 	fi
 
+	# Anthropic-specific fallback: Claude Code subscription token
+	if [[ "$provider" == "anthropic" && -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+		export ANTHROPIC_API_KEY="$CLAUDE_CODE_OAUTH_TOKEN"
+		log_success "Claude Code subscription detected (CLAUDE_CODE_OAUTH_TOKEN)"
+		return 0
+	fi
+
 	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
 	if [[ -c /dev/tty ]]; then
 		log_info "Your agent uses $primary_model ($provider_name)"
