@@ -6,7 +6,7 @@ How the autoresearch coordinator maps from the original Ensue-based shared-memor
 
 | Ensue Concept | obol-stack Equivalent | Notes |
 |---|---|---|
-| Shared memory (Redis/filesystem) | ERC-8004 on-chain registry + 8004scan API | Workers register capabilities on-chain; coordinator discovers via API |
+| Shared memory (Redis/filesystem) | ERC-8004 on-chain registry + public index API | Workers register capabilities on-chain; coordinator prefers the internal Reth indexer and falls back to 8004scan |
 | Task queue (Ensue scheduler) | Direct HTTP POST to worker `/experiment` endpoint | No central queue; coordinator submits directly to chosen worker |
 | Worker discovery (static config) | 8004scan OASF query (`machine_learning/model_optimization`) | Dynamic discovery; workers join/leave without coordinator restart |
 | Payment (none / trust-based) | x402 micropayments (USDC via ERC-3009 pre-signed auths) | Per-experiment payment; no credit accounts or invoicing |
@@ -18,7 +18,10 @@ How the autoresearch coordinator maps from the original Ensue-based shared-memor
 ## Discovery Flow
 
 ```
-Coordinator                          8004scan                        Worker
+Coordinator                    Internal Indexer / 8004scan           Worker
+    |                                    |                              |
+    |-- GET /health -------------------->|                              |
+    |<-- 200 ready / 503 unhealthy ------|                              |
     |                                    |                              |
     |-- GET /api/v1/public/agents ------>|                              |
     |   ?protocol=OASF                   |                              |
@@ -37,7 +40,7 @@ Coordinator                          8004scan                        Worker
     |   (extract endpoint, verify x402 + OASF service entry)            |
 ```
 
-### 8004scan API Parameters
+### Public Index API Parameters
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -47,6 +50,8 @@ Coordinator                          8004scan                        Worker
 | `ownerAddress` | address | Filter by registration owner |
 | `sortBy` | string | Sort field (e.g., `registeredAt`) |
 | `limit` | int | Max results to return |
+
+The coordinator uses the same query contract against both the internal Reth-backed indexer and the public 8004scan API. The preferred base is `OBOL_INDEXER_API_URL`; `SCAN_API_URL` remains the fallback when `/health` is unavailable, non-200, or reports `ready: false`.
 
 ### Worker Registration JSON
 

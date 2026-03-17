@@ -24,6 +24,24 @@ class CoordinatorHelpersTest(unittest.TestCase):
         self.assertIn("protocol=OASF", url)
         self.assertIn("limit=5", url)
 
+    def test_normalize_public_api_url_adds_public_suffix(self):
+        mod = load_coordinate_module()
+        self.assertEqual(
+            mod.normalize_public_api_url("http://indexer.internal:8088"),
+            "http://indexer.internal:8088/api/v1/public",
+        )
+        self.assertEqual(
+            mod.normalize_public_api_url("http://indexer.internal:8088/api/v1/public"),
+            "http://indexer.internal:8088/api/v1/public",
+        )
+
+    def test_build_indexer_health_url_strips_public_suffix(self):
+        mod = load_coordinate_module()
+        self.assertEqual(
+            mod.build_indexer_health_url("http://indexer.internal:8088/api/v1/public"),
+            "http://indexer.internal:8088/health",
+        )
+
     def test_extract_registration_from_agent_prefers_offchain_content(self):
         mod = load_coordinate_module()
         registration = {

@@ -15,3 +15,31 @@ executionClient: {{.ExecutionClient}}
 # @default lighthouse
 # @description Consensus layer client
 consensusClient: {{.ConsensusClient}}
+
+# @default
+# @description Custom Reth image repository for ERC-8004 indexer deployments
+rethImageRepository: {{.RethImageRepository}}
+
+# @default
+# @description Custom Reth image tag for ERC-8004 indexer deployments
+rethImageTag: {{.RethImageTag}}
+
+# @default false
+# @description Enable the embedded ERC-8004 indexer HTTP API in the Reth pod
+rethIndexerEnabled: {{.RethIndexerEnabled}}
+
+# @default 8088
+# @description Service port for the embedded ERC-8004 indexer API
+rethIndexerPort: {{.RethIndexerPort}}
+
+# @default /data/erc8004-indexer/indexer.db
+# @description SQLite path for the embedded ERC-8004 indexer
+rethIndexerDbPath: {{.RethIndexerDbPath}}
+
+# @default 0x8004A818BFB912233c491871b3d84c89A494BD9e
+# @description ERC-8004 identity registry address indexed by the custom Reth binary
+rethIndexerRegistryAddress: {{.RethIndexerRegistryAddress}}
+
+# @default 0
+# @description Historical start block for the initial ERC-8004 backfill
+rethIndexerBackfillFromBlock: {{.RethIndexerBackfillFromBlock}}

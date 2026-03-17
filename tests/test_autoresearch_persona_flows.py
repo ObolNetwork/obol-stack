@@ -98,6 +98,7 @@ class PersonaFlowsTest(unittest.TestCase):
 
     def test_researcher_flow_discover_and_submit_to_paid_worker(self):
         coord = load_module("persona_coordinate", COORD_MODULE)
+        coord.OBOL_INDEXER_API_URL = ""
 
         class FakeWorkerHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
@@ -152,12 +153,26 @@ class PersonaFlowsTest(unittest.TestCase):
             "metadata": {"best_val_bpb": "1.111", "updated": "2026-03-12T10:30:00Z"},
         }
 
-        class FakeScanHandler(BaseHTTPRequestHandler):
+        indexer_hits = {"health": 0, "agents": 0}
+        fallback_hits = {"agents": 0}
+
+        class FakeIndexerHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 return
 
             def do_GET(self):
+                if self.path == "/health":
+                    indexer_hits["health"] += 1
+                    payload = {"status": "ok", "ready": True, "latest_indexed_block": 123}
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
                 if self.path.startswith("/api/v1/public/agents"):
+                    indexer_hits["agents"] += 1
                     payload = {
                         "success": True,
                         "data": [
@@ -181,9 +196,29 @@ class PersonaFlowsTest(unittest.TestCase):
                 self.send_response(404)
                 self.end_headers()
 
-        scan_server = LocalServer(FakeScanHandler)
+        class FakeFallbackScanHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                if self.path.startswith("/api/v1/public/agents"):
+                    fallback_hits["agents"] += 1
+                    payload = {"success": True, "data": []}
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+        indexer_server = LocalServer(FakeIndexerHandler)
+        scan_server = LocalServer(FakeFallbackScanHandler)
         try:
             coord.SCAN_API_URL = scan_server.base_url + "/api/v1/public"
+            coord.OBOL_INDEXER_API_URL = indexer_server.base_url + "/api/v1/public"
             coord.HAS_SIGNER = True
             coord._signer_get = lambda path: {"keys": ["0x1111111111111111111111111111111111111111"]}
             coord._signer_post = lambda path, payload: {"signature": "0xsigned"}
@@ -197,9 +232,97 @@ class PersonaFlowsTest(unittest.TestCase):
             result = coordinator.submit_experiment(workers[0]["endpoint"], "print('hello')\n")
             self.assertIsNotNone(result)
             self.assertAlmostEqual(result["val_bpb"], 1.111)
+            self.assertGreaterEqual(indexer_hits["health"], 1)
+            self.assertEqual(indexer_hits["agents"], 1)
+            self.assertEqual(fallback_hits["agents"], 0)
         finally:
             scan_server.close()
+            indexer_server.close()
             worker_server.close()
+
+    def test_researcher_flow_falls_back_to_scan_when_indexer_unhealthy(self):
+        coord = load_module("persona_coordinate_fallback", COORD_MODULE)
+        coord.OBOL_INDEXER_API_URL = ""
+
+        registration = {
+            "x402Support": True,
+            "services": [
+                {"name": "web", "endpoint": "https://worker.example.com/services/autoresearch-worker"},
+                {
+                    "name": "OASF",
+                    "version": "0.8",
+                    "skills": ["machine_learning/model_optimization"],
+                    "domains": ["technology/artificial_intelligence/research"],
+                },
+            ],
+        }
+
+        indexer_hits = {"health": 0}
+        fallback_hits = {"agents": 0}
+
+        class UnhealthyIndexerHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                if self.path == "/health":
+                    indexer_hits["health"] += 1
+                    payload = {"status": "unhealthy", "ready": False}
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+        class FakeScanHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                if self.path.startswith("/api/v1/public/agents"):
+                    fallback_hits["agents"] += 1
+                    payload = {
+                        "success": True,
+                        "data": [
+                            {
+                                "agent_id": "84532:0xabc:9",
+                                "token_id": "9",
+                                "chain_id": 84532,
+                                "name": "Fallback Worker",
+                                "x402_supported": True,
+                                "raw_metadata": {"offchain_content": registration},
+                            }
+                        ],
+                    }
+                    raw = json.dumps(payload).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+        indexer_server = LocalServer(UnhealthyIndexerHandler)
+        scan_server = LocalServer(FakeScanHandler)
+        try:
+            coord.OBOL_INDEXER_API_URL = indexer_server.base_url + "/api/v1/public"
+            coord.SCAN_API_URL = scan_server.base_url + "/api/v1/public"
+
+            coordinator = coord.ObolCoordinator(chain="base-sepolia")
+            workers = coordinator.discover_workers(limit=1)
+            self.assertEqual(len(workers), 1)
+            self.assertEqual(workers[0]["name"], "Fallback Worker")
+            self.assertGreaterEqual(indexer_hits["health"], 1)
+            self.assertEqual(fallback_hits["agents"], 1)
+        finally:
+            scan_server.close()
+            indexer_server.close()
 
     def test_service_builder_and_consumer_resume_flow(self):
         coord = load_module("persona_coordinate_for_resume", COORD_MODULE)

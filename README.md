@@ -87,6 +87,8 @@ obol network sync --all
 
 **Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine)
 
+**Reth indexer options:** when `--execution-client reth` is selected, the Ethereum network template can also expose the embedded ERC-8004 indexer with `--reth-indexer-enabled=true`, `--reth-image-repository=<image>`, `--reth-image-tag=<tag>`, `--reth-indexer-port=8088`, `--reth-indexer-db-path=/data/erc8004-indexer/indexer.db`, `--reth-indexer-registry-address=0x8004A818BFB912233c491871b3d84c89A494BD9e`, and `--reth-indexer-backfill-from-block=0`. The custom image is built from [Dockerfile.reth-erc8004-indexer](/Users/bussyjd/Development/Obol_Workbench/obol-stack/.codex/worktrees/reth-indexer/Dockerfile.reth-erc8004-indexer) and exposes `/health` plus `/api/v1/public/*` from the same Reth pod.
+
 ```bash
 # View installed deployments
 obol kubectl get namespaces | grep -E "ethereum|aztec"

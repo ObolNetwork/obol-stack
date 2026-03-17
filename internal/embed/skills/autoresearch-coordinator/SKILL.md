@@ -10,7 +10,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 
 ## When to Use
 
-- Discovering GPU workers advertising `machine_learning/model_optimization` capabilities via 8004scan
+- Discovering GPU workers advertising `machine_learning/model_optimization` capabilities via the preferred public index API (internal Reth indexer first, then 8004scan fallback)
 - Probing worker endpoints for x402 pricing before submitting experiments
 - Submitting `train.py` experiments to remote GPU workers through x402 payment gates
 - Running the continuous THINK/CLAIM/RUN/PUBLISH experiment loop
@@ -28,7 +28,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 ## Quick Start
 
 ```bash
-# Discover available GPU workers on 8004scan
+# Discover available GPU workers from the preferred public index API
 python3 scripts/coordinate.py discover
 
 # Discover with custom limit
@@ -58,7 +58,7 @@ python3 scripts/coordinate.py loop train.py --prefer https://worker.example.com/
 
 | Command | Description |
 |---------|-------------|
-| `discover [--limit N]` | Query 8004scan for GPU workers with `machine_learning/model_optimization` skill |
+| `discover [--limit N]` | Query the preferred public index API for GPU workers with `machine_learning/model_optimization` skill |
 | `probe <endpoint>` | Send unauthenticated request to parse 402 pricing from the worker |
 | `submit <endpoint> <train.py> [--config JSON]` | Submit experiment with x402 payment (pre-sign ERC-3009, attach X-PAYMENT) |
 | `leaderboard [--limit N]` | Query 8004scan for all autoresearch workers, rank by best `val_bpb` |
@@ -77,7 +77,7 @@ Each step is atomic and idempotent. If a worker fails mid-experiment, the coordi
 
 ## How Discovery Works
 
-Workers register on-chain via ERC-8004 and advertise capabilities through OASF (Open Agent Skills Framework) metadata. The coordinator queries the 8004scan public API:
+Workers register on-chain via ERC-8004 and advertise capabilities through OASF (Open Agent Skills Framework) metadata. The coordinator prefers an internal Reth-backed indexer when `OBOL_INDEXER_API_URL` is healthy and otherwise falls back to the public 8004scan API:
 
 ```
 GET https://www.8004scan.io/api/v1/public/agents
@@ -127,7 +127,8 @@ Results are appended to `$DATA_DIR/autoresearch/results.jsonl` (one JSON object 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | 8004scan public API base URL; the coordinator queries `/agents` under this base |
+| `OBOL_INDEXER_API_URL` | `` | Preferred internal index API base URL. Accepts either the service root or `/api/v1/public`; `/health` must report ready before it will be used |
+| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | Fallback public API base URL used when the preferred internal indexer is unavailable or unhealthy |
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API for payment signing |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
 | `ERPC_NETWORK` | `base-sepolia` | Default chain for payment |

@@ -119,6 +119,10 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		templateData[field.Name] = value
 	}
 
+	if err := validateInstallOptions(network, templateData); err != nil {
+		return err
+	}
+
 	// Read the embedded values template
 	valuesContent, err := embed.ReadEmbeddedNetworkFile(network, "values.yaml.gotmpl")
 	if err != nil {

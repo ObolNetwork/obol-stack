@@ -42,7 +42,8 @@ releases:
           enabled: true
           image:
             {{- if eq .Values.executionClient "reth" }}
-            tag: v1.11.1
+            repository: '{{ if .Values.rethImageRepository }}{{ .Values.rethImageRepository }}{{ else }}ghcr.io/paradigmxyz/reth{{ end }}'
+            tag: '{{ if .Values.rethImageTag }}{{ .Values.rethImageTag }}{{ else }}v1.11.1{{ end }}'
             {{- else if eq .Values.executionClient "geth" }}
             tag: v1.17.0
             {{- else if eq .Values.executionClient "nethermind" }}
@@ -56,6 +57,22 @@ releases:
             enabled: true
             size: 500Gi
             existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+          {{- if and (eq .Values.executionClient "reth") .Values.rethIndexerEnabled }}
+          extraArgs:
+            - --erc8004-indexer-http-addr=0.0.0.0:{{ .Values.rethIndexerPort }}
+            - --erc8004-indexer-db-path={{ .Values.rethIndexerDbPath }}
+            - --erc8004-registry-address={{ .Values.rethIndexerRegistryAddress }}
+            - --erc8004-backfill-from-block={{ .Values.rethIndexerBackfillFromBlock }}
+          extraContainerPorts:
+            - name: erc8004-indexer
+              containerPort: {{ .Values.rethIndexerPort }}
+              protocol: TCP
+          extraPorts:
+            - name: erc8004-indexer
+              port: {{ .Values.rethIndexerPort }}
+              targetPort: erc8004-indexer
+              protocol: TCP
+          {{- end }}
 
       # Consensus client (pinned versions — update periodically)
       # The upstream chart wires --execution-endpoint and --network automatically.
@@ -113,5 +130,19 @@ releases:
                         "internal": "http://ethereum-beacon.ethereum-{{ .Values.id }}.svc.cluster.local:5052"
                       }
                     }
+                  }{{ if and (eq .Values.executionClient "reth") .Values.rethIndexerEnabled }},{{ end }}
+                  {{- if and (eq .Values.executionClient "reth") .Values.rethIndexerEnabled }}
+                  "indexer": {
+                    "kind": "erc8004",
+                    "registryAddress": "{{ .Values.rethIndexerRegistryAddress }}",
+                    "endpoints": {
+                      "health": {
+                        "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:{{ .Values.rethIndexerPort }}/health"
+                      },
+                      "public": {
+                        "internal": "http://ethereum-execution.ethereum-{{ .Values.id }}.svc.cluster.local:{{ .Values.rethIndexerPort }}/api/v1/public"
+                      }
+                    }
                   }
+                  {{- end }}
                 }

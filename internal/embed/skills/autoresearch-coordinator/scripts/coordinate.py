@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """coordinate.py -- Distributed autoresearch coordinator via obol-stack.
 
-Discovers GPU workers registered on ERC-8004 via the 8004scan API, probes
-their x402 pricing, submits experiments with micropayments, and tracks
-results with local provenance metadata.
+Discovers GPU workers registered on ERC-8004 via the preferred public index
+API (internal Reth indexer first, then 8004scan fallback), probes their x402
+pricing, submits experiments with micropayments, and tracks results with local
+provenance metadata.
 
 Replaces the Ensue-based shared-memory coordinator from autoresearch-at-home
 with decentralised discovery (ERC-8004) and payment (x402).
@@ -12,7 +13,7 @@ Usage:
     python3 coordinate.py <command> [args]
 
 Commands:
-    discover [--limit N]                         List GPU workers from 8004scan
+    discover [--limit N]                         List GPU workers from the public index API
     probe <endpoint>                             Check x402 pricing for a worker
     submit <endpoint> <train.py> [--config JSON] Submit experiment with payment
     leaderboard [--limit N]                      Global rankings by val_bpb
@@ -52,6 +53,7 @@ except ImportError:
 SCAN_API_URL = os.environ.get(
     "SCAN_API_URL", "https://www.8004scan.io/api/v1/public"
 )
+OBOL_INDEXER_API_URL = os.environ.get("OBOL_INDEXER_API_URL", "")
 REMOTE_SIGNER_URL = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000")
 ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
@@ -112,12 +114,69 @@ def _http_post(url, body, headers=None, timeout=120):
 
 
 # ---------------------------------------------------------------------------
-# 8004scan API
+# Public index API
 # ---------------------------------------------------------------------------
 
+def normalize_public_api_url(base_url):
+    """Normalize an index/scanner base URL to /api/v1/public."""
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return ""
+    suffix = "/api/v1/public"
+    if base.endswith(suffix):
+        return base
+    return base + suffix
+
+
+def build_indexer_health_url(base_url):
+    """Build the /health URL for an indexer base URL."""
+    base = normalize_public_api_url(base_url)
+    if not base:
+        return ""
+    suffix = "/api/v1/public"
+    if base.endswith(suffix):
+        base = base[:-len(suffix)]
+    return base.rstrip("/") + "/health"
+
+
+def is_index_api_healthy(base_url):
+    """Check whether the preferred internal indexer is healthy."""
+    health_url = build_indexer_health_url(base_url)
+    if not health_url:
+        return False
+    try:
+        payload = _http_get(health_url, timeout=5)
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+        return False
+
+    if not isinstance(payload, dict):
+        return False
+
+    ready = payload.get("ready")
+    status = str(payload.get("status", "")).lower()
+    if ready is False or status in {"starting", "unhealthy", "error"}:
+        return False
+    if ready is True or status in {"ok", "healthy"}:
+        return True
+    return False
+
+
+def resolve_agent_api_base():
+    """Return the preferred public agent index API base and a human label."""
+    preferred = normalize_public_api_url(OBOL_INDEXER_API_URL)
+    if preferred:
+        if is_index_api_healthy(preferred):
+            return preferred, "internal"
+        print(
+            f"Warning: preferred indexer unavailable or unhealthy, falling back to {SCAN_API_URL}",
+            file=sys.stderr,
+        )
+    return normalize_public_api_url(SCAN_API_URL), "8004scan"
+
+
 def build_scan_api_url(protocol="OASF", search=None, limit=20, chain_id=None,
-                       sort_by=None, owner_address=None):
-    """Build the 8004scan /agents query URL."""
+                       sort_by=None, owner_address=None, base_url=None):
+    """Build the /agents query URL for the preferred public index API."""
     params = {"limit": limit}
     if protocol:
         params["protocol"] = protocol
@@ -129,20 +188,33 @@ def build_scan_api_url(protocol="OASF", search=None, limit=20, chain_id=None,
         params["sortBy"] = sort_by
     if owner_address:
         params["ownerAddress"] = owner_address
-    base = SCAN_API_URL.rstrip("/")
+    base = normalize_public_api_url(base_url or SCAN_API_URL)
     return f"{base}/agents?{urllib.parse.urlencode(params)}"
 
 
 def query_8004scan(protocol="OASF", search=None, limit=20, chain_id=None,
-                   sort_by=None, owner_address=None):
-    """Query the 8004scan public API for registered agents.
+                   sort_by=None, owner_address=None, base_url=None):
+    """Query the preferred public agent index API for registered agents.
 
     Supports filtering by protocol (MCP/A2A/OASF/Web/Email), keyword search,
     chainId, ownerAddress, and sorting.
 
     Returns list of agent summary objects.
     """
-    url = build_scan_api_url(protocol, search, limit, chain_id, sort_by, owner_address)
+    effective_base, _ = (
+        (normalize_public_api_url(base_url), "explicit")
+        if base_url
+        else resolve_agent_api_base()
+    )
+    url = build_scan_api_url(
+        protocol,
+        search,
+        limit,
+        chain_id,
+        sort_by,
+        owner_address,
+        base_url=effective_base,
+    )
     try:
         result = _http_get(url)
         if isinstance(result, dict):
@@ -150,7 +222,17 @@ def query_8004scan(protocol="OASF", search=None, limit=20, chain_id=None,
             if isinstance(data, list):
                 if not data and search:
                     # Fall back to protocol-only listing if the keyword search is too strict.
-                    fallback = _http_get(build_scan_api_url(protocol, None, limit, chain_id, sort_by, owner_address))
+                    fallback = _http_get(
+                        build_scan_api_url(
+                            protocol,
+                            None,
+                            limit,
+                            chain_id,
+                            sort_by,
+                            owner_address,
+                            base_url=effective_base,
+                        )
+                    )
                     if isinstance(fallback, dict):
                         fallback_data = fallback.get("data", fallback.get("items", []))
                         if isinstance(fallback_data, list):
@@ -162,7 +244,7 @@ def query_8004scan(protocol="OASF", search=None, limit=20, chain_id=None,
             return result
         return []
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as e:
-        print(f"Error querying 8004scan: {e}", file=sys.stderr)
+        print(f"Error querying public agent index: {e}", file=sys.stderr)
         return []
 
 
@@ -190,6 +272,9 @@ def fetch_registration_json(uri):
 
 def extract_registration_from_agent(agent):
     """Extract the registration document from a current 8004scan agent summary."""
+    registration = agent.get("registration_json") if isinstance(agent, dict) else None
+    if isinstance(registration, dict):
+        return registration
     raw = agent.get("raw_metadata", {}) if isinstance(agent, dict) else {}
     offchain = raw.get("offchain_content") if isinstance(raw, dict) else None
     if isinstance(offchain, dict):
@@ -472,14 +557,16 @@ class ObolCoordinator:
         self.chain = chain or DEFAULT_CHAIN
 
     def discover_workers(self, limit=20):
-        """Query 8004scan for workers advertising machine_learning/model_optimization.
+        """Query the public index API for workers advertising machine_learning/model_optimization.
 
         Returns list of dicts with keys: name, endpoint, uri, agent_id, skills, x402.
         """
+        chain_id = CHAIN_IDS.get(self.chain)
         agents = query_8004scan(
             protocol="OASF",
             search=OASF_SKILL_FILTER,
             limit=limit,
+            chain_id=chain_id,
         )
 
         workers = []
@@ -638,15 +725,17 @@ class ObolCoordinator:
         return result
 
     def get_leaderboard(self, limit=20):
-        """Query 8004scan for autoresearch workers and rank by best val_bpb.
+        """Query the public index API for autoresearch workers and rank by best val_bpb.
 
         Fetches worker registration metadata and extracts reported val_bpb
         scores from their .well-known metadata.
         """
+        chain_id = CHAIN_IDS.get(self.chain)
         agents = query_8004scan(
             protocol="OASF",
             search=OASF_SKILL_FILTER,
             limit=limit * 2,  # fetch extra to account for workers without results
+            chain_id=chain_id,
         )
 
         entries = []
@@ -783,10 +872,11 @@ class ObolCoordinator:
 # ---------------------------------------------------------------------------
 
 def cmd_discover(args):
-    """List available GPU workers from 8004scan."""
+    """List available GPU workers from the public index API."""
     limit = args.limit or 20
+    api_base, api_source = resolve_agent_api_base()
     print(f"Discovering GPU workers with OASF skill '{OASF_SKILL_FILTER}'...")
-    print(f"  API: {SCAN_API_URL}")
+    print(f"  API: {api_base} ({api_source})")
     print()
 
     coordinator = ObolCoordinator(chain=args.chain)
@@ -898,9 +988,11 @@ def cmd_submit(args):
 
 
 def cmd_leaderboard(args):
-    """Show global leaderboard from 8004scan worker metadata."""
+    """Show global leaderboard from public index worker metadata."""
     limit = args.limit or 20
+    api_base, api_source = resolve_agent_api_base()
     print(f"Fetching global autoresearch leaderboard...")
+    print(f"  API: {api_base} ({api_source})")
     print()
 
     coordinator = ObolCoordinator(chain=args.chain)
