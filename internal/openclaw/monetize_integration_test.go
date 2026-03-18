@@ -300,8 +300,7 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // agentNamespace returns the namespace of the OpenClaw instance that has
-// monetize RBAC. Prefers "openclaw-obol-agent" (set up by `obol agent init`)
-// over other instances, because only that SA gets the ClusterRoleBinding.
+// monetize RBAC. This is always the "obol-agent" instance ("openclaw-obol-agent").
 func agentNamespace(cfg *config.Config) string {
 	out, err := obolRunErr(cfg, "openclaw", "list")
 	if err != nil {

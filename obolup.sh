@@ -60,7 +60,9 @@ readonly K3D_VERSION="5.8.3"
 readonly HELMFILE_VERSION="1.2.3"
 readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
-readonly OPENCLAW_VERSION="2026.3.11"
+# Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
+# Tested by TestOpenClawVersionConsistency.
+readonly OPENCLAW_VERSION="2026.3.13-1"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -72,7 +74,7 @@ log_info() {
 }
 
 log_success() {
-	echo -e "  ${OBOL_DARK_GREEN}${BOLD}✓${NC} $1"
+	echo -e "  ${OBOL_GREEN}${BOLD}✓${NC} $1"
 }
 
 log_warn() {
@@ -1494,6 +1496,62 @@ configure_path() {
 }
 
 # Print post-install instructions
+# Check if ~/.openclaw/openclaw.json specifies a cloud model that needs an API key.
+# If the key is missing and we have a TTY, prompt for it interactively and export
+# it so the subsequent obol bootstrap / stack up picks it up via autoConfigureLLM.
+check_agent_model_api_key() {
+	local config_file="$HOME/.openclaw/openclaw.json"
+	[[ -f "$config_file" ]] || return 0
+
+	# Extract agents.defaults.model.primary (e.g., "anthropic/claude-sonnet-4-6")
+	local primary_model=""
+	if command_exists python3; then
+		primary_model=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$config_file'))
+    print(d.get('agents',{}).get('defaults',{}).get('model',{}).get('primary',''))
+except: pass
+" 2>/dev/null)
+	fi
+
+	[[ -n "$primary_model" ]] || return 0
+
+	# Determine provider and required env var
+	local provider="" env_var="" provider_name=""
+	case "$primary_model" in
+		*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY"; provider_name="Anthropic" ;;
+		gpt*|o1*|o3*|o4*) provider="openai"; env_var="OPENAI_API_KEY"; provider_name="OpenAI" ;;
+		*) return 0 ;;
+	esac
+
+	echo ""
+	if [[ -n "${!env_var:-}" ]]; then
+		log_success "$env_var detected for $primary_model"
+		return 0
+	fi
+
+	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
+	if [[ -c /dev/tty ]]; then
+		log_success "Your agent uses $primary_model ($provider_name)"
+		echo ""
+		local api_key=""
+		read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
+		if [[ -n "$api_key" ]]; then
+			export "$env_var=$api_key"
+			log_success "$env_var configured"
+		else
+			echo ""
+			log_dim "  Skipped. Configure later: obol model setup --provider $provider"
+		fi
+	else
+		# Non-interactive: just warn
+		log_warn "Agent uses $primary_model but $env_var is not set."
+		log_dim "  Set it before starting: export $env_var=..."
+		log_dim "  Or configure after startup: obol model setup --provider $provider"
+	fi
+}
+
 print_instructions() {
 	local install_mode="$1"
 
@@ -1504,6 +1562,9 @@ print_instructions() {
 		log_success "Obol Stack installation complete!"
 	fi
 	echo ""
+
+	# Check if the agent's primary model requires a cloud API key.
+	check_agent_model_api_key
 
 	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty)
 	if [[ -c /dev/tty ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then

@@ -279,6 +279,13 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 						},
 					},
 					{
+						Name:  "stop",
+						Usage: "Stop the tunnel (scale cloudflared to 0 replicas)",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return tunnel.Stop(cfg, getUI(cmd))
+						},
+					},
+					{
 						Name:  "logs",
 						Usage: "View cloudflared logs",
 						Flags: []cli.Flag{

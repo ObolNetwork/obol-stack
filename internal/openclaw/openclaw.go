@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,14 +47,30 @@ const (
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.1.7"
 
-	// openclawImageTag overrides the chart's default image tag.
-	// Must match the version in OPENCLAW_VERSION (without "v" prefix).
-	openclawImageTag = "2026.3.11"
-
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
 	remoteSignerChartVersion = "0.3.0"
 )
+
+// openclawVersionRaw is the single source of truth for the upstream OpenClaw
+// version. It is read by CI (docker-publish-openclaw.yml), obolup.sh, and
+// the Go binary at compile time via go:embed.
+//
+//go:embed OPENCLAW_VERSION
+var openclawVersionRaw string
+
+// openclawImageTag returns the image tag derived from OPENCLAW_VERSION,
+// stripping the leading "v" and any whitespace/comments.
+func openclawImageTag() string {
+	for _, line := range strings.Split(openclawVersionRaw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return strings.TrimPrefix(line, "v")
+	}
+	return ""
+}
 
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
@@ -66,7 +83,9 @@ type OnboardOptions struct {
 	OllamaModels []string // Available Ollama models detected on host (nil = not queried)
 }
 
-// SetupDefault deploys a default OpenClaw instance as part of stack setup.
+// SetupDefault deploys the default OpenClaw instance as part of stack setup.
+// This is the single canonical instance that handles both user-facing inference
+// and agent-mode monetize/heartbeat reconciliation.
 // It is idempotent: if a "default" deployment already exists, it re-syncs.
 // When Ollama is not detected on the host and no existing ~/.openclaw config
 // is found, it skips provider setup gracefully so the user can configure
@@ -74,13 +93,14 @@ type OnboardOptions struct {
 func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	// Check whether the default deployment already exists (re-sync path).
 	// If it does, proceed unconditionally — the overlay was already written.
-	deploymentDir := DeploymentPath(cfg, "default")
+	deploymentDir := DeploymentPath(cfg, "obol-agent")
 	if _, err := os.Stat(deploymentDir); err == nil {
 		// Existing deployment — always re-sync regardless of Ollama status.
 		return Onboard(cfg, OnboardOptions{
-			ID:        "default",
+			ID:        "obol-agent",
 			Sync:      true,
 			IsDefault: true,
+			AgentMode: true,
 		}, u)
 	}
 
@@ -103,7 +123,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			} else {
 				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
 				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull qwen3.5:9b")
+				u.Print("  or pull a model with: ollama pull qwen3.5:4b")
 			}
 		} else {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
@@ -114,9 +134,10 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	}
 
 	return Onboard(cfg, OnboardOptions{
-		ID:           "default",
+		ID:           "obol-agent",
 		Sync:         true,
 		IsDefault:    true,
+		AgentMode:    true,
 		OllamaModels: ollamaModels,
 	}, u)
 }
@@ -125,7 +146,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	id := opts.ID
 	if opts.IsDefault {
-		id = "default"
+		id = "obol-agent"
 	}
 	if id == "" {
 		id = petname.Generate(2, "-")
@@ -242,7 +263,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 agents:
   defaults:
     heartbeat:
-      every: "2m"
+      every: "5m"
       target: "none"
 `
 	}
@@ -1729,8 +1750,8 @@ rbac:
 `)
 
 	// Override chart default image tag when the binary pins a newer version.
-	if openclawImageTag != "" {
-		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, openclawImageTag))
+	if tag := openclawImageTag(); tag != "" {
+		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, tag))
 	}
 
 	// Provider and agent model configuration.
@@ -2040,17 +2061,14 @@ func listOllamaModels() []string {
 }
 
 // preferredOllamaModel picks the best default model from available Ollama models.
-// Prefers qwen3.5:9b if available, otherwise falls back to the first model.
+// Models arrive in LiteLLM config order (set by `obol model prefer`), so the
+// first model is the user's preferred choice. Falls back to a hardcoded
+// preference list only for initial setup when no preference has been set.
 func preferredOllamaModel(models []string) string {
-	preferred := []string{"qwen3.5:9b", "qwen3.5:35b", "qwen3.5:27b"}
-	for _, p := range preferred {
-		for _, m := range models {
-			if m == p {
-				return m
-			}
-		}
+	if len(models) > 0 {
+		return models[0]
 	}
-	return models[0]
+	return ""
 }
 
 // ollamaModelDisplayName converts an Ollama model name (e.g. "llama3.2:3b")

@@ -433,10 +433,10 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
-	// Auto-configure LiteLLM with Ollama models if available.
-	// This ensures the inference path works out of the box when the user
-	// has Ollama running — no separate `obol model setup` step required.
-	// Non-fatal: the user can always run `obol model setup` later.
+	// Auto-configure LiteLLM with Ollama models and any cloud providers
+	// whose API keys are found in the environment. This ensures the
+	// inference path works out of the box — no separate `obol model setup`
+	// step required. Non-fatal: the user can always run `obol model setup` later.
 	autoConfigureLLM(cfg, u)
 
 	// Deploy default OpenClaw instance (non-fatal on failure).
@@ -451,62 +451,147 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
 	}
 
-	// Deploy the obol-agent singleton (monetize reconciliation, heartbeat).
+	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
 	// Non-fatal: the user can always run `obol agent init` later.
 	u.Blank()
-	u.Info("Deploying obol-agent")
+	u.Info("Applying agent capabilities")
 	if err := agent.Init(cfg, u); err != nil {
-		u.Warnf("Failed to deploy obol-agent: %v", err)
-		u.Dim("  You can manually deploy later with: obol agent init")
+		u.Warnf("Failed to apply agent capabilities: %v", err)
+		u.Dim("  You can manually apply later with: obol agent init")
 	}
 
-	// Start the Cloudflare tunnel so the stack is publicly accessible.
-	// Non-fatal: the user can start it later with `obol tunnel restart`.
+	// Start the Cloudflare tunnel only if a persistent DNS tunnel is provisioned.
+	// Quick tunnels are dormant by default and activate on first `obol sell`.
 	u.Blank()
-	u.Info("Starting Cloudflare tunnel")
-	if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
-		u.Warnf("Tunnel not started: %v", err)
-		u.Dim("  Start manually with: obol tunnel restart")
+	if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Mode == "dns" && st.Hostname != "" {
+		u.Info("Starting persistent Cloudflare tunnel")
+		if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
+			u.Warnf("Tunnel not started: %v", err)
+			u.Dim("  Start manually with: obol tunnel restart")
+		} else {
+			u.Successf("Tunnel active: %s", tunnelURL)
+		}
 	} else {
-		u.Successf("Tunnel active: %s", tunnelURL)
+		u.Dim("Tunnel dormant (activates on first 'obol sell http')")
+		u.Dim("  Start manually with: obol tunnel restart")
+		u.Dim("  For a persistent URL: obol tunnel login --hostname stack.example.com")
 	}
 
 	return nil
 }
 
-// autoConfigureLLM detects the host Ollama and auto-configures LiteLLM with
-// available models so that inference works out of the box. Skipped silently
-// if Ollama is unreachable, has no models, or LiteLLM already has non-paid
-// models configured.
+// autoConfigureLLM detects host Ollama and imported cloud providers, then
+// auto-configures LiteLLM so inference works out of the box.
+// Patches all providers first, then does a single restart.
 func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
+	var configured []string // provider names that were patched
+
+	// --- Ollama ---
 	ollamaModels, err := model.ListOllamaModels()
-	if err != nil || len(ollamaModels) == 0 {
-		// Ollama not running or no models — skip silently.
-		return
+	if err == nil && len(ollamaModels) > 0 && !model.HasConfiguredModels(cfg) {
+		u.Blank()
+		u.Infof("Ollama detected with %d model(s)", len(ollamaModels))
+
+		var names []string
+		for _, m := range ollamaModels {
+			name := m.Name
+			if strings.HasSuffix(name, ":latest") {
+				name = strings.TrimSuffix(name, ":latest")
+			}
+			names = append(names, name)
+		}
+
+		if err := model.PatchLiteLLMProvider(cfg, u, "ollama", "", names); err != nil {
+			u.Warnf("Auto-configure Ollama failed: %v", err)
+		} else {
+			configured = append(configured, "ollama")
+		}
 	}
 
-	// Check if LiteLLM already has real models (not just the paid/* catch-all).
-	if model.HasConfiguredModels(cfg) {
-		return
+	// --- Cloud provider from ~/.openclaw ---
+	if cloudProvider := autoDetectCloudProvider(cfg, u); cloudProvider != "" {
+		configured = append(configured, cloudProvider)
+	}
+
+	// --- Single restart for all providers ---
+	if len(configured) > 0 {
+		label := strings.Join(configured, " + ")
+		if err := model.RestartLiteLLM(cfg, u, label); err != nil {
+			u.Warnf("LiteLLM restart failed: %v", err)
+			u.Dim("  Run 'obol model setup' to configure manually.")
+		}
+	}
+}
+
+// autoDetectCloudProvider reads ~/.openclaw config, resolves the cloud
+// provider API key, and patches LiteLLM (without restart). Returns the
+// provider name on success, or "" if nothing was configured.
+func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
+	imported, err := openclaw.DetectExistingConfig()
+	if err != nil || imported == nil {
+		return ""
+	}
+
+	agentModel := imported.AgentModel
+	if agentModel == "" {
+		return ""
+	}
+
+	// Extract provider and model name from "anthropic/claude-sonnet-4-6".
+	provider, modelName := "", agentModel
+	if i := strings.Index(agentModel, "/"); i >= 0 {
+		provider = agentModel[:i]
+		modelName = agentModel[i+1:]
+	}
+	if provider == "" {
+		provider = model.ProviderFromModelName(agentModel)
+	}
+
+	if provider == "" || provider == "ollama" {
+		return ""
+	}
+
+	// Already configured — skip.
+	if model.HasProviderConfigured(cfg, provider) {
+		return ""
+	}
+
+	// Resolve API key: try primary + alt env vars, then .env in dev mode.
+	apiKey, envVarUsed := model.ResolveAPIKey(provider)
+	if apiKey == "" && os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		envVar := model.ProviderEnvVar(provider)
+		dotEnv := model.LoadDotEnv(filepath.Join(".", ".env"))
+		apiKey = dotEnv[envVar]
+		if apiKey != "" {
+			envVarUsed = envVar + " (.env)"
+		}
+	}
+
+	if apiKey == "" {
+		u.Blank()
+		primaryEnv := model.ProviderEnvVar(provider)
+		u.Warnf("Agent model %s detected but %s is not set", agentModel, primaryEnv)
+		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", primaryEnv))
+		u.Dim(fmt.Sprintf("  Or configure after startup: obol model setup --provider %s", provider))
+		return ""
 	}
 
 	u.Blank()
-	u.Infof("Ollama detected with %d model(s) — auto-configuring LiteLLM", len(ollamaModels))
-
-	var names []string
-	for _, m := range ollamaModels {
-		name := m.Name
-		if strings.HasSuffix(name, ":latest") {
-			name = strings.TrimSuffix(name, ":latest")
-		}
-		names = append(names, name)
+	if envVarUsed != model.ProviderEnvVar(provider) {
+		u.Infof("Cloud model %s detected via %s — configuring %s provider", agentModel, envVarUsed, provider)
+	} else {
+		u.Infof("Cloud model %s detected — configuring %s provider", agentModel, provider)
 	}
 
-	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
-		u.Warnf("Auto-configure LiteLLM failed: %v", err)
-		u.Dim("  Run 'obol model setup' to configure manually.")
+	if err := model.PatchLiteLLMProvider(cfg, u, provider, apiKey, []string{modelName}); err != nil {
+		u.Warnf("Auto-configure %s failed: %v", provider, err)
+		u.Dim(fmt.Sprintf("  Run 'obol model setup --provider %s' to configure manually.", provider))
+		return ""
 	}
+
+	return provider
 }
+
 
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
