@@ -218,27 +218,11 @@ func ensureHeartbeatActive(cfg *config.Config, u *ui.UI) error {
 	if err := applyCmd.Run(); err != nil {
 		return fmt.Errorf("patch heartbeat config: %w\n%s", err, applyErr.String())
 	}
-	u.Success("Heartbeat config injected into openclaw-config ConfigMap")
 
-	// Rollout-restart so the pod loads the updated config.
-	restartCmd := exec.Command(kubectlBin,
-		"rollout", "restart", "deployment/openclaw", "-n", namespace)
-	restartCmd.Env = env
-	var restartErr bytes.Buffer
-	restartCmd.Stderr = &restartErr
-	if err := restartCmd.Run(); err != nil {
-		return fmt.Errorf("restart openclaw deployment: %w\n%s", err, restartErr.String())
-	}
-
-	// Wait for rollout so the pod is live before the caller continues.
-	waitCmd := exec.Command(kubectlBin,
-		"rollout", "status", "deployment/openclaw",
-		"-n", namespace, "--timeout=120s")
-	waitCmd.Env = env
-	if out, err := waitCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("rollout did not complete: %w\n%s", err, string(out))
-	}
-
-	u.Success("OpenClaw restarted — heartbeat will activate on next startup (every 5m)")
+	// OpenClaw watches for ConfigMap file changes and hot-reloads config.
+	// No pod restart is needed: the running pod will detect the update within
+	// ~30-60s and apply [reload] config hot reload, switching the heartbeat
+	// interval to 5m immediately without losing the running pod or its state.
+	u.Success("Heartbeat config injected — OpenClaw hot reload will activate it (every 5m)")
 	return nil
 }
