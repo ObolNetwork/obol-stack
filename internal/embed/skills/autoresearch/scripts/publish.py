@@ -269,6 +269,13 @@ def main() -> None:
         )
     print(f"Using checkpoint: {checkpoint}")
 
+    if not str(checkpoint).endswith(".gguf"):
+        die(
+            f"checkpoint {checkpoint.name} is not in GGUF format. "
+            "Ollama requires GGUF files. Convert with:\n"
+            "  python llama.cpp/convert_hf_to_gguf.py <model-dir> --outfile model.gguf"
+        )
+
     model_name = args.name or f"autoresearch-{commit[:8]}"
     modelfile_path = create_modelfile(checkpoint, workdir)
     ollama_create(model_name, modelfile_path)

@@ -367,6 +367,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/experiments/"):
             exp_id = path.rsplit("/", 1)[-1]
+            if not re.fullmatch(r'[a-zA-Z0-9_-]+', exp_id):
+                self._json(400, {"error": "invalid experiment id"})
+                return
             result_path = self.state.results_dir / exp_id / "result.json"
             if not result_path.exists():
                 self._json(404, {"error": f"experiment {exp_id} not found"})
@@ -412,6 +415,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
         experiment_id = payload.get("experiment_id", payload.get("experimentId"))
         if experiment_id is not None and not isinstance(experiment_id, str):
             self._json(400, {"error": "experiment_id must be a string when provided"})
+            return
+        if experiment_id is not None and not re.fullmatch(r'[a-zA-Z0-9_-]+', experiment_id):
+            self._json(400, {"error": "experiment_id must contain only alphanumeric characters, hyphens, or underscores"})
             return
 
         try:

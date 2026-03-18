@@ -825,7 +825,10 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
     # GPU workers may need 300s+ for experiments; Traefik's default is 30s.
     # Add 120s overhead for facilitator verification + network latency.
     payment = spec.get("payment", {})
-    max_timeout = int(payment.get("maxTimeoutSeconds", 0) or 0)
+    try:
+        max_timeout = int(payment.get("maxTimeoutSeconds", 0) or 0)
+    except (ValueError, TypeError):
+        max_timeout = 0
     route_timeout_seconds = max(max_timeout + 120, 60) if max_timeout > 30 else 0
 
     # Build the HTTPRoute resource.

@@ -43,6 +43,32 @@ class RegistrationMetadataTest(unittest.TestCase):
         self.assertEqual(doc["metadata"]["best_val_bpb"], "1.234")
         self.assertTrue(any(s.get("name") == "OASF" for s in doc["services"]))
 
+    def test_build_registration_doc_includes_provenance(self):
+        mod = load_monetize_module()
+        spec = {
+            "type": "inference",
+            "path": "/services/my-model",
+            "payment": {"price": {"perRequest": "0.001"}},
+            "provenance": {
+                "framework": "autoresearch",
+                "metricName": "val_bpb",
+                "metricValue": "0.9973",
+                "experimentId": "abc123",
+                "trainHash": "sha256:deadbeef",
+                "paramCount": "50000000",
+            },
+            "registration": {
+                "name": "My Model",
+            },
+        }
+
+        doc = mod.build_registration_doc(spec, "my-model", "99", "http://obol.stack:8080")
+        self.assertIn("provenance", doc)
+        self.assertEqual(doc["provenance"]["framework"], "autoresearch")
+        self.assertEqual(doc["provenance"]["metricValue"], "0.9973")
+        self.assertEqual(doc["provenance"]["trainHash"], "sha256:deadbeef")
+        self.assertEqual(doc["provenance"]["paramCount"], "50000000")
+
     def test_build_indexed_metadata_includes_registration_metadata(self):
         mod = load_monetize_module()
         spec = {

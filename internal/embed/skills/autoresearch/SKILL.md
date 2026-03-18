@@ -118,6 +118,7 @@ publish.py
 - **Python stdlib + uv** — no pip install; uv for environment management
 - **5-minute time budget** — each experiment must complete within 5 minutes
 - **GPU required** — training runs on local GPU (Ollama must have GPU access)
+- **GGUF checkpoint required** — Ollama only accepts GGUF format; convert other formats (`.pt`, `.safetensors`) with `llama.cpp/convert_hf_to_gguf.py`
 - **Git repo required** — autoresearch directory must be a git repository for commit tracking
 - **results.tsv format** — tab-separated: `commit_hash`, `val_bpb`, `status`, `description`
 

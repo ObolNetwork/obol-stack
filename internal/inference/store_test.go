@@ -106,14 +106,23 @@ func TestStoreCreate_PersistsCanonicalProvenance(t *testing.T) {
 	if got.Provenance == nil {
 		t.Fatal("Provenance should be persisted")
 	}
+	if got.Provenance.Framework != "autoresearch" {
+		t.Errorf("Framework = %q, want %q", got.Provenance.Framework, "autoresearch")
+	}
 	if got.Provenance.MetricName != "val_bpb" {
 		t.Errorf("MetricName = %q, want %q", got.Provenance.MetricName, "val_bpb")
 	}
 	if got.Provenance.MetricValue != "0.9973" {
 		t.Errorf("MetricValue = %q, want %q", got.Provenance.MetricValue, "0.9973")
 	}
+	if got.Provenance.ExperimentID != "abc123" {
+		t.Errorf("ExperimentID = %q, want %q", got.Provenance.ExperimentID, "abc123")
+	}
 	if got.Provenance.TrainHash != "sha256:deadbeef" {
 		t.Errorf("TrainHash = %q, want %q", got.Provenance.TrainHash, "sha256:deadbeef")
+	}
+	if got.Provenance.ParamCount != "50000000" {
+		t.Errorf("ParamCount = %q, want %q", got.Provenance.ParamCount, "50000000")
 	}
 }
 

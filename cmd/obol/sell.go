@@ -384,24 +384,14 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("load provenance: %w", err)
 				}
-				provMap := map[string]interface{}{}
-				if prov.Framework != "" {
-					provMap["framework"] = prov.Framework
+				// Round-trip through JSON to build the map, respecting omitempty tags.
+				provBytes, err := json.Marshal(prov)
+				if err != nil {
+					return fmt.Errorf("marshal provenance: %w", err)
 				}
-				if prov.MetricName != "" {
-					provMap["metricName"] = prov.MetricName
-				}
-				if prov.MetricValue != "" {
-					provMap["metricValue"] = prov.MetricValue
-				}
-				if prov.ExperimentID != "" {
-					provMap["experimentId"] = prov.ExperimentID
-				}
-				if prov.TrainHash != "" {
-					provMap["trainHash"] = prov.TrainHash
-				}
-				if prov.ParamCount != "" {
-					provMap["paramCount"] = prov.ParamCount
+				var provMap map[string]interface{}
+				if err := json.Unmarshal(provBytes, &provMap); err != nil {
+					return fmt.Errorf("unmarshal provenance: %w", err)
 				}
 				spec["provenance"] = provMap
 				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",

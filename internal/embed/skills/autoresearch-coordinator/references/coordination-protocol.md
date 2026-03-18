@@ -149,8 +149,8 @@ Workers publish their best results in the `.well-known/agent-registration.json` 
 
 | Field | Type | Description |
 |---|---|---|
-| `metadata.best_val_bpb` | float | Best validation bits-per-byte achieved |
-| `metadata.total_experiments` | int | Total experiments processed by this worker |
+| `metadata.best_val_bpb` | string | Best validation bits-per-byte achieved (stringified float) |
+| `metadata.total_experiments` | string | Total experiments processed by this worker (stringified int) |
 | `metadata.updated` | string | ISO 8601 timestamp of last result update |
 
 ### Optional Fields

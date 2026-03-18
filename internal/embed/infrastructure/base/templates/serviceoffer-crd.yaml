@@ -167,7 +167,6 @@ spec:
                     metricName:
                       type: string
                       description: "Name of the primary quality metric (e.g. val_bpb)."
-                      default: "val_bpb"
                     metricValue:
                       type: string
                       description: "Primary quality metric value (e.g. 0.9973)."

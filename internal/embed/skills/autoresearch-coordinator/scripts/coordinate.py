@@ -571,10 +571,16 @@ class ObolCoordinator:
             print("  Pricing missing payTo or amount", file=sys.stderr)
             return None
 
-        print(f"  Price: {amount} USDC micro-units to {pay_to}")
+        try:
+            amount_int = int(amount)
+        except (ValueError, TypeError):
+            print(f"  Non-integer amount '{amount}', cannot sign payment", file=sys.stderr)
+            return None
+
+        print(f"  Price: {amount_int} USDC micro-units to {pay_to}")
 
         # Step 3: Sign ERC-3009 authorization
-        signed_auth = sign_erc3009_auth(pay_to, int(amount), self.chain)
+        signed_auth = sign_erc3009_auth(pay_to, amount_int, self.chain)
         if not signed_auth:
             print("  Failed to sign payment authorization", file=sys.stderr)
             return None
