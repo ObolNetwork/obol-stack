@@ -1,6 +1,6 @@
 ---
 name: wallets
-description: How to create, manage, and use Ethereum wallets. Covers EOAs, smart contract wallets, multisig (Safe), and account abstraction. Essential for any AI agent that needs to interact with Ethereum — sending transactions, signing messages, or managing funds. Includes guardrails for safe key handling.
+description: Educational reference on Ethereum wallet types — EOAs, smart contract wallets, multisig (Safe), account abstraction (ERC-4337). Use when explaining wallet concepts, choosing a wallet architecture, or designing key management. NOT for sending transactions — use ethereum-local-wallet for that.
 ---
 
 # Wallets on Ethereum
