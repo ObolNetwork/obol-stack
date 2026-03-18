@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,7 +61,99 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	}
 
 	fmt.Println("✓ AGENT_BASE_URL synced to obol-agent")
+
+	// Helmfile sync renders the openclaw-config ConfigMap from the chart template,
+	// which does not include agents.defaults.heartbeat.  Re-patch the ConfigMap so
+	// the heartbeat interval is restored.  OpenClaw hot-reloads the change (~30-60s)
+	// — no pod restart is needed.
+	patchHeartbeatAfterSync(cfg, deploymentDir)
+
 	return nil
+}
+
+// patchHeartbeatAfterSync re-injects agents.defaults.heartbeat into the
+// openclaw-config ConfigMap after a helmfile sync reset it.  Mirrors the logic
+// in internal/openclaw.patchHeartbeatConfig; kept here to avoid a circular
+// import (openclaw imports tunnel).
+//
+// Non-fatal: prints a warning on failure and continues.
+func patchHeartbeatAfterSync(cfg *config.Config, deploymentDir string) {
+	// Read heartbeat interval from values-obol.yaml.
+	valuesRaw, err := os.ReadFile(filepath.Join(deploymentDir, "values-obol.yaml"))
+	if err != nil || !strings.Contains(string(valuesRaw), "heartbeat:") {
+		return
+	}
+	var every, target string
+	for _, line := range strings.Split(string(valuesRaw), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "every:") {
+			every = strings.Trim(strings.TrimSpace(strings.TrimPrefix(t, "every:")), "\"'")
+		}
+		if strings.HasPrefix(t, "target:") {
+			target = strings.Trim(strings.TrimSpace(strings.TrimPrefix(t, "target:")), "\"'")
+		}
+	}
+	if every == "" {
+		return
+	}
+
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	namespace := "openclaw-" + agentDeploymentID
+	env := append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
+	// Read current ConfigMap.
+	getCmd := exec.Command(kubectlBin, "get", "configmap", "openclaw-config",
+		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
+	getCmd.Env = env
+	var outBuf bytes.Buffer
+	getCmd.Stdout = &outBuf
+	if err := getCmd.Run(); err != nil {
+		fmt.Printf("⚠ could not read openclaw-config for heartbeat patch: %v\n", err)
+		return
+	}
+
+	var cfgJSON map[string]interface{}
+	if err := json.Unmarshal(outBuf.Bytes(), &cfgJSON); err != nil {
+		fmt.Printf("⚠ could not parse openclaw.json for heartbeat patch: %v\n", err)
+		return
+	}
+
+	// Inject heartbeat.
+	agents, _ := cfgJSON["agents"].(map[string]interface{})
+	if agents == nil {
+		agents = map[string]interface{}{}
+		cfgJSON["agents"] = agents
+	}
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if defaults == nil {
+		defaults = map[string]interface{}{}
+		agents["defaults"] = defaults
+	}
+	hb := map[string]interface{}{"every": every}
+	if target != "" {
+		hb["target"] = target
+	}
+	defaults["heartbeat"] = hb
+
+	patched, _ := json.MarshalIndent(cfgJSON, "", "  ")
+	applyPayload, _ := json.Marshal(map[string]interface{}{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]interface{}{"name": "openclaw-config", "namespace": namespace},
+		"data":     map[string]string{"openclaw.json": string(patched)},
+	})
+
+	applyCmd := exec.Command(kubectlBin, "apply", "-f", "-",
+		"--server-side", "--field-manager=helm", "--force-conflicts")
+	applyCmd.Env = env
+	applyCmd.Stdin = bytes.NewReader(applyPayload)
+	var applyErr bytes.Buffer
+	applyCmd.Stderr = &applyErr
+	if err := applyCmd.Run(); err != nil {
+		fmt.Printf("⚠ heartbeat patch failed: %v\n%s\n", err, applyErr.String())
+		return
+	}
+	fmt.Printf("✓ Heartbeat config re-applied after sync (every: %s)\n", every)
 }
 
 func agentOverlayPath(cfg *config.Config) string {
