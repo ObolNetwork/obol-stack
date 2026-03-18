@@ -29,9 +29,7 @@ export function useRegistryAgents(
   const fetchAgents = useCallback(
     async (currentPage: number) => {
       setError(null);
-      setAgents([]);
       try {
-        setLoading(true);
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
           page: String(currentPage),

@@ -44,6 +44,84 @@ const EthereumIcon = ({ size = 32 }: { size: number }) => (
   </svg>
 );
 
+const EthereumGrayscaleIcon = ({ size = 32 }: { size: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M16 32C24.8366 32 32 24.8366 32 16C32 7.16344 24.8366 0 16 0C7.16344 0 0 7.16344 0 16C0 24.8366 7.16344 32 16 32Z"
+      fill="#6B7280"
+    />
+    <path
+      d="M16.498 4V12.87L23.995 16.22L16.498 4Z"
+      fill="white"
+      fillOpacity="0.5"
+    />
+    <path
+      d="M16.498 4L9 16.22L16.498 12.87V4Z"
+      fill="white"
+      fillOpacity="0.8"
+    />
+    <path
+      d="M16.498 21.9682V27.9952L24 17.6162L16.498 21.9682Z"
+      fill="white"
+      fillOpacity="0.5"
+    />
+    <path
+      d="M16.498 27.9952V21.9672L9 17.6162L16.498 27.9952Z"
+      fill="white"
+      fillOpacity="0.8"
+    />
+    <path
+      d="M16.498 20.5731L23.995 16.2201L16.498 12.8721V20.5731Z"
+      fill="white"
+      fillOpacity="0.15"
+    />
+    <path
+      d="M9 16.2201L16.498 20.5731V12.8721L9 16.2201Z"
+      fill="white"
+      fillOpacity="0.5"
+    />
+  </svg>
+);
+
+const BaseIcon = ({ size = 32 }: { size: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 146 146"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="73" cy="73" r="73" fill="#0052FF" />
+    <path
+      d="M73.323 123.729C101.617 123.729 124.553 100.832 124.553 72.5875C124.553 44.343 101.617 21.4463 73.323 21.4463C46.4795 21.4463 24.4581 42.0558 22.271 68.2887H89.9859V76.8864H22.271C24.4581 103.119 46.4795 123.729 73.323 123.729Z"
+      fill="white"
+    />
+  </svg>
+);
+
+const BaseGrayscaleIcon = ({ size = 32 }: { size: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 146 146"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <circle cx="73" cy="73" r="73" fill="#6B7280" />
+    <path
+      d="M73.323 123.729C101.617 123.729 124.553 100.832 124.553 72.5875C124.553 44.343 101.617 21.4463 73.323 21.4463C46.4795 21.4463 24.4581 42.0558 22.271 68.2887H89.9859V76.8864H22.271C24.4581 103.119 46.4795 123.729 73.323 123.729Z"
+      fill="white"
+      fillOpacity="0.7"
+    />
+  </svg>
+);
+
 const AztecIcon = ({ size = 32 }: { size: number }) => (
   <svg
     width={size}
@@ -74,15 +152,15 @@ const AztecIcon = ({ size = 32 }: { size: number }) => (
 
 const chainIcons: Record<ChainName, React.ComponentType<{ size: number }>> = {
   mainnet: EthereumIcon,
-  sepolia: EthereumIcon,
-  hoodi: EthereumIcon,
-  base: EthereumIcon,
-  'base-sepolia': EthereumIcon,
+  sepolia: EthereumGrayscaleIcon,
+  hoodi: EthereumGrayscaleIcon,
+  base: BaseIcon,
+  'base-sepolia': BaseGrayscaleIcon,
   aztec: AztecIcon,
 };
 
 export function ChainIcon({ chain, size = 32, className }: ChainIconProps) {
-  const IconComponent = chainIcons[chain] || EthereumIcon; // Fallback to Ethereum icon
+  const IconComponent = chainIcons[chain] || EthereumIcon;
 
   return (
     <div
@@ -94,5 +172,10 @@ export function ChainIcon({ chain, size = 32, className }: ChainIconProps) {
   );
 }
 
-// Export individual icons for direct use if needed
-export { EthereumIcon, AztecIcon };
+export {
+  EthereumIcon,
+  EthereumGrayscaleIcon,
+  BaseIcon,
+  BaseGrayscaleIcon,
+  AztecIcon,
+};

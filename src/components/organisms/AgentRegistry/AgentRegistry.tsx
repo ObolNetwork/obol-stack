@@ -173,7 +173,7 @@ export function AgentRegistry() {
 
   return (
     <Card section>
-      <Accordion header={headerContent} defaultExpanded={true}>
+      <Accordion header={headerContent} defaultExpanded={false}>
         {agents.length > 0 && (
           <Flex
             css={{
@@ -214,7 +214,7 @@ export function AgentRegistry() {
           </Flex>
         )}
         <AgentList>
-          {loading && (
+          {loading && agents.length === 0 && (
             <LoadingState size="small" message="Querying agent registry..." />
           )}
           {error && <ErrorState message={`Registry unavailable: ${error}`} />}

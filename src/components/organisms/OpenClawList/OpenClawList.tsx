@@ -28,7 +28,7 @@ export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
-      <SectionTitle>AI Agent Instances</SectionTitle>
+      <SectionTitle>Your Agents</SectionTitle>
       {!loading && instances.length > 0 && (
         <CountBadge count={instances.length} />
       )}
