@@ -30,14 +30,22 @@ func TestEffectiveRequestPrice_PerHour(t *testing.T) {
 }
 
 func TestApproximateRequestPriceFromPerHour(t *testing.T) {
-	// 0.50 USDC/hour * (5/60) = 0.04166... ≈ "0.0416666666666667"
+	// 0.50 USDC/hour * (5/60) = 0.04166...
 	got, err := ApproximateRequestPriceFromPerHour("0.50")
 	if err != nil {
 		t.Fatalf("ApproximateRequestPriceFromPerHour() error = %v", err)
 	}
-	// Verify it's approximately right (5/60 * 0.50 ≈ 0.0417)
-	if got == "" || got == "0" || got == "0.50" {
-		t.Errorf("ApproximateRequestPriceFromPerHour(0.50) = %q, expected approximated value", got)
+	// 6.00 USDC/hour gives exactly 0.5, so use that for an exact check too.
+	got6, err := ApproximateRequestPriceFromPerHour("6.00")
+	if err != nil {
+		t.Fatalf("ApproximateRequestPriceFromPerHour(6.00) error = %v", err)
+	}
+	if got6 != "0.5" {
+		t.Errorf("ApproximateRequestPriceFromPerHour(6.00) = %q, want %q", got6, "0.5")
+	}
+	// 0.50 * 5/60 should start with "0.0416"
+	if len(got) < 6 || got[:6] != "0.0416" {
+		t.Errorf("ApproximateRequestPriceFromPerHour(0.50) = %q, expected value starting with 0.0416", got)
 	}
 }
 

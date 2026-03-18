@@ -85,15 +85,28 @@ type Deployment struct {
 	// Required when TEEType is set. Bound into the TEE attestation user_data.
 	ModelHash string `json:"model_hash,omitempty"`
 
-	// NoPaymentGate disables the built-in x402 payment middleware when the
-	// gateway is routed through the cluster's x402 verifier via Traefik.
-	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
+	// Provenance holds optional metadata about how the model was produced
+	// (e.g. autoresearch experiment results). Stored alongside the deployment
+	// config and passed to the registration document when selling.
+	Provenance *Provenance `json:"provenance,omitempty"`
 
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 
 	// UpdatedAt is the RFC3339 timestamp of the most recent update.
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// Provenance tracks how a model or service was produced.
+// JSON field names use camelCase so the same document can flow through
+// publish.py -> --provenance-file -> ServiceOffer -> agent-registration.json.
+type Provenance struct {
+	Framework    string `json:"framework,omitempty"`    // e.g. "autoresearch"
+	MetricName   string `json:"metricName,omitempty"`   // e.g. "val_bpb"
+	MetricValue  string `json:"metricValue,omitempty"`  // e.g. "0.9973"
+	ExperimentID string `json:"experimentId,omitempty"` // commit hash or UUID
+	TrainHash    string `json:"trainHash,omitempty"`    // e.g. "sha256:..."
+	ParamCount   string `json:"paramCount,omitempty"`   // e.g. "50000000"
 }
 
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,
