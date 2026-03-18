@@ -17,10 +17,20 @@ const agentDeploymentID = "obol-agent"
 // SyncAgentBaseURL patches AGENT_BASE_URL in the obol-agent's values-obol.yaml
 // and runs helmfile sync to apply the change. It is a no-op if the obol-agent
 // deployment directory does not exist (agent not yet initialized).
+//
+// Idempotent: if the overlay already has the correct AGENT_BASE_URL, the
+// helmfile sync is skipped to avoid resetting the openclaw-config ConfigMap
+// (which helm renders without agents.defaults.heartbeat).
 func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	overlayPath := agentOverlayPath(cfg)
 	if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
 		return nil // agent not deployed yet — nothing to do
+	}
+
+	// Skip the helmfile sync (and ConfigMap reset) if the URL is unchanged.
+	if currentURL, _ := readCurrentAgentBaseURL(overlayPath); currentURL == tunnelURL {
+		fmt.Printf("✓ AGENT_BASE_URL already set to %s — skipping sync\n", tunnelURL)
+		return nil
 	}
 
 	if err := patchAgentBaseURL(overlayPath, tunnelURL); err != nil {
@@ -158,6 +168,26 @@ func patchHeartbeatAfterSync(cfg *config.Config, deploymentDir string) {
 
 func agentOverlayPath(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, "applications", "openclaw", agentDeploymentID, "values-obol.yaml")
+}
+
+// readCurrentAgentBaseURL returns the current AGENT_BASE_URL value from
+// values-obol.yaml, or "" if not found.
+func readCurrentAgentBaseURL(overlayPath string) (string, error) {
+	data, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "name: AGENT_BASE_URL") {
+			// Next line should be the value
+			if i+1 < len(lines) && strings.Contains(lines[i+1], "value:") {
+				v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i+1]), "value:"))
+				return v, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // patchAgentBaseURL reads values-obol.yaml and ensures the extraEnv list
