@@ -1,6 +1,6 @@
 ---
 name: ethereum-local-wallet
-description: "Sign and send Ethereum transactions via the local remote-signer. Use when asked to send ETH, sign messages, approve tokens, or interact with smart contracts that modify state. All signing goes through the in-cluster remote-signer; agents never touch private key material."
+description: "Execute Ethereum transactions NOW — send ETH, approve tokens, call contracts, sign messages. Uses the in-cluster remote-signer (agents never touch private keys). Use this skill whenever the user wants to DO something onchain, not just learn about wallets."
 metadata: { "openclaw": { "emoji": "💳", "requires": { "bins": ["python3"] } } }
 ---
 

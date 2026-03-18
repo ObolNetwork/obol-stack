@@ -104,7 +104,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 		if len(ollamaModels) == 0 {
 			u.Warn("No models pulled in Ollama")
 			u.Print("")
-			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:9b")
+			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:4b")
 			u.Print("  Hint: Or run: obol model pull")
 			return fmt.Errorf("Ollama is running but has no models")
 		}
@@ -378,7 +378,7 @@ func promptModelPull() (string, error) {
 		desc string
 	}
 	suggestions := []suggestion{
-		{"qwen3.5:9b", "5.6 GB", "Strong general-purpose (recommended)"},
+		{"qwen3.5:4b", "2.7 GB", "Fast general-purpose (recommended)"},
 		{"qwen2.5-coder:7b", "4.7 GB", "Code generation"},
 		{"deepseek-r1:8b", "4.9 GB", "Reasoning"},
 		{"gemma3:4b", "3.3 GB", "Lightweight, multilingual"},

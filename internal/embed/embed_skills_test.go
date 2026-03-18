@@ -17,10 +17,9 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 
 	// Core skills that must always be present
 	coreSkills := []string{
-		"addresses", "building-blocks", "concepts", "discovery", "distributed-validators",
-		"ethereum-networks", "ethereum-local-wallet", "frontend-playbook", "frontend-ux", "gas",
-		"indexing", "l2s", "sell", "obol-stack", "orchestration", "qa", "security",
-		"ship", "standards", "testing", "tools", "wallets", "why",
+		"addresses", "building-blocks", "buy-inference", "concepts", "discovery",
+		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
+		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "wallets", "why",
 	}
 	sort.Strings(names)
 

@@ -1,6 +1,6 @@
 ---
 name: indexing
-description: How to read and query onchain data — events, The Graph, indexing patterns. Why you cannot just loop through blocks, and what to use instead.
+description: How to read historical onchain data at scale — events, logs, The Graph subgraphs, Ponder, and indexing patterns. Use when building a backend that needs past blockchain state (not live queries — use ethereum-networks for that). Covers why you cannot loop through blocks and what to use instead.
 ---
 
 # Onchain Data & Indexing
