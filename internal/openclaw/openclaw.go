@@ -1993,6 +1993,30 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s)\n", every, target)
+
+	// The ConfigMap was patched AFTER helmfile sync started the pod, so the
+	// pod already loaded the old config (without heartbeat). Rollout-restart
+	// so it picks up agents.defaults.heartbeat on the next start.
+	restartCmd := exec.Command(kubectlBinary, "rollout", "restart",
+		"deployment/openclaw", "-n", namespace)
+	restartCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	var restartErr bytes.Buffer
+	restartCmd.Stderr = &restartErr
+	if err := restartCmd.Run(); err != nil {
+		fmt.Printf("Warning: could not restart openclaw deployment: %v\n%s\n", err, restartErr.String())
+		return
+	}
+
+	// Wait for the rollout to complete so subsequent steps see a live pod.
+	waitCmd := exec.Command(kubectlBinary, "rollout", "status",
+		"deployment/openclaw", "-n", namespace, "--timeout=120s")
+	waitCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	if out, err := waitCmd.CombinedOutput(); err != nil {
+		fmt.Printf("Warning: rollout status not confirmed: %v\n%s\n", err, string(out))
+		return
+	}
+
+	fmt.Printf("✓ OpenClaw restarted — heartbeat will activate on next startup\n")
 }
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.
