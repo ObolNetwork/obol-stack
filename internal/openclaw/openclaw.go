@@ -1992,7 +1992,11 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 		return
 	}
 
-	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s)\n", every, target)
+	// OpenClaw hot-reloads config: no pod restart needed.
+	// The running pod will detect the ConfigMap file change within ~30-60s
+	// and apply [reload] config hot reload, changing the heartbeat interval
+	// to the configured value immediately.
+	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s) — hot reload will activate it\n", every, target)
 }
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.

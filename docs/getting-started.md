@@ -112,9 +112,14 @@ obol kubectl port-forward -n llm svc/litellm 8001:4000 &
 PF_PID=$!
 sleep 3
 
+# LiteLLM requires the master key — retrieve it from the cluster secret
+LITELLM_KEY=$(obol kubectl get secret litellm-secrets -n llm \
+  -o jsonpath='{.data.LITELLM_MASTER_KEY}' | base64 -d)
+
 curl -s --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"qwen3.5:35b","messages":[{"role":"user","content":"What is 2+2? Answer with just the number."}],"max_tokens":50,"stream":false}' \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"What is 2+2? Answer with just the number."}],"max_tokens":50,"stream":false}' \
   | python3 -m json.tool
 
 kill $PF_PID
@@ -134,10 +139,14 @@ obol kubectl port-forward -n llm svc/litellm 8001:4000 &
 PF_PID=$!
 sleep 3
 
+LITELLM_KEY=$(obol kubectl get secret litellm-secrets -n llm \
+  -o jsonpath='{.data.LITELLM_MASTER_KEY}' | base64 -d)
+
 curl -s --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
   -d '{
-    "model":"qwen3.5:35b",
+    "model":"qwen3.5:9b",
     "messages":[{"role":"user","content":"What is the weather in London?"}],
     "tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}],
     "max_tokens":100,"stream":false

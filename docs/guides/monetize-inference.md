@@ -221,16 +221,22 @@ export TUNNEL_URL="https://<id>.trycloudflare.com"
 # Frontend (200)
 curl -s -o /dev/null -w "%{http_code}" "$TUNNEL_URL/"
 
-# eRPC (200 + JSON-RPC)
-curl -s -X POST "$TUNNEL_URL/rpc" \
+# eRPC (200 + network list) — local only, not via tunnel
+curl -s "http://obol.stack:8080/rpc" | jq .
+
+# eRPC JSON-RPC call (local only — specify evm/{chainId} path)
+curl -s -X POST "http://obol.stack:8080/rpc/evm/84532" \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | jq .result
+    -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' | jq .result
 
 # Monetized endpoint (402 -- payment required!)
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+
+# Machine-readable service catalog (200, always available when ServiceOffers are ready)
+curl -s "$TUNNEL_URL/skill.md"
 
 # ERC-8004 registration document (200)
 curl -s "$TUNNEL_URL/.well-known/agent-registration.json" | jq .

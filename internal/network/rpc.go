@@ -3,6 +3,7 @@ package network
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -107,6 +108,11 @@ var writeMethods = []interface{}{"eth_sendRawTransaction", "eth_sendTransaction"
 // Uses the "custom-" prefix to distinguish from ChainList-sourced upstreams.
 // When readOnly is true, eth_sendRawTransaction and eth_sendTransaction are blocked.
 func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, readOnly bool) error {
+	// Validate endpoint URL before modifying eRPC config.
+	if err := validateRPCEndpoint(endpoint); err != nil {
+		return fmt.Errorf("invalid endpoint URL %q: %w", endpoint, err)
+	}
+
 	erpcConfig, err := readERPCConfig(cfg)
 	if err != nil {
 		return err
@@ -435,6 +441,25 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) erro
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}
 
+	return nil
+}
+
+// validateRPCEndpoint returns an error if the endpoint string is not a valid
+// HTTP/HTTPS URL. This prevents silently adding invalid endpoints to eRPC.
+func validateRPCEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return fmt.Errorf("endpoint URL is required")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("scheme must be http, https, ws, or wss (got %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host (e.g. http://localhost:8545)")
+	}
 	return nil
 }
 
