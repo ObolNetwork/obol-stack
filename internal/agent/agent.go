@@ -110,17 +110,8 @@ func injectHeartbeatFile(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to create heartbeat directory: %w", err)
 	}
 
-	content := `## Reconcile
-Run: python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all --quick
-If output starts with "READY:", reply HEARTBEAT_OK.
-Otherwise report the changes.
-
-## Discover (only if /tmp/.obol-last-discovery is older than 10 minutes or missing)
-Run: python3 /data/.openclaw/skills/buy-inference/scripts/buy.py maintain
-Then: python3 /data/.openclaw/skills/discovery/scripts/discovery.py search --chain base-sepolia --limit 5
-For NEW x402-enabled agents not already purchased, probe and buy if price is reasonable.
-After discovery, run: touch /tmp/.obol-last-discovery
-Do NOT buy on every heartbeat. Only buy NEW agents.
+	content := `Run this single command, then reply with ONLY its output (no commentary):
+python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all --quick
 `
 
 	heartbeatPath := filepath.Join(heartbeatDir, "HEARTBEAT.md")

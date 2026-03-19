@@ -74,7 +74,7 @@ log_info() {
 }
 
 log_success() {
-	echo -e "  ${OBOL_DARK_GREEN}${BOLD}✓${NC} $1"
+	echo -e "  ${OBOL_GREEN}${BOLD}✓${NC} $1"
 }
 
 log_warn() {

@@ -202,6 +202,81 @@ general_settings:
 	})
 }
 
+func TestResolveAPIKey(t *testing.T) {
+	t.Run("primary env var found", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-primary")
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+		key, envVar := ResolveAPIKey("anthropic")
+		if key != "sk-ant-primary" {
+			t.Errorf("key = %q, want sk-ant-primary", key)
+		}
+		if envVar != "ANTHROPIC_API_KEY" {
+			t.Errorf("envVar = %q, want ANTHROPIC_API_KEY", envVar)
+		}
+	})
+
+	t.Run("fallback env var found", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-123")
+		key, envVar := ResolveAPIKey("anthropic")
+		if key != "oauth-token-123" {
+			t.Errorf("key = %q, want oauth-token-123", key)
+		}
+		if envVar != "CLAUDE_CODE_OAUTH_TOKEN" {
+			t.Errorf("envVar = %q, want CLAUDE_CODE_OAUTH_TOKEN", envVar)
+		}
+	})
+
+	t.Run("primary takes precedence over fallback", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-primary")
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-123")
+		key, envVar := ResolveAPIKey("anthropic")
+		if key != "sk-ant-primary" {
+			t.Errorf("key = %q, want sk-ant-primary (primary should win)", key)
+		}
+		if envVar != "ANTHROPIC_API_KEY" {
+			t.Errorf("envVar = %q, want ANTHROPIC_API_KEY", envVar)
+		}
+	})
+
+	t.Run("neither found", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+		key, envVar := ResolveAPIKey("anthropic")
+		if key != "" {
+			t.Errorf("key = %q, want empty", key)
+		}
+		if envVar != "" {
+			t.Errorf("envVar = %q, want empty", envVar)
+		}
+	})
+
+	t.Run("provider with no alt env vars", func(t *testing.T) {
+		t.Setenv("OPENAI_API_KEY", "sk-openai-123")
+		key, envVar := ResolveAPIKey("openai")
+		if key != "sk-openai-123" {
+			t.Errorf("key = %q, want sk-openai-123", key)
+		}
+		if envVar != "OPENAI_API_KEY" {
+			t.Errorf("envVar = %q, want OPENAI_API_KEY", envVar)
+		}
+	})
+
+	t.Run("ollama returns empty", func(t *testing.T) {
+		key, envVar := ResolveAPIKey("ollama")
+		if key != "" || envVar != "" {
+			t.Errorf("ollama should return empty, got key=%q envVar=%q", key, envVar)
+		}
+	})
+
+	t.Run("unknown provider returns empty", func(t *testing.T) {
+		key, envVar := ResolveAPIKey("unknown-provider")
+		if key != "" || envVar != "" {
+			t.Errorf("unknown provider should return empty, got key=%q envVar=%q", key, envVar)
+		}
+	})
+}
+
 func TestProviderEnvVar(t *testing.T) {
 	if got := ProviderEnvVar("anthropic"); got != "ANTHROPIC_API_KEY" {
 		t.Errorf("got %q, want ANTHROPIC_API_KEY", got)

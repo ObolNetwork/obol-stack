@@ -300,11 +300,11 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // agentNamespace returns the namespace of the OpenClaw instance that has
-// monetize RBAC. This is always the "default" instance ("openclaw-default").
+// monetize RBAC. This is always the "obol-agent" instance ("openclaw-obol-agent").
 func agentNamespace(cfg *config.Config) string {
 	out, err := obolRunErr(cfg, "openclaw", "list")
 	if err != nil {
-		return "openclaw-default"
+		return "openclaw-obol-agent"
 	}
 	// Collect all namespaces from output.
 	var namespaces []string
@@ -317,16 +317,16 @@ func agentNamespace(cfg *config.Config) string {
 			}
 		}
 	}
-	// Prefer default (has RBAC from `obol agent init`).
+	// Prefer obol-agent (has RBAC from `obol agent init`).
 	for _, ns := range namespaces {
-		if ns == "openclaw-default" {
+		if ns == "openclaw-obol-agent" {
 			return ns
 		}
 	}
 	if len(namespaces) > 0 {
 		return namespaces[0]
 	}
-	return "openclaw-default"
+	return "openclaw-obol-agent"
 }
 
 // requireAgent skips the test if no OpenClaw instance is deployed.
