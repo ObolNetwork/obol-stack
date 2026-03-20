@@ -102,7 +102,7 @@ func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"set", "env", "deployment/openclaw",
-		"-n", "openclaw-default",
+		"-n", "openclaw-obol-agent",
 		fmt.Sprintf("AGENT_BASE_URL=%s", strings.TrimRight(tunnelURL, "/")),
 	)
 	return cmd.Run()
