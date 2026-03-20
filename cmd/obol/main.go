@@ -71,7 +71,7 @@ COMMANDS:
      sell stop        Stop selling a service
      sell delete      Delete the sale of a service entirely
      sell pricing     Manage service pricing
-     sell register    Register a service on the ERC-8004 Agent Registry
+     sell register    Register on the ERC-8004 Agent Registry (multi-chain)
 
    App Management:
      app install     Install a Helm chart as an application
