@@ -52,18 +52,18 @@ func sellCommand(cfg *config.Config) *cli.Command {
 func sellInferenceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "inference",
-		Usage:     "Sell LLM inference via a local x402 payment gateway",
+		Usage:     "Sell local model inference with x402 payments",
 		ArgsUsage: "<name>",
 		Description: `Starts an x402-gated reverse proxy in front of a local Ollama instance.
 Buyers pay per-request in USDC to access inference endpoints.
 
 Examples:
-  obol sell inference my-qwen --model qwen3:0.6b --wallet 0x... --price 0.001
+  obol sell inference my-qwen --model qwen3.5:4b --wallet 0x... --price 0.001
   obol sell inference my-llama --model llama3:8b --wallet 0x... --chain base`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "model",
-				Usage: "Model name to serve (e.g. qwen3:0.6b)",
+				Usage: "Model name to serve (e.g. qwen3.5:4b)",
 			},
 			&cli.StringFlag{
 				Name:    "wallet",
@@ -86,7 +86,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, polygon, polygon-amoy, avalanche, avalanche-fuji)",
+				Usage: "Payment chain (base, base-sepolia)",
 				Value: "base-sepolia",
 			},
 			&cli.StringFlag{
@@ -288,14 +288,13 @@ Examples:
 func sellHTTPCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "http",
-		Usage:     "Sell access to any HTTP service via x402 (cluster-based)",
+		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Creates a ServiceOffer in the cluster. The agent reconciles it through:
-health-check → payment gate → route publishing → optional ERC-8004 registration.
+		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.
+Include --register to have the service listed on EIP8004 onchain agent registry.
 
-Examples:
-  obol sell http my-api --upstream my-svc --port 8080 --wallet 0x... --price 0.01
-  obol sell http my-db-proxy --upstream pgbouncer --port 5432 --wallet 0x... --chain base`,
+Example:
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base --register`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "wallet",
@@ -486,7 +485,7 @@ Examples:
 func sellListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
-		Usage: "List all ServiceOffer CRs",
+		Usage: "List all services for sale",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -514,7 +513,7 @@ func sellListCommand(cfg *config.Config) *cli.Command {
 func sellStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "status",
-		Usage:     "Show offer status (with name) or global pricing config (without name)",
+		Usage:     "Show the status of all services for sale or a specific service by name",
 		ArgsUsage: "[name]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -537,9 +536,9 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			// No name: show global pricing config + registrations.
 			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
 			if err != nil {
-				fmt.Printf("Cluster pricing: not available (%v)\n", err)
+				fmt.Printf("Payment configuration not available (%v)\n", err)
 			} else {
-				fmt.Printf("x402 Cluster Configuration:\n")
+				fmt.Printf("Payment Configuration:\n")
 				fmt.Printf("  Wallet:      %s\n", valueOrNone(pricingCfg.Wallet))
 				fmt.Printf("  Chain:       %s\n", valueOrNone(pricingCfg.Chain))
 				fmt.Printf("  Facilitator: %s\n", valueOrNone(pricingCfg.FacilitatorURL))
@@ -560,7 +559,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 
 			fmt.Println()
 
-			fmt.Printf("ERC-8004 Registration:\n")
+			fmt.Printf("ERC-8004 Agent Registration:\n")
 			kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
 				"-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,AGENT_ID:.status.agentId,TX:.status.registrationTxHash,REGISTERED:.status.conditions[?(@.type=='Registered')].status")
 
@@ -587,7 +586,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Stop serving a ServiceOffer (removes pricing route, keeps CR)",
+		Usage:     "Stop selling a service",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -604,7 +603,7 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 			name := cmd.Args().First()
 			ns := cmd.String("namespace")
 
-			fmt.Printf("Stopping ServiceOffer %s/%s...\n", ns, name)
+			fmt.Printf("Stopping the service offering %s/%s...\n", ns, name)
 
 			removePricingRoute(cfg, name)
 
@@ -615,7 +614,7 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("failed to patch status: %w", err)
 			}
 
-			fmt.Printf("ServiceOffer %s/%s stopped.\n", ns, name)
+			fmt.Printf("Service offering %s/%s stopped.\n", ns, name)
 			return nil
 		},
 	}
@@ -628,7 +627,7 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 func sellDeleteCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "delete",
-		Usage:     "Delete a ServiceOffer CR and deactivate ERC-8004 registration",
+		Usage:     "Delete the sale of a service entirely and deactivate its ERC-8004 agent registration",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -651,7 +650,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
-				fmt.Printf("Delete ServiceOffer %s/%s? This will:\n", ns, name)
+				fmt.Printf("Delete the service offering %s/%s? This will:\n", ns, name)
 				fmt.Println("  - Remove the associated Middleware and HTTPRoute")
 				fmt.Println("  - Remove the pricing route from the x402 verifier")
 				fmt.Println("  - Deactivate the ERC-8004 registration (if registered)")
@@ -690,7 +689,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 						})
 						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
 							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							fmt.Printf("  Warning: could not deactivate registration: %v\n", patchErr)
+							fmt.Printf("  Warning: could not deactivate agent registration: %v\n", patchErr)
 						} else {
 							fmt.Printf("  Registration deactivated (active=false). On-chain NFT persists.\n")
 						}
@@ -727,9 +726,9 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 func sellPricingCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "pricing",
-		Usage: "Configure x402 pricing in the cluster",
+		Usage: "Manage service pricing",
 		Description: `Sets the wallet address and chain for x402 payment collection.
-Stakater Reloader auto-restarts the verifier pod on config changes.`,
+Reloads the payment verifier when configuration is changed.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "wallet",
@@ -765,8 +764,8 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Register service on ERC-8004 Identity Registry (Base Sepolia)",
-		Description: `Mints an agent NFT on the ERC-8004 Identity Registry.
+		Usage: "Register a service on the ERC-8004 Agent Registry",
+		Description: `Mints an agent NFT on the ERC-8004 Agent Registry.
 Requires a funded Base Sepolia wallet (private key).`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -790,7 +789,7 @@ Requires a funded Base Sepolia wallet (private key).`,
 			&cli.StringFlag{
 				Name:  "name",
 				Usage: "Agent name",
-				Value: "Obol Stack",
+				Value: "Obol Agent",
 			},
 			&cli.StringFlag{
 				Name:  "description",
@@ -832,7 +831,7 @@ Requires a funded Base Sepolia wallet (private key).`,
 			}
 
 			agentURI := endpoint + "/.well-known/agent-registration.json"
-			fmt.Printf("Registering agent on ERC-8004 Identity Registry (Base Sepolia)...\n")
+			fmt.Printf("Registering agent on ERC-8004 Agent Registry...\n")
 			fmt.Printf("  Agent URI: %s\n", agentURI)
 			fmt.Printf("  Registry:  %s\n", erc8004.IdentityRegistryBaseSepolia)
 
@@ -911,14 +910,6 @@ func resolveX402Chain(name string) (x402.ChainConfig, error) {
 		return x402.BaseMainnet, nil
 	case "base-sepolia":
 		return x402.BaseSepolia, nil
-	case "polygon", "polygon-mainnet":
-		return x402.PolygonMainnet, nil
-	case "polygon-amoy":
-		return x402.PolygonAmoy, nil
-	case "avalanche", "avalanche-mainnet":
-		return x402.AvalancheMainnet, nil
-	case "avalanche-fuji":
-		return x402.AvalancheFuji, nil
 	default:
 		return x402.ChainConfig{}, fmt.Errorf("unsupported chain: %s", name)
 	}

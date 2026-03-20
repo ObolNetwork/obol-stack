@@ -64,14 +64,14 @@ COMMANDS:
      model status       Show LiteLLM gateway provider status
 
    Sell Services (x402):
-     sell inference   Sell LLM inference via local x402 payment gateway
-     sell http        Sell access to any HTTP service (cluster-based)
-     sell list        List all ServiceOffer CRs
-     sell status      Show offer status or global pricing config
-     sell stop        Stop serving a ServiceOffer
-     sell delete      Delete a ServiceOffer CR
-     sell pricing     Configure x402 pricing in the cluster
-     sell register    Register on ERC-8004 Identity Registry
+     sell inference   Sell local model inference with x402 payments
+     sell http        Sell any local HTTP service with x402 payments
+     sell list        List all services for sale
+     sell status      Show the status of all services for sale
+     sell stop        Stop selling a service
+     sell delete      Delete the sale of a service entirely
+     sell pricing     Manage service pricing
+     sell register    Register a service on the ERC-8004 Agent Registry
 
    App Management:
      app install     Install a Helm chart as an application

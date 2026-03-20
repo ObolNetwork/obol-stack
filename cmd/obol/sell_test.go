@@ -282,12 +282,6 @@ func TestResolveX402Chain(t *testing.T) {
 		{"base", false},
 		{"base-mainnet", false},
 		{"base-sepolia", false},
-		{"polygon", false},
-		{"polygon-mainnet", false},
-		{"polygon-amoy", false},
-		{"avalanche", false},
-		{"avalanche-mainnet", false},
-		{"avalanche-fuji", false},
 		{"unknown-chain", true},
 	}
 
