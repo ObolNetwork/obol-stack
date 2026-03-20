@@ -107,6 +107,8 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 **LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
+**Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
+
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 
 ## Standalone Inference Gateway
@@ -147,6 +149,15 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 3. **Unique namespaces** — each deployment must have unique namespace
 4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, x402-buyer)
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
+
+### OpenClaw Version Management
+
+Three places pin the OpenClaw version — all must agree:
+1. `internal/openclaw/OPENCLAW_VERSION` — source of truth (Renovate watches, CI reads)
+2. `internal/openclaw/openclaw.go` — `openclawImageTag` constant
+3. `obolup.sh` — `OPENCLAW_VERSION` shell constant for standalone installs
+
+`TestOpenClawVersionConsistency` in `internal/openclaw/version_test.go` catches drift.
 
 ### Pitfalls
 
