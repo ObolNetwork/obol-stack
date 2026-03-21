@@ -5,13 +5,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
@@ -39,6 +42,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellStatusCommand(cfg),
 			sellStopCommand(cfg),
 			sellDeleteCommand(cfg),
+			sellProbeCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
 		},
@@ -723,6 +727,119 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 // ---------------------------------------------------------------------------
 // sell pricing
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// sell probe — verify a sold endpoint is live and returns 402
+// ---------------------------------------------------------------------------
+
+func sellProbeCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "probe",
+		Usage:     "Verify a sold endpoint is live and payment-gated",
+		ArgsUsage: "<name>",
+		Description: `Probes the public tunnel URL for a ServiceOffer and checks that it
+returns HTTP 402 with valid x402 pricing headers. This confirms the
+endpoint is reachable, payment-gated, and correctly configured.
+
+Examples:
+  obol sell probe my-api -n default
+  obol sell probe my-llm -n llm`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "namespace",
+				Aliases:  []string{"n"},
+				Usage:    "Namespace of the ServiceOffer",
+				Required: true,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() == 0 {
+				return fmt.Errorf("name required: obol sell probe <name> -n <ns>")
+			}
+			name := cmd.Args().First()
+			ns := cmd.String("namespace")
+
+			// 1. Get tunnel URL.
+			tunnelURL, err := tunnel.GetTunnelURL(cfg)
+			if err != nil {
+				return fmt.Errorf("tunnel not available: %w\nStart with: obol tunnel restart", err)
+			}
+
+			// 2. Determine the service path from x402 pricing config.
+			urlPath := fmt.Sprintf("/services/%s", name)
+			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
+			if err == nil {
+				for _, r := range pricingCfg.Routes {
+					if r.OfferNamespace == ns && r.OfferName == name {
+						urlPath = strings.TrimSuffix(r.Pattern, "/*")
+						urlPath = strings.TrimSuffix(urlPath, "*")
+						break
+					}
+				}
+			}
+
+			probeURL := strings.TrimRight(tunnelURL, "/") + urlPath + "/health"
+			fmt.Printf("Probing %s ...\n", probeURL)
+
+			// 3. Send unauthenticated request — expect 402.
+			client := &http.Client{Timeout: 15 * time.Second}
+			resp, err := client.Get(probeURL)
+			if err != nil {
+				return fmt.Errorf("probe failed: %w", err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+
+			switch resp.StatusCode {
+			case http.StatusPaymentRequired:
+				// Parse x402 pricing from body.
+				var pricing struct {
+					X402Version int `json:"x402Version"`
+					Accepts     []struct {
+						Scheme string `json:"scheme"`
+						PayTo  string `json:"payTo"`
+						Amount string `json:"maxAmountRequired"`
+						Asset  string `json:"asset"`
+					} `json:"accepts"`
+				}
+				if err := json.Unmarshal(body, &pricing); err != nil {
+					fmt.Printf("  Status: 402 Payment Required (could not parse pricing body)\n")
+					return nil
+				}
+
+				fmt.Printf("  Status:  402 Payment Required ✓\n")
+				fmt.Printf("  x402:    v%d\n", pricing.X402Version)
+				if len(pricing.Accepts) > 0 {
+					a := pricing.Accepts[0]
+					fmt.Printf("  Price:   %s USDC (%s)\n", a.Amount, a.Scheme)
+					fmt.Printf("  PayTo:   %s\n", a.PayTo)
+				}
+				fmt.Printf("  URL:     %s\n", strings.TrimSuffix(probeURL, "/health"))
+				fmt.Println("\nEndpoint is live and payment-gated.")
+				return nil
+
+			case http.StatusOK:
+				fmt.Printf("  Status: 200 OK (NOT payment-gated!)\n")
+				fmt.Printf("  The endpoint is reachable but x402 middleware is not active.\n")
+				fmt.Printf("  Check: obol sell status %s -n %s\n", name, ns)
+				return fmt.Errorf("endpoint is not payment-gated")
+
+			case http.StatusNotFound:
+				fmt.Printf("  Status: 404 Not Found\n")
+				fmt.Printf("  The route may not be published yet.\n")
+				fmt.Printf("  Check: obol sell status %s -n %s\n", name, ns)
+				return fmt.Errorf("endpoint not found")
+
+			default:
+				fmt.Printf("  Status: %d %s\n", resp.StatusCode, http.StatusText(resp.StatusCode))
+				if len(body) > 0 && len(body) < 500 {
+					fmt.Printf("  Body:   %s\n", string(body))
+				}
+				return fmt.Errorf("unexpected status %d", resp.StatusCode)
+			}
+		},
+	}
+}
 
 func sellPricingCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
