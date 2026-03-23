@@ -1074,10 +1074,10 @@ def build_registration_doc(spec, name, agent_id, base_url):
         default_desc = f"{model_info['name']} inference via x402 micropayments ({price_info} USDC/request)"
 
     default_skills = {
-        "inference": ["natural_language_processing/text_generation/chat_completion"],
+        "inference": ["natural_language_processing/natural_language_generation/text_completion"],
     }
     default_domains = {
-        "inference": ["technology/artificial_intelligence"],
+        "inference": ["technology/data_science"],
     }
     skills = registration.get("skills", default_skills.get(offer_type, []))
     domains = registration.get("domains", default_domains.get(offer_type, []))

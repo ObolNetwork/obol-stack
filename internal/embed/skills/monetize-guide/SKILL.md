@@ -112,8 +112,8 @@ obol sell inference <name> \
   --register \
   --register-name "<descriptive name>" \
   --register-description "<what the model does>" \
-  --register-skills natural_language_processing/text_generation/chat_completion \
-  --register-domains technology/artificial_intelligence
+  --register-skills natural_language_processing/natural_language_generation/text_completion \
+  --register-domains technology/data_science
 ```
 
 The `--wallet` and `--chain` will be auto-resolved (remote-signer wallet, base-sepolia default).
@@ -213,15 +213,15 @@ To delete:        obol sell delete <name> -n <namespace>
 Use these when registering for on-chain discovery:
 
 **Common skills**:
-- `natural_language_processing/text_generation/chat_completion` — LLM chat
+- `natural_language_processing/natural_language_generation/text_completion` — LLM chat
 - `natural_language_processing/text_generation` — general text generation
 - `data_management/indexing` — data indexing services
 - `data_management/search` — search services
-- `machine_learning/model_optimization` — training/fine-tuning
+- `analytical_skills/model_optimization` — training/fine-tuning
 
 **Common domains**:
-- `technology/artificial_intelligence` — AI services
-- `technology/artificial_intelligence/research` — ML research
+- `technology/data_science` — AI services
+- `research_and_development/scientific_research` — ML research
 - `technology/blockchain` — blockchain data services
 
 ## Constraints

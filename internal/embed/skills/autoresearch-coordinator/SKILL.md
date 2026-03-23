@@ -10,7 +10,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 
 ## When to Use
 
-- Discovering GPU workers advertising `machine_learning/model_optimization` capabilities via the preferred public index API (internal Reth indexer first, then 8004scan fallback)
+- Discovering GPU workers advertising `analytical_skills/model_optimization` capabilities via the preferred public index API (internal Reth indexer first, then 8004scan fallback)
 - Probing worker endpoints for x402 pricing before submitting experiments
 - Submitting `train.py` experiments to remote GPU workers through x402 payment gates
 - Running the continuous THINK/CLAIM/RUN/PUBLISH experiment loop
@@ -58,7 +58,7 @@ python3 scripts/coordinate.py loop train.py --prefer https://worker.example.com/
 
 | Command | Description |
 |---------|-------------|
-| `discover [--limit N]` | Query the preferred public index API for GPU workers with `machine_learning/model_optimization` skill |
+| `discover [--limit N]` | Query the preferred public index API for GPU workers with `analytical_skills/model_optimization` skill |
 | `probe <endpoint>` | Send unauthenticated request to parse 402 pricing from the worker |
 | `submit <endpoint> <train.py> [--config JSON]` | Submit experiment with x402 payment (pre-sign ERC-3009, attach X-PAYMENT) |
 | `leaderboard [--limit N]` | Query 8004scan for all autoresearch workers, rank by best `val_bpb` |
@@ -82,7 +82,7 @@ Workers register on-chain via ERC-8004 and advertise capabilities through OASF (
 ```
 GET https://www.8004scan.io/api/v1/public/agents
     ?protocol=OASF
-    &search=machine_learning/model_optimization
+    &search=analytical_skills/model_optimization
     &limit=20
 ```
 

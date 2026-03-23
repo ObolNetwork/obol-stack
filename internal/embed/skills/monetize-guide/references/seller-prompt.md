@@ -43,8 +43,8 @@ For monetizing a local LLM:
 
 - **Upstream**: Ollama at `localhost:11434` (auto-detected)
 - **Pricing model**: `--per-request` or `--per-mtok`
-- **Registration skills**: `natural_language_processing/text_generation/chat_completion`
-- **Registration domains**: `technology/artificial_intelligence`
+- **Registration skills**: `natural_language_processing/natural_language_generation/text_completion`
+- **Registration domains**: `technology/data_science`
 - **Buyer interaction**: OpenAI-compatible API at `/services/<name>/v1/chat/completions`
 - **Health check**: Ollama `/api/tags` (auto-configured)
 
@@ -65,8 +65,8 @@ For selling GPU compute time (fine-tuning, training):
 
 - **Upstream**: Worker API (e.g., autoresearch worker at port 8080)
 - **Pricing model**: `--per-hour`
-- **Registration skills**: `machine_learning/model_optimization`
-- **Registration domains**: `technology/artificial_intelligence/research`
+- **Registration skills**: `analytical_skills/model_optimization`
+- **Registration domains**: `research_and_development/scientific_research`
 - **Buyer interaction**: Experiment submission API at `/services/<name>/experiment`
 - **Health check**: `/health` or `/healthz`
 - **Note**: `--per-hour` is approximated to per-request at 5 min/request for x402 gating

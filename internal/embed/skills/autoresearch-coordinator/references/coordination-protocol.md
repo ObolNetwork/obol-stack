@@ -8,7 +8,7 @@ How the autoresearch coordinator maps from the original Ensue-based shared-memor
 |---|---|---|
 | Shared memory (Redis/filesystem) | ERC-8004 on-chain registry + 8004scan API | Workers register capabilities on-chain; coordinator discovers via API |
 | Task queue (Ensue scheduler) | Direct HTTP POST to worker `/experiment` endpoint | No central queue; coordinator submits directly to chosen worker |
-| Worker discovery (static config) | 8004scan OASF query (`machine_learning/model_optimization`) | Dynamic discovery; workers join/leave without coordinator restart |
+| Worker discovery (static config) | 8004scan OASF query (`analytical_skills/model_optimization`) | Dynamic discovery; workers join/leave without coordinator restart |
 | Payment (none / trust-based) | x402 micropayments (USDC via ERC-3009 pre-signed auths) | Per-experiment payment; no credit accounts or invoicing |
 | Result aggregation (shared DB) | Local `results.jsonl` + worker `.well-known` metadata | Coordinator stores locally; workers publish best scores in registration |
 | Leaderboard (centralized) | 8004scan metadata aggregation | Workers self-report best `val_bpb` in their registration JSON |
@@ -66,8 +66,8 @@ Workers advertise capabilities in their `.well-known/agent-registration.json`:
     {
       "name": "OASF",
       "version": "0.8",
-      "skills": ["machine_learning/model_optimization"],
-      "domains": ["technology/artificial_intelligence/research"]
+      "skills": ["analytical_skills/model_optimization"],
+      "domains": ["research_and_development/scientific_research"]
     }
   ],
   "x402Support": true,
@@ -166,7 +166,7 @@ Workers publish their best results in the `.well-known/agent-registration.json` 
 
 The coordinator ranks workers by `metadata.best_val_bpb` in ascending order (lower is better). When querying the leaderboard:
 
-1. Fetch all workers with `machine_learning/model_optimization` skill from 8004scan
+1. Fetch all workers with `analytical_skills/model_optimization` skill from 8004scan
 2. For each worker, fetch their registration JSON
 3. Extract `metadata.best_val_bpb` (skip workers without this field)
 4. Sort ascending by `val_bpb`
