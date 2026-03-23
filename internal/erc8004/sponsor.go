@@ -76,7 +76,7 @@ func SponsoredRegister(ctx context.Context, signer *RemoteSigner, agentURI strin
 		Authorization:   authSig,
 	}
 
-	result, err := postSponsor(ctx, net.SponsorURL, reqBody)
+	result, err := postSponsor(ctx, signer.client, net.SponsorURL, reqBody)
 	if err != nil {
 		return nil, "", err
 	}
@@ -204,7 +204,7 @@ func splitSignature(sig string) (r, s string, v int, err error) {
 }
 
 // postSponsor submits the sponsored registration request to the sponsor API.
-func postSponsor(ctx context.Context, sponsorURL string, req SponsoredRegisterRequest) (*SponsoredRegisterResponse, error) {
+func postSponsor(ctx context.Context, client *http.Client, sponsorURL string, req SponsoredRegisterRequest) (*SponsoredRegisterResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal sponsor request: %w", err)
@@ -216,7 +216,7 @@ func postSponsor(ctx context.Context, sponsorURL string, req SponsoredRegisterRe
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("sponsor request failed: %w", err)
 	}

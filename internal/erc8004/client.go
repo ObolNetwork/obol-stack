@@ -74,7 +74,7 @@ func (c *Client) Close() {
 
 // ChainID returns the chain ID for this client's connection.
 func (c *Client) ChainID() *big.Int {
-	return c.chainID
+	return new(big.Int).Set(c.chainID)
 }
 
 // ETH returns the underlying ethclient for direct RPC calls.

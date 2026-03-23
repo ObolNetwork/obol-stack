@@ -3,9 +3,11 @@ package erc8004
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -135,6 +137,77 @@ func TestRemoteSigner_SignTransaction_Error(t *testing.T) {
 	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRemoteSigner_SignTransaction_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "internal error")
+	}))
+	defer srv.Close()
+
+	signer := NewRemoteSigner(srv.URL)
+	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention status code: %v", err)
+	}
+}
+
+func TestRemoteSigner_SignTypedData_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(signResponse{Error: "UNSUPPORTED_TYPE"})
+	}))
+	defer srv.Close()
+
+	signer := NewRemoteSigner(srv.URL)
+	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+	_, err := signer.SignTypedData(context.Background(), addr, EIP712TypedData{
+		PrimaryType: "Test",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRemoteSigner_SignTypedData_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "bad gateway")
+	}))
+	defer srv.Close()
+
+	signer := NewRemoteSigner(srv.URL)
+	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+	_, err := signer.SignTypedData(context.Background(), addr, EIP712TypedData{
+		PrimaryType: "Test",
+	})
+	if err == nil {
+		t.Fatal("expected error for HTTP 502")
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("error should mention status code: %v", err)
+	}
+}
+
+func TestRemoteSigner_GetAddress_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "service unavailable")
+	}))
+	defer srv.Close()
+
+	signer := NewRemoteSigner(srv.URL)
+	_, err := signer.GetAddress(context.Background())
+	if err == nil {
+		t.Fatal("expected error for HTTP 503")
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error should mention status code: %v", err)
 	}
 }
 

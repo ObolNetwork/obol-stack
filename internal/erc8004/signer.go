@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -27,7 +28,7 @@ type RemoteSigner struct {
 func NewRemoteSigner(baseURL string) *RemoteSigner {
 	return &RemoteSigner{
 		baseURL: baseURL,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -107,15 +108,17 @@ func (s *RemoteSigner) SignTransaction(ctx context.Context, addr common.Address,
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("remote-signer: sign transaction: HTTP %d: %s", resp.StatusCode, body)
+	}
+
 	var sr signResponse
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 		return "", fmt.Errorf("remote-signer: decode response: %w", err)
 	}
 	if sr.Error != "" {
 		return "", fmt.Errorf("remote-signer: %s", sr.Error)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("remote-signer: sign transaction: HTTP %d", resp.StatusCode)
 	}
 
 	return sr.SignedTransaction, nil
@@ -157,15 +160,17 @@ func (s *RemoteSigner) SignTypedData(ctx context.Context, addr common.Address, d
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("remote-signer: sign typed data: HTTP %d: %s", resp.StatusCode, body)
+	}
+
 	var sr signResponse
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 		return "", fmt.Errorf("remote-signer: decode response: %w", err)
 	}
 	if sr.Error != "" {
 		return "", fmt.Errorf("remote-signer: %s", sr.Error)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("remote-signer: sign typed data: HTTP %d", resp.StatusCode)
 	}
 
 	return sr.Signature, nil
@@ -180,9 +185,13 @@ func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Addre
 		Context: ctx,
 		Signer: func(fromAddr common.Address, tx *types.Transaction) (*types.Transaction, error) {
 			// Convert the unsigned transaction to a SignTxRequest.
+			var toAddr string
+			if tx.To() != nil {
+				toAddr = tx.To().Hex()
+			}
 			req := SignTxRequest{
 				ChainID:              chainID.String(),
-				To:                   tx.To().Hex(),
+				To:                   toAddr,
 				Nonce:                fmt.Sprintf("%d", tx.Nonce()),
 				GasLimit:             fmt.Sprintf("%d", tx.Gas()),
 				Value:                tx.Value().String(),

@@ -89,7 +89,7 @@ func TestPostSponsor_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := postSponsor(context.Background(), srv.URL, SponsoredRegisterRequest{
+	result, err := postSponsor(context.Background(), http.DefaultClient, srv.URL, SponsoredRegisterRequest{
 		AgentAddress: "0x1234",
 		AgentURI:     "https://example.com/.well-known/agent-registration.json",
 		Deadline:     9999999999,
@@ -105,6 +105,86 @@ func TestPostSponsor_Success(t *testing.T) {
 	}
 }
 
+func TestPostSponsor_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("server error"))
+	}))
+	defer srv.Close()
+
+	_, err := postSponsor(context.Background(), http.DefaultClient, srv.URL, SponsoredRegisterRequest{})
+	if err == nil {
+		t.Fatal("expected error for non-JSON 500 response")
+	}
+}
+
+func TestSponsoredRegister_NoSponsor(t *testing.T) {
+	signer := NewRemoteSigner("http://unused")
+	_, _, err := SponsoredRegister(context.Background(), signer, "https://example.com", BaseSepolia)
+	if err == nil {
+		t.Fatal("expected error for unsupported sponsor")
+	}
+}
+
+func TestSponsoredRegister_Integration(t *testing.T) {
+	// Mock both the remote-signer and sponsor APIs.
+	signerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/keys":
+			json.NewEncoder(w).Encode(keysResponse{
+				Keys: []string{"0xAbCd1234567890abcdef1234567890abcdef1234"},
+			})
+		default:
+			// Return a 65-byte signature for any signing request.
+			sig := "0x" +
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" +
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" +
+				"1b"
+			json.NewEncoder(w).Encode(signResponse{Signature: sig})
+		}
+	}))
+	defer signerSrv.Close()
+
+	sponsorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req SponsoredRegisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode sponsor request: %v", err)
+		}
+		if req.AgentAddress == "" {
+			t.Error("expected non-empty agentAddress")
+		}
+		if req.IntentSignature == "" {
+			t.Error("expected non-empty intentSignature")
+		}
+		json.NewEncoder(w).Encode(SponsoredRegisterResponse{
+			Success: true,
+			AgentID: 99,
+			TxHash:  "0xdeadbeef",
+		})
+	}))
+	defer sponsorSrv.Close()
+
+	signer := NewRemoteSigner(signerSrv.URL)
+	net := NetworkConfig{
+		Name:            "test-sponsored",
+		ChainID:         1,
+		RegistryAddress: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+		SponsorURL:      sponsorSrv.URL,
+		DelegateAddress: "0x0000000000000000000000000000000000001234",
+	}
+
+	agentID, txHash, err := SponsoredRegister(context.Background(), signer, "https://example.com/.well-known/agent-registration.json", net)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agentID.Int64() != 99 {
+		t.Errorf("agentID = %d, want 99", agentID.Int64())
+	}
+	if txHash != "0xdeadbeef" {
+		t.Errorf("txHash = %q, want 0xdeadbeef", txHash)
+	}
+}
+
 func TestPostSponsor_Failure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(SponsoredRegisterResponse{
@@ -114,7 +194,7 @@ func TestPostSponsor_Failure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := postSponsor(context.Background(), srv.URL, SponsoredRegisterRequest{})
+	_, err := postSponsor(context.Background(), http.DefaultClient, srv.URL, SponsoredRegisterRequest{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
