@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,6 +36,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellHTTPCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
+			sellProbeCommand(cfg),
 			sellStopCommand(cfg),
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
@@ -547,6 +550,101 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
+			return nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sell probe — send an unauthenticated request to verify 402 payment gate
+// ---------------------------------------------------------------------------
+
+func sellProbeCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "probe",
+		Usage:     "Probe a ServiceOffer endpoint to verify it returns 402 pricing",
+		ArgsUsage: "<name>",
+		Description: `Sends an unauthenticated request through Traefik to the ServiceOffer's
+endpoint and displays the HTTP status code and x402 pricing response.
+
+A 402 response with x402Version=1 confirms the endpoint is live and payment-gated.
+
+Examples:
+  obol sell probe flow-qwen -n llm
+  obol sell probe my-api -n default --path /health`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "namespace",
+				Aliases: []string{"n"},
+				Usage:   "Namespace of the ServiceOffer",
+			},
+			&cli.StringFlag{
+				Name:  "path",
+				Usage: "Subpath to probe (appended to the offer's endpoint)",
+				Value: "/health",
+			},
+			&cli.StringFlag{
+				Name:  "host",
+				Usage: "Traefik host:port",
+				Value: "obol.stack:8080",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.Args().First()
+			if name == "" {
+				return fmt.Errorf("name required: obol sell probe <name> -n <ns>")
+			}
+			ns := cmd.String("namespace")
+			if ns == "" {
+				return fmt.Errorf("namespace required: obol sell probe <name> -n <ns>")
+			}
+
+			// Get the ServiceOffer's endpoint from the CR status.
+			endpoint, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name,
+				"-n", ns, "-o", "jsonpath={.status.endpoint}")
+			if err != nil {
+				return fmt.Errorf("get ServiceOffer %s/%s: %w", ns, name, err)
+			}
+			endpoint = strings.TrimSpace(endpoint)
+			if endpoint == "" {
+				return fmt.Errorf("ServiceOffer %s/%s has no endpoint (not yet reconciled?)", ns, name)
+			}
+
+			subpath := cmd.String("path")
+			probeURL := "http://" + cmd.String("host") + endpoint + subpath
+			fmt.Printf("Probing %s ...\n", probeURL)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+			if err != nil {
+				return fmt.Errorf("create request: %w", err)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("probe failed: %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			fmt.Printf("HTTP %d\n", resp.StatusCode)
+
+			if resp.StatusCode == http.StatusPaymentRequired {
+				var pretty bytes.Buffer
+				if json.Indent(&pretty, body, "", "  ") == nil {
+					fmt.Println(pretty.String())
+				} else {
+					fmt.Println(string(body))
+				}
+				fmt.Println("\nEndpoint is live and payment-gated.")
+				return nil
+			}
+
+			if len(body) > 0 {
+				fmt.Println(string(body))
+			}
+			if resp.StatusCode == http.StatusOK {
+				fmt.Println("\nWarning: endpoint returned 200 (not payment-gated).")
+			}
 			return nil
 		},
 	}
