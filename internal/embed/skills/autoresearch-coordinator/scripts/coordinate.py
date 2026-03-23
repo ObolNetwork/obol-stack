@@ -285,7 +285,16 @@ def parse_402_pricing(headers, body):
     # x402 pricing can be in response body or headers
     pricing = {}
 
-    # Try body fields
+    # x402 V1 standard format: pricing in accepts[] array
+    accepts = data.get("accepts", [])
+    if accepts and isinstance(accepts, list):
+        offer = accepts[0]
+        for key in ("payTo", "network", "maxAmountRequired", "asset",
+                     "scheme", "description", "maxTimeoutSeconds"):
+            if key in offer:
+                pricing[key] = offer[key]
+
+    # Try body fields (flat format)
     for key in ("payTo", "network", "maxAmountRequired", "facilitatorURL",
                 "price", "priceModel", "description"):
         if key in data:

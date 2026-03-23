@@ -219,6 +219,20 @@ spec:
                           version:
                             type: string
                             description: "Protocol version (SHOULD per ERC-8004 spec)."
+                    skills:
+                      type: array
+                      description: >-
+                        OASF skills for discovery (e.g. natural_language_processing/text_generation).
+                        Mapped to an OASF service entry in the registration JSON.
+                      items:
+                        type: string
+                    domains:
+                      type: array
+                      description: >-
+                        OASF domains for discovery (e.g. technology/artificial_intelligence).
+                        Mapped to an OASF service entry in the registration JSON.
+                      items:
+                        type: string
                     supportedTrust:
                       type: array
                       description: >-
