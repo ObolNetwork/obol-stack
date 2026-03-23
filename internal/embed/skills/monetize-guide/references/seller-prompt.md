@@ -65,7 +65,7 @@ For selling GPU compute time (fine-tuning, training):
 
 - **Upstream**: Worker API (e.g., autoresearch worker at port 8080)
 - **Pricing model**: `--per-hour`
-- **Registration skills**: `analytical_skills/model_optimization`
+- **Registration skills**: `devops_mlops/model_versioning`
 - **Registration domains**: `research_and_development/scientific_research`
 - **Buyer interaction**: Experiment submission API at `/services/<name>/experiment`
 - **Health check**: `/health` or `/healthz`

@@ -126,7 +126,7 @@ publish.py
 
 When registering an autoresearch-optimized model on-chain via ERC-8004:
 
-- **Skills**: `analytical_skills/model_optimization`
+- **Skills**: `devops_mlops/model_versioning`
 - **Domains**: `research_and_development/scientific_research`
 
 ## References

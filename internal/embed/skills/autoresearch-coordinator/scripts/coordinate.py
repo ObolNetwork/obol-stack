@@ -60,7 +60,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 RESULTS_DIR = os.path.join(DATA_DIR, "autoresearch")
 RESULTS_FILE = os.path.join(RESULTS_DIR, "results.jsonl")
 
-OASF_SKILL_FILTER = "analytical_skills/model_optimization"
+OASF_SKILL_FILTER = "devops_mlops/model_versioning"
 
 CHAIN_IDS = {
     "base-sepolia": 84532,
@@ -481,7 +481,7 @@ class ObolCoordinator:
         self.chain = chain or DEFAULT_CHAIN
 
     def discover_workers(self, limit=20):
-        """Query 8004scan for workers advertising analytical_skills/model_optimization.
+        """Query 8004scan for workers advertising devops_mlops/model_versioning.
 
         Returns list of dicts with keys: name, endpoint, uri, agent_id, skills, x402.
         """

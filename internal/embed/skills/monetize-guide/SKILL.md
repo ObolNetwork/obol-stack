@@ -217,7 +217,7 @@ Use these when registering for on-chain discovery:
 - `natural_language_processing/text_generation` — general text generation
 - `data_management/indexing` — data indexing services
 - `data_management/search` — search services
-- `analytical_skills/model_optimization` — training/fine-tuning
+- `devops_mlops/model_versioning` — training/fine-tuning
 
 **Common domains**:
 - `technology/data_science` — AI services

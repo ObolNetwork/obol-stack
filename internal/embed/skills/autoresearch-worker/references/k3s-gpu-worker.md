@@ -71,6 +71,6 @@ obol sell http autoresearch-worker \
   --register \
   --register-name "GPU Worker Alpha" \
   --register-description "A GPU worker for paid autoresearch experiments" \
-  --register-skills analytical_skills/model_optimization \
+  --register-skills devops_mlops/model_versioning \
   --register-domains research_and_development/scientific_research
 ```
