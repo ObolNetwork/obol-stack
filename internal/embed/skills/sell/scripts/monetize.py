@@ -1329,6 +1329,245 @@ def _apply_resource(collection_path, name, resource, token, ssl_ctx):
             raise RuntimeError(f"K8s API error {e.code} for {name}") from e
 
 
+def _build_skill_md(items, base_url):
+    """Build /skill.md content from all Ready ServiceOffer items."""
+    ready = []
+    for item in items:
+        conditions = item.get("status", {}).get("conditions", [])
+        if is_condition_true(conditions, "Ready"):
+            ready.append(item)
+
+    agent_name = "Obol Stack"
+    if ready:
+        reg = ready[0].get("spec", {}).get("registration", {})
+        if reg.get("name"):
+            agent_name = reg["name"]
+
+    lines = [
+        f"# {agent_name} — x402 Service Catalog\n",
+        "",
+        "> This document lists all payment-gated services on this node.",
+        "> Payment uses the [x402 protocol](https://www.x402.org/) with USDC stablecoin.",
+        "> For machine-readable agent identity, see [/.well-known/agent-registration.json](/.well-known/agent-registration.json).",
+        "",
+    ]
+
+    if not ready:
+        lines.append("**No services currently available.**\n")
+        return "\n".join(lines)
+
+    lines.append("## Services\n")
+    lines.append("| Service | Type | Model | Price | Endpoint |")
+    lines.append("|---------|------|-------|-------|----------|")
+    for item in ready:
+        spec = item.get("spec", {})
+        name = item["metadata"]["name"]
+        offer_type = spec.get("type", "http")
+        model_name = spec.get("model", {}).get("name", "—")
+        path = spec.get("path", f"/services/{name}")
+        price_desc = describe_price(spec)
+        lines.append(f"| [{name}](#{name}) | {offer_type} | {model_name} | {price_desc} | `{base_url}{path}` |")
+    lines.append("")
+
+    lines.append("## How to Pay (x402 Protocol)\n")
+    lines.append("1. **Send a normal HTTP request** to the service endpoint")
+    lines.append("2. **Receive HTTP 402** with `X-Payment` response header containing JSON pricing:")
+    lines.append("   ```json")
+    lines.append('   {"x402Version":1,"schemes":[{"scheme":"exact","network":"...","maxAmountRequired":"...","payTo":"0x...","extra":{"name":"USDC","version":"2"}}]}')
+    lines.append("   ```")
+    lines.append("3. **Sign an ERC-3009 `transferWithAuthorization`** for USDC on the specified network:")
+    lines.append("   - `from`: your wallet address")
+    lines.append("   - `to`: the `payTo` address from the 402 response")
+    lines.append("   - `value`: the `maxAmountRequired` (in smallest units, 6 decimals)")
+    lines.append("   - `validAfter`: 0")
+    lines.append("   - `validBefore`: current timestamp + timeout")
+    lines.append("   - `nonce`: random 32 bytes")
+    lines.append("4. **Retry the original request** with `X-Payment` header containing your signed authorization")
+    lines.append("5. **Receive 200** with the actual service response")
+    lines.append("")
+    lines.append("### Quick Example (curl)\n")
+    lines.append("```bash")
+    lines.append("# Step 1: Probe for pricing")
+    first_spec = ready[0].get("spec", {})
+    first_path = first_spec.get("path", f"/services/{ready[0]['metadata']['name']}")
+    lines.append(f'curl -s -o /dev/null -w "%{{http_code}}" {base_url}{first_path}/v1/chat/completions')
+    lines.append("# Returns: 402")
+    lines.append("")
+    lines.append("# Step 2: Get pricing details")
+    lines.append(f'curl -sI {base_url}{first_path}/v1/chat/completions | grep X-Payment')
+    lines.append("```")
+    lines.append("")
+    lines.append("For programmatic payment, use [x402-go](https://github.com/coinbase/x402/tree/main/go), [x402-js](https://github.com/coinbase/x402/tree/main/typescript), or sign ERC-3009 directly with ethers/viem/web3.py.")
+    lines.append("")
+
+    lines.append("## Service Details\n")
+    for item in ready:
+        spec = item.get("spec", {})
+        name = item["metadata"]["name"]
+        offer_type = spec.get("type", "http")
+        model_name = spec.get("model", {}).get("name")
+        path = spec.get("path", f"/services/{name}")
+        registration = spec.get("registration", {})
+        default_desc = f"x402 payment-gated {offer_type} service"
+        if model_name:
+            default_desc = f"{model_name} inference via x402 micropayments"
+
+        lines.append(f"### {name}\n")
+        lines.append(f"- **Endpoint**: `{base_url}{path}`")
+        lines.append(f"- **Type**: {offer_type}")
+        if model_name:
+            lines.append(f"- **Model**: {model_name}")
+        lines.append(f"- **Price**: {describe_price(spec)}")
+        lines.append(f"- **Pay To**: `{get_pay_to(spec)}`")
+        lines.append(f"- **Network**: {get_network(spec)}")
+        lines.append(f"- **Description**: {registration.get('description', default_desc)}")
+        if offer_type == "inference" and model_name:
+            lines.append(f"\n**OpenAI-compatible endpoint**: `POST {base_url}{path}/v1/chat/completions`")
+            lines.append("```json")
+            lines.append('{')
+            lines.append(f'  "model": "{model_name}",')
+            lines.append('  "messages": [{"role": "user", "content": "Hello"}]')
+            lines.append('}')
+            lines.append("```")
+        lines.append("")
+
+    lines.append("## USDC Contract Addresses\n")
+    lines.append("| Network | Address |")
+    lines.append("|---------|---------|")
+    lines.append("| Base Sepolia | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |")
+    lines.append("| Base Mainnet | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |")
+    lines.append("")
+    lines.append("## Links\n")
+    lines.append(f"- [Agent Registration](/.well-known/agent-registration.json)")
+    lines.append("- [x402 Protocol](https://www.x402.org/)")
+    lines.append("- [ERC-3009 (transferWithAuthorization)](https://eips.ethereum.org/EIPS/eip-3009)")
+    lines.append("- [ERC-8004 (Agent Identity)](https://eips.ethereum.org/EIPS/eip-8004)")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _publish_skill_md(items, token, ssl_ctx):
+    """Publish the /skill.md aggregate endpoint.
+
+    Creates four resources (no ownerReferences — aggregate, not per-offer):
+      1. ConfigMap  obol-skill-md       — markdown content + httpd.conf
+      2. Deployment obol-skill-md       — busybox httpd serving the ConfigMap
+      3. Service    obol-skill-md       — ClusterIP targeting the deployment
+      4. HTTPRoute  obol-skill-md-route — routes /skill.md to the Service
+    """
+    import hashlib
+
+    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+    _, agent_ns = load_sa()
+    content = _build_skill_md(items, base_url)
+    content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+
+    cm_name = "obol-skill-md"
+    deploy_name = "obol-skill-md"
+    svc_name = "obol-skill-md"
+    route_name = "obol-skill-md-route"
+    labels = {"app": deploy_name, "obol.org/managed-by": "monetize"}
+
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": cm_name, "namespace": agent_ns, "labels": labels},
+        "data": {
+            "skill.md": content,
+            "httpd.conf": ".md:text/markdown\n",
+        },
+    }
+    _apply_resource(f"/api/v1/namespaces/{agent_ns}/configmaps", cm_name, configmap, token, ssl_ctx)
+
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": deploy_name, "namespace": agent_ns, "labels": labels},
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {
+                    "labels": labels,
+                    "annotations": {"obol.org/content-hash": content_hash},
+                },
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "httpd",
+                            "image": "busybox:1.36",
+                            "command": ["httpd", "-f", "-p", "8080", "-h", "/www"],
+                            "ports": [{"containerPort": 8080}],
+                            "volumeMounts": [
+                                {"name": "content", "mountPath": "/www", "readOnly": True},
+                                {"name": "httpdconf", "mountPath": "/etc/httpd.conf", "subPath": "httpd.conf", "readOnly": True},
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "5m", "memory": "8Mi"},
+                                "limits": {"cpu": "50m", "memory": "32Mi"},
+                            },
+                        }
+                    ],
+                    "volumes": [
+                        {
+                            "name": "content",
+                            "configMap": {
+                                "name": cm_name,
+                                "items": [{"key": "skill.md", "path": "skill.md"}],
+                            },
+                        },
+                        {
+                            "name": "httpdconf",
+                            "configMap": {
+                                "name": cm_name,
+                                "items": [{"key": "httpd.conf", "path": "httpd.conf"}],
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    }
+    _apply_resource(f"/apis/apps/v1/namespaces/{agent_ns}/deployments", deploy_name, deployment, token, ssl_ctx)
+
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": svc_name, "namespace": agent_ns, "labels": labels},
+        "spec": {
+            "type": "ClusterIP",
+            "selector": labels,
+            "ports": [{"port": 8080, "targetPort": 8080, "protocol": "TCP"}],
+        },
+    }
+    _apply_resource(f"/api/v1/namespaces/{agent_ns}/services", svc_name, service, token, ssl_ctx)
+
+    httproute = {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "HTTPRoute",
+        "metadata": {"name": route_name, "namespace": agent_ns},
+        "spec": {
+            "parentRefs": [
+                {"name": "traefik-gateway", "namespace": "traefik", "sectionName": "web"}
+            ],
+            "rules": [
+                {
+                    "matches": [{"path": {"type": "Exact", "value": "/skill.md"}}],
+                    "backendRefs": [{"name": svc_name, "namespace": agent_ns, "port": 8080}],
+                }
+            ],
+        },
+    }
+    _apply_resource(
+        f"/apis/gateway.networking.k8s.io/v1/namespaces/{agent_ns}/httproutes",
+        route_name, httproute, token, ssl_ctx,
+    )
+
+    ready_count = sum(1 for i in items if is_condition_true(i.get("status", {}).get("conditions", []), "Ready"))
+    print(f"  Published /skill.md ({ready_count} service(s))")
+
+
 def reconcile(ns, name, token, ssl_ctx):
     """Reconcile a single ServiceOffer through all stages."""
     path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{CRD_PLURAL}/{name}"
@@ -1608,6 +1847,10 @@ def cmd_process(ns, name, all_offers, quick, token, ssl_ctx):
 
         if not items:
             print("READY: 0/0 offers" if quick else "HEARTBEAT_OK: No ServiceOffers found")
+            try:
+                _publish_skill_md([], token, ssl_ctx)
+            except Exception as e:
+                print(f"  Warning: skill.md publish failed: {e}", file=sys.stderr)
             return
 
         pending = []
@@ -1618,6 +1861,10 @@ def cmd_process(ns, name, all_offers, quick, token, ssl_ctx):
 
         if not pending:
             print(f"READY: {len(items)}/{len(items)} offers" if quick else "HEARTBEAT_OK: All offers are Ready")
+            try:
+                _publish_skill_md(items, token, ssl_ctx)
+            except Exception as e:
+                print(f"  Warning: skill.md publish failed: {e}", file=sys.stderr)
             return
 
         if quick:
@@ -1651,6 +1898,14 @@ def cmd_process(ns, name, all_offers, quick, token, ssl_ctx):
                     reconcile(item_ns, item_name, token, ssl_ctx)
                 except Exception as e:
                     print(f"  Error reconciling {item_ns}/{item_name}: {e}", file=sys.stderr)
+
+        # Regenerate /skill.md from current state of all offers.
+        try:
+            all_path = f"/apis/{CRD_GROUP}/{CRD_VERSION}/{CRD_PLURAL}"
+            all_data = api_get(all_path, token, ssl_ctx)
+            _publish_skill_md(all_data.get("items", []), token, ssl_ctx)
+        except Exception as e:
+            print(f"  Warning: skill.md publish failed: {e}", file=sys.stderr)
     else:
         if not ns or not name:
             print("Error: --namespace and name are required (or use --all)", file=sys.stderr)
