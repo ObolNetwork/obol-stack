@@ -85,6 +85,10 @@ type Deployment struct {
 	// Required when TEEType is set. Bound into the TEE attestation user_data.
 	ModelHash string `json:"model_hash,omitempty"`
 
+	// NoPaymentGate disables the built-in x402 payment middleware when the
+	// gateway runs behind the cluster's x402 verifier to avoid double-gating.
+	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
+
 	// Provenance holds optional metadata about how the model was produced
 	// (e.g. autoresearch experiment results). Stored alongside the deployment
 	// config and passed to the registration document when selling.
