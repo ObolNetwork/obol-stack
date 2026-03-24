@@ -13,7 +13,7 @@ A cluster-wide OpenAI-compatible proxy that routes LLM traffic to actual provide
 | `llm` | Namespace | Dedicated namespace for LLM infrastructure |
 | `litellm-config` | ConfigMap | `config.yaml` with `model_list` (model definitions + routing) |
 | `litellm-secrets` | Secret | `LITELLM_MASTER_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` |
-| `litellm` | Deployment | `ghcr.io/berriai/litellm:main-stable`, port 4000 |
+| `litellm` | Deployment | `ghcr.io/berriai/litellm:main-v1.82.3`, port 4000 |
 | `litellm` | Service | `litellm.llm.svc.cluster.local:4000` |
 | `ollama` | Service (ExternalName) | Routes to host Ollama |
 
