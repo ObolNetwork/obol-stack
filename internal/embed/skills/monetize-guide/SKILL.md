@@ -66,7 +66,26 @@ ollama pull qwen3.5:4b   # Small, fast
 ollama pull qwen3.5:9b   # Medium, good quality
 ```
 
-#### For HTTP Services
+#### For External LAN Resources (GPU servers, vLLM, etc.)
+
+Ask the user if they have a GPU server or inference endpoint on their local network. If yes, get:
+- The endpoint URL (e.g., `http://192.168.0.202:8000/v1`)
+- The model name served at that endpoint
+
+Verify it's reachable and OpenAI-compatible:
+```bash
+# Probe the external endpoint
+curl -s <ENDPOINT_URL>/models | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for m in data.get('data', []):
+    print(f\"  {m['id']}\")
+"
+```
+
+If reachable, this endpoint can be sold by bridging it through LiteLLM (see Phase 4).
+
+#### For HTTP Services (in-cluster)
 
 ```bash
 # List services in the cluster that could be monetized
@@ -118,7 +137,37 @@ obol sell inference <name> \
 
 The `--wallet` and `--chain` will be auto-resolved (remote-signer wallet, base-sepolia default).
 
-#### HTTP Service
+#### External LAN Resource (GPU server, vLLM, etc.)
+
+Two steps: first bridge the endpoint into LiteLLM, then sell LiteLLM.
+
+```bash
+# Step A: Add the external endpoint to LiteLLM
+obol model setup custom --name <name> \
+  --endpoint <full_url_with_v1> \
+  --model "<model_name_at_endpoint>"
+
+# Step B: Sell it through LiteLLM
+obol sell http <name> \
+  --upstream litellm \
+  --port 4000 \
+  --namespace llm \
+  --per-request <confirmed_price> \
+  --wallet <wallet_address> \
+  --chain base-sepolia \
+  --health-path /health/liveliness \
+  --register \
+  --register-name "<descriptive name>" \
+  --register-description "<what the service does>" \
+  --register-skills natural_language_processing/natural_language_generation/text_completion \
+  --register-domains technology/data_science
+```
+
+The `--endpoint` must include `/v1` if the upstream is an OpenAI-compatible server (vLLM, TGI, etc.) — LiteLLM does not append it automatically.
+
+LAN IPs (e.g., `http://192.168.0.202:8000/v1`) are reachable from inside the k3d cluster without any additional network configuration.
+
+#### HTTP Service (in-cluster)
 
 ```bash
 obol sell http <name> \
