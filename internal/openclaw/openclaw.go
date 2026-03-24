@@ -2268,9 +2268,6 @@ func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaul
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
-
 	return buildDirectProviderOverlay(providerName, baseURL, defaultAPI, defaultAPIKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
@@ -2282,9 +2279,6 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("custom base URL is required")
 	}
-	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
-
 	fmt.Printf("Custom model ID: ")
 	modelID, _ := reader.ReadString('\n')
 	modelID = strings.TrimSpace(modelID)

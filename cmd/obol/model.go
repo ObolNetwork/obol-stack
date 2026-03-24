@@ -213,7 +213,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			name := cmd.String("name")
-			endpoint := model.WarnAndStripV1Suffix(cmd.String("endpoint"))
+			endpoint := cmd.String("endpoint")
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
