@@ -1,12 +1,33 @@
 # CLI Agent-Readiness Optimizations
 
+## Status
+
+**Implemented (this branch)**:
+- Phase 1: Global `--output json` / `-o json` / `OBOL_OUTPUT=json` flag
+- Phase 1: `OutputMode` + `IsJSON()` + `JSON()` on `internal/ui/UI`
+- Phase 1: 11 commands refactored with typed JSON results (sell list/status/info, network list, model status/list, version, update, openclaw list, tunnel status)
+- Phase 1: Human output redirected to stderr in JSON mode (stdout is clean JSON)
+- Phase 2: `internal/validate/` package (Name, Namespace, WalletAddress, ChainName, Price, URL, Path, NoControlChars)
+- Phase 2: Headless prompt paths — `Confirm`, `Select`, `Input`, `SecretInput` auto-resolve defaults in non-TTY/JSON mode
+- Phase 2: `sell delete` migrated from raw `fmt.Scanln` to `u.Confirm()`
+- Phase 6: `CONTEXT.md` — agent-facing context document
+
+**Deferred to follow-up**:
+- Phase 1D: `--from-json` raw JSON input
+- Phase 2B: `validate.*` wired into all command handlers
+- Phase 2C: model.go bufio migration, openclaw onboard headless path
+- Phase 3: `obol describe` schema introspection
+- Phase 4: `--fields` field filtering
+- Phase 5: `--dry-run` for mutating commands
+- Phase 7: MCP surface (`obol mcp`)
+
 ## Context
 
 The obol CLI is increasingly consumed by AI agents — Claude Code during development, OpenClaw agents in-cluster, and soon MCP clients. Today the CLI is human-optimized: colored output, spinners, interactive prompts, and hand-formatted tables. Agents need structured output, non-interactive paths, input hardening, and runtime introspection. This plan makes the CLI agent-ready while preserving human DX.
 
-**Current strengths**: `internal/ui/` abstraction with TTY detection (`ui.go:17`), `--verbose`/`--quiet` global flags, `internal/schemas/` with JSON-tagged Go types, `--force` pattern for non-interactive destructive ops, 23 SKILL.md files shipped in `internal/embed/skills/`, two commands already have `--json` (`update.go:20`, `sell.go:841`).
+**Strengths**: `internal/ui/` abstraction with TTY detection, `OutputMode` (human/json), `--verbose`/`--quiet`/`--output` global flags, `internal/schemas/` with JSON-tagged Go types, `internal/validate/` for input validation, `--force` pattern for non-interactive destructive ops, 23 SKILL.md files shipped in `internal/embed/skills/`, `CONTEXT.md` for agent consumption.
 
-**Key gaps**: No global structured output, ~100+ raw `fmt.Printf` calls in `cmd/obol/` bypassing the UI layer, no input validation, no schema introspection, no `--dry-run`, no field filtering, no raw JSON input path, no `CONTEXT.md` for agent consumption, interactive flows with no headless bypass (`openclaw onboard` hardwired `Interactive: true` in `openclaw.go:36`), no MCP surface, `version.BuildInfo()` returns a string not a struct.
+**Remaining gaps**: `--from-json` for structured input, some `fmt.Printf` calls still bypass UI layer, `model.go` interactive prompts not fully migrated, `openclaw onboard` still hardwired `Interactive: true`, no schema introspection, no `--dry-run`, no field filtering, no MCP surface.
 
 ---
 

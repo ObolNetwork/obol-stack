@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/agent"
@@ -119,9 +120,20 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 				Usage:   "Suppress all output except errors and warnings",
 				Sources: cli.EnvVars("OBOL_QUIET"),
 			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "Output format: human or json",
+				Value:   "human",
+				Sources: cli.EnvVars("OBOL_OUTPUT"),
+			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			u := ui.NewWithOptions(cmd.Bool("verbose"), cmd.Bool("quiet"))
+			outputMode, err := ui.ParseOutputMode(cmd.String("output"))
+			if err != nil {
+				return ctx, err
+			}
+			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
 			cmd.Metadata = map[string]any{"ui": u}
 			return ctx, nil
 		},
@@ -467,6 +479,25 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 				Name:  "version",
 				Usage: "Show detailed version information",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					if u.IsJSON() {
+						result := struct {
+							Version   string `json:"version"`
+							GitCommit string `json:"git_commit"`
+							BuildTime string `json:"build_time"`
+							GitDirty  string `json:"git_dirty"`
+							GoVersion string `json:"go_version,omitempty"`
+						}{
+							Version:   version.Version,
+							GitCommit: version.GitCommit,
+							BuildTime: version.BuildTime,
+							GitDirty:  version.GitDirty,
+						}
+						if bi, ok := debugReadBuildInfo(); ok {
+							result.GoVersion = bi
+						}
+						return u.JSON(result)
+					}
 					// Version output should always be unformatted for parseability.
 					fmt.Print(version.BuildInfo())
 					return nil
@@ -613,4 +644,13 @@ func getUI(cmd *cli.Command) *ui.UI {
 		}
 	}
 	return ui.New(false)
+}
+
+// debugReadBuildInfo returns the Go version from runtime/debug.ReadBuildInfo.
+func debugReadBuildInfo() (string, bool) {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", false
+	}
+	return bi.GoVersion, true
 }

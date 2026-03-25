@@ -28,6 +28,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mark3labs/x402-go"
@@ -549,11 +550,21 @@ func sellListCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			args := []string{"get", "serviceoffers.obol.org"}
 			if ns := cmd.String("namespace"); ns != "" {
 				args = append(args, "-n", ns)
 			} else {
 				args = append(args, "-A")
+			}
+			if u.IsJSON() {
+				args = append(args, "-o", "json")
+				out, err := kubectlOutput(cfg, args...)
+				if err != nil {
+					return err
+				}
+				fmt.Print(out)
+				return nil
 			}
 			args = append(args, "-o", "wide")
 			return kubectlRun(cfg, args...)
@@ -578,6 +589,8 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
 			// If a name is provided, show per-offer conditions.
 			if cmd.NArg() > 0 {
 				name := cmd.Args().First()
@@ -585,10 +598,19 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				if ns == "" {
 					return fmt.Errorf("namespace required: obol sell status <name> -n <ns>")
 				}
-				return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "yaml")
+				outputFmt := "-o"
+				outputVal := "yaml"
+				if u.IsJSON() {
+					outputVal = "json"
+				}
+				return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, outputFmt, outputVal)
 			}
 
 			// No name: show global pricing config + registrations.
+			if u.IsJSON() {
+				return sellStatusGlobalJSON(cfg, u)
+			}
+
 			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
 			if err != nil {
 				fmt.Printf("Payment configuration not available (%v)\n", err)
@@ -632,6 +654,91 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			return nil
 		},
 	}
+}
+
+// sellStatusGlobalJSON outputs the global sell status as JSON.
+func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
+	type routeJSON struct {
+		Pattern                string `json:"pattern"`
+		Price                  string `json:"price"`
+		Description            string `json:"description,omitempty"`
+		PayTo                  string `json:"pay_to,omitempty"`
+		PriceModel             string `json:"price_model,omitempty"`
+		PerMTok                string `json:"per_mtok,omitempty"`
+		ApproxTokensPerRequest int    `json:"approx_tokens_per_request,omitempty"`
+	}
+	type gatewayJSON struct {
+		Name        string `json:"name"`
+		ListenAddr  string `json:"listen_addr"`
+		UpstreamURL string `json:"upstream_url"`
+		Price       string `json:"price"`
+		Chain       string `json:"chain"`
+	}
+	type statusGlobal struct {
+		Payment *struct {
+			Wallet         string      `json:"wallet"`
+			Chain          string      `json:"chain"`
+			FacilitatorURL string      `json:"facilitator_url"`
+			VerifyOnly     bool        `json:"verify_only"`
+			Routes         []routeJSON `json:"routes"`
+		} `json:"payment,omitempty"`
+		PaymentError    string         `json:"payment_error,omitempty"`
+		Registrations   json.RawMessage `json:"registrations,omitempty"`
+		LocalGateways   []gatewayJSON  `json:"local_gateways,omitempty"`
+	}
+
+	var result statusGlobal
+
+	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
+	if err != nil {
+		result.PaymentError = err.Error()
+	} else {
+		p := &struct {
+			Wallet         string      `json:"wallet"`
+			Chain          string      `json:"chain"`
+			FacilitatorURL string      `json:"facilitator_url"`
+			VerifyOnly     bool        `json:"verify_only"`
+			Routes         []routeJSON `json:"routes"`
+		}{
+			Wallet:         pricingCfg.Wallet,
+			Chain:          pricingCfg.Chain,
+			FacilitatorURL: pricingCfg.FacilitatorURL,
+			VerifyOnly:     pricingCfg.VerifyOnly,
+		}
+		for _, r := range pricingCfg.Routes {
+			p.Routes = append(p.Routes, routeJSON{
+				Pattern:                r.Pattern,
+				Price:                  r.Price,
+				Description:            r.Description,
+				PayTo:                  r.PayTo,
+				PriceModel:             r.PriceModel,
+				PerMTok:                r.PerMTok,
+				ApproxTokensPerRequest: r.ApproxTokensPerRequest,
+			})
+		}
+		result.Payment = p
+	}
+
+	// Fetch registrations as raw JSON from kubectl.
+	regOut, regErr := kubectlOutput(cfg, "get", "serviceoffers.obol.org", "-A", "-o", "json")
+	if regErr == nil {
+		result.Registrations = json.RawMessage(regOut)
+	}
+
+	// Local inference gateways.
+	store := inference.NewStore(cfg.ConfigDir)
+	deployments, _ := store.List()
+	for _, d := range deployments {
+		result.LocalGateways = append(result.LocalGateways, gatewayJSON{
+			Name:        d.Name,
+			ListenAddr:  d.ListenAddr,
+			UpstreamURL: d.UpstreamURL,
+			Price:       formatInferencePriceSummary(d),
+			Chain:       d.Chain,
+		})
+	}
+
+	return u.JSON(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +805,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			if cmd.NArg() == 0 {
 				return fmt.Errorf("name required: obol sell delete <name> -n <ns>")
 			}
@@ -705,14 +813,8 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
-				fmt.Printf("Delete the service offering %s/%s? This will:\n", ns, name)
-				fmt.Println("  - Remove the associated Middleware and HTTPRoute")
-				fmt.Println("  - Remove the pricing route from the x402 verifier")
-				fmt.Println("  - Deactivate the ERC-8004 registration (if registered)")
-				fmt.Print("[y/N] ")
-				var response string
-				fmt.Scanln(&response)
-				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+				msg := fmt.Sprintf("Delete the service offering %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove the pricing route from the x402 verifier\n  - Deactivate the ERC-8004 registration (if registered)", ns, name)
+				if !u.Confirm(msg, false) {
 					fmt.Println("Aborted.")
 					return nil
 				}
@@ -1270,6 +1372,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			name := cmd.Args().First()
 			if name == "" {
 				return fmt.Errorf("usage: obol sell info <name>")
@@ -1289,7 +1392,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 				k, keyErr = enclave.NewKey(d.EnclaveTag)
 			}
 
-			if cmd.Bool("json") {
+			if u.IsJSON() || cmd.Bool("json") {
 				out := map[string]any{
 					"name":                      d.Name,
 					"enclave_tag":               d.EnclaveTag,
