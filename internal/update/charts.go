@@ -136,9 +136,9 @@ func CheckChartVersions(cfg *config.Config) ([]ChartStatus, error) {
 
 		if CompareVersions(rel.Version, latest) < 0 {
 			if MajorVersion(latest) != MajorVersion(rel.Version) {
-				status = "Major update available"
+				status = statusMajorUpdateAvailable
 			} else {
-				status = "Update available"
+				status = statusUpdateAvailable
 			}
 		}
 

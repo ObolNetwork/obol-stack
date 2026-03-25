@@ -6,6 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ObolNetwork/obol-stack/internal/model"
+)
+
+// API key environment variable names for known providers.
+const (
+	envAnthropicAPIKey = "ANTHROPIC_API_KEY"
+	envOpenAIAPIKey    = "OPENAI_API_KEY"
 )
 
 // ImportResult holds the parsed configuration from ~/.openclaw/openclaw.json
@@ -401,11 +409,11 @@ func sanitizeModelAPI(api string) string {
 
 func defaultProviderAPIKeyEnvVar(provider string) string {
 	switch provider {
-	case "anthropic":
-		return "ANTHROPIC_API_KEY"
-	case "openai":
-		return "OPENAI_API_KEY"
-	case "ollama":
+	case model.ProviderAnthropic:
+		return envAnthropicAPIKey
+	case model.ProviderOpenAI:
+		return envOpenAIAPIKey
+	case model.ProviderOllama:
 		return "OLLAMA_API_KEY"
 	default:
 		var out []rune

@@ -25,13 +25,18 @@ const (
 	secretName    = "litellm-secrets"
 	configMapName = "litellm-config"
 	deployName    = "litellm"
+
+	// Provider name constants used in model routing and configuration.
+	ProviderOllama    = "ollama"
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
 )
 
 // Known provider definitions — no need to query the running pod.
 var knownProviders = []ProviderInfo{
-	{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
-	{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
-	{ID: "ollama", Name: "Ollama (local)", EnvVar: ""},
+	{ID: ProviderAnthropic, Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
+	{ID: ProviderOpenAI, Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
+	{ID: ProviderOllama, Name: "Ollama (local)", EnvVar: ""},
 }
 
 // ProviderInfo describes an LLM provider.
@@ -561,7 +566,7 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 			st.HasAPIKey = true
 		}
 
-		if p.ID == "ollama" {
+		if p.ID == ProviderOllama {
 			st.HasAPIKey = true // Ollama doesn't need a key
 		}
 
@@ -708,11 +713,11 @@ func expandWildcard(provider string, liveModels []string) []string {
 // ProviderFromModelName infers the provider from a model name string.
 func ProviderFromModelName(name string) string {
 	if strings.Contains(name, "claude") {
-		return "anthropic"
+		return ProviderAnthropic
 	}
 
 	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
-		return "openai"
+		return ProviderOpenAI
 	}
 
 	return ""
@@ -762,13 +767,13 @@ func ProviderEnvVar(provider string) string {
 // Used to populate OpenClaw's model allowlist when a wildcard is configured
 // and the LiteLLM pod is not reachable for a live /v1/models query.
 var WellKnownModels = map[string][]string{
-	"anthropic": {
+	ProviderAnthropic: {
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5-20251001",
 		"claude-sonnet-4-5-20250929",
 	},
-	"openai": {
+	ProviderOpenAI: {
 		"gpt-5.4",
 		"gpt-4.1",
 		"gpt-4.1-mini",
@@ -785,7 +790,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 	var entries []ModelEntry
 
 	switch provider {
-	case "ollama":
+	case ProviderOllama:
 		// Explicit entries — ollama_chat/* wildcards are broken in LiteLLM
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
@@ -796,7 +801,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				},
 			})
 		}
-	case "anthropic":
+	case ProviderAnthropic:
 		// Wildcard: routes any anthropic model without explicit registration
 		entries = append(entries, ModelEntry{
 			ModelName:     "anthropic/*",
@@ -809,7 +814,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				LiteLLMParams: LiteLLMParams{Model: m, APIKey: "os.environ/ANTHROPIC_API_KEY"},
 			})
 		}
-	case "openai":
+	case ProviderOpenAI:
 		entries = append(entries, ModelEntry{
 			ModelName:     "openai/*",
 			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
@@ -895,24 +900,24 @@ func detectProvider(entry ModelEntry) string {
 
 	model := entry.LiteLLMParams.Model
 	// Wildcard entries
-	if strings.HasPrefix(model, "anthropic/") {
-		return "anthropic"
+	if strings.HasPrefix(model, ProviderAnthropic+"/") {
+		return ProviderAnthropic
 	}
 
-	if strings.HasPrefix(model, "ollama/") || strings.HasPrefix(model, "ollama_chat/") {
-		return "ollama"
+	if strings.HasPrefix(model, ProviderOllama+"/") || strings.HasPrefix(model, "ollama_chat/") {
+		return ProviderOllama
 	}
 
-	if strings.HasPrefix(model, "openai/") {
-		return "openai"
+	if strings.HasPrefix(model, ProviderOpenAI+"/") {
+		return ProviderOpenAI
 	}
 	// Anthropic models without prefix
 	if strings.Contains(model, "claude") {
-		return "anthropic"
+		return ProviderAnthropic
 	}
 
 	if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
-		return "openai"
+		return ProviderOpenAI
 	}
 
 	return "unknown"

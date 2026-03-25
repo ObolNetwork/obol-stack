@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func validateInstallOptions(networkName string, values map[string]string) error {
+func validateInstallOptions(networkName string, values map[string]string) error { //nolint:unparam // networkName will vary when more networks gain validation
 	if networkName != "ethereum" {
 		return nil
 	}

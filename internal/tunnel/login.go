@@ -163,10 +163,7 @@ func parseFirstUUID(s string) (string, error) {
 
 func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
 	// Secret: account certificate + tunnel credentials (locally-managed tunnel requires origincert).
-	secretYAML, err := buildLocalManagedSecretYAML(hostname, certPEM, credJSON)
-	if err != nil {
-		return err
-	}
+	secretYAML := buildLocalManagedSecretYAML(certPEM, credJSON)
 
 	if err := kubectlApply(cfg, u, kubeconfigPath, secretYAML); err != nil {
 		return err
@@ -186,7 +183,7 @@ const (
 	localManagedConfigMapName = "cloudflared-local-config"
 )
 
-func buildLocalManagedSecretYAML(hostname string, certPEM, credJSON []byte) ([]byte, error) {
+func buildLocalManagedSecretYAML(certPEM, credJSON []byte) []byte {
 	certB64 := base64.StdEncoding.EncodeToString(certPEM)
 	credB64 := base64.StdEncoding.EncodeToString(credJSON)
 
@@ -200,9 +197,8 @@ data:
   cert.pem: %s
   credentials.json: %s
 `, localManagedSecretName, tunnelNamespace, certB64, credB64)
-	_ = hostname // reserved for future labels/annotations
 
-	return []byte(secret), nil
+	return []byte(secret)
 }
 
 func buildLocalManagedConfigYAML(hostname, tunnelID string) []byte {

@@ -2351,14 +2351,14 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", envAnthropicAPIKey, "claude-sonnet-4-6", "Claude Sonnet 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
 
 			return result, nil, nil
 		case "5":
-			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", envOpenAIAPIKey, "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2413,14 +2413,14 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", envAnthropicAPIKey, "claude-sonnet-4-6", "Claude Sonnet 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
 
 		return result, nil, nil
 	case "4":
-		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", envOpenAIAPIKey, "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2543,7 +2543,7 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 
 	apiKeyEnvVar = strings.TrimSpace(apiKeyEnvVar)
 	if apiKeyEnvVar == "" {
-		apiKeyEnvVar = "OPENAI_API_KEY"
+		apiKeyEnvVar = envOpenAIAPIKey
 	}
 
 	fmt.Printf("API key (optional, leave empty to configure later): ")
@@ -2572,7 +2572,7 @@ func buildLiteLLMRoutedOverlay(cfg *config.Config, cloud *CloudProviderInfo) *Im
 				Name:         "openai",
 				BaseURL:      "http://litellm.llm.svc.cluster.local:4000/v1",
 				API:          "openai-completions",
-				APIKeyEnvVar: "OPENAI_API_KEY",
+				APIKeyEnvVar: envOpenAIAPIKey,
 				APIKey:       litellmMasterKey(cfg),
 				Models: []ImportedModel{
 					{ID: cloud.ModelID, Name: cloud.Display},
@@ -2590,18 +2590,18 @@ func buildDirectProviderOverlay(providerName, baseURL, api, apiKeyEnvVar, modelI
 	var agentPrefix string
 
 	switch providerName {
-	case "anthropic":
-		agentPrefix = "anthropic"
-	case "openai":
-		agentPrefix = "openai"
+	case model.ProviderAnthropic:
+		agentPrefix = model.ProviderAnthropic
+	case model.ProviderOpenAI:
+		agentPrefix = model.ProviderOpenAI
 	default:
 		agentPrefix = providerName
 	}
 
 	providers := []ImportedProvider{
-		{Name: "anthropic", Disabled: providerName != "anthropic"},
-		{Name: "openai", Disabled: providerName != "openai"},
-		{Name: "ollama", Disabled: providerName != "ollama"},
+		{Name: model.ProviderAnthropic, Disabled: providerName != model.ProviderAnthropic},
+		{Name: model.ProviderOpenAI, Disabled: providerName != model.ProviderOpenAI},
+		{Name: model.ProviderOllama, Disabled: providerName != model.ProviderOllama},
 	}
 	for i := range providers {
 		if providers[i].Name != providerName {

@@ -29,6 +29,10 @@ const (
 	dnsImage      = "alpine:3.21"
 	domain        = "obol.stack"
 
+	// OS name constants for runtime.GOOS comparisons.
+	osDarwin = "darwin"
+	osLinux  = "linux"
+
 	// macOS: custom port, /etc/resolver handles port directive
 	macHostPort = "5553"
 
@@ -56,7 +60,7 @@ const (
 // Docker container. On Linux, this is a no-op — NM dnsmasq handles
 // resolution without a container.
 func EnsureRunning() error {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == osDarwin {
 		return ensureMacOSContainer()
 	}
 
@@ -65,7 +69,7 @@ func EnsureRunning() error {
 
 // Stop removes the DNS resolver container (macOS only).
 func Stop() {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != osDarwin {
 		return
 	}
 
@@ -84,9 +88,9 @@ func Stop() {
 // Linux: configures NM dnsmasq plugin for wildcard resolution
 func ConfigureSystemResolver() error {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		return configureMacOSResolver()
-	case "linux":
+	case osLinux:
 		return configureLinuxResolver()
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
@@ -96,9 +100,9 @@ func ConfigureSystemResolver() error {
 // RemoveSystemResolver removes the host OS DNS configuration for *.obol.stack.
 func RemoveSystemResolver() {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		removeMacOSResolver()
-	case "linux":
+	case osLinux:
 		removeNMDnsmasq()
 	}
 
@@ -108,10 +112,10 @@ func RemoveSystemResolver() {
 // IsResolverConfigured checks whether the system resolver is already set up.
 func IsResolverConfigured() bool {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		_, err := os.Stat(filepath.Join(macResolverDir, macResolverFile))
 		return err == nil
-	case "linux":
+	case osLinux:
 		return hasNMDnsmasqConfig() && isNMResolvConfActive()
 	default:
 		return false

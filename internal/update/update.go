@@ -16,6 +16,11 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
 
+const (
+	statusUpdateAvailable      = "Update available"
+	statusMajorUpdateAvailable = "Major update available"
+)
+
 // UpdateResult holds the complete results of an update check
 type UpdateResult struct {
 	HelmRepoUpdated        bool
@@ -57,9 +62,9 @@ func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*Upda
 			result.ChartStatuses = statuses
 			for _, s := range statuses {
 				switch s.Status {
-				case "Update available":
+				case statusUpdateAvailable:
 					result.ChartUpdatesAvail = true
-				case "Major update available":
+				case statusMajorUpdateAvailable:
 					result.ChartMajorUpdatesAvail = true
 				}
 			}
@@ -251,7 +256,7 @@ func checkSkippedMajorUpdates(cfg *config.Config) []VersionBump {
 	var skipped []VersionBump
 
 	for _, s := range statuses {
-		if s.Status == "Major update available" {
+		if s.Status == statusMajorUpdateAvailable {
 			skipped = append(skipped, VersionBump{
 				Chart: s.Chart,
 				From:  s.Pinned,
@@ -409,7 +414,7 @@ func PrintCLIStatus(u *ui.UI, current string, release *LatestRelease, isDev bool
 
 	status := "Up to date"
 	if CompareVersions(current, release.Version) < 0 {
-		status = "Update available"
+		status = statusUpdateAvailable
 	}
 
 	u.Printf("  Obol CLI  %-10s  %-10s  %s", currentDisplay, release.TagName, status)
@@ -431,7 +436,7 @@ func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
 		count := 0
 
 		for _, s := range result.ChartStatuses {
-			if s.Status == "Update available" {
+			if s.Status == statusUpdateAvailable {
 				count++
 			}
 		}
@@ -443,7 +448,7 @@ func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
 		count := 0
 
 		for _, s := range result.ChartStatuses {
-			if s.Status == "Major update available" {
+			if s.Status == statusMajorUpdateAvailable {
 				count++
 			}
 		}
