@@ -211,7 +211,7 @@ func (v *Verifier) HandleWellKnown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(reg)
+	_ = json.NewEncoder(w).Encode(reg) //nolint:errchkjson // controlled registration struct
 }
 
 // MetricsHandler exposes Prometheus metrics for the verifier.

@@ -387,7 +387,7 @@ func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int
 	// Read config for upstream counts.
 	erpcConfig, readErr := readERPCConfig(cfg)
 	if readErr != nil {
-		return podStatus, nil, nil
+		return podStatus, nil, nil //nolint:nilerr // config unreadable; return pod status without upstream counts
 	}
 
 	upstreamCounts = make(map[int]int)

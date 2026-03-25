@@ -297,7 +297,7 @@ Examples:
 			}
 
 			// ChainList mode.
-			maxCount := int(cmd.Int("count"))
+			maxCount := cmd.Int("count")
 			if maxCount <= 0 {
 				maxCount = 3
 			}

@@ -43,18 +43,10 @@ linters:
     - wrapcheck       # obol-stack has no app/errors wrapper package
     - wsl
     # TODO: re-enable incrementally as issues are fixed
-    - errcheck        # 15 issues in non-test code
-    - errchkjson      # 5 issues
-    - goconst         # 32 repeated strings
-    - gocritic        # 10 issues
-    # gosec — re-enabled
-    - nilerr          # 10 issues
-    - nilnil          # 3 issues
-    - nosprintfhostport # 2 issues
-    - staticcheck     # 8 issues (autofix conflicts)
-    - unconvert       # 5 unnecessary conversions
-    - unparam         # 28 unused params
-    - wastedassign    # 1 issue
+    - goconst         # 32 repeated strings — low priority, re-enable later
+    - unparam         # 28 unused params — low priority, re-enable later
+    # Re-enabled: errcheck, errchkjson, gocritic, gosec, nilerr, nilnil,
+    # nosprintfhostport, staticcheck, unconvert, wastedassign
   settings:
     dupl:
       threshold: 400

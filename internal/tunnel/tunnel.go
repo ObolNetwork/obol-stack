@@ -76,7 +76,7 @@ func Status(cfg *config.Config, u *ui.UI) error {
 			u.Print("  - Check logs: obol tunnel logs")
 			u.Print("  - Restart tunnel: obol tunnel restart")
 
-			return nil
+			return nil //nolint:nilerr // URL unavailable is a display-only issue; show troubleshooting hints instead
 		}
 
 		url = tunnelURL

@@ -100,7 +100,7 @@ type openclawModel struct {
 func DetectExistingConfig() (*ImportResult, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr,nilnil // home dir unavailable; treat as no existing config
 	}
 
 	return detectExistingConfigAt(home)
@@ -114,7 +114,7 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // file absent means no prior config; not an error
 		}
 
 		return nil, fmt.Errorf("failed to read %s: %w", configPath, err)

@@ -78,7 +78,7 @@ func main() {
 
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		log.Fatalf("listen: %v", err) //nolint:gocritic // intentional fatal in main; defers are for graceful shutdown only
 	}
 
 	log.Printf("x402 verifier listening on %s", *listen)

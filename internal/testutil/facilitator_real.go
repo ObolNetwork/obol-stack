@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -75,7 +75,7 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 
 	rf := &RealFacilitator{
 		Port:       port,
-		ClusterURL: fmt.Sprintf("http://%s:%d", clusterHostURL(), port),
+		ClusterURL: "http://" + net.JoinHostPort(clusterHostURL(), strconv.Itoa(port)),
 		cmd:        cmd,
 		cancel:     cancel,
 	}
@@ -243,12 +243,7 @@ func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey s
 // waitReady polls the facilitator's /supported endpoint until it returns 200.
 func (rf *RealFacilitator) waitReady(timeout time.Duration) error {
 	// Use localhost URL for readiness check (not cluster URL).
-	var url string
-	if runtime.GOOS == "darwin" {
-		url = fmt.Sprintf("http://127.0.0.1:%d/supported", rf.Port)
-	} else {
-		url = fmt.Sprintf("http://127.0.0.1:%d/supported", rf.Port)
-	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/supported", rf.Port)
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

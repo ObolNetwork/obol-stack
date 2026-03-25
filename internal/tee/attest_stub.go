@@ -96,7 +96,7 @@ func NewKey(tag, modelHash string) (enclave.Key, error) {
 
 	// 65-byte uncompressed SEC1 public key.
 	pub := b.privKey.PublicKey
-	pubBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y)
+	pubBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y) //nolint:staticcheck // elliptic.Marshal needed for raw SEC1 encoding, not ECDH
 
 	return &teeKey{
 		tag:       tag,

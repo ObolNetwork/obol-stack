@@ -518,7 +518,7 @@ func loadUserSecretsFile(deploymentDir string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // file absent means no user secrets; not an error
 		}
 
 		return nil, err
@@ -774,7 +774,7 @@ func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int)
 		var stdout bytes.Buffer
 
 		cmd.Stdout = &stdout
-		cmd.Run()
+		_ = cmd.Run()
 
 		podName := strings.TrimSpace(stdout.String())
 		if podName != "" {
@@ -998,7 +998,7 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 					if _, err := fmt.Sscanf(portPart, "%d", &p); err == nil {
 						parsedPort <- p
 						// Continue draining to prevent pipe blocking
-						io.Copy(io.Discard, stdoutPipe)
+						_, _ = io.Copy(io.Discard, stdoutPipe)
 
 						return
 					}
@@ -1037,7 +1037,7 @@ func (pf *portForwarder) Stop() {
 	case <-pf.done:
 	case <-time.After(5 * time.Second):
 		if pf.cmd.Process != nil {
-			pf.cmd.Process.Kill()
+			_ = pf.cmd.Process.Kill()
 		}
 	}
 }
@@ -1459,7 +1459,7 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 
 	// Append --url and --token to the args
 	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
-	fullArgs := append(args, "--url", wsURL, "--token", token)
+	fullArgs := append(append([]string{}, args...), "--url", wsURL, "--token", token)
 
 	cmd := exec.Command(openclawBinary, fullArgs...)
 	cmd.Stdin = os.Stdin
@@ -1481,7 +1481,7 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 		exitErr := &exec.ExitError{}
 		if errors.As(err, &exitErr) {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus())
+				os.Exit(status.ExitStatus()) //nolint:gocritic // intentional exit to propagate child exit code; defers handle cleanup
 			}
 		}
 
@@ -1545,7 +1545,7 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	ids, err := ListInstanceIDs(cfg)
 	if err != nil || len(ids) == 0 {
-		return nil
+		return nil //nolint:nilerr // no instances to sync; not an error
 	}
 
 	masterKey := litellmMasterKey(cfg)
@@ -1612,7 +1612,7 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
 	if len(cloud) > 0 {
 		primary = cloud[0]
-		fallbacks = append(cloud[1:], local...)
+		fallbacks = append(append([]string{}, cloud[1:]...), local...)
 	} else {
 		primary = local[0]
 		fallbacks = local[1:]
@@ -1706,7 +1706,7 @@ func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []str
 			"openclaw.json": string(patched),
 		},
 	}
-	applyRaw, _ := json.Marshal(applyPayload)
+	applyRaw, _ := json.Marshal(applyPayload) //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 
 	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
 		"--server-side", "--field-manager=helm", "--force-conflicts")
@@ -1790,8 +1790,10 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 
 	inOpenAI := false
 	inModelList := false
-	modelListIndent := ""
-	replaced := false
+
+	var modelListIndent string
+
+	var replaced bool
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -2156,7 +2158,7 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 			"openclaw.json": string(patched),
 		},
 	}
-	applyRaw, _ := json.Marshal(applyPayload)
+	applyRaw, _ := json.Marshal(applyPayload) //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 
 	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
 		"--server-side", "--field-manager=helm", "--force-conflicts")

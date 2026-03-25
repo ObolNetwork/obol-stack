@@ -38,7 +38,7 @@ func (b *K3dBackend) Prerequisites(cfg *config.Config) error {
 
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
-		return errors.New("Docker is not running. k3d backend requires Docker.\nStart Docker and try again")
+		return errors.New("docker is not running; k3d backend requires Docker — start Docker and try again")
 	}
 
 	// Check k3d binary exists

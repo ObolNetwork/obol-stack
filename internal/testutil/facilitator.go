@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 )
@@ -129,7 +130,7 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 	mf.Server.Start()
 
 	mf.Port = port
-	mf.ClusterURL = fmt.Sprintf("http://%s:%d", clusterHostURL(), port)
+	mf.ClusterURL = "http://" + net.JoinHostPort(clusterHostURL(), strconv.Itoa(port))
 
 	t.Cleanup(mf.Server.Close)
 

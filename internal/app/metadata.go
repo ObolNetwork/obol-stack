@@ -50,7 +50,7 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 		} `yaml:"releases"`
 	}
 	if err := yaml.Unmarshal(data, &helmfile); err != nil {
-		return info, nil // Return partial info if YAML parsing fails
+		return info, nil //nolint:nilerr // return partial info (name from dir) if YAML parsing fails
 	}
 
 	if len(helmfile.Releases) > 0 {

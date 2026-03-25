@@ -118,7 +118,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			u.Print("  Hint: Using a custom host? Set OLLAMA_HOST=http://your-host:port")
 			u.Print("  Hint: Install from https://ollama.ai")
 
-			return fmt.Errorf("Ollama is not running: %w", err)
+			return fmt.Errorf("ollama is not running: %w", err)
 		}
 
 		u.Success("Ollama is reachable")
@@ -129,7 +129,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:4b")
 			u.Print("  Hint: Or run: obol model pull")
 
-			return errors.New("Ollama is running but has no models")
+			return errors.New("ollama is running but has no models")
 		}
 
 		u.Successf("Found %d pulled model(s)", len(ollamaModels))

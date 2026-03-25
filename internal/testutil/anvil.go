@@ -165,7 +165,7 @@ func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
 	// abi.encode(address, uint256(9)) — both padded to 32 bytes.
 	key := common.LeftPadBytes(addr.Bytes(), 32)
 	slotBytes := common.LeftPadBytes(slot.Bytes(), 32)
-	packed := append(key, slotBytes...)
+	packed := append(append([]byte{}, key...), slotBytes...)
 	storageSlot := crypto.Keccak256Hash(packed)
 
 	// Pad amount to 32 bytes.

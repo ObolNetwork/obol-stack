@@ -441,7 +441,7 @@ func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 	}
 
 	// Step 2: Inference probe — the definitive test
-	probePayload, _ := json.Marshal(map[string]any{
+	probePayload, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
 		"max_tokens": 1,
@@ -589,7 +589,7 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 	// The value is base64-encoded in .data
 	decoded, err := decodeBase64(strings.TrimSpace(key))
 	if err != nil {
-		return key, nil // If not base64, return raw
+		return key, nil //nolint:nilerr // secret may be stored unencoded; fall back to raw value
 	}
 
 	return decoded, nil
@@ -993,12 +993,12 @@ func ListOllamaModels() ([]OllamaModel, error) {
 
 	resp, err := client.Get(tagsURL)
 	if err != nil {
-		return nil, fmt.Errorf("Ollama is not running at %s: %w", endpoint, err)
+		return nil, fmt.Errorf("ollama is not running at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Ollama returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -1026,7 +1026,7 @@ func PullOllamaModel(name string) error {
 
 	healthResp, err := client.Get(endpoint)
 	if err != nil {
-		return fmt.Errorf("Ollama is not running at %s — start it first", endpoint)
+		return fmt.Errorf("ollama is not running at %s — start it first", endpoint)
 	}
 
 	healthResp.Body.Close()

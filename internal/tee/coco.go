@@ -204,7 +204,7 @@ func CheckCoCo(ctx context.Context, opts *CoCoInstallOpts) (*CoCoStatus, error) 
 	if err != nil {
 		// Not installed or helm error.
 		status.Installed = false
-		return status, nil
+		return status, nil //nolint:nilerr // helm failure means chart not installed; not an error
 	}
 
 	// Parse helm status JSON.

@@ -733,11 +733,10 @@ func checkPortsAvailable(ports []int) error {
 
 	if len(blocked) > 0 {
 		return fmt.Errorf(
-			"port(s) %s already in use\n\n"+
-				"Obol Stack needs these ports for HTTP/HTTPS access.\n"+
-				"Find what's using them with:\n"+
-				"  sudo lsof -i :%d\n\n"+
-				"Then stop the conflicting service and retry 'obol stack up'.",
+			"port(s) %s already in use — "+
+				"Obol Stack needs these ports for HTTP/HTTPS access; "+
+				"find what's using them with: sudo lsof -i :%d, "+
+				"then stop the conflicting service and retry 'obol stack up'",
 			formatPorts(blocked), blocked[0],
 		)
 	}

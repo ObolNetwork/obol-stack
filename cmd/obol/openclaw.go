@@ -151,11 +151,11 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					noBrowser := cmd.Bool("no-browser")
 
 					return openclaw.Dashboard(cfg, id, openclaw.DashboardOptions{
-						Port:      int(cmd.Int("port")),
+						Port:      cmd.Int("port"),
 						NoBrowser: noBrowser,
 					}, func(url string) {
 						if !noBrowser {
-							openBrowser(url)
+							_ = openBrowser(url)
 						}
 					}, getUI(cmd))
 				},

@@ -27,7 +27,7 @@ func loadTunnelState(cfg *config.Config) (*tunnelState, error) {
 	data, err := os.ReadFile(tunnelStatePath(cfg))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // no state file means tunnel was never provisioned; not an error
 		}
 
 		return nil, err

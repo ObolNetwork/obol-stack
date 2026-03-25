@@ -75,7 +75,7 @@ func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 func (b *K3sBackend) IsRunning(cfg *config.Config, stackID string) (bool, error) {
 	pid, err := b.readPid(cfg)
 	if err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // missing PID file means not running
 	}
 
 	return b.isProcessAlive(pid), nil
@@ -155,7 +155,8 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	}
 
 	// Detach the process
-	cmd.Process.Release()
+	_ = cmd.Process.Release()
+
 	logFile.Close()
 
 	u.Detail("PID", strconv.Itoa(pid))
@@ -168,7 +169,7 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		deadline := time.Now().Add(2 * time.Minute)
 		for time.Now().Before(deadline) {
 			if info, statErr := os.Stat(kubeconfigPath); statErr == nil && info.Size() > 0 {
-				exec.Command("sudo", "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), kubeconfigPath).Run()
+				_ = exec.Command("sudo", "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), kubeconfigPath).Run()
 
 				data, readErr := os.ReadFile(kubeconfigPath)
 				if readErr == nil && len(data) > 0 {
@@ -213,7 +214,7 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 	pid, err := b.readPid(cfg)
 	if err != nil {
 		u.Warn("k3s PID file not found, may not be running")
-		return nil
+		return nil //nolint:nilerr // missing PID file means nothing to stop
 	}
 
 	if !b.isProcessAlive(pid) {
@@ -233,7 +234,8 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 		Cmd:  stopCmd,
 	}); err != nil {
 		u.Warnf("SIGTERM failed, sending SIGKILL: %v", err)
-		exec.Command("sudo", "kill", "-9", pidStr).Run()
+
+		_ = exec.Command("sudo", "kill", "-9", pidStr).Run()
 	}
 
 	// Wait for process to exit
@@ -255,9 +257,11 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 			Cmd:  cleanCmd,
 		})
 	} else {
-		exec.Command("sudo", "pkill", "-TERM", "-f", "containerd-shim.*k3s").Run()
+		_ = exec.Command("sudo", "pkill", "-TERM", "-f", "containerd-shim.*k3s").Run()
+
 		time.Sleep(2 * time.Second)
-		exec.Command("sudo", "pkill", "-KILL", "-f", "containerd-shim.*k3s").Run()
+
+		_ = exec.Command("sudo", "pkill", "-KILL", "-f", "containerd-shim.*k3s").Run()
 	}
 
 	b.removePidFile(cfg)
@@ -268,7 +272,7 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 
 func (b *K3sBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error {
 	// Stop if running
-	b.Down(cfg, u, stackID)
+	_ = b.Down(cfg, u, stackID)
 
 	// Clean up k3s state directories
 	absDataDir, _ := filepath.Abs(cfg.DataDir)
@@ -281,7 +285,7 @@ func (b *K3sBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error
 	for _, dir := range cleanDirs {
 		if _, err := os.Stat(dir); err == nil {
 			u.Dim("  Cleaning up: " + dir)
-			exec.Command("sudo", "rm", "-rf", dir).Run()
+			_ = exec.Command("sudo", "rm", "-rf", dir).Run()
 		}
 	}
 

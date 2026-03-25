@@ -49,8 +49,8 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// Default to the network name (e.g., "mainnet", "hoodi", "sepolia") so that
 	// the first install of each network type gets a human-readable ID. If that
 	// directory already exists, fall back to a petname.
-	id, hasId := overrides["id"]
-	if !hasId || id == "" {
+	id, hasID := overrides["id"]
+	if !hasID || id == "" {
 		// Resolve the network name from --network flag or template default.
 		networkValue := overrides["network"]
 		if networkValue == "" {

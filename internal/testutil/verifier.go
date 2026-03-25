@@ -45,7 +45,7 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 	}
 
 	// Patch the ConfigMap with the new facilitator URL.
-	patchJSON, _ := json.Marshal(map[string]any{
+	patchJSON, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"data": map[string]string{
 			"pricing.yaml": updated,
 		},
@@ -78,7 +78,7 @@ func restoreVerifierConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON
 		return
 	}
 
-	patchJSON, _ := json.Marshal(map[string]any{
+	patchJSON, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"data": cm.Data,
 	})
 

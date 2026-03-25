@@ -67,7 +67,7 @@ func LoadBackend(cfg *config.Config) (Backend, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return &K3dBackend{}, nil
+		return &K3dBackend{}, nil //nolint:nilerr // missing file means legacy install; default to k3d
 	}
 
 	return NewBackend(strings.TrimSpace(string(data)))

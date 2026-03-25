@@ -209,9 +209,9 @@ Examples:
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
 				VMImage:         cmd.String("vm-image"),
-				VMCPUs:          int(cmd.Int("vm-cpus")),
-				VMMemoryMB:      int(cmd.Int("vm-memory")),
-				VMHostPort:      int(cmd.Int("vm-host-port")),
+				VMCPUs:          cmd.Int("vm-cpus"),
+				VMMemoryMB:      cmd.Int("vm-memory"),
+				VMHostPort:      cmd.Int("vm-host-port"),
 				TEEType:         teeType,
 				ModelHash:       modelHash,
 			}
@@ -649,7 +649,8 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			fmt.Println()
 
 			fmt.Printf("ERC-8004 Registration:\n")
-			kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
+
+			_ = kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
 				"-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,AGENT_ID:.status.agentId,TX:.status.registrationTxHash,REGISTERED:.status.conditions[?(@.type=='Registered')].status")
 
 			// Also show local inference gateway deployments.
@@ -853,7 +854,8 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				fmt.Print("[y/N] ")
 
 				var response string
-				fmt.Scanln(&response)
+
+				_, _ = fmt.Scanln(&response)
 
 				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
 					fmt.Println("Aborted.")
