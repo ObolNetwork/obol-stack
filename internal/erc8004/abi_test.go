@@ -112,7 +112,7 @@ func TestConstants_Addresses(t *testing.T) {
 			}
 
 			for _, c := range hex {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 					t.Errorf("address contains non-hex char %q", string(c))
 					break
 				}

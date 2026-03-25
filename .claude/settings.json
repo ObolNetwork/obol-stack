@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.go) ~/.local/bin/golangci-lint run --fix \"$(dirname \"$f\")/...\" ;; esac; } 2>/dev/null || true",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.go) golangci-lint fmt \"$f\" ;; esac; } 2>/dev/null || true",
             "timeout": 30,
-            "statusMessage": "Linting Go files..."
+            "statusMessage": "Formatting Go file..."
           }
         ]
       }

@@ -175,7 +175,7 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  fix: true
+  fix: false
 formatters:
   enable:
     - gofmt

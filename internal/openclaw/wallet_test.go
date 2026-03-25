@@ -215,7 +215,7 @@ func TestGenerateRandomPassword(t *testing.T) {
 
 	// Verify charset (alphanumeric only).
 	for _, c := range p1 {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 			t.Errorf("password contains non-alphanumeric character: %c", c)
 		}
 	}
