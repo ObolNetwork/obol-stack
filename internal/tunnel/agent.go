@@ -131,5 +131,5 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 		out = append(out, "extraEnv:", "  - name: AGENT_BASE_URL\n    value: "+tunnelURL)
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o644)
+	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600) //nolint:gosec // G703: path from user's local config dir
 }

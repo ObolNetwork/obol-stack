@@ -118,7 +118,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	}
 
 	// Store stack ID
-	if err := os.WriteFile(stackIDPath, []byte(stackID), 0o644); err != nil {
+	if err := os.WriteFile(stackIDPath, []byte(stackID), 0o600); err != nil { //nolint:gosec // G703: path from user's local config dir
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
@@ -772,5 +772,5 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 		return nil
 	}
 
-	return os.WriteFile(helmfilePath, []byte(updated), 0o644)
+	return os.WriteFile(helmfilePath, []byte(updated), 0o600) //nolint:gosec // G703: path from user's local config dir
 }

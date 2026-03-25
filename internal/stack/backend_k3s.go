@@ -65,7 +65,7 @@ func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3sConfig = strings.ReplaceAll(k3sConfig, "{{DATA_DIR}}", absDataDir)
 
 	k3sConfigPath := filepath.Join(cfg.ConfigDir, k3sConfigFile)
-	if err := os.WriteFile(k3sConfigPath, []byte(k3sConfig), 0o644); err != nil {
+	if err := os.WriteFile(k3sConfigPath, []byte(k3sConfig), 0o600); err != nil {
 		return fmt.Errorf("failed to write k3s config: %w", err)
 	}
 

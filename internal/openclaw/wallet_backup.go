@@ -391,7 +391,7 @@ persistence:
   size: 100Mi
 `, password)
 
-	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o644)
+	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o600)
 }
 
 // encryptBackup encrypts plaintext using AES-256-GCM with a scrypt-derived key.

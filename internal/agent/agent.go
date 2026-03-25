@@ -117,7 +117,7 @@ python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all --quick
 `
 
 	heartbeatPath := filepath.Join(heartbeatDir, "HEARTBEAT.md")
-	if err := os.WriteFile(heartbeatPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(heartbeatPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("failed to write HEARTBEAT.md: %w", err)
 	}
 

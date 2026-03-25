@@ -73,7 +73,7 @@ func CopyDefaults(destDir string, replacements map[string]string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(destPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 
@@ -160,7 +160,7 @@ func CopySkills(destDir string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
+		if err := os.WriteFile(destPath, data, 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 
@@ -232,7 +232,7 @@ func CopyNetwork(networkName, destDir string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
+		if err := os.WriteFile(destPath, data, 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 

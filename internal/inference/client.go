@@ -200,7 +200,7 @@ func (c *Client) fetchPubkey(ctx context.Context) ([]byte, error) {
 		return c.pubkey, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.GatewayURL+"/v1/enclave/pubkey", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.GatewayURL+"/v1/enclave/pubkey", nil) //nolint:gosec // G704: URL from user-configured GatewayURL, not tainted input
 	if err != nil {
 		return nil, fmt.Errorf("inference client: build pubkey request: %w", err)
 	}

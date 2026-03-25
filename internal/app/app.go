@@ -111,7 +111,7 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 
 	// 8. Write values.yaml
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
-	if err := os.WriteFile(valuesPath, values, 0o644); err != nil {
+	if err := os.WriteFile(valuesPath, values, 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
@@ -256,7 +256,7 @@ releases:
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dir, "helmfile.yaml"), buf.Bytes(), 0o644)
+	return os.WriteFile(filepath.Join(dir, "helmfile.yaml"), buf.Bytes(), 0o600)
 }
 
 // Sync deploys or updates an application to the cluster

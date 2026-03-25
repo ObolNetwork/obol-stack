@@ -47,7 +47,7 @@ linters:
     - errchkjson      # 5 issues
     - goconst         # 32 repeated strings
     - gocritic        # 10 issues
-    - gosec           # 67 issues, review separately
+    # gosec — re-enabled
     - nilerr          # 10 issues
     - nilnil          # 3 issues
     - nosprintfhostport # 2 issues
@@ -66,6 +66,8 @@ linters:
     gosec:
       excludes:
         - G115
+        - G204  # CLI tool intentionally runs subprocesses (k3d, helm, kubectl)
+        - G101  # false positives from variable names containing "key", "token", "secret"
     govet:
       disable:
         - fieldalignment
@@ -159,6 +161,9 @@ linters:
           - gosec
           - revive
         path: (.+)_test\.go
+      - linters:
+          - gosec
+        path: internal/testutil/
       - path: (.+)\.go$
         text: error returned from interface method should be wrapped
       - path: (.+)\.go$

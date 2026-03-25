@@ -68,7 +68,7 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
 
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
-	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0o644); err != nil {
+	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0o600); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 

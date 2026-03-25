@@ -157,7 +157,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 
 	// Write the templated values.yaml
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
-	if err := os.WriteFile(valuesPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(valuesPath, buf.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 

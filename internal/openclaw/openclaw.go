@@ -172,7 +172,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			namespace := fmt.Sprintf("%s-%s", appName, id)
 
 			helmfileContent := generateHelmfile(id, namespace)
-			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 			}
 
@@ -285,7 +285,7 @@ agents:
 `
 	}
 
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
@@ -313,7 +313,7 @@ agents:
 
 	// Generate helmfile.yaml referencing obol/openclaw + remote-signer
 	helmfileContent := generateHelmfile(id, namespace)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
@@ -748,12 +748,12 @@ func copyDirRecursive(src, dst string) error {
 			return os.MkdirAll(targetPath, 0o755)
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G122: local skill files from embedded assets, no symlink risk
 		if err != nil {
 			return err
 		}
 
-		return os.WriteFile(targetPath, data, 0o644)
+		return os.WriteFile(targetPath, data, 0o600) //nolint:gosec // G703: targetPath from user's local config dir
 	})
 }
 
@@ -1073,7 +1073,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	helmfileContent := generateHelmfile(id, namespace)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
 
@@ -1088,7 +1088,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, nil, "")
 
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
-	if err := os.WriteFile(overlayPath, []byte(overlay), 0o644); err != nil {
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0o600); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
@@ -1568,7 +1568,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 		// Update overlay YAML (for helm consistency on next sync)
 		updated, changed := patchOverlayModelList(content, models)
 		if changed {
-			if err := os.WriteFile(overlayPath, []byte(updated), 0o644); err != nil {
+			if err := os.WriteFile(overlayPath, []byte(updated), 0o600); err != nil { //nolint:gosec // G703: path from user's local config dir
 				u.Warnf("Failed to update overlay for %s: %v", id, err)
 			}
 		}
@@ -1769,7 +1769,7 @@ func patchAgentModelsJSON(cfg *config.Config, id string, models []string, master
 
 	data = append(data, '\n')
 
-	return os.WriteFile(modelsPath, data, 0o644)
+	return os.WriteFile(modelsPath, data, 0o600)
 }
 
 // patchOverlayModelList replaces the model list under the openai provider

@@ -190,7 +190,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		w.Header().Del("ETag")
 		w.WriteHeader(rec.code())
 
-		if _, err := w.Write(encResp); err != nil {
+		if _, err := w.Write(encResp); err != nil { //nolint:gosec // G705: writing encrypted binary, not user-controlled HTML
 			log.Printf("enclave middleware: write encrypted response: %v", err)
 		}
 	})

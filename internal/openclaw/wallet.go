@@ -383,7 +383,7 @@ func WriteWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
 		return fmt.Errorf("marshal wallet metadata: %w", err)
 	}
 
-	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0o644)
+	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0o600)
 }
 
 // ReadWalletMetadata reads existing wallet metadata from the deployment directory.
@@ -426,7 +426,7 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	values := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(valuesPath, []byte(values), 0o644); err != nil {
+	if err := os.WriteFile(valuesPath, []byte(values), 0o600); err != nil {
 		fmt.Printf("Warning: could not write remote-signer values: %v\n", err)
 		return
 	}

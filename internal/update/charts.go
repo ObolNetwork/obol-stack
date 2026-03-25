@@ -319,7 +319,7 @@ func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major b
 		return nil, err
 	}
 
-	if err := os.WriteFile(helmfilePath, out, 0o644); err != nil {
+	if err := os.WriteFile(helmfilePath, out, 0o600); err != nil {
 		return nil, err
 	}
 

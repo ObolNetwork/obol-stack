@@ -76,7 +76,7 @@ func LoadBackend(cfg *config.Config) (Backend, error) {
 // SaveBackend persists the backend choice
 func SaveBackend(cfg *config.Config, name string) error {
 	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
-	return os.WriteFile(path, []byte(name), 0o644)
+	return os.WriteFile(path, []byte(name), 0o600)
 }
 
 // DetectExistingBackend reads the persisted backend choice without
