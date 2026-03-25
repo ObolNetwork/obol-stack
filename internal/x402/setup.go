@@ -178,6 +178,7 @@ func EnsureVerifier(cfg *config.Config) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
+
 	bin, kc := kubectl.Paths(cfg)
 
 	// Quick check: if the namespace already exists, skip the apply.
@@ -186,6 +187,7 @@ func EnsureVerifier(cfg *config.Config) error {
 	}
 
 	fmt.Println("Deploying x402 payment verifier...")
+
 	return kubectl.Apply(bin, kc, x402Manifest)
 }
 
@@ -196,18 +198,23 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
 	}
+
 	if err := EnsureVerifier(cfg); err != nil {
 		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
+
 	bin, kc := kubectl.Paths(cfg)
 
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
+
 	secretPatch := map[string]any{"stringData": map[string]string{"WALLET_ADDRESS": wallet}}
+
 	patchJSON, err := json.Marshal(secretPatch)
 	if err != nil {
 		return fmt.Errorf("marshal secret patch: %w", err)
 	}
+
 	if err := kubectl.Run(bin, kc,
 		"patch", "secret", x402SecretName, "-n", x402Namespace,
 		"-p", string(patchJSON), "--type=merge"); err != nil {
@@ -217,14 +224,18 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	// 2. Update the pricing ConfigMap with wallet and chain.
 	// Read existing config to preserve routes added by the ServiceOffer reconciler.
 	fmt.Printf("Updating x402 pricing config...\n")
+
 	if facilitatorURL == "" {
 		facilitatorURL = "https://facilitator.x402.rs"
 	}
+
 	existingCfg, _ := GetPricingConfig(cfg)
+
 	var existingRoutes []RouteRule
 	if existingCfg != nil {
 		existingRoutes = existingCfg.Routes
 	}
+
 	pricingCfg := &PricingConfig{
 		Wallet:         wallet,
 		Chain:          chain,
@@ -237,6 +248,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	}
 
 	fmt.Printf("x402 configured: wallet=%s chain=%s\n", wallet, chain)
+
 	return nil
 }
 
@@ -267,6 +279,7 @@ func AddRoute(cfg *config.Config, pattern, price, description string, opts ...Ro
 
 	// Re-serialize and patch.
 	bin, kc := kubectl.Paths(cfg)
+
 	return patchPricingConfig(bin, kc, pricingCfg)
 }
 
@@ -310,6 +323,7 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return nil, err
 	}
+
 	bin, kc := kubectl.Paths(cfg)
 
 	raw, err := kubectl.Output(bin, kc,
@@ -335,6 +349,7 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 		tmpFile.Close()
 		return nil, err
 	}
+
 	tmpFile.Close()
 
 	return LoadConfig(tmpFile.Name())
@@ -357,6 +372,7 @@ func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 			"pricing.yaml": string(pricingBytes),
 		},
 	}
+
 	cmPatchJSON, err := json.Marshal(cmPatch)
 	if err != nil {
 		return fmt.Errorf("marshal pricing patch: %w", err)

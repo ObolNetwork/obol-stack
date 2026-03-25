@@ -48,6 +48,7 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	if err != nil {
 		t.Fatalf("find free port for facilitator: %v", err)
 	}
+
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
@@ -61,7 +62,9 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cmd := exec.CommandContext(ctx, bin, "--config", configPath)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stderr
 
@@ -79,7 +82,9 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 
 	t.Cleanup(func() {
 		cancel()
+
 		_ = cmd.Wait()
+
 		os.Remove(configPath)
 	})
 
@@ -89,6 +94,7 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	}
 
 	t.Logf("x402-rs facilitator running on port %d (cluster URL: %s)", port, rf.ClusterURL)
+
 	return rf
 }
 
@@ -102,6 +108,7 @@ func discoverFacilitatorBinary(t *testing.T) string {
 			t.Logf("using X402_FACILITATOR_BIN=%s", bin)
 			return bin
 		}
+
 		t.Fatalf("X402_FACILITATOR_BIN=%s does not exist", bin)
 	}
 
@@ -131,16 +138,21 @@ func discoverFacilitatorBinary(t *testing.T) string {
 		if _, err := exec.LookPath("cargo"); err != nil {
 			t.Skip("x402-rs source found but cargo not installed")
 		}
+
 		t.Logf("building x402-rs facilitator from %s (this may take a while)...", rsDir)
+
 		buildCommands := [][]string{
 			{"build", "--release", "-p", "x402-facilitator"},
 			{"build", "--release", "-p", "facilitator"},
 		}
+
 		var buildErr error
+
 		for _, args := range buildCommands {
 			build := exec.Command("cargo", args...)
 			build.Dir = rsDir
 			build.Stdout = os.Stderr
+
 			build.Stderr = os.Stderr
 			if err := build.Run(); err == nil {
 				buildErr = nil
@@ -149,19 +161,23 @@ func discoverFacilitatorBinary(t *testing.T) string {
 				buildErr = err
 			}
 		}
+
 		if buildErr != nil {
 			t.Fatalf("cargo build --release failed: %v", buildErr)
 		}
+
 		for _, prebuilt := range prebuiltCandidates {
 			if _, err := os.Stat(prebuilt); err == nil {
 				return prebuilt
 			}
 		}
+
 		t.Fatalf("cargo build succeeded but binary not found at any expected path: %v", prebuiltCandidates)
 	}
 
 	t.Skip("x402-rs facilitator not available — set X402_FACILITATOR_BIN or X402_RS_DIR, " +
 		"or clone https://github.com/x402-rs/x402-rs to ~/Development/R&D/x402-rs")
+
 	return ""
 }
 
@@ -174,15 +190,15 @@ func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey s
 		signerKey = signerKey[2:]
 	}
 
-	config := map[string]interface{}{
+	config := map[string]any{
 		"port": port,
 		"host": "0.0.0.0",
-		"chains": map[string]interface{}{
-			"eip155:84532": map[string]interface{}{
+		"chains": map[string]any{
+			"eip155:84532": map[string]any{
 				"eip1559":     true,
 				"flashblocks": false,
 				"signers":     []string{signerKey},
-				"rpc": []map[string]interface{}{
+				"rpc": []map[string]any{
 					{
 						"http":       anvilRPCURL,
 						"rate_limit": 50,
@@ -190,7 +206,7 @@ func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey s
 				},
 			},
 		},
-		"schemes": []map[string]interface{}{
+		"schemes": []map[string]any{
 			{
 				"id":     "v1-eip155-exact",
 				"chains": "eip155:*",
@@ -207,17 +223,20 @@ func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey s
 		t.Fatalf("marshal facilitator config: %v", err)
 	}
 
-	f, err := os.CreateTemp("", "x402-facilitator-*.json")
+	f, err := os.CreateTemp(t.TempDir(), "x402-facilitator-*.json")
 	if err != nil {
 		t.Fatalf("create temp config file: %v", err)
 	}
+
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		t.Fatalf("write facilitator config: %v", err)
 	}
+
 	f.Close()
 
 	t.Logf("wrote facilitator config to %s", f.Name())
+
 	return f.Name()
 }
 
@@ -236,11 +255,14 @@ func (rf *RealFacilitator) waitReady(timeout time.Duration) error {
 		resp, err := http.Get(url)
 		if err == nil {
 			resp.Body.Close()
+
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
+
 	return fmt.Errorf("facilitator not ready after %v on port %d", timeout, rf.Port)
 }

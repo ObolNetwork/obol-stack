@@ -64,17 +64,19 @@ func NewBackend(name string) (Backend, error) {
 // Falls back to k3d if no file exists (backward compatibility).
 func LoadBackend(cfg *config.Config) (Backend, error) {
 	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &K3dBackend{}, nil
 	}
+
 	return NewBackend(strings.TrimSpace(string(data)))
 }
 
 // SaveBackend persists the backend choice
 func SaveBackend(cfg *config.Config, name string) error {
 	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
-	return os.WriteFile(path, []byte(name), 0644)
+	return os.WriteFile(path, []byte(name), 0o644)
 }
 
 // DetectExistingBackend reads the persisted backend choice without
@@ -82,14 +84,17 @@ func SaveBackend(cfg *config.Config, name string) error {
 // which lets Init() apply its own default.
 func DetectExistingBackend(cfg *config.Config) string {
 	path := filepath.Join(cfg.ConfigDir, stackBackendFile)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
+
 	name := strings.TrimSpace(string(data))
 	// Validate it's a known backend; return empty if corrupted
 	if _, err := NewBackend(name); err != nil {
 		return ""
 	}
+
 	return name
 }

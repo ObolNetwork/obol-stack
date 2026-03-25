@@ -18,7 +18,8 @@ routes:
 
 func writeConfig(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -38,8 +39,7 @@ func TestWatchConfig_DetectsChange(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go WatchConfig(ctx, path, v, 10*time.Millisecond)
 
@@ -65,6 +65,7 @@ routes:
 	if cfg == nil {
 		t.Fatal("config is nil after reload")
 	}
+
 	if len(cfg.Routes) != 2 {
 		t.Errorf("expected 2 routes after reload, got %d", len(cfg.Routes))
 	}
@@ -85,8 +86,7 @@ func TestWatchConfig_IgnoresUnchanged(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go WatchConfig(ctx, path, v, 10*time.Millisecond)
 
@@ -98,6 +98,7 @@ func TestWatchConfig_IgnoresUnchanged(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("config should not be nil")
 	}
+
 	if len(cfg.Routes) != 1 {
 		t.Errorf("expected 1 route (unchanged), got %d", len(cfg.Routes))
 	}
@@ -118,8 +119,7 @@ func TestWatchConfig_InvalidConfig(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go WatchConfig(ctx, path, v, 10*time.Millisecond)
 
@@ -159,6 +159,7 @@ func TestWatchConfig_CancelContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
+
 	go func() {
 		WatchConfig(ctx, path, v, 10*time.Millisecond)
 		close(done)
@@ -187,8 +188,7 @@ func TestWatchConfig_MissingFile(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Point at a non-existent path — watcher should log but not crash.
 	go WatchConfig(ctx, "/nonexistent/config.yaml", v, 10*time.Millisecond)
@@ -201,6 +201,7 @@ func TestWatchConfig_MissingFile(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("config should not be nil — original should be preserved")
 	}
+
 	if len(cfg.Routes) != 1 {
 		t.Errorf("expected original config (1 route), got %d", len(cfg.Routes))
 	}

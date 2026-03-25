@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -25,10 +26,10 @@ import (
 // WalletInfo holds generated wallet metadata returned from GenerateWallet.
 type WalletInfo struct {
 	Address      string `json:"address"`       // 0x-prefixed Ethereum address
-	PublicKey    string `json:"publicKey"`      // 0x-prefixed uncompressed public key (130 hex chars)
+	PublicKey    string `json:"publicKey"`     // 0x-prefixed uncompressed public key (130 hex chars)
 	KeystoreUUID string `json:"keystore_uuid"` // UUID of the V3 keystore file
 	KeystorePath string `json:"keystore_path"` // Absolute host path to keystore JSON
-	CreatedAt    string `json:"createdAt"`      // ISO 8601 timestamp
+	CreatedAt    string `json:"createdAt"`     // ISO 8601 timestamp
 	Password     string `json:"-"`             // Keystore password (not serialized)
 }
 
@@ -63,9 +64,9 @@ type kdfParams struct {
 
 // scrypt parameters matching go-ethereum defaults.
 const (
-	scryptN    = 262144
-	scryptR    = 8
-	scryptP    = 1
+	scryptN     = 262144
+	scryptR     = 8
+	scryptP     = 1
 	scryptDKLen = 32
 )
 
@@ -145,6 +146,7 @@ func toChecksumAddress(addr string) string {
 
 	var result strings.Builder
 	result.WriteString("0x")
+
 	for i, c := range addr {
 		if c >= '0' && c <= '9' {
 			result.WriteRune(c)
@@ -158,6 +160,7 @@ func toChecksumAddress(addr string) string {
 			}
 		}
 	}
+
 	return result.String()
 }
 
@@ -170,6 +173,7 @@ func encryptToV3Keystore(privKey, pubKey []byte, password string) ([]byte, strin
 	if _, err := rand.Read(salt); err != nil {
 		return nil, "", fmt.Errorf("salt generation: %w", err)
 	}
+
 	iv := make([]byte, 16)
 	if _, err := rand.Read(iv); err != nil {
 		return nil, "", fmt.Errorf("iv generation: %w", err)
@@ -186,6 +190,7 @@ func encryptToV3Keystore(privKey, pubKey []byte, password string) ([]byte, strin
 	if err != nil {
 		return nil, "", fmt.Errorf("aes cipher: %w", err)
 	}
+
 	cipherText := make([]byte, len(privKey))
 	stream := cipher.NewCTR(block, iv)
 	stream.XORKeyStream(cipherText, privKey)
@@ -244,14 +249,17 @@ func decryptV3Keystore(keystoreJSON []byte, password string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode salt: %w", err)
 	}
+
 	iv, err := hex.DecodeString(ks.Crypto.CipherParams.IV)
 	if err != nil {
 		return nil, fmt.Errorf("decode iv: %w", err)
 	}
+
 	cipherText, err := hex.DecodeString(ks.Crypto.CipherText)
 	if err != nil {
 		return nil, fmt.Errorf("decode ciphertext: %w", err)
 	}
+
 	storedMAC, err := hex.DecodeString(ks.Crypto.MAC)
 	if err != nil {
 		return nil, fmt.Errorf("decode mac: %w", err)
@@ -266,9 +274,10 @@ func decryptV3Keystore(keystoreJSON []byte, password string) ([]byte, error) {
 	mac := sha3.NewLegacyKeccak256()
 	mac.Write(derivedKey[16:32])
 	mac.Write(cipherText)
+
 	computedMAC := mac.Sum(nil)
 	if !hmacEqual(computedMAC, storedMAC) {
-		return nil, fmt.Errorf("MAC mismatch: wrong password or corrupted keystore")
+		return nil, errors.New("MAC mismatch: wrong password or corrupted keystore")
 	}
 
 	// Decrypt.
@@ -276,6 +285,7 @@ func decryptV3Keystore(keystoreJSON []byte, password string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("aes cipher: %w", err)
 	}
+
 	plaintext := make([]byte, len(cipherText))
 	stream := cipher.NewCTR(block, iv)
 	stream.XORKeyStream(plaintext, cipherText)
@@ -288,10 +298,12 @@ func hmacEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	var result byte
 	for i := range a {
 		result |= a[i] ^ b[i]
 	}
+
 	return result == 0
 }
 
@@ -299,6 +311,7 @@ func hmacEqual(a, b []byte) bool {
 // alphanumeric characters (a-z, A-Z, 0-9).
 func generateRandomPassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
 	charsetLen := big.NewInt(int64(len(charset)))
 
 	result := make([]byte, length)
@@ -307,8 +320,10 @@ func generateRandomPassword(length int) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("random int: %w", err)
 		}
+
 		result[i] = charset[n.Int64()]
 	}
+
 	return string(result), nil
 }
 
@@ -325,13 +340,14 @@ func KeystoreVolumePath(cfg *config.Config, id string) string {
 // written keystore file.
 func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte) (string, error) {
 	dir := KeystoreVolumePath(cfg, id)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create keystore directory: %w", err)
 	}
 
 	filename := keystoreID + ".json"
+
 	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, keystoreJSON, 0600); err != nil {
+	if err := os.WriteFile(path, keystoreJSON, 0o600); err != nil {
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
@@ -366,7 +382,8 @@ func WriteWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
 	if err != nil {
 		return fmt.Errorf("marshal wallet metadata: %w", err)
 	}
-	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0644)
+
+	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0o644)
 }
 
 // ReadWalletMetadata reads existing wallet metadata from the deployment directory.
@@ -375,10 +392,12 @@ func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var wallet WalletInfo
 	if err := json.Unmarshal(data, &wallet); err != nil {
 		return nil, fmt.Errorf("unmarshal wallet metadata: %w", err)
 	}
+
 	return &wallet, nil
 }
 
@@ -399,6 +418,7 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 
 	// No wallet yet — generate one.
 	fmt.Println("Generating Ethereum wallet for this instance...")
+
 	wallet, err := GenerateWallet(cfg, id)
 	if err != nil {
 		fmt.Printf("Warning: could not generate wallet: %v\n", err)
@@ -406,7 +426,7 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	values := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(valuesPath, []byte(values), 0644); err != nil {
+	if err := os.WriteFile(valuesPath, []byte(values), 0o644); err != nil {
 		fmt.Printf("Warning: could not write remote-signer values: %v\n", err)
 		return
 	}
@@ -433,14 +453,14 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
 	// Build addresses.json matching the frontend's WalletMetadata type.
-	addressesJSON := map[string]interface{}{
+	addressesJSON := map[string]any{
 		"instanceId": id,
 		"addresses": []map[string]string{
 			{
 				"address":   wallet.Address,
 				"publicKey": wallet.PublicKey,
 				"createdAt": wallet.CreatedAt,
-				"label":     fmt.Sprintf("obol-agent-%s", id),
+				"label":     "obol-agent-" + id,
 			},
 		},
 		"count": 1,
@@ -452,10 +472,10 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 		return
 	}
 
-	manifest := map[string]interface{}{
+	manifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "wallet-metadata",
 			"namespace": namespace,
 			"labels": map[string]string{
@@ -475,9 +495,12 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 	}
 
 	cmd := exec.Command(kubectlBinary, "apply", "-f", "-")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	cmd.Stdin = bytes.NewReader(raw)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Warning: could not apply wallet-metadata ConfigMap: %v\n%s", err, stderr.String())

@@ -17,6 +17,7 @@ func (u *UI) Confirm(msg string, defaultYes bool) bool {
 	if defaultYes {
 		suffix = "[Y/n]"
 	}
+
 	fmt.Fprintf(u.stdout, "%s %s ", msg, dimStyle.Render(suffix))
 
 	reader := bufio.NewReader(os.Stdin)
@@ -26,6 +27,7 @@ func (u *UI) Confirm(msg string, defaultYes bool) bool {
 	if line == "" {
 		return defaultYes
 	}
+
 	return line == "y" || line == "yes"
 }
 
@@ -33,11 +35,13 @@ func (u *UI) Confirm(msg string, defaultYes bool) bool {
 // defaultIdx is 0-based; shown as [default] next to that option.
 func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
 	fmt.Fprintln(u.stdout, msg)
+
 	for i, opt := range options {
 		marker := "  "
 		if i == defaultIdx {
 			marker = accentStyle.Render("→ ")
 		}
+
 		fmt.Fprintf(u.stdout, "  %s%s%s %s\n",
 			marker,
 			accentStyle.Render("["),
@@ -60,6 +64,7 @@ func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
 	if err != nil || choice < 1 || choice > len(options) {
 		return 0, fmt.Errorf("invalid selection: %s", line)
 	}
+
 	return choice - 1, nil
 }
 
@@ -72,24 +77,31 @@ func (u *UI) Input(msg string, defaultVal string) (string, error) {
 	}
 
 	reader := bufio.NewReader(os.Stdin)
+
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
+
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return defaultVal, nil
 	}
+
 	return line, nil
 }
 
 // SecretInput reads input without echoing (for API keys, passwords).
 func (u *UI) SecretInput(msg string) (string, error) {
 	fmt.Fprintf(u.stdout, "%s: ", msg)
+
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+
 	fmt.Fprintln(u.stdout) // newline after hidden input
+
 	if err != nil {
 		return "", err
 	}
+
 	return strings.TrimSpace(string(b)), nil
 }

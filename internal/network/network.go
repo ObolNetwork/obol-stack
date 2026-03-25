@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +13,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
-	"github.com/dustinkirkland/golang-petname"
+	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,9 +30,11 @@ func List(cfg *config.Config, u *ui.UI) error {
 	}
 
 	u.Bold("Available networks:")
+
 	for _, network := range availableNetworks {
 		u.Printf("  • %s", network)
 	}
+
 	u.Blank()
 	u.Dim(fmt.Sprintf("Total: %d network(s) available", len(availableNetworks)))
 
@@ -68,11 +71,13 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 				id = networkValue
 			}
 		}
+
 		if id == "" {
 			id = petname.Generate(2, "-")
 		}
+
 		overrides["id"] = id
-		u.Detail("Deployment ID", fmt.Sprintf("%s (generated)", id))
+		u.Detail("Deployment ID", id+" (generated)")
 	} else {
 		u.Detail("Deployment ID", id)
 	}
@@ -85,6 +90,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite the existing configuration", network, id, deploymentDir)
 		}
+
 		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
@@ -99,7 +105,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 
 	u.Blank()
 	u.Print("Configuration:")
-	u.Detail("deployment id", fmt.Sprintf("%s (from directory structure)", id))
+	u.Detail("deployment id", id+" (from directory structure)")
 
 	// Process parsed fields
 	for _, field := range fields {
@@ -111,7 +117,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		} else if field.Required && value == "" {
 			return fmt.Errorf("missing required flag: --%s", field.FlagName)
 		} else if value != "" {
-			u.Detail(field.Name, fmt.Sprintf("%s (default)", value))
+			u.Detail(field.Name, value+" (default)")
 		} else {
 			u.Detail(field.Name, "(empty, optional)")
 		}
@@ -137,7 +143,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	}
 
 	// Validate that the generated content is valid YAML
-	var yamlCheck interface{}
+	var yamlCheck any
 	if err := yaml.Unmarshal(buf.Bytes(), &yamlCheck); err != nil {
 		return fmt.Errorf("generated values.yaml contains invalid YAML syntax: %w\n"+
 			"This may be caused by special characters in your input values.\n"+
@@ -145,13 +151,13 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	}
 
 	// Create deployment directory
-	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
+	if err := os.MkdirAll(deploymentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
 	// Write the templated values.yaml
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
-	if err := os.WriteFile(valuesPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(valuesPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 
@@ -176,34 +182,42 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 // SyncAll syncs all installed network deployments found in the config directory.
 func SyncAll(cfg *config.Config, u *ui.UI) error {
 	networksDir := filepath.Join(cfg.ConfigDir, "networks")
+
 	networkDirs, err := os.ReadDir(networksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			u.Print("No networks installed.")
 			return nil
 		}
+
 		return fmt.Errorf("could not read networks directory: %w", err)
 	}
 
 	var synced int
+
 	for _, networkDir := range networkDirs {
 		if !networkDir.IsDir() {
 			continue
 		}
+
 		deployments, err := os.ReadDir(filepath.Join(networksDir, networkDir.Name()))
 		if err != nil {
 			continue
 		}
+
 		for _, deployment := range deployments {
 			if !deployment.IsDir() {
 				continue
 			}
+
 			identifier := fmt.Sprintf("%s/%s", networkDir.Name(), deployment.Name())
 			u.Infof("Syncing %s", identifier)
+
 			if err := Sync(cfg, u, identifier); err != nil {
 				u.Warnf("Failed to sync %s: %v", identifier, err)
 				continue
 			}
+
 			synced++
 		}
 	}
@@ -213,6 +227,7 @@ func SyncAll(cfg *config.Config, u *ui.UI) error {
 	} else {
 		u.Successf("Synced %d network deployment(s)", synced)
 	}
+
 	return nil
 }
 
@@ -224,15 +239,17 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	if strings.Contains(deploymentIdentifier, "/") {
 		parts := strings.SplitN(deploymentIdentifier, "/", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+			return errors.New("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
 		}
+
 		networkName = parts[0]
 		deploymentID = parts[1]
 	} else {
 		parts := strings.SplitN(deploymentIdentifier, "-", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+			return errors.New("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
 		}
+
 		networkName = parts[0]
 		deploymentID = parts[1]
 	}
@@ -261,7 +278,7 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Check kubeconfig (cluster must be running)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
@@ -272,10 +289,11 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Execute helmfile sync
 	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
-		"--state-values-set", fmt.Sprintf("id=%s", deploymentID))
+		"--state-values-set", "id="+deploymentID)
 	cmd.Dir = deploymentDir
+
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		"KUBECONFIG="+kubeconfigPath,
 	)
 
 	if err := u.Exec(ui.ExecConfig{
@@ -308,15 +326,17 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	if strings.Contains(deploymentIdentifier, "/") {
 		parts := strings.SplitN(deploymentIdentifier, "/", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+			return errors.New("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
 		}
+
 		networkName = parts[0]
 		deploymentID = parts[1]
 	} else {
 		parts := strings.SplitN(deploymentIdentifier, "-", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
+			return errors.New("invalid deployment identifier format. Use: <network>/<id> or <network>-<id>")
 		}
+
 		networkName = parts[0]
 		deploymentID = parts[1]
 	}
@@ -334,11 +354,13 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 
 	// Check if namespace exists in cluster
 	namespaceExists := false
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := cmd.Run(); err == nil {
 			namespaceExists = true
 		}
@@ -359,9 +381,10 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	if namespaceExists {
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName, "--force", "--grace-period=0")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := u.Exec(ui.ExecConfig{
-			Name: fmt.Sprintf("Deleting namespace %s", namespaceName),
+			Name: "Deleting namespace " + namespaceName,
 			Cmd:  cmd,
 		}); err != nil {
 			return fmt.Errorf("failed to delete namespace: %w", err)
@@ -373,10 +396,12 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		if err := os.RemoveAll(deploymentDir); err != nil {
 			return fmt.Errorf("failed to delete config directory: %w", err)
 		}
+
 		u.Success("Configuration deleted")
 
 		// Clean up empty parent directory
 		networkDir := filepath.Join(cfg.ConfigDir, "networks", networkName)
+
 		entries, err := os.ReadDir(networkDir)
 		if err == nil && len(entries) == 0 {
 			os.Remove(networkDir)

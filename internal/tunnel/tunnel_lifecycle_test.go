@@ -12,6 +12,7 @@ import (
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
+
 	return &config.Config{
 		ConfigDir: filepath.Join(dir, "config"),
 		DataDir:   filepath.Join(dir, "data"),
@@ -39,12 +40,15 @@ func TestTunnelState_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+
 	if got.Mode != "quick" {
 		t.Errorf("mode = %q, want quick", got.Mode)
 	}
+
 	if got.Hostname != "abc-def.trycloudflare.com" {
 		t.Errorf("hostname = %q, want abc-def.trycloudflare.com", got.Hostname)
 	}
+
 	if got.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt should be set by save")
 	}
@@ -70,9 +74,11 @@ func TestTunnelState_DNSMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+
 	if got.Mode != "dns" {
 		t.Errorf("mode = %q, want dns", got.Mode)
 	}
+
 	if got.TunnelID != "tun-789" {
 		t.Errorf("tunnel_id = %q, want tun-789", got.TunnelID)
 	}
@@ -85,6 +91,7 @@ func TestTunnelState_NotExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load should not error on missing file: %v", err)
 	}
+
 	if got != nil {
 		t.Fatalf("expected nil state for missing file, got %+v", got)
 	}
@@ -107,6 +114,7 @@ func TestTunnelState_Overwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+
 	if got.Mode != "dns" || got.Hostname != "new.example.com" {
 		t.Errorf("expected overwritten state, got %+v", got)
 	}
@@ -124,8 +132,9 @@ func TestTunnelState_FilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
+
 	perm := info.Mode().Perm()
-	if perm != 0600 {
+	if perm != 0o600 {
 		t.Errorf("file permissions = %o, want 0600", perm)
 	}
 }
@@ -167,6 +176,7 @@ func TestTunnelModeAndURL(t *testing.T) {
 			if mode != tt.wantMode {
 				t.Errorf("mode = %q, want %q", mode, tt.wantMode)
 			}
+
 			if url != tt.wantURL {
 				t.Errorf("url = %q, want %q", url, tt.wantURL)
 			}
@@ -268,6 +278,7 @@ func TestLoadTunnelState_Exported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTunnelState: %v", err)
 	}
+
 	if st.Hostname != "exported-test.trycloudflare.com" {
 		t.Errorf("hostname = %q, want exported-test.trycloudflare.com", st.Hostname)
 	}

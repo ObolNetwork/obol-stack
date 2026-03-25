@@ -12,6 +12,7 @@ import (
 func TestSkillsVolumePath(t *testing.T) {
 	cfg := &config.Config{DataDir: "/data/obol"}
 	got := skillsVolumePath(cfg, "default")
+
 	want := filepath.Join("/data/obol", "openclaw-default", "openclaw-data", ".openclaw", "skills")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -44,11 +45,12 @@ func TestStageDefaultSkillsSkipsExisting(t *testing.T) {
 
 	// Pre-create skills directory with custom content
 	skillsDir := filepath.Join(deploymentDir, "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	marker := filepath.Join(skillsDir, "custom-marker.txt")
-	if err := os.WriteFile(marker, []byte("keep"), 0644); err != nil {
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

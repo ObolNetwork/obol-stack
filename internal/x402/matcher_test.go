@@ -10,9 +10,11 @@ func TestMatchRoute_ExactMatch(t *testing.T) {
 	if r := matchRoute(routes, "/health"); r == nil {
 		t.Fatal("expected match for /health")
 	}
+
 	if r := matchRoute(routes, "/healthz"); r != nil {
 		t.Fatal("expected no match for /healthz")
 	}
+
 	if r := matchRoute(routes, "/health/deep"); r != nil {
 		t.Fatal("expected no match for /health/deep")
 	}
@@ -29,11 +31,11 @@ func TestMatchRoute_PrefixMatch(t *testing.T) {
 	}{
 		{"/rpc/mainnet", true},
 		{"/rpc/sepolia", true},
-		{"/rpc/a/b/c", true},   // deep sub-path
-		{"/rpc/", true},        // trailing slash
-		{"/rpc", true},         // exact base path (no trailing slash)
-		{"/rpcx/foo", false},   // different prefix
-		{"/other", false},      // unrelated
+		{"/rpc/a/b/c", true}, // deep sub-path
+		{"/rpc/", true},      // trailing slash
+		{"/rpc", true},       // exact base path (no trailing slash)
+		{"/rpcx/foo", false}, // different prefix
+		{"/other", false},    // unrelated
 	}
 
 	for _, tt := range tests {
@@ -41,6 +43,7 @@ func TestMatchRoute_PrefixMatch(t *testing.T) {
 		if tt.match && r == nil {
 			t.Errorf("expected match for %q", tt.uri)
 		}
+
 		if !tt.match && r != nil {
 			t.Errorf("expected no match for %q", tt.uri)
 		}
@@ -59,10 +62,10 @@ func TestMatchRoute_GlobMatch(t *testing.T) {
 		{"/inference-abc/v1/chat/completions", true},
 		{"/inference-prod/v1/models", true},
 		{"/inference-test-123/v1/embeddings", true},
-		{"/inference-abc/v1/a/b/c", true},     // trailing * is greedy
-		{"/inference-abc/v2/models", false},    // v2 not v1
-		{"/inference/v1/models", false},        // missing segment after inference-
-		{"/other-abc/v1/models", false},        // wrong prefix
+		{"/inference-abc/v1/a/b/c", true},   // trailing * is greedy
+		{"/inference-abc/v2/models", false}, // v2 not v1
+		{"/inference/v1/models", false},     // missing segment after inference-
+		{"/other-abc/v1/models", false},     // wrong prefix
 	}
 
 	for _, tt := range tests {
@@ -70,6 +73,7 @@ func TestMatchRoute_GlobMatch(t *testing.T) {
 		if tt.match && r == nil {
 			t.Errorf("expected match for %q", tt.uri)
 		}
+
 		if !tt.match && r != nil {
 			t.Errorf("expected no match for %q", tt.uri)
 		}
@@ -86,6 +90,7 @@ func TestMatchRoute_FirstMatchWins(t *testing.T) {
 	if r == nil {
 		t.Fatal("expected match")
 	}
+
 	if r.Description != "rpc" {
 		t.Errorf("expected first rule (rpc) to win, got %q", r.Description)
 	}
@@ -100,9 +105,11 @@ func TestMatchRoute_NoMatch(t *testing.T) {
 	if r := matchRoute(routes, "/health"); r != nil {
 		t.Error("expected no match for /health")
 	}
+
 	if r := matchRoute(routes, "/"); r != nil {
 		t.Error("expected no match for /")
 	}
+
 	if r := matchRoute(routes, ""); r != nil {
 		t.Error("expected no match for empty string")
 	}
@@ -112,6 +119,7 @@ func TestMatchRoute_EmptyRoutes(t *testing.T) {
 	if r := matchRoute(nil, "/rpc/mainnet"); r != nil {
 		t.Error("expected no match with nil routes")
 	}
+
 	if r := matchRoute([]RouteRule{}, "/rpc/mainnet"); r != nil {
 		t.Error("expected no match with empty routes")
 	}
@@ -138,6 +146,7 @@ func TestMatchRoute_EthereumNetworkPattern(t *testing.T) {
 		if tt.match && r == nil {
 			t.Errorf("expected match for %q", tt.uri)
 		}
+
 		if !tt.match && r != nil {
 			t.Errorf("expected no match for %q", tt.uri)
 		}
@@ -149,6 +158,7 @@ func TestMatchPattern_GlobSegmentBoundary(t *testing.T) {
 	if matchPattern("/a-*/b", "/a-x/b") != true {
 		t.Error("expected /a-x/b to match /a-*/b")
 	}
+
 	if matchPattern("/a-*/b", "/a-x/c") != false {
 		t.Error("expected /a-x/c NOT to match /a-*/b")
 	}

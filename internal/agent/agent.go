@@ -31,6 +31,7 @@ func Init(cfg *config.Config, u *ui.UI) error {
 	}
 
 	u.Success("Agent capabilities applied to default OpenClaw instance")
+
 	return nil
 }
 
@@ -43,9 +44,9 @@ func Init(cfg *config.Config, u *ui.UI) error {
 //	RoleBindings patched:
 //	  openclaw-x402-pricing-binding       (x402 namespace, pricing ConfigMap)
 func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
-	namespace := fmt.Sprintf("openclaw-%s", DefaultInstanceID)
+	namespace := "openclaw-" + DefaultInstanceID
 
-	subject := []map[string]interface{}{
+	subject := []map[string]any{
 		{
 			"kind":      "ServiceAccount",
 			"name":      "openclaw",
@@ -53,7 +54,7 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 		},
 	}
 
-	patch := []map[string]interface{}{
+	patch := []map[string]any{
 		{
 			"op":    "replace",
 			"path":  "/subjects",
@@ -67,7 +68,7 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 	}
 
 	bin, kc := kubectl.Paths(cfg)
-	patchArg := fmt.Sprintf("-p=%s", string(patchData))
+	patchArg := "-p=" + string(patchData)
 
 	// Patch both ClusterRoleBindings.
 	clusterBindings := []string{
@@ -94,6 +95,7 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 	}
 
 	u.Successf("RBAC bindings patched (SA: openclaw in %s)", namespace)
+
 	return nil
 }
 
@@ -103,10 +105,10 @@ func patchMonetizeBinding(cfg *config.Config, u *ui.UI) error {
 // (resolveAgentWorkspaceDir → /data/.openclaw/workspace/HEARTBEAT.md),
 // NOT the root .openclaw directory.
 func injectHeartbeatFile(cfg *config.Config, u *ui.UI) error {
-	namespace := fmt.Sprintf("openclaw-%s", DefaultInstanceID)
+	namespace := "openclaw-" + DefaultInstanceID
 	heartbeatDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "workspace")
 
-	if err := os.MkdirAll(heartbeatDir, 0755); err != nil {
+	if err := os.MkdirAll(heartbeatDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create heartbeat directory: %w", err)
 	}
 
@@ -115,10 +117,11 @@ python3 /data/.openclaw/skills/sell/scripts/monetize.py process --all --quick
 `
 
 	heartbeatPath := filepath.Join(heartbeatDir, "HEARTBEAT.md")
-	if err := os.WriteFile(heartbeatPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(heartbeatPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("failed to write HEARTBEAT.md: %w", err)
 	}
 
 	u.Successf("HEARTBEAT.md injected at %s", heartbeatPath)
+
 	return nil
 }

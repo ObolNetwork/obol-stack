@@ -24,9 +24,9 @@ func TestABI_AllFunctionsPresent(t *testing.T) {
 	// names by appending a disambiguator (register, register0, register1).
 	// We check for the 7 unique method names plus the overload variants.
 	wantMethods := []string{
-		"register",   // overload with 1 input (string)
-		"register0",  // overload with 0 inputs
-		"register1",  // overload with 2 inputs (string, tuple[])
+		"register",  // overload with 1 input (string)
+		"register0", // overload with 0 inputs
+		"register1", // overload with 2 inputs (string, tuple[])
 		"setAgentURI",
 		"setMetadata",
 		"getMetadata",
@@ -83,6 +83,7 @@ func TestABI_RegisterOverloads(t *testing.T) {
 			t.Errorf("missing method %q", tt.name)
 			continue
 		}
+
 		if len(m.Inputs) != tt.wantInputs {
 			t.Errorf("method %q: got %d inputs, want %d", tt.name, len(m.Inputs), tt.wantInputs)
 		}
@@ -104,10 +105,12 @@ func TestConstants_Addresses(t *testing.T) {
 			if !strings.HasPrefix(a.addr, "0x") {
 				t.Fatalf("address %q does not start with 0x", a.addr)
 			}
+
 			hex := a.addr[2:]
 			if len(hex) != 40 {
 				t.Errorf("address hex part is %d chars, want 40", len(hex))
 			}
+
 			for _, c := range hex {
 				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 					t.Errorf("address contains non-hex char %q", string(c))
@@ -124,5 +127,6 @@ func methodNames(a abi.ABI) string {
 	for n := range a.Methods {
 		names = append(names, n)
 	}
+
 	return strings.Join(names, ", ")
 }

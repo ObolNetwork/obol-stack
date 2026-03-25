@@ -22,6 +22,7 @@ func matchRoute(routes []RouteRule, uri string) *RouteRule {
 			return &routes[i]
 		}
 	}
+
 	return nil
 }
 
@@ -34,8 +35,8 @@ func matchPattern(pattern, uri string) bool {
 
 	// Simple prefix match: pattern ends with "/*" and has no other wildcards.
 	// "/rpc/*" matches "/rpc", "/rpc/", "/rpc/anything", and "/rpc/a/b/c".
-	if strings.HasSuffix(pattern, "/*") {
-		prefix := strings.TrimSuffix(pattern, "/*")
+	if before, ok := strings.CutSuffix(pattern, "/*"); ok {
+		prefix := before
 		if !strings.Contains(prefix, "*") {
 			return uri == prefix || strings.HasPrefix(uri, prefix+"/")
 		}

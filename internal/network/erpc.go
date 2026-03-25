@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,6 +77,7 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
+
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap
@@ -87,34 +89,37 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	}
 
 	// Parse the YAML config
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		return fmt.Errorf("could not parse eRPC config: %w", err)
 	}
 
 	// Navigate to projects[0].upstreams
-	projects, ok := erpcConfig["projects"].([]interface{})
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
-		return fmt.Errorf("eRPC config has no projects")
-	}
-	project, ok := projects[0].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("eRPC config project[0] is not a map")
+		return errors.New("eRPC config has no projects")
 	}
 
-	upstreams, _ := project["upstreams"].([]interface{})
+	project, ok := projects[0].(map[string]any)
+	if !ok {
+		return errors.New("eRPC config project[0] is not a map")
+	}
+
+	upstreams, _ := project["upstreams"].([]any)
 
 	// Remove existing upstream with this ID (idempotent)
-	filtered := make([]interface{}, 0, len(upstreams))
+	filtered := make([]any, 0, len(upstreams))
 	for _, u := range upstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			filtered = append(filtered, u)
 			continue
 		}
+
 		if um["id"] == upstreamID {
 			continue // remove it
 		}
+
 		filtered = append(filtered, u)
 	}
 
@@ -126,18 +131,18 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 		// Write methods are blocked on local nodes so transactions are
 		// always routed through the designated write upstream (e.g.
 		// obol-rpc-mainnet) rather than leaking to the public mempool.
-		newUpstream := map[string]interface{}{
+		newUpstream := map[string]any{
 			"id":       upstreamID,
 			"endpoint": endpoint,
-			"evm": map[string]interface{}{
+			"evm": map[string]any{
 				"chainId": chainID,
 			},
-			"ignoreMethods": []interface{}{
+			"ignoreMethods": []any{
 				"eth_sendRawTransaction",
 				"eth_sendTransaction",
 			},
 		}
-		filtered = append([]interface{}{newUpstream}, filtered...)
+		filtered = append([]any{newUpstream}, filtered...)
 	}
 
 	project["upstreams"] = filtered
@@ -149,34 +154,39 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	// array order, so inserting the local node at position 0 is sufficient
 	// for local-first routing with automatic remote fallback.
 	if add {
-		networks, _ := project["networks"].([]interface{})
+		networks, _ := project["networks"].([]any)
 		found := false
+
 		for _, n := range networks {
-			nm, ok := n.(map[string]interface{})
+			nm, ok := n.(map[string]any)
 			if !ok {
 				continue
 			}
-			evm, _ := nm["evm"].(map[string]interface{})
+
+			evm, _ := nm["evm"].(map[string]any)
 			if evm == nil {
 				continue
 			}
+
 			if cid, _ := evm["chainId"].(int); cid == chainID {
 				found = true
 				break
 			}
 		}
+
 		if !found {
-			newNetwork := map[string]interface{}{
+			newNetwork := map[string]any{
 				"architecture": "evm",
-				"evm":          map[string]interface{}{"chainId": chainID},
-				"failsafe": map[string]interface{}{
-					"timeout": map[string]interface{}{"duration": "30s"},
-					"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
+				"evm":          map[string]any{"chainId": chainID},
+				"failsafe": map[string]any{
+					"timeout": map[string]any{"duration": "30s"},
+					"retry":   map[string]any{"maxAttempts": 2, "delay": "100ms"},
 				},
 			}
 			if networkAlias != "" {
 				newNetwork["alias"] = networkAlias
 			}
+
 			networks = append(networks, newNetwork)
 			project["networks"] = networks
 		}
@@ -189,11 +199,12 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 	}
 
 	// Patch the ConfigMap
-	patchData := map[string]interface{}{
+	patchData := map[string]any{
 		"data": map[string]string{
 			erpcConfigKey: string(updatedYAML),
 		},
 	}
+
 	patchJSON, err := json.Marshal(patchData)
 	if err != nil {
 		return fmt.Errorf("could not marshal patch: %w", err)
@@ -207,7 +218,7 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 
 	// Restart eRPC to pick up new config
 	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
-		"rollout", "restart", fmt.Sprintf("deployment/%s", erpcDeployment), "-n", erpcNamespace); err != nil {
+		"rollout", "restart", "deployment/"+erpcDeployment, "-n", erpcNamespace); err != nil {
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}
 

@@ -2,6 +2,7 @@ package stack
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,9 +35,10 @@ func (b *K3dBackend) Prerequisites(cfg *config.Config) error {
 	// Check Docker is running
 	cmd := exec.Command("docker", "info")
 	cmd.Stdout = nil
+
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Docker is not running. k3d backend requires Docker.\nStart Docker and try again")
+		return errors.New("Docker is not running. k3d backend requires Docker.\nStart Docker and try again")
 	}
 
 	// Check k3d binary exists
@@ -44,6 +46,7 @@ func (b *K3dBackend) Prerequisites(cfg *config.Config) error {
 	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
 		return fmt.Errorf("k3d not found at %s\nRun obolup.sh to install dependencies", k3dPath)
 	}
+
 	return nil
 }
 
@@ -65,7 +68,7 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
 
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
-	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0644); err != nil {
+	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0o644); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
 	}
 
@@ -73,17 +76,19 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 }
 
 func (b *K3dBackend) IsRunning(cfg *config.Config, stackID string) (bool, error) {
-	stackName := fmt.Sprintf("obol-stack-%s", stackID)
+	stackName := "obol-stack-" + stackID
 	listCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
+
 	output, err := listCmd.Output()
 	if err != nil {
 		return false, fmt.Errorf("k3d list command failed: %w", err)
 	}
+
 	return strings.Contains(string(output), stackName), nil
 }
 
 func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, error) {
-	stackName := fmt.Sprintf("obol-stack-%s", stackID)
+	stackName := "obol-stack-" + stackID
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
 
 	running, err := b.IsRunning(cfg, stackID)
@@ -93,6 +98,7 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	if running {
 		u.Warn("Cluster already exists, starting it")
+
 		startCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "start", stackName)
 		if err := u.Exec(ui.ExecConfig{
 			Name: "Starting existing k3d cluster",
@@ -106,7 +112,8 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		if err != nil {
 			return nil, fmt.Errorf("failed to get absolute path for data directory: %w", err)
 		}
-		if err := os.MkdirAll(absDataDir, 0755); err != nil {
+
+		if err := os.MkdirAll(absDataDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create data directory: %w", err)
 		}
 
@@ -126,6 +133,7 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	// Export kubeconfig
 	kubeconfigCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "kubeconfig", "get", stackName)
+
 	kubeconfigData, err := kubeconfigCmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get kubeconfig: %w", err)
@@ -149,15 +157,17 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 func waitForAPIServer(u *ui.UI, kubeconfigData []byte) error {
 	// Extract the server URL from kubeconfig
 	var serverURL string
-	for _, line := range strings.Split(string(kubeconfigData), "\n") {
+
+	for line := range strings.SplitSeq(string(kubeconfigData), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "server:") {
-			serverURL = strings.TrimSpace(strings.TrimPrefix(trimmed, "server:"))
+		if after, ok := strings.CutPrefix(trimmed, "server:"); ok {
+			serverURL = strings.TrimSpace(after)
 			break
 		}
 	}
+
 	if serverURL == "" {
-		return fmt.Errorf("could not find server URL in kubeconfig")
+		return errors.New("could not find server URL in kubeconfig")
 	}
 
 	client := &http.Client{
@@ -173,18 +183,21 @@ func waitForAPIServer(u *ui.UI, kubeconfigData []byte) error {
 			resp, err := client.Get(serverURL + "/version")
 			if err == nil {
 				resp.Body.Close()
+
 				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
 					return nil
 				}
 			}
+
 			time.Sleep(2 * time.Second)
 		}
+
 		return fmt.Errorf("timed out after 60s waiting for API server at %s", serverURL)
 	})
 }
 
 func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
-	stackName := fmt.Sprintf("obol-stack-%s", stackID)
+	stackName := "obol-stack-" + stackID
 
 	u.Infof("Stopping stack: %s", stackName)
 
@@ -194,6 +207,7 @@ func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 		Cmd:  stopCmd,
 	}); err != nil {
 		u.Warn("Graceful stop failed, forcing cluster deletion")
+
 		deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
 		if err := u.Exec(ui.ExecConfig{
 			Name: "Deleting k3d cluster",
@@ -207,7 +221,7 @@ func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 }
 
 func (b *K3dBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error {
-	stackName := fmt.Sprintf("obol-stack-%s", stackID)
+	stackName := "obol-stack-" + stackID
 
 	deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
 	if err := u.Exec(ui.ExecConfig{

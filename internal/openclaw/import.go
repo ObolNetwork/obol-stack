@@ -102,6 +102,7 @@ func DetectExistingConfig() (*ImportResult, error) {
 	if err != nil {
 		return nil, nil
 	}
+
 	return detectExistingConfigAt(home)
 }
 
@@ -109,11 +110,13 @@ func DetectExistingConfig() (*ImportResult, error) {
 // Extracted from DetectExistingConfig for testability.
 func detectExistingConfigAt(home string) (*ImportResult, error) {
 	configPath := filepath.Join(home, ".openclaw", "openclaw.json")
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, fmt.Errorf("failed to read %s: %w", configPath, err)
 	}
 
@@ -134,6 +137,7 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 		if p.API != "" && sanitized == "" {
 			fmt.Printf("  Note: unknown API type '%s' for provider '%s', will auto-detect\n", p.API, name)
 		}
+
 		ip := ImportedProvider{
 			Name:         name,
 			BaseURL:      p.BaseURL,
@@ -150,9 +154,11 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 				fmt.Printf("  Note: provider '%s' uses an env-var reference for its API key (will need manual configuration)\n", name)
 			}
 		}
+
 		for _, m := range p.Models {
-			ip.Models = append(ip.Models, ImportedModel{ID: m.ID, Name: m.Name})
+			ip.Models = append(ip.Models, ImportedModel(m))
 		}
+
 		result.Providers = append(result.Providers, ip)
 	}
 
@@ -163,6 +169,7 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 			fmt.Printf("  Note: Telegram bot token uses env-var reference (will need manual configuration)\n")
 		}
 	}
+
 	if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
 		if !isEnvVarRef(cfg.Channels.Discord.BotToken) {
 			result.Channels.Discord = &ImportedDiscord{BotToken: cfg.Channels.Discord.BotToken}
@@ -170,8 +177,10 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 			fmt.Printf("  Note: Discord bot token uses env-var reference (will need manual configuration)\n")
 		}
 	}
+
 	if cfg.Channels.Slack != nil {
 		botToken := cfg.Channels.Slack.BotToken
+
 		appToken := cfg.Channels.Slack.AppToken
 		if botToken != "" && !isEnvVarRef(botToken) {
 			result.Channels.Slack = &ImportedSlack{
@@ -200,42 +209,51 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 	var b strings.Builder
 
 	if result.AgentModel != "" {
-		b.WriteString(fmt.Sprintf("openclaw:\n  agentModel: %s\n\n", result.AgentModel))
+		fmt.Fprintf(&b, "openclaw:\n  agentModel: %s\n\n", result.AgentModel)
 	}
 
 	if len(result.Providers) > 0 {
 		b.WriteString("models:\n")
+
 		for _, p := range result.Providers {
-			b.WriteString(fmt.Sprintf("  %s:\n", p.Name))
+			fmt.Fprintf(&b, "  %s:\n", p.Name)
+
 			if p.Disabled {
 				b.WriteString("    enabled: false\n")
 				continue
 			}
+
 			b.WriteString("    enabled: true\n")
+
 			if p.BaseURL != "" {
-				b.WriteString(fmt.Sprintf("    baseUrl: %s\n", p.BaseURL))
+				fmt.Fprintf(&b, "    baseUrl: %s\n", p.BaseURL)
 			}
 			// Always emit api to override any stale base chart value.
 			// Empty string makes the Helm template omit it from JSON,
 			// letting OpenClaw auto-detect the protocol.
 			if p.API != "" {
-				b.WriteString(fmt.Sprintf("    api: %s\n", p.API))
+				fmt.Fprintf(&b, "    api: %s\n", p.API)
 			} else {
 				b.WriteString("    api: \"\"\n")
 			}
+
 			if p.APIKeyEnvVar != "" {
-				b.WriteString(fmt.Sprintf("    apiKeyEnvVar: %s\n", p.APIKeyEnvVar))
+				fmt.Fprintf(&b, "    apiKeyEnvVar: %s\n", p.APIKeyEnvVar)
 			}
+
 			if len(p.Models) > 0 {
 				b.WriteString("    models:\n")
+
 				for _, m := range p.Models {
-					b.WriteString(fmt.Sprintf("      - id: %s\n", m.ID))
+					fmt.Fprintf(&b, "      - id: %s\n", m.ID)
+
 					if m.Name != "" {
-						b.WriteString(fmt.Sprintf("        name: %s\n", m.Name))
+						fmt.Fprintf(&b, "        name: %s\n", m.Name)
 					}
 				}
 			}
 		}
+
 		b.WriteString("\n")
 	}
 
@@ -243,18 +261,22 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 	hasChannels := result.Channels.Telegram != nil || result.Channels.Discord != nil || result.Channels.Slack != nil
 	if hasChannels {
 		b.WriteString("channels:\n")
+
 		if result.Channels.Telegram != nil {
 			b.WriteString("  telegram:\n")
 			b.WriteString("    enabled: true\n")
 		}
+
 		if result.Channels.Discord != nil {
 			b.WriteString("  discord:\n")
 			b.WriteString("    enabled: true\n")
 		}
+
 		if result.Channels.Slack != nil {
 			b.WriteString("  slack:\n")
 			b.WriteString("    enabled: true\n")
 		}
+
 		b.WriteString("\n")
 	}
 
@@ -268,26 +290,34 @@ func PrintImportSummary(result *ImportResult) {
 	}
 
 	fmt.Println("Detected existing OpenClaw installation (~/.openclaw/):")
+
 	if len(result.Providers) > 0 {
 		fmt.Printf("  Providers: ")
+
 		names := make([]string, 0, len(result.Providers))
 		for _, p := range result.Providers {
 			names = append(names, p.Name)
 		}
+
 		fmt.Println(strings.Join(names, ", "))
 	}
+
 	if result.AgentModel != "" {
 		fmt.Printf("  Agent model: %s\n", result.AgentModel)
 	}
+
 	if result.Channels.Telegram != nil {
 		fmt.Println("  Telegram: configured")
 	}
+
 	if result.Channels.Discord != nil {
 		fmt.Println("  Discord: configured")
 	}
+
 	if result.Channels.Slack != nil {
 		fmt.Println("  Slack: configured")
 	}
+
 	if result.WorkspaceDir != "" {
 		files := detectWorkspaceFiles(result.WorkspaceDir)
 		fmt.Printf("  Workspace: %s (%s)\n", result.WorkspaceDir, strings.Join(files, ", "))
@@ -320,6 +350,7 @@ func detectWorkspace(home, configWorkspace string) string {
 
 	// Directory exists but has no marker files
 	fmt.Printf("  Note: workspace at %s has no marker files (SOUL.md, AGENTS.md, IDENTITY.md)\n", wsDir)
+
 	return ""
 }
 
@@ -329,7 +360,9 @@ func detectWorkspaceFiles(wsDir string) []string {
 		"SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md",
 		"TOOLS.md", "MEMORY.md",
 	}
+
 	var found []string
+
 	for _, name := range candidates {
 		if _, err := os.Stat(filepath.Join(wsDir, name)); err == nil {
 			found = append(found, name)
@@ -339,6 +372,7 @@ func detectWorkspaceFiles(wsDir string) []string {
 	if info, err := os.Stat(filepath.Join(wsDir, "memory")); err == nil && info.IsDir() {
 		found = append(found, "memory/")
 	}
+
 	return found
 }
 
@@ -361,6 +395,7 @@ func sanitizeModelAPI(api string) string {
 	if validModelAPIs[api] {
 		return api
 	}
+
 	return ""
 }
 
@@ -374,6 +409,7 @@ func defaultProviderAPIKeyEnvVar(provider string) string {
 		return "OLLAMA_API_KEY"
 	default:
 		var out []rune
+
 		for _, r := range strings.ToUpper(provider) {
 			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 				out = append(out, r)
@@ -381,10 +417,12 @@ func defaultProviderAPIKeyEnvVar(provider string) string {
 				out = append(out, '_')
 			}
 		}
+
 		s := strings.Trim(string(out), "_")
 		if s == "" {
 			return "MODEL_API_KEY"
 		}
+
 		return s + "_API_KEY"
 	}
 }
@@ -394,13 +432,16 @@ func extractEnvVarName(s string) (string, bool) {
 	if !strings.HasPrefix(s, "${") || !strings.HasSuffix(s, "}") {
 		return "", false
 	}
+
 	body := strings.TrimSuffix(strings.TrimPrefix(s, "${"), "}")
 	if body == "" {
 		return "", false
 	}
+
 	if i := strings.Index(body, ":"); i > 0 {
 		body = body[:i]
 	}
+
 	return body, body != ""
 }
 

@@ -39,6 +39,7 @@ func New(verbose bool) *UI {
 func NewWithOptions(verbose, quiet bool) *UI {
 	u := New(verbose)
 	u.quiet = quiet
+
 	return u
 }
 

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -26,6 +26,7 @@ func updateCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
 			clusterRunning := true
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 				clusterRunning = false
@@ -66,6 +67,7 @@ func updateCommand(cfg *config.Config) *cli.Command {
 			// Print CLI status
 			u.Blank()
 			u.Info("Checking CLI version...")
+
 			if result.CLIError != "" {
 				u.Warnf("%s", result.CLIError)
 			} else {
@@ -108,7 +110,7 @@ Examples:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-				return fmt.Errorf("stack not running, use 'obol stack up' first")
+				return errors.New("stack not running, use 'obol stack up' first")
 			}
 
 			chartFilter := ""
@@ -164,6 +166,7 @@ func printUpdateJSON(result *update.UpdateResult) error {
 		} else if result.CLIUpdateAvail {
 			status = "update_available"
 		}
+
 		out.CLI = &jsonCLI{
 			Current: version.Short(),
 			Latest:  result.CLIRelease.Version,
@@ -173,5 +176,6 @@ func printUpdateJSON(result *update.UpdateResult) error {
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+
 	return enc.Encode(out)
 }

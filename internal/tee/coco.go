@@ -48,6 +48,7 @@ func ParseCoCoRuntime(s string) (CoCoRuntimeClass, error) {
 	if s == "" || s == "none" {
 		return "", nil
 	}
+
 	switch CoCoRuntimeClass(s) {
 	case RuntimeQEMUCoCoDev, RuntimeQEMUSNP, RuntimeQEMUTDX:
 		return CoCoRuntimeClass(s), nil
@@ -59,21 +60,23 @@ func ParseCoCoRuntime(s string) (CoCoRuntimeClass, error) {
 
 func cocoRuntimeStrings() []string {
 	runtimes := ValidCoCoRuntimes()
+
 	ss := make([]string, len(runtimes))
 	for i, r := range runtimes {
 		ss[i] = string(r)
 	}
+
 	return ss
 }
 
 // CoCoStatus describes the installation state of the CoCo operator.
 type CoCoStatus struct {
-	Installed       bool     `json:"installed"`
-	Version         string   `json:"version,omitempty"`
-	Namespace       string   `json:"namespace,omitempty"`
-	RuntimeClasses  []string `json:"runtime_classes,omitempty"`
-	OperatorReady   bool     `json:"operator_ready"`
-	KVMAvailable    bool     `json:"kvm_available"`
+	Installed      bool     `json:"installed"`
+	Version        string   `json:"version,omitempty"`
+	Namespace      string   `json:"namespace,omitempty"`
+	RuntimeClasses []string `json:"runtime_classes,omitempty"`
+	OperatorReady  bool     `json:"operator_ready"`
+	KVMAvailable   bool     `json:"kvm_available"`
 }
 
 // CoCoInstallOpts configures the CoCo Helm install.
@@ -96,6 +99,7 @@ func (o *CoCoInstallOpts) helm() string {
 	if o != nil && o.HelmBin != "" {
 		return o.HelmBin
 	}
+
 	return "helm"
 }
 
@@ -103,6 +107,7 @@ func (o *CoCoInstallOpts) kubectl() string {
 	if o != nil && o.KubectlBin != "" {
 		return o.KubectlBin
 	}
+
 	return "kubectl"
 }
 
@@ -110,6 +115,7 @@ func (o *CoCoInstallOpts) kubeconfigArgs() []string {
 	if o != nil && o.Kubeconfig != "" {
 		return []string{"--kubeconfig", o.Kubeconfig}
 	}
+
 	return nil
 }
 
@@ -144,10 +150,12 @@ func InstallCoCo(ctx context.Context, opts *CoCoInstallOpts) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, opts.helm(), args...)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("tee/coco: helm install failed: %w\n%s", err, string(out))
 	}
+
 	return string(out), nil
 }
 
@@ -164,10 +172,12 @@ func UninstallCoCo(ctx context.Context, opts *CoCoInstallOpts) (string, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, opts.helm(), args...)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("tee/coco: helm uninstall failed: %w\n%s", err, string(out))
 	}
+
 	return string(out), nil
 }
 
@@ -189,6 +199,7 @@ func CheckCoCo(ctx context.Context, opts *CoCoInstallOpts) (*CoCoStatus, error) 
 	helmArgs = append(helmArgs, opts.kubeconfigArgs()...)
 
 	cmd := exec.CommandContext(ctx, opts.helm(), helmArgs...)
+
 	helmOut, err := cmd.CombinedOutput()
 	if err != nil {
 		// Not installed or helm error.
@@ -227,6 +238,7 @@ func listRuntimeClasses(ctx context.Context, opts *CoCoInstallOpts) ([]string, e
 	args = append(args, opts.kubeconfigArgs()...)
 
 	cmd := exec.CommandContext(ctx, opts.kubectl(), args...)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("tee/coco: list runtimeclasses: %w", err)
@@ -235,11 +247,13 @@ func listRuntimeClasses(ctx context.Context, opts *CoCoInstallOpts) ([]string, e
 	names := strings.Fields(strings.TrimSpace(string(out)))
 	// Filter to only CoCo/Kata runtimes.
 	var result []string
+
 	for _, name := range names {
 		if strings.HasPrefix(name, "kata-") {
 			result = append(result, name)
 		}
 	}
+
 	return result, nil
 }
 
@@ -249,6 +263,8 @@ func checkKVM() bool {
 	if err != nil {
 		return false
 	}
+
 	cmd := exec.Command("test", "-c", "/dev/kvm")
+
 	return cmd.Run() == nil
 }

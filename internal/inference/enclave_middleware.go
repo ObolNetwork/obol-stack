@@ -63,6 +63,7 @@ func newEnclaveMiddleware(tag string) (*enclaveMiddleware, error) {
 	if err != nil {
 		return nil, fmt.Errorf("enclave middleware: %w", err)
 	}
+
 	return &enclaveMiddleware{key: k}, nil
 }
 
@@ -94,7 +95,9 @@ func (m *enclaveMiddleware) handlePubkey(w http.ResponseWriter, _ *http.Request)
 		Persistent: m.key.Persistent(),
 		Algorithm:  "ECIES-P256-HKDF-SHA256-AES256GCM",
 	}
+
 	w.Header().Set("Content-Type", "application/json")
+
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		log.Printf("enclave pubkey handler: encode error: %v", err)
 	}
@@ -121,6 +124,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
 			return
 		}
+
 		_ = r.Body.Close()
 
 		// Decrypt via the SE private key.
@@ -128,6 +132,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		if err != nil {
 			log.Printf("enclave middleware: decrypt error: %q", err)
 			http.Error(w, "decryption failed", http.StatusBadRequest)
+
 			return
 		}
 
@@ -154,6 +159,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 				fmt.Sprintf("invalid %s header: must be hex-encoded 65-byte uncompressed P-256 public key", headerReplyPubkey),
 				http.StatusBadRequest,
 			)
+
 			return
 		}
 
@@ -164,6 +170,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		if rec.overflow {
 			log.Printf("enclave middleware: upstream response exceeded %d byte capture limit", maxResponseCapture)
 			http.Error(w, "response too large to encrypt", http.StatusBadGateway)
+
 			return
 		}
 
@@ -171,6 +178,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		if err != nil {
 			log.Printf("enclave middleware: response encrypt error: %v", err)
 			http.Error(w, "response encryption failed", http.StatusInternalServerError)
+
 			return
 		}
 
@@ -181,6 +189,7 @@ func (m *enclaveMiddleware) wrap(next http.Handler) http.Handler {
 		w.Header().Del("Content-Encoding")
 		w.Header().Del("ETag")
 		w.WriteHeader(rec.code())
+
 		if _, err := w.Write(encResp); err != nil {
 			log.Printf("enclave middleware: write encrypted response: %v", err)
 		}
@@ -202,10 +211,12 @@ func (c *responseCapture) Write(b []byte) (int, error) {
 	if c.overflow {
 		return 0, fmt.Errorf("response body exceeds %d byte limit", maxResponseCapture)
 	}
+
 	if c.body.Len()+len(b) > maxResponseCapture {
 		c.overflow = true
 		return 0, fmt.Errorf("response body exceeds %d byte limit", maxResponseCapture)
 	}
+
 	return c.body.Write(b)
 }
 
@@ -220,5 +231,6 @@ func (c *responseCapture) code() int {
 	if c.statusCode == 0 {
 		return http.StatusOK
 	}
+
 	return c.statusCode
 }

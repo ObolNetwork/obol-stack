@@ -38,6 +38,7 @@ func WatchConfig(ctx context.Context, path string, v *Verifier, interval time.Du
 			if mod.Equal(lastMod) {
 				continue
 			}
+
 			lastMod = mod
 
 			cfg, err := LoadConfig(path)

@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,7 +29,7 @@ func (b *K3sBackend) Name() string { return BackendK3s }
 
 func (b *K3sBackend) Prerequisites(cfg *config.Config) error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("k3s backend is only supported on Linux")
+		return errors.New("k3s backend is only supported on Linux")
 	}
 
 	// Check sudo access: try non-interactive first (NOPASSWD), fall back to interactive prompt
@@ -36,9 +37,10 @@ func (b *K3sBackend) Prerequisites(cfg *config.Config) error {
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
+
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("k3s backend requires root/sudo access")
+			return errors.New("k3s backend requires root/sudo access")
 		}
 	}
 
@@ -63,7 +65,7 @@ func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3sConfig = strings.ReplaceAll(k3sConfig, "{{DATA_DIR}}", absDataDir)
 
 	k3sConfigPath := filepath.Join(cfg.ConfigDir, k3sConfigFile)
-	if err := os.WriteFile(k3sConfigPath, []byte(k3sConfig), 0644); err != nil {
+	if err := os.WriteFile(k3sConfigPath, []byte(k3sConfig), 0o644); err != nil {
 		return fmt.Errorf("failed to write k3s config: %w", err)
 	}
 
@@ -83,11 +85,14 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	running, _ := b.IsRunning(cfg, stackID)
 	if running {
 		u.Warn("k3s is already running")
+
 		kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
+
 		data, err := os.ReadFile(kubeconfigPath)
 		if err != nil {
 			return nil, fmt.Errorf("k3s is running but kubeconfig not found: %w", err)
 		}
+
 		return data, nil
 	}
 
@@ -104,7 +109,8 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path for data directory: %w", err)
 	}
-	if err := os.MkdirAll(absDataDir, 0755); err != nil {
+
+	if err := os.MkdirAll(absDataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
@@ -116,7 +122,7 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	os.Remove(kubeconfigPath)
 
 	// Open log file for k3s output
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k3s log file: %w", err)
 	}
@@ -143,7 +149,7 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	// Write PID file
 	pidPath := filepath.Join(cfg.ConfigDir, k3sPidFile)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0600); err != nil {
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600); err != nil {
 		logFile.Close()
 		return nil, fmt.Errorf("failed to write k3s PID file: %w", err)
 	}
@@ -157,19 +163,23 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	// Wait for kubeconfig to be written by k3s
 	var kubeconfigData []byte
+
 	err = u.RunWithSpinner("Waiting for kubeconfig", func() error {
 		deadline := time.Now().Add(2 * time.Minute)
 		for time.Now().Before(deadline) {
 			if info, statErr := os.Stat(kubeconfigPath); statErr == nil && info.Size() > 0 {
 				exec.Command("sudo", "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), kubeconfigPath).Run()
+
 				data, readErr := os.ReadFile(kubeconfigPath)
 				if readErr == nil && len(data) > 0 {
 					kubeconfigData = data
 					return nil
 				}
 			}
+
 			time.Sleep(2 * time.Second)
 		}
+
 		return fmt.Errorf("k3s did not write kubeconfig within timeout\nCheck logs: %s", logPath)
 	})
 	if err != nil {
@@ -179,15 +189,18 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	// Wait for API server
 	err = u.RunWithSpinner("Waiting for API server", func() error {
 		kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
 		deadline := time.Now().Add(90 * time.Second)
 		for time.Now().Before(deadline) {
 			probe := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "get", "nodes", "--no-headers")
 			if out, probeErr := probe.Output(); probeErr == nil && len(out) > 0 {
 				return nil
 			}
+
 			time.Sleep(3 * time.Second)
 		}
-		return fmt.Errorf("API server not ready after 90s")
+
+		return errors.New("API server not ready after 90s")
 	})
 	if err != nil {
 		u.Warn("API server not fully ready, proceeding anyway")
@@ -206,12 +219,14 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 	if !b.isProcessAlive(pid) {
 		u.Warn("k3s process not running, cleaning up PID file")
 		b.removePidFile(cfg)
+
 		return nil
 	}
 
 	u.Infof("Stopping k3s (pid: %d)", pid)
 
 	pidStr := strconv.Itoa(pid)
+
 	stopCmd := exec.Command("sudo", "kill", "-TERM", pidStr)
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Sending SIGTERM to k3s",
@@ -227,6 +242,7 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 		if !b.isProcessAlive(pid) {
 			break
 		}
+
 		time.Sleep(1 * time.Second)
 	}
 
@@ -246,6 +262,7 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 
 	b.removePidFile(cfg)
 	u.Success("k3s stopped")
+
 	return nil
 }
 
@@ -255,6 +272,7 @@ func (b *K3sBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error
 
 	// Clean up k3s state directories
 	absDataDir, _ := filepath.Abs(cfg.DataDir)
+
 	cleanDirs := []string{
 		"/var/lib/rancher/k3s",
 		"/etc/rancher/k3s",
@@ -262,7 +280,7 @@ func (b *K3sBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error
 	}
 	for _, dir := range cleanDirs {
 		if _, err := os.Stat(dir); err == nil {
-			u.Dim(fmt.Sprintf("  Cleaning up: %s", dir))
+			u.Dim("  Cleaning up: " + dir)
 			exec.Command("sudo", "rm", "-rf", dir).Run()
 		}
 	}
@@ -288,17 +306,21 @@ func (b *K3sBackend) DataDir(cfg *config.Config) string {
 // readPid reads the k3s PID from the PID file
 func (b *K3sBackend) readPid(cfg *config.Config) (int, error) {
 	pidPath := filepath.Join(cfg.ConfigDir, k3sPidFile)
+
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
 		return 0, err
 	}
+
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		return 0, fmt.Errorf("invalid PID in %s: %w", pidPath, err)
 	}
+
 	if pid <= 0 {
 		return 0, fmt.Errorf("invalid PID in %s: %d", pidPath, pid)
 	}
+
 	return pid, nil
 }
 
@@ -308,6 +330,7 @@ func (b *K3sBackend) cleanStalePid(cfg *config.Config, u *ui.UI) {
 	if err != nil {
 		return
 	}
+
 	if !b.isProcessAlive(pid) {
 		u.Dim(fmt.Sprintf("  Cleaning up stale PID file (pid %d no longer running)", pid))
 		b.removePidFile(cfg)

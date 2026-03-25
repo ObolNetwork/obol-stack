@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -31,7 +32,7 @@ func Status(cfg *config.Config, u *ui.UI) error {
 
 	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
 	st, _ := loadTunnelState(cfg)
@@ -47,12 +48,15 @@ func Status(cfg *config.Config, u *ui.UI) error {
 			u.Print("The tunnel will start automatically when you sell a service.")
 			u.Print("  Start manually: obol tunnel restart")
 			u.Print("  Persistent URL: obol tunnel login --hostname stack.example.com")
+
 			return nil
 		}
+
 		printStatusBox(u, mode, "not running", url, time.Now())
 		u.Blank()
 		u.Print("Troubleshooting:")
 		u.Print("  - Start the stack: obol stack up")
+
 		return nil
 	}
 
@@ -71,8 +75,10 @@ func Status(cfg *config.Config, u *ui.UI) error {
 			u.Print("Troubleshooting:")
 			u.Print("  - Check logs: obol tunnel logs")
 			u.Print("  - Restart tunnel: obol tunnel restart")
+
 			return nil
 		}
+
 		url = tunnelURL
 	}
 
@@ -103,8 +109,9 @@ func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 		"--kubeconfig", kubeconfigPath,
 		"set", "env", "deployment/openclaw",
 		"-n", "openclaw-obol-agent",
-		fmt.Sprintf("AGENT_BASE_URL=%s", strings.TrimRight(tunnelURL, "/")),
+		"AGENT_BASE_URL="+strings.TrimRight(tunnelURL, "/"),
 	)
+
 	return cmd.Run()
 }
 
@@ -135,7 +142,7 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 		return url, nil
 	}
 
-	return "", fmt.Errorf("tunnel URL not found in logs")
+	return "", errors.New("tunnel URL not found in logs")
 }
 
 // EnsureRunning scales the cloudflared deployment to 1 replica if it's at 0,
@@ -146,7 +153,7 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("stack not running")
+		return "", errors.New("stack not running")
 	}
 
 	// Check if already running.
@@ -183,8 +190,10 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 
 	// Poll for tunnel URL (quick tunnels take a few seconds to register).
 	var tunnelURL string
-	for i := 0; i < 20; i++ {
+
+	for range 20 {
 		time.Sleep(time.Second)
+
 		if url, err := GetTunnelURL(cfg); err == nil {
 			tunnelURL = url
 			break
@@ -192,13 +201,14 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 	}
 
 	if tunnelURL == "" {
-		return "", fmt.Errorf("tunnel started but URL not available yet — run 'obol tunnel status' in a few seconds")
+		return "", errors.New("tunnel started but URL not available yet — run 'obol tunnel status' in a few seconds")
 	}
 
 	// Inject into obol-agent.
 	if err := InjectBaseURL(cfg, tunnelURL); err == nil {
 		u.Dim("Agent base URL updated to " + tunnelURL)
 	}
+
 	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
 		u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
 	}
@@ -213,7 +223,7 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 
 	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
 	cmd := exec.Command(kubectlPath,
@@ -242,7 +252,7 @@ func Logs(cfg *config.Config, follow bool) error {
 
 	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
 	args := []string{
@@ -279,7 +289,7 @@ func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
 
 	status := strings.TrimSpace(string(output))
 	if status == "" {
-		return "", fmt.Errorf("no pods found")
+		return "", errors.New("no pods found")
 	}
 
 	return strings.ToLower(status), nil
@@ -324,10 +334,12 @@ data:
 		"--kubeconfig", kubeconfigPath,
 		"apply", "-f", "-",
 	)
+
 	cmd.Stdin = strings.NewReader(manifest)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kubectl apply failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+
 	return nil
 }
 
@@ -348,16 +360,19 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	if err := CreateStorefront(cfg, tunnelURL); err != nil {
 		u.Warnf("could not create storefront: %v", err)
 	}
+
 	return tunnelURL, nil
 }
 
 // Stop scales the cloudflared deployment to 0 replicas.
 func Stop(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return nil // stack not running, nothing to stop
 	}
+
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"scale", "deployment/cloudflared",
@@ -367,7 +382,9 @@ func Stop(cfg *config.Config, u *ui.UI) error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to scale cloudflared to 0: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+
 	u.Success("Tunnel stopped")
+
 	return nil
 }
 
@@ -382,6 +399,7 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 	if err != nil {
 		return fmt.Errorf("invalid tunnel URL: %w", err)
 	}
+
 	hostname := parsed.Hostname()
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -412,60 +430,60 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 </html>`, tunnelURL, tunnelURL)
 
 	// Build the resources as a multi-document YAML manifest.
-	resources := []map[string]interface{}{
+	resources := []map[string]any{
 		// ConfigMap with HTML content + httpd mime config.
 		{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "tunnel-storefront",
 				"namespace": storefrontNamespace,
 			},
 			"data": map[string]string{
-				"index.html":  html,
-				"httpd.conf":  "",
-				"mime.types":  "text/html\thtml htm\n",
+				"index.html": html,
+				"httpd.conf": "",
+				"mime.types": "text/html\thtml htm\n",
 			},
 		},
 		// Deployment: busybox httpd serving the ConfigMap.
 		{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "tunnel-storefront",
 				"namespace": storefrontNamespace,
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": 1,
-				"selector": map[string]interface{}{
+				"selector": map[string]any{
 					"matchLabels": map[string]string{"app": "tunnel-storefront"},
 				},
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
 						"labels": map[string]string{"app": "tunnel-storefront"},
 					},
-					"spec": map[string]interface{}{
-						"containers": []map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []map[string]any{
 							{
 								"name":    "httpd",
 								"image":   "busybox:1.37",
 								"command": []string{"httpd", "-f", "-p", "8080", "-h", "/www"},
-								"ports": []map[string]interface{}{
+								"ports": []map[string]any{
 									{"containerPort": 8080},
 								},
-								"volumeMounts": []map[string]interface{}{
+								"volumeMounts": []map[string]any{
 									{"name": "html", "mountPath": "/www"},
 								},
-								"resources": map[string]interface{}{
+								"resources": map[string]any{
 									"requests": map[string]string{"cpu": "5m", "memory": "8Mi"},
 									"limits":   map[string]string{"cpu": "20m", "memory": "16Mi"},
 								},
 							},
 						},
-						"volumes": []map[string]interface{}{
+						"volumes": []map[string]any{
 							{
 								"name": "html",
-								"configMap": map[string]interface{}{
+								"configMap": map[string]any{
 									"name": "tunnel-storefront",
 								},
 							},
@@ -478,13 +496,13 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 		{
 			"apiVersion": "v1",
 			"kind":       "Service",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "tunnel-storefront",
 				"namespace": storefrontNamespace,
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"selector": map[string]string{"app": "tunnel-storefront"},
-				"ports": []map[string]interface{}{
+				"ports": []map[string]any{
 					{"port": 8080, "targetPort": 8080},
 				},
 			},
@@ -493,25 +511,25 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 		{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "tunnel-storefront",
 				"namespace": storefrontNamespace,
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"hostnames": []string{hostname},
-				"parentRefs": []map[string]interface{}{
+				"parentRefs": []map[string]any{
 					{
 						"name":        "traefik-gateway",
 						"namespace":   "traefik",
 						"sectionName": "web",
 					},
 				},
-				"rules": []map[string]interface{}{
+				"rules": []map[string]any{
 					{
-						"matches": []map[string]interface{}{
+						"matches": []map[string]any{
 							{"path": map[string]string{"type": "PathPrefix", "value": "/"}},
 						},
-						"backendRefs": []map[string]interface{}{
+						"backendRefs": []map[string]any{
 							{
 								"name": "tunnel-storefront",
 								"port": 8080,
@@ -529,21 +547,25 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource: %w", err)
 		}
+
 		cmd := exec.Command(kubectlPath,
 			"--kubeconfig", kubeconfigPath,
 			"apply", "-f", "-",
 		)
+
 		cmd.Stdin = strings.NewReader(string(data))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to apply storefront resource: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
+
 	return nil
 }
 
 // DeleteStorefront removes the storefront landing page resources.
 func DeleteStorefront(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return nil
@@ -563,6 +585,7 @@ func DeleteStorefront(cfg *config.Config) error {
 		)
 		_ = cmd.Run() // best-effort cleanup
 	}
+
 	return nil
 }
 
@@ -572,5 +595,6 @@ func parseQuickTunnelURL(logs string) (string, bool) {
 	if url := re.FindString(logs); url != "" {
 		return url, true
 	}
+
 	return "", false
 }

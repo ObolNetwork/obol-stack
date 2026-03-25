@@ -7,14 +7,15 @@ import (
 
 var (
 	// These variables are set via ldflags during build
-	Version   = "dev"        // Semantic version (e.g., "0.1.0")
-	GitCommit = "unknown"    // Git commit hash (e.g., "a751d4c")
-	BuildTime = "unknown"    // Build timestamp (e.g., "20251015123705")
-	GitDirty  = "false"      // Whether repo had uncommitted changes
+	Version   = "dev"     // Semantic version (e.g., "0.1.0")
+	GitCommit = "unknown" // Git commit hash (e.g., "a751d4c")
+	BuildTime = "unknown" // Build timestamp (e.g., "20251015123705")
+	GitDirty  = "false"   // Whether repo had uncommitted changes
 )
 
 // Full returns the full version string including all metadata
 // Format: version+commit.timestamp[-dirty]
+
 func Full() string {
 	version := Version
 

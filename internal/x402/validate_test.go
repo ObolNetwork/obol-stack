@@ -20,9 +20,9 @@ func TestValidateWallet(t *testing.T) {
 		"0xGGGG",
 		"not-an-address",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", // missing 0x prefix
-		"0xdeadbeef",                                // too short
+		"0xdeadbeef", // too short
 		"0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefAA", // too long
-		`0x"; malicious: true; "`,                   // injection attempt
+		`0x"; malicious: true; "`,                      // injection attempt
 	}
 	for _, addr := range invalid {
 		if err := ValidateWallet(addr); err == nil {

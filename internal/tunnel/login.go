@@ -3,6 +3,7 @@ package tunnel
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,36 +30,40 @@ type LoginOptions struct {
 func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
-		return fmt.Errorf("--hostname is required (e.g. stack.example.com)")
+		return errors.New("--hostname is required (e.g. stack.example.com)")
 	}
 
 	// Stack must be running so we can write secrets/config to the cluster.
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
 	stackID := getStackID(cfg)
 	if stackID == "" {
-		return fmt.Errorf("stack not initialized, run 'obol stack init' first")
+		return errors.New("stack not initialized, run 'obol stack init' first")
 	}
-	tunnelName := fmt.Sprintf("obol-stack-%s", stackID)
+
+	tunnelName := "obol-stack-" + stackID
 
 	cloudflaredPath, err := exec.LookPath("cloudflared")
 	if err != nil {
-		return fmt.Errorf("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
+		return errors.New("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
 	}
 
 	u.Info("Authenticating cloudflared (browser)...")
+
 	loginCmd := exec.Command(cloudflaredPath, "tunnel", "login")
 	loginCmd.Stdin = os.Stdin
 	loginCmd.Stdout = os.Stdout
+
 	loginCmd.Stderr = os.Stderr
 	if err := loginCmd.Run(); err != nil {
 		return fmt.Errorf("cloudflared tunnel login failed: %w", err)
 	}
 
 	u.Infof("Creating tunnel: %s", tunnelName)
+
 	if out, err := exec.Command(cloudflaredPath, "tunnel", "create", tunnelName).CombinedOutput(); err != nil {
 		// "Already exists" is common if user re-runs. We'll recover by querying tunnel info.
 		u.Warnf("cloudflared tunnel create returned an error (continuing): %s", strings.TrimSpace(string(out)))
@@ -68,6 +73,7 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("cloudflared tunnel info failed: %w\n%s", err, strings.TrimSpace(string(infoOut)))
 	}
+
 	tunnelID, err := parseFirstUUID(string(infoOut))
 	if err != nil {
 		return fmt.Errorf("could not parse tunnel UUID from cloudflared tunnel info:\n%s", strings.TrimSpace(string(infoOut)))
@@ -81,12 +87,14 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", certPath, err)
 	}
+
 	cred, err := os.ReadFile(credPath)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", credPath, err)
 	}
 
 	u.Infof("Creating DNS route for %s...", hostname)
+
 	routeOut, err := exec.Command(cloudflaredPath, "tunnel", "route", "dns", tunnelName, hostname).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s", err, strings.TrimSpace(string(routeOut)))
@@ -105,15 +113,17 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if st == nil {
 		st = &tunnelState{}
 	}
+
 	st.Mode = "dns"
 	st.Hostname = hostname
 	st.TunnelID = tunnelID
+
 	st.TunnelName = tunnelName
 	if err := saveTunnelState(cfg, st); err != nil {
 		return fmt.Errorf("tunnel created, but failed to save local state: %w", err)
 	}
 
-	tunnelURL := fmt.Sprintf("https://%s", hostname)
+	tunnelURL := "https://" + hostname
 
 	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
 	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
@@ -129,6 +139,7 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	u.Success("Tunnel login complete")
 	u.Printf("Persistent URL: https://%s", hostname)
 	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
+
 	return nil
 }
 
@@ -137,6 +148,7 @@ func defaultCloudflaredDir() string {
 	if err != nil {
 		return ".cloudflared"
 	}
+
 	return filepath.Join(home, ".cloudflared")
 }
 
@@ -145,7 +157,8 @@ func parseFirstUUID(s string) (string, error) {
 	if m := re.FindString(strings.ToLower(s)); m != "" {
 		return m, nil
 	}
-	return "", fmt.Errorf("uuid not found")
+
+	return "", errors.New("uuid not found")
 }
 
 func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
@@ -154,6 +167,7 @@ func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath,
 	if err != nil {
 		return err
 	}
+
 	if err := kubectlApply(cfg, u, kubeconfigPath, secretYAML); err != nil {
 		return err
 	}
@@ -187,6 +201,7 @@ data:
   credentials.json: %s
 `, localManagedSecretName, tunnelNamespace, certB64, credB64)
 	_ = hostname // reserved for future labels/annotations
+
 	return []byte(secret), nil
 }
 
@@ -207,6 +222,7 @@ data:
         service: http://traefik.traefik.svc.cluster.local:80
       - service: http_status:404
 `, localManagedConfigMapName, tunnelNamespace, tunnelID, tunnelID, hostname)
+
 	return []byte(cfg)
 }
 
@@ -217,6 +233,7 @@ func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest 
 		"--kubeconfig", kubeconfigPath,
 		"apply", "-f", "-",
 	)
+
 	cmd.Stdin = bytes.NewReader(manifest)
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Applying Kubernetes manifest",
@@ -224,5 +241,6 @@ func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest 
 	}); err != nil {
 		return fmt.Errorf("kubectl apply failed: %w", err)
 	}
+
 	return nil
 }

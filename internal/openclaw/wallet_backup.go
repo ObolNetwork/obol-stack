@@ -5,9 +5,11 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -39,17 +41,17 @@ type BackupWallet struct {
 
 // BackupWalletOptions holds options for the backup command.
 type BackupWalletOptions struct {
-	Output     string // Output file path (empty = auto-generate)
-	Passphrase string // Encryption passphrase (empty = no encryption)
-	HasPassFlag bool  // Whether --passphrase was explicitly set
+	Output      string // Output file path (empty = auto-generate)
+	Passphrase  string // Encryption passphrase (empty = no encryption)
+	HasPassFlag bool   // Whether --passphrase was explicitly set
 }
 
 // RestoreWalletOptions holds options for the restore command.
 type RestoreWalletOptions struct {
-	Input      string // Input file path
-	Passphrase string // Decryption passphrase
-	HasPassFlag bool  // Whether --passphrase was explicitly set
-	Force      bool   // Overwrite existing wallet
+	Input       string // Input file path
+	Passphrase  string // Decryption passphrase
+	HasPassFlag bool   // Whether --passphrase was explicitly set
+	Force       bool   // Overwrite existing wallet
 }
 
 // BackupWallet creates a backup of the wallet for the given instance.
@@ -64,6 +66,7 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 
 	// Read keystore JSON.
 	keystorePath := filepath.Join(KeystoreVolumePath(cfg, id), wallet.KeystoreUUID+".json")
+
 	keystoreData, err := os.ReadFile(keystorePath)
 	if err != nil {
 		return fmt.Errorf("failed to read keystore file: %w", err)
@@ -124,11 +127,12 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 		if err != nil {
 			return fmt.Errorf("encryption failed: %w", err)
 		}
-		if err := os.WriteFile(outputPath, ciphertext, 0600); err != nil {
+
+		if err := os.WriteFile(outputPath, ciphertext, 0o600); err != nil {
 			return fmt.Errorf("failed to write backup: %w", err)
 		}
 	} else {
-		if err := os.WriteFile(outputPath, backupJSON, 0600); err != nil {
+		if err := os.WriteFile(outputPath, backupJSON, 0o600); err != nil {
 			return fmt.Errorf("failed to write backup: %w", err)
 		}
 	}
@@ -136,6 +140,7 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 	u.Success("Wallet backup created")
 	u.Detail("Address", wallet.Address)
 	u.Detail("Output", outputPath)
+
 	if encrypted {
 		u.Detail("Encrypted", "yes (AES-256-GCM)")
 	} else {
@@ -156,6 +161,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 
 	// Detect format and decrypt if needed.
 	var backupJSON []byte
+
 	if isEncryptedBackup(raw) {
 		passphrase := opts.Passphrase
 		if !opts.HasPassFlag {
@@ -164,9 +170,11 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 				return fmt.Errorf("failed to read passphrase: %w", err)
 			}
 		}
+
 		if passphrase == "" {
-			return fmt.Errorf("passphrase required for encrypted backup")
+			return errors.New("passphrase required for encrypted backup")
 		}
+
 		backupJSON, err = decryptBackup(raw, passphrase)
 		if err != nil {
 			return fmt.Errorf("decryption failed (wrong passphrase?): %w", err)
@@ -180,11 +188,13 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	if err := json.Unmarshal(backupJSON, &backup); err != nil {
 		return fmt.Errorf("invalid backup file: %w", err)
 	}
+
 	if backup.Version != 1 {
 		return fmt.Errorf("unsupported backup version %d (expected 1)", backup.Version)
 	}
+
 	if len(backup.Wallets) == 0 {
-		return fmt.Errorf("backup contains no wallets")
+		return errors.New("backup contains no wallets")
 	}
 
 	w := backup.Wallets[0]
@@ -203,11 +213,12 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 
 	// Write keystore file.
 	keystoreDir := KeystoreVolumePath(cfg, id)
-	if err := os.MkdirAll(keystoreDir, 0700); err != nil {
+	if err := os.MkdirAll(keystoreDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create keystore directory: %w", err)
 	}
+
 	keystorePath := filepath.Join(keystoreDir, w.KeystoreUUID+".json")
-	if err := os.WriteFile(keystorePath, []byte(w.Keystore), 0600); err != nil {
+	if err := os.WriteFile(keystorePath, []byte(w.Keystore), 0o600); err != nil {
 		return fmt.Errorf("failed to write keystore: %w", err)
 	}
 
@@ -235,6 +246,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	// Restart the remote-signer so it picks up the new keystore.
 	// Best-effort: cluster may not be running.
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	kubectlBin, kubeconfig := kubectl.Paths(cfg)
 	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
 		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
@@ -257,10 +269,12 @@ func ListWallets(cfg *config.Config, id string, u *ui.UI) error {
 		ids = []string{id}
 	} else {
 		var err error
+
 		ids, err = ListInstanceIDs(cfg)
 		if err != nil {
 			return err
 		}
+
 		if len(ids) == 0 {
 			u.Info("No OpenClaw instances found")
 			return nil
@@ -268,25 +282,32 @@ func ListWallets(cfg *config.Config, id string, u *ui.UI) error {
 	}
 
 	found := false
+
 	for _, instanceID := range ids {
 		deployDir := DeploymentPath(cfg, instanceID)
+
 		wallet, err := ReadWalletMetadata(deployDir)
 		if err != nil {
 			continue
 		}
+
 		found = true
+
 		u.Detail("Instance", instanceID)
 		u.Detail("  Address", wallet.Address)
 		u.Detail("  Keystore UUID", wallet.KeystoreUUID)
+
 		if wallet.CreatedAt != "" {
 			u.Detail("  Created", wallet.CreatedAt)
 		}
+
 		u.Blank()
 	}
 
 	if !found {
 		u.Info("No wallets found")
 	}
+
 	return nil
 }
 
@@ -296,13 +317,16 @@ func FindInstancesWithWallets(cfg *config.Config) []string {
 	if err != nil {
 		return nil
 	}
+
 	var result []string
+
 	for _, id := range ids {
 		deployDir := DeploymentPath(cfg, id)
 		if _, err := ReadWalletMetadata(deployDir); err == nil {
 			result = append(result, id)
 		}
 	}
+
 	return result
 }
 
@@ -322,8 +346,9 @@ func resolvePassphrase(flagValue string, hasFlag bool, u *ui.UI) (string, error)
 		if err != nil {
 			return "", fmt.Errorf("failed to read confirmation: %w", err)
 		}
+
 		if passphrase != confirm {
-			return "", fmt.Errorf("passphrases do not match")
+			return "", errors.New("passphrases do not match")
 		}
 	}
 
@@ -345,9 +370,11 @@ func readKeystorePassword(deployDir string) (string, error) {
 	if err := yaml.Unmarshal(data, &values); err != nil {
 		return "", fmt.Errorf("failed to parse values-remote-signer.yaml: %w", err)
 	}
+
 	if values.KeystorePassword.Value == "" {
-		return "", fmt.Errorf("keystorePassword.value not found in values-remote-signer.yaml")
+		return "", errors.New("keystorePassword.value not found in values-remote-signer.yaml")
 	}
+
 	return values.KeystorePassword.Value, nil
 }
 
@@ -363,7 +390,8 @@ persistence:
   enabled: true
   size: 100Mi
 `, password)
-	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0644)
+
+	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o644)
 }
 
 // encryptBackup encrypts plaintext using AES-256-GCM with a scrypt-derived key.
@@ -411,20 +439,22 @@ func encryptBackup(plaintext []byte, passphrase string) ([]byte, error) {
 func decryptBackup(data []byte, passphrase string) ([]byte, error) {
 	minLen := len(backupMagic) + 1 + 32 + 12 // magic + version + salt + nonce
 	if len(data) < minLen {
-		return nil, fmt.Errorf("encrypted file too short")
+		return nil, errors.New("encrypted file too short")
 	}
 
 	offset := 0
 
 	// Verify magic.
 	if string(data[offset:offset+len(backupMagic)]) != string(backupMagic) {
-		return nil, fmt.Errorf("not an encrypted backup file")
+		return nil, errors.New("not an encrypted backup file")
 	}
+
 	offset += len(backupMagic)
 
 	// Check version.
 	version := data[offset]
 	offset++
+
 	if version != backupVersion {
 		return nil, fmt.Errorf("unsupported encryption version %d", version)
 	}
@@ -452,13 +482,15 @@ func decryptBackup(data []byte, passphrase string) ([]byte, error) {
 	// Extract nonce.
 	nonceSize := gcm.NonceSize()
 	if len(data) < offset+nonceSize {
-		return nil, fmt.Errorf("encrypted file too short for nonce")
+		return nil, errors.New("encrypted file too short for nonce")
 	}
+
 	nonce := data[offset : offset+nonceSize]
 	offset += nonceSize
 
 	// Decrypt.
 	ciphertext := data[offset:]
+
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %w", err)
@@ -472,20 +504,25 @@ func isEncryptedBackup(data []byte) bool {
 	if len(data) < len(backupMagic) {
 		return false
 	}
+
 	return string(data[:len(backupMagic)]) == string(backupMagic)
 }
 
 // walletAddressesForPurgeWarning returns addresses of wallets that would be lost.
 func walletAddressesForPurgeWarning(cfg *config.Config) []string {
 	ids := FindInstancesWithWallets(cfg)
+
 	var addresses []string
+
 	for _, id := range ids {
 		deployDir := DeploymentPath(cfg, id)
+
 		w, err := ReadWalletMetadata(deployDir)
 		if err == nil {
 			addresses = append(addresses, fmt.Sprintf("  %s (instance: %s)", w.Address, id))
 		}
 	}
+
 	return addresses
 }
 
@@ -498,7 +535,9 @@ func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) {
 	}
 
 	addresses := walletAddressesForPurgeWarning(cfg)
+
 	u.Warn("The following wallets will be destroyed:")
+
 	for _, a := range addresses {
 		u.Print(a)
 	}
@@ -510,6 +549,7 @@ func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) {
 	}
 
 	u.Blank()
+
 	if !u.Confirm("Back up wallets before purging?", true) {
 		return
 	}
@@ -533,4 +573,3 @@ func PromptBackupBeforePurge(cfg *config.Config, u *ui.UI) {
 
 	u.Blank()
 }
-

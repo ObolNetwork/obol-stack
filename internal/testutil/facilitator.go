@@ -35,6 +35,7 @@ func clusterHostURL() string {
 	if runtime.GOOS == "darwin" {
 		return "host.docker.internal"
 	}
+
 	return "host.k3d.internal"
 }
 
@@ -59,6 +60,7 @@ func ClusterHostIP(t *testing.T) string {
 	if runtime.GOOS == "darwin" {
 		const dockerDesktopGW = "192.168.65.254"
 		t.Logf("%s not resolvable on host, using Docker Desktop gateway %s", hostname, dockerDesktopGW)
+
 		return dockerDesktopGW
 	}
 
@@ -67,17 +69,21 @@ func ClusterHostIP(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("cannot resolve cluster host IP: DNS failed for %s and docker0 not found: %v", hostname, err)
 	}
+
 	ifAddrs, err := iface.Addrs()
 	if err != nil {
 		t.Fatalf("cannot get docker0 addresses: %v", err)
 	}
+
 	for _, addr := range ifAddrs {
 		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
 			t.Logf("using docker0 bridge IP %s", ipNet.IP)
 			return ipNet.IP.String()
 		}
 	}
+
 	t.Fatalf("no IPv4 address on docker0 interface")
+
 	return ""
 }
 
@@ -114,6 +120,7 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 	if err != nil {
 		t.Fatalf("find free port for mock facilitator: %v", err)
 	}
+
 	port := l.Addr().(*net.TCPAddr).Port
 
 	mf.Server = httptest.NewUnstartedServer(mux)
@@ -125,6 +132,7 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 	mf.ClusterURL = fmt.Sprintf("http://%s:%d", clusterHostURL(), port)
 
 	t.Cleanup(mf.Server.Close)
+
 	return mf
 }
 
@@ -133,13 +141,13 @@ func StartMockFacilitator(t *testing.T) *MockFacilitator {
 func TestPaymentHeader(t *testing.T, payTo string) string {
 	t.Helper()
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"x402Version": 1,
 		"scheme":      "exact",
 		"network":     "base-sepolia",
-		"payload": map[string]interface{}{
+		"payload": map[string]any{
 			"signature": "0xmocksig",
-			"authorization": map[string]interface{}{
+			"authorization": map[string]any{
 				"from":        "0xmockpayer",
 				"to":          payTo,
 				"value":       "1000000",
@@ -148,7 +156,7 @@ func TestPaymentHeader(t *testing.T, payTo string) string {
 				"nonce":       "0x0",
 			},
 		},
-		"resource": map[string]interface{}{
+		"resource": map[string]any{
 			"payTo":             payTo,
 			"maxAmountRequired": "1000000",
 			"asset":             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -160,5 +168,6 @@ func TestPaymentHeader(t *testing.T, payTo string) string {
 	if err != nil {
 		t.Fatalf("marshal payment header: %v", err)
 	}
+
 	return base64.StdEncoding.EncodeToString(data)
 }

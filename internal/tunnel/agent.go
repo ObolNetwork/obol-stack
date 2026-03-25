@@ -27,6 +27,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 
 	// Run helmfile sync to apply the change to the cluster.
 	deploymentDir := filepath.Dir(overlayPath)
+
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
 		// Overlay exists but helmfile.yaml is missing — unusual, skip sync.
@@ -47,8 +48,10 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	}
 
 	fmt.Printf("Syncing AGENT_BASE_URL=%s to obol-agent...\n", tunnelURL)
+
 	cmd := exec.Command(helmfileBin, "-f", helmfilePath, "sync")
 	cmd.Dir = deploymentDir
+
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -59,6 +62,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	}
 
 	fmt.Println("✓ AGENT_BASE_URL synced to obol-agent")
+
 	return nil
 }
 
@@ -80,6 +84,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 
 	// Pre-scan: check if AGENT_BASE_URL already exists.
 	alreadyPresent := false
+
 	for _, l := range lines {
 		if strings.Contains(l, "name: AGENT_BASE_URL") {
 			alreadyPresent = true
@@ -88,6 +93,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 	}
 
 	inserted := false
+
 	var out []string
 
 	for i := 0; i < len(lines); i++ {
@@ -96,12 +102,15 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 		// Case 1: AGENT_BASE_URL already present — update its value line.
 		if strings.Contains(line, "name: AGENT_BASE_URL") {
 			inserted = true
+
 			out = append(out, line)
 			// The next line should be the value line — replace it.
 			if i+1 < len(lines) && strings.Contains(lines[i+1], "value:") {
 				i++
-				out = append(out, fmt.Sprintf("    value: %s", tunnelURL))
+
+				out = append(out, "    value: "+tunnelURL)
 			}
+
 			continue
 		}
 
@@ -111,7 +120,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 		if !alreadyPresent && !inserted && strings.Contains(line, "value: http://remote-signer:9000") {
 			out = append(out,
 				"  - name: AGENT_BASE_URL",
-				fmt.Sprintf("    value: %s", tunnelURL),
+				"    value: "+tunnelURL,
 			)
 			inserted = true
 		}
@@ -119,8 +128,8 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 
 	// Case 3: Neither AGENT_BASE_URL nor REMOTE_SIGNER_URL found (unusual).
 	if !inserted {
-		out = append(out, "extraEnv:", fmt.Sprintf("  - name: AGENT_BASE_URL\n    value: %s", tunnelURL))
+		out = append(out, "extraEnv:", "  - name: AGENT_BASE_URL\n    value: "+tunnelURL)
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0644)
+	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o644)
 }

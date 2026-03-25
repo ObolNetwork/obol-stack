@@ -24,7 +24,7 @@ routes:
     price: "0.001"
     description: "Inference gateway"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,24 +36,31 @@ routes:
 	if cfg.Wallet != "0xABCDEF1234567890ABCDEF1234567890ABCDEF12" {
 		t.Errorf("wallet = %q, want 0xABCDEF...", cfg.Wallet)
 	}
+
 	if cfg.Chain != "base-sepolia" {
 		t.Errorf("chain = %q, want base-sepolia", cfg.Chain)
 	}
+
 	if cfg.FacilitatorURL != "https://custom-facilitator.example.com" {
 		t.Errorf("facilitatorURL = %q, want custom URL", cfg.FacilitatorURL)
 	}
+
 	if !cfg.VerifyOnly {
 		t.Error("verifyOnly should be true")
 	}
+
 	if len(cfg.Routes) != 2 {
 		t.Fatalf("routes count = %d, want 2", len(cfg.Routes))
 	}
+
 	if cfg.Routes[0].Pattern != "/rpc/*" {
 		t.Errorf("route[0].pattern = %q, want /rpc/*", cfg.Routes[0].Pattern)
 	}
+
 	if cfg.Routes[0].Price != "0.0001" {
 		t.Errorf("route[0].price = %q, want 0.0001", cfg.Routes[0].Price)
 	}
+
 	if cfg.Routes[1].Description != "Inference gateway" {
 		t.Errorf("route[1].description = %q, want 'Inference gateway'", cfg.Routes[1].Description)
 	}
@@ -69,7 +76,7 @@ routes:
   - pattern: "/api/*"
     price: "0.01"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,6 +88,7 @@ routes:
 	if cfg.Chain != "base-sepolia" {
 		t.Errorf("default chain = %q, want base-sepolia", cfg.Chain)
 	}
+
 	if cfg.FacilitatorURL != "https://facilitator.x402.rs" {
 		t.Errorf("default facilitatorURL = %q, want https://facilitator.x402.rs", cfg.FacilitatorURL)
 	}
@@ -90,7 +98,7 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")
 
-	if err := os.WriteFile(path, []byte("{{not: valid: yaml:"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("{{not: valid: yaml:"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,6 +134,7 @@ func TestResolveChain_AllSupported(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveChain(%q): %v", tt.name, err)
 			}
+
 			if got.NetworkID != tt.expected.NetworkID {
 				t.Errorf("ResolveChain(%q).NetworkID = %q, want %q", tt.name, got.NetworkID, tt.expected.NetworkID)
 			}
@@ -135,7 +144,7 @@ func TestResolveChain_AllSupported(t *testing.T) {
 
 func TestResolveChain_Aliases(t *testing.T) {
 	tests := []struct {
-		alias    string
+		alias     string
 		canonical string
 	}{
 		{"base-mainnet", "base"},
@@ -149,10 +158,12 @@ func TestResolveChain_Aliases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveChain(%q): %v", tt.alias, err)
 			}
+
 			canonResult, err := ResolveChain(tt.canonical)
 			if err != nil {
 				t.Fatalf("ResolveChain(%q): %v", tt.canonical, err)
 			}
+
 			if aliasResult.NetworkID != canonResult.NetworkID {
 				t.Errorf("alias %q NetworkID = %q, canonical %q NetworkID = %q",
 					tt.alias, aliasResult.NetworkID, tt.canonical, canonResult.NetworkID)
@@ -225,7 +236,7 @@ routes:
   - pattern: "/api/*"
     price: "0.01"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,7 +256,7 @@ routes:
   - pattern: "/api/*"
     price: "0.01"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,6 +264,7 @@ routes:
 	if err != nil {
 		t.Fatalf("LoadConfig should allow localhost HTTP: %v", err)
 	}
+
 	if cfg.FacilitatorURL != "http://localhost:4040" {
 		t.Errorf("facilitatorURL = %q, want http://localhost:4040", cfg.FacilitatorURL)
 	}
