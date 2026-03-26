@@ -27,6 +27,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -167,6 +168,9 @@ Examples:
 				} else {
 					return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
 				}
+			}
+			if err := validate.Name(name); err != nil {
+				return err
 			}
 
 			wallet := cmd.String("wallet")
@@ -404,9 +408,57 @@ Example:
 				Name:  "register-domains",
 				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
 			},
+			&cli.StringFlag{
+				Name:  "from-json",
+				Usage: "Read ServiceOffer spec from JSON file (or - for stdin) instead of flags",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+
+			// --from-json: read spec from file/stdin and apply directly.
+			if jsonPath := cmd.String("from-json"); jsonPath != "" {
+				data, err := readJSONInput(jsonPath)
+				if err != nil {
+					return err
+				}
+				var spec map[string]interface{}
+				if err := json.Unmarshal(data, &spec); err != nil {
+					return fmt.Errorf("parse JSON spec: %w", err)
+				}
+
+				name := cmd.Args().First()
+				if name == "" {
+					// Try metadata.name from the JSON if it looks like a full manifest.
+					if md, ok := spec["metadata"].(map[string]interface{}); ok {
+						if n, ok := md["name"].(string); ok {
+							name = n
+						}
+					}
+				}
+				if name == "" {
+					return fmt.Errorf("name required: provide as positional arg or metadata.name in JSON")
+				}
+
+				ns := cmd.String("namespace")
+
+				manifest := map[string]interface{}{
+					"apiVersion": "obol.org/v1alpha1",
+					"kind":       "ServiceOffer",
+					"metadata": map[string]interface{}{
+						"name":      name,
+						"namespace": ns,
+					},
+					"spec": spec,
+				}
+
+				if err := kubectlApply(cfg, manifest); err != nil {
+					return err
+				}
+				fmt.Printf("ServiceOffer %s/%s created from JSON\n", ns, name)
+				return nil
+			}
+
 			name := cmd.Args().First()
 			if name == "" {
 				if u.IsTTY() {
@@ -418,6 +470,9 @@ Example:
 				} else {
 					return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
 				}
+			}
+			if err := validate.Name(name); err != nil {
+				return err
 			}
 
 			// Auto-discover wallet from remote-signer if not set.
@@ -763,6 +818,9 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("name required: obol sell stop <name> -n <ns>")
 			}
 			name := cmd.Args().First()
+			if err := validate.Name(name); err != nil {
+				return err
+			}
 			ns := cmd.String("namespace")
 
 			fmt.Printf("Stopping the service offering %s/%s...\n", ns, name)
@@ -810,6 +868,9 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("name required: obol sell delete <name> -n <ns>")
 			}
 			name := cmd.Args().First()
+			if err := validate.Name(name); err != nil {
+				return err
+			}
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
@@ -902,8 +963,32 @@ Reloads the payment verifier when configuration is changed.`,
 				Usage:   "x402 facilitator URL",
 				Sources: cli.EnvVars("X402_FACILITATOR_URL"),
 			},
+			&cli.StringFlag{
+				Name:  "from-json",
+				Usage: "Read pricing config from JSON file (or - for stdin) instead of flags",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// --from-json: read pricing config from file/stdin.
+			if jsonPath := cmd.String("from-json"); jsonPath != "" {
+				data, err := readJSONInput(jsonPath)
+				if err != nil {
+					return err
+				}
+				var pricingCfg struct {
+					Wallet         string `json:"wallet"`
+					Chain          string `json:"chain"`
+					FacilitatorURL string `json:"facilitatorUrl"`
+				}
+				if err := json.Unmarshal(data, &pricingCfg); err != nil {
+					return fmt.Errorf("parse JSON pricing config: %w", err)
+				}
+				if pricingCfg.Wallet == "" {
+					return fmt.Errorf("wallet is required in JSON input")
+				}
+				return x402verifier.Setup(cfg, pricingCfg.Wallet, pricingCfg.Chain, pricingCfg.FacilitatorURL)
+			}
+
 			wallet := cmd.String("wallet")
 			if wallet == "" {
 				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -312,11 +311,12 @@ func modelPullCommand() *cli.Command {
 		Usage:     "Pull an Ollama model to the local machine",
 		ArgsUsage: "[model]",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			modelName := cmd.Args().First()
 
 			if modelName == "" {
 				var err error
-				modelName, err = promptModelPull()
+				modelName, err = promptModelPull(u)
 				if err != nil {
 					return err
 				}
@@ -504,48 +504,41 @@ func detectCredentials() map[string]detectedCredential {
 }
 
 // promptModelPull interactively asks the user which Ollama model to pull.
-func promptModelPull() (string, error) {
-	type suggestion struct {
-		name string
-		size string
-		desc string
-	}
-	suggestions := []suggestion{
-		{"qwen3.5:4b", "2.7 GB", "Fast general-purpose (recommended)"},
-		{"qwen2.5-coder:7b", "4.7 GB", "Code generation"},
-		{"deepseek-r1:8b", "4.9 GB", "Reasoning"},
-		{"gemma3:4b", "3.3 GB", "Lightweight, multilingual"},
+// When the UI is non-interactive (piped, CI, or JSON mode), it returns an
+// error instructing the user to specify --model via flag.
+func promptModelPull(u *ui.UI) (string, error) {
+	if !u.IsTTY() || u.IsJSON() {
+		return "", fmt.Errorf("model name required: use positional arg (obol model pull <model>)")
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println("Popular models:")
-	fmt.Println()
-	for i, s := range suggestions {
-		fmt.Printf("  [%d] %-25s (%s) — %s\n", i+1, s.name, s.size, s.desc)
+	suggestions := []string{
+		"qwen3.5:4b      (2.7 GB) — Fast general-purpose (recommended)",
+		"qwen2.5-coder:7b (4.7 GB) — Code generation",
+		"deepseek-r1:8b   (4.9 GB) — Reasoning",
+		"gemma3:4b        (3.3 GB) — Lightweight, multilingual",
+		"Other (enter name)",
 	}
-	fmt.Printf("  [%d] Other (enter name)\n", len(suggestions)+1)
-	fmt.Printf("\nChoice [1]: ")
-
-	line, _ := reader.ReadString('\n')
-	choice := strings.TrimSpace(line)
-	if choice == "" {
-		choice = "1"
+	modelNames := []string{
+		"qwen3.5:4b",
+		"qwen2.5-coder:7b",
+		"deepseek-r1:8b",
+		"gemma3:4b",
 	}
 
-	idx := 0
-	if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(suggestions)+1 {
-		return "", fmt.Errorf("invalid choice: %s", choice)
+	idx, err := u.Select("Select a model to pull:", suggestions, 0)
+	if err != nil {
+		return "", err
 	}
 
-	if idx <= len(suggestions) {
-		return suggestions[idx-1].name, nil
+	if idx < len(modelNames) {
+		return modelNames[idx], nil
 	}
 
 	// Custom model name
-	fmt.Printf("Model name (e.g. mistral:7b): ")
-	name, _ := reader.ReadString('\n')
-	name = strings.TrimSpace(name)
+	name, err := u.Input("Model name (e.g. mistral:7b)", "")
+	if err != nil {
+		return "", err
+	}
 	if name == "" {
 		return "", fmt.Errorf("model name is required")
 	}

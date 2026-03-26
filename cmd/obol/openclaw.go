@@ -34,12 +34,13 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
 					return openclaw.Onboard(cfg, openclaw.OnboardOptions{
 						ID:          cmd.String("id"),
 						Force:       cmd.Bool("force"),
 						Sync:        !cmd.Bool("no-sync"),
-						Interactive: true,
-					}, getUI(cmd))
+						Interactive: u.IsTTY() && !u.IsJSON(),
+					}, u)
 				},
 			},
 			{
