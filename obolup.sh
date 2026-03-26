@@ -96,6 +96,49 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+# Check host prerequisites that the installer cannot provide itself.
+# Binaries we download (helm, kubectl, k3d, etc.) are not checked here —
+# only tools the user must install separately.
+check_prerequisites() {
+	local missing=()
+
+	# Node.js 22+ / npm — required for openclaw CLI (unless already installed)
+	local need_npm=true
+	if command_exists openclaw; then
+		local oc_version
+		oc_version=$(openclaw --version 2>/dev/null | tr -d '[:space:]' || echo "")
+		if [[ -n "$oc_version" ]] && version_ge "$oc_version" "$OPENCLAW_VERSION"; then
+			need_npm=false
+		fi
+	fi
+
+	if [[ "$need_npm" == "true" ]]; then
+		if ! command_exists npm; then
+			missing+=("Node.js 22+ (npm) — required to install openclaw CLI")
+		else
+			local node_major
+			node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+			if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
+				missing+=("Node.js 22+ (found: v${node_major:-none}) — required for openclaw CLI")
+			fi
+		fi
+	fi
+
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		log_error "Missing prerequisites:"
+		echo ""
+		for dep in "${missing[@]}"; do
+			echo "  • $dep"
+		done
+		echo ""
+		log_dim "  Install the above, then re-run obolup.sh"
+		echo ""
+		return 1
+	fi
+
+	return 0
+}
+
 # Detect installation mode (install vs upgrade)
 detect_installation_mode() {
 	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
@@ -1690,6 +1733,11 @@ main() {
 		log_info "Backend: k3s (Docker not required)"
 	fi
 	echo ""
+
+	# Check host prerequisites (npm/Node.js, etc.) before starting installs
+	if ! check_prerequisites; then
+		exit 1
+	fi
 
 	create_directories
 	install_obol_binary
