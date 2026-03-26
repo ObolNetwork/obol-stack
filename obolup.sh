@@ -1242,6 +1242,13 @@ install_dependencies() {
 	log_info "Checking and installing dependencies..."
 	echo ""
 
+	# Ensure OBOL_BIN_DIR is in PATH for the current process so that
+	# binaries installed here (helm, helmfile, etc.) are immediately
+	# available to each other and to later steps like `obol bootstrap`.
+	if ! echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
+		export PATH="$OBOL_BIN_DIR:$PATH"
+	fi
+
 	# Install each dependency
 	install_kubectl || log_warn "kubectl installation failed (continuing...)"
 	install_helm || log_warn "helm installation failed (continuing...)"
@@ -1434,20 +1441,13 @@ add_to_profile() {
 # In interactive mode, asks user whether to auto-modify or show manual instructions.
 # In non-interactive mode (CI/CD), prints manual instructions only unless OBOL_MODIFY_PATH=yes.
 configure_path() {
-	# Check if OBOL_BIN_DIR is already in current PATH
-	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
-		log_success "OBOL_BIN_DIR already in PATH"
-		return 0
-	fi
-
 	# Detect appropriate profile file
 	local profile
 	profile=$(detect_shell_profile)
 
-	# Check if already configured in detected profile
+	# Check if already persisted in the shell profile
 	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
 		log_success "OBOL_BIN_DIR already configured in $profile"
-		log_info "Will be available in new shell sessions"
 		return 0
 	fi
 
