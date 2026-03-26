@@ -12,10 +12,11 @@
 - Phase 2: `sell delete` migrated from raw `fmt.Scanln` to `u.Confirm()`
 - Phase 6: `CONTEXT.md` — agent-facing context document
 
+- Phase 1D: `--from-json` on sell http, sell pricing, network add (`cmd/obol/input.go` helper)
+- Phase 2B: `validate.Name()` wired into sell inference/http/stop/delete, `validate.URL()` in network add
+- Phase 2C: model.go `promptModelPull()` migrated from bufio to `u.Select()`/`u.Input()`, openclaw onboard headless via `u.IsTTY() && !u.IsJSON()`
+
 **Deferred to follow-up**:
-- Phase 1D: `--from-json` raw JSON input
-- Phase 2B: `validate.*` wired into all command handlers
-- Phase 2C: model.go bufio migration, openclaw onboard headless path
 - Phase 3: `obol describe` schema introspection
 - Phase 4: `--fields` field filtering
 - Phase 5: `--dry-run` for mutating commands
