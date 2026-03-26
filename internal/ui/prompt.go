@@ -10,9 +10,19 @@ import (
 	"golang.org/x/term"
 )
 
+// isInteractive returns true if prompts should be shown.
+// Returns false in JSON mode or when stdin is not a terminal.
+func (u *UI) isInteractive() bool {
+	return !u.IsJSON() && u.IsTTY()
+}
+
 // Confirm asks a yes/no question, returns true for "y"/"yes".
-// The default is shown in brackets: [Y/n] or [y/N].
+// In non-interactive mode, returns the default without prompting.
 func (u *UI) Confirm(msg string, defaultYes bool) bool {
+	if !u.isInteractive() {
+		return defaultYes
+	}
+
 	suffix := "[y/N]"
 	if defaultYes {
 		suffix = "[Y/n]"
@@ -30,8 +40,12 @@ func (u *UI) Confirm(msg string, defaultYes bool) bool {
 }
 
 // Select presents a numbered list and returns the selected index.
-// defaultIdx is 0-based; shown as [default] next to that option.
+// In non-interactive mode, returns the default index without prompting.
 func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
+	if !u.isInteractive() {
+		return defaultIdx, nil
+	}
+
 	fmt.Fprintln(u.stdout, msg)
 	for i, opt := range options {
 		marker := "  "
@@ -64,7 +78,15 @@ func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
 }
 
 // Input reads a single line of text input with an optional default.
+// In non-interactive mode, returns the default or an error if no default is set.
 func (u *UI) Input(msg string, defaultVal string) (string, error) {
+	if !u.isInteractive() {
+		if defaultVal != "" {
+			return defaultVal, nil
+		}
+		return "", fmt.Errorf("%s: required (non-interactive mode, provide via flag)", msg)
+	}
+
 	if defaultVal != "" {
 		fmt.Fprintf(u.stdout, "%s %s: ", msg, dimStyle.Render("["+defaultVal+"]"))
 	} else {
@@ -84,7 +106,12 @@ func (u *UI) Input(msg string, defaultVal string) (string, error) {
 }
 
 // SecretInput reads input without echoing (for API keys, passwords).
+// In non-interactive mode, returns an error directing the user to use a flag.
 func (u *UI) SecretInput(msg string) (string, error) {
+	if !u.isInteractive() {
+		return "", fmt.Errorf("%s: interactive input unavailable (provide via flag or env var)", msg)
+	}
+
 	fmt.Fprintf(u.stdout, "%s: ", msg)
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(u.stdout) // newline after hidden input

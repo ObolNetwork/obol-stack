@@ -183,14 +183,54 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 // network list — unified local nodes + remote RPCs
 // ---------------------------------------------------------------------------
 
+// networkListResult is the JSON-serialisable result for `network list`.
+type networkListResult struct {
+	LocalNodes []string              `json:"local_nodes"`
+	RPCs       []networkListRPCEntry `json:"rpcs"`
+}
+
+type networkListRPCEntry struct {
+	Alias     string `json:"alias"`
+	ChainID   int    `json:"chain_id"`
+	Upstreams int    `json:"upstreams"`
+}
+
 func networkListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
 		Usage: "List all networks (local nodes + remote RPCs)",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if u.IsJSON() {
+				result := networkListResult{}
+
+				// Collect local nodes (best-effort).
+				if nodes, err := embed.GetAvailableNetworks(); err == nil {
+					result.LocalNodes = nodes
+				}
+
+				// Collect remote RPCs.
+				if rpcNetworks, err := network.ListRPCNetworks(cfg); err == nil {
+					for _, net := range rpcNetworks {
+						alias := net.Alias
+						if alias == "" {
+							alias = fmt.Sprintf("chain-%d", net.ChainID)
+						}
+						result.RPCs = append(result.RPCs, networkListRPCEntry{
+							Alias:     alias,
+							ChainID:   net.ChainID,
+							Upstreams: len(net.Upstreams),
+						})
+					}
+				}
+
+				return u.JSON(result)
+			}
+
 			// Show local node deployments.
 			fmt.Println("Local Nodes:")
-			if err := network.List(cfg, getUI(cmd)); err != nil {
+			if err := network.List(cfg, u); err != nil {
 				fmt.Printf("  (unable to list: %v)\n", err)
 			}
 

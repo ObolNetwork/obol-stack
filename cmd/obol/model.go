@@ -225,6 +225,19 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// modelStatusResult is the JSON-serialisable result for `model status`.
+type modelStatusResult struct {
+	Providers []modelStatusProvider `json:"providers"`
+}
+
+type modelStatusProvider struct {
+	Name    string   `json:"name"`
+	Enabled bool     `json:"enabled"`
+	APIKey  string   `json:"api_key"` // "set", "missing", or "n/a"
+	Models  []string `json:"models"`
+	EnvVar  string   `json:"env_var,omitempty"`
+}
+
 func modelStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "status",
@@ -241,6 +254,29 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 				providers = append(providers, name)
 			}
 			sort.Strings(providers)
+
+			if u.IsJSON() {
+				result := modelStatusResult{}
+				for _, name := range providers {
+					s := status[name]
+					key := "n/a"
+					if s.EnvVar != "" {
+						if s.HasAPIKey {
+							key = "set"
+						} else {
+							key = "missing"
+						}
+					}
+					result.Providers = append(result.Providers, modelStatusProvider{
+						Name:    name,
+						Enabled: s.Enabled,
+						APIKey:  key,
+						Models:  s.Models,
+						EnvVar:  s.EnvVar,
+					})
+				}
+				return u.JSON(result)
+			}
 
 			u.Bold("LiteLLM gateway providers:")
 			u.Blank()
@@ -296,11 +332,61 @@ func modelPullCommand() *cli.Command {
 	}
 }
 
+// modelListResult is the JSON-serialisable result for `model list`.
+type modelListResult struct {
+	Local    []modelListLocal    `json:"local"`
+	Gateway  []modelListGateway  `json:"gateway,omitempty"`
+}
+
+type modelListLocal struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+type modelListGateway struct {
+	Provider string   `json:"provider"`
+	Enabled  bool     `json:"enabled"`
+	Models   []string `json:"models"`
+}
+
 func modelListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
 		Usage: "List pulled Ollama models and cloud provider status",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if u.IsJSON() {
+				result := modelListResult{}
+
+				if models, err := model.ListOllamaModels(); err == nil {
+					for _, m := range models {
+						result.Local = append(result.Local, modelListLocal{
+							Name: m.Name,
+							Size: m.Size,
+						})
+					}
+				}
+
+				if providerStatus, err := model.GetProviderStatus(cfg); err == nil {
+					providers := make([]string, 0, len(providerStatus))
+					for name := range providerStatus {
+						providers = append(providers, name)
+					}
+					sort.Strings(providers)
+					for _, name := range providers {
+						s := providerStatus[name]
+						result.Gateway = append(result.Gateway, modelListGateway{
+							Provider: name,
+							Enabled:  s.Enabled,
+							Models:   s.Models,
+						})
+					}
+				}
+
+				return u.JSON(result)
+			}
+
 			// List local Ollama models
 			models, err := model.ListOllamaModels()
 			if err != nil {

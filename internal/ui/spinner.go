@@ -16,7 +16,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 func (u *UI) RunWithSpinner(msg string, fn func() error) error {
 	start := time.Now()
 
-	if !u.isTTY || u.verbose {
+	if !u.isTTY || u.verbose || u.IsJSON() {
 		u.Info(msg)
 		err := fn()
 		elapsed := time.Since(start).Round(time.Second)

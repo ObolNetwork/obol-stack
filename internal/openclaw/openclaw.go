@@ -1083,10 +1083,20 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 }
 
 // List displays installed OpenClaw instances
+// openclawInstance is the JSON-serialisable representation of one instance.
+type openclawInstance struct {
+	ID        string `json:"id"`
+	Namespace string `json:"namespace"`
+	URL       string `json:"url"`
+}
+
 func List(cfg *config.Config, u *ui.UI) error {
 	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
 
 	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
+		if u.IsJSON() {
+			return u.JSON([]openclawInstance{})
+		}
 		u.Print("No OpenClaw instances installed")
 		u.Print("\nTo create one: obol openclaw up")
 		return nil
@@ -1098,14 +1108,14 @@ func List(cfg *config.Config, u *ui.UI) error {
 	}
 
 	if len(entries) == 0 {
+		if u.IsJSON() {
+			return u.JSON([]openclawInstance{})
+		}
 		u.Print("No OpenClaw instances installed")
 		return nil
 	}
 
-	u.Info("OpenClaw instances:")
-	u.Blank()
-
-	count := 0
+	var instances []openclawInstance
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -1113,14 +1123,28 @@ func List(cfg *config.Config, u *ui.UI) error {
 		id := entry.Name()
 		namespace := fmt.Sprintf("%s-%s", appName, id)
 		hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-		u.Bold("  " + id)
-		u.Detail("  Namespace", namespace)
-		u.Detail("  URL", fmt.Sprintf("http://%s", hostname))
-		u.Blank()
-		count++
+		instances = append(instances, openclawInstance{
+			ID:        id,
+			Namespace: namespace,
+			URL:       fmt.Sprintf("http://%s", hostname),
+		})
 	}
 
-	u.Printf("Total: %d instance(s)", count)
+	if u.IsJSON() {
+		return u.JSON(instances)
+	}
+
+	u.Info("OpenClaw instances:")
+	u.Blank()
+
+	for _, inst := range instances {
+		u.Bold("  " + inst.ID)
+		u.Detail("  Namespace", inst.Namespace)
+		u.Detail("  URL", inst.URL)
+		u.Blank()
+	}
+
+	u.Printf("Total: %d instance(s)", len(instances))
 	return nil
 }
 
