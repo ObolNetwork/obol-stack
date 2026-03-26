@@ -159,8 +159,14 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					{
 						Name:  "up",
 						Usage: "Start the Obol Stack",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:  "wildcard-dns",
+								Usage: "Configure wildcard *.obol.stack DNS via NetworkManager/dnsmasq (Linux) or /etc/resolver (macOS)",
+							},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Up(cfg, getUI(cmd))
+							return stack.Up(cfg, getUI(cmd), cmd.Bool("wildcard-dns"))
 						},
 					},
 					{
