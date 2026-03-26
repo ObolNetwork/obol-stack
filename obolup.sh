@@ -62,7 +62,7 @@ readonly K9S_VERSION="0.50.18"
 readonly HELM_DIFF_VERSION="3.14.1"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
-readonly OPENCLAW_VERSION="2026.3.13-1"
+readonly OPENCLAW_VERSION="2026.3.24"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
