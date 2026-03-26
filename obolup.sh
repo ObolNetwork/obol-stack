@@ -1545,10 +1545,11 @@ configure_path() {
 # it so the subsequent obol bootstrap / stack up picks it up via autoConfigureLLM.
 check_agent_model_api_key() {
 	local config_file="$HOME/.openclaw/openclaw.json"
+	[[ -f "$config_file" ]] || return 0
 
-	# Try to detect the model from an existing openclaw.json config.
+	# Extract agents.defaults.model.primary (e.g., "anthropic/claude-sonnet-4-6")
 	local primary_model=""
-	if [[ -f "$config_file" ]] && command_exists python3; then
+	if command_exists python3; then
 		primary_model=$(python3 -c "
 import json, sys
 try:
@@ -1558,110 +1559,47 @@ except: pass
 " 2>/dev/null)
 	fi
 
-	# Determine provider from config, or check for any pre-existing API keys
-	# in the environment even on fresh installs.
+	[[ -n "$primary_model" ]] || return 0
+
+	# Determine provider and required env var
 	local provider="" env_var="" provider_name=""
-	if [[ -n "$primary_model" ]]; then
-		case "$primary_model" in
-			*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY"; provider_name="Anthropic" ;;
-			gpt*|o1*|o3*|o4*) provider="openai"; env_var="OPENAI_API_KEY"; provider_name="OpenAI" ;;
-		esac
-	fi
+	case "$primary_model" in
+		*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY"; provider_name="Anthropic" ;;
+		gpt*|o1*|o3*|o4*) provider="openai"; env_var="OPENAI_API_KEY"; provider_name="OpenAI" ;;
+		*) return 0 ;;
+	esac
 
-	# If we identified a provider from config, check if the key is already set.
-	if [[ -n "$provider" ]]; then
-		echo ""
-		if [[ -n "${!env_var:-}" ]]; then
-			log_success "$env_var detected for $primary_model"
-			return 0
-		fi
-
-		# Anthropic-specific fallback: Claude Code subscription token
-		if [[ "$provider" == "anthropic" && -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-			export ANTHROPIC_API_KEY="$CLAUDE_CODE_OAUTH_TOKEN"
-			log_success "Claude Code subscription detected (CLAUDE_CODE_OAUTH_TOKEN)"
-			return 0
-		fi
-
-		# Interactive: prompt for the specific key
-		if [[ -c /dev/tty ]]; then
-			log_info "Your agent uses $primary_model ($provider_name)"
-			echo ""
-			local api_key=""
-			read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
-			if [[ -n "$api_key" ]]; then
-				export "$env_var=$api_key"
-				log_success "$env_var configured"
-			else
-				echo ""
-				log_dim "  Skipped. Configure later: obol model setup"
-			fi
-		else
-			log_warn "Agent uses $primary_model but $env_var is not set."
-			log_dim "  Set it before starting: export $env_var=..."
-			log_dim "  Or configure after startup: obol model setup"
-		fi
+	echo ""
+	if [[ -n "${!env_var:-}" ]]; then
+		log_success "$env_var detected for $primary_model"
 		return 0
 	fi
 
-	# Fresh install (no openclaw.json) — check environment for known API keys
-	# and offer to configure a cloud provider interactively.
-	if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-		log_success "ANTHROPIC_API_KEY detected — will configure Anthropic in LiteLLM"
-		return 0
-	fi
-	if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+	# Anthropic-specific fallback: Claude Code subscription token
+	if [[ "$provider" == "anthropic" && -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
 		export ANTHROPIC_API_KEY="$CLAUDE_CODE_OAUTH_TOKEN"
 		log_success "Claude Code subscription detected (CLAUDE_CODE_OAUTH_TOKEN)"
 		return 0
 	fi
-	if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-		log_success "OPENAI_API_KEY detected — will configure OpenAI in LiteLLM"
-		return 0
-	fi
 
-	# No config file and no environment keys — prompt interactively
+	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
 	if [[ -c /dev/tty ]]; then
+		log_info "Your agent uses $primary_model ($provider_name)"
 		echo ""
-		log_info "Cloud AI provider (optional — local Ollama models work without a key)"
-		echo ""
-		echo "  1. Anthropic (Claude)"
-		echo "  2. OpenAI (GPT)"
-		echo "  3. Skip (use local Ollama models only)"
-		echo ""
-
-		local choice
-		read -p "Choose [1/2/3]: " choice </dev/tty
-
-		case "$choice" in
-		1)
-			local api_key=""
-			read -r -p "  Anthropic API key (ANTHROPIC_API_KEY): " api_key </dev/tty
-			if [[ -n "$api_key" ]]; then
-				export ANTHROPIC_API_KEY="$api_key"
-				log_success "ANTHROPIC_API_KEY configured"
-			else
-				log_dim "  Skipped. Configure later: obol model setup"
-			fi
-			;;
-		2)
-			local api_key=""
-			read -r -p "  OpenAI API key (OPENAI_API_KEY): " api_key </dev/tty
-			if [[ -n "$api_key" ]]; then
-				export OPENAI_API_KEY="$api_key"
-				log_success "OPENAI_API_KEY configured"
-			else
-				log_dim "  Skipped. Configure later: obol model setup"
-			fi
-			;;
-		*)
-			log_dim "  Using local Ollama models. Configure a cloud provider later: obol model setup"
-			;;
-		esac
+		local api_key=""
+		read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
+		if [[ -n "$api_key" ]]; then
+			export "$env_var=$api_key"
+			log_success "$env_var configured"
+		else
+			echo ""
+			log_dim "  Skipped. Configure later: obol model setup --provider $provider"
+		fi
 	else
-		log_dim "  No cloud AI provider API key found in environment."
-		log_dim "  The agent will use local Ollama models."
-		log_dim "  Configure a cloud provider after startup: obol model setup"
+		# Non-interactive: just warn
+		log_warn "Agent uses $primary_model but $env_var is not set."
+		log_dim "  Set it before starting: export $env_var=..."
+		log_dim "  Or configure after startup: obol model setup --provider $provider"
 	fi
 }
 
