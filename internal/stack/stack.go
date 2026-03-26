@@ -285,13 +285,20 @@ func Up(cfg *config.Config, u *ui.UI) error {
 		return err
 	}
 
-	// Ensure DNS resolver is running for wildcard *.obol.stack
+	// Ensure *.obol.stack resolves to localhost.
+	// /etc/hosts is the primary mechanism (works everywhere, including headless).
+	// Wildcard DNS via NM dnsmasq (Linux) or /etc/resolver (macOS) is optional
+	// and only attempted as an enhancement for subdomain resolution.
+	if err := dns.EnsureHostsEntries(nil); err != nil {
+		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
+	}
 	if err := dns.EnsureRunning(); err != nil {
 		u.Warnf("DNS resolver failed to start: %v", err)
 	} else if err := dns.ConfigureSystemResolver(); err != nil {
-		u.Warnf("Failed to configure system DNS resolver: %v", err)
+		u.Dim(fmt.Sprintf("  Wildcard DNS not configured: %v", err))
+		u.Dim("  obol.stack will resolve via /etc/hosts (subdomains added as needed)")
 	} else {
-		u.Success("DNS resolver configured")
+		u.Success("DNS resolver configured (wildcard *.obol.stack)")
 	}
 
 	u.Blank()

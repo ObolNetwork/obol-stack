@@ -123,8 +123,24 @@ check_docker() {
 		return 1
 	fi
 
-	# Check if Docker daemon is running; try to start it automatically
+	# Check if Docker daemon is running and accessible
 	if ! docker info >/dev/null 2>&1; then
+		# Distinguish permission errors from daemon-not-running
+		local docker_err
+		docker_err=$(docker info 2>&1)
+
+		if echo "$docker_err" | grep -qi "permission denied"; then
+			log_error "Docker is installed but your user does not have permission to access it"
+			echo ""
+			echo "  Add your user to the docker group and apply the change:"
+			echo "    sudo usermod -aG docker \$USER"
+			echo "    newgrp docker"
+			echo ""
+			log_dim "  Then run this installer again."
+			echo ""
+			return 1
+		fi
+
 		if [[ "$(uname -s)" == "Linux" ]]; then
 			log_warn "Docker daemon is not running — attempting to start..."
 			# Try systemd first (apt/yum installs), then snap
@@ -181,21 +197,6 @@ check_docker() {
 	if [[ "$major" -lt 20 ]] || { [[ "$major" -eq 20 ]] && [[ "$minor" -lt 10 ]]; }; then
 		log_warn "Docker version $docker_version is older than recommended (20.10.0+)"
 		log_warn "k3d may not work correctly with older Docker versions"
-	fi
-
-	# Check if user can run Docker without sudo (Linux-specific)
-	if [[ "$(uname -s)" == "Linux" ]]; then
-		if ! docker ps >/dev/null 2>&1; then
-			log_warn "Current user cannot run Docker commands"
-			echo ""
-			echo "You may need to add your user to the docker group:"
-			echo "  sudo usermod -aG docker \$USER"
-			echo "  newgrp docker"
-			echo ""
-			echo "Or run commands with sudo."
-			echo ""
-			# Don't fail here - user might be running with sudo
-		fi
 	fi
 
 	# Check Docker networking (ensure bridge network works)
