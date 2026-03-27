@@ -187,6 +187,33 @@ function refund(
 
 Expiry ordering enforced by contract: `preApprovalExpiry <= authorizationExpiry <= refundExpiry`
 
+### Verified: receiver == payer Is Valid
+
+Option A sets `receiver = payer = platform_wallet` in PaymentInfo. This is
+intentional and verified against the contract source:
+
+1. **AuthCaptureEscrow** (`_validatePayment()` at line 480) checks:
+   amount <= maxAmount, expiry ordering, fee bounds. It **never** checks
+   `payer != receiver`. No constraint exists.
+
+2. **ERC-3009** (`receiveWithAuthorization`) requires `to == msg.sender`
+   ("caller must be the payee" — Circle's FiatTokenV2/EIP3009.sol). But
+   `to` is set to the `ERC3009PaymentCollector` contract address, not to
+   `paymentInfo.receiver`. The collector is an intermediary:
+
+   ```
+   authorize:  payer → collector (to==msg.sender ✓) → TokenStore (locked)
+   capture:    TokenStore → receiver (== payer, standard ERC20 transfer)
+   distribute: payer wallet → worker1, worker2, ... (standard ERC20 transfers)
+   ```
+
+3. **Capture to self** is just a TokenStore → platform_wallet ERC20 transfer.
+   No special-case logic, no revert condition.
+
+Source: `base/commerce-payments/src/AuthCaptureEscrow.sol` lines 236-295,
+`src/collectors/ERC3009PaymentCollector.sol` lines 42-49,
+`circlefin/stablecoin-evm/contracts/v2/EIP3009.sol` (receiveWithAuthorization).
+
 ### Inverted Trust Model — Why It's Better
 
 The Commerce Payments escrow protects the **payer** (the reward pool), not the service provider (the worker). This inversion is actually the superior design for our use case:
