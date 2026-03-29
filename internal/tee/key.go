@@ -36,8 +36,8 @@ type teeKey struct {
 var _ enclave.Key = (*teeKey)(nil)
 
 func (k *teeKey) PublicKeyBytes() []byte { return k.pubBytes }
-func (k *teeKey) Tag() string           { return k.tag }
-func (k *teeKey) Persistent() bool      { return true }
+func (k *teeKey) Tag() string            { return k.tag }
+func (k *teeKey) Persistent() bool       { return true }
 
 func (k *teeKey) Sign(digest []byte) ([]byte, error) {
 	return k.backend.sign(digest)
@@ -65,6 +65,7 @@ func (k *teeKey) Decrypt(ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < headerLen+tagLen {
 		return nil, fmt.Errorf("tee: ciphertext too short (%d bytes)", len(ciphertext))
 	}
+
 	if ciphertext[0] != 0x01 {
 		return nil, fmt.Errorf("tee: unsupported ciphertext version 0x%02x", ciphertext[0])
 	}
@@ -89,6 +90,7 @@ func (k *teeKey) Decrypt(ciphertext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tee: aes.NewCipher: %w", err)
 	}
+
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, fmt.Errorf("tee: cipher.NewGCM: %w", err)
@@ -98,6 +100,7 @@ func (k *teeKey) Decrypt(ciphertext []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tee: AES-GCM decrypt failed: %w", err)
 	}
+
 	return plain, nil
 }
 
@@ -113,9 +116,11 @@ func deriveKey(sharedPoint, ephPubBytes, recipPubBytes []byte) ([]byte, error) {
 	info = append(info, recipPubBytes...)
 
 	kdf := hkdf.New(sha256.New, sharedPoint, nil, info)
+
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(kdf, key); err != nil {
 		return nil, fmt.Errorf("tee: HKDF: %w", err)
 	}
+
 	return key, nil
 }

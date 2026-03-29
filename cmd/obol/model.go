@@ -1,11 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -62,12 +63,14 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 			if provider == "" {
 				creds := detectCredentials()
 				providers, _ := model.GetAvailableProviders(cfg)
+
 				options := make([]string, len(providers))
 				for i, p := range providers {
 					label := fmt.Sprintf("%s (%s)", p.Name, p.ID)
 					if det, ok := creds[p.ID]; ok {
-						label += fmt.Sprintf(" — detected: %s", det.source)
+						label += " — detected: " + det.source
 					}
+
 					options[i] = label
 				}
 
@@ -75,11 +78,13 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				if err != nil {
 					return err
 				}
+
 				provider = providers[idx].ID
 
 				// If a credential was detected for the chosen provider, offer to use it
 				if det, ok := creds[provider]; ok && det.key != "" && apiKey == "" {
 					u.Infof("%s API key detected (%s)", providers[idx].Name, det.source)
+
 					if u.Confirm("Use detected credential?", true) {
 						apiKey = det.key
 					}
@@ -103,6 +108,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 	if len(models) == 0 {
 		// Diagnostic: check Ollama connectivity
 		u.Info("Checking Ollama connectivity...")
+
 		ollamaModels, err := model.ListOllamaModels()
 		if err != nil {
 			u.Errorf("Ollama not reachable")
@@ -110,8 +116,10 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			u.Print("  Hint: Is Ollama running? Try: ollama serve")
 			u.Print("  Hint: Using a custom host? Set OLLAMA_HOST=http://your-host:port")
 			u.Print("  Hint: Install from https://ollama.ai")
-			return fmt.Errorf("Ollama is not running: %w", err)
+
+			return fmt.Errorf("ollama is not running: %w", err)
 		}
+
 		u.Success("Ollama is reachable")
 
 		if len(ollamaModels) == 0 {
@@ -119,17 +127,21 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 			u.Print("")
 			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:4b")
 			u.Print("  Hint: Or run: obol model pull")
-			return fmt.Errorf("Ollama is running but has no models")
+
+			return errors.New("ollama is running but has no models")
 		}
+
 		u.Successf("Found %d pulled model(s)", len(ollamaModels))
 
 		for _, m := range ollamaModels {
 			name := m.Name
-			if strings.HasSuffix(name, ":latest") {
-				name = strings.TrimSuffix(name, ":latest")
+			if before, ok := strings.CutSuffix(name, ":latest"); ok {
+				name = before
 			}
+
 			models = append(models, name)
 		}
+
 		u.Infof("Models: %s", strings.Join(models, ", "))
 	}
 
@@ -138,19 +150,23 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 	}
 
 	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
+
 	return syncOpenClawModels(cfg, u)
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
 	if apiKey == "" {
 		var err error
+
 		info := providerInfo(provider)
+
 		apiKey, err = u.SecretInput(fmt.Sprintf("%s API key (%s)", info.Name, info.EnvVar))
 		if err != nil {
 			return err
 		}
+
 		if apiKey == "" {
-			return fmt.Errorf("API key is required")
+			return errors.New("API key is required")
 		}
 	}
 
@@ -167,11 +183,13 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, models); err != nil {
 		u.Print("")
 		u.Print("  Hint: Configuration stored in: litellm-config ConfigMap (llm namespace)")
+
 		return err
 	}
 
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
+
 	return syncOpenClawModels(cfg, u)
 }
 
@@ -185,6 +203,7 @@ func syncOpenClawModels(cfg *config.Config, u *ui.UI) error {
 		u.Warnf("Could not read LiteLLM model list: %v", err)
 		return nil // non-fatal
 	}
+
 	return openclaw.SyncOverlayModels(cfg, allModels, u)
 }
 
@@ -195,6 +214,7 @@ func modelSyncCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			u.Info("Reading model list from LiteLLM...")
+
 			return syncOpenClawModels(cfg, u)
 		},
 	}
@@ -213,16 +233,30 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			name := cmd.String("name")
-			endpoint := model.WarnAndStripV1Suffix(cmd.String("endpoint"))
+			endpoint := cmd.String("endpoint")
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
 			if err := model.AddCustomEndpoint(cfg, u, name, endpoint, modelName, apiKey); err != nil {
 				return err
 			}
+
 			return syncOpenClawModels(cfg, u)
 		},
 	}
+}
+
+// modelStatusResult is the JSON-serialisable result for `model status`.
+type modelStatusResult struct {
+	Providers []modelStatusProvider `json:"providers"`
+}
+
+type modelStatusProvider struct {
+	Name    string   `json:"name"`
+	Enabled bool     `json:"enabled"`
+	APIKey  string   `json:"api_key"` // "set", "missing", or "n/a"
+	Models  []string `json:"models"`
+	EnvVar  string   `json:"env_var,omitempty"`
 }
 
 func modelStatusCommand(cfg *config.Config) *cli.Command {
@@ -231,6 +265,7 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 		Usage: "Show LiteLLM gateway provider status",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+
 			status, err := model.GetProviderStatus(cfg)
 			if err != nil {
 				return err
@@ -240,14 +275,40 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 			for name := range status {
 				providers = append(providers, name)
 			}
+
 			sort.Strings(providers)
+
+			if u.IsJSON() {
+				result := modelStatusResult{}
+				for _, name := range providers {
+					s := status[name]
+					key := "n/a"
+					if s.EnvVar != "" {
+						if s.HasAPIKey {
+							key = "set"
+						} else {
+							key = "missing"
+						}
+					}
+					result.Providers = append(result.Providers, modelStatusProvider{
+						Name:    name,
+						Enabled: s.Enabled,
+						APIKey:  key,
+						Models:  s.Models,
+						EnvVar:  s.EnvVar,
+					})
+				}
+				return u.JSON(result)
+			}
 
 			u.Bold("LiteLLM gateway providers:")
 			u.Blank()
 			u.Printf("  %-20s %-8s %-10s %-10s %s", "PROVIDER", "ENABLED", "API KEY", "MODELS", "ENV VAR")
+
 			for _, name := range providers {
 				s := status[name]
 				key := "n/a"
+
 				if s.EnvVar != "" {
 					if s.HasAPIKey {
 						key = "set"
@@ -255,16 +316,19 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 						key = "missing"
 					}
 				}
-				modelCount := fmt.Sprintf("%d", len(s.Models))
+
+				modelCount := strconv.Itoa(len(s.Models))
 				if len(s.Models) == 0 {
 					modelCount = "-"
 				}
+
 				u.Printf("  %-20s %-8t %-10s %-10s %s", name, s.Enabled, key, modelCount, s.EnvVar)
 			}
 
 			u.Blank()
 			u.Dim("Run 'obol model setup' to configure a provider.")
 			u.Dim("Run 'obol model setup custom' to add a custom endpoint.")
+
 			return nil
 		},
 	}
@@ -276,24 +340,45 @@ func modelPullCommand() *cli.Command {
 		Usage:     "Pull an Ollama model to the local machine",
 		ArgsUsage: "[model]",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			modelName := cmd.Args().First()
 
 			if modelName == "" {
 				var err error
-				modelName, err = promptModelPull()
+				modelName, err = promptModelPull(u)
 				if err != nil {
 					return err
 				}
 			}
 
 			fmt.Printf("Pulling model: %s\n\n", modelName)
+
 			if err := model.PullOllamaModel(modelName); err != nil {
 				return err
 			}
+
 			fmt.Printf("\nModel %s is ready.\n", modelName)
+
 			return nil
 		},
 	}
+}
+
+// modelListResult is the JSON-serialisable result for `model list`.
+type modelListResult struct {
+	Local   []modelListLocal   `json:"local"`
+	Gateway []modelListGateway `json:"gateway,omitempty"`
+}
+
+type modelListLocal struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+type modelListGateway struct {
+	Provider string   `json:"provider"`
+	Enabled  bool     `json:"enabled"`
+	Models   []string `json:"models"`
 }
 
 func modelListCommand(cfg *config.Config) *cli.Command {
@@ -301,6 +386,39 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 		Name:  "list",
 		Usage: "List pulled Ollama models and cloud provider status",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if u.IsJSON() {
+				result := modelListResult{}
+
+				if models, err := model.ListOllamaModels(); err == nil {
+					for _, m := range models {
+						result.Local = append(result.Local, modelListLocal{
+							Name: m.Name,
+							Size: m.Size,
+						})
+					}
+				}
+
+				if providerStatus, err := model.GetProviderStatus(cfg); err == nil {
+					providers := make([]string, 0, len(providerStatus))
+					for name := range providerStatus {
+						providers = append(providers, name)
+					}
+					sort.Strings(providers)
+					for _, name := range providers {
+						s := providerStatus[name]
+						result.Gateway = append(result.Gateway, modelListGateway{
+							Provider: name,
+							Enabled:  s.Enabled,
+							Models:   s.Models,
+						})
+					}
+				}
+
+				return u.JSON(result)
+			}
+
 			// List local Ollama models
 			models, err := model.ListOllamaModels()
 			if err != nil {
@@ -313,10 +431,12 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 				fmt.Println("Local models (Ollama):")
 				fmt.Println()
 				fmt.Printf("  %-35s %s\n", "NAME", "SIZE")
+
 				for _, m := range models {
 					fmt.Printf("  %-35s %s\n", m.Name, model.FormatBytes(m.Size))
 				}
 			}
+
 			fmt.Println()
 
 			// Show LiteLLM configured models
@@ -330,21 +450,26 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 				for name := range providerStatus {
 					providers = append(providers, name)
 				}
+
 				sort.Strings(providers)
 
 				fmt.Println("LiteLLM gateway models:")
 				fmt.Println()
 				fmt.Printf("  %-20s %-10s %s\n", "PROVIDER", "STATUS", "MODELS")
+
 				for _, name := range providers {
 					s := providerStatus[name]
+
 					status := "disabled"
 					if s.Enabled {
 						status = "enabled"
 					}
+
 					modelList := strings.Join(s.Models, ", ")
 					if modelList == "" {
 						modelList = "-"
 					}
+
 					fmt.Printf("  %-20s %-10s %s\n", name, status, modelList)
 				}
 			}
@@ -361,13 +486,16 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 		ArgsUsage: "<model-name>",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+
 			modelName := cmd.Args().First()
 			if modelName == "" {
-				return fmt.Errorf("model name is required\n\nUsage: obol model remove <model-name>\n\nList configured models with: obol model list")
+				return errors.New("model name is required\n\nUsage: obol model remove <model-name>\n\nList configured models with: obol model list")
 			}
+
 			if err := model.RemoveModel(cfg, u, modelName); err != nil {
 				return err
 			}
+
 			return syncOpenClawModels(cfg, u)
 		},
 	}
@@ -380,6 +508,7 @@ func providerInfo(id string) model.ProviderInfo {
 			return p
 		}
 	}
+
 	return model.ProviderInfo{ID: id, Name: id}
 }
 
@@ -418,50 +547,44 @@ func detectCredentials() map[string]detectedCredential {
 }
 
 // promptModelPull interactively asks the user which Ollama model to pull.
-func promptModelPull() (string, error) {
-	type suggestion struct {
-		name string
-		size string
-		desc string
-	}
-	suggestions := []suggestion{
-		{"qwen3.5:4b", "2.7 GB", "Fast general-purpose (recommended)"},
-		{"qwen2.5-coder:7b", "4.7 GB", "Code generation"},
-		{"deepseek-r1:8b", "4.9 GB", "Reasoning"},
-		{"gemma3:4b", "3.3 GB", "Lightweight, multilingual"},
+// When the UI is non-interactive (piped, CI, or JSON mode), it returns an
+// error instructing the user to specify --model via flag.
+func promptModelPull(u *ui.UI) (string, error) {
+	if !u.IsTTY() || u.IsJSON() {
+		return "", fmt.Errorf("model name required: use positional arg (obol model pull <model>)")
 	}
 
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println("Popular models:")
-	fmt.Println()
-	for i, s := range suggestions {
-		fmt.Printf("  [%d] %-25s (%s) — %s\n", i+1, s.name, s.size, s.desc)
+	suggestions := []string{
+		"qwen3.5:4b      (2.7 GB) — Fast general-purpose (recommended)",
+		"qwen2.5-coder:7b (4.7 GB) — Code generation",
+		"deepseek-r1:8b   (4.9 GB) — Reasoning",
+		"gemma3:4b        (3.3 GB) — Lightweight, multilingual",
+		"Other (enter name)",
 	}
-	fmt.Printf("  [%d] Other (enter name)\n", len(suggestions)+1)
-	fmt.Printf("\nChoice [1]: ")
-
-	line, _ := reader.ReadString('\n')
-	choice := strings.TrimSpace(line)
-	if choice == "" {
-		choice = "1"
+	modelNames := []string{
+		"qwen3.5:4b",
+		"qwen2.5-coder:7b",
+		"deepseek-r1:8b",
+		"gemma3:4b",
 	}
 
-	idx := 0
-	if _, err := fmt.Sscanf(choice, "%d", &idx); err != nil || idx < 1 || idx > len(suggestions)+1 {
-		return "", fmt.Errorf("invalid choice: %s", choice)
+	idx, err := u.Select("Select a model to pull:", suggestions, 0)
+	if err != nil {
+		return "", err
 	}
 
-	if idx <= len(suggestions) {
-		return suggestions[idx-1].name, nil
+	if idx < len(modelNames) {
+		return modelNames[idx], nil
 	}
 
 	// Custom model name
-	fmt.Printf("Model name (e.g. mistral:7b): ")
-	name, _ := reader.ReadString('\n')
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("model name is required")
+	name, err := u.Input("Model name (e.g. mistral:7b)", "")
+	if err != nil {
+		return "", err
 	}
+	if name == "" {
+		return "", errors.New("model name is required")
+	}
+
 	return name, nil
 }

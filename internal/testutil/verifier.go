@@ -37,7 +37,7 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 
 	// Replace the facilitatorURL in the pricing YAML.
 	updated := currentYAML
-	for _, line := range strings.Split(currentYAML, "\n") {
+	for line := range strings.SplitSeq(currentYAML, "\n") {
 		if strings.Contains(line, "facilitatorURL:") {
 			updated = strings.Replace(updated, line, fmt.Sprintf(`facilitatorURL: "%s"`, newURL), 1)
 			break
@@ -45,15 +45,16 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 	}
 
 	// Patch the ConfigMap with the new facilitator URL.
-	patchJSON, _ := json.Marshal(map[string]any{
+	patchJSON, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"data": map[string]string{
 			"pricing.yaml": updated,
 		},
 	})
 	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
-		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
+		"--type=merge", "-p="+string(patchJSON)); err != nil {
 		t.Fatalf("patch x402-pricing ConfigMap: %v", err)
 	}
+
 	t.Logf("Patched x402-pricing facilitatorURL → %s", newURL)
 
 	// Register cleanup to restore original ConfigMap.
@@ -67,6 +68,8 @@ func PatchVerifierFacilitator(t *testing.T, kubectlBin, kubeconfig, newURL strin
 
 // restoreVerifierConfigMap restores the x402-pricing ConfigMap from a JSON snapshot.
 func restoreVerifierConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON string) {
+	t.Helper()
+
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
@@ -75,12 +78,12 @@ func restoreVerifierConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON
 		return
 	}
 
-	patchJSON, _ := json.Marshal(map[string]any{
+	patchJSON, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"data": cm.Data,
 	})
 
 	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "patch", "cm", "x402-pricing", "-n", "x402",
-		"--type=merge", fmt.Sprintf("-p=%s", string(patchJSON))); err != nil {
+		"--type=merge", "-p="+string(patchJSON)); err != nil {
 		t.Logf("Warning: could not restore x402-pricing ConfigMap: %v", err)
 	} else {
 		t.Log("Restored original x402-pricing ConfigMap")
@@ -106,8 +109,9 @@ func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL st
 			t.Log("x402-verifier restarted with updated facilitator URL")
 			return
 		}
+
 		time.Sleep(3 * time.Second)
 	}
+
 	t.Log("Warning: did not confirm verifier restart with new URL (continuing anyway)")
 }
-

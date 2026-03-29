@@ -18,6 +18,7 @@ import urllib.request
 SKILLS_DIR = "/data/.openclaw/skills"
 RPC = os.path.join(SKILLS_DIR, "ethereum-networks", "scripts", "rpc.py")
 KUBE = os.path.join(SKILLS_DIR, "obol-stack", "scripts", "kube.py")
+WORKER = os.path.join(SKILLS_DIR, "autoresearch-worker", "scripts", "worker_api.py")
 
 passed = 0
 failed = 0
@@ -274,6 +275,31 @@ def test_network_summary():
 
 
 test("distributed-validators/network_summary", test_network_summary)
+
+
+# ──────────────────────────────────────────────
+# autoresearch-worker tests
+# ──────────────────────────────────────────────
+print("\n\033[1m--- autoresearch-worker ---\033[0m")
+
+
+def test_autoresearch_worker_files():
+    for f in ["SKILL.md", "scripts/worker_api.py", "references/worker-api.md"]:
+        path = os.path.join(SKILLS_DIR, "autoresearch-worker", f)
+        assert os.path.isfile(path), f"missing: {f}"
+
+
+test("autoresearch-worker/files_exist", test_autoresearch_worker_files)
+
+
+def test_autoresearch_worker_help():
+    rc, out, err = run(["python3", WORKER, "--help"])
+    assert rc == 0, f"exit {rc}: {err}"
+    assert "experiment" in out.lower(), f"missing experiment help text in: {out}"
+    assert "--repo" in out, f"missing --repo option in: {out}"
+
+
+test("autoresearch-worker/help", test_autoresearch_worker_help)
 
 
 # ──────────────────────────────────────────────

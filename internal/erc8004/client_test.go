@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -37,11 +38,13 @@ type jsonrpcResp struct {
 // The handler map keys are method names; values return the hex-encoded result.
 func mockRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) (json.RawMessage, error)) *httptest.Server {
 	t.Helper()
+
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonrpcReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Logf("mock rpc: decode error: %v", err)
-			http.Error(w, "bad request", 400)
+			http.Error(w, "bad request", http.StatusBadRequest)
+
 			return
 		}
 
@@ -54,6 +57,7 @@ func mockRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) (j
 				Error:   json.RawMessage(`{"code":-32601,"message":"method not found"}`),
 			}
 			json.NewEncoder(w).Encode(resp)
+
 			return
 		}
 
@@ -65,6 +69,7 @@ func mockRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) (j
 				Error:   json.RawMessage(fmt.Sprintf(`{"code":-32000,"message":"%s"}`, err.Error())),
 			}
 			json.NewEncoder(w).Encode(resp)
+
 			return
 		}
 
@@ -89,6 +94,7 @@ func TestNewClient(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -98,6 +104,7 @@ func TestNewClient(t *testing.T) {
 	if client.chainID.Int64() != BaseSepoliaChainID {
 		t.Errorf("chain ID = %d, want %d", client.chainID.Int64(), BaseSepoliaChainID)
 	}
+
 	if client.address != common.HexToAddress(IdentityRegistryBaseSepolia) {
 		t.Errorf("address = %s, want %s", client.address.Hex(), IdentityRegistryBaseSepolia)
 	}
@@ -112,7 +119,7 @@ func TestRegister(t *testing.T) {
 
 	// Build a fake Registered event log.
 	// Registered(uint256 indexed agentId, string agentURI, address indexed owner)
-	registeredABI, _ := json.Marshal([]interface{}{})
+	registeredABI, _ := json.Marshal([]any{})
 	_ = registeredABI
 
 	parsedABI, err := parseABI()
@@ -131,7 +138,9 @@ func TestRegister(t *testing.T) {
 	}
 
 	fakeTxHash := common.HexToHash("0xaabbccdd")
+
 	var nonceMu sync.Mutex
+
 	nonce := uint64(0)
 
 	handlers := map[string]func([]json.RawMessage) (json.RawMessage, error){
@@ -151,8 +160,10 @@ func TestRegister(t *testing.T) {
 		"eth_getTransactionCount": func(_ []json.RawMessage) (json.RawMessage, error) {
 			nonceMu.Lock()
 			defer nonceMu.Unlock()
+
 			result := fmt.Sprintf(`"0x%x"`, nonce)
 			nonce++
+
 			return json.RawMessage(result), nil
 		},
 		"eth_estimateGas": func(_ []json.RawMessage) (json.RawMessage, error) {
@@ -187,7 +198,7 @@ func TestRegister(t *testing.T) {
 					"logIndex": "0x0",
 					"removed": false
 				}],
-				"logsBloom": "0x` + strings.Repeat("0", 512) + `",
+				"logsBloom": "0x`+strings.Repeat("0", 512)+`",
 				"type": "0x2",
 				"effectiveGasPrice": "0x3b9aca00"
 			}`,
@@ -197,6 +208,7 @@ func TestRegister(t *testing.T) {
 				hex.EncodeToString(uriEncoded),
 				fakeTxHash.Hex(),
 			)
+
 			return json.RawMessage(receipt), nil
 		},
 		"eth_blockNumber": func(_ []json.RawMessage) (json.RawMessage, error) {
@@ -233,6 +245,7 @@ func TestRegister(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -276,6 +289,7 @@ func TestGetMetadata(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -299,6 +313,7 @@ func TestTokenURI(t *testing.T) {
 	}
 
 	expectedURI := "https://example.com/.well-known/agent-registration.json"
+
 	encoded, err := parsedABI.Methods["tokenURI"].Outputs.Pack(expectedURI)
 	if err != nil {
 		t.Fatalf("pack: %v", err)
@@ -317,6 +332,7 @@ func TestTokenURI(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -338,6 +354,7 @@ func TestTokenURI(t *testing.T) {
 // sendRawTransaction, receipt (status 0x1, empty logs), and block data.
 func txMockHandlers(fakeTxHash common.Hash) map[string]func([]json.RawMessage) (json.RawMessage, error) {
 	var nonceMu sync.Mutex
+
 	nonce := uint64(0)
 
 	return map[string]func([]json.RawMessage) (json.RawMessage, error){
@@ -356,8 +373,10 @@ func txMockHandlers(fakeTxHash common.Hash) map[string]func([]json.RawMessage) (
 		"eth_getTransactionCount": func(_ []json.RawMessage) (json.RawMessage, error) {
 			nonceMu.Lock()
 			defer nonceMu.Unlock()
+
 			result := fmt.Sprintf(`"0x%x"`, nonce)
 			nonce++
+
 			return json.RawMessage(result), nil
 		},
 		"eth_estimateGas": func(_ []json.RawMessage) (json.RawMessage, error) {
@@ -381,6 +400,7 @@ func txMockHandlers(fakeTxHash common.Hash) map[string]func([]json.RawMessage) (
 				"type": "0x2",
 				"effectiveGasPrice": "0x3b9aca00"
 			}`, fakeTxHash.Hex())
+
 			return json.RawMessage(receipt), nil
 		},
 		"eth_blockNumber": func(_ []json.RawMessage) (json.RawMessage, error) {
@@ -427,6 +447,7 @@ func TestSetAgentURI(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -452,6 +473,7 @@ func TestSetMetadata(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -487,6 +509,7 @@ func TestRegister_NoRegisteredEvent(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -497,6 +520,7 @@ func TestRegister_NoRegisteredEvent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when Registered event not found, got nil")
 	}
+
 	if !strings.Contains(err.Error(), "Registered event not found") {
 		t.Errorf("error = %q, want it to contain 'Registered event not found'", err.Error())
 	}
@@ -512,13 +536,14 @@ func TestRegister_TxError(t *testing.T) {
 	handlers := txMockHandlers(fakeTxHash)
 	// Override sendRawTransaction to return an error.
 	handlers["eth_sendRawTransaction"] = func(_ []json.RawMessage) (json.RawMessage, error) {
-		return nil, fmt.Errorf("insufficient funds")
+		return nil, errors.New("insufficient funds")
 	}
 
 	srv := mockRPC(t, handlers)
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -556,6 +581,7 @@ func TestGetMetadata_EmptyResult(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
+
 	client, err := NewClient(ctx, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -566,6 +592,7 @@ func TestGetMetadata_EmptyResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMetadata: %v", err)
 	}
+
 	if len(result) != 0 {
 		t.Errorf("expected empty bytes, got %q", result)
 	}

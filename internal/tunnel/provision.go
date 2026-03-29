@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,29 +30,33 @@ type ProvisionOptions struct {
 func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
-		return fmt.Errorf("--hostname is required (e.g. stack.example.com)")
+		return errors.New("--hostname is required (e.g. stack.example.com)")
 	}
+
 	if opts.AccountID == "" {
-		return fmt.Errorf("--account-id is required (or set CLOUDFLARE_ACCOUNT_ID)")
+		return errors.New("--account-id is required (or set CLOUDFLARE_ACCOUNT_ID)")
 	}
+
 	if opts.ZoneID == "" {
-		return fmt.Errorf("--zone-id is required (or set CLOUDFLARE_ZONE_ID)")
+		return errors.New("--zone-id is required (or set CLOUDFLARE_ZONE_ID)")
 	}
+
 	if opts.APIToken == "" {
-		return fmt.Errorf("--api-token is required (or set CLOUDFLARE_API_TOKEN)")
+		return errors.New("--api-token is required (or set CLOUDFLARE_API_TOKEN)")
 	}
 
 	// Stack must be running so we can store the tunnel token in-cluster.
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("stack not running, use 'obol stack up' first")
+		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
 	stackID := getStackID(cfg)
 	if stackID == "" {
-		return fmt.Errorf("stack not initialized, run 'obol stack init' first")
+		return errors.New("stack not initialized, run 'obol stack init' first")
 	}
-	tunnelName := fmt.Sprintf("obol-stack-%s", stackID)
+
+	tunnelName := "obol-stack-" + stackID
 
 	client := newCloudflareClient(opts.APIToken)
 
@@ -70,10 +75,12 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 
 	if st != nil && st.AccountID == opts.AccountID && st.TunnelID != "" {
 		tunnelID = st.TunnelID
+
 		tok, err := client.GetTunnelToken(opts.AccountID, tunnelID)
 		if err != nil {
 			// If the tunnel no longer exists, create a new one.
 			u.Warnf("Existing tunnel token fetch failed (%v); creating a new tunnel...", err)
+
 			tunnelID = ""
 		} else {
 			tunnelToken = tok
@@ -85,6 +92,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 		if err != nil {
 			return err
 		}
+
 		tunnelID = t.ID
 		tunnelToken = t.Token
 	}
@@ -109,6 +117,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	if st == nil {
 		st = &tunnelState{}
 	}
+
 	st.Mode = "dns"
 	st.Hostname = hostname
 	st.AccountID = opts.AccountID
@@ -120,7 +129,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 		return fmt.Errorf("tunnel provisioned, but failed to save local state: %w", err)
 	}
 
-	tunnelURL := fmt.Sprintf("https://%s", hostname)
+	tunnelURL := "https://" + hostname
 
 	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
 	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
@@ -136,6 +145,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	u.Success("Tunnel provisioned")
 	u.Printf("Persistent URL: https://%s", hostname)
 	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
+
 	return nil
 }
 
@@ -149,9 +159,11 @@ func normalizeHostname(s string) string {
 	if idx := strings.IndexByte(s, '/'); idx >= 0 {
 		s = s[:idx]
 	}
+
 	if idx := strings.IndexByte(s, '?'); idx >= 0 {
 		s = s[:idx]
 	}
+
 	if idx := strings.IndexByte(s, '#'); idx >= 0 {
 		s = s[:idx]
 	}
@@ -170,6 +182,7 @@ func applyTunnelTokenSecret(cfg *config.Config, u *ui.UI, kubeconfigPath, token 
 		"--dry-run=client",
 		"-o", "yaml",
 	)
+
 	out, err := createCmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to create secret manifest: %w", err)
@@ -179,6 +192,7 @@ func applyTunnelTokenSecret(cfg *config.Config, u *ui.UI, kubeconfigPath, token 
 		"--kubeconfig", kubeconfigPath,
 		"apply", "-f", "-",
 	)
+
 	applyCmd.Stdin = bytes.NewReader(out)
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Applying tunnel token secret",
@@ -186,6 +200,7 @@ func applyTunnelTokenSecret(cfg *config.Config, u *ui.UI, kubeconfigPath, token 
 	}); err != nil {
 		return fmt.Errorf("failed to apply tunnel token secret: %w", err)
 	}
+
 	return nil
 }
 
@@ -196,6 +211,7 @@ func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string)
 	if _, err := os.Stat(helmPath); os.IsNotExist(err) {
 		return fmt.Errorf("helm not found at %s", helmPath)
 	}
+
 	if _, err := os.Stat(filepath.Join(defaultsDir, "cloudflared", "Chart.yaml")); os.IsNotExist(err) {
 		return fmt.Errorf("cloudflared chart not found in %s (re-run 'obol stack init --force' to refresh defaults)", defaultsDir)
 	}
@@ -211,6 +227,7 @@ func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string)
 		"--wait",
 		"--timeout", "2m",
 	)
+
 	cmd.Dir = defaultsDir
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Upgrading cloudflared Helm release",
@@ -218,5 +235,6 @@ func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string)
 	}); err != nil {
 		return fmt.Errorf("failed to upgrade cloudflared release: %w", err)
 	}
+
 	return nil
 }

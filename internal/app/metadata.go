@@ -19,6 +19,7 @@ type HelmfileInfo struct {
 // ParseHelmfile extracts chart information from a helmfile.yaml
 func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 	helmfilePath := filepath.Join(dir, "helmfile.yaml")
+
 	data, err := os.ReadFile(helmfilePath)
 	if err != nil {
 		return nil, err
@@ -30,12 +31,13 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "# Installed from: ") {
-			info.ChartRef = strings.TrimPrefix(line, "# Installed from: ")
+		if after, ok := strings.CutPrefix(line, "# Installed from: "); ok {
+			info.ChartRef = after
 			// Remove any trailing annotation like "(resolved via ArtifactHub)"
 			if idx := strings.Index(info.ChartRef, " ("); idx != -1 {
 				info.ChartRef = info.ChartRef[:idx]
 			}
+
 			break
 		}
 	}
@@ -48,7 +50,7 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 		} `yaml:"releases"`
 	}
 	if err := yaml.Unmarshal(data, &helmfile); err != nil {
-		return info, nil // Return partial info if YAML parsing fails
+		return info, nil //nolint:nilerr // return partial info (name from dir) if YAML parsing fails
 	}
 
 	if len(helmfile.Releases) > 0 {
@@ -62,9 +64,11 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 // GetHelmfileModTime returns the modification time of helmfile.yaml
 func GetHelmfileModTime(dir string) (modTime string, err error) {
 	helmfilePath := filepath.Join(dir, "helmfile.yaml")
+
 	stat, err := os.Stat(helmfilePath)
 	if err != nil {
 		return "", err
 	}
+
 	return stat.ModTime().Format("2006-01-02 15:04:05"), nil
 }

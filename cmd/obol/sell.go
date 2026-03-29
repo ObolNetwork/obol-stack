@@ -1,27 +1,38 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mark3labs/x402-go"
@@ -37,6 +48,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellHTTPCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
+			sellProbeCommand(cfg),
 			sellStopCommand(cfg),
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
@@ -52,18 +64,18 @@ func sellCommand(cfg *config.Config) *cli.Command {
 func sellInferenceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "inference",
-		Usage:     "Sell LLM inference via a local x402 payment gateway",
+		Usage:     "Sell local model inference with x402 payments",
 		ArgsUsage: "<name>",
 		Description: `Starts an x402-gated reverse proxy in front of a local Ollama instance.
 Buyers pay per-request in USDC to access inference endpoints.
 
 Examples:
-  obol sell inference my-qwen --model qwen3:0.6b --wallet 0x... --price 0.001
+  obol sell inference my-qwen --model qwen3.5:4b --wallet 0x... --price 0.001
   obol sell inference my-llama --model llama3:8b --wallet 0x... --chain base`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "model",
-				Usage: "Model name to serve (e.g. qwen3:0.6b)",
+				Usage: "Model name to serve (e.g. qwen3.5:4b)",
 			},
 			&cli.StringFlag{
 				Name:    "wallet",
@@ -86,7 +98,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, polygon, polygon-amoy, avalanche, avalanche-fuji)",
+				Usage: "Payment chain (base-sepolia, base, ethereum)",
 				Value: "base-sepolia",
 			},
 			&cli.StringFlag{
@@ -146,29 +158,59 @@ Examples:
 				Usage:   "SHA-256 of model weights for TEE attestation (required with --tee)",
 				Sources: cli.EnvVars("OBOL_MODEL_HASH"),
 			},
+			&cli.StringFlag{
+				Name:  "provenance-file",
+				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			name := cmd.Args().First()
 			if name == "" {
-				return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
+				if u.IsTTY() {
+					var err error
+					name, err = u.Input("Service name", "")
+					if err != nil || name == "" {
+						return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
+					}
+				} else {
+					return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
+				}
+			}
+			if err := validate.Name(name); err != nil {
+				return err
 			}
 
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+					wallet = resolved
+					fmt.Printf("Using wallet from remote-signer: %s\n", wallet)
+				} else if u.IsTTY() {
+					var inputErr error
+					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					if inputErr != nil || wallet == "" {
+						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					}
+				} else {
+					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+				}
 			}
+
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
 				return err
 			}
 
 			teeType := cmd.String("tee")
 			modelHash := cmd.String("model-hash")
+
 			if teeType != "" {
 				if _, err := tee.ParseTEEType(teeType); err != nil {
 					return err
 				}
+
 				if modelHash == "" {
-					return fmt.Errorf("--model-hash is required when --tee is set")
+					return errors.New("--model-hash is required when --tee is set")
 				}
 			}
 
@@ -181,6 +223,7 @@ Examples:
 			if err != nil {
 				return err
 			}
+
 			perRequest, err := priceTable.EffectiveRequestPriceE()
 			if err != nil {
 				return fmt.Errorf("invalid pricing: %w", err)
@@ -198,12 +241,24 @@ Examples:
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
 				VMImage:         cmd.String("vm-image"),
-				VMCPUs:          int(cmd.Int("vm-cpus")),
-				VMMemoryMB:      int(cmd.Int("vm-memory")),
-				VMHostPort:      int(cmd.Int("vm-host-port")),
+				VMCPUs:          cmd.Int("vm-cpus"),
+				VMMemoryMB:      cmd.Int("vm-memory"),
+				VMHostPort:      cmd.Int("vm-host-port"),
 				TEEType:         teeType,
 				ModelHash:       modelHash,
 			}
+
+			if pf := cmd.String("provenance-file"); pf != "" {
+				prov, err := loadProvenance(pf)
+				if err != nil {
+					return fmt.Errorf("load provenance: %w", err)
+				}
+
+				d.Provenance = prov
+				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
+					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
+			}
+
 			if priceTable.PerMTok != "" {
 				d.ApproxTokensPerRequest = schemas.ApproxTokensPerRequest
 			}
@@ -217,7 +272,8 @@ Examples:
 			// If a cluster is available, route through the cluster's x402 flow
 			// (tunnel → Traefik → x402-verifier → host gateway → Ollama).
 			// The gateway's built-in x402 is disabled to avoid double-gating.
-			kubeconfigPath := fmt.Sprintf("%s/kubeconfig.yaml", cfg.ConfigDir)
+			kubeconfigPath := cfg.ConfigDir + "/kubeconfig.yaml"
+
 			clusterAvailable := false
 			if _, statErr := os.Stat(kubeconfigPath); statErr == nil {
 				clusterAvailable = true
@@ -228,6 +284,7 @@ Examples:
 
 				// Resolve the gateway port from the listen address.
 				listenAddr := d.ListenAddr
+
 				port := "8402"
 				if idx := strings.LastIndex(listenAddr, ":"); idx >= 0 {
 					port = listenAddr[idx+1:]
@@ -243,14 +300,16 @@ Examples:
 				if err := createHostService(cfg, name, svcNs, port); err != nil {
 					fmt.Printf("Warning: could not create cluster service: %v\n", err)
 					fmt.Println("Falling back to standalone mode with built-in x402 payment gate.")
+
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
 					soSpec := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
-					soManifest := map[string]interface{}{
+
+					soManifest := map[string]any{
 						"apiVersion": "obol.org/v1alpha1",
 						"kind":       "ServiceOffer",
-						"metadata": map[string]interface{}{
+						"metadata": map[string]any{
 							"name":      name,
 							"namespace": svcNs,
 						},
@@ -258,6 +317,7 @@ Examples:
 					}
 					if err := kubectlApply(cfg, soManifest); err != nil {
 						fmt.Printf("Warning: could not create ServiceOffer: %v\n", err)
+
 						d.NoPaymentGate = false
 					} else {
 						fmt.Printf("ServiceOffer %s/%s created (type: inference, routed via cluster)\n", svcNs, name)
@@ -266,6 +326,7 @@ Examples:
 						u := getUI(cmd)
 						u.Blank()
 						u.Info("Ensuring tunnel is active for public access...")
+
 						if tunnelURL, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
 							u.Warnf("Tunnel not started: %v", tErr)
 							u.Dim("  Start manually with: obol tunnel restart")
@@ -288,26 +349,24 @@ Examples:
 func sellHTTPCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "http",
-		Usage:     "Sell access to any HTTP service via x402 (cluster-based)",
+		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Creates a ServiceOffer in the cluster. The agent reconciles it through:
-health-check → payment gate → route publishing → optional ERC-8004 registration.
+		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.
+Include --register to have the service listed on EIP8004 onchain agent registry.
 
-Examples:
-  obol sell http my-api --upstream my-svc --port 8080 --wallet 0x... --price 0.01
-  obol sell http my-db-proxy --upstream pgbouncer --port 5432 --wallet 0x... --chain base`,
+Example:
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base --register`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "wallet",
-				Aliases:  []string{"w"},
-				Usage:    "USDC recipient wallet address",
-				Sources:  cli.EnvVars("X402_WALLET"),
-				Required: true,
+				Name:    "wallet",
+				Aliases: []string{"w"},
+				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
+				Sources: cli.EnvVars("X402_WALLET"),
 			},
 			&cli.StringFlag{
-				Name:     "chain",
-				Usage:    "Payment chain (e.g. base-sepolia, base)",
-				Required: true,
+				Name:  "chain",
+				Usage: "Payment chain (base-sepolia, base, ethereum)",
+				Value: "base-sepolia",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -379,19 +438,110 @@ Examples:
 				Name:  "register-domains",
 				Usage: "OASF domains for discovery (e.g. technology/artificial_intelligence)",
 			},
+			&cli.StringSliceFlag{
+				Name:  "register-metadata",
+				Usage: "Additional registration metadata as key=value pairs (repeatable, e.g. gpu=A100-80GB)",
+			},
+			&cli.StringFlag{
+				Name:  "provenance-file",
+				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+			},
+			&cli.StringFlag{
+				Name:  "from-json",
+				Usage: "Read ServiceOffer spec from JSON file (or - for stdin) instead of flags",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if cmd.NArg() == 0 {
-				return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
+			u := getUI(cmd)
+
+			// --from-json: read spec from file/stdin and apply directly.
+			if jsonPath := cmd.String("from-json"); jsonPath != "" {
+				data, err := readJSONInput(jsonPath)
+				if err != nil {
+					return err
+				}
+				var spec map[string]interface{}
+				if err := json.Unmarshal(data, &spec); err != nil {
+					return fmt.Errorf("parse JSON spec: %w", err)
+				}
+
+				name := cmd.Args().First()
+				if name == "" {
+					// Try metadata.name from the JSON if it looks like a full manifest.
+					if md, ok := spec["metadata"].(map[string]interface{}); ok {
+						if n, ok := md["name"].(string); ok {
+							name = n
+						}
+					}
+				}
+				if name == "" {
+					return fmt.Errorf("name required: provide as positional arg or metadata.name in JSON")
+				}
+
+				ns := cmd.String("namespace")
+
+				manifest := map[string]interface{}{
+					"apiVersion": "obol.org/v1alpha1",
+					"kind":       "ServiceOffer",
+					"metadata": map[string]interface{}{
+						"name":      name,
+						"namespace": ns,
+					},
+					"spec": spec,
+				}
+
+				if err := kubectlApply(cfg, manifest); err != nil {
+					return err
+				}
+				fmt.Printf("ServiceOffer %s/%s created from JSON\n", ns, name)
+				return nil
 			}
+
 			name := cmd.Args().First()
+			if name == "" {
+				if u.IsTTY() {
+					var err error
+					name, err = u.Input("Service name", "")
+					if err != nil || name == "" {
+						return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
+					}
+				} else {
+					return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
+				}
+			}
+			if err := validate.Name(name); err != nil {
+				return err
+			}
+
+			// Auto-discover wallet from remote-signer if not set.
+			wallet := cmd.String("wallet")
+			if wallet == "" {
+				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+					wallet = resolved
+					fmt.Printf("Using wallet from remote-signer: %s\n", wallet)
+				} else if u.IsTTY() {
+					var inputErr error
+					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					if inputErr != nil || wallet == "" {
+						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					}
+				} else {
+					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+				}
+			}
+			if err := x402verifier.ValidateWallet(wallet); err != nil {
+				return err
+			}
+
 			ns := cmd.String("namespace")
 
 			priceTable, err := resolvePriceTable(cmd, true)
 			if err != nil {
 				return err
 			}
-			price := map[string]interface{}{}
+
+			price := map[string]any{}
+
 			switch {
 			case priceTable.PerRequest != "":
 				price["perRequest"] = priceTable.PerRequest
@@ -401,18 +551,18 @@ Examples:
 				price["perHour"] = priceTable.PerHour
 			}
 
-			spec := map[string]interface{}{
+			spec := map[string]any{
 				"type": "http",
-				"upstream": map[string]interface{}{
+				"upstream": map[string]any{
 					"service":    cmd.String("upstream"),
 					"namespace":  ns,
 					"port":       cmd.Int("port"),
 					"healthPath": cmd.String("health-path"),
 				},
-				"payment": map[string]interface{}{
+				"payment": map[string]any{
 					"scheme":            "exact",
 					"network":           cmd.String("chain"),
-					"payTo":             cmd.String("wallet"),
+					"payTo":             wallet,
 					"maxTimeoutSeconds": cmd.Int("max-timeout"),
 					"price":             price,
 				},
@@ -422,32 +572,68 @@ Examples:
 				spec["path"] = path
 			}
 
+			if pf := cmd.String("provenance-file"); pf != "" {
+				prov, err := loadProvenance(pf)
+				if err != nil {
+					return fmt.Errorf("load provenance: %w", err)
+				}
+				// Round-trip through JSON to build the map, respecting omitempty tags.
+				provBytes, err := json.Marshal(prov)
+				if err != nil {
+					return fmt.Errorf("marshal provenance: %w", err)
+				}
+
+				var provMap map[string]any
+				if err := json.Unmarshal(provBytes, &provMap); err != nil {
+					return fmt.Errorf("unmarshal provenance: %w", err)
+				}
+
+				spec["provenance"] = provMap
+
+				fmt.Printf("Loaded provenance: %s (metric %s=%s, params %s)\n",
+					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
+			}
+
 			if cmd.Bool("register") || cmd.String("register-name") != "" {
-				reg := map[string]interface{}{
+				reg := map[string]any{
 					"enabled": cmd.Bool("register"),
 				}
 				if n := cmd.String("register-name"); n != "" {
 					reg["name"] = n
 				}
+
 				if d := cmd.String("register-description"); d != "" {
 					reg["description"] = d
 				}
+
 				if img := cmd.String("register-image"); img != "" {
 					reg["image"] = img
 				}
+
 				if skills := cmd.StringSlice("register-skills"); len(skills) > 0 {
 					reg["skills"] = skills
 				}
+
 				if domains := cmd.StringSlice("register-domains"); len(domains) > 0 {
 					reg["domains"] = domains
 				}
+
+				if metaPairs := cmd.StringSlice("register-metadata"); len(metaPairs) > 0 {
+					meta, err := parseMetadataPairs(metaPairs)
+					if err != nil {
+						return err
+					}
+
+					reg["metadata"] = meta
+				}
+
 				spec["registration"] = reg
 			}
 
-			manifest := map[string]interface{}{
+			manifest := map[string]any{
 				"apiVersion": "obol.org/v1alpha1",
 				"kind":       "ServiceOffer",
-				"metadata": map[string]interface{}{
+				"metadata": map[string]any{
 					"name":      name,
 					"namespace": ns,
 				},
@@ -457,23 +643,28 @@ Examples:
 			if err := kubectlApply(cfg, manifest); err != nil {
 				return err
 			}
+
 			fmt.Printf("ServiceOffer %s/%s created (type: http)\n", ns, name)
+
 			if priceTable.PerMTok != "" {
 				fmt.Printf("Requests will be charged at %s\n", formatPriceTableSummary(priceTable))
 			}
+
 			fmt.Printf("The agent will reconcile: health-check → payment gate → route\n")
 			fmt.Printf("Check status: obol sell status %s -n %s\n", name, ns)
 
 			// Ensure tunnel is active for public access.
-			u := getUI(cmd)
+			u = getUI(cmd)
 			u.Blank()
 			u.Info("Ensuring tunnel is active for public access...")
+
 			if tunnelURL, err := tunnel.EnsureTunnelForSell(cfg, u); err != nil {
 				u.Warnf("Tunnel not started: %v", err)
 				u.Dim("  Start manually with: obol tunnel restart")
 			} else {
 				u.Successf("Tunnel active: %s", tunnelURL)
 			}
+
 			return nil
 		},
 	}
@@ -486,7 +677,7 @@ Examples:
 func sellListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
-		Usage: "List all ServiceOffer CRs",
+		Usage: "List all services for sale",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -495,13 +686,24 @@ func sellListCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			args := []string{"get", "serviceoffers.obol.org"}
 			if ns := cmd.String("namespace"); ns != "" {
 				args = append(args, "-n", ns)
 			} else {
 				args = append(args, "-A")
 			}
+			if u.IsJSON() {
+				args = append(args, "-o", "json")
+				out, err := kubectlOutput(cfg, args...)
+				if err != nil {
+					return err
+				}
+				fmt.Print(out)
+				return nil
+			}
 			args = append(args, "-o", "wide")
+
 			return kubectlRun(cfg, args...)
 		},
 	}
@@ -514,7 +716,7 @@ func sellListCommand(cfg *config.Config) *cli.Command {
 func sellStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "status",
-		Usage:     "Show offer status (with name) or global pricing config (without name)",
+		Usage:     "Show the status of all services for sale or a specific service by name",
 		ArgsUsage: "[name]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -524,55 +726,258 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
 			// If a name is provided, show per-offer conditions.
 			if cmd.NArg() > 0 {
 				name := cmd.Args().First()
+
 				ns := cmd.String("namespace")
 				if ns == "" {
-					return fmt.Errorf("namespace required: obol sell status <name> -n <ns>")
+					return errors.New("namespace required: obol sell status <name> -n <ns>")
 				}
-				return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "yaml")
+				outputFmt := "-o"
+				outputVal := "yaml"
+				if u.IsJSON() {
+					outputVal = "json"
+				}
+				return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, outputFmt, outputVal)
 			}
 
 			// No name: show global pricing config + registrations.
+			if u.IsJSON() {
+				return sellStatusGlobalJSON(cfg, u)
+			}
+
 			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
 			if err != nil {
-				fmt.Printf("Cluster pricing: not available (%v)\n", err)
+				fmt.Printf("Payment configuration not available (%v)\n", err)
 			} else {
-				fmt.Printf("x402 Cluster Configuration:\n")
+				fmt.Printf("Payment Configuration:\n")
 				fmt.Printf("  Wallet:      %s\n", valueOrNone(pricingCfg.Wallet))
 				fmt.Printf("  Chain:       %s\n", valueOrNone(pricingCfg.Chain))
 				fmt.Printf("  Facilitator: %s\n", valueOrNone(pricingCfg.FacilitatorURL))
 				fmt.Printf("  Verify Only: %v\n", pricingCfg.VerifyOnly)
 				fmt.Printf("  Routes:      %d\n", len(pricingCfg.Routes))
+
 				for _, r := range pricingCfg.Routes {
 					desc := r.Description
 					if desc == "" {
 						desc = "(no description)"
 					}
+
 					payTo := r.PayTo
 					if payTo == "" {
 						payTo = "(global)"
 					}
+
 					fmt.Printf("    %s → %s  payTo=%s  %s\n", r.Pattern, formatRoutePriceSummary(r), payTo, desc)
 				}
 			}
 
 			fmt.Println()
 
-			fmt.Printf("ERC-8004 Registration:\n")
-			kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
+			fmt.Printf("ERC-8004 Agent Registration:\n")
+			_ = kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
 				"-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,AGENT_ID:.status.agentId,TX:.status.registrationTxHash,REGISTERED:.status.conditions[?(@.type=='Registered')].status")
 
 			// Also show local inference gateway deployments.
 			store := inference.NewStore(cfg.ConfigDir)
+
 			deployments, _ := store.List()
 			if len(deployments) > 0 {
 				fmt.Printf("\nLocal Inference Gateways:\n")
+
 				for _, d := range deployments {
 					fmt.Printf("  %-20s %s → %s  %s  chain=%s\n",
 						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d), d.Chain)
 				}
+			}
+
+			return nil
+		},
+	}
+}
+
+// sellStatusGlobalJSON outputs the global sell status as JSON.
+func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
+	type routeJSON struct {
+		Pattern                string `json:"pattern"`
+		Price                  string `json:"price"`
+		Description            string `json:"description,omitempty"`
+		PayTo                  string `json:"pay_to,omitempty"`
+		PriceModel             string `json:"price_model,omitempty"`
+		PerMTok                string `json:"per_mtok,omitempty"`
+		ApproxTokensPerRequest int    `json:"approx_tokens_per_request,omitempty"`
+	}
+	type gatewayJSON struct {
+		Name        string `json:"name"`
+		ListenAddr  string `json:"listen_addr"`
+		UpstreamURL string `json:"upstream_url"`
+		Price       string `json:"price"`
+		Chain       string `json:"chain"`
+	}
+	type statusGlobal struct {
+		Payment *struct {
+			Wallet         string      `json:"wallet"`
+			Chain          string      `json:"chain"`
+			FacilitatorURL string      `json:"facilitator_url"`
+			VerifyOnly     bool        `json:"verify_only"`
+			Routes         []routeJSON `json:"routes"`
+		} `json:"payment,omitempty"`
+		PaymentError  string          `json:"payment_error,omitempty"`
+		Registrations json.RawMessage `json:"registrations,omitempty"`
+		LocalGateways []gatewayJSON   `json:"local_gateways,omitempty"`
+	}
+
+	var result statusGlobal
+
+	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
+	if err != nil {
+		result.PaymentError = err.Error()
+	} else {
+		p := &struct {
+			Wallet         string      `json:"wallet"`
+			Chain          string      `json:"chain"`
+			FacilitatorURL string      `json:"facilitator_url"`
+			VerifyOnly     bool        `json:"verify_only"`
+			Routes         []routeJSON `json:"routes"`
+		}{
+			Wallet:         pricingCfg.Wallet,
+			Chain:          pricingCfg.Chain,
+			FacilitatorURL: pricingCfg.FacilitatorURL,
+			VerifyOnly:     pricingCfg.VerifyOnly,
+		}
+		for _, r := range pricingCfg.Routes {
+			p.Routes = append(p.Routes, routeJSON{
+				Pattern:                r.Pattern,
+				Price:                  r.Price,
+				Description:            r.Description,
+				PayTo:                  r.PayTo,
+				PriceModel:             r.PriceModel,
+				PerMTok:                r.PerMTok,
+				ApproxTokensPerRequest: r.ApproxTokensPerRequest,
+			})
+		}
+		result.Payment = p
+	}
+
+	// Fetch registrations as raw JSON from kubectl.
+	regOut, regErr := kubectlOutput(cfg, "get", "serviceoffers.obol.org", "-A", "-o", "json")
+	if regErr == nil {
+		result.Registrations = json.RawMessage(regOut)
+	}
+
+	// Local inference gateways.
+	store := inference.NewStore(cfg.ConfigDir)
+	deployments, _ := store.List()
+	for _, d := range deployments {
+		result.LocalGateways = append(result.LocalGateways, gatewayJSON{
+			Name:        d.Name,
+			ListenAddr:  d.ListenAddr,
+			UpstreamURL: d.UpstreamURL,
+			Price:       formatInferencePriceSummary(d),
+			Chain:       d.Chain,
+		})
+	}
+
+	return u.JSON(result)
+}
+
+// ---------------------------------------------------------------------------
+// sell probe — send an unauthenticated request to verify 402 payment gate
+// ---------------------------------------------------------------------------
+
+func sellProbeCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "probe",
+		Usage:     "Probe a ServiceOffer endpoint to verify it returns 402 pricing",
+		ArgsUsage: "<name>",
+		Description: `Sends an unauthenticated request through Traefik to the ServiceOffer's
+endpoint and displays the HTTP status code and x402 pricing response.
+
+A 402 response with x402Version=1 confirms the endpoint is live and payment-gated.
+
+Examples:
+  obol sell probe flow-qwen -n llm
+  obol sell probe my-api -n default --path /health`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "namespace",
+				Aliases: []string{"n"},
+				Usage:   "Namespace of the ServiceOffer",
+			},
+			&cli.StringFlag{
+				Name:  "path",
+				Usage: "Subpath to probe (appended to the offer's endpoint)",
+				Value: "/health",
+			},
+			&cli.StringFlag{
+				Name:  "host",
+				Usage: "Traefik host:port",
+				Value: "obol.stack:8080",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			name := cmd.Args().First()
+			if name == "" {
+				return errors.New("name required: obol sell probe <name> -n <ns>")
+			}
+
+			ns := cmd.String("namespace")
+			if ns == "" {
+				return errors.New("namespace required: obol sell probe <name> -n <ns>")
+			}
+
+			// Get the ServiceOffer's endpoint from the CR status.
+			endpoint, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name,
+				"-n", ns, "-o", "jsonpath={.status.endpoint}")
+			if err != nil {
+				return fmt.Errorf("get ServiceOffer %s/%s: %w", ns, name, err)
+			}
+
+			endpoint = strings.TrimSpace(endpoint)
+			if endpoint == "" {
+				return fmt.Errorf("ServiceOffer %s/%s has no endpoint (not yet reconciled?)", ns, name)
+			}
+
+			subpath := cmd.String("path")
+			probeURL := "http://" + cmd.String("host") + endpoint + subpath
+			fmt.Printf("Probing %s ...\n", probeURL)
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+			if err != nil {
+				return fmt.Errorf("create request: %w", err)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("probe failed: %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			fmt.Printf("HTTP %d\n", resp.StatusCode)
+
+			if resp.StatusCode == http.StatusPaymentRequired {
+				var pretty bytes.Buffer
+				if json.Indent(&pretty, body, "", "  ") == nil {
+					fmt.Println(pretty.String())
+				} else {
+					fmt.Println(string(body))
+				}
+
+				fmt.Println("\nEndpoint is live and payment-gated.")
+
+				return nil
+			}
+
+			if len(body) > 0 {
+				fmt.Println(string(body))
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				fmt.Println("\nWarning: endpoint returned 200 (not payment-gated).")
 			}
 
 			return nil
@@ -587,7 +992,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Stop serving a ServiceOffer (removes pricing route, keeps CR)",
+		Usage:     "Stop selling a service",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -599,23 +1004,28 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("name required: obol sell stop <name> -n <ns>")
+				return errors.New("name required: obol sell stop <name> -n <ns>")
 			}
+
 			name := cmd.Args().First()
+			if err := validate.Name(name); err != nil {
+				return err
+			}
 			ns := cmd.String("namespace")
 
-			fmt.Printf("Stopping ServiceOffer %s/%s...\n", ns, name)
+			fmt.Printf("Stopping the service offering %s/%s...\n", ns, name)
 
 			removePricingRoute(cfg, name)
 
 			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
+
 			err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
 				"--type=merge", "--subresource=status", "-p", patchJSON)
 			if err != nil {
 				return fmt.Errorf("failed to patch status: %w", err)
 			}
 
-			fmt.Printf("ServiceOffer %s/%s stopped.\n", ns, name)
+			fmt.Printf("Service offering %s/%s stopped.\n", ns, name)
 			return nil
 		},
 	}
@@ -628,7 +1038,7 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 func sellDeleteCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "delete",
-		Usage:     "Delete a ServiceOffer CR and deactivate ERC-8004 registration",
+		Usage:     "Delete the sale of a service entirely and deactivate its ERC-8004 agent registration",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -644,21 +1054,20 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("name required: obol sell delete <name> -n <ns>")
+				return errors.New("name required: obol sell delete <name> -n <ns>")
 			}
+
 			name := cmd.Args().First()
+			if err := validate.Name(name); err != nil {
+				return err
+			}
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
-				fmt.Printf("Delete ServiceOffer %s/%s? This will:\n", ns, name)
-				fmt.Println("  - Remove the associated Middleware and HTTPRoute")
-				fmt.Println("  - Remove the pricing route from the x402 verifier")
-				fmt.Println("  - Deactivate the ERC-8004 registration (if registered)")
-				fmt.Print("[y/N] ")
-				var response string
-				fmt.Scanln(&response)
-				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+				msg := fmt.Sprintf("Delete the service offering %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove the pricing route from the x402 verifier\n  - Deactivate the ERC-8004 registration (if registered)", ns, name)
+				if !u.Confirm(msg, false) {
 					fmt.Println("Aborted.")
 					return nil
 				}
@@ -673,24 +1082,26 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				fmt.Printf("Deactivating ERC-8004 registration (agent %s)...\n", agentID)
 
 				cmName := fmt.Sprintf("so-%s-registration", name)
+
 				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
 					"-o", `jsonpath={.data.agent-registration\.json}`)
 				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
 					fmt.Printf("  No registration document found. Agent %s NFT persists on-chain.\n", agentID)
 				} else {
-					var regDoc map[string]interface{}
+					var regDoc map[string]any
 					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
 						fmt.Printf("  Warning: corrupt registration JSON, skipping deactivation: %v\n", jsonErr)
 					} else {
 						regDoc["active"] = false
-						patchJSON, _ := json.Marshal(map[string]interface{}{
+
+						patchJSON, _ := json.Marshal(map[string]any{
 							"data": map[string]string{
 								"agent-registration.json": mustMarshal(regDoc),
 							},
 						})
 						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
 							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							fmt.Printf("  Warning: could not deactivate registration: %v\n", patchErr)
+							fmt.Printf("  Warning: could not deactivate agent registration: %v\n", patchErr)
 						} else {
 							fmt.Printf("  Registration deactivated (active=false). On-chain NFT persists.\n")
 						}
@@ -715,6 +1126,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 					_ = tunnel.DeleteStorefront(cfg)
 				}
 			}
+
 			return nil
 		},
 	}
@@ -727,19 +1139,18 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 func sellPricingCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "pricing",
-		Usage: "Configure x402 pricing in the cluster",
+		Usage: "Manage service pricing",
 		Description: `Sets the wallet address and chain for x402 payment collection.
-Stakater Reloader auto-restarts the verifier pod on config changes.`,
+Reloads the payment verifier when configuration is changed.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "wallet",
-				Usage:    "USDC recipient wallet address (EVM)",
-				Sources:  cli.EnvVars("X402_WALLET"),
-				Required: true,
+				Name:    "wallet",
+				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
+				Sources: cli.EnvVars("X402_WALLET"),
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia)",
+				Usage: "Payment chain (base-sepolia, base, ethereum)",
 				Value: "base-sepolia",
 			},
 			&cli.StringFlag{
@@ -747,12 +1158,45 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 				Usage:   "x402 facilitator URL",
 				Sources: cli.EnvVars("X402_FACILITATOR_URL"),
 			},
+			&cli.StringFlag{
+				Name:  "from-json",
+				Usage: "Read pricing config from JSON file (or - for stdin) instead of flags",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// --from-json: read pricing config from file/stdin.
+			if jsonPath := cmd.String("from-json"); jsonPath != "" {
+				data, err := readJSONInput(jsonPath)
+				if err != nil {
+					return err
+				}
+				var pricingCfg struct {
+					Wallet         string `json:"wallet"`
+					Chain          string `json:"chain"`
+					FacilitatorURL string `json:"facilitatorUrl"`
+				}
+				if err := json.Unmarshal(data, &pricingCfg); err != nil {
+					return fmt.Errorf("parse JSON pricing config: %w", err)
+				}
+				if pricingCfg.Wallet == "" {
+					return fmt.Errorf("wallet is required in JSON input")
+				}
+				return x402verifier.Setup(cfg, pricingCfg.Wallet, pricingCfg.Chain, pricingCfg.FacilitatorURL)
+			}
+
 			wallet := cmd.String("wallet")
+			if wallet == "" {
+				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+					wallet = resolved
+					fmt.Printf("Using wallet from remote-signer: %s\n", wallet)
+				} else {
+					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+				}
+			}
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
 				return err
 			}
+
 			return x402verifier.Setup(cfg, wallet, cmd.String("chain"), cmd.String("facilitator-url"))
 		},
 	}
@@ -765,23 +1209,25 @@ Stakater Reloader auto-restarts the verifier pod on config changes.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Register service on ERC-8004 Identity Registry (Base Sepolia)",
-		Description: `Mints an agent NFT on the ERC-8004 Identity Registry.
-Requires a funded Base Sepolia wallet (private key).`,
+		Usage: "Register a service on the ERC-8004 Agent Registry",
+		Description: `Registers an agent on the ERC-8004 Agent Registry on one or more chains.
+Uses the remote-signer wallet by default. Supports sponsored (zero-gas)
+registration on networks that offer it (e.g. ethereum mainnet).
+
+Examples:
+  obol sell register                                    # interactive, defaults to base-sepolia
+  obol sell register --chain base-sepolia               # register on base-sepolia
+  obol sell register --chain mainnet,base               # register on multiple chains
+  obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:    "private-key",
-				Usage:   "DEPRECATED: use --private-key-file or ERC8004_PRIVATE_KEY env var",
-				Sources: cli.EnvVars("ERC8004_PRIVATE_KEY"),
+				Name:  "chain",
+				Usage: "Registration chain(s), comma-separated (base-sepolia, base, mainnet)",
+				Value: "base-sepolia",
 			},
-			&cli.StringFlag{
-				Name:  "private-key-file",
-				Usage: "Path to file containing secp256k1 private key (hex)",
-			},
-			&cli.StringFlag{
-				Name:  "rpc-url",
-				Usage: "Base Sepolia JSON-RPC URL",
-				Value: erc8004.DefaultRPCURL,
+			&cli.BoolFlag{
+				Name:  "sponsored",
+				Usage: "Use sponsored (zero-gas) registration when available",
 			},
 			&cli.StringFlag{
 				Name:  "endpoint",
@@ -789,79 +1235,257 @@ Requires a funded Base Sepolia wallet (private key).`,
 			},
 			&cli.StringFlag{
 				Name:  "name",
-				Usage: "Agent name",
-				Value: "Obol Stack",
+				Usage: "Agent name for registration",
+				Value: "Obol Agent",
 			},
 			&cli.StringFlag{
 				Name:  "description",
 				Usage: "Agent description",
+				Value: "Obol Stack AI agent with x402 payment-gated services",
+			},
+			&cli.StringFlag{
+				Name:  "image",
+				Usage: "Agent image URL for registration",
+			},
+			&cli.StringFlag{
+				Name:    "private-key-file",
+				Usage:   "Path to private key file (fallback if no remote-signer available)",
+				Sources: cli.EnvVars("ERC8004_PRIVATE_KEY"),
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			keyHex := cmd.String("private-key")
-			if keyHex == "" {
-				if keyFile := cmd.String("private-key-file"); keyFile != "" {
-					data, err := os.ReadFile(keyFile)
-					if err != nil {
-						return fmt.Errorf("read private key file: %w", err)
+			u := getUI(cmd)
+
+			// Resolve networks.
+			chainCSV := cmd.String("chain")
+			if u.IsTTY() && !cmd.IsSet("chain") {
+				nets := erc8004.SupportedNetworks()
+				options := make([]string, len(nets))
+				for i, n := range nets {
+					label := n.Name
+					if n.HasSponsor() {
+						label += " (sponsored, zero gas)"
 					}
-					keyHex = strings.TrimSpace(string(data))
+					options[i] = label
+				}
+				idx, err := u.Select("Registration network", options, 0)
+				if err != nil {
+					return err
+				}
+				chainCSV = nets[idx].Name
+			}
+
+			networks, err := erc8004.ResolveNetworks(chainCSV)
+			if err != nil {
+				return err
+			}
+
+			// Interactive confirmation of registration metadata.
+			agentName := cmd.String("name")
+			agentDesc := cmd.String("description")
+			if u.IsTTY() {
+				if !cmd.IsSet("name") {
+					if val, err := u.Input("Agent name", agentName); err == nil && val != "" {
+						agentName = val
+					}
+				}
+				if !cmd.IsSet("description") {
+					if val, err := u.Input("Agent description", agentDesc); err == nil && val != "" {
+						agentDesc = val
+					}
 				}
 			}
-			if keyHex == "" {
-				return fmt.Errorf("private key required: use --private-key-file <path> or set ERC8004_PRIVATE_KEY")
-			}
-			if cmd.IsSet("private-key") {
-				fmt.Fprintf(os.Stderr, "Warning: --private-key flag exposes key in process args. Use --private-key-file or ERC8004_PRIVATE_KEY env var instead.\n")
-			}
-			keyHex = strings.TrimPrefix(keyHex, "0x")
 
-			key, err := crypto.HexToECDSA(keyHex)
-			if err != nil {
-				return fmt.Errorf("invalid private key: %w", err)
-			}
-
+			// Resolve endpoint.
 			endpoint := cmd.String("endpoint")
 			if endpoint == "" {
 				tunnelURL, err := tunnel.GetTunnelURL(cfg)
 				if err != nil {
-					return fmt.Errorf("--endpoint required (tunnel auto-detect failed: %v)", err)
+					if u.IsTTY() {
+						endpoint, _ = u.Input("Service endpoint URL", "")
+					}
+					if endpoint == "" {
+						return fmt.Errorf("--endpoint required (tunnel auto-detect failed: %v)", err)
+					}
+				} else {
+					endpoint = tunnelURL
+					fmt.Printf("Auto-detected endpoint from tunnel: %s\n", endpoint)
 				}
-				endpoint = tunnelURL
-				fmt.Printf("Auto-detected endpoint from tunnel: %s\n", endpoint)
 			}
-
 			agentURI := endpoint + "/.well-known/agent-registration.json"
-			fmt.Printf("Registering agent on ERC-8004 Identity Registry (Base Sepolia)...\n")
+
+			// Determine signing method: remote-signer (preferred) or private key file (fallback).
+			useRemoteSigner := false
+			var signerNS string
+
+			if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+				if nsErr == nil {
+					useRemoteSigner = true
+					signerNS = ns
+				}
+			}
+
+			// Fallback to private key file if no remote-signer.
+			var fallbackKey string
+			if !useRemoteSigner {
+				keyFile := cmd.String("private-key-file")
+				if keyFile != "" {
+					data, err := os.ReadFile(keyFile)
+					if err != nil {
+						return fmt.Errorf("read private key file: %w", err)
+					}
+					fallbackKey = strings.TrimSpace(string(data))
+				}
+				if fallbackKey == "" {
+					return fmt.Errorf("no remote-signer wallet found and no --private-key-file provided.\nRun 'obol agent init' first, or use --private-key-file")
+				}
+			}
+
+			// Register on each network (best-effort).
+			fmt.Printf("Registering agent on ERC-8004 Agent Registry...\n")
 			fmt.Printf("  Agent URI: %s\n", agentURI)
-			fmt.Printf("  Registry:  %s\n", erc8004.IdentityRegistryBaseSepolia)
+			fmt.Printf("  Networks:  %s\n", chainCSV)
 
-			client, err := erc8004.NewClient(ctx, cmd.String("rpc-url"))
-			if err != nil {
-				return fmt.Errorf("connect to Base Sepolia: %w", err)
+			var successes int
+			for _, net := range networks {
+				fmt.Printf("\n  [%s] (chain ID %d)\n", net.Name, net.ChainID)
+				fmt.Printf("    Registry: %s\n", net.RegistryAddress)
+
+				sponsored := net.HasSponsor() && (cmd.Bool("sponsored") || !cmd.IsSet("sponsored"))
+
+				if sponsored && useRemoteSigner {
+					// Sponsored path via remote-signer.
+					if err := registerSponsored(ctx, cfg, net, agentURI, signerNS); err != nil {
+						fmt.Printf("    Warning: sponsored registration failed: %v\n", err)
+						continue
+					}
+				} else if useRemoteSigner {
+					// Direct on-chain via remote-signer (needs funded wallet).
+					if err := registerDirectViaSigner(ctx, cfg, net, agentURI, signerNS); err != nil {
+						fmt.Printf("    Warning: direct registration failed: %v\n", err)
+						continue
+					}
+				} else {
+					// Fallback: direct on-chain with private key file.
+					if err := registerDirectWithKey(ctx, net, agentURI, fallbackKey); err != nil {
+						fmt.Printf("    Warning: registration failed: %v\n", err)
+						continue
+					}
+				}
+
+				fmt.Printf("    CAIP-10:  %s\n", net.CAIP10Registry())
+				successes++
 			}
-			defer client.Close()
 
-			agentID, err := client.Register(ctx, key, agentURI)
-			if err != nil {
-				return fmt.Errorf("register: %w", err)
+			if successes == 0 {
+				return fmt.Errorf("registration failed on all networks")
 			}
 
-			txAddr := crypto.PubkeyToAddress(key.PublicKey)
-			fmt.Printf("\nAgent registered successfully!\n")
-			fmt.Printf("  Agent ID:  %s\n", agentID.String())
-			fmt.Printf("  Owner:     %s\n", txAddr.Hex())
-
-			x402Meta := []byte(`{"x402":true}`)
-			if err := client.SetMetadata(ctx, key, agentID, "x402", x402Meta); err != nil {
-				fmt.Printf("  Warning: failed to set x402 metadata: %v\n", err)
-			}
-
-			fmt.Printf("  Registry:  eip155:%d:%s\n", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia)
-
+			fmt.Printf("\nAgent registered on %d/%d networks.\n", successes, len(networks))
 			return nil
 		},
 	}
+}
+
+// registerSponsored performs a sponsored (zero-gas) registration via the remote-signer.
+func registerSponsored(ctx context.Context, cfg *config.Config, net erc8004.NetworkConfig, agentURI, namespace string) error {
+	fmt.Printf("    Using sponsored registration (zero gas)...\n")
+
+	// Port-forward to remote-signer.
+	pf, err := startSignerPortForward(cfg, namespace)
+	if err != nil {
+		return fmt.Errorf("port-forward to remote-signer: %w", err)
+	}
+	defer pf.Stop()
+
+	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
+
+	agentID, txHash, err := erc8004.SponsoredRegister(ctx, signer, agentURI, net)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("    Agent ID: %s\n", agentID.String())
+	fmt.Printf("    Tx hash:  %s\n", txHash)
+	return nil
+}
+
+// registerDirectViaSigner performs a direct on-chain registration via the remote-signer.
+func registerDirectViaSigner(ctx context.Context, cfg *config.Config, net erc8004.NetworkConfig, agentURI, namespace string) error {
+	fmt.Printf("    Using direct on-chain registration via remote-signer...\n")
+
+	// Port-forward to remote-signer.
+	pf, err := startSignerPortForward(cfg, namespace)
+	if err != nil {
+		return fmt.Errorf("port-forward to remote-signer: %w", err)
+	}
+	defer pf.Stop()
+
+	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
+
+	addr, err := signer.GetAddress(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("    Wallet:   %s\n", addr.Hex())
+
+	// Connect to eRPC for this network.
+	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	if err != nil {
+		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
+	}
+	defer client.Close()
+
+	// Create TransactOpts that delegates signing to the remote-signer.
+	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
+
+	agentID, err := client.RegisterWithOpts(ctx, opts, agentURI)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("    Agent ID: %s\n", agentID.String())
+	fmt.Printf("    Owner:    %s\n", addr.Hex())
+
+	// Set x402 metadata.
+	x402Meta := []byte(`{"x402":true}`)
+	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", x402Meta); err != nil {
+		fmt.Printf("    Warning: failed to set x402 metadata: %v\n", err)
+	}
+	return nil
+}
+
+// registerDirectWithKey performs a direct on-chain registration using a raw private key.
+func registerDirectWithKey(ctx context.Context, net erc8004.NetworkConfig, agentURI, keyHex string) error {
+	fmt.Printf("    Using direct on-chain registration with private key...\n")
+
+	keyHex = strings.TrimPrefix(keyHex, "0x")
+	key, err := crypto.HexToECDSA(keyHex)
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
+	}
+
+	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	if err != nil {
+		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
+	}
+	defer client.Close()
+
+	agentID, err := client.Register(ctx, key, agentURI)
+	if err != nil {
+		return err
+	}
+
+	txAddr := crypto.PubkeyToAddress(key.PublicKey)
+	fmt.Printf("    Agent ID: %s\n", agentID.String())
+	fmt.Printf("    Owner:    %s\n", txAddr.Hex())
+
+	x402Meta := []byte(`{"x402":true}`)
+	if err := client.SetMetadata(ctx, key, agentID, "x402", x402Meta); err != nil {
+		fmt.Printf("    Warning: failed to set x402 metadata: %v\n", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -893,9 +1517,11 @@ func runInferenceGateway(d *inference.Deployment, chain x402.ChainConfig) error 
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		<-sigCh
 		fmt.Println("\nShutting down gateway...")
+
 		if err := gw.Stop(); err != nil {
 			fmt.Fprintf(os.Stderr, "shutdown error: %v\n", err)
 		}
@@ -911,16 +1537,106 @@ func resolveX402Chain(name string) (x402.ChainConfig, error) {
 		return x402.BaseMainnet, nil
 	case "base-sepolia":
 		return x402.BaseSepolia, nil
-	case "polygon", "polygon-mainnet":
-		return x402.PolygonMainnet, nil
-	case "polygon-amoy":
-		return x402.PolygonAmoy, nil
-	case "avalanche", "avalanche-mainnet":
-		return x402.AvalancheMainnet, nil
-	case "avalanche-fuji":
-		return x402.AvalancheFuji, nil
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		// Ethereum mainnet USDC: verified 2025-10-28
+		return x402.ChainConfig{
+			NetworkID:      "ethereum",
+			USDCAddress:    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+			Decimals:       6,
+			EIP3009Name:    "USD Coin",
+			EIP3009Version: "2",
+		}, nil
 	default:
-		return x402.ChainConfig{}, fmt.Errorf("unsupported chain: %s", name)
+		return x402.ChainConfig{}, fmt.Errorf("unsupported chain: %s (supported: base-sepolia, base, ethereum)", name)
+	}
+}
+
+// startSignerPortForward launches a temporary port-forward to the remote-signer
+// service in the given namespace. Caller must call pf.Stop() when done.
+func startSignerPortForward(cfg *config.Config, namespace string) (*signerPortForwarder, error) {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",
+		"svc/remote-signer", ":9000", "-n", namespace)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("start port-forward: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	parsedPort := make(chan int, 1)
+	parseErr := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "Forwarding from") {
+				parts := strings.Split(line, ":")
+				if len(parts) >= 2 {
+					portPart := strings.Fields(parts[len(parts)-1])[0]
+					var p int
+					if _, scanErr := fmt.Sscanf(portPart, "%d", &p); scanErr == nil {
+						parsedPort <- p
+						io.Copy(io.Discard, stdoutPipe)
+						return
+					}
+				}
+			}
+		}
+		parseErr <- fmt.Errorf("port-forward exited without reporting a local port")
+	}()
+
+	select {
+	case p := <-parsedPort:
+		return &signerPortForwarder{cmd: cmd, localPort: p, done: done, cancel: cancel}, nil
+	case err := <-parseErr:
+		cancel()
+		return nil, err
+	case err := <-done:
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("port-forward exited: %w", err)
+		}
+		return nil, fmt.Errorf("port-forward exited unexpectedly")
+	case <-time.After(30 * time.Second):
+		cancel()
+		return nil, fmt.Errorf("timed out waiting for port-forward")
+	}
+}
+
+// signerPortForwarder manages a background port-forward to the remote-signer.
+type signerPortForwarder struct {
+	cmd       *exec.Cmd
+	localPort int
+	done      chan error
+	cancel    context.CancelFunc
+}
+
+// Stop terminates the port-forward process.
+func (pf *signerPortForwarder) Stop() {
+	pf.cancel()
+	select {
+	case <-pf.done:
+	case <-time.After(5 * time.Second):
+		if pf.cmd.Process != nil {
+			pf.cmd.Process.Kill()
+		}
 	}
 }
 
@@ -939,6 +1655,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
 			name := cmd.Args().First()
 			if name == "" {
 				return fmt.Errorf("usage: obol sell info <name>")
@@ -958,7 +1675,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 				k, keyErr = enclave.NewKey(d.EnclaveTag)
 			}
 
-			if cmd.Bool("json") {
+			if u.IsJSON() || cmd.Bool("json") {
 				out := map[string]any{
 					"name":                      d.Name,
 					"enclave_tag":               d.EnclaveTag,
@@ -1014,12 +1731,14 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 // kubectl helpers
 // ---------------------------------------------------------------------------
 
-func kubectlApply(cfg *config.Config, manifest interface{}) error {
+func kubectlApply(cfg *config.Config, manifest any) error {
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
 	}
+
 	bin, kc := kubectl.Paths(cfg)
+
 	return kubectl.Apply(bin, kc, raw)
 }
 
@@ -1027,7 +1746,9 @@ func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return "", err
 	}
+
 	bin, kc := kubectl.Paths(cfg)
+
 	return kubectl.Output(bin, kc, args...)
 }
 
@@ -1035,15 +1756,18 @@ func kubectlRun(cfg *config.Config, args ...string) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
+
 	bin, kc := kubectl.Paths(cfg)
+
 	return kubectl.Run(bin, kc, args...)
 }
 
-func mustMarshal(v interface{}) string {
+func mustMarshal(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return "{}"
 	}
+
 	return string(b)
 }
 
@@ -1051,7 +1775,22 @@ func valueOrNone(s string) string {
 	if s == "" {
 		return "(not set)"
 	}
+
 	return s
+}
+
+func parseMetadataPairs(values []string) (map[string]string, error) {
+	meta := make(map[string]string, len(values))
+	for _, raw := range values {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("invalid --register-metadata value %q: expected key=value", raw)
+		}
+
+		meta[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+
+	return meta, nil
 }
 
 func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable, error) {
@@ -1059,7 +1798,9 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 	if perRequest == "" {
 		perRequest = cmd.String("per-request")
 	}
+
 	perMTok := cmd.String("per-mtok")
+
 	var perHour string
 	if allowPerHour {
 		perHour = cmd.String("per-hour")
@@ -1072,21 +1813,27 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 		if _, err := schemas.ApproximateRequestPriceFromPerMTok(perMTok); err != nil {
 			return schemas.PriceTable{}, fmt.Errorf("invalid --per-mtok value %q: %w", perMTok, err)
 		}
+
 		return schemas.PriceTable{PerMTok: perMTok}, nil
 	case perHour != "":
+		if _, err := schemas.ApproximateRequestPriceFromPerHour(perHour); err != nil {
+			return schemas.PriceTable{}, fmt.Errorf("invalid --per-hour value %q: %w", perHour, err)
+		}
+
 		return schemas.PriceTable{PerHour: perHour}, nil
 	default:
 		if allowPerHour {
-			return schemas.PriceTable{}, fmt.Errorf("price required: use --price, --per-request, --per-mtok, or --per-hour")
+			return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, --per-mtok, or --per-hour")
 		}
-		return schemas.PriceTable{}, fmt.Errorf("price required: use --price, --per-request, or --per-mtok")
+
+		return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, or --per-mtok")
 	}
 }
 
 func formatPriceTableSummary(priceTable schemas.PriceTable) string {
 	switch {
 	case priceTable.PerRequest != "":
-		return fmt.Sprintf("%s USDC/request", priceTable.PerRequest)
+		return priceTable.PerRequest + " USDC/request"
 	case priceTable.PerMTok != "":
 		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
 			priceTable.EffectiveRequestPrice(),
@@ -1094,7 +1841,11 @@ func formatPriceTableSummary(priceTable schemas.PriceTable) string {
 			schemas.ApproxTokensPerRequest,
 		)
 	case priceTable.PerHour != "":
-		return fmt.Sprintf("%s USDC/hour", priceTable.PerHour)
+		return fmt.Sprintf("%s USDC/request (approx from %s USDC/hour @ %d min/request)",
+			priceTable.EffectiveRequestPrice(),
+			priceTable.PerHour,
+			schemas.ApproxMinutesPerRequest,
+		)
 	default:
 		return "0 USDC/request"
 	}
@@ -1105,9 +1856,11 @@ func formatRoutePriceSummary(route x402verifier.RouteRule) string {
 		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
 			route.Price, route.PerMTok, route.ApproxTokensPerRequest)
 	}
+
 	if route.Price != "" {
-		return fmt.Sprintf("%s USDC/request", route.Price)
+		return route.Price + " USDC/request"
 	}
+
 	return "0 USDC/request"
 }
 
@@ -1116,7 +1869,27 @@ func formatInferencePriceSummary(d *inference.Deployment) string {
 		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
 			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
 	}
-	return fmt.Sprintf("%s USDC/request", d.PricePerRequest)
+
+	return d.PricePerRequest + " USDC/request"
+}
+
+// loadProvenance reads a provenance JSON file and returns the parsed struct.
+func loadProvenance(path string) (*inference.Provenance, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var prov inference.Provenance
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&prov); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+
+	return &prov, nil
 }
 
 // createHostService creates a headless Service + Endpoints in the cluster
@@ -1133,32 +1906,32 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 
 	portNum, _ := strconv.Atoi(port)
 
-	svc := map[string]interface{}{
+	svc := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Service",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      name,
 			"namespace": ns,
 		},
-		"spec": map[string]interface{}{
-			"ports": []map[string]interface{}{
+		"spec": map[string]any{
+			"ports": []map[string]any{
 				{"port": portNum, "targetPort": portNum, "protocol": "TCP"},
 			},
 		},
 	}
-	ep := map[string]interface{}{
+	ep := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Endpoints",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      name,
 			"namespace": ns,
 		},
-		"subsets": []map[string]interface{}{
+		"subsets": []map[string]any{
 			{
-				"addresses": []map[string]interface{}{
+				"addresses": []map[string]any{
 					{"ip": hostIP},
 				},
-				"ports": []map[string]interface{}{
+				"ports": []map[string]any{
 					{"port": portNum, "protocol": "TCP"},
 				},
 			},
@@ -1168,9 +1941,11 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 	if err := kubectlApply(cfg, svc); err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
+
 	if err := kubectlApply(cfg, ep); err != nil {
 		return fmt.Errorf("failed to create endpoints: %w", err)
 	}
+
 	return nil
 }
 
@@ -1203,31 +1978,32 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("cannot determine host IP; ensure Docker is running or using k3s backend")
+
+	return "", errors.New("cannot determine host IP; ensure Docker is running or using k3s backend")
 }
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]interface{} {
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]any {
 	portNum, _ := strconv.Atoi(port)
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"type": "inference",
-		"upstream": map[string]interface{}{
+		"upstream": map[string]any{
 			"service":    d.Name,
 			"namespace":  ns,
 			"port":       portNum,
 			"healthPath": "/health",
 		},
-		"payment": map[string]interface{}{
+		"payment": map[string]any{
 			"scheme":  "exact",
 			"network": d.Chain,
 			"payTo":   d.WalletAddress,
-			"price":   map[string]interface{}{},
+			"price":   map[string]any{},
 		},
-		"path": fmt.Sprintf("/services/%s", d.Name),
+		"path": "/services/" + d.Name,
 	}
 
-	price := spec["payment"].(map[string]interface{})["price"].(map[string]interface{})
+	price := spec["payment"].(map[string]any)["price"].(map[string]any)
 	if pt.PerMTok != "" {
 		price["perMTok"] = pt.PerMTok
 	} else {
@@ -1235,27 +2011,31 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	}
 
 	if d.UpstreamURL != "" {
-		spec["model"] = map[string]interface{}{
+		spec["model"] = map[string]any{
 			"name":    "ollama",
 			"runtime": "ollama",
 		}
 	}
+
 	return spec
 }
 
 // removePricingRoute removes the x402-verifier pricing route for the given offer.
 func removePricingRoute(cfg *config.Config, name string) {
-	urlPath := fmt.Sprintf("/services/%s", name)
+	urlPath := "/services/" + name
+
 	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
 	if err != nil {
 		return
 	}
+
 	updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
 	for _, r := range pricingCfg.Routes {
 		if !strings.Contains(r.Pattern, urlPath) {
 			updatedRoutes = append(updatedRoutes, r)
 		}
 	}
+
 	if len(updatedRoutes) < len(pricingCfg.Routes) {
 		pricingCfg.Routes = updatedRoutes
 		if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {

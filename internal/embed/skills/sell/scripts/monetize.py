@@ -203,7 +203,9 @@ def get_effective_price(spec):
         return price["perRequest"]
     if price.get("perMTok"):
         return _approximate_request_price(price["perMTok"])
-    return price.get("perHour") or "0"
+    if price.get("perHour"):
+        return _approximate_request_price_from_per_hour(price["perHour"])
+    return "0"
 
 
 def _approximate_request_price(per_mtok):
@@ -213,6 +215,23 @@ def _approximate_request_price(per_mtok):
     except InvalidOperation as exc:
         raise ValueError(f"invalid perMTok price: {per_mtok!r}") from exc
     return _decimal_to_string(value / APPROX_TOKENS_PER_REQUEST)
+
+
+# Autoresearch experiment budget: 5 minutes per experiment.
+APPROX_MINUTES_PER_REQUEST = 5
+
+
+def _approximate_request_price_from_per_hour(per_hour):
+    """Approximate a per-request price from a per-hour price.
+
+    Uses APPROX_MINUTES_PER_REQUEST (5 min, matching autoresearch budget).
+    Formula: perRequest = perHour * (minutesPerRequest / 60)
+    """
+    try:
+        value = Decimal(str(per_hour).strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid perHour price: {per_hour!r}") from exc
+    return _decimal_to_string(value * APPROX_MINUTES_PER_REQUEST / 60)
 
 
 def _decimal_to_string(value):
@@ -235,7 +254,10 @@ def describe_price(spec):
             f"(approx from {price['perMTok']} USDC/MTok @ {int(APPROX_TOKENS_PER_REQUEST)} tok/request)"
         )
     if price.get("perHour"):
-        return f"{price['perHour']} USDC/hour"
+        return (
+            f"{get_effective_price(spec)} USDC/request "
+            f"(approx from {price['perHour']} USDC/hour @ {APPROX_MINUTES_PER_REQUEST} min/request)"
+        )
     return "0 USDC/request"
 
 
@@ -799,6 +821,16 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
     port = upstream.get("port", 11434)
     url_path = spec.get("path", f"/services/{name}")
 
+    # Derive the HTTPRoute request timeout from payment.maxTimeoutSeconds.
+    # GPU workers may need 300s+ for experiments; Traefik's default is 30s.
+    # Add 120s overhead for facilitator verification + network latency.
+    payment = spec.get("payment", {})
+    try:
+        max_timeout = int(payment.get("maxTimeoutSeconds", 0) or 0)
+    except (ValueError, TypeError):
+        max_timeout = 0
+    route_timeout_seconds = max(max_timeout + 120, 60) if max_timeout > 30 else 0
+
     # Build the HTTPRoute resource.
     # Use ExtensionRef filter (not traefik.io/middleware annotation) because
     # Traefik's Gateway API provider ignores annotations — only ExtensionRef
@@ -868,6 +900,14 @@ def stage_route_published(spec, ns, name, token, ssl_ctx):
             ],
         },
     }
+
+    # Set request timeout on the HTTPRoute rule when the upstream may take
+    # longer than Traefik's default 30s (e.g. GPU experiment workers).
+    if route_timeout_seconds > 0:
+        httproute["spec"]["rules"][0]["timeouts"] = {
+            "request": f"{route_timeout_seconds}s",
+        }
+        print(f"  HTTPRoute timeout: {route_timeout_seconds}s (from maxTimeoutSeconds={max_timeout})")
 
     # Get UID for OwnerReference.
     so = api_get(
@@ -977,11 +1017,11 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
 
     # Set on-chain metadata for indexed discovery (MetadataSet events).
     # Buyers can filter agents by these keys without fetching every registration JSON.
-    offer_type = spec.get("type", "http")
     try:
-        print(f"  Setting on-chain metadata: x402.supported=true, service.type={offer_type}")
-        _set_metadata_on_chain(agent_id, "x402.supported", b"\x01")
-        _set_metadata_on_chain(agent_id, "service.type", offer_type.encode("utf-8"))
+        indexed = build_indexed_metadata(spec)
+        print("  Setting on-chain metadata for indexed discovery")
+        for key, value in indexed.items():
+            _set_metadata_on_chain(agent_id, key, value)
     except Exception as e:
         print(f"  Warning: on-chain metadata failed (non-blocking): {e}")
 
@@ -990,30 +1030,42 @@ def stage_registered(spec, ns, name, token, ssl_ctx):
     return True
 
 
-def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx):
-    """Publish the ERC-8004 AgentRegistration document.
+def _coerce_registration_metadata(registration):
+    """Return registration metadata as a string-key/string-value dict."""
+    raw = registration.get("metadata", {}) if isinstance(registration, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    meta = {}
+    for key, value in raw.items():
+        if key is None:
+            continue
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        if value is None:
+            continue
+        meta[key_text] = str(value)
+    return meta
 
-    Creates four agent-managed resources (all with ownerReferences for GC):
-      1. ConfigMap  so-<name>-registration  — the JSON document
-      2. Deployment so-<name>-registration  — busybox httpd serving the ConfigMap
-      3. Service    so-<name>-registration  — ClusterIP targeting the deployment
-      4. HTTPRoute  so-<name>-wellknown     — routes /.well-known/agent-registration.json
 
-    On ServiceOffer deletion, K8s garbage collection tears everything down.
-
-    NOTE: ERC-8004 allows multiple services in a single registration.json.
-    Currently each ServiceOffer creates its own registration document. When
-    multiple offers share one agent identity, this should evolve to aggregate
-    all offers' services into a single /.well-known/agent-registration.json.
-    """
+def build_indexed_metadata(spec):
+    """Build metadata entries for indexed on-chain discovery."""
+    offer_type = spec.get("type", "http")
     registration = spec.get("registration", {})
-    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+    entries = {
+        "x402.supported": b"\x01",
+        "service.type": str(offer_type).encode("utf-8"),
+    }
+    for key, value in _coerce_registration_metadata(registration).items():
+        entries[f"metadata.{key}"] = value.encode("utf-8")
+    return entries
+
+
+def build_registration_doc(spec, name, agent_id, base_url):
+    """Build the ERC-8004 registration document for a ServiceOffer."""
+    registration = spec.get("registration", {})
     url_path = spec.get("path", f"/services/{name}")
 
-    # ── 1. Build the registration JSON ─────────────────────────────────────
-    # ERC-8004 REQUIRED fields: type, name, description, image, services,
-    # x402Support, active, registrations. All are always emitted.
-    # Build a richer description from spec fields.
     offer_type = spec.get("type", "http")
     price_info = get_effective_price(spec)
     model_info = spec.get("model", {})
@@ -1021,13 +1073,11 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
     if model_info.get("name"):
         default_desc = f"{model_info['name']} inference via x402 micropayments ({price_info} USDC/request)"
 
-    # OASF skills and domains for machine-readable capability discovery.
-    # Defaults based on service type; overridden by spec.registration.skills/domains.
     default_skills = {
-        "inference": ["natural_language_processing/text_generation/chat_completion"],
+        "inference": ["natural_language_processing/natural_language_generation/text_completion"],
     }
     default_domains = {
-        "inference": ["technology/artificial_intelligence"],
+        "inference": ["technology/data_science"],
     }
     skills = registration.get("skills", default_skills.get(offer_type, []))
     domains = registration.get("domains", default_domains.get(offer_type, []))
@@ -1054,7 +1104,6 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
         "supportedTrust": registration.get("supportedTrust", []),
     }
 
-    # Add OASF service entry for structured capability discovery.
     if skills or domains:
         oasf_entry = {"name": "OASF", "version": "0.8"}
         if skills:
@@ -1068,6 +1117,37 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
             if svc.get("endpoint"):
                 doc["services"].append(svc)
 
+    metadata = _coerce_registration_metadata(registration)
+    if metadata:
+        doc["metadata"] = metadata
+
+    provenance = spec.get("provenance")
+    if provenance:
+        doc["provenance"] = {k: v for k, v in provenance.items() if v}
+
+    return doc
+
+
+def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx):
+    """Publish the ERC-8004 AgentRegistration document.
+
+    Creates four agent-managed resources (all with ownerReferences for GC):
+      1. ConfigMap  so-<name>-registration  — the JSON document
+      2. Deployment so-<name>-registration  — busybox httpd serving the ConfigMap
+      3. Service    so-<name>-registration  — ClusterIP targeting the deployment
+      4. HTTPRoute  so-<name>-wellknown     — routes /.well-known/agent-registration.json
+
+    On ServiceOffer deletion, K8s garbage collection tears everything down.
+
+    NOTE: ERC-8004 allows multiple services in a single registration.json.
+    Currently each ServiceOffer creates its own registration document. When
+    multiple offers share one agent identity, this should evolve to aggregate
+    all offers' services into a single /.well-known/agent-registration.json.
+    """
+    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080")
+
+    # ── 1. Build the registration JSON ─────────────────────────────────────
+    doc = build_registration_doc(spec, name, agent_id, base_url)
     doc_json = json.dumps(doc, indent=2)
 
     # ── Get ServiceOffer UID for ownerReferences ───────────────────────────
@@ -1225,9 +1305,29 @@ def _publish_registration_json(spec, ns, name, agent_id, tx_hash, token, ssl_ctx
     print(f"  Published registration at /.well-known/agent-registration.json")
 
 
-# ---------------------------------------------------------------------------
-# /skill.md — aggregate agent-optimized service catalog
-# ---------------------------------------------------------------------------
+def _apply_resource(collection_path, name, resource, token, ssl_ctx):
+    """Create-or-update a Kubernetes resource (idempotent).
+
+    Uses a direct HTTP GET to distinguish 404 (create) from other errors
+    (permission denied, server error) rather than catching SystemExit from
+    api_get which treats all failures as 404.
+    """
+    api_server = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    api_port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+    url = f"https://{api_server}:{api_port}{collection_path}/{name}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
+        # Exists — patch it.
+        api_patch(f"{collection_path}/{name}", resource, token, ssl_ctx, patch_type="merge")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            api_post(collection_path, resource, token, ssl_ctx)
+        else:
+            body = e.read().decode() if e.fp else ""
+            print(f"  Failed to check {name}: HTTP {e.code}: {body[:200]}", file=sys.stderr)
+            raise RuntimeError(f"K8s API error {e.code} for {name}") from e
+
 
 def _build_skill_md(items, base_url):
     """Build /skill.md content from all Ready ServiceOffer items."""
@@ -1237,7 +1337,6 @@ def _build_skill_md(items, base_url):
         if is_condition_true(conditions, "Ready"):
             ready.append(item)
 
-    # Resolve agent name from the first offer's registration, or fallback.
     agent_name = "Obol Stack"
     if ready:
         reg = ready[0].get("spec", {}).get("registration", {})
@@ -1257,7 +1356,6 @@ def _build_skill_md(items, base_url):
         lines.append("**No services currently available.**\n")
         return "\n".join(lines)
 
-    # ── Summary table ─────────────────────────────────────────────────────
     lines.append("## Services\n")
     lines.append("| Service | Type | Model | Price | Endpoint |")
     lines.append("|---------|------|-------|-------|----------|")
@@ -1271,7 +1369,6 @@ def _build_skill_md(items, base_url):
         lines.append(f"| [{name}](#{name}) | {offer_type} | {model_name} | {price_desc} | `{base_url}{path}` |")
     lines.append("")
 
-    # ── How to pay ────────────────────────────────────────────────────────
     lines.append("## How to Pay (x402 Protocol)\n")
     lines.append("1. **Send a normal HTTP request** to the service endpoint")
     lines.append("2. **Receive HTTP 402** with `X-Payment` response header containing JSON pricing:")
@@ -1303,7 +1400,6 @@ def _build_skill_md(items, base_url):
     lines.append("For programmatic payment, use [x402-go](https://github.com/coinbase/x402/tree/main/go), [x402-js](https://github.com/coinbase/x402/tree/main/typescript), or sign ERC-3009 directly with ethers/viem/web3.py.")
     lines.append("")
 
-    # ── Per-service details ───────────────────────────────────────────────
     lines.append("## Service Details\n")
     for item in ready:
         spec = item.get("spec", {})
@@ -1335,7 +1431,6 @@ def _build_skill_md(items, base_url):
             lines.append("```")
         lines.append("")
 
-    # ── Reference ─────────────────────────────────────────────────────────
     lines.append("## USDC Contract Addresses\n")
     lines.append("| Network | Address |")
     lines.append("|---------|---------|")
@@ -1374,7 +1469,6 @@ def _publish_skill_md(items, token, ssl_ctx):
     route_name = "obol-skill-md-route"
     labels = {"app": deploy_name, "obol.org/managed-by": "monetize"}
 
-    # ── 1. ConfigMap ──────────────────────────────────────────────────────
     configmap = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -1386,7 +1480,6 @@ def _publish_skill_md(items, token, ssl_ctx):
     }
     _apply_resource(f"/api/v1/namespaces/{agent_ns}/configmaps", cm_name, configmap, token, ssl_ctx)
 
-    # ── 2. Deployment (busybox httpd) ─────────────────────────────────────
     deployment = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -1438,7 +1531,6 @@ def _publish_skill_md(items, token, ssl_ctx):
     }
     _apply_resource(f"/apis/apps/v1/namespaces/{agent_ns}/deployments", deploy_name, deployment, token, ssl_ctx)
 
-    # ── 3. Service ────────────────────────────────────────────────────────
     service = {
         "apiVersion": "v1",
         "kind": "Service",
@@ -1451,7 +1543,6 @@ def _publish_skill_md(items, token, ssl_ctx):
     }
     _apply_resource(f"/api/v1/namespaces/{agent_ns}/services", svc_name, service, token, ssl_ctx)
 
-    # ── 4. HTTPRoute (public, no ForwardAuth) ─────────────────────────────
     httproute = {
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
@@ -1475,30 +1566,6 @@ def _publish_skill_md(items, token, ssl_ctx):
 
     ready_count = sum(1 for i in items if is_condition_true(i.get("status", {}).get("conditions", []), "Ready"))
     print(f"  Published /skill.md ({ready_count} service(s))")
-
-
-def _apply_resource(collection_path, name, resource, token, ssl_ctx):
-    """Create-or-update a Kubernetes resource (idempotent).
-
-    Uses a direct HTTP GET to distinguish 404 (create) from other errors
-    (permission denied, server error) rather than catching SystemExit from
-    api_get which treats all failures as 404.
-    """
-    api_server = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
-    api_port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
-    url = f"https://{api_server}:{api_port}{collection_path}/{name}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    try:
-        urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
-        # Exists — patch it.
-        api_patch(f"{collection_path}/{name}", resource, token, ssl_ctx, patch_type="merge")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            api_post(collection_path, resource, token, ssl_ctx)
-        else:
-            body = e.read().decode() if e.fp else ""
-            print(f"  Failed to check {name}: HTTP {e.code}: {body[:200]}", file=sys.stderr)
-            raise RuntimeError(f"K8s API error {e.code} for {name}") from e
 
 
 def reconcile(ns, name, token, ssl_ctx):

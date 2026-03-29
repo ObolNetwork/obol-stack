@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,11 +17,11 @@ type ArtifactHubClient struct {
 
 // ArtifactHubPackage represents the API response for a package
 type ArtifactHubPackage struct {
-	Name       string                   `json:"name"`
-	Version    string                   `json:"version"`
-	Repository ArtifactHubRepository    `json:"repository"`
-	ContentURL string                   `json:"content_url"`
-	AvailableVersions []ArtifactHubVersion `json:"available_versions"`
+	Name              string                `json:"name"`
+	Version           string                `json:"version"`
+	Repository        ArtifactHubRepository `json:"repository"`
+	ContentURL        string                `json:"content_url"`
+	AvailableVersions []ArtifactHubVersion  `json:"available_versions"`
 }
 
 // ArtifactHubRepository represents repository info in the API response
@@ -86,6 +87,7 @@ func (c *ArtifactHubClient) ResolveChart(ref string) (*ChartInfo, error) {
 			return nil, fmt.Errorf("chart not found: %s/%s version %s\n"+
 				"Verify the repository, chart name, and version are correct on https://artifacthub.io", repoName, chartName, version)
 		}
+
 		return nil, fmt.Errorf("chart not found: %s/%s\n"+
 			"Verify the repository and chart name are correct on https://artifacthub.io", repoName, chartName)
 	}
@@ -103,7 +105,7 @@ func (c *ArtifactHubClient) ResolveChart(ref string) (*ChartInfo, error) {
 
 	// Validate we got the required fields
 	if pkg.Repository.URL == "" {
-		return nil, fmt.Errorf("ArtifactHub returned incomplete data: missing repository URL")
+		return nil, errors.New("ArtifactHub returned incomplete data: missing repository URL")
 	}
 
 	return &ChartInfo{

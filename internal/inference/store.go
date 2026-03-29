@@ -86,14 +86,31 @@ type Deployment struct {
 	ModelHash string `json:"model_hash,omitempty"`
 
 	// NoPaymentGate disables the built-in x402 payment middleware when the
-	// gateway is routed through the cluster's x402 verifier via Traefik.
+	// gateway runs behind the cluster's x402 verifier to avoid double-gating.
 	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
+
+	// Provenance holds optional metadata about how the model was produced
+	// (e.g. autoresearch experiment results). Stored alongside the deployment
+	// config and passed to the registration document when selling.
+	Provenance *Provenance `json:"provenance,omitempty"`
 
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 
 	// UpdatedAt is the RFC3339 timestamp of the most recent update.
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// Provenance tracks how a model or service was produced.
+// JSON field names use camelCase so the same document can flow through
+// publish.py -> --provenance-file -> ServiceOffer -> agent-registration.json.
+type Provenance struct {
+	Framework    string `json:"framework,omitempty"`    // e.g. "autoresearch"
+	MetricName   string `json:"metricName,omitempty"`   // e.g. "val_bpb"
+	MetricValue  string `json:"metricValue,omitempty"`  // e.g. "0.9973"
+	ExperimentID string `json:"experimentId,omitempty"` // commit hash or UUID
+	TrainHash    string `json:"trainHash,omitempty"`    // e.g. "sha256:..."
+	ParamCount   string `json:"paramCount,omitempty"`   // e.g. "50000000"
 }
 
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,
@@ -106,6 +123,7 @@ func ValidateName(name string) error {
 	if !validDeploymentName.MatchString(name) {
 		return fmt.Errorf("invalid deployment name %q: must be 1-63 alphanumeric chars, hyphens, or underscores", name)
 	}
+
 	return nil
 }
 
@@ -136,6 +154,7 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	if err := ValidateName(d.Name); err != nil {
 		return err
 	}
+
 	if _, err := os.Stat(s.configPath(d.Name)); err == nil && !force {
 		return fmt.Errorf("%w: %s", ErrDeploymentExists, d.Name)
 	}
@@ -144,25 +163,32 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	if d.EnclaveTag == "" {
 		d.EnclaveTag = "com.obol.inference." + d.Name
 	}
+
 	if d.ListenAddr == "" {
 		d.ListenAddr = ":8402"
 	}
+
 	if d.UpstreamURL == "" {
 		d.UpstreamURL = "http://localhost:11434"
 	}
+
 	if d.PricePerRequest == "" {
 		d.PricePerRequest = "0.001"
 	}
+
 	if d.Chain == "" {
 		d.Chain = "base-sepolia"
 	}
+
 	if d.FacilitatorURL == "" {
 		d.FacilitatorURL = "https://facilitator.x402.rs"
 	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	if d.CreatedAt == "" {
 		d.CreatedAt = now
 	}
+
 	d.UpdatedAt = now
 
 	if err := os.MkdirAll(s.dir(d.Name), 0o700); err != nil {
@@ -173,9 +199,11 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	if err != nil {
 		return fmt.Errorf("inference store: marshal: %w", err)
 	}
+
 	if err := os.WriteFile(s.configPath(d.Name), data, 0o600); err != nil {
 		return fmt.Errorf("inference store: write: %w", err)
 	}
+
 	return nil
 }
 
@@ -184,17 +212,21 @@ func (s *Store) Get(name string) (*Deployment, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+
 	data, err := os.ReadFile(s.configPath(name))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w: %s", ErrDeploymentNotFound, name)
 		}
+
 		return nil, fmt.Errorf("inference store: read %s: %w", name, err)
 	}
+
 	var d Deployment
 	if err := json.Unmarshal(data, &d); err != nil {
 		return nil, fmt.Errorf("inference store: parse %s: %w", name, err)
 	}
+
 	return &d, nil
 }
 
@@ -205,20 +237,25 @@ func (s *Store) List() ([]*Deployment, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil // empty — not an error
 		}
+
 		return nil, fmt.Errorf("inference store: list: %w", err)
 	}
 
 	var deployments []*Deployment
+
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
+
 		d, err := s.Get(e.Name())
 		if err != nil {
 			continue // skip malformed entries
 		}
+
 		deployments = append(deployments, d)
 	}
+
 	return deployments, nil
 }
 
@@ -229,12 +266,15 @@ func (s *Store) Delete(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
+
 	if _, err := s.Get(name); err != nil {
 		return err
 	}
+
 	if err := os.RemoveAll(s.dir(name)); err != nil {
 		return fmt.Errorf("inference store: delete %s: %w", name, err)
 	}
+
 	return nil
 }
 
@@ -243,10 +283,13 @@ func (s *Store) Update(d *Deployment) error {
 	if _, err := s.Get(d.Name); err != nil {
 		return err
 	}
+
 	d.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
 	data, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return fmt.Errorf("inference store: marshal: %w", err)
 	}
+
 	return os.WriteFile(s.configPath(d.Name), data, 0o600)
 }

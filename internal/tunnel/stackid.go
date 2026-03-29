@@ -15,5 +15,6 @@ func getStackID(cfg *config.Config) string {
 	if err != nil {
 		return ""
 	}
+
 	return strings.TrimSpace(string(data))
 }

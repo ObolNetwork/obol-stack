@@ -14,7 +14,8 @@ import (
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".stack-id"), []byte("test-cluster"), 0644)
+	os.WriteFile(filepath.Join(dir, ".stack-id"), []byte("test-cluster"), 0o644)
+
 	return &config.Config{ConfigDir: dir, DataDir: dir, BinDir: dir}
 }
 
@@ -42,18 +43,23 @@ func TestBuildLiteLLMRoutedOverlay_Anthropic(t *testing.T) {
 	if openai.Name != "openai" || openai.Disabled {
 		t.Errorf("openai: name=%q disabled=%v, want openai/false", openai.Name, openai.Disabled)
 	}
+
 	if openai.BaseURL != "http://litellm.llm.svc.cluster.local:4000/v1" {
 		t.Errorf("openai.BaseURL = %q", openai.BaseURL)
 	}
+
 	if openai.APIKeyEnvVar != "OPENAI_API_KEY" {
 		t.Errorf("openai.APIKeyEnvVar = %q, want OPENAI_API_KEY", openai.APIKeyEnvVar)
 	}
+
 	if openai.APIKey != "sk-obol-test-cluster" {
 		t.Errorf("openai.APIKey = %q, want sk-obol-test-cluster", openai.APIKey)
 	}
+
 	if openai.API != "openai-completions" {
 		t.Errorf("openai.API = %q, want openai-completions", openai.API)
 	}
+
 	if len(openai.Models) != 1 || openai.Models[0].ID != "claude-sonnet-4-5-20250929" {
 		t.Errorf("openai.Models = %v", openai.Models)
 	}
@@ -64,9 +70,11 @@ func TestBuildLiteLLMRoutedOverlay_Anthropic(t *testing.T) {
 			t.Errorf("Providers[%d] (%s) should be disabled", idx, result.Providers[idx].Name)
 		}
 	}
+
 	if result.Providers[1].Name != "anthropic" {
 		t.Errorf("Providers[1].Name = %q, want anthropic", result.Providers[1].Name)
 	}
+
 	if result.Providers[2].Name != "ollama" {
 		t.Errorf("Providers[2].Name = %q, want ollama", result.Providers[2].Name)
 	}
@@ -111,6 +119,7 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	if !strings.Contains(yaml, "openai:\n    enabled: true") {
 		t.Errorf("YAML missing enabled openai provider, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
 		t.Errorf("YAML missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
@@ -139,6 +148,7 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	if !strings.Contains(yaml, "anthropic:\n    enabled: false") {
 		t.Errorf("YAML missing disabled anthropic, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "ollama:\n    enabled: false") {
 		t.Errorf("YAML missing disabled ollama, got:\n%s", yaml)
 	}
@@ -152,12 +162,15 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 	if !strings.Contains(yaml, "agentModel: openai/llama3.2:3b") {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
 		t.Errorf("default overlay missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "id: llama3.2:3b") {
 		t.Errorf("default overlay missing first model, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "id: mistral:7b") {
 		t.Errorf("default overlay missing second model, got:\n%s", yaml)
 	}
@@ -170,9 +183,11 @@ func TestGenerateOverlayValues_OllamaDefaultNoModels(t *testing.T) {
 	if strings.Contains(yaml, "agentModel:") {
 		t.Errorf("default overlay should not set agentModel when no models available, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "models: []") {
 		t.Errorf("default overlay should have empty models list, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
 		t.Errorf("default overlay missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
@@ -183,6 +198,7 @@ func TestGenerateOverlayValues_ExternalSecrets(t *testing.T) {
 	if !strings.Contains(yaml, "extraEnvFromSecrets") {
 		t.Errorf("overlay missing extraEnvFromSecrets, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "openclaw-user-secrets") {
 		t.Errorf("overlay missing external secret ref, got:\n%s", yaml)
 	}
@@ -195,6 +211,7 @@ func TestGenerateOverlayValues_AgentBaseURL(t *testing.T) {
 	if !strings.Contains(yaml, "AGENT_BASE_URL") {
 		t.Errorf("overlay missing AGENT_BASE_URL, got:\n%s", yaml)
 	}
+
 	if !strings.Contains(yaml, "value: https://mystack.example.com") {
 		t.Errorf("overlay missing AGENT_BASE_URL value, got:\n%s", yaml)
 	}
@@ -231,12 +248,15 @@ func TestCollectSensitiveData_StripsLiterals(t *testing.T) {
 	if data["OPENAI_API_KEY"] != "sk-test" {
 		t.Fatalf("missing OPENAI_API_KEY in extracted data: %+v", data)
 	}
+
 	if data["TELEGRAM_BOT_TOKEN"] != "tg-token" {
 		t.Fatalf("missing TELEGRAM_BOT_TOKEN in extracted data: %+v", data)
 	}
+
 	if imported.Providers[0].APIKey != "" {
 		t.Fatalf("provider API key was not stripped from overlay data")
 	}
+
 	if imported.Channels.Telegram.BotToken != "" {
 		t.Fatalf("telegram token was not stripped from overlay data")
 	}
@@ -256,18 +276,23 @@ func TestBuildDirectProviderOverlay_OpenAI(t *testing.T) {
 	if result.AgentModel != "openai/gpt-5.2" {
 		t.Fatalf("AgentModel = %q, want openai/gpt-5.2", result.AgentModel)
 	}
+
 	foundEnabled := false
+
 	for _, p := range result.Providers {
 		if p.Name == "openai" {
 			foundEnabled = true
+
 			if p.Disabled {
 				t.Fatalf("openai provider should be enabled")
 			}
+
 			if p.APIKeyEnvVar != "OPENAI_API_KEY" {
 				t.Fatalf("openai APIKeyEnvVar = %q", p.APIKeyEnvVar)
 			}
 		}
 	}
+
 	if !foundEnabled {
 		t.Fatalf("openai provider not found in overlay")
 	}
@@ -287,30 +312,39 @@ func TestBuildDirectProviderOverlay_Anthropic(t *testing.T) {
 	if result.AgentModel != "anthropic/claude-sonnet-4-6" {
 		t.Fatalf("AgentModel = %q, want anthropic/claude-sonnet-4-6", result.AgentModel)
 	}
+
 	foundEnabled := false
+
 	for _, p := range result.Providers {
 		if p.Name == "anthropic" {
 			foundEnabled = true
+
 			if p.Disabled {
 				t.Fatalf("anthropic provider should be enabled")
 			}
+
 			if p.BaseURL != "https://api.anthropic.com" {
 				t.Fatalf("anthropic BaseURL = %q, want https://api.anthropic.com (no /v1 suffix)", p.BaseURL)
 			}
+
 			if p.API != "anthropic-messages" {
 				t.Fatalf("anthropic API = %q, want anthropic-messages", p.API)
 			}
+
 			if p.APIKeyEnvVar != "ANTHROPIC_API_KEY" {
 				t.Fatalf("anthropic APIKeyEnvVar = %q", p.APIKeyEnvVar)
 			}
 		}
+
 		if p.Name == "openai" && !p.Disabled {
 			t.Fatalf("openai provider should be disabled for anthropic direct")
 		}
+
 		if p.Name == "ollama" && !p.Disabled {
 			t.Fatalf("ollama provider should be disabled for anthropic direct")
 		}
 	}
+
 	if !foundEnabled {
 		t.Fatalf("anthropic provider not found in overlay")
 	}
@@ -339,14 +373,17 @@ models:
 erpc:
   url: http://erpc.erpc.svc.cluster.local/rpc
 `
+
 	t.Run("add models", func(t *testing.T) {
 		updated, changed := patchOverlayModelList(overlay, []string{"llama3.2:3b", "claude-sonnet-4-5-20250929", "gpt-4o"})
 		if !changed {
 			t.Fatal("expected change")
 		}
+
 		if !strings.Contains(updated, "id: claude-sonnet-4-5-20250929") {
 			t.Errorf("missing claude model in updated overlay:\n%s", updated)
 		}
+
 		if !strings.Contains(updated, "id: gpt-4o") {
 			t.Errorf("missing gpt model in updated overlay:\n%s", updated)
 		}
@@ -361,6 +398,7 @@ erpc:
 		if !changed {
 			t.Fatal("expected change")
 		}
+
 		if !strings.Contains(updated, "models: []") {
 			t.Errorf("expected empty models list:\n%s", updated)
 		}
@@ -372,6 +410,7 @@ erpc:
     enabled: true
     baseUrl: https://api.anthropic.com
 `
+
 		_, changed := patchOverlayModelList(nonLiteLLM, []string{"claude-sonnet-4-5-20250929"})
 		if changed {
 			t.Fatal("should not patch non-LiteLLM overlay")
@@ -382,10 +421,12 @@ erpc:
 		emptyOverlay := strings.Replace(overlay,
 			"    models:\n      - id: llama3.2:3b\n        name: Llama 3.2 3B",
 			"    models: []", 1)
+
 		updated, changed := patchOverlayModelList(emptyOverlay, []string{"llama3.2:3b"})
 		if !changed {
 			t.Fatal("expected change")
 		}
+
 		if !strings.Contains(updated, "id: llama3.2:3b") {
 			t.Errorf("missing model in updated overlay:\n%s", updated)
 		}
@@ -398,9 +439,10 @@ func TestPatchAgentModelsJSON(t *testing.T) {
 		id := "test"
 		namespace := fmt.Sprintf("%s-%s", appName, id)
 		agentDir := filepath.Join(cfg.DataDir, namespace, "openclaw-data", ".openclaw", "agents", "main", "agent")
-		os.MkdirAll(agentDir, 0755)
+		os.MkdirAll(agentDir, 0o755)
 
 		models := []string{"claude-sonnet-4-6", "gpt-4o", "llama3.2:3b"}
+
 		err := patchAgentModelsJSON(cfg, id, models, "sk-obol-test")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -415,9 +457,11 @@ func TestPatchAgentModelsJSON(t *testing.T) {
 		if !strings.Contains(content, "claude-sonnet-4-6") {
 			t.Errorf("missing claude model in models.json")
 		}
+
 		if !strings.Contains(content, "litellm.llm.svc.cluster.local:4000") {
 			t.Errorf("missing LiteLLM URL in models.json")
 		}
+
 		if !strings.Contains(content, "sk-obol-test") {
 			t.Errorf("missing master key in models.json")
 		}
@@ -425,6 +469,7 @@ func TestPatchAgentModelsJSON(t *testing.T) {
 		if strings.Contains(content, "llmspy") {
 			t.Errorf("models.json should not contain llmspy")
 		}
+
 		if strings.Contains(content, "ollama") {
 			t.Errorf("models.json should not contain stale ollama provider")
 		}
@@ -432,6 +477,7 @@ func TestPatchAgentModelsJSON(t *testing.T) {
 
 	t.Run("skips when agent dir does not exist", func(t *testing.T) {
 		cfg := testConfig(t)
+
 		err := patchAgentModelsJSON(cfg, "nonexistent", []string{"model"}, "key")
 		if err != nil {
 			t.Fatalf("should skip gracefully, got error: %v", err)

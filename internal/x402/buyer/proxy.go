@@ -54,6 +54,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 	if state == nil {
 		state = &StateStore{}
 	}
+
 	if state.consumed == nil {
 		state.consumed = make(map[string]map[string]struct{})
 	}
@@ -90,13 +91,16 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 
 	for name, upstream := range cfg.Upstreams {
 		authPool := auths[name]
+
 		filtered := make([]*PreSignedAuth, 0, len(authPool))
 		for _, auth := range authPool {
 			if auth == nil || p.state.IsConsumed(name, auth.Nonce) {
 				continue
 			}
+
 			filtered = append(filtered, auth)
 		}
+
 		if len(filtered) == 0 {
 			log.Printf("WARNING: upstream %q has 0 remaining pre-signed auths", name)
 		}
@@ -117,6 +121,7 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 				return p.state.MarkConsumed(name, auth.Nonce)
 			},
 		)
+
 		handler, err := p.buildUpstreamHandler(name, remoteModel, upstream, signer)
 		if err != nil {
 			return fmt.Errorf("build handler for %q: %w", name, err)
@@ -203,13 +208,14 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 			pr.Out.Host = target.Host
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if resp != nil && resp.Request != nil && resp.Request.Header.Get("X-PAYMENT") != "" {
+			if resp != nil && resp.Request != nil && resp.Request.Header.Get("X-Payment") != "" {
 				switch {
 				case resp.StatusCode < http.StatusBadRequest:
 					p.metrics.paymentSuccessTotal.With(labels).Inc()
 				default:
 					p.metrics.paymentFailureTotal.With(labels).Inc()
 				}
+
 				p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 			}
@@ -241,6 +247,7 @@ func (p *Proxy) handleModelRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
+
 	r.Body.Close()
 
 	remoteModel, rewrittenBody, entry := p.resolveModelRequest(body)
@@ -278,6 +285,7 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 	}
 
 	modelValue, _ := payload["model"].(string)
+
 	remoteModel := normalizeRemoteModel(modelValue)
 	if remoteModel == "" {
 		return "", nil, nil
@@ -287,11 +295,13 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 	upstreamName, ok := p.modelRoutes[remoteModel]
 	entry := p.upstreams[upstreamName]
 	p.mu.RUnlock()
+
 	if !ok || entry == nil {
 		return "", nil, nil
 	}
 
 	payload["model"] = remoteModel
+
 	rewrittenBody, err := json.Marshal(payload)
 	if err != nil {
 		return "", nil, nil
@@ -302,6 +312,7 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 
 func normalizeRemoteModel(model string) string {
 	normalized := strings.TrimSpace(model)
+
 	for {
 		switch {
 		case strings.HasPrefix(normalized, "paid/"):
@@ -322,16 +333,19 @@ func bodyBufferMiddleware(next http.Handler) http.Handler {
 		if r.Body != nil && r.Body != http.NoBody {
 			body, err := io.ReadAll(r.Body)
 			r.Body.Close()
+
 			if err != nil {
 				http.Error(w, "failed to read request body", http.StatusBadRequest)
 				return
 			}
+
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 			r.GetBody = func() (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader(body)), nil
 			}
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -342,6 +356,7 @@ func (p *Proxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 	defer p.mu.RUnlock()
 
 	result := make(map[string]upstreamStatus)
+
 	for name, signer := range p.signers {
 		us := p.upstreams[name]
 		result[name] = upstreamStatus{
@@ -355,12 +370,13 @@ func (p *Proxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result) //nolint:errchkjson // controlled status map
 }
 
 // singleJoiningSlash joins a base and suffix path with exactly one slash.
 func singleJoiningSlash(a, b string) string {
 	aslash := strings.HasSuffix(a, "/")
+
 	bslash := strings.HasPrefix(b, "/")
 	switch {
 	case aslash && bslash:
@@ -368,5 +384,6 @@ func singleJoiningSlash(a, b string) string {
 	case !aslash && !bslash:
 		return a + "/" + b
 	}
+
 	return a + b
 }

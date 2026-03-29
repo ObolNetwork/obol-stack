@@ -16,13 +16,16 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 func (u *UI) RunWithSpinner(msg string, fn func() error) error {
 	start := time.Now()
 
-	if !u.isTTY || u.verbose {
+	if !u.isTTY || u.verbose || u.IsJSON() {
 		u.Info(msg)
+
 		err := fn()
+
 		elapsed := time.Since(start).Round(time.Second)
 		if err == nil {
 			u.Successf("%s (%s)", msg, elapsed)
 		}
+
 		return err
 	}
 
@@ -30,9 +33,11 @@ func (u *UI) RunWithSpinner(msg string, fn func() error) error {
 	u.mu.Lock()
 	done := make(chan struct{})
 	frame := 0
+
 	go func() {
 		ticker := time.NewTicker(80 * time.Millisecond)
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-done:
@@ -51,6 +56,7 @@ func (u *UI) RunWithSpinner(msg string, fn func() error) error {
 	u.mu.Unlock()
 
 	err := fn()
+
 	close(done)
 
 	elapsed := time.Since(start).Round(time.Second)
@@ -65,5 +71,6 @@ func (u *UI) RunWithSpinner(msg string, fn func() error) error {
 	} else {
 		u.Errorf("%s", msg)
 	}
+
 	return err
 }

@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -113,20 +114,25 @@ type Gateway struct {
 // NewGateway creates a new inference gateway with the given configuration.
 func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	if cfg.TEEType != "" && cfg.EnclaveTag != "" {
-		return nil, fmt.Errorf("TEEType and EnclaveTag are mutually exclusive: set one or neither")
+		return nil, errors.New("TEEType and EnclaveTag are mutually exclusive: set one or neither")
 	}
+
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8402"
 	}
+
 	if cfg.FacilitatorURL == "" {
 		cfg.FacilitatorURL = "https://facilitator.x402.rs"
 	}
+
 	if err := x402verifier.ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {
 		return nil, err
 	}
+
 	if cfg.Chain.NetworkID == "" {
 		cfg.Chain = x402.BaseSepolia
 	}
+
 	if cfg.PricePerRequest == "" {
 		cfg.PricePerRequest = "0.001"
 	}
@@ -172,6 +178,7 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 
 	// Initialise key backend: TEE (Linux) or SE (macOS), mutually exclusive.
 	var em *enclaveMiddleware
+
 	switch {
 	case g.config.TEEType != "":
 		// Linux TEE path — generate key inside TEE (or stub).
@@ -179,10 +186,12 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		if deployName == "" {
 			deployName = "com.obol.inference.default"
 		}
+
 		seKey, keyErr := tee.NewKey(deployName, g.config.ModelHash)
 		if keyErr != nil {
 			return nil, fmt.Errorf("tee key: %w", keyErr)
 		}
+
 		g.seKey = seKey
 		em = &enclaveMiddleware{key: seKey}
 		log.Printf("  tee:       type=%s tag=%q pubkey=%x...",
@@ -193,10 +202,12 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		if err := enclave.CheckSIP(); err != nil {
 			return nil, fmt.Errorf("enclave SIP check failed: %w", err)
 		}
+
 		em, err = newEnclaveMiddleware(g.config.EnclaveTag)
 		if err != nil {
 			return nil, fmt.Errorf("enclave middleware: %w", err)
 		}
+
 		g.seKey = em.key
 		log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
 			em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
@@ -218,9 +229,11 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		if em != nil {
 			h = em.wrap(h)
 		}
+
 		if !g.config.NoPaymentGate {
 			h = paymentMiddleware(h)
 		}
+
 		return h
 	}
 
@@ -248,8 +261,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 			if err != nil {
 				log.Printf("attestation error: %v", err)
 				http.Error(w, "attestation unavailable", http.StatusInternalServerError)
+
 				return
 			}
+
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(report)
 		})
@@ -277,16 +292,18 @@ func (g *Gateway) Start() error {
 		// Use deployment name from enclave tag suffix if available.
 		if g.config.EnclaveTag != "" {
 			const prefix = "com.obol.inference."
-			if strings.HasPrefix(g.config.EnclaveTag, prefix) {
+			if after, ok := strings.CutPrefix(g.config.EnclaveTag, prefix); ok {
 				cm = newContainerManager(g.config.VMBinary,
-					strings.TrimPrefix(g.config.EnclaveTag, prefix),
+					after,
 					g.config.VMHostPort)
 			}
 		}
+
 		ctx := context.Background()
 		if err := cm.Start(ctx, g.config.VMImage, g.config.VMCPUs, g.config.VMMemoryMB); err != nil {
 			return fmt.Errorf("container start: %w", err)
 		}
+
 		g.container = cm
 		upstreamURL = cm.UpstreamURL()
 		log.Printf("  container:   %s → %s", cm.name, cm.UpstreamURL())
@@ -314,6 +331,7 @@ func (g *Gateway) Start() error {
 	log.Printf("  price:       %s USDC/request", g.config.PricePerRequest)
 	log.Printf("  chain:       %s", g.config.Chain.NetworkID)
 	log.Printf("  facilitator: %s", g.config.FacilitatorURL)
+
 	if g.config.TEEType != "" {
 		log.Printf("  tee:         %s (model_hash=%s)", g.config.TEEType, g.config.ModelHash)
 	} else if g.config.EnclaveTag == "" {
@@ -326,15 +344,18 @@ func (g *Gateway) Start() error {
 // Stop gracefully shuts down the gateway and any managed container.
 func (g *Gateway) Stop() error {
 	var serverErr error
+
 	if g.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		serverErr = g.server.Shutdown(ctx)
 	}
 
 	if g.container != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
 		if err := g.container.Stop(ctx); err != nil {
 			log.Printf("container stop: %v", err)
 		}

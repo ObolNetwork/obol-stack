@@ -132,7 +132,10 @@ spec:
     spec:
       containers:
         - name: litellm
-          image: ghcr.io/berriai/litellm:main-stable
+          # Pinned to v1.82.3 — main-stable is a floating tag vulnerable to
+          # supply-chain attacks (see BerriAI/litellm#24512: PyPI 1.82.7-1.82.8
+          # contained credential-stealing malware). Always pin to a versioned tag.
+          image: ghcr.io/berriai/litellm:main-v1.82.3
           imagePullPolicy: IfNotPresent
           args:
             - --config

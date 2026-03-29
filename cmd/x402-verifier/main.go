@@ -19,6 +19,7 @@ func main() {
 	configPath := flag.String("config", "/config/pricing.yaml", "Path to pricing config YAML")
 	listen := flag.String("listen", ":8080", "Listen address")
 	watch := flag.Bool("watch", true, "Watch config file for changes")
+
 	flag.Parse()
 
 	cfg, err := x402verifier.LoadConfig(*configPath)
@@ -61,12 +62,15 @@ func main() {
 	// Handle graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		<-sigCh
 		log.Println("shutting down...")
 		cancel()
+
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
+
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
 		}
@@ -74,7 +78,7 @@ func main() {
 
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		log.Fatalf("listen: %v", err) //nolint:gocritic // intentional fatal in main; defers are for graceful shutdown only
 	}
 
 	log.Printf("x402 verifier listening on %s", *listen)

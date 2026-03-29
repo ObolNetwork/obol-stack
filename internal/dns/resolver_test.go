@@ -10,6 +10,7 @@ func TestConstants(t *testing.T) {
 	if containerName != "obol-dns" {
 		t.Errorf("containerName = %q, want %q", containerName, "obol-dns")
 	}
+
 	if domain != "obol.stack" {
 		t.Errorf("domain = %q, want %q", domain, "obol.stack")
 	}
@@ -17,6 +18,7 @@ func TestConstants(t *testing.T) {
 	if macHostPort != "5553" {
 		t.Errorf("macHostPort = %q, want %q", macHostPort, "5553")
 	}
+
 	if macResolverFile != "obol.stack" {
 		t.Errorf("macResolverFile = %q, want %q", macResolverFile, "obol.stack")
 	}
@@ -25,6 +27,7 @@ func TestConstants(t *testing.T) {
 	if nmConfFile != "obol-dns.conf" {
 		t.Errorf("nmConfFile = %q, want %q", nmConfFile, "obol-dns.conf")
 	}
+
 	if nmDnsmasqFile != "obol-stack.conf" {
 		t.Errorf("nmDnsmasqFile = %q, want %q", nmDnsmasqFile, "obol-stack.conf")
 	}
@@ -42,9 +45,9 @@ func TestHasNMDnsmasqConfig(t *testing.T) {
 	// unless the test system has it installed
 	result := hasNMDnsmasqConfig()
 	path := filepath.Join(nmDnsmasqDir, nmDnsmasqFile)
+
 	_, fileExists := os.Stat(path)
 	if result != (fileExists == nil) {
 		t.Errorf("hasNMDnsmasqConfig() = %v, but file exists = %v", result, fileExists == nil)
 	}
 }
-

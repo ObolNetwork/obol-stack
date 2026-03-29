@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,13 +63,15 @@ var openclawVersionRaw string
 // openclawImageTag returns the image tag derived from OPENCLAW_VERSION,
 // stripping the leading "v" and any whitespace/comments.
 func openclawImageTag() string {
-	for _, line := range strings.Split(openclawVersionRaw, "\n") {
+	for line := range strings.SplitSeq(openclawVersionRaw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
 		return strings.TrimPrefix(line, "v")
 	}
+
 	return ""
 }
 
@@ -109,6 +112,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	if importErr != nil {
 		u.Warnf("could not read existing config: %v", importErr)
 	}
+
 	hasImportedProviders := imported != nil && len(imported.Providers) > 0
 
 	// No imported providers — skip automatic deployment.
@@ -129,6 +133,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
 			u.Print("  Skipping default OpenClaw model provider setup.")
 			u.Print("  Run 'obol model setup' to configure a provider later.")
+
 			return nil
 		}
 	}
@@ -148,6 +153,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if opts.IsDefault {
 		id = "obol-agent"
 	}
+
 	if id == "" {
 		id = petname.Generate(2, "-")
 		u.Infof("Generated deployment ID: %s", id)
@@ -164,10 +170,12 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			// Always regenerate helmfile.yaml to pick up chart version bumps.
 			// values-obol.yaml (user config) is intentionally left unchanged.
 			namespace := fmt.Sprintf("%s-%s", appName, id)
+
 			helmfileContent := generateHelmfile(id, namespace)
-			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 			}
+
 			if opts.Sync {
 				if err := doSync(cfg, id, u); err != nil {
 					return err
@@ -177,11 +185,14 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 				if importErr != nil {
 					u.Warnf("could not read existing config: %v", importErr)
 				}
+
 				if imported != nil && imported.WorkspaceDir != "" {
 					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
 				}
+
 				return nil
 			}
+
 			return nil
 		}
 	}
@@ -192,6 +203,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite", appName, id, deploymentDir)
 		}
+
 		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
@@ -200,6 +212,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if err != nil {
 		u.Warnf("failed to read existing config: %v", err)
 	}
+
 	if imported != nil {
 		PrintImportSummary(imported)
 	}
@@ -210,6 +223,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			u.Print("\nUsing detected configuration from ~/.openclaw/")
 		} else {
 			var cloudProvider *CloudProviderInfo
+
 			imported, cloudProvider, err = interactiveSetup(cfg, imported)
 			if err != nil {
 				return fmt.Errorf("interactive setup failed: %w", err)
@@ -223,7 +237,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		}
 	}
 
-	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
+	if err := os.MkdirAll(deploymentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
@@ -236,6 +250,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if err := dns.EnsureHostsEntries(collectAllHostnames(cfg, hostname)); err != nil {
 		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
 	}
+
 	secretData := collectSensitiveData(imported)
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		os.RemoveAll(deploymentDir)
@@ -243,6 +258,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	}
 	// If running in agent mode, read tunnel state to inject AGENT_BASE_URL.
 	var agentBaseURL string
+
 	if opts.AgentMode {
 		st, _ := tunnel.LoadTunnelState(cfg)
 		if st != nil && st.Hostname != "" {
@@ -254,6 +270,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			opts.OllamaModels = listOllamaModels()
 		}
 	}
+
 	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, opts.OllamaModels, agentBaseURL)
 
 	// Append heartbeat config for agent mode.
@@ -267,7 +284,8 @@ agents:
       target: "none"
 `
 	}
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0644); err != nil {
+
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-obol.yaml"), []byte(overlay), 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
@@ -275,16 +293,19 @@ agents:
 	// Generate Ethereum signing wallet (key + remote-signer config).
 	u.Blank()
 	u.Info("Generating Ethereum wallet...")
+
 	wallet, err := GenerateWallet(cfg, id)
 	if err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to generate wallet: %w", err)
 	}
+
 	rsValues := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues), 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write remote-signer values: %w", err)
 	}
+
 	if err := WriteWalletMetadata(deploymentDir, wallet); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write wallet metadata: %w", err)
@@ -292,7 +313,7 @@ agents:
 
 	// Generate helmfile.yaml referencing obol/openclaw + remote-signer
 	helmfileContent := generateHelmfile(id, namespace)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
@@ -310,9 +331,11 @@ agents:
 	u.Print("  - values-remote-signer.yaml  Remote-signer config (keystore password)")
 	u.Print("  - wallet.json                Wallet metadata (address, keystore UUID)")
 	u.Print("  - helmfile.yaml              Deployment configuration")
+
 	if len(secretData) > 0 {
 		u.Printf("  - %s  Local secret values (used to create %s in-cluster)", userSecretsFileName, userSecretsK8sSecretRef)
 	}
+
 	u.Blank()
 	u.Print("  Back up your signing key:")
 	u.Printf("    cp -r %s ~/obol-wallet-backup/", KeystoreVolumePath(cfg, id))
@@ -326,6 +349,7 @@ agents:
 		u.Blank()
 		u.Info("Deploying to cluster...")
 		u.Blank()
+
 		if err := doSync(cfg, id, u); err != nil {
 			return err
 		}
@@ -342,10 +366,12 @@ agents:
 		if imported != nil && imported.WorkspaceDir != "" {
 			copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
 		}
+
 		return nil
 	}
 
 	u.Printf("\nTo deploy: obol openclaw sync %s", id)
+
 	return nil
 }
 
@@ -367,13 +393,14 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
 	}
+
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	if err := applyUserSecretsIfPresent(cfg, namespace, deploymentDir); err != nil {
@@ -401,8 +428,9 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 
 	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync")
 	cmd.Dir = deploymentDir
+
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		"KUBECONFIG="+kubeconfigPath,
 	)
 
 	if err := u.Exec(ui.ExecConfig{
@@ -427,7 +455,7 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Blank()
 	u.Success("OpenClaw installed successfully!")
 	u.Detail("Namespace", namespace)
-	u.Detail("URL", fmt.Sprintf("http://%s", hostname))
+	u.Detail("URL", "http://"+hostname)
 	u.Blank()
 	u.Dim("[Optional] Retrieve a gateway token:")
 	u.Printf("  obol openclaw token %s", id)
@@ -445,10 +473,11 @@ func refreshObolHelmRepo(cfg *config.Config) error {
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	env := append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+	env := append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
 	addCmd := exec.Command(helmBinary, "repo", "add", "obol", "https://obolnetwork.github.io/helm-charts/")
 	addCmd.Env = env
+
 	addOut, addErr := addCmd.CombinedOutput()
 	if addErr != nil && !strings.Contains(string(addOut), `"obol" already exists`) {
 		return fmt.Errorf("helm repo add obol failed: %w\n%s", addErr, string(addOut))
@@ -456,6 +485,7 @@ func refreshObolHelmRepo(cfg *config.Config) error {
 
 	updateCmd := exec.Command(helmBinary, "repo", "update", "obol")
 	updateCmd.Env = env
+
 	updateOut, updateErr := updateCmd.CombinedOutput()
 	if updateErr != nil {
 		return fmt.Errorf("helm repo update obol failed: %w\n%s", updateErr, string(updateOut))
@@ -470,6 +500,7 @@ func writeUserSecretsFile(deploymentDir string, secretData map[string]string) er
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+
 		return nil
 	}
 
@@ -477,16 +508,19 @@ func writeUserSecretsFile(deploymentDir string, secretData map[string]string) er
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, payload, 0600)
+
+	return os.WriteFile(path, payload, 0o600)
 }
 
 func loadUserSecretsFile(deploymentDir string) (map[string]string, error) {
 	path := filepath.Join(deploymentDir, userSecretsFileName)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // file absent means no user secrets; not an error
 		}
+
 		return nil, err
 	}
 
@@ -494,6 +528,7 @@ func loadUserSecretsFile(deploymentDir string) (map[string]string, error) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("invalid %s: %w", userSecretsFileName, err)
 	}
+
 	return out, nil
 }
 
@@ -502,6 +537,7 @@ func applyUserSecretsIfPresent(cfg *config.Config, namespace, deploymentDir stri
 	if err != nil {
 		return err
 	}
+
 	if len(secretData) == 0 {
 		return nil
 	}
@@ -513,7 +549,7 @@ func applyUserSecretsIfPresent(cfg *config.Config, namespace, deploymentDir stri
 		return err
 	}
 
-	manifest := map[string]interface{}{
+	manifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
 		"metadata": map[string]string{
@@ -523,39 +559,50 @@ func applyUserSecretsIfPresent(cfg *config.Config, namespace, deploymentDir stri
 		"type":       "Opaque",
 		"stringData": secretData,
 	}
+
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return err
 	}
 
 	cmd := exec.Command(kubectlBinary, "apply", "-f", "-")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	cmd.Stdin = bytes.NewReader(raw)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%w\n%s", err, stderr.String())
 	}
+
 	return nil
 }
 
 func ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace string) error {
 	getCmd := exec.Command(kubectlBinary, "get", "namespace", namespace)
-	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	getCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	if err := getCmd.Run(); err == nil {
 		return nil
 	}
 
 	createCmd := exec.Command(kubectlBinary, "create", "namespace", namespace)
-	createCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	createCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 	var stderr bytes.Buffer
+
 	createCmd.Stderr = &stderr
 	if err := createCmd.Run(); err != nil {
 		if strings.Contains(stderr.String(), "AlreadyExists") {
 			return nil
 		}
+
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
+
 	return nil
 }
 
@@ -569,7 +616,7 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 	u.Blank()
 	u.Infof("Importing workspace from %s...", workspaceDir)
 
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		u.Warnf("could not create workspace directory: %v", err)
 		return
 	}
@@ -593,7 +640,7 @@ func stageDefaultSkills(deploymentDir string, u *ui.UI) {
 		return
 	}
 
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		u.Warnf("could not create skills directory: %v", err)
 		return
 	}
@@ -634,6 +681,7 @@ func skillsVolumePath(cfg *config.Config, id string) string {
 // OpenClaw's file watcher detects new/changed skills at runtime.
 func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u *ui.UI) {
 	skillsSrc := filepath.Join(deploymentDir, "skills")
+
 	info, err := os.Stat(skillsSrc)
 	if err != nil || !info.IsDir() {
 		return
@@ -643,34 +691,41 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 	if err != nil {
 		return
 	}
+
 	hasSkills := false
+
 	for _, e := range entries {
 		if e.IsDir() {
 			hasSkills = true
 			break
 		}
 	}
+
 	if !hasSkills {
 		return
 	}
 
 	targetDir := skillsVolumePath(cfg, id)
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		u.Warnf("could not create skills volume directory: %v", err)
 		return
 	}
 
 	u.Info("Injecting skills to volume...")
+
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
+
 		src := filepath.Join(skillsSrc, e.Name())
+
 		dst := filepath.Join(targetDir, e.Name())
 		if err := copyDirRecursive(src, dst); err != nil {
 			u.Warnf("could not inject skill %s: %v", e.Name(), err)
 			continue
 		}
+
 		u.Successf("Injected skill: %s", e.Name())
 	}
 }
@@ -682,26 +737,30 @@ func copyDirRecursive(src, dst string) error {
 		if err != nil {
 			return err
 		}
+
 		relPath, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
+
 		targetPath := filepath.Join(dst, relPath)
 		if info.IsDir() {
-			return os.MkdirAll(targetPath, 0755)
+			return os.MkdirAll(targetPath, 0o755)
 		}
-		data, err := os.ReadFile(path)
+
+		data, err := os.ReadFile(path) //nolint:gosec // G122: local skill files from embedded assets, no symlink risk
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(targetPath, data, 0644)
+
+		return os.WriteFile(targetPath, data, 0o600) //nolint:gosec // G703: targetPath from user's local config dir
 	})
 }
 
 // waitForPod polls for a Running pod matching the openclaw label and returns its name.
 // Returns an error if no ready pod is found within timeoutSec seconds.
 func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int) (string, error) {
-	labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s", appName)
+	labelSelector := "app.kubernetes.io/name=" + appName
 
 	for i := 0; i < timeoutSec; i += 3 {
 		cmd := exec.Command(kubectlBinary, "get", "pods",
@@ -709,10 +768,13 @@ func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int)
 			"-l", labelSelector,
 			"-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}",
 		)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 		var stdout bytes.Buffer
+
 		cmd.Stdout = &stdout
-		cmd.Run()
+		_ = cmd.Run()
 
 		podName := strings.TrimSpace(stdout.String())
 		if podName != "" {
@@ -720,6 +782,7 @@ func waitForPod(kubectlBinary, kubeconfigPath, namespace string, timeoutSec int)
 			if idx := strings.Index(podName, " "); idx > 0 {
 				podName = podName[:idx]
 			}
+
 			return podName, nil
 		}
 
@@ -735,16 +798,19 @@ func getToken(cfg *config.Config, id string) (string, error) {
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
 	cmd := exec.Command(kubectlBinary, "get", "secret", "-n", namespace,
-		"-l", fmt.Sprintf("app.kubernetes.io/name=%s", appName),
+		"-l", "app.kubernetes.io/name="+appName,
 		"-o", "json")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 	var stdout, stderr bytes.Buffer
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -771,6 +837,7 @@ func getToken(cfg *config.Config, id string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to decode token: %w", err)
 			}
+
 			return string(decoded), nil
 		}
 	}
@@ -784,7 +851,9 @@ func Token(cfg *config.Config, id string, u *ui.UI) error {
 	if err != nil {
 		return err
 	}
+
 	u.Print(token)
+
 	return nil
 }
 
@@ -792,38 +861,45 @@ func Token(cfg *config.Config, id string, u *ui.UI) error {
 // then retrieves and returns the new token.
 func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
 	// Delete the existing secret so a fresh token is generated on restart.
 	u.Info("Deleting existing gateway token...")
+
 	deleteCmd := exec.Command(kubectlBinary, "delete", "secret",
 		"-n", namespace,
-		"-l", fmt.Sprintf("app.kubernetes.io/name=%s", appName),
+		"-l", "app.kubernetes.io/name="+appName,
 		"--ignore-not-found")
-	deleteCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	if out, err := deleteCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("failed to delete secret: %w\n%s", err, string(out))
 	}
 
 	// Restart the deployment to regenerate the token.
 	u.Info("Restarting OpenClaw to regenerate token...")
+
 	restartCmd := exec.Command(kubectlBinary, "rollout", "restart",
 		"deployment/openclaw", "-n", namespace)
-	restartCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	restartCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	if out, err := restartCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("failed to restart deployment: %w\n%s", err, string(out))
 	}
 
 	// Wait for rollout to complete.
 	u.Info("Waiting for new pod to start...")
+
 	waitCmd := exec.Command(kubectlBinary, "rollout", "status",
 		"deployment/openclaw", "-n", namespace, "--timeout=120s")
-	waitCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	waitCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	if out, err := waitCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("rollout not confirmed: %w\n%s", err, string(out))
 	}
@@ -838,6 +914,7 @@ func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 	}
 
 	u.Success("Token regenerated successfully")
+
 	return newToken, nil
 }
 
@@ -847,11 +924,13 @@ func findOpenClawBinary(cfg *config.Config) (string, error) {
 	if p, err := exec.LookPath("openclaw"); err == nil {
 		return p, nil
 	}
+
 	candidate := filepath.Join(cfg.BinDir, "openclaw")
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate, nil
 	}
-	return "", fmt.Errorf("openclaw CLI not found.\n\nInstall with one of:\n  obolup.sh                                    (re-run bootstrap installer)\n  curl -fsSL https://openclaw.ai/install.sh | bash\n  npm install -g openclaw                      (requires Node.js 22+)")
+
+	return "", errors.New("openclaw CLI not found.\n\nInstall with one of:\n  obolup.sh                                    (re-run bootstrap installer)\n  curl -fsSL https://openclaw.ai/install.sh | bash\n  npm install -g openclaw                      (requires Node.js 22+)")
 }
 
 // portForwarder manages a background kubectl port-forward process.
@@ -867,7 +946,7 @@ type portForwarder struct {
 func startPortForward(cfg *config.Config, namespace string, localPort int) (*portForwarder, error) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return nil, errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
@@ -879,8 +958,9 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",
-		fmt.Sprintf("svc/%s", appName), portArg, "-n", namespace)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+		"svc/"+appName, portArg, "-n", namespace)
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
 	// kubectl prints "Forwarding from ..." to stdout (not stderr)
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -895,6 +975,7 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 	}
 
 	done := make(chan error, 1)
+
 	go func() {
 		done <- cmd.Wait()
 	}()
@@ -902,6 +983,7 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 	// Parse the "Forwarding from 127.0.0.1:<port>" line from stdout
 	parsedPort := make(chan int, 1)
 	parseErr := make(chan error, 1)
+
 	go func() {
 		scanner := bufio.NewScanner(stdoutPipe)
 		for scanner.Scan() {
@@ -911,17 +993,20 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 				parts := strings.Split(line, ":")
 				if len(parts) >= 2 {
 					portPart := strings.Fields(parts[len(parts)-1])[0]
+
 					var p int
 					if _, err := fmt.Sscanf(portPart, "%d", &p); err == nil {
 						parsedPort <- p
 						// Continue draining to prevent pipe blocking
-						io.Copy(io.Discard, stdoutPipe)
+						_, _ = io.Copy(io.Discard, stdoutPipe)
+
 						return
 					}
 				}
 			}
 		}
-		parseErr <- fmt.Errorf("port-forward exited without reporting a local port")
+
+		parseErr <- errors.New("port-forward exited without reporting a local port")
 	}()
 
 	select {
@@ -932,24 +1017,27 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 		return nil, err
 	case err := <-done:
 		cancel()
+
 		if err != nil {
 			return nil, fmt.Errorf("port-forward process exited unexpectedly: %w", err)
 		}
-		return nil, fmt.Errorf("port-forward process exited unexpectedly")
+
+		return nil, errors.New("port-forward process exited unexpectedly")
 	case <-time.After(30 * time.Second):
 		cancel()
-		return nil, fmt.Errorf("timed out waiting for port-forward to become ready")
+		return nil, errors.New("timed out waiting for port-forward to become ready")
 	}
 }
 
 // Stop terminates the port-forward process gracefully.
 func (pf *portForwarder) Stop() {
 	pf.cancel()
+
 	select {
 	case <-pf.done:
 	case <-time.After(5 * time.Second):
 		if pf.cmd.Process != nil {
-			pf.cmd.Process.Kill()
+			_ = pf.cmd.Process.Kill()
 		}
 	}
 }
@@ -983,26 +1071,31 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 
 	// Regenerate helmfile to pick up any chart version bumps
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	helmfileContent := generateHelmfile(id, namespace)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write helmfile.yaml: %w", err)
 	}
 
 	// Regenerate overlay values with the selected provider
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
+
 	secretData := collectSensitiveData(imported)
 	if err := writeUserSecretsFile(deploymentDir, secretData); err != nil {
 		return fmt.Errorf("failed to write OpenClaw secrets metadata: %w", err)
 	}
+
 	overlay := generateOverlayValues(cfg, hostname, imported, len(secretData) > 0, nil, "")
+
 	overlayPath := filepath.Join(deploymentDir, "values-obol.yaml")
-	if err := os.WriteFile(overlayPath, []byte(overlay), 0644); err != nil {
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0o600); err != nil {
 		return fmt.Errorf("failed to write overlay values: %w", err)
 	}
 
 	u.Blank()
 	u.Info("Applying configuration...")
 	u.Blank()
+
 	if err := doSync(cfg, id, u); err != nil {
 		return err
 	}
@@ -1012,6 +1105,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 
 	u.Blank()
 	u.Info("Waiting for the OpenClaw gateway to be ready...")
+
 	if _, err := waitForPod(kubectlBinary, kubeconfigPath, namespace, 90); err != nil {
 		u.Warnf("pod not ready yet: %v", err)
 		u.Printf("The deployment may still be rolling out. Check with: obol kubectl get pods -n %s", namespace)
@@ -1021,6 +1115,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 		u.Success("Setup complete!")
 		u.Print("  Access the OpenClaw dashboard from http://obol.stack")
 	}
+
 	return nil
 }
 
@@ -1066,6 +1161,7 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 	}
 
 	sigCh := make(chan os.Signal, 1)
+
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
@@ -1083,12 +1179,23 @@ func Dashboard(cfg *config.Config, id string, opts DashboardOptions, onReady fun
 }
 
 // List displays installed OpenClaw instances
+// openclawInstance is the JSON-serialisable representation of one instance.
+type openclawInstance struct {
+	ID        string `json:"id"`
+	Namespace string `json:"namespace"`
+	URL       string `json:"url"`
+}
+
 func List(cfg *config.Config, u *ui.UI) error {
 	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
 
 	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
+		if u.IsJSON() {
+			return u.JSON([]openclawInstance{})
+		}
 		u.Print("No OpenClaw instances installed")
 		u.Print("\nTo create one: obol openclaw up")
+
 		return nil
 	}
 
@@ -1098,29 +1205,44 @@ func List(cfg *config.Config, u *ui.UI) error {
 	}
 
 	if len(entries) == 0 {
+		if u.IsJSON() {
+			return u.JSON([]openclawInstance{})
+		}
 		u.Print("No OpenClaw instances installed")
 		return nil
+	}
+
+	var instances []openclawInstance
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		id := entry.Name()
+		namespace := fmt.Sprintf("%s-%s", appName, id)
+		hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
+		instances = append(instances, openclawInstance{
+			ID:        id,
+			Namespace: namespace,
+			URL:       fmt.Sprintf("http://%s", hostname),
+		})
+	}
+
+	if u.IsJSON() {
+		return u.JSON(instances)
 	}
 
 	u.Info("OpenClaw instances:")
 	u.Blank()
 
-	count := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		id := entry.Name()
-		namespace := fmt.Sprintf("%s-%s", appName, id)
-		hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
-		u.Bold("  " + id)
-		u.Detail("  Namespace", namespace)
-		u.Detail("  URL", fmt.Sprintf("http://%s", hostname))
+	for _, inst := range instances {
+		u.Bold("  " + inst.ID)
+		u.Detail("  Namespace", inst.Namespace)
+		u.Detail("  URL", inst.URL)
 		u.Blank()
-		count++
 	}
 
-	u.Printf("Total: %d instance(s)", count)
+	u.Printf("Total: %d instance(s)", len(instances))
 	return nil
 }
 
@@ -1138,11 +1260,13 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 	}
 
 	namespaceExists := false
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespace)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := cmd.Run(); err == nil {
 			namespaceExists = true
 		}
@@ -1154,11 +1278,13 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 
 	u.Blank()
 	u.Print("Resources to be deleted:")
+
 	if namespaceExists {
 		u.Printf("  [x] Kubernetes namespace: %s", namespace)
 	} else {
 		u.Printf("  [ ] Kubernetes namespace: %s (not found)", namespace)
 	}
+
 	if configExists {
 		u.Printf("  [x] Configuration: %s", deploymentDir)
 	}
@@ -1174,15 +1300,17 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 		// Run helmfile destroy first to cleanly remove Helm releases.
 		// This ensures StatefulSet PVCs are properly cleaned up before namespace deletion.
 		helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
+
 		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
 		if _, err := os.Stat(helmfilePath); err == nil {
 			if _, err := os.Stat(helmfileBinary); err == nil {
 				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
 				destroyCmd.Dir = deploymentDir
-				destroyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+				destroyCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
 				if err := u.Exec(ui.ExecConfig{
-					Name: fmt.Sprintf("Removing Helm releases from %s", namespace),
+					Name: "Removing Helm releases from " + namespace,
 					Cmd:  destroyCmd,
 				}); err != nil {
 					u.Warnf("helmfile destroy failed (will force-delete namespace): %v", err)
@@ -1193,10 +1321,11 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		deleteCmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
-		deleteCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
 		if err := u.Exec(ui.ExecConfig{
-			Name: fmt.Sprintf("Deleting namespace %s", namespace),
+			Name: "Deleting namespace " + namespace,
 			Cmd:  deleteCmd,
 		}); err != nil {
 			u.Warnf("namespace deletion may still be in progress: %v", err)
@@ -1205,12 +1334,15 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 
 	if configExists {
 		u.Info("Deleting configuration...")
+
 		if err := os.RemoveAll(deploymentDir); err != nil {
 			return fmt.Errorf("failed to delete config directory: %w", err)
 		}
+
 		u.Success("Configuration deleted")
 
 		parentDir := filepath.Join(cfg.ConfigDir, "applications", appName)
+
 		entries, err := os.ReadDir(parentDir)
 		if err == nil && len(entries) == 0 {
 			os.Remove(parentDir)
@@ -1219,6 +1351,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 
 	u.Blank()
 	u.Successf("OpenClaw %s deleted successfully!", id)
+
 	return nil
 }
 
@@ -1234,7 +1367,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 
 	u.Infof("Syncing skills from %s to volume...", skillsDir)
 
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create skills volume directory: %w", err)
 	}
 
@@ -1247,15 +1380,19 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 		if !e.IsDir() {
 			continue
 		}
+
 		src := filepath.Join(skillsDir, e.Name())
+
 		dst := filepath.Join(targetDir, e.Name())
 		if err := copyDirRecursive(src, dst); err != nil {
 			return fmt.Errorf("failed to copy skill %s: %w", e.Name(), err)
 		}
+
 		u.Successf("Synced skill: %s", e.Name())
 	}
 
 	u.Success("Skills synced to volume (file watcher will reload)")
+
 	return nil
 }
 
@@ -1264,6 +1401,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 func SkillAdd(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "add"}, args...))
 }
 
@@ -1272,6 +1410,7 @@ func SkillAdd(cfg *config.Config, id string, args []string, u *ui.UI) error {
 func SkillRemove(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "remove"}, args...))
 }
 
@@ -1280,6 +1419,7 @@ func SkillRemove(cfg *config.Config, id string, args []string, u *ui.UI) error {
 func SkillList(cfg *config.Config, id string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	return cliViaKubectlExec(cfg, namespace, []string{"skills", "list"})
 }
 
@@ -1296,6 +1436,7 @@ var remoteCapableCommands = map[string]bool{
 // others are executed via kubectl exec into the pod.
 func CLI(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
+
 	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s/%s\nRun 'obol openclaw up' first", appName, id)
@@ -1315,6 +1456,7 @@ func CLI(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	if remoteCapableCommands[firstArg] {
 		return cliViaPortForward(cfg, id, namespace, args)
 	}
+
 	return cliViaKubectlExec(cfg, namespace, args)
 }
 
@@ -1338,7 +1480,7 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 
 	// Append --url and --token to the args
 	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
-	fullArgs := append(args, "--url", wsURL, "--token", token)
+	fullArgs := append(append([]string{}, args...), "--url", wsURL, "--token", token)
 
 	cmd := exec.Command(openclawBinary, fullArgs...)
 	cmd.Stdin = os.Stdin
@@ -1347,6 +1489,7 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 
 	// Handle signals to clean up port-forward
 	sigCh := make(chan os.Signal, 1)
+
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
@@ -1356,13 +1499,16 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 	}()
 
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus())
+				os.Exit(status.ExitStatus()) //nolint:gocritic // intentional exit to propagate child exit code; defers handle cleanup
 			}
 		}
+
 		return err
 	}
+
 	return nil
 }
 
@@ -1370,7 +1516,7 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
@@ -1389,19 +1535,23 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 	execArgs = append(execArgs, args...)
 
 	cmd := exec.Command(kubectlBinary, execArgs...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				os.Exit(status.ExitStatus())
 			}
 		}
+
 		return err
 	}
+
 	return nil
 }
 
@@ -1416,17 +1566,19 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	ids, err := ListInstanceIDs(cfg)
 	if err != nil || len(ids) == 0 {
-		return nil
+		return nil //nolint:nilerr // no instances to sync; not an error
 	}
 
 	masterKey := litellmMasterKey(cfg)
 
 	for _, id := range ids {
 		overlayPath := filepath.Join(DeploymentPath(cfg, id), "values-obol.yaml")
+
 		data, err := os.ReadFile(overlayPath)
 		if err != nil {
 			continue
 		}
+
 		content := string(data)
 
 		// Only patch instances that use the LiteLLM gateway pattern
@@ -1437,7 +1589,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 		// Update overlay YAML (for helm consistency on next sync)
 		updated, changed := patchOverlayModelList(content, models)
 		if changed {
-			if err := os.WriteFile(overlayPath, []byte(updated), 0644); err != nil {
+			if err := os.WriteFile(overlayPath, []byte(updated), 0o600); err != nil { //nolint:gosec // G703: path from user's local config dir
 				u.Warnf("Failed to update overlay for %s: %v", id, err)
 			}
 		}
@@ -1455,6 +1607,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 
 		u.Infof("Updated models for OpenClaw %s (%d models, primary: %s)", id, len(models), primary)
 	}
+
 	return nil
 }
 
@@ -1468,6 +1621,7 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 
 	// Partition into cloud and local
 	var cloud, local []string
+
 	for _, m := range models {
 		if isCloudModel(m) {
 			cloud = append(cloud, m)
@@ -1479,7 +1633,7 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
 	if len(cloud) > 0 {
 		primary = cloud[0]
-		fallbacks = append(cloud[1:], local...)
+		fallbacks = append(append([]string{}, cloud[1:]...), local...)
 	} else {
 		primary = local[0]
 		fallbacks = local[1:]
@@ -1487,9 +1641,11 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 
 	// Prefix with openai/ for LiteLLM routing
 	primary = "openai/" + primary
+
 	for i, f := range fallbacks {
 		fallbacks[i] = "openai/" + f
 	}
+
 	return primary, fallbacks
 }
 
@@ -1498,9 +1654,11 @@ func isCloudModel(name string) bool {
 	if strings.Contains(name, "claude") {
 		return true
 	}
+
 	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
 		return true
 	}
+
 	return false
 }
 
@@ -1515,36 +1673,41 @@ func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []str
 	// Read current ConfigMap
 	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
 		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
-	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	getCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 	var out bytes.Buffer
+
 	getCmd.Stdout = &out
 	if err := getCmd.Run(); err != nil {
 		return // ConfigMap may not exist yet
 	}
 
-	var cfgJSON map[string]interface{}
+	var cfgJSON map[string]any
 	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
 		return
 	}
 
 	// Navigate to agents.defaults.model
-	agents, ok := cfgJSON["agents"].(map[string]interface{})
+	agents, ok := cfgJSON["agents"].(map[string]any)
 	if !ok {
-		agents = map[string]interface{}{}
+		agents = map[string]any{}
 		cfgJSON["agents"] = agents
 	}
-	defaults, ok := agents["defaults"].(map[string]interface{})
+
+	defaults, ok := agents["defaults"].(map[string]any)
 	if !ok {
-		defaults = map[string]interface{}{}
+		defaults = map[string]any{}
 		agents["defaults"] = defaults
 	}
 
-	modelCfg := map[string]interface{}{
+	modelCfg := map[string]any{
 		"primary": primary,
 	}
 	if len(fallbacks) > 0 {
 		modelCfg["fallbacks"] = fallbacks
 	}
+
 	defaults["model"] = modelCfg
 
 	// Re-serialize and apply
@@ -1553,10 +1716,10 @@ func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []str
 		return
 	}
 
-	applyPayload := map[string]interface{}{
+	applyPayload := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "openclaw-config",
 			"namespace": namespace,
 		},
@@ -1564,11 +1727,13 @@ func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []str
 			"openclaw.json": string(patched),
 		},
 	}
-	applyRaw, _ := json.Marshal(applyPayload)
+	applyRaw, _ := json.Marshal(applyPayload) //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 
 	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
 		"--server-side", "--field-manager=helm", "--force-conflicts")
-	applyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	applyCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 	applyCmd.Stdin = bytes.NewReader(applyRaw)
 	if err := applyCmd.Run(); err != nil {
 		u.Warnf("Failed to patch model hierarchy in ConfigMap: %v", err)
@@ -1594,6 +1759,7 @@ func patchAgentModelsJSON(cfg *config.Config, id string, models []string, master
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
+
 	type provider struct {
 		BaseURL string       `json:"baseUrl"`
 		APIKey  string       `json:"apiKey"`
@@ -1606,8 +1772,8 @@ func patchAgentModelsJSON(cfg *config.Config, id string, models []string, master
 		entries = append(entries, modelEntry{ID: m, Name: m})
 	}
 
-	modelsJSON := map[string]interface{}{
-		"providers": map[string]interface{}{
+	modelsJSON := map[string]any{
+		"providers": map[string]any{
 			"openai": provider{
 				BaseURL: "http://litellm.llm.svc.cluster.local:4000/v1",
 				APIKey:  masterKey,
@@ -1621,9 +1787,10 @@ func patchAgentModelsJSON(cfg *config.Config, id string, models []string, master
 	if err != nil {
 		return fmt.Errorf("failed to marshal models.json: %w", err)
 	}
+
 	data = append(data, '\n')
 
-	return os.WriteFile(modelsPath, data, 0644)
+	return os.WriteFile(modelsPath, data, 0o600)
 }
 
 // patchOverlayModelList replaces the model list under the openai provider
@@ -1639,11 +1806,15 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 	//         - id: <model>
 	//           name: <display>
 	lines := strings.Split(content, "\n")
+
 	var result []string
+
 	inOpenAI := false
 	inModelList := false
-	modelListIndent := ""
-	replaced := false
+
+	var modelListIndent string
+
+	var replaced bool
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -1652,7 +1823,9 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 		// Track when we enter the openai provider section
 		if trimmed == "openai:" && strings.Contains(content, "litellm.llm.svc") {
 			inOpenAI = true
+
 			result = append(result, line)
+
 			continue
 		}
 
@@ -1678,15 +1851,19 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 			if trimmed == "models: []" {
 				continue
 			}
+
 			for i+1 < len(lines) {
 				next := lines[i+1]
+
 				nextTrimmed := strings.TrimSpace(next)
 				if nextTrimmed == "" || (strings.HasPrefix(next, modelListIndent+"  ") && (strings.HasPrefix(nextTrimmed, "- id:") || strings.HasPrefix(nextTrimmed, "name:"))) {
 					i++
 					continue
 				}
+
 				break
 			}
+
 			continue
 		}
 
@@ -1701,6 +1878,7 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 	if !replaced {
 		return content, false
 	}
+
 	return strings.Join(result, "\n"), true
 }
 
@@ -1715,10 +1893,12 @@ func DeploymentPath(cfg *config.Config, id string) string {
 // litellmMasterKey returns the LiteLLM master key derived from the cluster's stack ID.
 func litellmMasterKey(cfg *config.Config) string {
 	stackIDPath := filepath.Join(cfg.ConfigDir, ".stack-id")
+
 	data, err := os.ReadFile(stackIDPath)
 	if err != nil {
 		return "sk-obol-default" // fallback if stack ID not found
 	}
+
 	return "sk-obol-" + strings.TrimSpace(string(data))
 }
 
@@ -1733,7 +1913,7 @@ httpRoute:
   enabled: true
   hostnames:
 `)
-	b.WriteString(fmt.Sprintf("    - %s\n", hostname))
+	fmt.Fprintf(&b, "    - %s\n", hostname)
 	b.WriteString(`  parentRefs:
     - name: traefik-gateway
       namespace: traefik
@@ -1751,7 +1931,7 @@ rbac:
 
 	// Override chart default image tag when the binary pins a newer version.
 	if tag := openclawImageTag(); tag != "" {
-		b.WriteString(fmt.Sprintf("# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, tag))
+		fmt.Fprintf(&b, "# Override chart default image tag (chart ships %s)\nimage:\n  tag: \"%s\"\n\n", chartVersion, tag)
 	}
 
 	// Provider and agent model configuration.
@@ -1781,9 +1961,11 @@ rbac:
 
 	b.WriteString("# All models route through LiteLLM gateway (openai provider slot).\n")
 	b.WriteString("openclaw:\n")
+
 	if agentModel != "" {
-		b.WriteString(fmt.Sprintf("  agentModel: %s\n", agentModel))
+		fmt.Fprintf(&b, "  agentModel: %s\n", agentModel)
 	}
+
 	b.WriteString(`  gateway:
     # Allow control UI over HTTP behind Traefik (local dev stack).
     # dangerouslyDisableDeviceAuth is needed because Traefik proxies from
@@ -1802,16 +1984,18 @@ models:
     api: openai-completions
     apiKeyEnvVar: OPENAI_API_KEY
 `)
-	b.WriteString(fmt.Sprintf("    apiKeyValue: %s\n", litellmMasterKey(cfg)))
+	fmt.Fprintf(&b, "    apiKeyValue: %s\n", litellmMasterKey(cfg))
 
 	if len(ollamaModels) > 0 {
 		b.WriteString("    models:\n")
+
 		for _, m := range ollamaModels {
-			b.WriteString(fmt.Sprintf("      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m)))
+			fmt.Fprintf(&b, "      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m))
 		}
 	} else {
 		b.WriteString("    models: []\n")
 	}
+
 	b.WriteString("\n")
 
 	// Append non-model imported config (channels, etc.)
@@ -1820,8 +2004,11 @@ models:
 		// Strip the openclaw: and models: sections — we already wrote those above.
 		// Keep only channel config and other non-provider settings.
 		lines := strings.Split(importedOverlay, "\n")
+
 		var kept []string
+
 		skip := false
+
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			// Skip openclaw: block (agentModel) and models: block (providers)
@@ -1833,10 +2020,12 @@ models:
 			if skip && len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
 				skip = false
 			}
+
 			if !skip {
 				kept = append(kept, line)
 			}
 		}
+
 		extra := strings.TrimSpace(strings.Join(kept, "\n"))
 		if extra != "" {
 			b.WriteString("# Imported from ~/.openclaw/openclaw.json\n")
@@ -1855,11 +2044,13 @@ extraEnv:
   - name: REMOTE_SIGNER_URL
     value: http://remote-signer:9000
 `)
+
 	if agentBaseURL != "" {
-		b.WriteString(fmt.Sprintf(`  - name: AGENT_BASE_URL
+		fmt.Fprintf(&b, `  - name: AGENT_BASE_URL
     value: %s
-`, agentBaseURL))
+`, agentBaseURL)
 	}
+
 	b.WriteString(`
 # Skills: injected directly to the host-side PVC path at
 # $DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/
@@ -1890,6 +2081,7 @@ secrets:
 func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	// Read values-obol.yaml to check for heartbeat config.
 	valuesPath := filepath.Join(deploymentDir, "values-obol.yaml")
+
 	valuesRaw, err := os.ReadFile(valuesPath)
 	if err != nil {
 		return // No values file, nothing to patch.
@@ -1902,17 +2094,20 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 
 	// Extract heartbeat every/target from YAML (simple parsing, not full YAML).
 	var every, target string
-	for _, line := range strings.Split(string(valuesRaw), "\n") {
+
+	for line := range strings.SplitSeq(string(valuesRaw), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "every:") {
-			every = strings.TrimSpace(strings.TrimPrefix(trimmed, "every:"))
+		if after, ok := strings.CutPrefix(trimmed, "every:"); ok {
+			every = strings.TrimSpace(after)
 			every = strings.Trim(every, "\"'")
 		}
-		if strings.HasPrefix(trimmed, "target:") {
-			target = strings.TrimSpace(strings.TrimPrefix(trimmed, "target:"))
+
+		if after, ok := strings.CutPrefix(trimmed, "target:"); ok {
+			target = strings.TrimSpace(after)
 			target = strings.Trim(target, "\"'")
 		}
 	}
+
 	if every == "" {
 		return // No heartbeat interval configured.
 	}
@@ -1924,8 +2119,11 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	// Read current ConfigMap.
 	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
 		"-n", namespace, "-o", "jsonpath={.data.openclaw\\.json}")
-	getCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	getCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 	var out bytes.Buffer
+
 	getCmd.Stdout = &out
 	if err := getCmd.Run(); err != nil {
 		fmt.Printf("Warning: could not read openclaw-config ConfigMap: %v\n", err)
@@ -1933,30 +2131,32 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	// Parse JSON config.
-	var cfgJSON map[string]interface{}
+	var cfgJSON map[string]any
 	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
 		fmt.Printf("Warning: could not parse openclaw.json: %v\n", err)
 		return
 	}
 
 	// Navigate to agents.defaults, inject heartbeat.
-	agents, ok := cfgJSON["agents"].(map[string]interface{})
+	agents, ok := cfgJSON["agents"].(map[string]any)
 	if !ok {
-		agents = map[string]interface{}{}
+		agents = map[string]any{}
 		cfgJSON["agents"] = agents
 	}
-	defaults, ok := agents["defaults"].(map[string]interface{})
+
+	defaults, ok := agents["defaults"].(map[string]any)
 	if !ok {
-		defaults = map[string]interface{}{}
+		defaults = map[string]any{}
 		agents["defaults"] = defaults
 	}
 
-	heartbeat := map[string]interface{}{
+	heartbeat := map[string]any{
 		"every": every,
 	}
 	if target != "" {
 		heartbeat["target"] = target
 	}
+
 	defaults["heartbeat"] = heartbeat
 
 	// Re-serialize.
@@ -1968,10 +2168,10 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 
 	// Apply via kubectl apply --server-side with Helm's field manager so that
 	// subsequent helm upgrade doesn't conflict on data.openclaw.json.
-	applyPayload := map[string]interface{}{
+	applyPayload := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "ConfigMap",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":      "openclaw-config",
 			"namespace": namespace,
 		},
@@ -1979,13 +2179,16 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 			"openclaw.json": string(patched),
 		},
 	}
-	applyRaw, _ := json.Marshal(applyPayload)
+	applyRaw, _ := json.Marshal(applyPayload) //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 
 	applyCmd := exec.Command(kubectlBinary, "apply", "-f", "-",
 		"--server-side", "--field-manager=helm", "--force-conflicts")
-	applyCmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+	applyCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	applyCmd.Stdin = bytes.NewReader(applyRaw)
+
 	var applyErr bytes.Buffer
+
 	applyCmd.Stderr = &applyErr
 	if err := applyCmd.Run(); err != nil {
 		fmt.Printf("Warning: could not patch heartbeat config: %v\n%s\n", err, applyErr.String())
@@ -2003,8 +2206,10 @@ func ollamaEndpoint() string {
 		if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
 			host = "http://" + host
 		}
+
 		return strings.TrimRight(host, "/")
 	}
+
 	return "http://localhost:11434"
 }
 
@@ -2013,17 +2218,21 @@ func ollamaEndpoint() string {
 // server responds with HTTP 200.
 func detectOllama() bool {
 	endpoint := ollamaEndpoint()
+
 	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
 	if err != nil {
 		return false
 	}
 
 	client := &http.Client{Timeout: 2 * time.Second}
+
 	resp, err := client.Get(tagsURL)
 	if err != nil {
 		return false
 	}
+
 	resp.Body.Close()
+
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -2031,19 +2240,24 @@ func detectOllama() bool {
 // Returns nil if Ollama is not reachable, empty slice if reachable but no models pulled.
 func listOllamaModels() []string {
 	endpoint := ollamaEndpoint()
+
 	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
 	if err != nil {
 		return nil
 	}
+
 	client := &http.Client{Timeout: 3 * time.Second}
+
 	resp, err := client.Get(tagsURL)
 	if err != nil {
 		return nil
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
+
 	var result struct {
 		Models []struct {
 			Name string `json:"name"`
@@ -2052,11 +2266,13 @@ func listOllamaModels() []string {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil
 	}
+
 	names := make([]string, 0, len(result.Models))
 	for _, m := range result.Models {
 		name := strings.TrimSuffix(m.Name, ":latest")
 		names = append(names, name)
 	}
+
 	return names
 }
 
@@ -2068,6 +2284,7 @@ func preferredOllamaModel(models []string) string {
 	if len(models) > 0 {
 		return models[0]
 	}
+
 	return ""
 }
 
@@ -2075,13 +2292,16 @@ func preferredOllamaModel(models []string) string {
 // into a human-friendly display name (e.g. "Llama3.2 3b").
 func ollamaModelDisplayName(name string) string {
 	parts := strings.SplitN(name, ":", 2)
+
 	display := parts[0]
 	if len(display) > 0 {
 		display = strings.ToUpper(display[:1]) + display[1:]
 	}
+
 	if len(parts) > 1 {
 		display += " " + parts[1]
 	}
+
 	return display
 }
 
@@ -2094,7 +2314,9 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 	if imported != nil {
 		fmt.Print("\nUse detected configuration? [Y/n]: ")
+
 		line, _ := reader.ReadString('\n')
+
 		line = strings.TrimSpace(strings.ToLower(line))
 		if line == "" || line == "y" || line == "yes" {
 			fmt.Println("Using detected configuration.")
@@ -2121,6 +2343,7 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 		fmt.Print("\nChoice [1]: ")
 
 		line, _ := reader.ReadString('\n')
+
 		choice := strings.TrimSpace(line)
 		if choice == "" {
 			choice = "1"
@@ -2135,32 +2358,39 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 			if err != nil {
 				return nil, nil, err
 			}
+
 			result := buildLiteLLMRoutedOverlay(cfg, cloud)
+
 			return result, cloud, nil
 		case "3":
 			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
+
 			result := buildLiteLLMRoutedOverlay(cfg, cloud)
+
 			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", envAnthropicAPIKey, "claude-sonnet-4-6", "Claude Sonnet 4.6")
 			if err != nil {
 				return nil, nil, err
 			}
+
 			return result, nil, nil
 		case "5":
-			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", envOpenAIAPIKey, "gpt-5.2", "GPT-5.2")
 			if err != nil {
 				return nil, nil, err
 			}
+
 			return result, nil, nil
 		case "6":
 			result, err := promptForCustomProvider(reader)
 			if err != nil {
 				return nil, nil, err
 			}
+
 			return result, nil, nil
 		default:
 			fmt.Printf("Unknown choice '%s', using global Ollama route.\n", choice)
@@ -2178,6 +2408,7 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')
+
 	choice := strings.TrimSpace(line)
 	if choice == "" {
 		choice = "1"
@@ -2189,32 +2420,39 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 		if err != nil {
 			return nil, nil, err
 		}
+
 		result := buildLiteLLMRoutedOverlay(cfg, cloud)
+
 		return result, cloud, nil
 	case "2":
 		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
+
 		result := buildLiteLLMRoutedOverlay(cfg, cloud)
+
 		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", envAnthropicAPIKey, "claude-sonnet-4-6", "Claude Sonnet 4.6")
 		if err != nil {
 			return nil, nil, err
 		}
+
 		return result, nil, nil
 	case "4":
-		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", envOpenAIAPIKey, "gpt-5.2", "GPT-5.2")
 		if err != nil {
 			return nil, nil, err
 		}
+
 		return result, nil, nil
 	case "5":
 		result, err := promptForCustomProvider(reader)
 		if err != nil {
 			return nil, nil, err
 		}
+
 		return result, nil, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown choice '%s'; please select a valid model provider", choice)
@@ -2225,7 +2463,9 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 // The actual overlay (ImportResult) is built separately via buildLiteLLMRoutedOverlay.
 func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string) (*CloudProviderInfo, error) {
 	fmt.Printf("\n%s API key: ", display)
+
 	apiKey, _ := reader.ReadString('\n')
+
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s API key is required", display)
@@ -2242,34 +2482,40 @@ func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelN
 // promptForDirectProvider asks for direct-provider settings for an instance-local override.
 func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaultBaseURL, defaultAPI, defaultAPIKeyEnvVar, defaultModelID, defaultModelName string) (*ImportResult, error) {
 	fmt.Printf("\n%s API key (instance-local): ", display)
+
 	apiKey, _ := reader.ReadString('\n')
+
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s API key is required", display)
 	}
 
 	fmt.Printf("%s model ID [%s]: ", display, defaultModelID)
+
 	modelID, _ := reader.ReadString('\n')
+
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		modelID = defaultModelID
 	}
 
 	fmt.Printf("%s model display name [%s]: ", display, defaultModelName)
+
 	modelName, _ := reader.ReadString('\n')
+
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		modelName = defaultModelName
 	}
 
 	fmt.Printf("%s base URL [%s]: ", display, defaultBaseURL)
+
 	baseURL, _ := reader.ReadString('\n')
+
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
 
 	return buildDirectProviderOverlay(providerName, baseURL, defaultAPI, defaultAPIKeyEnvVar, modelID, modelName, apiKey), nil
 }
@@ -2277,44 +2523,54 @@ func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaul
 // promptForCustomProvider asks for an OpenAI-compatible custom endpoint override.
 func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	fmt.Printf("\nCustom base URL (OpenAI-compatible, e.g. https://example.com/v1): ")
+
 	baseURL, _ := reader.ReadString('\n')
+
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		return nil, fmt.Errorf("custom base URL is required")
+		return nil, errors.New("custom base URL is required")
 	}
-	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
 
 	fmt.Printf("Custom model ID: ")
+
 	modelID, _ := reader.ReadString('\n')
+
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
-		return nil, fmt.Errorf("custom model ID is required")
+		return nil, errors.New("custom model ID is required")
 	}
 
 	fmt.Printf("Custom model display name [%s]: ", modelID)
+
 	modelName, _ := reader.ReadString('\n')
+
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		modelName = modelID
 	}
 
 	fmt.Printf("Custom API type [openai-completions]: ")
+
 	apiType, _ := reader.ReadString('\n')
+
 	apiType = strings.TrimSpace(apiType)
 	if apiType == "" {
 		apiType = "openai-completions"
 	}
 
 	fmt.Printf("API key env var [OPENAI_API_KEY]: ")
+
 	apiKeyEnvVar, _ := reader.ReadString('\n')
+
 	apiKeyEnvVar = strings.TrimSpace(apiKeyEnvVar)
 	if apiKeyEnvVar == "" {
-		apiKeyEnvVar = "OPENAI_API_KEY"
+		apiKeyEnvVar = envOpenAIAPIKey
 	}
 
 	fmt.Printf("API key (optional, leave empty to configure later): ")
+
 	apiKey, _ := reader.ReadString('\n')
+
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		fmt.Println("  Note: no API key provided; set it later via the OpenClaw user secret.")
@@ -2337,7 +2593,7 @@ func buildLiteLLMRoutedOverlay(cfg *config.Config, cloud *CloudProviderInfo) *Im
 				Name:         "openai",
 				BaseURL:      "http://litellm.llm.svc.cluster.local:4000/v1",
 				API:          "openai-completions",
-				APIKeyEnvVar: "OPENAI_API_KEY",
+				APIKeyEnvVar: envOpenAIAPIKey,
 				APIKey:       litellmMasterKey(cfg),
 				Models: []ImportedModel{
 					{ID: cloud.ModelID, Name: cloud.Display},
@@ -2353,24 +2609,26 @@ func buildLiteLLMRoutedOverlay(cfg *config.Config, cloud *CloudProviderInfo) *Im
 // Provider name must be one of anthropic/openai/ollama due current chart constraints.
 func buildDirectProviderOverlay(providerName, baseURL, api, apiKeyEnvVar, modelID, modelName, apiKey string) *ImportResult {
 	var agentPrefix string
+
 	switch providerName {
-	case "anthropic":
-		agentPrefix = "anthropic"
-	case "openai":
-		agentPrefix = "openai"
+	case model.ProviderAnthropic:
+		agentPrefix = model.ProviderAnthropic
+	case model.ProviderOpenAI:
+		agentPrefix = model.ProviderOpenAI
 	default:
 		agentPrefix = providerName
 	}
 
 	providers := []ImportedProvider{
-		{Name: "anthropic", Disabled: providerName != "anthropic"},
-		{Name: "openai", Disabled: providerName != "openai"},
-		{Name: "ollama", Disabled: providerName != "ollama"},
+		{Name: model.ProviderAnthropic, Disabled: providerName != model.ProviderAnthropic},
+		{Name: model.ProviderOpenAI, Disabled: providerName != model.ProviderOpenAI},
+		{Name: model.ProviderOllama, Disabled: providerName != model.ProviderOllama},
 	}
 	for i := range providers {
 		if providers[i].Name != providerName {
 			continue
 		}
+
 		providers[i].Disabled = false
 		providers[i].BaseURL = baseURL
 		providers[i].API = api
@@ -2401,11 +2659,13 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 		if p.APIKey == "" {
 			continue
 		}
+
 		envVar := p.APIKeyEnvVar
 		if envVar == "" {
 			envVar = defaultProviderAPIKeyEnvVar(p.Name)
 			p.APIKeyEnvVar = envVar
 		}
+
 		secretData[envVar] = p.APIKey
 		p.APIKey = ""
 	}
@@ -2414,15 +2674,18 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 		secretData["TELEGRAM_BOT_TOKEN"] = imported.Channels.Telegram.BotToken
 		imported.Channels.Telegram.BotToken = ""
 	}
+
 	if imported.Channels.Discord != nil && imported.Channels.Discord.BotToken != "" {
 		secretData["DISCORD_BOT_TOKEN"] = imported.Channels.Discord.BotToken
 		imported.Channels.Discord.BotToken = ""
 	}
+
 	if imported.Channels.Slack != nil {
 		if imported.Channels.Slack.BotToken != "" {
 			secretData["SLACK_BOT_TOKEN"] = imported.Channels.Slack.BotToken
 			imported.Channels.Slack.BotToken = ""
 		}
+
 		if imported.Channels.Slack.AppToken != "" {
 			secretData["SLACK_APP_TOKEN"] = imported.Channels.Slack.AppToken
 			imported.Channels.Slack.AppToken = ""
@@ -2432,6 +2695,7 @@ func collectSensitiveData(imported *ImportResult) map[string]string {
 	if len(secretData) == 0 {
 		return nil
 	}
+
 	return secretData
 }
 
@@ -2468,20 +2732,25 @@ releases:
 func collectAllHostnames(cfg *config.Config, newHostname string) []string {
 	hostnames := []string{newHostname}
 	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
+
 	entries, err := os.ReadDir(appsDir)
 	if err != nil {
 		return hostnames
 	}
+
 	seen := map[string]bool{newHostname: true}
+
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
+
 		h := fmt.Sprintf("openclaw-%s.%s", e.Name(), defaultDomain)
 		if !seen[h] {
 			hostnames = append(hostnames, h)
 			seen[h] = true
 		}
 	}
+
 	return hostnames
 }
