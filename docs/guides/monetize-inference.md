@@ -1,5 +1,7 @@
 # How to Monetize Your Inference with Obol Stack
 
+> This is an operator workflow guide. The canonical contract for sell-side and buy-side behavior lives in [SPEC.md](../../SPEC.md), [ARCHITECTURE.md](../../ARCHITECTURE.md), and [BEHAVIORS_AND_EXPECTATIONS.md](../../BEHAVIORS_AND_EXPECTATIONS.md).
+
 This guide walks you through exposing a local LLM as a paid API endpoint using the Obol Stack. By the end, you'll have:
 
 - A local Ollama model serving inference
@@ -10,9 +12,9 @@ This guide walks you through exposing a local LLM as a paid API endpoint using t
 > [!NOTE]
 > `--per-mtok` is supported for inference pricing, but phase 1 still charges an
 > approximate flat request price derived as `perMTok / 1000` using a fixed
-> `1000 tok/request` assumption. Exact token metering is deferred to the
-> follow-up `x402-meter` design described in
-> [`docs/plans/per-token-metering.md`](../plans/per-token-metering.md).
+> `1000 tok/request` assumption. Exact token metering is tracked as phase 2
+> follow-up work in [SPEC.md](../../SPEC.md#10-phased-rollout) and
+> [ADR-0009](../adr/0009-phase-2-exact-metering-after-pre-request-gate.md).
 
 > [!IMPORTANT]
 > The monetize subsystem is alpha software on the `feat/secure-enclave-inference` branch.

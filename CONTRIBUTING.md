@@ -1,90 +1,171 @@
-# Contributing to Blockchain Helm Charts
+# Contributing to Obol Stack
 
-Thank you for considering contributing to this project! This document provides guidelines to help you contribute effectively.
+This document defines the non-negotiable contribution rules for the consolidated Obol Stack codebase and spec bundle.
 
-## Getting Started
+---
 
-### Prerequisites
+## 1. Canonical Documents
 
-- Kubernetes knowledge
-- Helm chart development experience
-- Understanding of the specific blockchain client you're creating/modifying a chart for
+The canonical specification bundle lives at repo root:
 
-### Development Environment
+- `SPEC.md`
+- `ARCHITECTURE.md`
+- `BEHAVIORS_AND_EXPECTATIONS.md`
+- `CONTRIBUTING.md`
+- `features/`
+- `docs/adr/`
 
-1. Install [Helm](https://helm.sh/docs/intro/install/)
-2. Install [kubectl](https://kubernetes.io/docs/tasks/tools/)
-3. Set up a Kubernetes environment (minikube, kind, or a cloud provider)
+Supporting material in `docs/guides/` can remain useful, but it is **not** authoritative once the root-level bundle covers the same topic.
+Planning or architecture notes must be folded into `SPEC.md` phase sections or `docs/adr/` instead of living as parallel sources of truth under `docs/plans/` or `plans/`.
 
-## Chart Development Guidelines
+If code and docs disagree:
+- code is the temporary source of truth
+- the root-level bundle must be updated in the same change or immediately after
 
-### Chart Structure
+---
 
-Each chart should follow this structure:
-```
-charts/<blockchain-client>/
-├── Chart.yaml
-├── values.yaml
-├── templates/
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml (if needed)
-│   ├── pvc.yaml (if needed)
-│   └── NOTES.txt
-├── OWNERS (maintainers list)
-└── README.md (chart-specific documentation)
-```
+## 2. Actor Priority
 
-### Requirements
+When making product or UX tradeoffs, preserve this order:
 
-- Charts must be compatible with Helm 3
-- Include comprehensive documentation
-- Provide sensible defaults in values.yaml
-- Include proper Kubernetes resource requests and limits
-- Follow security best practices
+1. Local operator
+2. Agent developer
+3. Remote buyer
 
-### Values.yaml
+This affects:
+- defaults
+- failure handling
+- public exposure rules
+- CLI ergonomics
+- phased rollout decisions
 
-- Group related values logically
-- Add comments explaining the purpose of values
-- Include sensible defaults that work out-of-the-box
-- Provide examples for custom configurations
+---
 
-## Pull Request Process
+## 3. Documentation Update Rules
 
-1. Fork the repository
-2. Create a new branch for your changes
-3. Make your changes following the chart development guidelines
-4. Test your charts thoroughly
-5. Submit a pull request
-6. Address review comments
+Any change touching these areas is spec-impacting and must update the canonical bundle when it changes behavior:
 
-### Pull Request Checklist
+- `cmd/obol/`
+- `internal/stack/`
+- `internal/model/`
+- `internal/network/`
+- `internal/openclaw/`
+- `internal/agent/`
+- `internal/x402/`
+- `internal/x402/buyer/`
+- `internal/tunnel/`
+- `internal/erc8004/`
+- `internal/inference/`
+- `internal/embed/infrastructure/`
+- `internal/embed/skills/`
+- `internal/app/`
+- `internal/schemas/`
 
-- [ ] Chart version updated according to semantic versioning
-- [ ] Chart README.md updated with any new values or changes
-- [ ] Chart has been tested and verified to work
-- [ ] `helm lint` passes without warnings
-- [ ] `helm template` generates valid Kubernetes resources
+Rules:
+- describe only behavior that is actually implemented on the branch
+- move future work into `Phase 2+` sections and ADR follow-ups
+- do not silently broaden support claims
+- do not collapse different chain domains into one “supported networks” statement
 
-## Testing Your Chart
+Current chain domains that must stay distinct:
+- installable local networks
+- eRPC remote RPC aliases
+- sell-side payment chains
+- ERC-8004 registration networks
+
+---
+
+## 4. Feature and ADR Discipline
+
+Feature files:
+- live under `features/`
+- start with `@bdd`
+- reference both `SPEC.md` and `BEHAVIORS_AND_EXPECTATIONS.md`
+- use `@phase1`, `@phase2`, etc. when phases matter
+
+ADRs:
+- live under `docs/adr/`
+- record durable architectural decisions, not transient implementation chatter
+- must note the affected `SPEC.md` sections
+
+---
+
+## 5. Development Expectations
+
+Baseline validation before sending a substantial code change:
 
 ```bash
-# Lint the chart
-helm lint charts/your-chart
-
-# Render the templates
-helm template charts/your-chart
-
-# Install the chart in a test environment
-helm install test-release charts/your-chart --dry-run
+go build ./...
+go test ./...
 ```
 
-## Code of Conduct
+When the change touches the monetization path, strongly prefer validating one or more of:
 
-Please respect other contributors and maintain a positive environment for everyone.
+```bash
+./flows/flow-06-sell-setup.sh
+./flows/flow-07-sell-verify.sh
+./flows/flow-08-buy.sh
+./flows/flow-10-anvil-facilitator.sh
+```
 
-## Thank You
+When the change touches embedded skills or sell-side metadata, also consider:
 
-Your contributions help make this project better for everyone!
+```bash
+python3 tests/skills_smoke_test.py
+python3 tests/test_sell_registration_metadata.py
+python3 tests/test_autoresearch_worker.py
+```
+
+---
+
+## 6. Security and Exposure Guardrails
+
+Never merge a change that:
+- exposes frontend, eRPC, monitoring, or similar operator surfaces to the public tunnel
+- gives the buyer sidecar live signer access
+- changes sell-side chain support claims without updating both CLI behavior and docs
+- enables write-capable public RPC forwarding by default
+- removes the `OffChainOnly` degradation path without a replacement operator-safe fallback
+
+---
+
+## 7. Hook-Based Drift Detection
+
+Repo-local Codex hooks should be treated as guardrails, not as a substitute for human judgment.
+
+Intended behavior:
+- session-start hooks remind Codex that the root-level bundle is canonical
+- stop hooks block or warn when spec-impacting code changed but the canonical bundle did not
+
+To enable Codex hooks locally:
+
+```toml
+# ~/.codex/config.toml
+[features]
+codex_hooks = true
+```
+
+The repository hook entrypoint is:
+
+- `.codex/hooks.json`
+
+Hook scripts belong under:
+
+- `.codex/hooks/`
+
+This repository currently ships:
+
+- `.codex/hooks/workspace_context.py`
+- `.codex/hooks/stop_spec_sync.py`
+
+If hooks and code ever disagree, fix the hooks or the bundle. Do not paper over the mismatch.
+
+---
+
+## 8. Pull Request Checklist
+
+- [ ] Behavior changes are reflected in the root-level canonical bundle
+- [ ] Future work is isolated into phases or ADR follow-ups
+- [ ] Operator-facing claims match the actual CLI and runtime surface
+- [ ] Security exposure boundaries were preserved
+- [ ] Tests or flow validations were run, or the omission is explicitly stated
