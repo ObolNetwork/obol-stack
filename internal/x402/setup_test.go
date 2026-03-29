@@ -325,18 +325,21 @@ func TestPricingConfig_YAMLWithPerRouteOverrides(t *testing.T) {
 	}
 }
 
-func TestX402Manifest_IncludesVerifierServiceMonitor(t *testing.T) {
+func TestX402Manifest_UsesServiceOfferControllerModel(t *testing.T) {
 	manifest := string(x402Manifest)
-	if !strings.Contains(manifest, "kind: ServiceMonitor") {
-		t.Fatalf("x402 manifest missing ServiceMonitor:\n%s", manifest)
+	if strings.Contains(manifest, "paymentroutes.obol.org") {
+		t.Fatalf("x402 manifest still references removed PaymentRoute CRD:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "name: x402-verifier") {
-		t.Fatalf("x402 manifest missing x402-verifier monitor name:\n%s", manifest)
+	if !strings.Contains(manifest, "name: serviceoffer-controller") {
+		t.Fatalf("x402 manifest missing serviceoffer-controller deployment:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "release: monitoring") {
-		t.Fatalf("x402 manifest missing monitoring release label:\n%s", manifest)
+	if !strings.Contains(manifest, "--route-source=kube") {
+		t.Fatalf("x402 verifier is not configured for kube-backed service offers:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "path: /metrics") {
-		t.Fatalf("x402 manifest missing metrics scrape path:\n%s", manifest)
+	if !strings.Contains(manifest, "resources: [\"serviceoffers\"]") {
+		t.Fatalf("x402 manifest missing serviceoffer watch RBAC:\n%s", manifest)
+	}
+	if strings.Contains(manifest, "kind: ServiceMonitor") {
+		t.Fatalf("x402 manifest still includes legacy ServiceMonitor stanza:\n%s", manifest)
 	}
 }

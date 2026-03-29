@@ -1,25 +1,15 @@
 ---
-# x402 ForwardAuth verifier (OKR-2)
-#
-# Central x402 micropayment verifier for Traefik ForwardAuth.
-# Any HTTPRoute can be monetized by:
-#   1. Adding a Traefik Middleware CRD (forwardAuth) in its namespace
-#   2. Adding an ExtensionRef filter on the HTTPRoute rule
-#
-# The verifier reads pricing config from a ConfigMap and validates
-# x402 payment headers via the facilitator service. It returns:
-#   - 200: allow (payment valid or route is free)
-#   - 402: deny (with payment requirements JSON in body)
-#
-# Configuration is managed imperatively via `obol x402 setup`.
+# x402 runtime components:
+# - x402-verifier: live ForwardAuth request path
+# - serviceoffer-controller: control-plane reconciler for ServiceOffer child resources
 apiVersion: v1
 kind: Namespace
 metadata:
   name: x402
 
 ---
-# Pricing configuration. Managed imperatively via `obol x402 setup`.
-# The verifier watches this file for changes (poll-based).
+# Static verifier settings plus optional manual routes. In cluster mode the
+# verifier merges these with dynamic routes derived from ready ServiceOffers.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,8 +24,6 @@ data:
     routes: []
 
 ---
-# Secret for wallet address and any future auth tokens.
-# Patched imperatively via `obol x402 setup`.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -46,6 +34,95 @@ stringData:
   WALLET_ADDRESS: ""
 
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: x402-verifier
+  namespace: x402
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: serviceoffer-controller
+  namespace: x402
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: x402-verifier
+rules:
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: x402-verifier
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: x402-verifier
+subjects:
+  - kind: ServiceAccount
+    name: x402-verifier
+    namespace: x402
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: serviceoffer-controller
+rules:
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["registrationrequests"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["registrationrequests/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["traefik.io"]
+    resources: ["middlewares"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: serviceoffer-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: serviceoffer-controller
+subjects:
+  - kind: ServiceAccount
+    name: serviceoffer-controller
+    namespace: x402
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,8 +130,6 @@ metadata:
   namespace: x402
   labels:
     app: x402-verifier
-  annotations:
-    configmap.reloader.stakater.com/reload: "x402-pricing"
 spec:
   replicas: 2
   selector:
@@ -65,6 +140,7 @@ spec:
       labels:
         app: x402-verifier
     spec:
+      serviceAccountName: x402-verifier
       containers:
         - name: verifier
           image: ghcr.io/obolnetwork/x402-verifier:latest
@@ -76,6 +152,7 @@ spec:
           args:
             - --config=/config/pricing.yaml
             - --listen=:8080
+            - --route-source=kube
           volumeMounts:
             - name: pricing-config
               mountPath: /config
@@ -110,6 +187,39 @@ spec:
                 path: pricing.yaml
 
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: serviceoffer-controller
+  namespace: x402
+  labels:
+    app: serviceoffer-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: serviceoffer-controller
+  template:
+    metadata:
+      labels:
+        app: serviceoffer-controller
+    spec:
+      serviceAccountName: serviceoffer-controller
+      containers:
+        - name: controller
+          image: ghcr.io/obolnetwork/serviceoffer-controller:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --workers=2
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -128,8 +238,6 @@ spec:
       protocol: TCP
 
 ---
-# PDB ensures at least 1 replica stays available during rollouts/evictions.
-# Without this, Traefik ForwardAuth fails open when the verifier is unavailable.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

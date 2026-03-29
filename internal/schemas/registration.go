@@ -29,6 +29,12 @@ type RegistrationSpec struct {
 	// Maps to AgentRegistration.supportedTrust[].
 	// Valid values: "reputation", "crypto-economic", "tee-attestation".
 	SupportedTrust []string `json:"supportedTrust,omitempty" yaml:"supportedTrust,omitempty"`
+
+	// Skills lists OASF skills for discovery.
+	Skills []string `json:"skills,omitempty" yaml:"skills,omitempty"`
+
+	// Domains lists OASF domains for discovery.
+	Domains []string `json:"domains,omitempty" yaml:"domains,omitempty"`
 }
 
 // ServiceDef describes an endpoint the agent exposes.

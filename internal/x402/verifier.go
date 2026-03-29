@@ -1,13 +1,11 @@
 package x402
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"sync/atomic"
 
-	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	x402lib "github.com/mark3labs/x402-go"
 	x402http "github.com/mark3labs/x402-go/http"
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,11 +15,10 @@ import (
 // micropayments on a per-route basis. Traefik sends every incoming request
 // to /verify; the Verifier either returns 200 (allow) or 402 (pay-wall).
 type Verifier struct {
-	config       atomic.Pointer[PricingConfig]
-	chain        atomic.Pointer[x402lib.ChainConfig]
-	chains       atomic.Pointer[map[string]x402lib.ChainConfig] // pre-resolved: chain name → config
-	registration atomic.Pointer[erc8004.AgentRegistration]
-	metrics      *verifierMetrics
+	config  atomic.Pointer[PricingConfig]
+	chain   atomic.Pointer[x402lib.ChainConfig]
+	chains  atomic.Pointer[map[string]x402lib.ChainConfig] // pre-resolved: chain name → config
+	metrics *verifierMetrics
 }
 
 // NewVerifier creates a Verifier with the given initial configuration.
@@ -180,23 +177,6 @@ func (v *Verifier) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, `{"status":"ready"}`)
-}
-
-// SetRegistration atomically sets the ERC-8004 agent registration data
-// served at /.well-known/agent-registration.json.
-func (v *Verifier) SetRegistration(reg *erc8004.AgentRegistration) {
-	v.registration.Store(reg)
-}
-
-// HandleWellKnown serves the ERC-8004 agent registration document.
-func (v *Verifier) HandleWellKnown(w http.ResponseWriter, r *http.Request) {
-	reg := v.registration.Load()
-	if reg == nil {
-		http.Error(w, "no registration configured", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(reg)
 }
 
 // MetricsHandler exposes Prometheus metrics for the verifier.

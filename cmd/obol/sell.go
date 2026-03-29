@@ -290,7 +290,7 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell access to any HTTP service via x402 (cluster-based)",
 		ArgsUsage: "<name>",
-		Description: `Creates a ServiceOffer in the cluster. The agent reconciles it through:
+		Description: `Creates a ServiceOffer in the cluster. The serviceoffer-controller reconciles it through:
 health-check → payment gate → route publishing → optional ERC-8004 registration.
 
 Examples:
@@ -461,7 +461,7 @@ Examples:
 			if priceTable.PerMTok != "" {
 				fmt.Printf("Requests will be charged at %s\n", formatPriceTableSummary(priceTable))
 			}
-			fmt.Printf("The agent will reconcile: health-check → payment gate → route\n")
+			fmt.Printf("The serviceoffer-controller will reconcile: health-check → payment gate → route → registration\n")
 			fmt.Printf("Check status: obol sell status %s -n %s\n", name, ns)
 
 			// Ensure tunnel is active for public access.
@@ -587,7 +587,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Stop serving a ServiceOffer (removes pricing route, keeps CR)",
+		Usage:     "Pause a ServiceOffer without deleting it",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -604,18 +604,16 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 			name := cmd.Args().First()
 			ns := cmd.String("namespace")
 
-			fmt.Printf("Stopping ServiceOffer %s/%s...\n", ns, name)
+			fmt.Printf("Pausing ServiceOffer %s/%s...\n", ns, name)
 
-			removePricingRoute(cfg, name)
-
-			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
+			patchJSON := `{"metadata":{"annotations":{"obol.org/paused":"true"}}}`
 			err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
-				"--type=merge", "--subresource=status", "-p", patchJSON)
+				"--type=merge", "-p", patchJSON)
 			if err != nil {
-				return fmt.Errorf("failed to patch status: %w", err)
+				return fmt.Errorf("failed to pause serviceoffer: %w", err)
 			}
 
-			fmt.Printf("ServiceOffer %s/%s stopped.\n", ns, name)
+			fmt.Printf("ServiceOffer %s/%s paused.\n", ns, name)
 			return nil
 		},
 	}
@@ -653,7 +651,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			if !cmd.Bool("force") {
 				fmt.Printf("Delete ServiceOffer %s/%s? This will:\n", ns, name)
 				fmt.Println("  - Remove the associated Middleware and HTTPRoute")
-				fmt.Println("  - Remove the pricing route from the x402 verifier")
+				fmt.Println("  - Remove x402 enforcement for the service")
 				fmt.Println("  - Deactivate the ERC-8004 registration (if registered)")
 				fmt.Print("[y/N] ")
 				var response string
@@ -664,40 +662,8 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			removePricingRoute(cfg, name)
-
-			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
-				"-o", "jsonpath={.status.agentId}")
-			if err == nil && strings.TrimSpace(soOut) != "" {
-				agentID := strings.TrimSpace(soOut)
-				fmt.Printf("Deactivating ERC-8004 registration (agent %s)...\n", agentID)
-
-				cmName := fmt.Sprintf("so-%s-registration", name)
-				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
-					"-o", `jsonpath={.data.agent-registration\.json}`)
-				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
-					fmt.Printf("  No registration document found. Agent %s NFT persists on-chain.\n", agentID)
-				} else {
-					var regDoc map[string]interface{}
-					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
-						fmt.Printf("  Warning: corrupt registration JSON, skipping deactivation: %v\n", jsonErr)
-					} else {
-						regDoc["active"] = false
-						patchJSON, _ := json.Marshal(map[string]interface{}{
-							"data": map[string]string{
-								"agent-registration.json": mustMarshal(regDoc),
-							},
-						})
-						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
-							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							fmt.Printf("  Warning: could not deactivate registration: %v\n", patchErr)
-						} else {
-							fmt.Printf("  Registration deactivated (active=false). On-chain NFT persists.\n")
-						}
-					}
-				}
-			}
-
+			fmt.Printf("Deleting ServiceOffer %s/%s...\n", ns, name)
+			fmt.Printf("The serviceoffer-controller finalizer will clean up published routes and registration state.\n")
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
 			}
@@ -1241,27 +1207,4 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 		}
 	}
 	return spec
-}
-
-// removePricingRoute removes the x402-verifier pricing route for the given offer.
-func removePricingRoute(cfg *config.Config, name string) {
-	urlPath := fmt.Sprintf("/services/%s", name)
-	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
-	if err != nil {
-		return
-	}
-	updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
-	for _, r := range pricingCfg.Routes {
-		if !strings.Contains(r.Pattern, urlPath) {
-			updatedRoutes = append(updatedRoutes, r)
-		}
-	}
-	if len(updatedRoutes) < len(pricingCfg.Routes) {
-		pricingCfg.Routes = updatedRoutes
-		if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
-			fmt.Printf("Warning: failed to remove pricing route: %v\n", err)
-		} else {
-			fmt.Printf("Removed pricing route for %s\n", urlPath)
-		}
-	}
 }

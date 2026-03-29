@@ -75,6 +75,32 @@ func getServiceOffer(t *testing.T, cfg *config.Config, name, namespace string) m
 	return result
 }
 
+func resourceExists(t *testing.T, cfg *config.Config, kind, name, namespace string) bool {
+	t.Helper()
+	_, err := obolRunErr(cfg, "kubectl", "get", kind, name, "-n", namespace)
+	return err == nil
+}
+
+func assertOfferRouteResourcesPresent(t *testing.T, cfg *config.Config, name, namespace string) {
+	t.Helper()
+	if !resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
+		t.Fatalf("middleware x402-%s not found in %s", name, namespace)
+	}
+	if !resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
+		t.Fatalf("httproute so-%s not found in %s", name, namespace)
+	}
+}
+
+func assertOfferRouteResourcesAbsent(t *testing.T, cfg *config.Config, name, namespace string) {
+	t.Helper()
+	if resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
+		t.Fatalf("middleware x402-%s still exists in %s", name, namespace)
+	}
+	if resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
+		t.Fatalf("httproute so-%s still exists in %s", name, namespace)
+	}
+}
+
 // testNamespace generates a unique test namespace name.
 func testNamespace(prefix string) string {
 	return fmt.Sprintf("test-%s-%s", prefix, petname.Generate(2, "-"))
@@ -1874,11 +1900,11 @@ spec:
 //
 // Validates that:
 //  1. An Ollama model is exposed as a ServiceOffer
-//  2. The reconciler creates Middleware + HTTPRoute + pricing route
+//  2. The reconciler creates Middleware + HTTPRoute
 //  3. Requests without payment return 402
 //  4. Requests with valid payment return 200 + inference result
 //  5. The service is accessible via the CF tunnel
-//  6. Deletion cleans up all resources including the pricing route
+//  6. Deletion cleans up all owned route resources
 func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -1898,7 +1924,7 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 	applyServiceOffer(t, cfg, yaml)
 	t.Cleanup(func() {
 		deleteServiceOffer(t, cfg, name, ns)
-		// Give time for pricing route cleanup by the delete handler.
+		// Give the controller time to observe the deletion.
 		time.Sleep(2 * time.Second)
 	})
 	t.Logf("created ServiceOffer %s/%s for model %s", ns, name, model)
@@ -1918,12 +1944,8 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 		}
 	}
 
-	// Step 4: Verify x402-pricing ConfigMap has the route.
-	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("x402-pricing ConfigMap missing route for %s:\n%s", name, pricingOut)
-	}
+	// Step 4: Verify route resources exist.
+	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// Step 5: Wait for Reloader to restart verifier + route propagation.
 	time.Sleep(8 * time.Second)
@@ -2018,8 +2040,8 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 	obolRun(t, cfg, "kubectl", "delete", "serviceoffers.obol.org", name, "-n", ns)
 	time.Sleep(5 * time.Second)
 
-	// Verify pricing route was NOT automatically removed (delete was via kubectl, not monetize.py).
-	// In practice, the pricing route cleanup happens when using the skill's delete command.
+	// Delete happened via kubectl, so only Kubernetes-owned resources are expected
+	// to disappear automatically here.
 	// Let's verify the K8s resources are gone (cascade via OwnerRef).
 	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
 	if strings.Contains(mwOut, name) {
@@ -2061,7 +2083,7 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 	)
 	t.Logf("create output:\n%s", out)
 	t.Cleanup(func() {
-		// Delete via the skill (which also removes pricing route).
+		// Delete via the skill.
 		execInAgentErr(cfg, "python3",
 			"/data/.openclaw/skills/monetize/scripts/monetize.py",
 			"delete", name, "--namespace", ns)
@@ -2090,14 +2112,8 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 		t.Errorf("offer not Ready after agent reconciliation: Ready=%s", readyStatus)
 	}
 
-	// Step 5: Verify x402-pricing ConfigMap has the route (added by the agent).
-	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("agent did not add pricing route to x402-pricing ConfigMap:\n%s", pricingOut)
-	} else {
-		t.Logf("agent autonomously added pricing route for /services/%s/*", name)
-	}
+	// Step 5: Verify route resources exist.
+	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// Step 6: Agent lists offers — should see the one we created.
 	listOut := execInAgent(t, cfg, "python3",
@@ -2107,21 +2123,15 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 		t.Errorf("agent list does not contain %q:\n%s", name, listOut)
 	}
 
-	// Step 7: Agent deletes the offer (should also remove pricing route).
+	// Step 7: Agent deletes the offer.
 	delOut := execInAgent(t, cfg, "python3",
 		"/data/.openclaw/skills/monetize/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
-	// Step 8: Verify pricing route removed.
+	// Step 8: Verify route resources removed.
 	time.Sleep(2 * time.Second)
-	pricingOut = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("agent did not remove pricing route after delete:\n%s", pricingOut)
-	} else {
-		t.Logf("agent autonomously cleaned up pricing route")
-	}
+	assertOfferRouteResourcesAbsent(t, cfg, name, ns)
 
 	// Step 9: Verify CR is gone.
 	_, err := obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
@@ -2142,11 +2152,11 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 //
 // This test proves:
 //  1. The agent can reconcile an offer backed by a forked chain upstream
-//  2. The x402-pricing ConfigMap is correctly patched by the agent
+//  2. The controller-backed route resources are created by the agent flow
 //  3. The payment gate correctly returns 402 for unpaid requests
 //  4. The payment gate correctly returns 200 with valid payment
 //  5. The mock facilitator receives verify+settle calls
-//  6. Deletion cleans up both K8s resources and pricing routes
+//  6. Deletion cleans up both K8s resources and service exposure
 func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -2184,12 +2194,8 @@ func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
 		}
 	}
 
-	// Verify pricing route was added by the reconciler.
-	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if !strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("reconciler did not add pricing route:\n%s", pricingOut)
-	}
+	// Verify route resources were added by the reconciler.
+	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// Wait for Reloader + route propagation.
 	time.Sleep(8 * time.Second)
@@ -2250,19 +2256,15 @@ func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
 	t.Logf("facilitator calls: verify=%d, settle=%d",
 		mf.VerifyCalls.Load(), mf.SettleCalls.Load())
 
-	// Delete via the agent skill (tests pricing route removal).
+	// Delete via the agent skill.
 	delOut := execInAgent(t, cfg, "python3",
 		"/data/.openclaw/skills/monetize/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
-	// Verify pricing route was removed.
+	// Verify route resources were removed.
 	time.Sleep(2 * time.Second)
-	pricingOut = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
-	}
+	assertOfferRouteResourcesAbsent(t, cfg, name, ns)
 
 	// Verify K8s resources are gone.
 	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
@@ -2497,13 +2499,9 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
-	// Verify pricing route was removed.
+	// Verify route resources were removed.
 	time.Sleep(2 * time.Second)
-	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
-	}
+	assertOfferRouteResourcesAbsent(t, cfg, name, ns)
 
 	// Verify K8s resources are gone.
 	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
@@ -2693,7 +2691,7 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 //	Step 1: ModelReady        → model checked in Ollama /api/tags
 //	Step 2: UpstreamHealthy   → upstream service health-checked
 //	Step 3: PaymentGateReady  → Middleware x402-<name> created
-//	                          → pricing route added to x402-pricing ConfigMap
+//	                          → verifier derives route from published ServiceOffer
 //	Step 4: RoutePublished    → HTTPRoute so-<name> created
 //	                          → parentRef = traefik-gateway
 //	                          → filter = ExtensionRef to Middleware
@@ -2706,7 +2704,7 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 //   - ownerReferences point back to the ServiceOffer (GC cascade)
 //   - The pricing ConfigMap has the route with correct pattern, price, payTo
 //   - A second `process --all` is idempotent (no errors, same state)
-//   - Delete via agent removes pricing route + CR (cascade removes rest)
+//   - Delete via agent removes the CR (cascade removes owned route resources)
 //
 // This proves: drop a CR → agent does everything → monetisation works.
 func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
@@ -2825,25 +2823,10 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	verifyOwnerRef(t, mw, name, "ServiceOffer")
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 4: Verify pricing route in x402-pricing ConfigMap
+	// Step 4: Verify route resources
 	// ────────────────────────────────────────────────────────────────────
-	t.Log("Step 4: Verifying pricing route in x402-pricing ConfigMap")
-	pricingYAML := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-
-	expectedPattern := fmt.Sprintf("%s/*", path)
-	if !strings.Contains(pricingYAML, expectedPattern) {
-		t.Errorf("pricing ConfigMap missing route pattern %q:\n%s", expectedPattern, pricingYAML)
-	} else {
-		t.Logf("  ✓ pricing route pattern: %s", expectedPattern)
-	}
-
-	// Verify payTo in the route entry.
-	if !strings.Contains(pricingYAML, sellerAddr) {
-		t.Errorf("pricing ConfigMap missing payTo %s:\n%s", sellerAddr, pricingYAML)
-	} else {
-		t.Logf("  ✓ pricing route payTo: %s", sellerAddr)
-	}
+	t.Log("Step 4: Verifying route resources")
+	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// ────────────────────────────────────────────────────────────────────
 	// Step 5: Verify HTTPRoute — gateway parent + middleware filter + backend
@@ -2968,9 +2951,9 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	}
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 8: Agent delete — pricing route removed + cascade
+	// Step 8: Agent delete — route resources removed + cascade
 	// ────────────────────────────────────────────────────────────────────
-	t.Log("Step 8: Agent deletes offer (pricing route + CR)")
+	t.Log("Step 8: Agent deletes offer (route resources + CR)")
 	delOut := execInAgent(t, cfg, "python3",
 		"/data/.openclaw/skills/monetize/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
@@ -2979,14 +2962,8 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	// Wait for GC cascade.
 	time.Sleep(3 * time.Second)
 
-	// 8a: Pricing route removed from ConfigMap.
-	pricingYAML = obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if strings.Contains(pricingYAML, expectedPattern) {
-		t.Errorf("pricing route %s still present after delete:\n%s", expectedPattern, pricingYAML)
-	} else {
-		t.Logf("  ✓ pricing route removed from ConfigMap")
-	}
+	// 8a: Owned route resources removed.
+	assertOfferRouteResourcesAbsent(t, cfg, name, ns)
 
 	// 8b: ServiceOffer CR gone.
 	_, err = obolRunErr(cfg, "kubectl", "get", "serviceoffers.obol.org", name, "-n", ns)
@@ -3638,18 +3615,7 @@ func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
 		t.Logf("  ✓ %s", cond)
 	}
 
-	// Patch HTTPRoute with LiteLLM auth header (monetize.py doesn't add this yet).
-	masterKey := getLiteLLMMasterKey(t, cfg)
-	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
-	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
-
-	// Restart x402-verifier so it picks up the new pricing route that
-	// monetize.py just added to the x402-pricing ConfigMap.
-	obolRun(t, cfg, "kubectl", "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
-	obolRun(t, cfg, "kubectl", "rollout", "status", "deployment/x402-verifier", "-n", "x402", "--timeout=60s")
-	t.Log("  ✓ Restarted x402-verifier with new pricing route")
-
-	// Wait for Traefik to pick up the patched HTTPRoute.
+	// Wait for Traefik to pick up the published HTTPRoute.
 	time.Sleep(5 * time.Second)
 
 	// ── STEP 2: GATE — Unpaid request returns 402 ──────────────────────
@@ -3767,15 +3733,9 @@ func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
 		"delete", name, "--namespace", ns)
 	t.Logf("  delete output:\n%s", delOut)
 
-	// Verify pricing route was removed.
+	// Verify route resources were removed.
 	time.Sleep(3 * time.Second)
-	pricingOut := obolRun(t, cfg, "kubectl", "get", "configmap", "x402-pricing",
-		"-n", "x402", "-o", "jsonpath={.data.pricing\\.yaml}")
-	if strings.Contains(pricingOut, fmt.Sprintf("/services/%s/*", name)) {
-		t.Errorf("pricing route not removed after delete:\n%s", pricingOut)
-	} else {
-		t.Log("  ✓ Pricing route cleaned up")
-	}
+	assertOfferRouteResourcesAbsent(t, cfg, name, ns)
 
 	t.Log("═══ SELL → GATE → PAY → INFER → SETTLE → DISCOVER — ALL PASSED ═══")
 }

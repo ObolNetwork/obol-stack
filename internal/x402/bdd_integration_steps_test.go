@@ -309,7 +309,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 	})
 
 	// ── Sell-side steps ──────────────────────────────────────────────
-	// These validate that the real `obol sell http` + agent reconciliation
+	// These validate that the real `obol sell http` + controller reconciliation
 	// path works. TestMain already runs these commands during bootstrap,
 	// so these steps verify the resulting state.
 
@@ -388,20 +388,9 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
-	ctx.When(`^the agent reconciles the ServiceOffer$`, func() error {
-		// TestMain already waited for Ready. If not ready, trigger manually.
-		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
-			"get", "serviceoffers.obol.org", serviceOfferName,
-			"-n", serviceOfferNamespace,
-			"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
-		if err != nil || strings.TrimSpace(out) != "True" {
-			// Trigger reconciliation manually.
-			triggerReconciliation(w.kubectlBin, w.kubeconfig)
-			// Poll for Ready.
-			return waitForServiceOfferReady(w.kubectlBin, w.kubeconfig,
-				serviceOfferName, serviceOfferNamespace, 120*time.Second)
-		}
-		return nil
+	ctx.When(`^the controller reconciles the ServiceOffer$`, func() error {
+		return waitForServiceOfferReady(w.kubectlBin, w.kubeconfig,
+			serviceOfferName, serviceOfferNamespace, 120*time.Second)
 	})
 
 	ctx.Then(`^the ServiceOffer status is "([^"]*)"$`, func(expected string) error {
@@ -441,21 +430,6 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			return fmt.Errorf("HTTPRoute %s not found in %s: %v", name, serviceOfferNamespace, err)
 		}
 		w.t.Logf("integration: ✓ HTTPRoute %s exists", name)
-		return nil
-	})
-
-	ctx.Then(`^the x402-pricing ConfigMap contains a route for the offer$`, func() error {
-		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
-			"get", "cm", "x402-pricing", "-n", "x402",
-			"-o", "jsonpath={.data.pricing\\.yaml}")
-		if err != nil {
-			return fmt.Errorf("could not read x402-pricing: %v", err)
-		}
-		pattern := "/services/" + serviceOfferName + "/*"
-		if !strings.Contains(out, pattern) {
-			return fmt.Errorf("pricing ConfigMap does not contain route %s:\n%s", pattern, out)
-		}
-		w.t.Logf("integration: ✓ Pricing route %s present", pattern)
 		return nil
 	})
 
@@ -578,7 +552,6 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return fmt.Errorf("no OASF service entry found in registration services")
 	})
 
-
 	ctx.When(`^the agent probes the tunnel service endpoint$`, func() error {
 		if w.discoveredEndpoint == "" {
 			return fmt.Errorf("no service endpoint discovered")
@@ -628,18 +601,25 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
-	ctx.Then(`^the x402-pricing ConfigMap does not contain a route for the offer$`, func() error {
-		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
-			"get", "cm", "x402-pricing", "-n", "x402",
-			"-o", "jsonpath={.data.pricing\\.yaml}")
-		if err != nil {
-			return fmt.Errorf("could not read x402-pricing: %v", err)
+	ctx.Then(`^no Middleware exists for the offer$`, func() error {
+		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "middleware", "x402-"+serviceOfferName,
+			"-n", serviceOfferNamespace)
+		if err == nil {
+			return fmt.Errorf("Middleware still exists after delete")
 		}
-		pattern := "/services/" + serviceOfferName + "/*"
-		if strings.Contains(out, pattern) {
-			return fmt.Errorf("pricing route %s still present after delete:\n%s", pattern, out)
+		w.t.Log("integration: ✓ Middleware removed")
+		return nil
+	})
+
+	ctx.Then(`^no HTTPRoute exists for the offer$`, func() error {
+		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "httproute", "so-"+serviceOfferName,
+			"-n", serviceOfferNamespace)
+		if err == nil {
+			return fmt.Errorf("HTTPRoute still exists after delete")
 		}
-		w.t.Log("integration: ✓ Pricing route removed")
+		w.t.Log("integration: ✓ HTTPRoute removed")
 		return nil
 	})
 }

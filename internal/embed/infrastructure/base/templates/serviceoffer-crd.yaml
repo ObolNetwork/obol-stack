@@ -201,6 +201,16 @@ spec:
                         Valid values: reputation, crypto-economic, tee-attestation.
                       items:
                         type: string
+                    skills:
+                      type: array
+                      description: "OASF skills included in the generated registration document."
+                      items:
+                        type: string
+                    domains:
+                      type: array
+                      description: "OASF domains included in the generated registration document."
+                      items:
+                        type: string
             status:
               type: object
               properties:

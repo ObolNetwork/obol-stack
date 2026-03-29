@@ -592,7 +592,6 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 	return provider
 }
 
-
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
 	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
@@ -602,6 +601,7 @@ type localImage struct {
 // localImages lists images that should be built locally and imported into k3d.
 var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
+	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 

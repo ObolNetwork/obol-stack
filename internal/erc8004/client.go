@@ -61,20 +61,27 @@ func (c *Client) Close() {
 // Register mints a new agent NFT with the given agentURI.
 // Returns the minted agentId (token ID).
 func (c *Client) Register(ctx context.Context, key *ecdsa.PrivateKey, agentURI string) (*big.Int, error) {
+	agentID, _, err := c.RegisterDetailed(ctx, key, agentURI)
+	return agentID, err
+}
+
+// RegisterDetailed mints a new agent NFT with the given agentURI and returns
+// both the minted agentId and transaction hash.
+func (c *Client) RegisterDetailed(ctx context.Context, key *ecdsa.PrivateKey, agentURI string) (*big.Int, string, error) {
 	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
 	if err != nil {
-		return nil, fmt.Errorf("erc8004: transactor: %w", err)
+		return nil, "", fmt.Errorf("erc8004: transactor: %w", err)
 	}
 	opts.Context = ctx
 
 	tx, err := c.contract.Transact(opts, "register", agentURI)
 	if err != nil {
-		return nil, fmt.Errorf("erc8004: register tx: %w", err)
+		return nil, "", fmt.Errorf("erc8004: register tx: %w", err)
 	}
 
 	receipt, err := bind.WaitMined(ctx, c.eth, tx)
 	if err != nil {
-		return nil, fmt.Errorf("erc8004: wait mined: %w", err)
+		return nil, "", fmt.Errorf("erc8004: wait mined: %w", err)
 	}
 
 	// Parse the Registered event to extract agentId.
@@ -85,10 +92,10 @@ func (c *Client) Register(ctx context.Context, key *ecdsa.PrivateKey, agentURI s
 		}
 		// agentId is indexed (topic[1]).
 		agentID := new(big.Int).SetBytes(vLog.Topics[1].Bytes())
-		return agentID, nil
+		return agentID, tx.Hash().Hex(), nil
 	}
 
-	return nil, fmt.Errorf("erc8004: Registered event not found in receipt (tx: %s)", tx.Hash().Hex())
+	return nil, "", fmt.Errorf("erc8004: Registered event not found in receipt (tx: %s)", tx.Hash().Hex())
 }
 
 // SetAgentURI updates the agentURI for an existing agent NFT.

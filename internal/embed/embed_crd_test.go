@@ -206,6 +206,26 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 	}
 }
 
+func TestRegistrationRequestCRD_Parses(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/registrationrequest-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no RegistrationRequest CRD found")
+	}
+
+	if name := nested(crd, "metadata", "name"); name != "registrationrequests.obol.org" {
+		t.Errorf("metadata.name = %v, want registrationrequests.obol.org", name)
+	}
+	if kind := nested(crd, "spec", "names", "kind"); kind != "RegistrationRequest" {
+		t.Errorf("spec.names.kind = %v, want RegistrationRequest", kind)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Monetize RBAC tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,33 +273,22 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("read ClusterRole missing core API group")
 	}
 
-	// ── Workload ClusterRole ────────────────────────────────────────────
-	workloadCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-workload")
-	if workloadCR == nil {
-		t.Fatal("no ClusterRole 'openclaw-monetize-workload' found")
+	// ── Write ClusterRole ───────────────────────────────────────────────
+	writeCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-write")
+	if writeCR == nil {
+		t.Fatal("no ClusterRole 'openclaw-monetize-write' found")
 	}
 
-	workloadRules, ok := workloadCR["rules"].([]interface{})
-	if !ok || len(workloadRules) == 0 {
-		t.Fatal("workload ClusterRole has no rules")
+	writeRules, ok := writeCR["rules"].([]interface{})
+	if !ok || len(writeRules) == 0 {
+		t.Fatal("write ClusterRole has no rules")
 	}
 
-	// Workload role should have mutate verbs and cover all agent-managed apiGroups.
-	workloadGroups := collectAPIGroups(workloadRules)
-	for _, want := range []string{"obol.org", "traefik.io", "gateway.networking.k8s.io", "", "apps"} {
-		if !workloadGroups[want] {
-			t.Errorf("workload ClusterRole missing apiGroup %q", want)
-		}
+	if !hasVerbOnResource(writeRules, "obol.org", "serviceoffers", "create") {
+		t.Error("write ClusterRole missing 'create' on obol.org/serviceoffers")
 	}
-
-	// Workload: apps/deployments should have create (for registration httpd).
-	if !hasVerbOnResource(workloadRules, "apps", "deployments", "create") {
-		t.Error("workload ClusterRole missing 'create' on apps/deployments")
-	}
-
-	// Workload: configmaps should have create (for registration JSON).
-	if !hasVerbOnResource(workloadRules, "", "configmaps", "create") {
-		t.Error("workload ClusterRole missing 'create' on configmaps")
+	if hasVerbOnResource(writeRules, "traefik.io", "middlewares", "create") {
+		t.Error("write ClusterRole should not grant child-resource access")
 	}
 
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
@@ -291,44 +300,12 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
 	}
 
-	workloadCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-workload-binding")
-	if workloadCRB == nil {
-		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-workload-binding' found")
+	writeCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-write-binding")
+	if writeCRB == nil {
+		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-write-binding' found")
 	}
-	if ref := nested(workloadCRB, "roleRef", "name"); ref != "openclaw-monetize-workload" {
-		t.Errorf("workload binding roleRef.name = %v, want openclaw-monetize-workload", ref)
-	}
-
-
-	// ── x402 namespace Role + RoleBinding ───────────────────────────────
-	x402Role := findDocByName(docs, "Role", "openclaw-x402-pricing")
-	if x402Role == nil {
-		t.Fatal("no Role 'openclaw-x402-pricing' found")
-	}
-	if ns := nested(x402Role, "metadata", "namespace"); ns != "x402" {
-		t.Errorf("x402 Role namespace = %v, want x402", ns)
-	}
-
-	// x402 Role should be scoped to x402-pricing ConfigMap only.
-	x402Rules, ok := x402Role["rules"].([]interface{})
-	if !ok || len(x402Rules) != 1 {
-		t.Fatalf("x402 Role should have exactly 1 rule, got %d", len(x402Rules))
-	}
-	rm := x402Rules[0].(map[string]interface{})
-	resNames, ok := rm["resourceNames"].([]interface{})
-	if !ok || len(resNames) != 1 || resNames[0] != "x402-pricing" {
-		t.Errorf("x402 Role should be scoped to resourceNames: [x402-pricing], got %v", resNames)
-	}
-
-	x402RB := findDocByName(docs, "RoleBinding", "openclaw-x402-pricing-binding")
-	if x402RB == nil {
-		t.Fatal("no RoleBinding 'openclaw-x402-pricing-binding' found")
-	}
-	if ns := nested(x402RB, "metadata", "namespace"); ns != "x402" {
-		t.Errorf("x402 RoleBinding namespace = %v, want x402", ns)
-	}
-	if ref := nested(x402RB, "roleRef", "name"); ref != "openclaw-x402-pricing" {
-		t.Errorf("x402 RoleBinding roleRef.name = %v, want openclaw-x402-pricing", ref)
+	if ref := nested(writeCRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
+		t.Errorf("write binding roleRef.name = %v, want openclaw-monetize-write", ref)
 	}
 }
 
