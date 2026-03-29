@@ -68,7 +68,7 @@ Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traef
 
 Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC on Base/Base Sepolia, Traefik ForwardAuth).
 
-**Sell-side flow**: `obol sell http` → creates ServiceOffer CR → agent reconciles 6 stages: ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware + pricing route) → RoutePublished (HTTPRoute) → Registered (ERC-8004 on-chain) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
+**Sell-side flow**: `obol sell http` → creates ServiceOffer CR → `serviceoffer-controller` (controller-runtime, own Deployment in `obol-system` ns) derives child resources: Middleware (traefik.io ForwardAuth), PaymentRoute CR (obol.org), HTTPRoute (gateway API). Status conditions: UpstreamHealthy → PaymentGateReady → RoutePublished → Ready with `observedGeneration`. Finalizer ensures cleanup on deletion.
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
@@ -76,9 +76,11 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **ServiceOffer CRD** (`obol.org`): Spec fields — `type` (inference|fine-tuning), `model{name,runtime}`, `upstream{service,ns,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image}`. In phase 1, `perMTok` is accepted but enforced as `perRequest = perMTok / 1000`.
 
-**x402-verifier** (`x402` ns): ForwardAuth middleware. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Config in `x402-pricing` ConfigMap: `wallet`, `chain`, `facilitatorURL`, `verifyOnly`, `routes[]{pattern, price, description, priceModel, perMTok, approxTokensPerRequest, offerNamespace, offerName}`. Exposes `/metrics` and is scraped via `ServiceMonitor`.
+**PaymentRoute CRD** (`obol.org`): One CR per monetized route, owned by ServiceOffer. Replaces the shared `x402-pricing` ConfigMap. Spec: `pattern`, `price`, `payTo`, `network`, `priceModel`, `perMTok`, `approxTokensPerRequest`, `upstreamAuth`. Status: `admitted` (set by verifier when route is loaded).
 
-**Agent reconciler** (`internal/embed/skills/monetize/scripts/monetize.py`): Watches ServiceOffer CRs, creates Middleware (`traefik.io`), HTTPRoute, pricing route in ConfigMap, registration resources (ConfigMap + httpd + HTTPRoute at `/.well-known/`). All with ownerReferences for auto-GC.
+**x402-verifier** (`x402` ns): ForwardAuth middleware. Watches PaymentRoute CRs via dynamic informer (replaces ConfigMap file polling). No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Global config (wallet, chain, facilitatorURL) from ConfigMap; per-route config from PaymentRoute CRs. Exposes `/metrics` and is scraped via `ServiceMonitor`. Separate Deployment from controller (different failure domain, scales on QPS).
+
+**serviceoffer-controller** (`obol-system` ns): controller-runtime operator that reconciles ServiceOffer CRDs. Generation-driven: derives Middleware, PaymentRoute, HTTPRoute from spec, observes convergence. Finalizer for cleanup. Replaces `monetize.py` (deleted).
 
 **ERC-8004**: On-chain registration on Base Sepolia Identity Registry (`0xEA0fE4FCF9E3017a24d9Db6e0e39B552c8648B9D`). NFT mint via remote-signer wallet, publishes `/.well-known/agent-registration.json`.
 

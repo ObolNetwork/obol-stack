@@ -21,7 +21,6 @@ import (
 func main() {
 	configPath := flag.String("config", "/config/pricing.yaml", "Path to pricing config YAML (global settings)")
 	listen := flag.String("listen", ":8080", "Listen address")
-	routeSource := flag.String("route-source", "paymentroute", "Route source: paymentroute (CRD watch) or configmap (legacy file watcher)")
 	routeNamespace := flag.String("route-namespace", "x402", "Namespace to watch for PaymentRoute CRs")
 	flag.Parse()
 
@@ -57,34 +56,24 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start route source.
-	switch *routeSource {
-	case "paymentroute":
-		restCfg, err := rest.InClusterConfig()
-		if err != nil {
-			log.Fatalf("in-cluster config: %v (use --route-source=configmap outside cluster)", err)
-		}
-
-		dynClient, err := dynamic.NewForConfig(restCfg)
-		if err != nil {
-			log.Fatalf("dynamic client: %v", err)
-		}
-
-		src := source.NewPaymentRouteSource(dynClient, v, *routeNamespace)
-		go func() {
-			if err := src.Run(ctx); err != nil {
-				log.Fatalf("paymentroute source: %v", err)
-			}
-		}()
-		log.Printf("route source: PaymentRoute CRs (namespace: %s)", *routeNamespace)
-
-	case "configmap":
-		go x402verifier.WatchConfig(ctx, *configPath, v, 5*time.Second)
-		log.Printf("route source: ConfigMap file watcher (%s)", *configPath)
-
-	default:
-		log.Fatalf("unknown route source: %s", *routeSource)
+	// Start PaymentRoute informer.
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatalf("in-cluster config: %v", err)
 	}
+
+	dynClient, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		log.Fatalf("dynamic client: %v", err)
+	}
+
+	src := source.NewPaymentRouteSource(dynClient, v, *routeNamespace)
+	go func() {
+		if err := src.Run(ctx); err != nil {
+			log.Fatalf("paymentroute source: %v", err)
+		}
+	}()
+	log.Printf("route source: PaymentRoute CRs (namespace: %s)", *routeNamespace)
 
 	// Graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
