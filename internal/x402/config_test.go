@@ -114,6 +114,7 @@ func TestResolveChain_AllSupported(t *testing.T) {
 	}{
 		{"base-sepolia", x402lib.BaseSepolia},
 		{"base", x402lib.BaseMainnet},
+		{"ethereum", EthereumMainnet},
 		{"polygon", x402lib.PolygonMainnet},
 		{"polygon-amoy", x402lib.PolygonAmoy},
 		{"avalanche", x402lib.AvalancheMainnet},
@@ -139,6 +140,8 @@ func TestResolveChain_Aliases(t *testing.T) {
 		canonical string
 	}{
 		{"base-mainnet", "base"},
+		{"ethereum-mainnet", "ethereum"},
+		{"mainnet", "ethereum"},
 		{"polygon-mainnet", "polygon"},
 		{"avalanche-mainnet", "avalanche"},
 	}
@@ -162,7 +165,7 @@ func TestResolveChain_Aliases(t *testing.T) {
 }
 
 func TestResolveChain_Unsupported(t *testing.T) {
-	unsupported := []string{"ethereum", "mainnet", "solana", "unknown-chain", ""}
+	unsupported := []string{"solana", "unknown-chain", ""}
 	for _, name := range unsupported {
 		t.Run(name, func(t *testing.T) {
 			_, err := ResolveChain(name)

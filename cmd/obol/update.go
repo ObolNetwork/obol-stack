@@ -31,7 +31,7 @@ func updateCommand(cfg *config.Config) *cli.Command {
 				clusterRunning = false
 			}
 
-			jsonMode := cmd.Bool("json")
+			jsonMode := cmd.Bool("json") || u.IsJSON()
 
 			if !jsonMode && clusterRunning {
 				u.Info("Updating helm repositories...")

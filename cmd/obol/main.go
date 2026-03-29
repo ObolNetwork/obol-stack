@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/agent"
@@ -64,14 +65,14 @@ COMMANDS:
      model status       Show LiteLLM gateway provider status
 
    Sell Services (x402):
-     sell inference   Sell LLM inference via local x402 payment gateway
-     sell http        Sell access to any HTTP service (cluster-based)
-     sell list        List all ServiceOffer CRs
-     sell status      Show offer status or global pricing config
-     sell stop        Stop serving a ServiceOffer
-     sell delete      Delete a ServiceOffer CR
-     sell pricing     Configure x402 pricing in the cluster
-     sell register    Register on ERC-8004 Identity Registry
+     sell inference   Sell local model inference with x402 payments
+     sell http        Sell any local HTTP service with x402 payments
+     sell list        List all services for sale
+     sell status      Show the status of all services for sale
+     sell stop        Stop selling a service
+     sell delete      Delete the sale of a service entirely
+     sell pricing     Manage service pricing
+     sell register    Register on the ERC-8004 Agent Registry (multi-chain)
 
    App Management:
      app install     Install a Helm chart as an application
@@ -119,9 +120,20 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 				Usage:   "Suppress all output except errors and warnings",
 				Sources: cli.EnvVars("OBOL_QUIET"),
 			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "Output format: human or json",
+				Value:   "human",
+				Sources: cli.EnvVars("OBOL_OUTPUT"),
+			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			u := ui.NewWithOptions(cmd.Bool("verbose"), cmd.Bool("quiet"))
+			outputMode, err := ui.ParseOutputMode(cmd.String("output"))
+			if err != nil {
+				return ctx, err
+			}
+			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
 			cmd.Metadata = map[string]any{"ui": u}
 			return ctx, nil
 		},
@@ -467,6 +479,25 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 				Name:  "version",
 				Usage: "Show detailed version information",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					if u.IsJSON() {
+						result := struct {
+							Version   string `json:"version"`
+							GitCommit string `json:"git_commit"`
+							BuildTime string `json:"build_time"`
+							GitDirty  string `json:"git_dirty"`
+							GoVersion string `json:"go_version,omitempty"`
+						}{
+							Version:   version.Version,
+							GitCommit: version.GitCommit,
+							BuildTime: version.BuildTime,
+							GitDirty:  version.GitDirty,
+						}
+						if bi, ok := debugReadBuildInfo(); ok {
+							result.GoVersion = bi
+						}
+						return u.JSON(result)
+					}
 					// Version output should always be unformatted for parseability.
 					fmt.Print(version.BuildInfo())
 					return nil
@@ -613,4 +644,13 @@ func getUI(cmd *cli.Command) *ui.UI {
 		}
 	}
 	return ui.New(false)
+}
+
+// debugReadBuildInfo returns the Go version from runtime/debug.ReadBuildInfo.
+func debugReadBuildInfo() (string, bool) {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", false
+	}
+	return bi.GoVersion, true
 }

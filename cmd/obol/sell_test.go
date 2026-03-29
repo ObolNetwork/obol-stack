@@ -190,8 +190,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"register", "register-name", "register-description", "register-image",
 	)
 
-	assertFlagRequired(t, flags, "wallet")
-	assertFlagRequired(t, flags, "chain")
+	assertStringDefault(t, flags, "chain", "base-sepolia")
 	assertStringDefault(t, flags, "namespace", "default")
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)
@@ -228,9 +227,13 @@ func TestSellRegister_Flags(t *testing.T) {
 	flags := flagMap(reg)
 
 	requireFlags(t, flags,
-		"private-key", "private-key-file", "rpc-url",
-		"endpoint", "name", "description",
+		"chain", "sponsored", "private-key-file",
+		"endpoint", "name", "description", "image",
 	)
+
+	assertStringDefault(t, flags, "chain", "base-sepolia")
+	assertStringDefault(t, flags, "name", "Obol Agent")
+	assertStringDefault(t, flags, "description", "Obol Stack AI agent with x402 payment-gated services")
 }
 
 func TestSellPricing_Flags(t *testing.T) {
@@ -240,7 +243,6 @@ func TestSellPricing_Flags(t *testing.T) {
 	flags := flagMap(pricing)
 
 	requireFlags(t, flags, "wallet", "chain")
-	assertFlagRequired(t, flags, "wallet")
 	assertStringDefault(t, flags, "chain", "base-sepolia")
 }
 
@@ -282,12 +284,9 @@ func TestResolveX402Chain(t *testing.T) {
 		{"base", false},
 		{"base-mainnet", false},
 		{"base-sepolia", false},
-		{"polygon", false},
-		{"polygon-mainnet", false},
-		{"polygon-amoy", false},
-		{"avalanche", false},
-		{"avalanche-mainnet", false},
-		{"avalanche-fuji", false},
+		{"ethereum", false},
+		{"mainnet", false},
+		{"ethereum-mainnet", false},
 		{"unknown-chain", true},
 	}
 

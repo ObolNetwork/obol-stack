@@ -11,9 +11,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	x402 "github.com/mark3labs/x402-go"
-	x402http "github.com/mark3labs/x402-go/http"
+	"github.com/mark3labs/x402-go/encoding"
 )
 
 // Proxy is an OpenAI-compatible reverse proxy that routes requests to upstream
@@ -216,7 +217,7 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 
 			return nil
 		},
-		Transport: &x402http.X402Transport{
+		Transport: &replayableX402Transport{
 			Base:     http.DefaultTransport,
 			Signers:  []x402.Signer{signer},
 			Selector: x402.NewDefaultPaymentSelector(),
@@ -334,6 +335,220 @@ func bodyBufferMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// replayableX402Transport mirrors the x402-go retry flow, but rebuilds the
+// request body from GetBody for each attempt so retries stay valid under
+// httputil.ReverseProxy on newer Go versions.
+type replayableX402Transport struct {
+	Base             http.RoundTripper
+	Signers          []x402.Signer
+	Selector         x402.PaymentSelector
+	OnPaymentAttempt x402.PaymentCallback
+	OnPaymentSuccess x402.PaymentCallback
+	OnPaymentFailure x402.PaymentCallback
+}
+
+func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.Base == nil {
+		t.Base = http.DefaultTransport
+	}
+	if err := ensureReplayableBody(req); err != nil {
+		return nil, err
+	}
+
+	firstReq, err := cloneRequestWithFreshBody(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.Base.RoundTrip(firstReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusPaymentRequired {
+		return resp, nil
+	}
+
+	requirements, err := parsePaymentRequirements(resp)
+	if err != nil {
+		resp.Body.Close()
+		return nil, x402.NewPaymentError(x402.ErrCodeInvalidRequirements, "failed to parse payment requirements", err)
+	}
+	resp.Body.Close()
+
+	payment, err := t.Selector.SelectAndSign(requirements, t.Signers)
+	if err != nil {
+		return nil, err
+	}
+
+	var selectedRequirement *x402.PaymentRequirement
+	for i := range requirements {
+		if requirements[i].Network == payment.Network && requirements[i].Scheme == payment.Scheme {
+			selectedRequirement = &requirements[i]
+			break
+		}
+	}
+
+	startTime := time.Now()
+	if t.OnPaymentAttempt != nil && selectedRequirement != nil {
+		t.OnPaymentAttempt(x402.PaymentEvent{
+			Type:      x402.PaymentEventAttempt,
+			Timestamp: startTime,
+			Method:    "HTTP",
+			URL:       req.URL.String(),
+			Network:   payment.Network,
+			Scheme:    payment.Scheme,
+			Amount:    selectedRequirement.MaxAmountRequired,
+			Asset:     selectedRequirement.Asset,
+			Recipient: selectedRequirement.PayTo,
+		})
+	}
+
+	paymentHeader, err := encoding.EncodePayment(*payment)
+	if err != nil {
+		if t.OnPaymentFailure != nil {
+			t.OnPaymentFailure(x402.PaymentEvent{
+				Type:      x402.PaymentEventFailure,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Error:     err,
+				Duration:  time.Since(startTime),
+			})
+		}
+		return nil, x402.NewPaymentError(x402.ErrCodeSigningFailed, "failed to build payment header", err)
+	}
+
+	retryReq, err := cloneRequestWithFreshBody(req)
+	if err != nil {
+		return nil, err
+	}
+	retryReq.Header.Set("X-PAYMENT", paymentHeader)
+
+	respRetry, err := t.Base.RoundTrip(retryReq)
+	duration := time.Since(startTime)
+	if err != nil {
+		if t.OnPaymentFailure != nil {
+			t.OnPaymentFailure(x402.PaymentEvent{
+				Type:      x402.PaymentEventFailure,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Error:     err,
+				Duration:  duration,
+			})
+		}
+		return nil, err
+	}
+
+	settlement, _ := encoding.DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
+	if settlement.Success && t.OnPaymentSuccess != nil {
+		event := x402.PaymentEvent{
+			Type:        x402.PaymentEventSuccess,
+			Timestamp:   time.Now(),
+			Method:      "HTTP",
+			URL:         req.URL.String(),
+			Transaction: settlement.Transaction,
+			Payer:       settlement.Payer,
+			Duration:    duration,
+		}
+		if selectedRequirement != nil {
+			event.Network = selectedRequirement.Network
+			event.Scheme = selectedRequirement.Scheme
+			event.Amount = selectedRequirement.MaxAmountRequired
+			event.Asset = selectedRequirement.Asset
+			event.Recipient = selectedRequirement.PayTo
+		}
+		t.OnPaymentSuccess(event)
+	}
+
+	return respRetry, nil
+}
+
+func ensureReplayableBody(req *http.Request) error {
+	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
+		return nil
+	}
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	return nil
+}
+
+func cloneRequestWithFreshBody(req *http.Request) (*http.Request, error) {
+	clone := req.Clone(req.Context())
+	switch {
+	case req.Body == nil:
+		clone.Body = nil
+	case req.Body == http.NoBody:
+		clone.Body = http.NoBody
+	default:
+		if req.GetBody == nil {
+			return nil, fmt.Errorf("request body is not replayable")
+		}
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("clone request body: %w", err)
+		}
+		clone.Body = body
+		clone.ContentLength = req.ContentLength
+	}
+	return clone, nil
+}
+
+func parsePaymentRequirements(resp *http.Response) ([]x402.PaymentRequirement, error) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var paymentReqResp struct {
+		X402Version int    `json:"x402Version"`
+		Error       string `json:"error"`
+		Accepts     []struct {
+			Scheme            string                 `json:"scheme"`
+			Network           string                 `json:"network"`
+			MaxAmountRequired string                 `json:"maxAmountRequired"`
+			Asset             string                 `json:"asset"`
+			PayTo             string                 `json:"payTo"`
+			Resource          string                 `json:"resource"`
+			Description       string                 `json:"description,omitempty"`
+			MimeType          string                 `json:"mimeType,omitempty"`
+			MaxTimeoutSeconds int                    `json:"maxTimeoutSeconds"`
+			Extra             map[string]interface{} `json:"extra,omitempty"`
+		} `json:"accepts"`
+	}
+	if err := json.Unmarshal(body, &paymentReqResp); err != nil {
+		return nil, fmt.Errorf("failed to parse payment requirements JSON: %w", err)
+	}
+	if len(paymentReqResp.Accepts) == 0 {
+		return nil, fmt.Errorf("no payment requirements in response")
+	}
+
+	requirements := make([]x402.PaymentRequirement, len(paymentReqResp.Accepts))
+	for i, req := range paymentReqResp.Accepts {
+		requirements[i] = x402.PaymentRequirement{
+			Scheme:            req.Scheme,
+			Network:           req.Network,
+			MaxAmountRequired: req.MaxAmountRequired,
+			Asset:             req.Asset,
+			PayTo:             req.PayTo,
+			Resource:          req.Resource,
+			Description:       req.Description,
+			MimeType:          req.MimeType,
+			MaxTimeoutSeconds: req.MaxTimeoutSeconds,
+			Extra:             req.Extra,
+		}
+	}
+
+	return requirements, nil
 }
 
 // handleStatus returns JSON with remaining auths and spend per upstream.
