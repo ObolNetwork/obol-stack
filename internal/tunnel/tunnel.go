@@ -25,6 +25,15 @@ const (
 )
 
 // Status displays the current tunnel status and URL.
+// tunnelStatusResult is the JSON-serialisable result for `tunnel status`.
+type tunnelStatusResult struct {
+	Mode        string `json:"mode"`
+	Status      string `json:"status"`
+	URL         string `json:"url"`
+	LastUpdated string `json:"last_updated"`
+}
+
+// Status displays the current tunnel status and URL.
 func Status(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -42,12 +51,18 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		mode, url := tunnelModeAndURL(st)
 		if mode == "quick" {
 			// Quick tunnel is dormant — activates on first `obol sell`.
+			if u.IsJSON() {
+				return u.JSON(tunnelStatusResult{Mode: "quick", Status: "dormant", URL: "(activates on 'obol sell')", LastUpdated: time.Now().Format(time.RFC3339)})
+			}
 			printStatusBox(u, "quick", "dormant", "(activates on 'obol sell')", time.Now())
 			u.Blank()
 			u.Print("The tunnel will start automatically when you sell a service.")
 			u.Print("  Start manually: obol tunnel restart")
 			u.Print("  Persistent URL: obol tunnel login --hostname stack.example.com")
 			return nil
+		}
+		if u.IsJSON() {
+			return u.JSON(tunnelStatusResult{Mode: mode, Status: "not running", URL: url, LastUpdated: time.Now().Format(time.RFC3339)})
 		}
 		printStatusBox(u, mode, "not running", url, time.Now())
 		u.Blank()
@@ -66,6 +81,9 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		// Quick tunnels only: try to get URL from logs.
 		tunnelURL, err := GetTunnelURL(cfg)
 		if err != nil {
+			if u.IsJSON() {
+				return u.JSON(tunnelStatusResult{Mode: mode, Status: podStatus, URL: "(not available)", LastUpdated: time.Now().Format(time.RFC3339)})
+			}
 			printStatusBox(u, mode, podStatus, "(not available)", time.Now())
 			u.Blank()
 			u.Print("Troubleshooting:")
@@ -74,6 +92,10 @@ func Status(cfg *config.Config, u *ui.UI) error {
 			return nil
 		}
 		url = tunnelURL
+	}
+
+	if u.IsJSON() {
+		return u.JSON(tunnelStatusResult{Mode: mode, Status: statusLabel, URL: url, LastUpdated: time.Now().Format(time.RFC3339)})
 	}
 
 	printStatusBox(u, mode, statusLabel, url, time.Now())

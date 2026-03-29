@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	"github.com/urfave/cli/v3"
 )
 
@@ -183,14 +185,54 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 // network list — unified local nodes + remote RPCs
 // ---------------------------------------------------------------------------
 
+// networkListResult is the JSON-serialisable result for `network list`.
+type networkListResult struct {
+	LocalNodes []string              `json:"local_nodes"`
+	RPCs       []networkListRPCEntry `json:"rpcs"`
+}
+
+type networkListRPCEntry struct {
+	Alias     string `json:"alias"`
+	ChainID   int    `json:"chain_id"`
+	Upstreams int    `json:"upstreams"`
+}
+
 func networkListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
 		Usage: "List all networks (local nodes + remote RPCs)",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if u.IsJSON() {
+				result := networkListResult{}
+
+				// Collect local nodes (best-effort).
+				if nodes, err := embed.GetAvailableNetworks(); err == nil {
+					result.LocalNodes = nodes
+				}
+
+				// Collect remote RPCs.
+				if rpcNetworks, err := network.ListRPCNetworks(cfg); err == nil {
+					for _, net := range rpcNetworks {
+						alias := net.Alias
+						if alias == "" {
+							alias = fmt.Sprintf("chain-%d", net.ChainID)
+						}
+						result.RPCs = append(result.RPCs, networkListRPCEntry{
+							Alias:     alias,
+							ChainID:   net.ChainID,
+							Upstreams: len(net.Upstreams),
+						})
+					}
+				}
+
+				return u.JSON(result)
+			}
+
 			// Show local node deployments.
 			fmt.Println("Local Nodes:")
-			if err := network.List(cfg, getUI(cmd)); err != nil {
+			if err := network.List(cfg, u); err != nil {
 				fmt.Printf("  (unable to list: %v)\n", err)
 			}
 
@@ -252,8 +294,70 @@ Examples:
 				Name:  "allow-writes",
 				Usage: "Allow write methods (eth_sendRawTransaction, eth_sendTransaction)",
 			},
+			&cli.StringFlag{
+				Name:  "from-json",
+				Usage: "Read network config from JSON file (or - for stdin) instead of flags",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// --from-json: read network add config from file/stdin.
+			if jsonPath := cmd.String("from-json"); jsonPath != "" {
+				data, err := readJSONInput(jsonPath)
+				if err != nil {
+					return err
+				}
+				var netCfg struct {
+					Chain       string `json:"chain"`
+					Endpoint    string `json:"endpoint"`
+					AllowWrites bool   `json:"allowWrites"`
+				}
+				if err := json.Unmarshal(data, &netCfg); err != nil {
+					return fmt.Errorf("parse JSON network config: %w", err)
+				}
+				if netCfg.Chain == "" {
+					return fmt.Errorf("chain is required in JSON input")
+				}
+
+				chainID, chainName, err := network.ResolveChainID(netCfg.Chain)
+				if err != nil {
+					return err
+				}
+
+				readOnly := !netCfg.AllowWrites
+
+				if netCfg.Endpoint != "" {
+					fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, netCfg.Endpoint)
+					if err := network.AddCustomRPC(cfg, chainID, chainName, netCfg.Endpoint, readOnly); err != nil {
+						return fmt.Errorf("failed to add custom RPC: %w", err)
+					}
+					fmt.Printf("Added custom RPC for %s (chain ID: %d) to eRPC\n", chainName, chainID)
+					return nil
+				}
+
+				// ChainList mode with defaults.
+				maxCount := 3
+				fmt.Printf("Fetching public RPCs for %s (chain ID: %d) from ChainList...\n", chainName, chainID)
+				endpoints, displayName, err := network.FetchChainListRPCs(chainID, nil)
+				if err != nil {
+					return fmt.Errorf("failed to fetch RPCs: %w", err)
+				}
+				if len(endpoints) == 0 {
+					return fmt.Errorf("no free public RPCs found for chain ID %d", chainID)
+				}
+				if len(endpoints) > maxCount {
+					endpoints = endpoints[:maxCount]
+				}
+				if displayName != "" {
+					chainName = displayName
+				}
+				fmt.Printf("Found %d quality RPCs for %s\n", len(endpoints), chainName)
+				if err := network.AddPublicRPCs(cfg, chainID, chainName, endpoints, readOnly); err != nil {
+					return fmt.Errorf("failed to add RPCs: %w", err)
+				}
+				fmt.Printf("Added %d RPCs for %s (chain ID: %d) to eRPC\n", len(endpoints), chainName, chainID)
+				return nil
+			}
+
 			if cmd.NArg() == 0 {
 				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network add base\n  obol network add base-sepolia --endpoint http://host.k3d.internal:8545")
 			}
@@ -268,6 +372,9 @@ Examples:
 
 			// Custom endpoint mode.
 			if endpoint := cmd.String("endpoint"); endpoint != "" {
+				if err := validate.URL(endpoint); err != nil {
+					return fmt.Errorf("invalid --endpoint: %w", err)
+				}
 				fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, endpoint)
 				if readOnly {
 					fmt.Printf("  Write methods blocked (use --allow-writes to enable)\n")
