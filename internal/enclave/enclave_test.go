@@ -4,6 +4,7 @@ package enclave_test
 
 import (
 	"crypto/sha256"
+	"errors"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
@@ -14,6 +15,7 @@ const testTag = "com.obol.enclave.test"
 // cleanup removes the test key if it exists.
 func cleanup(t *testing.T) {
 	t.Helper()
+
 	_ = enclave.DeleteKey(testTag)
 }
 
@@ -25,6 +27,7 @@ func TestNewKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKey: %v", err)
 	}
+
 	if k == nil {
 		t.Fatal("NewKey returned nil key")
 	}
@@ -33,9 +36,11 @@ func TestNewKey(t *testing.T) {
 	if len(pub) != 65 {
 		t.Fatalf("PublicKeyBytes: want 65 bytes, got %d", len(pub))
 	}
+
 	if pub[0] != 0x04 {
 		t.Fatalf("PublicKeyBytes: expected uncompressed prefix 0x04, got 0x%02x", pub[0])
 	}
+
 	if k.Tag() != testTag {
 		t.Fatalf("Tag: want %q, got %q", testTag, k.Tag())
 	}
@@ -71,7 +76,7 @@ func TestLoadKeyNotFound(t *testing.T) {
 	_ = enclave.DeleteKey("com.obol.enclave.nonexistent")
 
 	_, err := enclave.LoadKey("com.obol.enclave.nonexistent")
-	if err != enclave.ErrKeyNotFound {
+	if !errors.Is(err, enclave.ErrKeyNotFound) {
 		t.Fatalf("expected ErrKeyNotFound, got %v", err)
 	}
 }
@@ -92,6 +97,7 @@ func TestSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
+
 	if len(sig) < 64 {
 		t.Fatalf("Sign: signature too short (%d bytes)", len(sig))
 	}
@@ -118,6 +124,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	if len(ciphertext) < minLen {
 		t.Fatalf("ciphertext too short: got %d, want >= %d", len(ciphertext), minLen)
 	}
+
 	if ciphertext[0] != 0x01 {
 		t.Fatalf("unexpected version byte: 0x%02x", ciphertext[0])
 	}
@@ -143,6 +150,7 @@ func TestEncryptDecryptTampered(t *testing.T) {
 	}
 
 	plaintext := []byte("sensitive data")
+
 	ciphertext, err := enclave.Encrypt(k.PublicKeyBytes(), plaintext)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -179,6 +187,7 @@ func TestNewKeyIdempotent(t *testing.T) {
 		if !k1.Persistent() {
 			t.Skip("key is ephemeral and in-process cache returned different instance; acceptable in test isolation")
 		}
+
 		t.Fatal("second NewKey returned a different key than the first")
 	}
 }
@@ -187,12 +196,12 @@ func TestCheckSIP(t *testing.T) {
 	// CheckSIP should not return an unexpected error on Apple Silicon.
 	// ErrSIPDisabled is legitimate on developer machines with csrutil disabled.
 	err := enclave.CheckSIP()
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		t.Log("SIP is enabled")
-	case enclave.ErrSIPDisabled:
+	case errors.Is(err, enclave.ErrSIPDisabled):
 		t.Log("WARNING: System Integrity Protection is disabled on this machine")
-	case enclave.ErrNotSupported:
+	case errors.Is(err, enclave.ErrNotSupported):
 		t.Skip("Secure Enclave not supported on this platform")
 	default:
 		t.Fatalf("CheckSIP unexpected error: %v", err)

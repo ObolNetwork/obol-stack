@@ -43,9 +43,11 @@ func (u *UI) Exec(cfg ExecConfig) error {
 	if cfg.Interactive {
 		return u.execInteractive(cfg)
 	}
+
 	if u.verbose {
 		return u.execVerbose(cfg)
 	}
+
 	return u.execCaptured(cfg)
 }
 
@@ -53,6 +55,7 @@ func (u *UI) Exec(cfg ExecConfig) error {
 // Stderr is captured and shown on error.
 func (u *UI) ExecOutput(cfg ExecConfig) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
+
 	cfg.Cmd.Stdout = &stdout
 	cfg.Cmd.Stderr = &stderr
 
@@ -64,34 +67,41 @@ func (u *UI) ExecOutput(cfg ExecConfig) ([]byte, error) {
 		if combined != "" {
 			u.dumpCapturedOutput(combined)
 		}
+
 		return nil, err
 	}
+
 	return stdout.Bytes(), nil
 }
 
 func (u *UI) execInteractive(cfg ExecConfig) error {
 	u.Infof("%s ...", cfg.Name)
+
 	if cfg.Cmd.Stdin == nil {
 		cfg.Cmd.Stdin = os.Stdin
 	}
+
 	if cfg.Cmd.Stdout == nil {
 		cfg.Cmd.Stdout = os.Stdout
 	}
+
 	if cfg.Cmd.Stderr == nil {
 		cfg.Cmd.Stderr = os.Stderr
 	}
+
 	err := cfg.Cmd.Run()
 	if err == nil {
 		u.Successf("%s", cfg.Name)
 	} else {
 		u.Errorf("%s", cfg.Name)
 	}
+
 	return err
 }
 
-
 func (u *UI) execCaptured(cfg ExecConfig) error {
 	var buf bytes.Buffer
+
 	cfg.Cmd.Stdout = &buf
 	cfg.Cmd.Stderr = &buf
 
@@ -101,6 +111,7 @@ func (u *UI) execCaptured(cfg ExecConfig) error {
 	if err != nil && buf.Len() > 0 {
 		u.dumpCapturedOutput(buf.String())
 	}
+
 	return err
 }
 
@@ -120,8 +131,10 @@ func (u *UI) execVerbose(cfg ExecConfig) error {
 
 	streamLines := func(r io.Reader) {
 		defer wg.Done()
+
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
 		for scanner.Scan() {
 			fmt.Fprintf(u.stdout, "%s%s\n", prefix, scanner.Text())
 		}
@@ -131,6 +144,7 @@ func (u *UI) execVerbose(cfg ExecConfig) error {
 	go streamLines(stderrPipe)
 
 	err := cfg.Cmd.Run()
+
 	stdoutW.Close()
 	stderrW.Close()
 	wg.Wait()
@@ -140,11 +154,13 @@ func (u *UI) execVerbose(cfg ExecConfig) error {
 	} else {
 		u.Errorf("%s", cfg.Name)
 	}
+
 	return err
 }
 
 func (u *UI) dumpCapturedOutput(output string) {
 	separator := dimStyle.Render("  ───────────────────────")
+
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, dimStyle.Render("  Output:"))
 	fmt.Fprintln(os.Stderr, separator)

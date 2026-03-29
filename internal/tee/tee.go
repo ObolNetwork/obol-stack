@@ -70,9 +70,11 @@ func UserData(pubkey []byte, modelHash string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tee: invalid model hash hex: %w", err)
 	}
+
 	h := sha256.New()
 	h.Write(pubkey)
 	h.Write(hashBytes)
+
 	return h.Sum(nil), nil
 }
 

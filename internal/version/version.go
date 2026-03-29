@@ -5,23 +5,26 @@ import (
 	"runtime/debug"
 )
 
+const unknownValue = "unknown" // default for unset ldflags fields
+
 var (
 	// These variables are set via ldflags during build
 	Version   = "dev"        // Semantic version (e.g., "0.1.0")
-	GitCommit = "unknown"    // Git commit hash (e.g., "a751d4c")
-	BuildTime = "unknown"    // Build timestamp (e.g., "20251015123705")
+	GitCommit = unknownValue // Git commit hash (e.g., "a751d4c")
+	BuildTime = unknownValue // Build timestamp (e.g., "20251015123705")
 	GitDirty  = "false"      // Whether repo had uncommitted changes
 )
 
 // Full returns the full version string including all metadata
 // Format: version+commit.timestamp[-dirty]
+
 func Full() string {
 	version := Version
 
 	// Add build metadata if available
-	if GitCommit != "unknown" && BuildTime != "unknown" {
+	if GitCommit != unknownValue && BuildTime != unknownValue {
 		version = fmt.Sprintf("%s+%s.%s", version, GitCommit, BuildTime)
-	} else if GitCommit != "unknown" {
+	} else if GitCommit != unknownValue {
 		version = fmt.Sprintf("%s+%s", version, GitCommit)
 	}
 

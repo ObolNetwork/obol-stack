@@ -1,11 +1,11 @@
 package stack
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -39,13 +39,15 @@ func TestCheckPortsAvailable_BlockedPort(t *testing.T) {
 		t.Fatal("expected error for blocked port, got nil")
 	}
 
-	portStr := fmt.Sprintf("%d", blockedPort)
+	portStr := strconv.Itoa(blockedPort)
 	if !strings.Contains(err.Error(), portStr) {
 		t.Errorf("error should mention blocked port %d, got: %v", blockedPort, err)
 	}
+
 	if !strings.Contains(err.Error(), "already in use") {
 		t.Errorf("error should mention 'already in use', got: %v", err)
 	}
+
 	if !strings.Contains(err.Error(), "sudo lsof") {
 		t.Errorf("error should include remediation hint, got: %v", err)
 	}
@@ -66,6 +68,7 @@ func TestCheckPortsAvailable_MixedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to bind second ephemeral port: %v", err)
 	}
+
 	freePort := ln2.Addr().(*net.TCPAddr).Port
 	ln2.Close()
 
@@ -75,7 +78,7 @@ func TestCheckPortsAvailable_MixedPorts(t *testing.T) {
 	}
 
 	// Should mention only the blocked port
-	blockedStr := fmt.Sprintf("%d", blockedPort)
+	blockedStr := strconv.Itoa(blockedPort)
 	if !strings.Contains(err.Error(), blockedStr) {
 		t.Errorf("error should mention blocked port %d, got: %v", blockedPort, err)
 	}
@@ -109,8 +112,9 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 
 	// Write k3d as the current backend + its config file
 	SaveBackend(cfg, BackendK3d)
+
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
-	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
 	// Switch to k3s — k3d config should be cleaned up
 	// (Destroy will fail because no real cluster, but cleanup should still work)
@@ -130,8 +134,9 @@ func TestDestroyOldBackendIfSwitching_NoopSameBackend(t *testing.T) {
 	}
 
 	SaveBackend(cfg, BackendK3d)
+
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
-	os.WriteFile(k3dPath, []byte("k3d config"), 0644)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
 	// Same backend — nothing should be cleaned up
 	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
@@ -152,7 +157,7 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 	SaveBackend(cfg, BackendK3s)
 	// Create k3s state files
 	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
-		os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0644)
+		os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0o644)
 	}
 
 	// Switch to k3d — k3s files should be cleaned up
@@ -185,6 +190,7 @@ func TestOllamaHostIPForBackend_K3s(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error for k3s backend: %v", err)
 	}
+
 	if ip != "127.0.0.1" {
 		t.Errorf("expected 127.0.0.1 for k3s backend, got %s", ip)
 	}
@@ -199,6 +205,7 @@ func TestOllamaHostIPForBackend_K3d(t *testing.T) {
 	if err != nil {
 		t.Skipf("skipping: resolution failed (expected in CI without Docker): %v", err)
 	}
+
 	if ip == "" {
 		t.Fatal("expected non-empty IP for k3d backend")
 	}
@@ -216,6 +223,7 @@ func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if ip != "127.0.0.1" {
 		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
 	}
@@ -227,13 +235,16 @@ func TestDockerBridgeGatewayIP(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("docker0 interface only exists on Linux")
 	}
+
 	ip, err := dockerBridgeGatewayIP()
 	if err != nil {
 		t.Skipf("skipping: docker0 not available (expected without Docker): %v", err)
 	}
+
 	if net.ParseIP(ip) == nil {
 		t.Errorf("expected valid IP from docker0, got %q", ip)
 	}
+
 	t.Logf("docker0 gateway IP: %s", ip)
 }
 
@@ -247,17 +258,21 @@ func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read helmfile: %v", err)
 	}
+
 	out := string(data)
 
 	if !strings.Contains(out, "kind: PodMonitor") {
 		t.Fatalf("helmfile missing PodMonitor:\n%s", out)
 	}
+
 	if !strings.Contains(out, "name: litellm-x402-buyer") {
 		t.Fatalf("helmfile missing buyer PodMonitor name:\n%s", out)
 	}
+
 	if !strings.Contains(out, "release: monitoring") {
 		t.Fatalf("helmfile missing monitoring label:\n%s", out)
 	}
+
 	if !strings.Contains(out, "port: buyer-http") || !strings.Contains(out, "path: /metrics") {
 		t.Fatalf("helmfile missing buyer metrics endpoint:\n%s", out)
 	}
@@ -273,6 +288,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read llm template: %v", err)
 	}
+
 	out := string(data)
 
 	for _, want := range []string{
@@ -290,6 +306,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 			t.Fatalf("llm template missing %q:\n%s", want, out)
 		}
 	}
+
 	if strings.Contains(out, "custom_provider_map") {
 		t.Fatalf("llm template should not require a custom provider:\n%s", out)
 	}

@@ -65,6 +65,7 @@ func (c *Client) Register(ctx context.Context, key *ecdsa.PrivateKey, agentURI s
 	if err != nil {
 		return nil, fmt.Errorf("erc8004: transactor: %w", err)
 	}
+
 	opts.Context = ctx
 
 	tx, err := c.contract.Transact(opts, "register", agentURI)
@@ -85,6 +86,7 @@ func (c *Client) Register(ctx context.Context, key *ecdsa.PrivateKey, agentURI s
 		}
 		// agentId is indexed (topic[1]).
 		agentID := new(big.Int).SetBytes(vLog.Topics[1].Bytes())
+
 		return agentID, nil
 	}
 
@@ -97,6 +99,7 @@ func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID
 	if err != nil {
 		return fmt.Errorf("erc8004: transactor: %w", err)
 	}
+
 	opts.Context = ctx
 
 	tx, err := c.contract.Transact(opts, "setAgentURI", agentID, uri)
@@ -107,6 +110,7 @@ func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
 		return fmt.Errorf("erc8004: wait mined: %w", err)
 	}
+
 	return nil
 }
 
@@ -116,6 +120,7 @@ func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID
 	if err != nil {
 		return fmt.Errorf("erc8004: transactor: %w", err)
 	}
+
 	opts.Context = ctx
 
 	tx, err := c.contract.Transact(opts, "setMetadata", agentID, k, v)
@@ -126,39 +131,48 @@ func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
 		return fmt.Errorf("erc8004: wait mined: %w", err)
 	}
+
 	return nil
 }
 
 // GetMetadata reads metadata for the given key from the agent NFT.
 func (c *Client) GetMetadata(ctx context.Context, agentID *big.Int, k string) ([]byte, error) {
-	var out []interface{}
+	var out []any
+
 	err := c.contract.Call(&bind.CallOpts{Context: ctx}, &out, "getMetadata", agentID, k)
 	if err != nil {
 		return nil, fmt.Errorf("erc8004: getMetadata: %w", err)
 	}
+
 	if len(out) == 0 {
 		return nil, nil
 	}
+
 	b, ok := out[0].([]byte)
 	if !ok {
 		return nil, fmt.Errorf("erc8004: getMetadata: unexpected type %T", out[0])
 	}
+
 	return b, nil
 }
 
 // TokenURI returns the ERC-721 tokenURI for the agent NFT.
 func (c *Client) TokenURI(ctx context.Context, agentID *big.Int) (string, error) {
-	var out []interface{}
+	var out []any
+
 	err := c.contract.Call(&bind.CallOpts{Context: ctx}, &out, "tokenURI", agentID)
 	if err != nil {
 		return "", fmt.Errorf("erc8004: tokenURI: %w", err)
 	}
+
 	if len(out) == 0 {
 		return "", nil
 	}
+
 	s, ok := out[0].(string)
 	if !ok {
 		return "", fmt.Errorf("erc8004: tokenURI: unexpected type %T", out[0])
 	}
+
 	return s, nil
 }

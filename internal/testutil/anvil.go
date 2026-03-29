@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,6 @@ import (
 func jsonDecode(r io.Reader, v any) error {
 	return json.NewDecoder(r).Decode(v)
 }
-
 
 // AnvilFork represents a running Anvil instance forking a live chain.
 type AnvilFork struct {
@@ -83,6 +83,7 @@ func StartAnvilForkWithURL(t *testing.T, forkURL string) *AnvilFork {
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
+
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
@@ -91,10 +92,12 @@ func StartAnvilForkWithURL(t *testing.T, forkURL string) *AnvilFork {
 	cmd := exec.CommandContext(ctx, "anvil",
 		"--fork-url", forkURL,
 		"--host", "0.0.0.0",
-		"--port", fmt.Sprintf("%d", port),
+		"--port", strconv.Itoa(port),
 		"--silent",
 	)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
@@ -112,6 +115,7 @@ func StartAnvilForkWithURL(t *testing.T, forkURL string) *AnvilFork {
 
 	t.Cleanup(func() {
 		cancel()
+
 		_ = cmd.Wait()
 	})
 
@@ -132,12 +136,15 @@ func (f *AnvilFork) waitReady(timeout time.Duration) error {
 		resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
 		if err == nil {
 			resp.Body.Close()
+
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}
+
 		time.Sleep(200 * time.Millisecond)
 	}
+
 	return fmt.Errorf("anvil not ready after %v on port %d", timeout, f.Port)
 }
 
@@ -158,7 +165,7 @@ func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
 	// abi.encode(address, uint256(9)) — both padded to 32 bytes.
 	key := common.LeftPadBytes(addr.Bytes(), 32)
 	slotBytes := common.LeftPadBytes(slot.Bytes(), 32)
-	packed := append(key, slotBytes...)
+	packed := append(append([]byte{}, key...), slotBytes...)
 	storageSlot := crypto.Keccak256Hash(packed)
 
 	// Pad amount to 32 bytes.
@@ -173,6 +180,7 @@ func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
 	if err != nil {
 		t.Fatalf("anvil_setStorageAt failed: %v", err)
 	}
+
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -185,14 +193,17 @@ func (f *AnvilFork) MintUSDC(t *testing.T, to string, amount *big.Int) {
 // FundETH sets the ETH balance for an address on the Anvil fork using anvil_setBalance.
 func (f *AnvilFork) FundETH(t *testing.T, addr string, amount *big.Int) {
 	t.Helper()
+
 	body := fmt.Sprintf(
 		`{"jsonrpc":"2.0","method":"anvil_setBalance","params":["%s","0x%x"],"id":1}`,
 		addr, amount,
 	)
+
 	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("anvil_setBalance failed: %v", err)
 	}
+
 	resp.Body.Close()
 	t.Logf("funded %s with %s wei", addr, amount)
 }
@@ -202,14 +213,17 @@ func (f *AnvilFork) FundETH(t *testing.T, addr string, amount *big.Int) {
 // USDC's SignatureChecker sees code → tries EIP-1271 instead of ecrecover.
 func (f *AnvilFork) ClearCode(t *testing.T, addr string) {
 	t.Helper()
+
 	body := fmt.Sprintf(
 		`{"jsonrpc":"2.0","method":"anvil_setCode","params":["%s","0x"],"id":1}`,
 		addr,
 	)
+
 	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("anvil_setCode failed: %v", err)
 	}
+
 	resp.Body.Close()
 }
 
@@ -224,6 +238,7 @@ func (f *AnvilFork) GetUSDCBalance(t *testing.T, addr string) *big.Int {
 		`{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"%s","data":"%s"},"latest"],"id":1}`,
 		USDCBaseSepolia, calldata,
 	)
+
 	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("eth_call balanceOf failed: %v", err)
@@ -239,5 +254,6 @@ func (f *AnvilFork) GetUSDCBalance(t *testing.T, addr string) *big.Int {
 
 	balance := new(big.Int)
 	balance.SetString(strings.TrimPrefix(result.Result, "0x"), 16)
+
 	return balance
 }

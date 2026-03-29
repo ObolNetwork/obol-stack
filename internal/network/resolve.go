@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,24 +20,29 @@ func ListInstanceIDs(cfg *config.Config) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, fmt.Errorf("failed to read networks directory: %w", err)
 	}
 
 	var ids []string
+
 	for _, networkDir := range networkDirs {
 		if !networkDir.IsDir() {
 			continue
 		}
+
 		deployments, err := os.ReadDir(filepath.Join(networksDir, networkDir.Name()))
 		if err != nil {
 			continue
 		}
+
 		for _, deployment := range deployments {
 			if deployment.IsDir() {
 				ids = append(ids, fmt.Sprintf("%s/%s", networkDir.Name(), deployment.Name()))
 			}
 		}
 	}
+
 	return ids, nil
 }
 
@@ -55,7 +61,7 @@ func ResolveInstance(cfg *config.Config, args []string) (identifier string, rema
 
 	switch len(instances) {
 	case 0:
-		return "", nil, fmt.Errorf("no network deployments found — run 'obol network install <network>' to create one")
+		return "", nil, errors.New("no network deployments found — run 'obol network install <network>' to create one")
 	case 1:
 		return instances[0], args, nil
 	default:
@@ -68,15 +74,18 @@ func ResolveInstance(cfg *config.Config, args []string) (identifier string, rema
 			}
 			// Type-prefix match: "ethereum" → auto-select if only one of that type
 			var prefixMatches []string
+
 			for _, inst := range instances {
 				if typ, _, ok := strings.Cut(inst, "/"); ok && typ == args[0] {
 					prefixMatches = append(prefixMatches, inst)
 				}
 			}
+
 			if len(prefixMatches) == 1 {
 				return prefixMatches[0], args[1:], nil
 			}
 		}
+
 		return "", nil, fmt.Errorf("multiple network deployments found, specify one: %s", strings.Join(instances, ", "))
 	}
 }

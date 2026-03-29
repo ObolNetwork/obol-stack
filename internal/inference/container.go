@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,24 +46,29 @@ type ContainerManager struct {
 // kept; the result is truncated to 63 chars.
 func sanitizeContainerName(deploymentName string) string {
 	name := strings.ToLower(deploymentName)
+
 	var b strings.Builder
+
 	for _, c := range name {
 		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
 			b.WriteRune(c)
 		}
 	}
+
 	s := b.String()
 	// Trim leading hyphens.
 	s = strings.TrimLeft(s, "-")
 	if s == "" {
 		s = "default"
 	}
+
 	full := "obol-inference-" + s
 	if len(full) > 63 {
 		full = full[:63]
 	}
 	// Trim trailing hyphens after truncation.
 	full = strings.TrimRight(full, "-")
+
 	return full
 }
 
@@ -72,9 +78,11 @@ func newContainerManager(binary, deploymentName string, hostPort int) *Container
 	if binary == "" {
 		binary = "container"
 	}
+
 	if hostPort == 0 {
 		hostPort = defaultContainerHostPort
 	}
+
 	return &ContainerManager{
 		binary: binary,
 		name:   sanitizeContainerName(deploymentName),
@@ -91,14 +99,17 @@ func (m *ContainerManager) UpstreamURL() string {
 // Safe to call when the daemon is already running.
 func (m *ContainerManager) EnsureSystemRunning(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, m.binary, "system", "start", "--enable-kernel-install")
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := strings.ToLower(string(out))
 		if strings.Contains(s, "already running") || strings.Contains(s, "already started") {
 			return nil
 		}
+
 		return fmt.Errorf("container system start: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+
 	return nil
 }
 
@@ -110,9 +121,11 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 	if image == "" {
 		image = defaultContainerImage
 	}
+
 	if cpus == 0 {
 		cpus = defaultContainerCPUs
 	}
+
 	if memoryMB == 0 {
 		memoryMB = defaultContainerMemoryMB
 	}
@@ -131,6 +144,7 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 	log.Printf("container: pulling image %s (first run may take several minutes)...", image)
 	pullCmd := exec.CommandContext(ctx, m.binary, "pull", image)
 	pullCmd.Stdout = os.Stdout
+
 	pullCmd.Stderr = os.Stderr
 	if err := pullCmd.Run(); err != nil {
 		return fmt.Errorf("container pull %s: %w", image, err)
@@ -143,7 +157,7 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 		"--name", m.name,
 		"--detach",
 		"--publish", fmt.Sprintf("127.0.0.1:%d:11434", m.port),
-		"--cpus", fmt.Sprintf("%d", cpus),
+		"--cpus", strconv.Itoa(cpus),
 		"--memory", fmt.Sprintf("%dM", memoryMB),
 		image,
 	}
@@ -158,6 +172,7 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 	}
 
 	log.Printf("container: %q ready at %s", m.name, m.UpstreamURL())
+
 	return nil
 }
 
@@ -165,6 +180,7 @@ func (m *ContainerManager) Start(ctx context.Context, image string, cpus, memory
 // Returns nil if the container does not exist.
 func (m *ContainerManager) Stop(ctx context.Context) error {
 	stopCmd := exec.CommandContext(ctx, m.binary, "stop", m.name)
+
 	out, err := stopCmd.CombinedOutput()
 	if err != nil {
 		s := strings.ToLower(string(out))
@@ -181,8 +197,10 @@ func (m *ContainerManager) Stop(ctx context.Context) error {
 		if strings.Contains(s, "not found") || strings.Contains(s, "does not exist") {
 			return nil
 		}
+
 		return fmt.Errorf("container rm %s: %w: %s", m.name, err, strings.TrimSpace(string(out)))
 	}
+
 	return nil
 }
 
@@ -199,6 +217,7 @@ func (m *ContainerManager) waitReady(ctx context.Context) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("ollama in container %q not ready after %s", m.name, containerReadyTimeout)
 		}
+
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -208,6 +227,7 @@ func (m *ContainerManager) waitReady(ctx context.Context) error {
 			resp.Body.Close()
 			return nil
 		}
+
 		if resp != nil {
 			resp.Body.Close()
 		}

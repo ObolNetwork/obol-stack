@@ -23,9 +23,11 @@ const ApproxTokensPerRequest = 1000
 // autoresearch 5-minute experiment budget.
 const ApproxMinutesPerRequest = 5
 
-var approxTokensPerRequestDecimal = decimal.NewFromInt(ApproxTokensPerRequest)
-var minutesPerHour = decimal.NewFromInt(60)
-var approxMinutesPerRequestDecimal = decimal.NewFromInt(ApproxMinutesPerRequest)
+var (
+	approxTokensPerRequestDecimal  = decimal.NewFromInt(ApproxTokensPerRequest)
+	minutesPerHour                 = decimal.NewFromInt(60)
+	approxMinutesPerRequestDecimal = decimal.NewFromInt(ApproxMinutesPerRequest)
+)
 
 // PaymentTerms defines x402 payment requirements for a ServiceOffer.
 // Field names align with x402 PaymentRequirements (V2).
@@ -77,6 +79,7 @@ func (p PriceTable) EffectiveRequestPrice() string {
 	if err != nil {
 		return "0"
 	}
+
 	return price
 }
 
@@ -87,12 +90,15 @@ func (p PriceTable) EffectiveRequestPriceE() (string, error) {
 	if p.PerRequest != "" {
 		return p.PerRequest, nil
 	}
+
 	if p.PerMTok != "" {
 		return ApproximateRequestPriceFromPerMTok(p.PerMTok)
 	}
+
 	if p.PerHour != "" {
 		return ApproximateRequestPriceFromPerHour(p.PerHour)
 	}
+
 	return "0", nil
 }
 
@@ -103,6 +109,7 @@ func ApproximateRequestPriceFromPerMTok(perMTok string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return value.Div(approxTokensPerRequestDecimal).String(), nil
 }
 
@@ -115,5 +122,6 @@ func ApproximateRequestPriceFromPerHour(perHour string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return value.Mul(approxMinutesPerRequestDecimal).Div(minutesPerHour).String(), nil
 }

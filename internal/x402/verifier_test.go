@@ -25,12 +25,14 @@ type mockFacilitatorOpts struct {
 
 type mockFacilitator struct {
 	*httptest.Server
+
 	verifyCalls atomic.Int32
 	settleCalls atomic.Int32
 }
 
 func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator {
 	t.Helper()
+
 	mf := &mockFacilitator{}
 
 	mux := http.NewServeMux()
@@ -43,10 +45,12 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
 		mf.verifyCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+
 		if opts.rejectPayment {
 			fmt.Fprintf(w, `{"isValid":false,"invalidReason":"mock rejection"}`)
 			return
 		}
+
 		fmt.Fprintf(w, `{"isValid":true,"payer":"0xmockpayer"}`)
 	})
 
@@ -57,13 +61,15 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 	})
 
 	mf.Server = httptest.NewServer(mux)
-	t.Cleanup(mf.Server.Close)
+	t.Cleanup(mf.Close)
+
 	return mf
 }
 
 // testPaymentHeader returns a base64-encoded x402 PaymentPayload for BaseSepolia.
 func testPaymentHeader(t *testing.T) string {
 	t.Helper()
+
 	p := x402lib.PaymentPayload{
 		X402Version: 1,
 		Scheme:      "exact",
@@ -80,16 +86,19 @@ func testPaymentHeader(t *testing.T) string {
 			},
 		},
 	}
+
 	data, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal payment: %v", err)
 	}
+
 	return base64.StdEncoding.EncodeToString(data)
 }
 
 // newTestVerifier creates a Verifier backed by the given facilitator URL.
 func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *Verifier {
 	t.Helper()
+
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
@@ -100,6 +109,7 @@ func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *V
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
+
 	return v
 }
 
@@ -129,12 +139,14 @@ func TestVerifier_FreeRoute_Returns200(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/health")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 for free route, got %d", w.Code)
 	}
+
 	if fac.verifyCalls.Load() != 0 {
 		t.Error("facilitator should not be called for free routes")
 	}
@@ -173,16 +185,19 @@ func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with valid payment, got %d", w.Code)
 	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
 	}
+
 	if fac.settleCalls.Load() != 1 {
 		t.Errorf("expected 1 settle call, got %d", fac.settleCalls.Load())
 	}
@@ -197,13 +212,15 @@ func TestVerifier_PaidRoute_RejectedPayment_Returns402(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
 	if w.Code != http.StatusPaymentRequired {
 		t.Errorf("expected 402 for rejected payment, got %d", w.Code)
 	}
+
 	if fac.settleCalls.Load() != 0 {
 		t.Error("settle should not be called when verify fails")
 	}
@@ -211,6 +228,7 @@ func TestVerifier_PaidRoute_RejectedPayment_Returns402(t *testing.T) {
 
 func TestVerifier_VerifyOnly_SkipsSettle(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
@@ -225,16 +243,19 @@ func TestVerifier_VerifyOnly_SkipsSettle(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
 	}
+
 	if fac.settleCalls.Load() != 0 {
 		t.Errorf("expected 0 settle calls (verifyOnly), got %d", fac.settleCalls.Load())
 	}
@@ -251,8 +272,10 @@ func TestVerifier_MultipleRoutes_CorrectMatching(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
+
 	if w.Code != http.StatusPaymentRequired {
 		t.Errorf("rpc route: expected 402, got %d", w.Code)
 	}
@@ -261,8 +284,10 @@ func TestVerifier_MultipleRoutes_CorrectMatching(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req2.Header.Set("X-Forwarded-Uri", "/inference-prod/v1/chat/completions")
 	req2.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w2 := httptest.NewRecorder()
 	v.HandleVerify(w2, req2)
+
 	if w2.Code != http.StatusPaymentRequired {
 		t.Errorf("inference route: expected 402, got %d", w2.Code)
 	}
@@ -270,8 +295,10 @@ func TestVerifier_MultipleRoutes_CorrectMatching(t *testing.T) {
 	// Frontend route — should be free.
 	req3 := httptest.NewRequest(http.MethodGet, "/verify", nil)
 	req3.Header.Set("X-Forwarded-Uri", "/dashboard")
+
 	w3 := httptest.NewRecorder()
 	v.HandleVerify(w3, req3)
+
 	if w3.Code != http.StatusOK {
 		t.Errorf("frontend route: expected 200 (free), got %d", w3.Code)
 	}
@@ -286,8 +313,10 @@ func TestVerifier_ConfigReload(t *testing.T) {
 	// Initially /api/* is free.
 	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/api/data")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
+
 	if w.Code != http.StatusOK {
 		t.Errorf("before reload: expected 200 for /api/data, got %d", w.Code)
 	}
@@ -310,8 +339,10 @@ func TestVerifier_ConfigReload(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "/verify", nil)
 	req2.Header.Set("X-Forwarded-Uri", "/api/data")
 	req2.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w2 := httptest.NewRecorder()
 	v.HandleVerify(w2, req2)
+
 	if w2.Code != http.StatusPaymentRequired {
 		t.Errorf("after reload: expected 402 for /api/data, got %d", w2.Code)
 	}
@@ -385,9 +416,11 @@ func TestVerifier_SetRegistration(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+
 	if got.Name != "test-agent" {
 		t.Errorf("name = %q, want test-agent", got.Name)
 	}
+
 	if !got.X402Support {
 		t.Error("x402Support should be true")
 	}
@@ -444,6 +477,7 @@ func TestVerifier_HandleWellKnown_JSON(t *testing.T) {
 
 	// Verify the response is valid JSON with expected fields.
 	body, _ := io.ReadAll(w.Body)
+
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
@@ -452,12 +486,15 @@ func TestVerifier_HandleWellKnown_JSON(t *testing.T) {
 	if raw["type"] != erc8004.RegistrationType {
 		t.Errorf("type = %v, want %s", raw["type"], erc8004.RegistrationType)
 	}
+
 	if raw["name"] != "json-test" {
 		t.Errorf("name = %v, want json-test", raw["name"])
 	}
+
 	if raw["x402Support"] != true {
 		t.Errorf("x402Support = %v, want true", raw["x402Support"])
 	}
+
 	if raw["active"] != true {
 		t.Errorf("active = %v, want true", raw["active"])
 	}
@@ -487,15 +524,18 @@ func TestVerifier_ReadyzNotReady(t *testing.T) {
 // the first PaymentRequirement from the "accepts" array.
 func parse402Accepts(t *testing.T, body []byte) x402lib.PaymentRequirement {
 	t.Helper()
+
 	var resp struct {
 		Accepts []x402lib.PaymentRequirement `json:"accepts"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("failed to decode 402 body: %v\nbody: %s", err, string(body))
 	}
+
 	if len(resp.Accepts) == 0 {
 		t.Fatal("402 response has empty accepts array")
 	}
+
 	return resp.Accepts[0]
 }
 
@@ -522,6 +562,7 @@ func TestVerifier_PerRoutePayTo_UsesRouteWallet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -535,6 +576,7 @@ func TestVerifier_PerRoutePayTo_UsesRouteWallet(t *testing.T) {
 	if pr.PayTo != routeWallet {
 		t.Errorf("payTo = %q, want route wallet %q", pr.PayTo, routeWallet)
 	}
+
 	if pr.PayTo == globalWallet {
 		t.Error("payTo should NOT be the global wallet — per-route override was ignored")
 	}
@@ -560,6 +602,7 @@ func TestVerifier_PerRouteNetwork_ResolvesCorrectChain(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/services/mainnet/rpc")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -574,6 +617,7 @@ func TestVerifier_PerRouteNetwork_ResolvesCorrectChain(t *testing.T) {
 	if pr.Network != x402lib.BaseMainnet.NetworkID {
 		t.Errorf("network = %q, want %q (base mainnet)", pr.Network, x402lib.BaseMainnet.NetworkID)
 	}
+
 	if pr.Network == x402lib.BaseSepolia.NetworkID {
 		t.Error("network should NOT be base-sepolia — per-route override was ignored")
 	}
@@ -601,13 +645,15 @@ func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with valid payment on per-route PayTo, got %d", w.Code)
 	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
 	}
@@ -629,6 +675,7 @@ func TestVerifier_PerRouteNetwork_InvalidChain_RejectsAtLoad(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected NewVerifier to reject invalid per-route chain at load time")
 	}
+
 	if !strings.Contains(err.Error(), "unsupported chain") {
 		t.Errorf("expected 'unsupported chain' error, got: %v", err)
 	}
@@ -656,6 +703,7 @@ func TestVerifier_NoPerRouteOverride_UsesGlobalWallet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -694,13 +742,16 @@ func TestVerifier_MixedRoutes_CorrectOverrides(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req1.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req1.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w1 := httptest.NewRecorder()
 	v.HandleVerify(w1, req1)
 
 	if w1.Code != http.StatusPaymentRequired {
 		t.Fatalf("rpc route: expected 402, got %d", w1.Code)
 	}
+
 	body1, _ := io.ReadAll(w1.Body)
+
 	pr1 := parse402Accepts(t, body1)
 	if pr1.PayTo != globalWallet {
 		t.Errorf("rpc route: payTo = %q, want global wallet %q", pr1.PayTo, globalWallet)
@@ -710,13 +761,16 @@ func TestVerifier_MixedRoutes_CorrectOverrides(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req2.Header.Set("X-Forwarded-Uri", "/services/custom/endpoint")
 	req2.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w2 := httptest.NewRecorder()
 	v.HandleVerify(w2, req2)
 
 	if w2.Code != http.StatusPaymentRequired {
 		t.Fatalf("custom route: expected 402, got %d", w2.Code)
 	}
+
 	body2, _ := io.ReadAll(w2.Body)
+
 	pr2 := parse402Accepts(t, body2)
 	if pr2.PayTo != customWallet {
 		t.Errorf("custom route: payTo = %q, want custom wallet %q", pr2.PayTo, customWallet)
@@ -735,6 +789,7 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
+
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -773,9 +828,11 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	okReq := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	okReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	okReq.Header.Set("X-Forwarded-Host", "obol.stack")
-	okReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	okReq.Header.Set("X-Payment", testPaymentHeader(t))
+
 	okResp := httptest.NewRecorder()
 	okVerifier.HandleVerify(okResp, okReq)
+
 	if okResp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", okResp.Code)
 	}
@@ -798,9 +855,11 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	rejectReq := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	rejectReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	rejectReq.Header.Set("X-Forwarded-Host", "obol.stack")
-	rejectReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	rejectReq.Header.Set("X-Payment", testPaymentHeader(t))
+
 	rejectResp := httptest.NewRecorder()
 	rejectVerifier.HandleVerify(rejectResp, rejectReq)
+
 	if rejectResp.Code != http.StatusPaymentRequired {
 		t.Fatalf("expected 402, got %d", rejectResp.Code)
 	}
@@ -818,11 +877,13 @@ func scrapeVerifierMetrics(t *testing.T, v *Verifier) map[string]*dto.MetricFami
 
 	rec := httptest.NewRecorder()
 	v.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d, want 200", rec.Code)
 	}
 
 	var parser expfmt.TextParser
+
 	families, err := parser.TextToMetricFamilies(strings.NewReader(rec.Body.String()))
 	if err != nil {
 		t.Fatalf("parse metrics: %v", err)
@@ -844,6 +905,7 @@ func assertVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabel
 			if got != wantValue {
 				t.Fatalf("%s labels %v = %v, want %v", family.GetName(), wantLabels, got, wantValue)
 			}
+
 			return
 		}
 	}
@@ -869,19 +931,21 @@ func verifierLabelsMatch(metric *dto.Metric, want map[string]string) bool {
 	if len(metric.GetLabel()) != len(want) {
 		return false
 	}
+
 	for _, label := range metric.GetLabel() {
 		if want[label.GetName()] != label.GetValue() {
 			return false
 		}
 	}
+
 	return true
 }
 
 func verifierMetricValue(metric *dto.Metric) float64 {
 	switch {
-	case metric.Counter != nil:
+	case metric.GetCounter() != nil:
 		return metric.GetCounter().GetValue()
-	case metric.Gauge != nil:
+	case metric.GetGauge() != nil:
 		return metric.GetGauge().GetValue()
 	default:
 		return 0

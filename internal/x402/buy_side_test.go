@@ -55,6 +55,7 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
+
 	srv := httptest.NewServer(proxy)
 	defer srv.Close()
 
@@ -85,6 +86,7 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		t.Fatalf("decode: %v\n%s", err, string(body))
 	}
+
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content != "paid response" {
 		t.Errorf("unexpected response: %s", string(body))
 	}
@@ -93,9 +95,11 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	if seller.unpaidRequests.Load() == 0 {
 		t.Error("seller received 0 unpaid requests (should have gotten initial 402)")
 	}
+
 	if seller.paidRequests.Load() == 0 {
 		t.Error("seller received 0 paid requests")
 	}
+
 	t.Logf("Seller requests: unpaid=%d, paid=%d",
 		seller.unpaidRequests.Load(), seller.paidRequests.Load())
 
@@ -108,7 +112,7 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 		t.Fatal("seller did not record a payment")
 	}
 
-	var envelope map[string]interface{}
+	var envelope map[string]any
 	if err := json.Unmarshal([]byte(lastPayment), &envelope); err != nil {
 		t.Fatalf("parse payment envelope: %v", err)
 	}
@@ -117,25 +121,30 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	if v, ok := envelope["x402Version"]; !ok || v != float64(1) {
 		t.Errorf("x402Version = %v, want 1", v)
 	}
+
 	if v, ok := envelope["scheme"]; !ok || v != "exact" {
 		t.Errorf("scheme = %v, want exact", v)
 	}
+
 	if v, ok := envelope["network"]; !ok || v != "base-sepolia" {
 		t.Errorf("network = %v, want base-sepolia", v)
 	}
 
 	// Check payload has authorization with correct fields.
-	payload, ok := envelope["payload"].(map[string]interface{})
+	payload, ok := envelope["payload"].(map[string]any)
 	if !ok {
 		t.Fatal("payload missing or wrong type")
 	}
+
 	if _, ok := payload["signature"]; !ok {
 		t.Error("payload.signature missing")
 	}
-	authz, ok := payload["authorization"].(map[string]interface{})
+
+	authz, ok := payload["authorization"].(map[string]any)
 	if !ok {
 		t.Fatal("payload.authorization missing or wrong type")
 	}
+
 	if authz["to"] != payTo {
 		t.Errorf("authorization.to = %v, want %s", authz["to"], payTo)
 	}
@@ -153,7 +162,7 @@ func TestBuySidecar_MultiplePayments(t *testing.T) {
 
 	// Create 3 unique pre-signed auths.
 	var authPool []*buyer.PreSignedAuth
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		authPool = append(authPool, signPreSignedAuth(t, buyerKey, payTo, "1000", 84532))
 	}
 
@@ -174,11 +183,12 @@ func TestBuySidecar_MultiplePayments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
+
 	srv := httptest.NewServer(proxy)
 	defer srv.Close()
 
 	// Send 3 requests, each should succeed.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := http.Post(
 			srv.URL+"/upstream/multi/v1/chat/completions",
 			"application/json",
@@ -187,8 +197,10 @@ func TestBuySidecar_MultiplePayments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request %d: %v", i+1, err)
 		}
+
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("request %d: expected 200, got %d: %s", i+1, resp.StatusCode, string(body))
 		}
@@ -229,6 +241,7 @@ func TestBuySidecar_PoolExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
+
 	srv := httptest.NewServer(proxy)
 	defer srv.Close()
 
@@ -238,7 +251,9 @@ func TestBuySidecar_PoolExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
+
 	resp1.Body.Close()
+
 	if resp1.StatusCode != http.StatusOK {
 		t.Fatalf("request 1: expected 200, got %d", resp1.StatusCode)
 	}
@@ -278,6 +293,7 @@ func TestBuySidecar_Probe(t *testing.T) {
 	}
 
 	body, _ := io.ReadAll(resp.Body)
+
 	var pricing struct {
 		X402Version int `json:"x402Version"`
 		Accepts     []struct {
@@ -295,13 +311,16 @@ func TestBuySidecar_Probe(t *testing.T) {
 	if pricing.X402Version != 1 {
 		t.Errorf("x402Version = %d, want 1", pricing.X402Version)
 	}
+
 	if len(pricing.Accepts) == 0 {
 		t.Fatal("no accepts[] in 402 response")
 	}
+
 	a := pricing.Accepts[0]
 	if a.PayTo != "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" {
 		t.Errorf("payTo = %q", a.PayTo)
 	}
+
 	if a.Amount != "1000" {
 		t.Errorf("amount = %q", a.Amount)
 	}
@@ -330,7 +349,7 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		paymentHeader := r.Header.Get("X-PAYMENT")
+		paymentHeader := r.Header.Get("X-Payment")
 
 		if paymentHeader == "" {
 			// No payment → 402.
@@ -347,6 +366,7 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 					"asset": %q
 				}]
 			}`, testutil.USDCBaseSepolia)
+
 			return
 		}
 
@@ -355,13 +375,15 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, `{"error":"invalid base64 in X-PAYMENT: %v"}`, err)
+
 			return
 		}
 
-		var envelope map[string]interface{}
+		var envelope map[string]any
 		if err := json.Unmarshal(decoded, &envelope); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, `{"error":"invalid JSON in X-PAYMENT: %v"}`, err)
+
 			return
 		}
 
@@ -369,11 +391,14 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 		if _, ok := envelope["x402Version"]; !ok {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":"missing x402Version in payment"}`)
+
 			return
 		}
+
 		if _, ok := envelope["payload"]; !ok {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":"missing payload in payment"}`)
+
 			return
 		}
 
@@ -402,10 +427,13 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+
 	ms.port = l.Addr().(*net.TCPAddr).Port
 
 	srv := &http.Server{Handler: mux, ReadTimeout: 30 * time.Second}
+
 	go func() { _ = srv.Serve(l) }()
+
 	t.Cleanup(func() { srv.Close() })
 
 	return ms
@@ -422,6 +450,7 @@ func signPreSignedAuth(t *testing.T, signerKeyHex, payTo, amount string, chainID
 	if err != nil {
 		t.Fatalf("parse key: %v", err)
 	}
+
 	fromAddr := crypto.PubkeyToAddress(key.PublicKey)
 
 	// Generate random 32-byte nonce.
@@ -429,6 +458,7 @@ func signPreSignedAuth(t *testing.T, signerKeyHex, payTo, amount string, chainID
 	if _, err := rand.Read(nonce); err != nil {
 		t.Fatalf("generate nonce: %v", err)
 	}
+
 	nonceHex := fmt.Sprintf("0x%x", nonce)
 
 	// Build EIP-712 typed data for TransferWithAuthorization (ERC-3009).
@@ -475,6 +505,7 @@ func signPreSignedAuth(t *testing.T, signerKeyHex, payTo, amount string, chainID
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
+
 	sig[64] += 27 // Ethereum v convention
 	sigHex := fmt.Sprintf("0x%x", sig)
 

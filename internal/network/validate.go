@@ -1,12 +1,13 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
 
-func validateInstallOptions(networkName string, values map[string]string) error {
+func validateInstallOptions(networkName string, values map[string]string) error { //nolint:unparam // networkName will vary when more networks gain validation
 	if networkName != "ethereum" {
 		return nil
 	}
@@ -15,15 +16,17 @@ func validateInstallOptions(networkName string, values map[string]string) error 
 	if err != nil {
 		return fmt.Errorf("invalid --reth-indexer-enabled value %q: %w", values["RethIndexerEnabled"], err)
 	}
+
 	if !rethIndexerEnabled {
 		return nil
 	}
 
 	if values["ExecutionClient"] != "reth" {
-		return fmt.Errorf("the embedded ERC-8004 indexer requires --execution-client reth")
+		return errors.New("the embedded ERC-8004 indexer requires --execution-client reth")
 	}
+
 	if strings.TrimSpace(values["RethImageRepository"]) == "" || strings.TrimSpace(values["RethImageTag"]) == "" {
-		return fmt.Errorf("the embedded ERC-8004 indexer requires both --reth-image-repository and --reth-image-tag")
+		return errors.New("the embedded ERC-8004 indexer requires both --reth-image-repository and --reth-image-tag")
 	}
 
 	port := strings.TrimSpace(values["RethIndexerPort"])
@@ -35,10 +38,11 @@ func validateInstallOptions(networkName string, values map[string]string) error 
 	}
 
 	if strings.TrimSpace(values["RethIndexerDbPath"]) == "" {
-		return fmt.Errorf("the embedded ERC-8004 indexer requires --reth-indexer-db-path")
+		return errors.New("the embedded ERC-8004 indexer requires --reth-indexer-db-path")
 	}
+
 	if strings.TrimSpace(values["RethIndexerRegistryAddress"]) == "" {
-		return fmt.Errorf("the embedded ERC-8004 indexer requires --reth-indexer-registry-address")
+		return errors.New("the embedded ERC-8004 indexer requires --reth-indexer-registry-address")
 	}
 
 	if backfill := strings.TrimSpace(values["RethIndexerBackfillFromBlock"]); backfill != "" {
@@ -57,6 +61,6 @@ func parseBoolString(value string) (bool, error) {
 	case "true", "1", "yes":
 		return true, nil
 	default:
-		return false, fmt.Errorf("expected true/false")
+		return false, errors.New("expected true/false")
 	}
 }

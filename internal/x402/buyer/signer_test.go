@@ -124,10 +124,12 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Sign: %v", err)
 	}
+
 	payload1 := p1.Payload.(x402.EVMPayload)
 	if payload1.Signature != "0xaaa" {
 		t.Errorf("first signature = %q, want %q", payload1.Signature, "0xaaa")
 	}
+
 	if p1.X402Version != 1 || p1.Scheme != "exact" || p1.Network != "base-sepolia" {
 		t.Errorf("unexpected payload fields: version=%d scheme=%s network=%s",
 			p1.X402Version, p1.Scheme, p1.Network)
@@ -136,6 +138,7 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 	if signer.Remaining() != 1 {
 		t.Errorf("remaining = %d, want 1", signer.Remaining())
 	}
+
 	if signer.Spent() != 1 {
 		t.Errorf("spent = %d, want 1", signer.Spent())
 	}
@@ -145,6 +148,7 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Sign: %v", err)
 	}
+
 	payload2 := p2.Payload.(x402.EVMPayload)
 	if payload2.Signature != "0xbbb" {
 		t.Errorf("second signature = %q, want %q", payload2.Signature, "0xbbb")
@@ -164,6 +168,7 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 
 func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 	const N = 100
+
 	auths := make([]*PreSignedAuth, N)
 	for i := range auths {
 		auths[i] = makeAuth("0xsig")
@@ -187,20 +192,19 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+
 	successes := make(chan struct{}, N)
 	failures := make(chan struct{}, N)
 
 	for range N {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := signer.Sign(req)
 			if err != nil {
 				failures <- struct{}{}
 			} else {
 				successes <- struct{}{}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -208,13 +212,16 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 	close(failures)
 
 	s := len(successes)
+
 	f := len(failures)
 	if s != N {
 		t.Errorf("successes = %d, want %d (failures=%d)", s, N, f)
 	}
+
 	if signer.Remaining() != 0 {
 		t.Errorf("remaining = %d, want 0", signer.Remaining())
 	}
+
 	if signer.Spent() != N {
 		t.Errorf("spent = %d, want %d", signer.Spent(), N)
 	}
@@ -229,15 +236,19 @@ func TestPreSignedSigner_Interface(t *testing.T) {
 	if signer.Network() != "base-sepolia" {
 		t.Errorf("Network() = %q", signer.Network())
 	}
+
 	if signer.Scheme() != "exact" {
 		t.Errorf("Scheme() = %q", signer.Scheme())
 	}
+
 	if signer.GetPriority() != 0 {
 		t.Errorf("GetPriority() = %d", signer.GetPriority())
 	}
+
 	if signer.GetMaxAmount() != nil {
 		t.Errorf("GetMaxAmount() = %v, want nil", signer.GetMaxAmount())
 	}
+
 	tokens := signer.GetTokens()
 	if len(tokens) != 1 || tokens[0].Address != "0xasset" {
 		t.Errorf("GetTokens() = %+v", tokens)

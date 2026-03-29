@@ -340,7 +340,7 @@ func (k *seKey) Sign(digest []byte) ([]byte, error) {
 		C.size_t(len(digest)),
 		(*C.uint8_t)(unsafe.Pointer(&sigBuf[0])),
 		C.size_t(len(sigBuf)),
-		&errStr,
+		&errStr, //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 	)
 	if n == 0 {
 		msg := cfStringToGo(errStr)
@@ -366,7 +366,7 @@ func (k *seKey) ECDH(peerPubKeyBytes []byte) ([]byte, error) {
 		C.size_t(len(peerPubKeyBytes)),
 		(*C.uint8_t)(unsafe.Pointer(&outBuf[0])),
 		C.size_t(len(outBuf)),
-		&errStr,
+		&errStr, //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 	)
 	if n == 0 {
 		msg := cfStringToGo(errStr)
@@ -411,7 +411,7 @@ func newKey(tag string) (Key, error) {
 	// Attempt persistent (keychain-backed) creation first.
 	var errCode C.CFIndex
 	var errStr C.CFStringRef
-	privRef := C.create_se_key(ctag, C.int(1), &errCode, &errStr)
+	privRef := C.create_se_key(ctag, C.int(1), &errCode, &errStr) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 
 	if unsafe.Pointer(privRef) != nil {
 		// Success — key is in keychain.
@@ -441,7 +441,7 @@ func newKey(tag string) (Key, error) {
 
 	// Ephemeral fallback.
 	var errStr2 C.CFStringRef
-	privRef = C.create_se_key(ctag, C.int(0), &errCode, &errStr2)
+	privRef = C.create_se_key(ctag, C.int(0), &errCode, &errStr2) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 	if unsafe.Pointer(privRef) == nil {
 		msg := cfStringToGo(errStr2)
 		if unsafe.Pointer(errStr2) != nil {
@@ -472,7 +472,7 @@ func loadKey(tag string) (Key, error) {
 
 	var found C.int
 	var errStr C.CFStringRef
-	privRef := C.load_se_key(ctag, &found, &errStr)
+	privRef := C.load_se_key(ctag, &found, &errStr) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 
 	if found == 0 {
 		if unsafe.Pointer(errStr) != nil {
