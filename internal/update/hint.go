@@ -22,6 +22,7 @@ func HintIfStale(cfg *config.Config) {
 
 	// Read on-disk helmfile
 	onDiskPath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
+
 	onDiskData, err := os.ReadFile(onDiskPath)
 	if err != nil {
 		return
@@ -32,6 +33,7 @@ func HintIfStale(cfg *config.Config) {
 	if err != nil {
 		return
 	}
+
 	onDiskReleases, err := ParseHelmfileReleasesFromBytes(onDiskData)
 	if err != nil {
 		return
@@ -39,6 +41,7 @@ func HintIfStale(cfg *config.Config) {
 
 	// Build map of on-disk chart versions
 	onDiskVersions := make(map[string]string)
+
 	for _, rel := range onDiskReleases {
 		if rel.Version != "" && !strings.HasPrefix(rel.Chart, "./") {
 			onDiskVersions[rel.Chart] = rel.Version
@@ -50,12 +53,14 @@ func HintIfStale(cfg *config.Config) {
 		if rel.Version == "" || strings.HasPrefix(rel.Chart, "./") {
 			continue
 		}
+
 		onDiskVer, ok := onDiskVersions[rel.Chart]
 		if !ok {
 			// New chart in embedded that doesn't exist on disk
 			fmt.Println("\nHint: Some stack components have updates available. Run 'obol upgrade' to apply.")
 			return
 		}
+
 		if CompareVersions(onDiskVer, rel.Version) < 0 {
 			fmt.Println("\nHint: Some stack components have updates available. Run 'obol upgrade' to apply.")
 			return

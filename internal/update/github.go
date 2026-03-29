@@ -2,6 +2,7 @@ package update
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -37,7 +38,7 @@ func CheckLatestRelease() (*LatestRelease, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("GitHub API rate limit reached, try again later")
+		return nil, errors.New("GitHub API rate limit reached, try again later")
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -64,14 +65,16 @@ func CompareVersions(current, latest string) int {
 	currentParts := parseSemver(current)
 	latestParts := parseSemver(latest)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if currentParts[i] < latestParts[i] {
 			return -1
 		}
+
 		if currentParts[i] > latestParts[i] {
 			return 1
 		}
 	}
+
 	return 0
 }
 
@@ -91,10 +94,13 @@ func parseSemver(v string) [3]int {
 	}
 
 	parts := strings.Split(v, ".")
+
 	var result [3]int
+
 	for i := 0; i < 3 && i < len(parts); i++ {
 		n, _ := strconv.Atoi(parts[i])
 		result[i] = n
 	}
+
 	return result
 }

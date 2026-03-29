@@ -27,13 +27,13 @@ clean:
 
 # Initialize and start the cluster
 up:
-    obol cluster init
-    obol cluster up
+    obol stack init
+    obol stack up
 
 # Stop and purge the cluster
 down:
-    obol cluster down
-    obol cluster purge
+    obol stack down
+    obol stack purge
 
 # Path to the frontend repo (override with FRONTEND_DIR=../path just dev-frontend)
 frontend_dir := env("FRONTEND_DIR", justfile_directory() / "../obol-stack-front-end")

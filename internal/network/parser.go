@@ -35,6 +35,7 @@ func extractTemplateFields(content string) (map[string]int, error) {
 
 	// Walk the template AST to find field references
 	var walkNodes func(node parse.Node)
+
 	walkNodes = func(node parse.Node) {
 		if node == nil {
 			return
@@ -82,8 +83,8 @@ func extractTemplateFields(content string) (map[string]int, error) {
 	}
 
 	// Walk the template tree
-	if tmpl.Tree != nil && tmpl.Tree.Root != nil {
-		walkNodes(tmpl.Tree.Root)
+	if tmpl.Tree != nil && tmpl.Root != nil {
+		walkNodes(tmpl.Root)
 	}
 
 	return fields, nil
@@ -92,12 +93,15 @@ func extractTemplateFields(content string) (map[string]int, error) {
 // parseAnnotationsFromLines extracts annotations from comment lines preceding a field
 // Returns enum values, default value, description, and whether a default was specified
 func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, string, string, bool) {
-	var enumValues []string
-	var defaultValue string
-	var description string
-	var hasDefault bool
+	var (
+		enumValues   []string
+		defaultValue string
+		description  string
+		hasDefault   bool
+	)
 
 	// Look backwards from the field line to find annotations
+
 	for i := fieldLineNum - 1; i >= 0; i-- {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
@@ -110,6 +114,7 @@ func parseAnnotationsFromLines(lines []string, fieldLineNum int) ([]string, stri
 		// Parse @enum annotation
 		if enumMatch := regexp.MustCompile(`#\s*@enum\s+(.+)`).FindStringSubmatch(line); enumMatch != nil {
 			enumStr := strings.TrimSpace(enumMatch[1])
+
 			enumValues = strings.Split(enumStr, ",")
 			for j := range enumValues {
 				enumValues[j] = strings.TrimSpace(enumValues[j])
@@ -153,10 +158,12 @@ func ParseTemplateFields(networkName string) ([]TemplateField, error) {
 		name string
 		line int
 	}
+
 	sortedFields := make([]fieldWithLine, 0, len(fieldMap))
 	for fieldName, lineNum := range fieldMap {
 		sortedFields = append(sortedFields, fieldWithLine{name: fieldName, line: lineNum})
 	}
+
 	sort.Slice(sortedFields, func(i, j int) bool {
 		return sortedFields[i].line < sortedFields[j].line
 	})
@@ -192,10 +199,12 @@ func ParseTemplateFields(networkName string) ([]TemplateField, error) {
 func fieldNameToFlagName(fieldName string) string {
 	// Insert hyphen before uppercase letters (except first)
 	var result strings.Builder
+
 	for i, r := range fieldName {
 		if i > 0 && r >= 'A' && r <= 'Z' {
 			result.WriteRune('-')
 		}
+
 		result.WriteRune(r)
 	}
 

@@ -34,24 +34,29 @@ func TestK3sReadPid(t *testing.T) {
 			cfg := &config.Config{ConfigDir: tmpDir}
 
 			pidPath := filepath.Join(tmpDir, k3sPidFile)
-			if err := os.WriteFile(pidPath, []byte(tt.content), 0600); err != nil {
+			if err := os.WriteFile(pidPath, []byte(tt.content), 0o600); err != nil {
 				t.Fatalf("WriteFile error: %v", err)
 			}
 
 			b := &K3sBackend{}
+
 			pid, err := b.readPid(cfg)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("readPid() = %d, nil error; want error containing %q", pid, tt.errContains)
 				}
+
 				if !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("readPid() error = %q, want containing %q", err.Error(), tt.errContains)
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("readPid() unexpected error: %v", err)
 			}
+
 			if pid != tt.wantPid {
 				t.Errorf("readPid() = %d, want %d", pid, tt.wantPid)
 			}
@@ -63,6 +68,7 @@ func TestK3sReadPid(t *testing.T) {
 		cfg := &config.Config{ConfigDir: tmpDir}
 
 		b := &K3sBackend{}
+
 		_, err := b.readPid(cfg)
 		if err == nil {
 			t.Fatal("readPid() with no file should return error")
@@ -75,7 +81,7 @@ func TestK3sRemovePidFile(t *testing.T) {
 	cfg := &config.Config{ConfigDir: tmpDir}
 
 	pidPath := filepath.Join(tmpDir, k3sPidFile)
-	if err := os.WriteFile(pidPath, []byte("12345"), 0600); err != nil {
+	if err := os.WriteFile(pidPath, []byte("12345"), 0o600); err != nil {
 		t.Fatalf("WriteFile error: %v", err)
 	}
 

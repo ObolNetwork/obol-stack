@@ -22,6 +22,7 @@ func (u *UI) Info(msg string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintf(u.stdout, "%s %s\n", infoStyle.Render("==>"), msg)
 }
 
@@ -35,6 +36,7 @@ func (u *UI) Success(msg string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintf(u.stdout, "  %s %s\n", successStyle.Render("✓"), msg)
 }
 
@@ -70,6 +72,7 @@ func (u *UI) Print(msg string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintln(u.stdout, msg)
 }
 
@@ -78,6 +81,7 @@ func (u *UI) Printf(format string, args ...any) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintf(u.stdout, format+"\n", args...)
 }
 
@@ -86,6 +90,7 @@ func (u *UI) Detail(key, value string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintf(u.stdout, "  %s: %s\n", dimStyle.Render(key), value)
 }
 
@@ -94,6 +99,7 @@ func (u *UI) Dim(msg string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintln(u.stdout, dimStyle.Render(msg))
 }
 
@@ -102,6 +108,7 @@ func (u *UI) Bold(msg string) {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintln(u.stdout, boldStyle.Render(msg))
 }
 
@@ -110,5 +117,6 @@ func (u *UI) Blank() {
 	if u.quiet {
 		return
 	}
+
 	fmt.Fprintln(u.stdout)
 }

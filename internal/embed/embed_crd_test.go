@@ -10,65 +10,76 @@ import (
 // multiDoc splits a YAML file that may start with a Helm conditional
 // (e.g. {{- if ... }}) into individual YAML documents, stripping
 // Helm template directives and blank documents.
-func multiDoc(raw []byte) []map[string]interface{} {
+func multiDoc(raw []byte) []map[string]any {
 	// Strip Helm template lines ({{- ... }}).
 	var cleaned []string
-	for _, line := range strings.Split(string(raw), "\n") {
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "{{") {
 			continue
 		}
+
 		cleaned = append(cleaned, line)
 	}
 
 	docs := strings.Split(strings.Join(cleaned, "\n"), "\n---\n")
-	var result []map[string]interface{}
+
+	var result []map[string]any
+
 	for _, doc := range docs {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
 			continue
 		}
-		var m map[string]interface{}
+
+		var m map[string]any
 		if err := yaml.Unmarshal([]byte(doc), &m); err != nil {
 			continue
 		}
+
 		if len(m) > 0 {
 			result = append(result, m)
 		}
 	}
+
 	return result
 }
 
 // findDoc returns the first document matching kind.
-func findDoc(docs []map[string]interface{}, kind string) map[string]interface{} {
+func findDoc(docs []map[string]any, kind string) map[string]any {
 	for _, d := range docs {
 		if d["kind"] == kind {
 			return d
 		}
 	}
+
 	return nil
 }
 
 // findDocByName returns the first document matching kind and metadata.name.
-func findDocByName(docs []map[string]interface{}, kind, name string) map[string]interface{} {
+func findDocByName(docs []map[string]any, kind, name string) map[string]any {
 	for _, d := range docs {
 		if d["kind"] == kind && nested(d, "metadata", "name") == name {
 			return d
 		}
 	}
+
 	return nil
 }
 
 // nested traverses a map[string]interface{} by dot-separated keys.
-func nested(m map[string]interface{}, keys ...string) interface{} {
-	var cur interface{} = m
+func nested(m map[string]any, keys ...string) any {
+	var cur any = m
 	for _, k := range keys {
-		cm, ok := cur.(map[string]interface{})
+		cm, ok := cur.(map[string]any)
 		if !ok {
 			return nil
 		}
+
 		cur = cm[k]
 	}
+
 	return cur
 }
 
@@ -83,6 +94,7 @@ func TestServiceOfferCRD_Parses(t *testing.T) {
 	}
 
 	docs := multiDoc(data)
+
 	crd := findDoc(docs, "CustomResourceDefinition")
 	if crd == nil {
 		t.Fatal("no CustomResourceDefinition document found")
@@ -110,23 +122,26 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 	}
 
 	docs := multiDoc(data)
+
 	crd := findDoc(docs, "CustomResourceDefinition")
 	if crd == nil {
 		t.Fatal("no CRD document found")
 	}
 
 	// Navigate to spec.versions[0].schema.openAPIV3Schema.properties.spec.properties
-	versions, ok := nested(crd, "spec", "versions").([]interface{})
+	versions, ok := nested(crd, "spec", "versions").([]any)
 	if !ok || len(versions) == 0 {
 		t.Fatal("spec.versions is empty or wrong type")
 	}
-	v0, ok := versions[0].(map[string]interface{})
+
+	v0, ok := versions[0].(map[string]any)
 	if !ok {
 		t.Fatal("versions[0] is not a map")
 	}
 
 	specProps := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties")
-	pm, ok := specProps.(map[string]interface{})
+
+	pm, ok := specProps.(map[string]any)
 	if !ok {
 		t.Fatalf("spec.properties is not a map: %T", specProps)
 	}
@@ -146,18 +161,20 @@ func TestServiceOfferCRD_PrinterColumns(t *testing.T) {
 	}
 
 	docs := multiDoc(data)
+
 	crd := findDoc(docs, "CustomResourceDefinition")
 	if crd == nil {
 		t.Fatal("no CRD document found")
 	}
 
-	versions, ok := nested(crd, "spec", "versions").([]interface{})
+	versions, ok := nested(crd, "spec", "versions").([]any)
 	if !ok || len(versions) == 0 {
 		t.Fatal("no versions")
 	}
-	v0 := versions[0].(map[string]interface{})
 
-	cols, ok := v0["additionalPrinterColumns"].([]interface{})
+	v0 := versions[0].(map[string]any)
+
+	cols, ok := v0["additionalPrinterColumns"].([]any)
 	if !ok {
 		t.Fatal("additionalPrinterColumns missing or wrong type")
 	}
@@ -168,7 +185,7 @@ func TestServiceOfferCRD_PrinterColumns(t *testing.T) {
 	}
 
 	for i, want := range expected {
-		col := cols[i].(map[string]interface{})
+		col := cols[i].(map[string]any)
 		if got := col["name"]; got != want {
 			t.Errorf("column[%d].name = %v, want %v", i, got, want)
 		}
@@ -182,17 +199,19 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 	}
 
 	docs := multiDoc(data)
+
 	crd := findDoc(docs, "CustomResourceDefinition")
 	if crd == nil {
 		t.Fatal("no CRD document found")
 	}
 
-	versions := nested(crd, "spec", "versions").([]interface{})
-	v0 := versions[0].(map[string]interface{})
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
 	// Wallet validation is now at spec.payment.properties.payTo (aligned with x402)
 	payToProp := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties",
 		"payment", "properties", "payTo")
-	wm, ok := payToProp.(map[string]interface{})
+
+	wm, ok := payToProp.(map[string]any)
 	if !ok {
 		t.Fatal("payment.payTo property not a map")
 	}
@@ -201,6 +220,7 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 	if !ok {
 		t.Fatal("payment.payTo.pattern missing")
 	}
+
 	if pattern != "^0x[0-9a-fA-F]{40}$" {
 		t.Errorf("payment.payTo.pattern = %q, want ^0x[0-9a-fA-F]{40}$", pattern)
 	}
@@ -224,18 +244,20 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Fatal("no ClusterRole 'openclaw-monetize-read' found")
 	}
 
-	readRules, ok := readCR["rules"].([]interface{})
+	readRules, ok := readCR["rules"].([]any)
 	if !ok || len(readRules) == 0 {
 		t.Fatal("read ClusterRole has no rules")
 	}
 
 	// Read role should be read-only: no create/update/patch/delete verbs.
 	for _, r := range readRules {
-		rm := r.(map[string]interface{})
-		verbs, ok := rm["verbs"].([]interface{})
+		rm := r.(map[string]any)
+
+		verbs, ok := rm["verbs"].([]any)
 		if !ok {
 			continue
 		}
+
 		for _, v := range verbs {
 			switch v.(string) {
 			case "create", "update", "patch", "delete":
@@ -249,6 +271,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if !readGroups["obol.org"] {
 		t.Error("read ClusterRole missing obol.org apiGroup")
 	}
+
 	if !readGroups[""] {
 		t.Error("read ClusterRole missing core API group")
 	}
@@ -259,7 +282,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Fatal("no ClusterRole 'openclaw-monetize-workload' found")
 	}
 
-	workloadRules, ok := workloadCR["rules"].([]interface{})
+	workloadRules, ok := workloadCR["rules"].([]any)
 	if !ok || len(workloadRules) == 0 {
 		t.Fatal("workload ClusterRole has no rules")
 	}
@@ -287,6 +310,7 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if readCRB == nil {
 		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-read-binding' found")
 	}
+
 	if ref := nested(readCRB, "roleRef", "name"); ref != "openclaw-monetize-read" {
 		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
 	}
@@ -295,27 +319,30 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if workloadCRB == nil {
 		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-workload-binding' found")
 	}
+
 	if ref := nested(workloadCRB, "roleRef", "name"); ref != "openclaw-monetize-workload" {
 		t.Errorf("workload binding roleRef.name = %v, want openclaw-monetize-workload", ref)
 	}
-
 
 	// ── x402 namespace Role + RoleBinding ───────────────────────────────
 	x402Role := findDocByName(docs, "Role", "openclaw-x402-pricing")
 	if x402Role == nil {
 		t.Fatal("no Role 'openclaw-x402-pricing' found")
 	}
+
 	if ns := nested(x402Role, "metadata", "namespace"); ns != "x402" {
 		t.Errorf("x402 Role namespace = %v, want x402", ns)
 	}
 
 	// x402 Role should be scoped to x402-pricing ConfigMap only.
-	x402Rules, ok := x402Role["rules"].([]interface{})
+	x402Rules, ok := x402Role["rules"].([]any)
 	if !ok || len(x402Rules) != 1 {
 		t.Fatalf("x402 Role should have exactly 1 rule, got %d", len(x402Rules))
 	}
-	rm := x402Rules[0].(map[string]interface{})
-	resNames, ok := rm["resourceNames"].([]interface{})
+
+	rm := x402Rules[0].(map[string]any)
+
+	resNames, ok := rm["resourceNames"].([]any)
 	if !ok || len(resNames) != 1 || resNames[0] != "x402-pricing" {
 		t.Errorf("x402 Role should be scoped to resourceNames: [x402-pricing], got %v", resNames)
 	}
@@ -324,71 +351,88 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if x402RB == nil {
 		t.Fatal("no RoleBinding 'openclaw-x402-pricing-binding' found")
 	}
+
 	if ns := nested(x402RB, "metadata", "namespace"); ns != "x402" {
 		t.Errorf("x402 RoleBinding namespace = %v, want x402", ns)
 	}
+
 	if ref := nested(x402RB, "roleRef", "name"); ref != "openclaw-x402-pricing" {
 		t.Errorf("x402 RoleBinding roleRef.name = %v, want openclaw-x402-pricing", ref)
 	}
 }
 
 // collectAPIGroups extracts all unique apiGroup strings from a list of rules.
-func collectAPIGroups(rules []interface{}) map[string]bool {
+func collectAPIGroups(rules []any) map[string]bool {
 	groups := make(map[string]bool)
+
 	for _, r := range rules {
-		rm := r.(map[string]interface{})
-		gs, ok := rm["apiGroups"].([]interface{})
+		rm := r.(map[string]any)
+
+		gs, ok := rm["apiGroups"].([]any)
 		if !ok {
 			continue
 		}
+
 		for _, g := range gs {
 			groups[g.(string)] = true
 		}
 	}
+
 	return groups
 }
 
 // hasVerbOnResource checks if any rule grants the given verb on the given
 // apiGroup + resource combination.
-func hasVerbOnResource(rules []interface{}, apiGroup, resource, verb string) bool {
+func hasVerbOnResource(rules []any, apiGroup, resource, verb string) bool {
 	for _, r := range rules {
-		rm := r.(map[string]interface{})
-		gs, ok := rm["apiGroups"].([]interface{})
+		rm := r.(map[string]any)
+
+		gs, ok := rm["apiGroups"].([]any)
 		if !ok {
 			continue
 		}
+
 		groupMatch := false
+
 		for _, g := range gs {
 			if g.(string) == apiGroup {
 				groupMatch = true
 			}
 		}
+
 		if !groupMatch {
 			continue
 		}
-		res, ok := rm["resources"].([]interface{})
+
+		res, ok := rm["resources"].([]any)
 		if !ok {
 			continue
 		}
+
 		resMatch := false
+
 		for _, rr := range res {
 			if rr.(string) == resource {
 				resMatch = true
 			}
 		}
+
 		if !resMatch {
 			continue
 		}
-		verbs, ok := rm["verbs"].([]interface{})
+
+		verbs, ok := rm["verbs"].([]any)
 		if !ok {
 			continue
 		}
+
 		for _, v := range verbs {
 			if v.(string) == verb {
 				return true
 			}
 		}
 	}
+
 	return false
 }
 
@@ -415,10 +459,11 @@ func TestAdmissionPolicy_Parses(t *testing.T) {
 	}
 
 	// Policy should have 2 validation rules
-	validations, ok := nested(policy, "spec", "validations").([]interface{})
+	validations, ok := nested(policy, "spec", "validations").([]any)
 	if !ok {
 		t.Fatal("spec.validations missing or wrong type")
 	}
+
 	if len(validations) != 2 {
 		t.Errorf("got %d validation rules, want 2", len(validations))
 	}
@@ -428,10 +473,11 @@ func TestAdmissionPolicy_Parses(t *testing.T) {
 		t.Errorf("binding.spec.policyName = %v, want openclaw-resource-guard", pName)
 	}
 
-	actions, ok := nested(binding, "spec", "validationActions").([]interface{})
+	actions, ok := nested(binding, "spec", "validationActions").([]any)
 	if !ok || len(actions) == 0 {
 		t.Fatal("binding.spec.validationActions missing")
 	}
+
 	if actions[0] != "Deny" {
 		t.Errorf("validationActions[0] = %v, want Deny", actions[0])
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,6 +37,7 @@ func ExtractUserData(quote []byte) ([]byte, TEEType, error) {
 		if err != nil {
 			return nil, TEETypeStub, fmt.Errorf("tee: invalid stub user_data hex: %w", err)
 		}
+
 		return ud, TEETypeStub, nil
 	}
 
@@ -51,6 +53,7 @@ func ExtractUserData(quote []byte) ([]byte, TEEType, error) {
 	// teeType=0x00000081 at offset 4.
 	if len(quote) > 48 {
 		version := binary.LittleEndian.Uint16(quote[0:2])
+
 		teeType := binary.LittleEndian.Uint32(quote[4:8])
 		if version == 4 && teeType == 0x00000081 {
 			// reportData is in the TD Quote Body at offset 568 from quote
@@ -143,6 +146,7 @@ func VerifyTDX(quote []byte, expectedUserData []byte) error {
 	}
 
 	_ = quoteV4 // available for callers who need measurements (MrTd, RTMRs)
+
 	return nil
 }
 
@@ -219,8 +223,9 @@ func VerifyNitro(doc []byte, expectedUserData []byte) error {
 	if err != nil {
 		return fmt.Errorf("tee/nitro: attestation verification failed: %w", err)
 	}
+
 	if !result.SignatureOK {
-		return fmt.Errorf("tee/nitro: COSE signature verification failed")
+		return errors.New("tee/nitro: COSE signature verification failed")
 	}
 
 	// Validate user_data binding.
@@ -243,21 +248,23 @@ func VerifyNitroWithPCR0(doc []byte, expectedUserData []byte, expectedPCR0 []byt
 	if err != nil {
 		return fmt.Errorf("tee/nitro: attestation verification failed: %w", err)
 	}
+
 	if !result.SignatureOK {
-		return fmt.Errorf("tee/nitro: COSE signature verification failed")
+		return errors.New("tee/nitro: COSE signature verification failed")
 	}
 
 	if expectedUserData != nil {
 		if !bytes.Equal(result.Document.UserData, expectedUserData) {
-			return fmt.Errorf("tee/nitro: user_data mismatch")
+			return errors.New("tee/nitro: user_data mismatch")
 		}
 	}
 
 	if expectedPCR0 != nil {
 		pcr0, ok := result.Document.PCRs[0]
 		if !ok {
-			return fmt.Errorf("tee/nitro: PCR0 not present in attestation")
+			return errors.New("tee/nitro: PCR0 not present in attestation")
 		}
+
 		if !bytes.Equal(pcr0, expectedPCR0) {
 			return fmt.Errorf("tee/nitro: PCR0 mismatch: expected %x, got %x",
 				expectedPCR0, pcr0)
@@ -279,6 +286,7 @@ func ComputeModelHash(modelID string) string {
 func padTo64(data []byte) []byte {
 	out := make([]byte, 64)
 	copy(out, data)
+
 	return out
 }
 
@@ -288,10 +296,12 @@ func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
+
 	for i := range a {
 		if a[i] != b[i] {
 			return false
 		}
 	}
+
 	return true
 }

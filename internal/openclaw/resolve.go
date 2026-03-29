@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,15 +20,18 @@ func ListInstanceIDs(cfg *config.Config) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, fmt.Errorf("failed to read OpenClaw instances: %w", err)
 	}
 
 	var ids []string
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			ids = append(ids, entry.Name())
 		}
 	}
+
 	return ids, nil
 }
 
@@ -46,7 +50,7 @@ func ResolveInstance(cfg *config.Config, args []string) (id string, remaining []
 
 	switch len(instances) {
 	case 0:
-		return "", nil, fmt.Errorf("no OpenClaw instances found — run 'obol agent init' to create one")
+		return "", nil, errors.New("no OpenClaw instances found — run 'obol agent init' to create one")
 	case 1:
 		return instances[0], args, nil
 	default:
@@ -57,6 +61,7 @@ func ResolveInstance(cfg *config.Config, args []string) (id string, remaining []
 				}
 			}
 		}
+
 		return "", nil, fmt.Errorf("multiple OpenClaw instances found, specify one: %s", strings.Join(instances, ", "))
 	}
 }

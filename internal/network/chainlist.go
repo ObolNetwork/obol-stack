@@ -29,10 +29,10 @@ type RPCEndpoint struct {
 
 // ChainEntry represents a single chain entry from the ChainList API.
 type ChainEntry struct {
-	Name    string        `json:"name"`
-	Chain   string        `json:"chain"`
-	ChainID int           `json:"chainId"`
-	RPC     []interface{} `json:"rpc"` // mix of strings and objects
+	Name    string `json:"name"`
+	Chain   string `json:"chain"`
+	ChainID int    `json:"chainId"`
+	RPC     []any  `json:"rpc"` // mix of strings and objects
 }
 
 // chainNames maps common chain names/aliases to chain IDs.
@@ -81,7 +81,9 @@ func ResolveChainID(nameOrID string) (int, string, error) {
 	for name := range chainNames {
 		names = append(names, name)
 	}
+
 	sort.Strings(names)
+
 	return 0, "", fmt.Errorf("unknown chain %q. Known chains: %s\nOr use a numeric chain ID (e.g., 8453)", nameOrID, strings.Join(names, ", "))
 }
 
@@ -91,6 +93,7 @@ type ChainListFetcher func() ([]byte, error)
 // DefaultChainListFetcher fetches from the real ChainList API.
 func DefaultChainListFetcher() ([]byte, error) {
 	client := &http.Client{Timeout: chainListTimeout}
+
 	resp, err := client.Get(chainListURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ChainList data: %w", err)
@@ -136,27 +139,32 @@ func ParseAndFilterRPCs(data []byte, chainID, maxRPCs int) ([]RPCEndpoint, strin
 
 	// Find the chain entry.
 	var target *ChainEntry
+
 	for i := range chains {
 		if chains[i].ChainID == chainID {
 			target = &chains[i]
 			break
 		}
 	}
+
 	if target == nil {
 		return nil, "", fmt.Errorf("chain ID %d not found in ChainList data", chainID)
 	}
 
 	// Parse RPCs — the RPC field is a mix of strings and objects.
 	var endpoints []RPCEndpoint
+
 	for _, raw := range target.RPC {
 		var ep RPCEndpoint
+
 		switch v := raw.(type) {
 		case string:
 			ep = RPCEndpoint{URL: v, Tracking: "unknown"}
-		case map[string]interface{}:
+		case map[string]any:
 			if url, ok := v["url"].(string); ok {
 				ep.URL = url
 			}
+
 			if tracking, ok := v["tracking"].(string); ok {
 				ep.Tracking = tracking
 			} else {
@@ -186,6 +194,7 @@ func ParseAndFilterRPCs(data []byte, chainID, maxRPCs int) ([]RPCEndpoint, strin
 // FilterFreeRPCs filters RPC endpoints to only include free, HTTPS, non-tracking endpoints.
 func FilterFreeRPCs(endpoints []RPCEndpoint) []RPCEndpoint {
 	var result []RPCEndpoint
+
 	for _, ep := range endpoints {
 		// HTTPS only.
 		if !strings.HasPrefix(ep.URL, "https://") {
@@ -209,6 +218,7 @@ func FilterFreeRPCs(endpoints []RPCEndpoint) []RPCEndpoint {
 
 		result = append(result, ep)
 	}
+
 	return result
 }
 

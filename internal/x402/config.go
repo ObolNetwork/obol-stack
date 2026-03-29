@@ -93,6 +93,7 @@ func LoadConfig(path string) (*PricingConfig, error) {
 	if cfg.FacilitatorURL == "" {
 		cfg.FacilitatorURL = "https://facilitator.x402.rs"
 	}
+
 	if cfg.Chain == "" {
 		cfg.Chain = "base-sepolia"
 	}
@@ -117,6 +118,7 @@ func ValidateFacilitatorURL(u string) error {
 	if parsed.Scheme == "https" {
 		return nil
 	}
+
 	if parsed.Scheme != "http" {
 		return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)
 	}

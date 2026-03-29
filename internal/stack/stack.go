@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -37,6 +38,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	if _, err := os.Stat(stackIDPath); err == nil {
 		hasExistingConfig = true
 	}
+
 	if _, err := os.Stat(backendFilePath); err == nil {
 		hasExistingConfig = true
 	}
@@ -49,7 +51,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 		return fmt.Errorf("stack configuration already exists at %s\nUse --force to overwrite", cfg.ConfigDir)
 	}
 
-	if err := os.MkdirAll(cfg.ConfigDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create stack config dir: %w", err)
 	}
 
@@ -100,10 +102,12 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	// Resolve {{OLLAMA_HOST_IP}} to a numeric IP for the Endpoints object:
 	// - Endpoints require an IP, not a hostname (ClusterIP+Endpoints pattern)
 	ollamaHost := ollamaHostForBackend(backendName)
+
 	ollamaHostIP, err := ollamaHostIPForBackend(backendName)
 	if err != nil {
 		return fmt.Errorf("failed to resolve Ollama host IP: %w", err)
 	}
+
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 	if err := embed.CopyDefaults(defaultsDir, map[string]string{
 		"{{OLLAMA_HOST}}":    ollamaHost,
@@ -114,7 +118,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	}
 
 	// Store stack ID
-	if err := os.WriteFile(stackIDPath, []byte(stackID), 0644); err != nil {
+	if err := os.WriteFile(stackIDPath, []byte(stackID), 0o600); err != nil { //nolint:gosec // G703: path from user's local config dir
 		return fmt.Errorf("failed to write stack ID: %w", err)
 	}
 
@@ -124,6 +128,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	}
 
 	u.Success("Stack initialized")
+
 	return nil
 }
 
@@ -134,6 +139,7 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 	if err != nil {
 		return
 	}
+
 	if oldBackend.Name() == newBackend {
 		return // same backend, nothing to clean up
 	}
@@ -155,12 +161,14 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 // that would otherwise linger and confuse detection.
 func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 	var staleFiles []string
+
 	switch oldBackend {
 	case BackendK3d:
 		staleFiles = []string{k3dConfigFile}
 	case BackendK3s:
 		staleFiles = []string{k3sConfigFile, k3sPidFile, k3sLogFile}
 	}
+
 	for _, f := range staleFiles {
 		path := filepath.Join(cfg.ConfigDir, f)
 		if _, err := os.Stat(path); err == nil {
@@ -175,9 +183,11 @@ func ollamaHostForBackend(backendName string) string {
 	if backendName == BackendK3s {
 		return "127.0.0.1"
 	}
+
 	if runtime.GOOS == "darwin" {
 		return "host.docker.internal"
 	}
+
 	return "host.k3d.internal"
 }
 
@@ -216,7 +226,8 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 		if bridgeErr == nil {
 			return ip, nil
 		}
-		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %v", host, err, bridgeErr)
+
+		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %w", host, err, bridgeErr)
 	}
 
 	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
@@ -241,23 +252,26 @@ func dockerBridgeGatewayIP() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("docker0 interface not found: %w", err)
 	}
+
 	addrs, err := iface.Addrs()
 	if err != nil {
 		return "", fmt.Errorf("cannot get docker0 addresses: %w", err)
 	}
+
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
 			return ipNet.IP.String(), nil
 		}
 	}
-	return "", fmt.Errorf("no IPv4 address found on docker0 interface")
+
+	return "", errors.New("no IPv4 address found on docker0 interface")
 }
 
 // Up starts the cluster using the configured backend
 func Up(cfg *config.Config, u *ui.UI) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
-		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
+		return errors.New("stack ID not found, run 'obol stack init' first")
 	}
 
 	backend, err := LoadBackend(cfg)
@@ -275,7 +289,7 @@ func Up(cfg *config.Config, u *ui.UI) error {
 	}
 
 	// Write kubeconfig
-	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0600); err != nil {
+	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0o600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
@@ -298,6 +312,7 @@ func Up(cfg *config.Config, u *ui.UI) error {
 	u.Bold("Stack started successfully.")
 	u.Print("Visit http://obol.stack in your browser to get started.")
 	update.HintIfStale(cfg)
+
 	return nil
 }
 
@@ -305,7 +320,7 @@ func Up(cfg *config.Config, u *ui.UI) error {
 func Down(cfg *config.Config, u *ui.UI) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
-		return fmt.Errorf("stack ID not found, stack may not be initialized")
+		return errors.New("stack ID not found, stack may not be initialized")
 	}
 
 	backend, err := LoadBackend(cfg)
@@ -336,6 +351,7 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	// Destroy cluster if we have a stack ID
 	if stackID != "" {
 		u.Infof("Destroying cluster (id: %s)", stackID)
+
 		if err := backend.Destroy(cfg, u, stackID); err != nil {
 			u.Warnf("Failed to destroy cluster (may already be deleted): %v", err)
 		}
@@ -349,6 +365,7 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	if err := os.RemoveAll(cfg.ConfigDir); err != nil {
 		return fmt.Errorf("failed to remove stack config: %w", err)
 	}
+
 	u.Success("Removed cluster config")
 
 	// Remove data directory only if force flag is set.
@@ -356,6 +373,7 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	// which requires an interactive terminal (stdin connected).
 	if force {
 		rmCmd := exec.Command("sudo", "rm", "-rf", cfg.DataDir)
+
 		rmCmd.Stdin = os.Stdin
 		if err := u.Exec(ui.ExecConfig{
 			Name:        "Removing data directory",
@@ -364,6 +382,7 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 		}); err != nil {
 			return fmt.Errorf("failed to remove data directory: %w", err)
 		}
+
 		u.Blank()
 		u.Bold("Cluster fully purged (binaries preserved)")
 	} else {
@@ -378,10 +397,12 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 // getStackID reads the stored stack ID
 func getStackID(cfg *config.Config) string {
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
+
 	data, err := os.ReadFile(stackIDPath)
 	if err != nil {
 		return ""
 	}
+
 	return strings.TrimSpace(string(data))
 }
 
@@ -409,7 +430,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	)
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
-		fmt.Sprintf("STACK_DATA_DIR=%s", dataDir),
+		"STACK_DATA_DIR="+dataDir,
 	)
 
 	// In development mode, build and import local Docker images that aren't
@@ -425,9 +446,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		Cmd:  helmfileCmd,
 	}); err != nil {
 		u.Warn("Helmfile sync failed, stopping cluster")
+
 		if downErr := Down(cfg, u); downErr != nil {
 			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
+
 		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
 	}
 
@@ -446,6 +469,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// prompt (e.g. EnsureHostsEntries writing /etc/hosts).
 	u.Blank()
 	u.Info("Setting up default OpenClaw instance")
+
 	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
@@ -455,6 +479,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// Non-fatal: the user can always run `obol agent init` later.
 	u.Blank()
 	u.Info("Applying agent capabilities")
+
 	if err := agent.Init(cfg, u); err != nil {
 		u.Warnf("Failed to apply agent capabilities: %v", err)
 		u.Dim("  You can manually apply later with: obol agent init")
@@ -463,8 +488,10 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// Start the Cloudflare tunnel only if a persistent DNS tunnel is provisioned.
 	// Quick tunnels are dormant by default and activate on first `obol sell`.
 	u.Blank()
+
 	if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Mode == "dns" && st.Hostname != "" {
 		u.Info("Starting persistent Cloudflare tunnel")
+
 		if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
 			u.Warnf("Tunnel not started: %v", err)
 			u.Dim("  Start manually with: obol tunnel restart")
@@ -493,11 +520,13 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 		u.Infof("Ollama detected with %d model(s)", len(ollamaModels))
 
 		var names []string
+
 		for _, m := range ollamaModels {
 			name := m.Name
-			if strings.HasSuffix(name, ":latest") {
-				name = strings.TrimSuffix(name, ":latest")
+			if before, ok := strings.CutSuffix(name, ":latest"); ok {
+				name = before
 			}
+
 			names = append(names, name)
 		}
 
@@ -539,10 +568,11 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 
 	// Extract provider and model name from "anthropic/claude-sonnet-4-6".
 	provider, modelName := "", agentModel
-	if i := strings.Index(agentModel, "/"); i >= 0 {
-		provider = agentModel[:i]
-		modelName = agentModel[i+1:]
+	if before, after, ok := strings.Cut(agentModel, "/"); ok {
+		provider = before
+		modelName = after
 	}
+
 	if provider == "" {
 		provider = model.ProviderFromModelName(agentModel)
 	}
@@ -561,6 +591,7 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 	if apiKey == "" && os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		envVar := model.ProviderEnvVar(provider)
 		dotEnv := model.LoadDotEnv(filepath.Join(".", ".env"))
+
 		apiKey = dotEnv[envVar]
 		if apiKey != "" {
 			envVarUsed = envVar + " (.env)"
@@ -569,14 +600,17 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 
 	if apiKey == "" {
 		u.Blank()
+
 		primaryEnv := model.ProviderEnvVar(provider)
 		u.Warnf("Agent model %s detected but %s is not set", agentModel, primaryEnv)
 		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", primaryEnv))
-		u.Dim(fmt.Sprintf("  Or configure after startup: obol model setup --provider %s", provider))
+		u.Dim("  Or configure after startup: obol model setup --provider " + provider)
+
 		return ""
 	}
 
 	u.Blank()
+
 	if envVarUsed != model.ProviderEnvVar(provider) {
 		u.Infof("Cloud model %s detected via %s — configuring %s provider", agentModel, envVarUsed, provider)
 	} else {
@@ -586,12 +620,12 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 	if err := model.PatchLiteLLMProvider(cfg, u, provider, apiKey, []string{modelName}); err != nil {
 		u.Warnf("Auto-configure %s failed: %v", provider, err)
 		u.Dim(fmt.Sprintf("  Run 'obol model setup --provider %s' to configure manually.", provider))
+
 		return ""
 	}
 
 	return provider
 }
-
 
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
@@ -621,11 +655,12 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		return
 	}
 
-	clusterName := fmt.Sprintf("obol-stack-%s", stackID)
+	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 
 	for _, img := range localImages {
 		contextDir := projectRoot
+
 		dockerfilePath := filepath.Join(projectRoot, img.dockerfile)
 		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			continue // Dockerfile not present (production install without source)
@@ -638,6 +673,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			contextDir,
 		)
 		buildCmd.Stdout = os.Stdout
+
 		buildCmd.Stderr = os.Stderr
 		if err := buildCmd.Run(); err != nil {
 			fmt.Printf("Warning: failed to build %s: %v\n", img.tag, err)
@@ -647,6 +683,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		fmt.Printf("Importing %s into cluster %s...\n", img.tag, clusterName)
 		importCmd := exec.Command(k3dBinary, "image", "import", img.tag, "-c", clusterName)
 		importCmd.Stdout = os.Stdout
+
 		importCmd.Stderr = os.Stderr
 		if err := importCmd.Run(); err != nil {
 			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
@@ -660,14 +697,17 @@ func findProjectRoot() string {
 	if err != nil {
 		return ""
 	}
+
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return ""
 		}
+
 		dir = parent
 	}
 }
@@ -675,27 +715,32 @@ func findProjectRoot() string {
 // checkPortsAvailable verifies that all required ports can be bound.
 func checkPortsAvailable(ports []int) error {
 	var blocked []int
+
 	for _, port := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
 			if strings.Contains(err.Error(), "permission denied") {
 				continue
 			}
+
 			blocked = append(blocked, port)
+
 			continue
 		}
+
 		ln.Close()
 	}
+
 	if len(blocked) > 0 {
 		return fmt.Errorf(
-			"port(s) %s already in use\n\n"+
-				"Obol Stack needs these ports for HTTP/HTTPS access.\n"+
-				"Find what's using them with:\n"+
-				"  sudo lsof -i :%d\n\n"+
-				"Then stop the conflicting service and retry 'obol stack up'.",
+			"port(s) %s already in use — "+
+				"Obol Stack needs these ports for HTTP/HTTPS access; "+
+				"find what's using them with: sudo lsof -i :%d, "+
+				"then stop the conflicting service and retry 'obol stack up'",
 			formatPorts(blocked), blocked[0],
 		)
 	}
+
 	return nil
 }
 
@@ -704,6 +749,7 @@ func formatPorts(ports []int) string {
 	for i, p := range ports {
 		strs[i] = strconv.Itoa(p)
 	}
+
 	return strings.Join(strs, ", ")
 }
 
@@ -714,13 +760,16 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 	}
 
 	needle := "              hostnames:\n                - obol.stack\n"
+
 	s := string(data)
 	if !strings.Contains(s, needle) {
 		return nil
 	}
+
 	updated := strings.ReplaceAll(s, needle, "")
 	if updated == s {
 		return nil
 	}
-	return os.WriteFile(helmfilePath, []byte(updated), 0644)
+
+	return os.WriteFile(helmfilePath, []byte(updated), 0o600) //nolint:gosec // G703: path from user's local config dir
 }

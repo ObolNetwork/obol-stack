@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -19,6 +20,7 @@ func sanitizeAlias(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = nonAlphanumeric.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
+
 	return s
 }
 
@@ -43,29 +45,34 @@ func ListRPCNetworks(cfg *config.Config) ([]RPCNetworkInfo, error) {
 		return nil, err
 	}
 
-	projects, ok := erpcConfig["projects"].([]interface{})
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
-		return nil, fmt.Errorf("eRPC config has no projects")
+		return nil, errors.New("eRPC config has no projects")
 	}
-	project, ok := projects[0].(map[string]interface{})
+
+	project, ok := projects[0].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("eRPC config project[0] is not a map")
+		return nil, errors.New("eRPC config project[0] is not a map")
 	}
 
 	// Build upstream lookup by chain ID.
-	upstreams, _ := project["upstreams"].([]interface{})
+	upstreams, _ := project["upstreams"].([]any)
 	upstreamsByChain := make(map[int][]RPCUpstreamInfo)
+
 	for _, u := range upstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			continue
 		}
+
 		id, _ := um["id"].(string)
 		endpoint, _ := um["endpoint"].(string)
+
 		var chainID int
-		if evm, ok := um["evm"].(map[string]interface{}); ok {
+		if evm, ok := um["evm"].(map[string]any); ok {
 			chainID = yamlInt(evm["chainId"])
 		}
+
 		if chainID > 0 {
 			upstreamsByChain[chainID] = append(upstreamsByChain[chainID], RPCUpstreamInfo{
 				ID:       id,
@@ -76,17 +83,21 @@ func ListRPCNetworks(cfg *config.Config) ([]RPCNetworkInfo, error) {
 	}
 
 	// Build network list.
-	networks, _ := project["networks"].([]interface{})
+	networks, _ := project["networks"].([]any)
+
 	var result []RPCNetworkInfo
+
 	for _, n := range networks {
-		nm, ok := n.(map[string]interface{})
+		nm, ok := n.(map[string]any)
 		if !ok {
 			continue
 		}
+
 		var chainID int
-		if evm, ok := nm["evm"].(map[string]interface{}); ok {
+		if evm, ok := nm["evm"].(map[string]any); ok {
 			chainID = yamlInt(evm["chainId"])
 		}
+
 		alias, _ := nm["alias"].(string)
 		if chainID > 0 {
 			result = append(result, RPCNetworkInfo{
@@ -101,7 +112,7 @@ func ListRPCNetworks(cfg *config.Config) ([]RPCNetworkInfo, error) {
 }
 
 // writeMethods are blocked by default on remote upstreams when readOnly is true.
-var writeMethods = []interface{}{"eth_sendRawTransaction", "eth_sendTransaction"}
+var writeMethods = []any{"eth_sendRawTransaction", "eth_sendTransaction"}
 
 // AddCustomRPC adds a single custom RPC endpoint for a chain to the eRPC ConfigMap.
 // Uses the "custom-" prefix to distinguish from ChainList-sourced upstreams.
@@ -112,68 +123,76 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		return err
 	}
 
-	projects, ok := erpcConfig["projects"].([]interface{})
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
-		return fmt.Errorf("eRPC config has no projects")
+		return errors.New("eRPC config has no projects")
 	}
-	project, ok := projects[0].(map[string]interface{})
+
+	project, ok := projects[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("eRPC config project[0] is not a map")
+		return errors.New("eRPC config project[0] is not a map")
 	}
 
 	// Remove any existing custom upstream for this chain ID.
-	existingUpstreams, _ := project["upstreams"].([]interface{})
-	filtered := make([]interface{}, 0, len(existingUpstreams))
+	existingUpstreams, _ := project["upstreams"].([]any)
+
+	filtered := make([]any, 0, len(existingUpstreams))
 	for _, u := range existingUpstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			filtered = append(filtered, u)
 			continue
 		}
+
 		id, _ := um["id"].(string)
 		if strings.HasPrefix(id, fmt.Sprintf("custom-%d-", chainID)) {
 			continue
 		}
+
 		filtered = append(filtered, u)
 	}
 
 	// Add the custom upstream.
-	upstream := map[string]interface{}{
+	upstream := map[string]any{
 		"id":       fmt.Sprintf("custom-%d-0", chainID),
 		"endpoint": endpoint,
-		"evm": map[string]interface{}{
+		"evm": map[string]any{
 			"chainId": chainID,
 		},
 	}
 	if readOnly {
 		upstream["ignoreMethods"] = writeMethods
 	}
+
 	filtered = append(filtered, upstream)
 	project["upstreams"] = filtered
 
 	// Ensure a network entry exists for this chain ID.
-	networksList, _ := project["networks"].([]interface{})
+	networksList, _ := project["networks"].([]any)
 	found := false
+
 	for _, n := range networksList {
-		nm, ok := n.(map[string]interface{})
+		nm, ok := n.(map[string]any)
 		if !ok {
 			continue
 		}
-		if evm, ok := nm["evm"].(map[string]interface{}); ok {
+
+		if evm, ok := nm["evm"].(map[string]any); ok {
 			if yamlInt(evm["chainId"]) == chainID {
 				found = true
 				break
 			}
 		}
 	}
+
 	if !found {
-		networksList = append(networksList, map[string]interface{}{
+		networksList = append(networksList, map[string]any{
 			"architecture": "evm",
-			"evm":          map[string]interface{}{"chainId": chainID},
+			"evm":          map[string]any{"chainId": chainID},
 			"alias":        sanitizeAlias(chainName),
-			"failsafe": map[string]interface{}{
-				"timeout": map[string]interface{}{"duration": "30s"},
-				"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
+			"failsafe": map[string]any{
+				"timeout": map[string]any{"duration": "30s"},
+				"retry":   map[string]any{"maxAttempts": 2, "delay": "100ms"},
 			},
 		})
 		project["networks"] = networksList
@@ -188,6 +207,7 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
+
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap.
@@ -198,75 +218,84 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 		return fmt.Errorf("could not read eRPC config: %w", err)
 	}
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		return fmt.Errorf("could not parse eRPC config: %w", err)
 	}
 
-	projects, ok := erpcConfig["projects"].([]interface{})
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
-		return fmt.Errorf("eRPC config has no projects")
+		return errors.New("eRPC config has no projects")
 	}
-	project, ok := projects[0].(map[string]interface{})
+
+	project, ok := projects[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("eRPC config project[0] is not a map")
+		return errors.New("eRPC config project[0] is not a map")
 	}
 
 	// Remove any existing chainlist- upstreams for this chain ID.
-	existingUpstreams, _ := project["upstreams"].([]interface{})
-	filtered := make([]interface{}, 0, len(existingUpstreams))
+	existingUpstreams, _ := project["upstreams"].([]any)
+
+	filtered := make([]any, 0, len(existingUpstreams))
 	for _, u := range existingUpstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			filtered = append(filtered, u)
 			continue
 		}
+
 		id, _ := um["id"].(string)
 		if strings.HasPrefix(id, fmt.Sprintf("chainlist-%d-", chainID)) {
 			continue // remove old chainlist entries for this chain
 		}
+
 		filtered = append(filtered, u)
 	}
 
 	// Add new ChainList upstreams.
 	for i, ep := range endpoints {
-		newUpstream := map[string]interface{}{
+		newUpstream := map[string]any{
 			"id":       fmt.Sprintf("chainlist-%d-%d", chainID, i),
 			"endpoint": ep.URL,
-			"evm": map[string]interface{}{
+			"evm": map[string]any{
 				"chainId": chainID,
 			},
 		}
 		if readOnly {
 			newUpstream["ignoreMethods"] = writeMethods
 		}
+
 		filtered = append(filtered, newUpstream)
 	}
+
 	project["upstreams"] = filtered
 
 	// Ensure a network entry exists for this chain ID.
-	networksList, _ := project["networks"].([]interface{})
+	networksList, _ := project["networks"].([]any)
 	found := false
+
 	for _, n := range networksList {
-		nm, ok := n.(map[string]interface{})
+		nm, ok := n.(map[string]any)
 		if !ok {
 			continue
 		}
-		if evm, ok := nm["evm"].(map[string]interface{}); ok {
+
+		if evm, ok := nm["evm"].(map[string]any); ok {
 			if yamlInt(evm["chainId"]) == chainID {
 				found = true
 				break
 			}
 		}
 	}
+
 	if !found {
-		newNetwork := map[string]interface{}{
+		newNetwork := map[string]any{
 			"architecture": "evm",
-			"evm":          map[string]interface{}{"chainId": chainID},
+			"evm":          map[string]any{"chainId": chainID},
 			"alias":        sanitizeAlias(chainName),
-			"failsafe": map[string]interface{}{
-				"timeout": map[string]interface{}{"duration": "30s"},
-				"retry":   map[string]interface{}{"maxAttempts": 2, "delay": "100ms"},
+			"failsafe": map[string]any{
+				"timeout": map[string]any{"duration": "30s"},
+				"retry":   map[string]any{"maxAttempts": 2, "delay": "100ms"},
 			},
 		}
 		networksList = append(networksList, newNetwork)
@@ -282,6 +311,7 @@ func RemovePublicRPCs(cfg *config.Config, chainID int) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
+
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Read current eRPC config from ConfigMap.
@@ -292,35 +322,39 @@ func RemovePublicRPCs(cfg *config.Config, chainID int) error {
 		return fmt.Errorf("could not read eRPC config: %w", err)
 	}
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		return fmt.Errorf("could not parse eRPC config: %w", err)
 	}
 
-	projects, ok := erpcConfig["projects"].([]interface{})
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
-		return fmt.Errorf("eRPC config has no projects")
+		return errors.New("eRPC config has no projects")
 	}
-	project, ok := projects[0].(map[string]interface{})
+
+	project, ok := projects[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("eRPC config project[0] is not a map")
+		return errors.New("eRPC config project[0] is not a map")
 	}
 
 	// Remove chainlist- upstreams for this chain ID.
-	existingUpstreams, _ := project["upstreams"].([]interface{})
-	filtered := make([]interface{}, 0, len(existingUpstreams))
+	existingUpstreams, _ := project["upstreams"].([]any)
+	filtered := make([]any, 0, len(existingUpstreams))
 	removed := 0
+
 	for _, u := range existingUpstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			filtered = append(filtered, u)
 			continue
 		}
+
 		id, _ := um["id"].(string)
 		if strings.HasPrefix(id, fmt.Sprintf("chainlist-%d-", chainID)) {
 			removed++
 			continue
 		}
+
 		filtered = append(filtered, u)
 	}
 
@@ -338,6 +372,7 @@ func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return "", nil, err
 	}
+
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	// Get pod status.
@@ -352,26 +387,29 @@ func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int
 	// Read config for upstream counts.
 	erpcConfig, readErr := readERPCConfig(cfg)
 	if readErr != nil {
-		return podStatus, nil, nil
+		return podStatus, nil, nil //nolint:nilerr // config unreadable; return pod status without upstream counts
 	}
 
 	upstreamCounts = make(map[int]int)
-	projects, ok := erpcConfig["projects"].([]interface{})
+
+	projects, ok := erpcConfig["projects"].([]any)
 	if !ok || len(projects) == 0 {
 		return podStatus, upstreamCounts, nil
 	}
-	project, ok := projects[0].(map[string]interface{})
+
+	project, ok := projects[0].(map[string]any)
 	if !ok {
 		return podStatus, upstreamCounts, nil
 	}
 
-	upstreams, _ := project["upstreams"].([]interface{})
+	upstreams, _ := project["upstreams"].([]any)
 	for _, u := range upstreams {
-		um, ok := u.(map[string]interface{})
+		um, ok := u.(map[string]any)
 		if !ok {
 			continue
 		}
-		if evm, ok := um["evm"].(map[string]interface{}); ok {
+
+		if evm, ok := um["evm"].(map[string]any); ok {
 			chainID := yamlInt(evm["chainId"])
 			if chainID > 0 {
 				upstreamCounts[chainID]++
@@ -383,10 +421,11 @@ func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int
 }
 
 // readERPCConfig reads and parses the eRPC ConfigMap YAML.
-func readERPCConfig(cfg *config.Config) (map[string]interface{}, error) {
+func readERPCConfig(cfg *config.Config) (map[string]any, error) {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return nil, err
 	}
+
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
@@ -396,7 +435,7 @@ func readERPCConfig(cfg *config.Config) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("could not read eRPC config: %w", err)
 	}
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		return nil, fmt.Errorf("could not parse eRPC config: %w", err)
 	}
@@ -405,7 +444,7 @@ func readERPCConfig(cfg *config.Config) (map[string]interface{}, error) {
 }
 
 // writeERPCConfig serializes the eRPC config and patches the ConfigMap, then restarts eRPC.
-func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) error {
+func writeERPCConfig(cfg *config.Config, erpcConfig map[string]any) error {
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	updatedYAML, err := yaml.Marshal(erpcConfig)
@@ -413,11 +452,12 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) erro
 		return fmt.Errorf("could not serialize eRPC config: %w", err)
 	}
 
-	patchData := map[string]interface{}{
+	patchData := map[string]any{
 		"data": map[string]string{
 			erpcConfigKey: string(updatedYAML),
 		},
 	}
+
 	patchJSON, err := json.Marshal(patchData)
 	if err != nil {
 		return fmt.Errorf("could not marshal patch: %w", err)
@@ -431,7 +471,7 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) erro
 
 	// Restart eRPC to pick up new config.
 	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
-		"rollout", "restart", fmt.Sprintf("deployment/%s", erpcDeployment), "-n", erpcNamespace); err != nil {
+		"rollout", "restart", "deployment/"+erpcDeployment, "-n", erpcNamespace); err != nil {
 		return fmt.Errorf("could not restart eRPC: %w", err)
 	}
 
@@ -440,7 +480,7 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]interface{}) erro
 
 // yamlInt extracts an int from a YAML-parsed interface{} value,
 // handling both int and float64 (JSON numbers).
-func yamlInt(v interface{}) int {
+func yamlInt(v any) int {
 	switch n := v.(type) {
 	case int:
 		return n

@@ -8,6 +8,7 @@ import "fmt"
 //	  Hint: check your configuration
 func (u *UI) FormatError(err error, hint string) {
 	u.Error(err.Error())
+
 	if hint != "" {
 		fmt.Fprintf(u.stderr, "  %s\n", dimStyle.Render(hint))
 	}
@@ -19,6 +20,7 @@ func (u *UI) FormatError(err error, hint string) {
 //	  Run: obol stack up
 func (u *UI) FormatActionableError(err error, action string) {
 	u.Error(err.Error())
+
 	if action != "" {
 		fmt.Fprintf(u.stderr, "  Run: %s\n", boldStyle.Render(action))
 	}

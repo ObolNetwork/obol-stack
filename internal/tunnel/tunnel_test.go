@@ -36,6 +36,7 @@ func TestParseQuickTunnelURL(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ok=true")
 	}
+
 	if url != "https://seasonal-deck-organisms-sf.trycloudflare.com" {
 		t.Fatalf("unexpected url: %q", url)
 	}
@@ -52,7 +53,7 @@ func TestPatchAgentBaseURL_Insert(t *testing.T) {
 skills:
   enabled: false
 `
-	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,9 +67,11 @@ skills:
 	if !strings.Contains(content, "name: AGENT_BASE_URL") {
 		t.Errorf("patched file missing AGENT_BASE_URL:\n%s", content)
 	}
+
 	if !strings.Contains(content, "value: https://mystack.example.com") {
 		t.Errorf("patched file missing tunnel URL value:\n%s", content)
 	}
+
 	if !strings.Contains(content, "REMOTE_SIGNER_URL") {
 		t.Errorf("patched file lost REMOTE_SIGNER_URL:\n%s", content)
 	}
@@ -87,7 +90,7 @@ func TestPatchAgentBaseURL_Update(t *testing.T) {
 skills:
   enabled: false
 `
-	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,6 +104,7 @@ skills:
 	if !strings.Contains(content, "value: https://new.example.com") {
 		t.Errorf("patched file missing updated URL:\n%s", content)
 	}
+
 	if strings.Contains(content, "old.example.com") {
 		t.Errorf("patched file still has old URL:\n%s", content)
 	}
