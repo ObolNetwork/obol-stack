@@ -1,5 +1,7 @@
 # Getting Started with the Obol Stack
 
+> This is an operator guide. The canonical system contract lives in [SPEC.md](../SPEC.md), [ARCHITECTURE.md](../ARCHITECTURE.md), and [BEHAVIORS_AND_EXPECTATIONS.md](../BEHAVIORS_AND_EXPECTATIONS.md).
+
 This guide walks you through installing the Obol Stack, starting a local Kubernetes cluster, testing LLM inference through the AI agent, and optionally monetizing your compute.
 
 > [!IMPORTANT]
