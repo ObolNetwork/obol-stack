@@ -33,6 +33,11 @@ func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
 	return v, nil
 }
 
+// Config returns the current pricing configuration (thread-safe).
+func (v *Verifier) Config() *PricingConfig {
+	return v.config.Load()
+}
+
 // Reload atomically swaps the pricing configuration.
 func (v *Verifier) Reload(cfg *PricingConfig) error {
 	return v.load(cfg)

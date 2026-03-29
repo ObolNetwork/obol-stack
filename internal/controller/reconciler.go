@@ -1,6 +1,7 @@
 // Package controller implements a Kubernetes controller for ServiceOffer CRDs.
 // It replaces the Python-based monetize.py reconciliation loop with an
-// event-driven controller-runtime reconciler.
+// event-driven controller-runtime reconciler. The controller is generation-driven:
+// it derives desired child resources from spec and observes convergence.
 package controller
 
 import (
@@ -19,6 +20,7 @@ import (
 
 const (
 	finalizerName = "obol.org/serviceoffer-cleanup"
+	fieldOwner    = "serviceoffer-controller"
 
 	condUpstreamHealthy  = "UpstreamHealthy"
 	condPaymentGateReady = "PaymentGateReady"
@@ -26,22 +28,24 @@ const (
 	condReady            = "Ready"
 
 	verifierNamespace = "x402"
-	verifierConfigMap = "x402-pricing"
 	gatewayName       = "traefik-gateway"
 	gatewayNamespace  = "traefik"
 	gatewaySectionWeb = "web"
 )
 
 var (
-	serviceOfferGVR = schema.GroupVersionResource{Group: "obol.org", Version: "v1alpha1", Resource: "serviceoffers"}
 	serviceOfferGVK = schema.GroupVersionKind{Group: "obol.org", Version: "v1alpha1", Kind: "ServiceOffer"}
+
+	paymentRouteGVK = schema.GroupVersionKind{Group: "obol.org", Version: "v1alpha1", Kind: "PaymentRoute"}
+	middlewareGVK   = schema.GroupVersionKind{Group: "traefik.io", Version: "v1alpha1", Kind: "Middleware"}
+	httpRouteGVK    = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 )
 
 // Reconciler reconciles ServiceOffer CRDs into child Kubernetes resources:
-// Middleware (traefik.io), HTTPRoute (gateway API), and x402 pricing ConfigMap entries.
+// PaymentRoute (obol.org), Middleware (traefik.io), and HTTPRoute (gateway API).
 type Reconciler struct {
 	client.Client
-	HTTPClient *http.Client
+	HTTPClient *http.Client // injectable for testing
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -51,23 +55,23 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Reconcile handles a single ServiceOffer event.
+// Reconcile handles a single ServiceOffer event. It is generation-driven:
+// always derive desired child resources from spec, apply them, then observe status.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Fetch the ServiceOffer.
 	so := &unstructured.Unstructured{}
 	so.SetGroupVersionKind(serviceOfferGVK)
 	if err := r.Get(ctx, req.NamespacedName, so); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Handle deletion.
+	// Handle deletion via finalizer.
 	if !so.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, so)
 	}
 
-	// Ensure finalizer.
+	// Ensure finalizer is present.
 	if !controllerutil.ContainsFinalizer(so, finalizerName) {
 		controllerutil.AddFinalizer(so, finalizerName)
 		if err := r.Update(ctx, so); err != nil {
@@ -78,52 +82,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	spec, err := getSpec(so)
 	if err != nil {
 		logger.Error(err, "invalid ServiceOffer spec")
-		return ctrl.Result{}, nil // don't requeue on bad spec
+		return ctrl.Result{}, nil // don't requeue bad spec
 	}
 
 	name := so.GetName()
 	ns := so.GetNamespace()
 
-	// --- Stage 1: Upstream health check ---
-	healthy, msg := r.checkUpstreamHealth(ctx, spec)
-	setCondition(so, condUpstreamHealthy, healthy, msg)
+	// --- Derive and apply desired child resources ---
+
+	// 1. Check upstream health (non-resource precondition).
+	healthy, healthMsg := r.checkUpstreamHealth(ctx, spec)
+	setCondition(so, condUpstreamHealthy, healthy, healthMsg)
 	if !healthy {
-		if err := r.updateStatus(ctx, so); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("upstream not healthy, requeueing", "name", name, "msg", msg)
+		_ = r.updateStatus(ctx, so)
+		logger.Info("upstream not healthy, requeueing", "name", name, "msg", healthMsg)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// --- Stage 2: Payment gate (Middleware + ConfigMap pricing route) ---
-	if err := r.ensureMiddleware(ctx, so, name, ns); err != nil {
-		setCondition(so, condPaymentGateReady, false, fmt.Sprintf("middleware error: %v", err))
+	// 2. Apply Middleware.
+	if err := r.applyMiddleware(ctx, so, name, ns); err != nil {
+		setCondition(so, condPaymentGateReady, false, fmt.Sprintf("middleware: %v", err))
 		_ = r.updateStatus(ctx, so)
 		return ctrl.Result{}, err
 	}
-	if err := r.ensurePricingRoute(ctx, so, spec, name, ns); err != nil {
-		setCondition(so, condPaymentGateReady, false, fmt.Sprintf("pricing error: %v", err))
-		_ = r.updateStatus(ctx, so)
-		return ctrl.Result{}, err
-	}
-	setCondition(so, condPaymentGateReady, true, "Middleware and pricing route configured")
 
-	// --- Stage 3: HTTPRoute ---
-	if err := r.ensureHTTPRoute(ctx, so, spec, name, ns); err != nil {
-		setCondition(so, condRoutePublished, false, fmt.Sprintf("httproute error: %v", err))
+	// 3. Apply PaymentRoute CR (replaces ConfigMap mutation).
+	if err := r.applyPaymentRoute(ctx, so, spec, name, ns); err != nil {
+		setCondition(so, condPaymentGateReady, false, fmt.Sprintf("payment route: %v", err))
 		_ = r.updateStatus(ctx, so)
 		return ctrl.Result{}, err
 	}
+	setCondition(so, condPaymentGateReady, true, "Middleware and PaymentRoute applied")
+
+	// 4. Apply HTTPRoute.
 	path := spec.Path
 	if path == "" {
 		path = "/services/" + name
 	}
+	if err := r.applyHTTPRoute(ctx, so, spec, name, ns, path); err != nil {
+		setCondition(so, condRoutePublished, false, fmt.Sprintf("httproute: %v", err))
+		_ = r.updateStatus(ctx, so)
+		return ctrl.Result{}, err
+	}
 	setCondition(so, condRoutePublished, true, "HTTPRoute published at "+path)
 
-	// Set endpoint in status.
+	// --- Observe and finalize ---
 	setNestedField(so, path, "status", "endpoint")
-
-	// --- All conditions met ---
 	setCondition(so, condReady, true, "All conditions satisfied")
 	setNestedField(so, so.GetGeneration(), "status", "observedGeneration")
 
@@ -131,37 +135,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	logger.Info("ServiceOffer reconciled", "name", name, "endpoint", path)
+	logger.Info("reconciled", "name", name, "endpoint", path)
 	return ctrl.Result{}, nil
 }
 
-// handleDeletion removes the pricing route from the ConfigMap (ownerRefs handle the rest).
+// handleDeletion runs finalizer logic. OwnerReferences handle child resource
+// GC for PaymentRoute, Middleware, and HTTPRoute. The finalizer is for any
+// external side effects that can't be expressed via ownerRefs.
 func (r *Reconciler) handleDeletion(ctx context.Context, so *unstructured.Unstructured) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
 	if controllerutil.ContainsFinalizer(so, finalizerName) {
-		spec, err := getSpec(so)
-		if err == nil {
-			path := spec.Path
-			if path == "" {
-				path = "/services/" + so.GetName()
-			}
-			if rmErr := r.removePricingRoute(ctx, path, so.GetName()); rmErr != nil {
-				logger.Error(rmErr, "failed to remove pricing route, continuing cleanup")
-			}
-		}
-
+		// Currently no external side effects beyond owned resources.
+		// ERC-8004 deactivation will be added here in a future phase.
 		controllerutil.RemoveFinalizer(so, finalizerName)
 		if err := r.Update(ctx, so); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
-
-	logger.Info("ServiceOffer deleted", "name", so.GetName())
+	log.FromContext(ctx).Info("deleted", "name", so.GetName())
 	return ctrl.Result{}, nil
 }
 
 // checkUpstreamHealth probes the upstream service health endpoint.
+// Any HTTP response (even 4xx/5xx) counts as reachable, matching the
+// existing monetize.py behavior.
 func (r *Reconciler) checkUpstreamHealth(ctx context.Context, spec *offerSpec) (bool, string) {
 	healthPath := spec.Upstream.HealthPath
 	if healthPath == "" {
@@ -187,7 +183,6 @@ func (r *Reconciler) checkUpstreamHealth(ctx context.Context, spec *offerSpec) (
 	}
 	defer resp.Body.Close()
 
-	// Any response = reachable (matches monetize.py behavior).
 	return true, fmt.Sprintf("GET %s returned %d", healthPath, resp.StatusCode)
 }
 

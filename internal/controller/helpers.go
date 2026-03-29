@@ -52,18 +52,18 @@ func (p priceTable) effectiveRequestPrice() string {
 	return "0"
 }
 
-// priceModel returns the pricing model string for the route rule.
+// priceModel returns the pricing model string for the PaymentRoute CR.
 func (p priceTable) priceModel() string {
 	if p.PerRequest != "" {
-		return "perRequest"
+		return "per-request"
 	}
 	if p.PerMTok != "" {
-		return "perMTok"
+		return "per-mtok"
 	}
 	if p.PerHour != "" {
-		return "perHour"
+		return "per-hour"
 	}
-	return "perRequest"
+	return "per-request"
 }
 
 // getSpec extracts a typed spec from an unstructured ServiceOffer.
