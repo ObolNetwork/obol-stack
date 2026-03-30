@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -49,10 +50,12 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if cmd.Bool("all") {
 						return network.SyncAll(cfg, u)
 					}
+
 					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return fmt.Errorf("%w\n\nOr use --all to sync all deployments", err)
 					}
+
 					return network.Sync(cfg, u, identifier)
 				},
 			},
@@ -65,6 +68,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return network.Delete(cfg, getUI(cmd), identifier)
 				},
 			},
@@ -84,6 +88,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 	}
 
 	var commands []*cli.Command
+
 	for _, networkName := range networks {
 		// Parse the embedded values template to get fields
 		fields, err := network.ParseTemplateFields(networkName)
@@ -113,7 +118,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			// Build usage string
 			usage := field.Description
 			if usage == "" {
-				usage = fmt.Sprintf("Override %s", field.Name)
+				usage = "Override " + field.Name
 			}
 
 			// Mark as required if no default value
@@ -141,6 +146,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 		// Create the network-specific install command
 		netName := networkName // Capture for closure
 		netFields := fields    // Capture for validation
+
 		commands = append(commands, &cli.Command{
 			Name:  netName,
 			Usage: fmt.Sprintf("Install %s network", netName),
@@ -166,6 +172,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 									value, field.FlagName, strings.Join(field.EnumValues, ", "))
 							}
 						}
+
 						overrides[field.FlagName] = value
 					}
 				}
@@ -240,11 +247,13 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 
 			// Show remote RPC networks from eRPC config.
 			fmt.Println("Remote RPCs:")
+
 			rpcNetworks, err := network.ListRPCNetworks(cfg)
 			if err != nil {
 				fmt.Printf("  (unable to read eRPC config: %v)\n", err)
 				return nil
 			}
+
 			if len(rpcNetworks) == 0 {
 				fmt.Println("  (none configured)")
 			} else {
@@ -253,9 +262,11 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 					if alias == "" {
 						alias = fmt.Sprintf("chain-%d", net.ChainID)
 					}
+
 					fmt.Printf("  %-20s chain=%-8d %d upstream(s)\n", alias, net.ChainID, len(net.Upstreams))
 				}
 			}
+
 			return nil
 		},
 	}
@@ -359,10 +370,11 @@ Examples:
 			}
 
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network add base\n  obol network add base-sepolia --endpoint http://host.k3d.internal:8545")
+				return errors.New("chain name or ID required\n\nExamples:\n  obol network add base\n  obol network add base-sepolia --endpoint http://host.k3d.internal:8545")
 			}
 
 			chainArg := cmd.Args().First()
+
 			chainID, chainName, err := network.ResolveChainID(chainArg)
 			if err != nil {
 				return err
@@ -376,18 +388,22 @@ Examples:
 					return fmt.Errorf("invalid --endpoint: %w", err)
 				}
 				fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, endpoint)
+
 				if readOnly {
 					fmt.Printf("  Write methods blocked (use --allow-writes to enable)\n")
 				}
+
 				if err := network.AddCustomRPC(cfg, chainID, chainName, endpoint, readOnly); err != nil {
 					return fmt.Errorf("failed to add custom RPC: %w", err)
 				}
+
 				fmt.Printf("Added custom RPC for %s (chain ID: %d) to eRPC\n", chainName, chainID)
+
 				return nil
 			}
 
 			// ChainList mode.
-			maxCount := int(cmd.Int("count"))
+			maxCount := cmd.Int("count")
 			if maxCount <= 0 {
 				maxCount = 3
 			}
@@ -412,6 +428,7 @@ Examples:
 			}
 
 			fmt.Printf("Found %d quality RPCs for %s:\n", len(endpoints), chainName)
+
 			for i, ep := range endpoints {
 				fmt.Printf("  %d. %s (tracking: %s)\n", i+1, ep.URL, ep.Tracking)
 			}
@@ -421,11 +438,13 @@ Examples:
 			}
 
 			fmt.Printf("Adding to eRPC gateway...\n")
+
 			if err := network.AddPublicRPCs(cfg, chainID, chainName, endpoints, readOnly); err != nil {
 				return fmt.Errorf("failed to add RPCs: %w", err)
 			}
 
 			fmt.Printf("Added %d RPCs for %s (chain ID: %d) to eRPC\n", len(endpoints), chainName, chainID)
+
 			return nil
 		},
 	}
@@ -448,10 +467,11 @@ Examples:
   obol network remove 8453`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network remove base\n  obol network remove 8453")
+				return errors.New("chain name or ID required\n\nExamples:\n  obol network remove base\n  obol network remove 8453")
 			}
 
 			chainArg := cmd.Args().First()
+
 			chainID, chainName, err := network.ResolveChainID(chainArg)
 			if err != nil {
 				return err
@@ -464,6 +484,7 @@ Examples:
 			}
 
 			fmt.Printf("Removed ChainList RPCs for %s (chain ID: %d) from eRPC\n", chainName, chainID)
+
 			return nil
 		},
 	}
@@ -487,6 +508,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 			fmt.Printf("====================\n\n")
 
 			fmt.Printf("Pod:\n")
+
 			if podStatus != "" {
 				fmt.Printf("  %s\n", podStatus)
 			} else {
@@ -494,6 +516,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 			}
 
 			fmt.Printf("\nUpstreams per chain:\n")
+
 			if len(upstreamCounts) == 0 {
 				fmt.Printf("  (no upstreams configured)\n")
 			} else {
@@ -501,6 +524,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 				for id := range upstreamCounts {
 					chainIDs = append(chainIDs, id)
 				}
+
 				sort.Ints(chainIDs)
 
 				for _, id := range chainIDs {
@@ -537,5 +561,6 @@ func chainIDToName(chainID int) string {
 	if name, ok := names[chainID]; ok {
 		return name
 	}
+
 	return fmt.Sprintf("Chain %d", chainID)
 }

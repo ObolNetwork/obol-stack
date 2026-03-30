@@ -30,6 +30,9 @@ type ServiceOfferSpec struct {
 	// Defaults to /services/<name>.
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 
+	// Provenance tracks how the service or model was produced.
+	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
 	// Registration holds ERC-8004 registration metadata.
 	Registration *RegistrationSpec `json:"registration,omitempty" yaml:"registration,omitempty"`
 }
@@ -60,18 +63,18 @@ type UpstreamSpec struct {
 
 // ServiceOfferStatus is the Go representation of a ServiceOffer status.
 type ServiceOfferStatus struct {
-	Conditions         []Condition `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	Endpoint           string      `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
-	AgentID            string      `json:"agentId,omitempty" yaml:"agentId,omitempty"`
+	Conditions         []Condition `json:"conditions,omitempty"         yaml:"conditions,omitempty"`
+	Endpoint           string      `json:"endpoint,omitempty"           yaml:"endpoint,omitempty"`
+	AgentID            string      `json:"agentId,omitempty"            yaml:"agentId,omitempty"`
 	RegistrationTxHash string      `json:"registrationTxHash,omitempty" yaml:"registrationTxHash,omitempty"`
 	ObservedGeneration int64       `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
 }
 
 // Condition represents a ServiceOffer status condition.
 type Condition struct {
-	Type               string `json:"type" yaml:"type"`
-	Status             string `json:"status" yaml:"status"`
-	Reason             string `json:"reason,omitempty" yaml:"reason,omitempty"`
-	Message            string `json:"message,omitempty" yaml:"message,omitempty"`
+	Type               string `json:"type"                         yaml:"type"`
+	Status             string `json:"status"                       yaml:"status"`
+	Reason             string `json:"reason,omitempty"             yaml:"reason,omitempty"`
+	Message            string `json:"message,omitempty"            yaml:"message,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty" yaml:"lastTransitionTime,omitempty"`
 }

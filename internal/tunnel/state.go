@@ -27,8 +27,9 @@ func loadTunnelState(cfg *config.Config) (*tunnelState, error) {
 	data, err := os.ReadFile(tunnelStatePath(cfg))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // no state file means tunnel was never provisioned; not an error
 		}
+
 		return nil, err
 	}
 
@@ -36,13 +37,15 @@ func loadTunnelState(cfg *config.Config) (*tunnelState, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return nil, err
 	}
+
 	return &st, nil
 }
 
 func saveTunnelState(cfg *config.Config, st *tunnelState) error {
-	if err := os.MkdirAll(filepath.Dir(tunnelStatePath(cfg)), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(tunnelStatePath(cfg)), 0o755); err != nil {
 		return err
 	}
+
 	st.UpdatedAt = time.Now().UTC()
 
 	data, err := json.MarshalIndent(st, "", "  ")
@@ -51,7 +54,7 @@ func saveTunnelState(cfg *config.Config, st *tunnelState) error {
 	}
 
 	// Contains non-secret metadata only, but keep it user-private by default.
-	return os.WriteFile(tunnelStatePath(cfg), data, 0600)
+	return os.WriteFile(tunnelStatePath(cfg), data, 0o600)
 }
 
 // TunnelState is an exported alias so other packages (agent, openclaw)
@@ -68,5 +71,6 @@ func tunnelModeAndURL(st *tunnelState) (mode, url string) {
 	if st != nil && st.Hostname != "" {
 		return "dns", "https://" + st.Hostname
 	}
+
 	return "quick", ""
 }

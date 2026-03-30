@@ -22,6 +22,7 @@ func TestNewKey_StubBackend(t *testing.T) {
 	if len(pub) != 65 {
 		t.Fatalf("expected 65-byte public key, got %d", len(pub))
 	}
+
 	if pub[0] != 0x04 {
 		t.Fatalf("expected 0x04 prefix, got 0x%02x", pub[0])
 	}
@@ -30,6 +31,7 @@ func TestNewKey_StubBackend(t *testing.T) {
 	if key.Tag() != "com.obol.test.tee" {
 		t.Errorf("expected tag %q, got %q", "com.obol.test.tee", key.Tag())
 	}
+
 	if !key.Persistent() {
 		t.Error("expected Persistent() == true")
 	}
@@ -40,12 +42,14 @@ func TestNewKey_UniqueKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	k2, err := NewKey("com.obol.test.k2", testModelHash)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pub1 := hex.EncodeToString(k1.PublicKeyBytes())
+
 	pub2 := hex.EncodeToString(k2.PublicKeyBytes())
 	if pub1 == pub2 {
 		t.Error("two separately generated keys should have different public keys")
@@ -95,6 +99,7 @@ func TestECIES_DecryptBadVersion(t *testing.T) {
 
 	// Corrupt the version byte.
 	ct[0] = 0xFF
+
 	_, err = key.Decrypt(ct)
 	if err == nil {
 		t.Error("expected error for bad version, got nil")
@@ -128,15 +133,19 @@ func TestAttest_Stub(t *testing.T) {
 	if report.TEEType != TEETypeStub {
 		t.Errorf("expected tee_type %q, got %q", TEETypeStub, report.TEEType)
 	}
+
 	if report.Pubkey != hex.EncodeToString(key.PublicKeyBytes()) {
 		t.Error("report pubkey doesn't match key's public key")
 	}
+
 	if report.ModelHash != testModelHash {
 		t.Errorf("report model_hash = %q, want %q", report.ModelHash, testModelHash)
 	}
+
 	if report.Timestamp == 0 {
 		t.Error("expected non-zero timestamp")
 	}
+
 	if len(report.Quote) == 0 {
 		t.Error("expected non-empty quote")
 	}
@@ -149,6 +158,7 @@ func TestAttest_Stub(t *testing.T) {
 	if err := json.Unmarshal(report.Quote, &stubDoc); err != nil {
 		t.Fatalf("failed to parse stub quote: %v", err)
 	}
+
 	if stubDoc.Type != "stub" {
 		t.Errorf("stub quote type = %q, want %q", stubDoc.Type, "stub")
 	}
@@ -158,6 +168,7 @@ func TestAttest_Stub(t *testing.T) {
 	h := sha256.New()
 	h.Write(key.PublicKeyBytes())
 	h.Write(modelHashBytes)
+
 	expectedUD := hex.EncodeToString(h.Sum(nil))
 	if stubDoc.UserData != expectedUD {
 		t.Errorf("user_data mismatch:\n  got:  %s\n  want: %s", stubDoc.UserData, expectedUD)
@@ -194,6 +205,7 @@ func TestVerifyBinding_WrongModel(t *testing.T) {
 
 	// Wrong model hash should fail.
 	wrongHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
 	err = VerifyBinding(report.Quote, key.PublicKeyBytes(), wrongHash)
 	if err == nil {
 		t.Error("expected error for wrong model hash, got nil")
@@ -215,6 +227,7 @@ func TestExtractUserData_StubRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractUserData failed: %v", err)
 	}
+
 	if teeType != TEETypeStub {
 		t.Errorf("expected tee type %q, got %q", TEETypeStub, teeType)
 	}
@@ -232,10 +245,12 @@ func TestSign_Stub(t *testing.T) {
 	}
 
 	digest := sha256.Sum256([]byte("test message"))
+
 	sig, err := key.Sign(digest[:])
 	if err != nil {
 		t.Fatalf("Sign failed: %v", err)
 	}
+
 	if len(sig) == 0 {
 		t.Error("expected non-empty signature")
 	}
@@ -305,6 +320,7 @@ func TestMarshalReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	report, err := Attest(key, testModelHash)
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +336,7 @@ func TestMarshalReport(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("failed to unmarshal report JSON: %v", err)
 	}
+
 	if parsed.TEEType != TEETypeStub {
 		t.Errorf("round-trip tee_type = %q, want %q", parsed.TEEType, TEETypeStub)
 	}
@@ -367,13 +384,16 @@ func TestExtractUserData_RejectsUnknownFormat(t *testing.T) {
 
 func TestPadTo64(t *testing.T) {
 	input := []byte{0x01, 0x02, 0x03}
+
 	out := padTo64(input)
 	if len(out) != 64 {
 		t.Fatalf("expected 64 bytes, got %d", len(out))
 	}
+
 	if out[0] != 0x01 || out[1] != 0x02 || out[2] != 0x03 {
 		t.Error("first 3 bytes should match input")
 	}
+
 	for i := 3; i < 64; i++ {
 		if out[i] != 0 {
 			t.Errorf("byte %d should be zero, got 0x%02x", i, out[i])
@@ -392,9 +412,11 @@ func TestExtractUserData_SyntheticSNP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractUserData failed: %v", err)
 	}
+
 	if teeType != TEETypeSNP {
 		t.Errorf("expected TEE type %q, got %q", TEETypeSNP, teeType)
 	}
+
 	if !bytesEqual(extracted, userData) {
 		t.Errorf("user_data mismatch:\n  got:  %x\n  want: %x", extracted, userData)
 	}
@@ -419,9 +441,11 @@ func TestExtractUserData_SyntheticTDX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractUserData failed: %v", err)
 	}
+
 	if teeType != TEETypeTDX {
 		t.Errorf("expected TEE type %q, got %q", TEETypeTDX, teeType)
 	}
+
 	if !bytesEqual(extracted, userData[:32]) {
 		t.Errorf("user_data mismatch:\n  got:  %x\n  want: %x", extracted, userData[:32])
 	}

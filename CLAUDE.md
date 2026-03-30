@@ -1,8 +1,16 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 Obol Stack: framework for AI agents to run decentralised infrastructure locally. k3d cluster with OpenClaw AI agent, blockchain networks, payment-gated inference (x402), Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
+
+## Conventions
+
+- **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
+- **Branches**: `feat/`, `fix/`, `research/`, `codex/` prefixes
+- **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 
 ## Build, Test, Run
 
@@ -113,14 +121,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## Standalone Inference Gateway
 
-`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM.
-
-| Component | File | Role |
-|-----------|------|------|
-| `Gateway` | `internal/inference/gateway.go` | HTTP server, x402 middleware, Ollama proxy |
-| `ContainerManager` | `internal/inference/container.go` | Apple Containerization VM lifecycle |
-| `Store` | `internal/inference/store.go` | Deployment config persistence |
-| `Key` interface | `internal/enclave/enclave.go` | Secure Enclave signing (`enclave_darwin.go`: CGo/Security.framework, `enclave_stub.go`: fallback) |
+`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM. Key code: `internal/inference/` (gateway, container, store) and `internal/enclave/` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
 
 ## OpenClaw & Skills
 
@@ -132,15 +133,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
-
-| Component | File |
-|-----------|------|
-| Sidecar binary | `cmd/x402-buyer/main.go` |
-| PreSignedSigner | `internal/x402/buyer/signer.go` |
-| Reverse proxy | `internal/x402/buyer/proxy.go` |
-| Config/types | `internal/x402/buyer/config.go` |
-| Buy skill | `internal/embed/skills/buy-inference/` |
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price). Key code: `cmd/x402-buyer/` and `internal/x402/buyer/`.
 
 ## Development Constraints
 
@@ -183,31 +176,9 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 - `/skill.md` — machine-readable service catalog
 - `/` on tunnel hostname — static storefront landing page (busybox httpd)
 
-## Key Packages
+## Dependencies
 
-| Package | Key Files | Role |
-|---------|-----------|------|
-| `cmd/obol` | `main.go`, `sell.go`, `network.go`, `openclaw.go`, `model.go` | CLI commands |
-| `internal/config` | `config.go` | XDG Config struct |
-| `internal/stack` | `stack.go` | Cluster lifecycle |
-| `internal/network` | `network.go`, `erpc.go`, `rpc.go`, `parser.go` | Networks, eRPC, RPC gateway |
-| `internal/x402` | `config.go`, `setup.go`, `verifier.go`, `matcher.go`, `watcher.go` | ForwardAuth verifier |
-| `internal/x402/buyer` | `signer.go`, `proxy.go`, `config.go` | Buy-side sidecar |
-| `internal/erc8004` | `client.go`, `types.go`, `abi.go` | ERC-8004 Identity Registry |
-| `internal/agent` | `agent.go` | obol-agent singleton, RBAC patching |
-| `internal/model` | `model.go` | LiteLLM gateway configuration |
-| `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution |
-| `internal/inference` | `gateway.go`, `container.go`, `store.go` | Standalone x402 gateway |
-| `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
-| `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
-
-**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, helios, aztec), `internal/embed/skills/` (23 skills).
-
-**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`.
-
-**Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
-
-**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.35.0, helm 3.19.4, k3d 5.8.3, helmfile 1.2.3, k9s 0.50.18, helm-diff 3.14.1. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `mark3labs/x402-go`.
+Docker 20.10.0+, Go 1.25+. Toolchain installed by `obolup.sh` (kubectl, helm, k3d, helmfile, k9s). Key Go deps: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `mark3labs/x402-go`. E2E monetize walkthrough: `@docs/guides/monetize-inference.md`.
 
 ## Related Codebases
 

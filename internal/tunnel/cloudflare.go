@@ -3,6 +3,7 @@ package tunnel
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,9 +46,11 @@ func (c *cloudflareClient) CreateTunnel(accountID, tunnelName string) (*cloudfla
 	if err := c.doJSON("POST", fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/cfd_tunnel", accountID), reqBody, &resp); err != nil {
 		return nil, err
 	}
+
 	if !resp.Success {
 		return nil, fmt.Errorf("cloudflare tunnel create failed: %v", resp.Errors)
 	}
+
 	return &cloudflareTunnel{ID: resp.Result.ID, Token: resp.Result.Token}, nil
 }
 
@@ -61,9 +64,11 @@ func (c *cloudflareClient) GetTunnelToken(accountID, tunnelID string) (string, e
 	if err := c.doJSON("GET", fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/cfd_tunnel/%s/token", accountID, tunnelID), nil, &resp); err != nil {
 		return "", err
 	}
+
 	if !resp.Success || resp.Result == "" {
-		return "", fmt.Errorf("cloudflare tunnel token fetch failed")
+		return "", errors.New("cloudflare tunnel token fetch failed")
 	}
+
 	return resp.Result, nil
 }
 
@@ -95,9 +100,11 @@ func (c *cloudflareClient) UpdateTunnelConfiguration(accountID, tunnelID, hostna
 	if err := c.doJSON("PUT", url, reqBody, &resp); err != nil {
 		return err
 	}
+
 	if !resp.Success {
 		return fmt.Errorf("cloudflare tunnel configuration update failed: %v", resp.Errors)
 	}
+
 	return nil
 }
 
@@ -112,6 +119,7 @@ type dnsRecord struct {
 func (c *cloudflareClient) UpsertTunnelDNSRecord(zoneID, hostname, content string) error {
 	// Find existing records for this exact name/type.
 	listURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=CNAME&name=%s", zoneID, url.QueryEscape(hostname))
+
 	var listResp struct {
 		Success bool `json:"success"`
 		Errors  []struct {
@@ -123,6 +131,7 @@ func (c *cloudflareClient) UpsertTunnelDNSRecord(zoneID, hostname, content strin
 	if err := c.doJSON("GET", listURL, nil, &listResp); err != nil {
 		return err
 	}
+
 	if !listResp.Success {
 		return fmt.Errorf("cloudflare dns record list failed: %v", listResp.Errors)
 	}
@@ -148,9 +157,11 @@ func (c *cloudflareClient) UpsertTunnelDNSRecord(zoneID, hostname, content strin
 		if err := c.doJSON("PUT", updateURL, reqBody, &updResp); err != nil {
 			return err
 		}
+
 		if !updResp.Success {
 			return fmt.Errorf("cloudflare dns record update failed: %v", updResp.Errors)
 		}
+
 		return nil
 	}
 
@@ -174,15 +185,20 @@ func (c *cloudflareClient) UpsertTunnelDNSRecord(zoneID, hostname, content strin
 	if err := c.doJSON("POST", createURL, reqBody, &createResp); err != nil {
 		return err
 	}
+
 	if !createResp.Success {
 		return fmt.Errorf("cloudflare dns record create failed: %v", createResp.Errors)
 	}
+
 	return nil
 }
 
 func (c *cloudflareClient) doJSON(method, url string, reqBody any, out any) error {
-	var body []byte
-	var err error
+	var (
+		body []byte
+		err  error
+	)
+
 	if reqBody != nil {
 		body, err = json.Marshal(reqBody)
 		if err != nil {
@@ -194,10 +210,12 @@ func (c *cloudflareClient) doJSON(method, url string, reqBody any, out any) erro
 	if err != nil {
 		return err
 	}
+
 	req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 30 * time.Second}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -217,8 +235,10 @@ func (c *cloudflareClient) doJSON(method, url string, reqBody any, out any) erro
 	if out == nil {
 		return nil
 	}
+
 	if err := json.Unmarshal(respBody, out); err != nil {
 		return err
 	}
+
 	return nil
 }

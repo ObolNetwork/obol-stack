@@ -42,6 +42,7 @@ func TestValidCoCoRuntimes(t *testing.T) {
 		if err != nil {
 			t.Errorf("ParseCoCoRuntime(%q) failed: %v", r, err)
 		}
+
 		if got != r {
 			t.Errorf("round-trip mismatch: %q != %q", got, r)
 		}
@@ -61,6 +62,7 @@ func TestInstallCoCo_DryRun(t *testing.T) {
 	if cmd == "" {
 		t.Fatal("expected non-empty command string")
 	}
+
 	for _, want := range []string{
 		CoCoChartOCI,
 		CoCoChartVersion,
@@ -106,5 +108,6 @@ func searchString(s, sub string) bool {
 			return true
 		}
 	}
+
 	return false
 }

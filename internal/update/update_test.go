@@ -95,11 +95,13 @@ func TestMatchesFilter(t *testing.T) {
 func TestResolveReleaseNames(t *testing.T) {
 	// Set up a temp config dir with a helmfile
 	tmpDir := t.TempDir()
+
 	defaultsDir := filepath.Join(tmpDir, "defaults")
-	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+	if err := os.MkdirAll(defaultsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte(sampleHelmfile), 0644); err != nil {
+
+	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte(sampleHelmfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -148,6 +150,7 @@ func TestResolveReleaseNames(t *testing.T) {
 			if len(got) != len(tc.want) {
 				t.Fatalf("ResolveReleaseNames(%q) = %v, want %v", tc.filter, got, tc.want)
 			}
+
 			for i := range got {
 				if got[i] != tc.want[i] {
 					t.Errorf("ResolveReleaseNames(%q)[%d] = %q, want %q", tc.filter, i, got[i], tc.want[i])
@@ -163,7 +166,6 @@ func TestUpgradeOneHelmfile_ChartFilter(t *testing.T) {
 	// We can't call helm search, so we test the filter/skip logic by using
 	// a mock-friendly approach: write a helmfile and verify only the filtered
 	// chart is considered.
-
 	tmpDir := t.TempDir()
 	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml")
 
@@ -178,7 +180,7 @@ func TestUpgradeOneHelmfile_ChartFilter(t *testing.T) {
     chart: prometheus-community/kube-prometheus-stack
     version: 82.2.1
 `
-	if err := os.WriteFile(helmfilePath, []byte(helmfileContent), 0644); err != nil {
+	if err := os.WriteFile(helmfilePath, []byte(helmfileContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,6 +199,7 @@ func TestUpgradeOneHelmfile_ChartFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(data) != helmfileContent {
 		t.Error("helmfile was unexpectedly modified when helm binary is unavailable")
 	}
@@ -209,6 +212,7 @@ func TestUpgradeOneHelmfile_ChartFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(data) != helmfileContent {
 		t.Error("helmfile was unexpectedly modified when helm binary is unavailable")
 	}
@@ -264,8 +268,9 @@ func TestMajorVersion(t *testing.T) {
 
 func TestParseHelmfileReleases(t *testing.T) {
 	tmpDir := t.TempDir()
+
 	helmfilePath := filepath.Join(tmpDir, "helmfile.yaml")
-	if err := os.WriteFile(helmfilePath, []byte(sampleHelmfile), 0644); err != nil {
+	if err := os.WriteFile(helmfilePath, []byte(sampleHelmfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -294,9 +299,11 @@ func TestParseHelmfileReleases(t *testing.T) {
 		if releases[i].Name != exp.name {
 			t.Errorf("release[%d].Name = %q, want %q", i, releases[i].Name, exp.name)
 		}
+
 		if releases[i].Chart != exp.chart {
 			t.Errorf("release[%d].Chart = %q, want %q", i, releases[i].Chart, exp.chart)
 		}
+
 		if releases[i].Version != exp.version {
 			t.Errorf("release[%d].Version = %q, want %q", i, releases[i].Version, exp.version)
 		}
@@ -308,19 +315,21 @@ func TestCollectHelmfiles(t *testing.T) {
 
 	// Create defaults helmfile
 	defaultsDir := filepath.Join(tmpDir, "defaults")
-	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+	if err := os.MkdirAll(defaultsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte("releases: []"), 0644); err != nil {
+
+	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte("releases: []"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create an app instance helmfile
 	appDir := filepath.Join(tmpDir, "applications", "openclaw", "my-instance")
-	if err := os.MkdirAll(appDir, 0755); err != nil {
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(appDir, "helmfile.yaml"), []byte("releases: []"), 0644); err != nil {
+
+	if err := os.WriteFile(filepath.Join(appDir, "helmfile.yaml"), []byte("releases: []"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,6 +343,7 @@ func TestCollectHelmfiles(t *testing.T) {
 	if paths[0] != filepath.Join(defaultsDir, "helmfile.yaml") {
 		t.Errorf("paths[0] = %q, want defaults helmfile", paths[0])
 	}
+
 	if paths[1] != filepath.Join(appDir, "helmfile.yaml") {
 		t.Errorf("paths[1] = %q, want app instance helmfile", paths[1])
 	}
@@ -342,8 +352,9 @@ func TestCollectHelmfiles(t *testing.T) {
 func TestCheckChartVersions_LocalChart(t *testing.T) {
 	// Test that local charts (./base) are reported as "Local chart"
 	tmpDir := t.TempDir()
+
 	defaultsDir := filepath.Join(tmpDir, "defaults")
-	if err := os.MkdirAll(defaultsDir, 0755); err != nil {
+	if err := os.MkdirAll(defaultsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -351,7 +362,7 @@ func TestCheckChartVersions_LocalChart(t *testing.T) {
   - name: base
     chart: ./base
 `
-	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte(helmfile), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(defaultsDir, "helmfile.yaml"), []byte(helmfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,6 +379,7 @@ func TestCheckChartVersions_LocalChart(t *testing.T) {
 	if len(statuses) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(statuses))
 	}
+
 	if statuses[0].Status != "Local chart" {
 		t.Errorf("status = %q, want %q", statuses[0].Status, "Local chart")
 	}

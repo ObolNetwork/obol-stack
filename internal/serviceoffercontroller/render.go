@@ -590,6 +590,12 @@ func buildActiveRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, a
 			AgentRegistry: fmt.Sprintf("eip155:%d:%s", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia),
 		}}
 	}
+	if metadata := nonEmptyStringMap(offer.Spec.Registration.Metadata); len(metadata) > 0 {
+		registration.Metadata = metadata
+	}
+	if provenance := nonEmptyStringMap(offer.Spec.Provenance); len(provenance) > 0 {
+		registration.Provenance = provenance
+	}
 	return registration
 }
 
@@ -722,4 +728,23 @@ func fallbackOfferType(offer *monetizeapi.ServiceOffer) string {
 func parseInt64(value string) int64 {
 	parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	return parsed
+}
+
+func nonEmptyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		result[key] = value
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

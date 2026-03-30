@@ -57,6 +57,7 @@ func isRepoChartFormat(ref string) bool {
 	if idx := strings.LastIndex(ref, "@"); idx != -1 {
 		base = ref[:idx]
 	}
+
 	return strings.Count(base, "/") == 1 && !strings.Contains(ref, "://")
 }
 
@@ -76,6 +77,7 @@ func parseURLReference(ref string) (*ChartReference, error) {
 	// Extract chart name and version (e.g., redis-19.0.0 -> redis, 19.0.0)
 	chartName := nameWithVersion
 	version := ""
+
 	re := regexp.MustCompile(`^(.+)-(\d+\.\d+\.\d+.*)$`)
 	if matches := re.FindStringSubmatch(nameWithVersion); len(matches) > 2 {
 		chartName = matches[1]
@@ -94,8 +96,8 @@ func parseURLReference(ref string) (*ChartReference, error) {
 func parseOCIReference(ref string) (*ChartReference, error) {
 	// oci://registry-1.docker.io/bitnamicharts/redis
 	// oci://registry-1.docker.io/bitnamicharts/redis:19.0.0
-
 	withoutScheme := strings.TrimPrefix(ref, "oci://")
+
 	parts := strings.Split(withoutScheme, "/")
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("invalid OCI reference: %s", ref)
@@ -105,6 +107,7 @@ func parseOCIReference(ref string) (*ChartReference, error) {
 	last := parts[len(parts)-1]
 	chartName := last
 	version := ""
+
 	if idx := strings.LastIndex(last, ":"); idx != -1 {
 		chartName = last[:idx]
 		version = last[idx+1:]
@@ -122,6 +125,7 @@ func parseOCIReference(ref string) (*ChartReference, error) {
 func parseRepoChartReference(ref string) (*ChartReference, error) {
 	// Parse repo/chart[@version]
 	version := ""
+
 	base := ref
 	if idx := strings.LastIndex(ref, "@"); idx != -1 {
 		version = ref[idx+1:]

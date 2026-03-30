@@ -138,10 +138,19 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 				Name: "qwen3.5:9b",
 			},
 			Path: "/services/demo",
+			Provenance: map[string]string{
+				"framework":   "autoresearch",
+				"metricName":  "val_bpb",
+				"metricValue": "0.9973",
+			},
 			Registration: monetizeapi.ServiceOfferRegistration{
 				Name:    "Demo Agent",
 				Skills:  []string{"natural_language_processing/text_generation"},
 				Domains: []string{"technology/artificial_intelligence"},
+				Metadata: map[string]string{
+					"gpu":          "A100-80GB",
+					"best_val_bpb": "1.234",
+				},
 			},
 		},
 	}
@@ -162,6 +171,12 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 	}
 	if len(document.Services) < 2 {
 		t.Fatalf("services = %+v, want web + OASF", document.Services)
+	}
+	if document.Metadata["gpu"] != "A100-80GB" {
+		t.Fatalf("metadata = %+v, want gpu entry", document.Metadata)
+	}
+	if document.Provenance["framework"] != "autoresearch" {
+		t.Fatalf("provenance = %+v, want framework entry", document.Provenance)
 	}
 }
 

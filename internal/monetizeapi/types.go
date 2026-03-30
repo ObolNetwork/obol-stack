@@ -45,6 +45,7 @@ type ServiceOfferSpec struct {
 	Upstream     ServiceOfferUpstream     `json:"upstream,omitempty"`
 	Payment      ServiceOfferPayment      `json:"payment,omitempty"`
 	Path         string                   `json:"path,omitempty"`
+	Provenance   map[string]string        `json:"provenance,omitempty"`
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
 }
 
@@ -84,6 +85,7 @@ type ServiceOfferRegistration struct {
 	SupportedTrust []string              `json:"supportedTrust,omitempty"`
 	Skills         []string              `json:"skills,omitempty"`
 	Domains        []string              `json:"domains,omitempty"`
+	Metadata       map[string]string     `json:"metadata,omitempty"`
 }
 
 type ServiceOfferService struct {

@@ -21,7 +21,9 @@ import (
 // endpoint that decrypts incoming encrypted bodies.
 func startEnclaveGateway(t *testing.T, tag string) (*httptest.Server, enclave.Key) {
 	t.Helper()
+
 	_ = enclave.DeleteKey(tag)
+
 	t.Cleanup(func() { _ = enclave.DeleteKey(tag) })
 
 	seKey, err := enclave.NewKey(tag)
@@ -39,6 +41,7 @@ func startEnclaveGateway(t *testing.T, tag string) (*httptest.Server, enclave.Ke
 			"persistent": seKey.Persistent(),
 			"algorithm":  "ECIES-P256-HKDF-SHA256-AES256GCM",
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(body)
 	})
@@ -49,8 +52,10 @@ func startEnclaveGateway(t *testing.T, tag string) (*httptest.Server, enclave.Ke
 		body, _ := io.ReadAll(r.Body)
 
 		var plain []byte
+
 		if ct == "application/x-obol-encrypted" {
 			var err error
+
 			plain, err = seKey.Decrypt(body)
 			if err != nil {
 				http.Error(w, "decrypt failed: "+err.Error(), http.StatusBadRequest)
@@ -68,13 +73,16 @@ func startEnclaveGateway(t *testing.T, tag string) (*httptest.Server, enclave.Ke
 				http.Error(w, "bad reply pubkey", http.StatusBadRequest)
 				return
 			}
+
 			enc, err := enclave.Encrypt(replyPubkey, plain)
 			if err != nil {
 				http.Error(w, "encrypt reply failed: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
+
 			w.Header().Set("Content-Type", "application/x-obol-encrypted")
 			_, _ = w.Write(enc)
+
 			return
 		}
 
@@ -84,6 +92,7 @@ func startEnclaveGateway(t *testing.T, tag string) (*httptest.Server, enclave.Ke
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+
 	return srv, seKey
 }
 
@@ -101,6 +110,7 @@ func TestClientFetchesPubkey(t *testing.T) {
 	if len(pk) != 65 {
 		t.Fatalf("expected 65-byte pubkey, got %d bytes", len(pk))
 	}
+
 	if hex.EncodeToString(pk) != hex.EncodeToString(seKey.PublicKeyBytes()) {
 		t.Errorf("pubkey mismatch")
 	}
@@ -117,7 +127,7 @@ func TestClientEncryptsRequest(t *testing.T) {
 	}
 
 	want := `{"model":"llama3","messages":[{"role":"user","content":"hello"}]}`
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", srv.URL+"/echo", strings.NewReader(want))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/echo", strings.NewReader(want))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.Do(req)
@@ -142,10 +152,12 @@ func TestClientPassthroughNoBody(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
+
 		ct := r.Header.Get("Content-Type")
 		if ct == "application/x-obol-encrypted" {
 			t.Errorf("GET request should not be encrypted, got Content-Type: %s", ct)
 		}
+
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
@@ -156,6 +168,7 @@ func TestClientPassthroughNoBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKey: %v", err)
 	}
+
 	t.Cleanup(func() { _ = enclave.DeleteKey("com.obol.inference.test.client-noencrypt") })
 
 	c := &inference.Client{
@@ -165,12 +178,15 @@ func TestClientPassthroughNoBody(t *testing.T) {
 	// Manually inject pubkey so fetchPubkey doesn't try to hit a missing endpoint.
 	_ = fakeKey // pubkey unused — GET has no body so encrypt path is skipped
 
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", srv.URL+"/health", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/health", nil)
+
 	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
+
 	resp.Body.Close()
+
 	if !called {
 		t.Error("upstream handler was not called")
 	}
@@ -181,7 +197,9 @@ func TestClientPassthroughNoBody(t *testing.T) {
 // client's ephemeral key → client decrypts → plaintext response.
 func TestClientEncryptedReply(t *testing.T) {
 	const replyTag = "com.obol.inference.test.client-reply"
+
 	_ = enclave.DeleteKey(replyTag)
+
 	t.Cleanup(func() { _ = enclave.DeleteKey(replyTag) })
 
 	srv, _ := startEnclaveGateway(t, "com.obol.inference.test.client-reply-gw")
@@ -190,12 +208,13 @@ func TestClientEncryptedReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+
 	if err := c.EnableEncryptedReplies(replyTag); err != nil {
 		t.Fatalf("EnableEncryptedReplies: %v", err)
 	}
 
 	want := `{"model":"llama3","messages":[{"role":"user","content":"secret question"}]}`
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", srv.URL+"/echo", strings.NewReader(want))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/echo", strings.NewReader(want))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.Do(req)
@@ -207,6 +226,7 @@ func TestClientEncryptedReply(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status: %s", resp.Status)
 	}
+
 	got, _ := io.ReadAll(resp.Body)
 	if strings.TrimSpace(string(got)) != want {
 		t.Errorf("round-trip body mismatch:\n  want: %s\n  got:  %s", want, got)

@@ -27,47 +27,48 @@ projects:
             duration: 30s
 `
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		t.Fatalf("failed to parse test config: %v", err)
 	}
 
-	projects := erpcConfig["projects"].([]interface{})
-	project := projects[0].(map[string]interface{})
+	projects := erpcConfig["projects"].([]any)
+	project := projects[0].(map[string]any)
 
 	// Add a local upstream at position 0 (highest priority)
-	upstreams := project["upstreams"].([]interface{})
-	newUpstream := map[string]interface{}{
+	upstreams := project["upstreams"].([]any)
+	newUpstream := map[string]any{
 		"id":       "local-ethereum-test",
 		"endpoint": "http://ethereum-execution.ethereum-test.svc.cluster.local:8545",
-		"evm":      map[string]interface{}{"chainId": 1},
-		"ignoreMethods": []interface{}{
+		"evm":      map[string]any{"chainId": 1},
+		"ignoreMethods": []any{
 			"eth_sendRawTransaction",
 			"eth_sendTransaction",
 		},
 	}
-	upstreams = append([]interface{}{newUpstream}, upstreams...)
+	upstreams = append([]any{newUpstream}, upstreams...)
 	project["upstreams"] = upstreams
 
 	// Verify local upstream is first (eRPC tries in order for reads)
-	if len(project["upstreams"].([]interface{})) != 2 {
-		t.Errorf("expected 2 upstreams, got %d", len(project["upstreams"].([]interface{})))
+	if len(project["upstreams"].([]any)) != 2 {
+		t.Errorf("expected 2 upstreams, got %d", len(project["upstreams"].([]any)))
 	}
 
-	first := project["upstreams"].([]interface{})[0].(map[string]interface{})
+	first := project["upstreams"].([]any)[0].(map[string]any)
 	if first["id"] != "local-ethereum-test" {
 		t.Errorf("first upstream should be local, got %v", first["id"])
 	}
 	// Local upstream must block write methods
-	ignored, ok := first["ignoreMethods"].([]interface{})
+	ignored, ok := first["ignoreMethods"].([]any)
 	if !ok || len(ignored) != 2 {
 		t.Fatal("local upstream must have ignoreMethods for write methods")
 	}
+
 	if ignored[0] != "eth_sendRawTransaction" {
 		t.Errorf("ignoreMethods[0] = %v, want eth_sendRawTransaction", ignored[0])
 	}
 
-	second := project["upstreams"].([]interface{})[1].(map[string]interface{})
+	second := project["upstreams"].([]any)[1].(map[string]any)
 	if second["id"] != "obol-rpc-mainnet" {
 		t.Errorf("second upstream should be remote (write-capable), got %v", second["id"])
 	}
@@ -87,30 +88,34 @@ func TestPatchERPCConfig_RemoveUpstream(t *testing.T) {
           chainId: 1
 `
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 
-	projects := erpcConfig["projects"].([]interface{})
-	project := projects[0].(map[string]interface{})
-	upstreams := project["upstreams"].([]interface{})
+	projects := erpcConfig["projects"].([]any)
+	project := projects[0].(map[string]any)
+	upstreams := project["upstreams"].([]any)
 
 	// Filter out the local upstream
-	var filtered []interface{}
+	var filtered []any
+
 	for _, u := range upstreams {
-		um := u.(map[string]interface{})
+		um := u.(map[string]any)
 		if um["id"] == "local-ethereum-test" {
 			continue
 		}
+
 		filtered = append(filtered, u)
 	}
+
 	project["upstreams"] = filtered
 
 	if len(filtered) != 1 {
 		t.Errorf("expected 1 upstream after removal, got %d", len(filtered))
 	}
-	remaining := filtered[0].(map[string]interface{})
+
+	remaining := filtered[0].(map[string]any)
 	if remaining["id"] != "obol-rpc-mainnet" {
 		t.Errorf("remaining upstream should be obol-rpc-mainnet, got %v", remaining["id"])
 	}
@@ -130,42 +135,45 @@ func TestPatchERPCConfig_Idempotent(t *testing.T) {
           chainId: 1
 `
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 
-	projects := erpcConfig["projects"].([]interface{})
-	project := projects[0].(map[string]interface{})
-	upstreams := project["upstreams"].([]interface{})
+	projects := erpcConfig["projects"].([]any)
+	project := projects[0].(map[string]any)
+	upstreams := project["upstreams"].([]any)
 
 	// Remove existing, then add updated (same as patchERPCUpstream logic)
-	var filtered []interface{}
+	var filtered []any
+
 	for _, u := range upstreams {
-		um := u.(map[string]interface{})
+		um := u.(map[string]any)
 		if um["id"] == "local-ethereum-test" {
 			continue
 		}
+
 		filtered = append(filtered, u)
 	}
 
-	newUpstream := map[string]interface{}{
+	newUpstream := map[string]any{
 		"id":       "local-ethereum-test",
 		"endpoint": "http://new-endpoint:8545",
-		"evm":      map[string]interface{}{"chainId": 1},
-		"ignoreMethods": []interface{}{
+		"evm":      map[string]any{"chainId": 1},
+		"ignoreMethods": []any{
 			"eth_sendRawTransaction",
 			"eth_sendTransaction",
 		},
 	}
-	filtered = append([]interface{}{newUpstream}, filtered...)
+	filtered = append([]any{newUpstream}, filtered...)
 	project["upstreams"] = filtered
 
 	// Should still be 2 upstreams (not 3)
 	if len(filtered) != 2 {
 		t.Errorf("expected 2 upstreams (idempotent), got %d", len(filtered))
 	}
-	first := filtered[0].(map[string]interface{})
+
+	first := filtered[0].(map[string]any)
 	if first["endpoint"] != "http://new-endpoint:8545" {
 		t.Errorf("endpoint should be updated, got %v", first["endpoint"])
 	}
@@ -199,53 +207,58 @@ func TestPatchERPCConfig_PreservesWriteOnlySelectionPolicy(t *testing.T) {
             }
 `
 
-	var erpcConfig map[string]interface{}
+	var erpcConfig map[string]any
 	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 
-	projects := erpcConfig["projects"].([]interface{})
-	project := projects[0].(map[string]interface{})
+	projects := erpcConfig["projects"].([]any)
+	project := projects[0].(map[string]any)
 
 	// Simulate what patchERPCUpstream does: add local upstream at front
 	// with write methods blocked
-	upstreams := project["upstreams"].([]interface{})
-	newUpstream := map[string]interface{}{
+	upstreams := project["upstreams"].([]any)
+	newUpstream := map[string]any{
 		"id":       "local-ethereum-prod",
 		"endpoint": "http://ethereum-execution.ethereum-prod.svc.cluster.local:8545",
-		"evm":      map[string]interface{}{"chainId": 1},
-		"ignoreMethods": []interface{}{
+		"evm":      map[string]any{"chainId": 1},
+		"ignoreMethods": []any{
 			"eth_sendRawTransaction",
 			"eth_sendTransaction",
 		},
 	}
-	upstreams = append([]interface{}{newUpstream}, upstreams...)
+	upstreams = append([]any{newUpstream}, upstreams...)
 	project["upstreams"] = upstreams
 
 	// Verify: selectionPolicy must be UNTOUCHED
-	networks := project["networks"].([]interface{})
-	mainnet := networks[0].(map[string]interface{})
-	sp, ok := mainnet["selectionPolicy"].(map[string]interface{})
+	networks := project["networks"].([]any)
+	mainnet := networks[0].(map[string]any)
+
+	sp, ok := mainnet["selectionPolicy"].(map[string]any)
 	if !ok {
 		t.Fatal("selectionPolicy was removed")
 	}
+
 	if sp["evalPerMethod"] != true {
 		t.Error("evalPerMethod should still be true")
 	}
+
 	fn, ok := sp["evalFunction"].(string)
 	if !ok || !strings.Contains(fn, "obol-rpc-mainnet") {
 		t.Error("evalFunction should still route writes to obol-rpc-mainnet")
 	}
 
 	// Verify: 2 upstreams (local + obol), local first for reads
-	if len(project["upstreams"].([]interface{})) != 2 {
-		t.Errorf("expected 2 upstreams, got %d", len(project["upstreams"].([]interface{})))
+	if len(project["upstreams"].([]any)) != 2 {
+		t.Errorf("expected 2 upstreams, got %d", len(project["upstreams"].([]any)))
 	}
-	first := project["upstreams"].([]interface{})[0].(map[string]interface{})
+
+	first := project["upstreams"].([]any)[0].(map[string]any)
 	if first["id"] != "local-ethereum-prod" {
 		t.Errorf("local upstream should be first (for reads), got %v", first["id"])
 	}
-	second := project["upstreams"].([]interface{})[1].(map[string]interface{})
+
+	second := project["upstreams"].([]any)[1].(map[string]any)
 	if second["id"] != "obol-rpc-mainnet" {
 		t.Errorf("obol-rpc-mainnet should be second (protected write target), got %v", second["id"])
 	}
@@ -269,6 +282,7 @@ func TestNetworkChainIDs(t *testing.T) {
 			t.Errorf("networkChainIDs missing %q", tt.network)
 			continue
 		}
+
 		if got != tt.chainID {
 			t.Errorf("networkChainIDs[%q] = %d, want %d", tt.network, got, tt.chainID)
 		}

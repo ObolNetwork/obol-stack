@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -52,6 +53,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return openclaw.Sync(cfg, id, getUI(cmd))
 				},
 			},
@@ -70,15 +72,19 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					u := getUI(cmd)
 					if cmd.Bool("regenerate") {
 						newToken, err := openclaw.RegenerateToken(cfg, id, u)
 						if err != nil {
 							return err
 						}
+
 						u.Print(newToken)
+
 						return nil
 					}
+
 					return openclaw.Token(cfg, id, u)
 				},
 			},
@@ -105,6 +111,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return openclaw.Delete(cfg, id, cmd.Bool("force"), getUI(cmd))
 				},
 			},
@@ -117,6 +124,7 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return openclaw.Setup(cfg, id, openclaw.SetupOptions{}, getUI(cmd))
 				},
 			},
@@ -140,13 +148,15 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					noBrowser := cmd.Bool("no-browser")
+
 					return openclaw.Dashboard(cfg, id, openclaw.DashboardOptions{
-						Port:      int(cmd.Int("port")),
+						Port:      cmd.Int("port"),
 						NoBrowser: noBrowser,
 					}, func(url string) {
 						if !noBrowser {
-							openBrowser(url)
+							_ = openBrowser(url)
 						}
 					}, getUI(cmd))
 				},
@@ -172,12 +182,14 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 
 					// Strip the "--" separator if present
 					var openclawArgs []string
+
 					for i, arg := range remaining {
 						if arg == "--" {
 							openclawArgs = remaining[i+1:]
 							break
 						}
 					}
+
 					if len(openclawArgs) == 0 && len(remaining) > 0 {
 						openclawArgs = remaining
 					}
@@ -213,10 +225,12 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					if err := kubectl.EnsureCluster(cfg); err != nil {
 						return err
 					}
+
 					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return err
 					}
+
 					return openclaw.BackupWalletCmd(cfg, id, openclaw.BackupWalletOptions{
 						Output:      cmd.String("output"),
 						Passphrase:  cmd.String("passphrase"),
@@ -247,10 +261,12 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					if err := kubectl.EnsureCluster(cfg); err != nil {
 						return err
 					}
+
 					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return err
 					}
+
 					return openclaw.RestoreWalletCmd(cfg, id, openclaw.RestoreWalletOptions{
 						Input:       cmd.String("input"),
 						Passphrase:  cmd.String("passphrase"),
@@ -265,14 +281,18 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 				ArgsUsage: "[instance-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+
 					var id string
+
 					if len(args) > 0 {
 						var err error
+
 						id, _, err = openclaw.ResolveInstance(cfg, args)
 						if err != nil {
 							return err
 						}
 					}
+
 					return openclaw.ListWallets(cfg, id, getUI(cmd))
 				},
 			},
@@ -293,13 +313,16 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {
 						return err
 					}
+
 					if len(remaining) == 0 {
-						return fmt.Errorf("skill package or path required\n\nUsage: obol openclaw skill add <package-or-path>")
+						return errors.New("skill package or path required\n\nUsage: obol openclaw skill add <package-or-path>")
 					}
+
 					return openclaw.SkillAdd(cfg, id, remaining, getUI(cmd))
 				},
 			},
@@ -310,13 +333,16 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {
 						return err
 					}
+
 					if len(remaining) == 0 {
-						return fmt.Errorf("skill name required\n\nUsage: obol openclaw skill remove <skill-name>")
+						return errors.New("skill name required\n\nUsage: obol openclaw skill remove <skill-name>")
 					}
+
 					return openclaw.SkillRemove(cfg, id, remaining, getUI(cmd))
 				},
 			},
@@ -329,6 +355,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return openclaw.SkillList(cfg, id, getUI(cmd))
 				},
 			},
@@ -348,6 +375,7 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return openclaw.SkillsSync(cfg, id, cmd.String("from"), getUI(cmd))
 				},
 			},

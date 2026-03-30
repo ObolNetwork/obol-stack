@@ -22,9 +22,37 @@ func TestEffectiveRequestPrice_PerMTok(t *testing.T) {
 }
 
 func TestEffectiveRequestPrice_PerHour(t *testing.T) {
-	p := PriceTable{PerHour: "2.00"}
-	if got := p.EffectiveRequestPrice(); got != "2.00" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "2.00")
+	// 6.00 USDC/hour * (5 min / 60 min) = 0.50 USDC/request
+	p := PriceTable{PerHour: "6.00"}
+	if got := p.EffectiveRequestPrice(); got != "0.5" {
+		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.5")
+	}
+}
+
+func TestApproximateRequestPriceFromPerHour(t *testing.T) {
+	// 0.50 USDC/hour * (5/60) = 0.04166...
+	got, err := ApproximateRequestPriceFromPerHour("0.50")
+	if err != nil {
+		t.Fatalf("ApproximateRequestPriceFromPerHour() error = %v", err)
+	}
+	// 6.00 USDC/hour gives exactly 0.5, so use that for an exact check too.
+	got6, err := ApproximateRequestPriceFromPerHour("6.00")
+	if err != nil {
+		t.Fatalf("ApproximateRequestPriceFromPerHour(6.00) error = %v", err)
+	}
+
+	if got6 != "0.5" {
+		t.Errorf("ApproximateRequestPriceFromPerHour(6.00) = %q, want %q", got6, "0.5")
+	}
+	// 0.50 * 5/60 should start with "0.0416"
+	if len(got) < 6 || got[:6] != "0.0416" {
+		t.Errorf("ApproximateRequestPriceFromPerHour(0.50) = %q, expected value starting with 0.0416", got)
+	}
+}
+
+func TestApproximateRequestPriceFromPerHour_Invalid(t *testing.T) {
+	if _, err := ApproximateRequestPriceFromPerHour("bad"); err == nil {
+		t.Fatal("ApproximateRequestPriceFromPerHour() error = nil, want non-nil")
 	}
 }
 
@@ -47,6 +75,7 @@ func TestApproximateRequestPriceFromPerMTok(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApproximateRequestPriceFromPerMTok() error = %v", err)
 	}
+
 	if got != "0.00125" {
 		t.Errorf("ApproximateRequestPriceFromPerMTok() = %q, want %q", got, "0.00125")
 	}
@@ -83,18 +112,23 @@ func TestPaymentTerms_JSONRoundTrip(t *testing.T) {
 	if decoded.Network != original.Network {
 		t.Errorf("Network = %q, want %q", decoded.Network, original.Network)
 	}
+
 	if decoded.PayTo != original.PayTo {
 		t.Errorf("PayTo = %q, want %q", decoded.PayTo, original.PayTo)
 	}
+
 	if decoded.Scheme != original.Scheme {
 		t.Errorf("Scheme = %q, want %q", decoded.Scheme, original.Scheme)
 	}
+
 	if decoded.MaxTimeoutSeconds != original.MaxTimeoutSeconds {
 		t.Errorf("MaxTimeoutSeconds = %d, want %d", decoded.MaxTimeoutSeconds, original.MaxTimeoutSeconds)
 	}
+
 	if decoded.Price.PerRequest != original.Price.PerRequest {
 		t.Errorf("Price.PerRequest = %q, want %q", decoded.Price.PerRequest, original.Price.PerRequest)
 	}
+
 	if decoded.Price.PerMTok != original.Price.PerMTok {
 		t.Errorf("Price.PerMTok = %q, want %q", decoded.Price.PerMTok, original.Price.PerMTok)
 	}
@@ -125,18 +159,23 @@ func TestPaymentTerms_YAMLRoundTrip(t *testing.T) {
 	if decoded.Network != original.Network {
 		t.Errorf("Network = %q, want %q", decoded.Network, original.Network)
 	}
+
 	if decoded.PayTo != original.PayTo {
 		t.Errorf("PayTo = %q, want %q", decoded.PayTo, original.PayTo)
 	}
+
 	if decoded.Scheme != original.Scheme {
 		t.Errorf("Scheme = %q, want %q", decoded.Scheme, original.Scheme)
 	}
+
 	if decoded.MaxTimeoutSeconds != original.MaxTimeoutSeconds {
 		t.Errorf("MaxTimeoutSeconds = %d, want %d", decoded.MaxTimeoutSeconds, original.MaxTimeoutSeconds)
 	}
+
 	if decoded.Price.PerRequest != original.Price.PerRequest {
 		t.Errorf("Price.PerRequest = %q, want %q", decoded.Price.PerRequest, original.Price.PerRequest)
 	}
+
 	if decoded.Price.PerMTok != original.Price.PerMTok {
 		t.Errorf("Price.PerMTok = %q, want %q", decoded.Price.PerMTok, original.Price.PerMTok)
 	}
@@ -182,11 +221,13 @@ func TestPaymentTerms_JSONFieldNames(t *testing.T) {
 	if err := json.Unmarshal(raw["price"], &priceRaw); err != nil {
 		t.Fatalf("json.Unmarshal price to map failed: %v", err)
 	}
+
 	for _, expected := range []string{"perRequest", "perMTok"} {
 		if _, ok := priceRaw[expected]; !ok {
 			t.Errorf("expected price field %q not found in JSON output", expected)
 		}
 	}
+
 	for _, unexpected := range []string{"per_request", "per_mtok"} {
 		if _, ok := priceRaw[unexpected]; ok {
 			t.Errorf("unexpected snake_case field %q found in price JSON output", unexpected)
@@ -211,6 +252,7 @@ func TestPriceTable_OmitEmpty(t *testing.T) {
 	if _, ok := jsonMap["perRequest"]; !ok {
 		t.Error("expected perRequest in JSON output")
 	}
+
 	for _, field := range []string{"perMTok", "perHour", "perEpoch"} {
 		if _, ok := jsonMap[field]; ok {
 			t.Errorf("field %q should be omitted from JSON when empty", field)
@@ -223,7 +265,7 @@ func TestPriceTable_OmitEmpty(t *testing.T) {
 		t.Fatalf("yaml.Marshal failed: %v", err)
 	}
 
-	var yamlMap map[string]interface{}
+	var yamlMap map[string]any
 	if err := yaml.Unmarshal(yamlData, &yamlMap); err != nil {
 		t.Fatalf("yaml.Unmarshal to map failed: %v", err)
 	}
@@ -231,6 +273,7 @@ func TestPriceTable_OmitEmpty(t *testing.T) {
 	if _, ok := yamlMap["perRequest"]; !ok {
 		t.Error("expected perRequest in YAML output")
 	}
+
 	for _, field := range []string{"perMTok", "perHour", "perEpoch"} {
 		if _, ok := yamlMap[field]; ok {
 			t.Errorf("field %q should be omitted from YAML when empty", field)

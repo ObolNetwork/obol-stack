@@ -21,6 +21,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
 		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "wallets", "why",
 	}
+
 	sort.Strings(names)
 
 	if len(names) < len(coreSkills) {
@@ -31,6 +32,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	for _, n := range names {
 		nameSet[n] = true
 	}
+
 	for _, core := range coreSkills {
 		if !nameSet[core] {
 			t.Errorf("missing core skill %q in %v", core, names)
@@ -49,11 +51,13 @@ func TestCopySkills(t *testing.T) {
 	skills := []string{"discovery", "distributed-validators", "ethereum-networks", "ethereum-local-wallet", "sell", "obol-stack", "addresses", "wallets"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
+
 		info, err := os.Stat(skillMD)
 		if err != nil {
 			t.Errorf("%s/SKILL.md: %v", skill, err)
 			continue
 		}
+
 		if info.Size() == 0 {
 			t.Errorf("%s/SKILL.md is empty", skill)
 		}
@@ -128,6 +132,7 @@ func TestMonetizePy_Syntax(t *testing.T) {
 	}
 
 	cmd := exec.Command("python3", "-m", "py_compile", monetizePy)
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("monetize.py has syntax errors:\n%s\n%v", output, err)
@@ -141,6 +146,7 @@ func TestKubePy_WriteHelpers(t *testing.T) {
 	}
 
 	kubePy := filepath.Join(destDir, "obol-stack", "scripts", "kube.py")
+
 	data, err := os.ReadFile(kubePy)
 	if err != nil {
 		t.Fatalf("read kube.py: %v", err)
@@ -170,6 +176,7 @@ func TestDiscoveryPy_Syntax(t *testing.T) {
 	}
 
 	cmd := exec.Command("python3", "-m", "py_compile", discoveryPy)
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("discovery.py has syntax errors:\n%s\n%v", output, err)
@@ -183,6 +190,7 @@ func TestDiscoverySkill_Commands(t *testing.T) {
 	}
 
 	discoveryPy := filepath.Join(destDir, "discovery", "scripts", "discovery.py")
+
 	data, err := os.ReadFile(discoveryPy)
 	if err != nil {
 		t.Fatalf("read discovery.py: %v", err)
@@ -225,11 +233,12 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 
 	// Pre-create a skill directory with custom content
 	customDir := filepath.Join(destDir, "obol-stack")
-	if err := os.MkdirAll(customDir, 0755); err != nil {
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	customFile := filepath.Join(customDir, "custom.txt")
-	if err := os.WriteFile(customFile, []byte("user content"), 0644); err != nil {
+	if err := os.WriteFile(customFile, []byte("user content"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

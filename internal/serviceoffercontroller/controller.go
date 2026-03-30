@@ -597,6 +597,14 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 
 		_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "x402.supported", []byte{1})
 		_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "service.type", []byte(fallbackOfferType(offer)))
+		for key, value := range offer.Spec.Registration.Metadata {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "metadata."+key, []byte(value))
+		}
 
 		document = buildActiveRegistrationDocument(offer, baseURL, agentID)
 		documentJSON, contentHash, err = marshalRegistrationDocument(document)

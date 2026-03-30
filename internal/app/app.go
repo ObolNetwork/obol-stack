@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +12,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
-	"github.com/dustinkirkland/golang-petname"
+	petname "github.com/dustinkirkland/golang-petname"
 )
 
 // InstallOptions contains options for the install command
@@ -40,16 +41,21 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 	// 2. If repo/chart format, resolve via ArtifactHub
 	if chart.NeedsResolution() {
 		u.Info("Resolving chart via ArtifactHub...")
+
 		client := NewArtifactHubClient()
+
 		info, err := client.ResolveChart(chartRef)
 		if err != nil {
 			return err
 		}
+
 		chart.RepoURL = info.RepoURL
+
 		chart.RepoName = info.RepoName
 		if chart.Version == "" {
 			chart.Version = info.Version
 		}
+
 		u.Detail("Resolved", fmt.Sprintf("%s/%s version %s", info.RepoName, info.ChartName, info.Version))
 		u.Detail("Repository URL", info.RepoURL)
 	}
@@ -64,6 +70,7 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 	if appName == "" {
 		appName = chart.GetChartName()
 	}
+
 	u.Detail("Application name", appName)
 
 	// 4. Generate or use provided ID
@@ -83,16 +90,18 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 				"Directory: %s\n"+
 				"Use --force or -f to overwrite", appName, id, deploymentDir)
 		}
+
 		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
 	// 6. Create deployment directory
-	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
+	if err := os.MkdirAll(deploymentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
 	// 7. Fetch default values using helm show values
 	u.Info("Fetching chart default values...")
+
 	values, err := fetchChartValues(cfg, chart)
 	if err != nil {
 		// Clean up on failure
@@ -102,7 +111,7 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 
 	// 8. Write values.yaml
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
-	if err := os.WriteFile(valuesPath, values, 0644); err != nil {
+	if err := os.WriteFile(valuesPath, values, 0o600); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
@@ -134,6 +143,7 @@ func fetchChartValues(cfg *config.Config, chart *ChartReference) ([]byte, error)
 	helmPath := filepath.Join(cfg.BinDir, "helm")
 
 	var args []string
+
 	switch chart.Format {
 	case FormatURL:
 		// Direct URL reference
@@ -153,7 +163,9 @@ func fetchChartValues(cfg *config.Config, chart *ChartReference) ([]byte, error)
 	}
 
 	cmd := exec.Command(helmPath, args...)
+
 	var stdout, stderr bytes.Buffer
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -223,7 +235,7 @@ releases:
 `
 	}
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"Original":  chart.Original,
 		"ChartURL":  chart.ChartURL,
 		"RepoName":  chart.RepoName,
@@ -244,7 +256,7 @@ releases:
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dir, "helmfile.yaml"), buf.Bytes(), 0644)
+	return os.WriteFile(filepath.Join(dir, "helmfile.yaml"), buf.Bytes(), 0o600)
 }
 
 // Sync deploys or updates an application to the cluster
@@ -277,7 +289,7 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Check kubeconfig exists (cluster must be running)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	// Get helmfile binary path
@@ -292,8 +304,9 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// Execute helmfile sync
 	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync")
 	cmd.Dir = deploymentDir
+
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
+		"KUBECONFIG="+kubeconfigPath,
 	)
 
 	if err := u.Exec(ui.ExecConfig{Name: "Running helmfile sync", Cmd: cmd}); err != nil {
@@ -301,6 +314,7 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
+
 	u.Blank()
 	u.Success("Application synced successfully!")
 	u.Detail("Namespace", namespace)
@@ -317,12 +331,13 @@ func parseDeploymentIdentifier(identifier string) (appName, id string, err error
 	if strings.Contains(identifier, "/") {
 		parts := strings.SplitN(identifier, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return "", "", fmt.Errorf("invalid format. Use: <app>/<id>")
+			return "", "", errors.New("invalid format. Use: <app>/<id>")
 		}
+
 		return parts[0], parts[1], nil
 	}
 
-	return "", "", fmt.Errorf("please use <app>/<id> format (e.g., postgresql/eager-fox)")
+	return "", "", errors.New("please use <app>/<id> format (e.g., postgresql/eager-fox)")
 }
 
 // List displays installed applications
@@ -338,6 +353,7 @@ func List(cfg *config.Config, u *ui.UI, opts ListOptions) error {
 		u.Print("  obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz")
 		u.Blank()
 		u.Print("Find charts at https://artifacthub.io")
+
 		return nil
 	}
 
@@ -356,6 +372,7 @@ func List(cfg *config.Config, u *ui.UI, opts ListOptions) error {
 	u.Blank()
 
 	count := 0
+
 	for _, appDir := range apps {
 		if !appDir.IsDir() {
 			continue
@@ -383,7 +400,9 @@ func List(cfg *config.Config, u *ui.UI, opts ListOptions) error {
 			if err != nil {
 				// Helmfile not found - show basic info
 				u.Printf("  %s/%s", appName, id)
+
 				count++
+
 				continue
 			}
 
@@ -392,14 +411,17 @@ func List(cfg *config.Config, u *ui.UI, opts ListOptions) error {
 				u.Printf("  %s/%s", appName, id)
 				u.Detail("    Chart", info.ChartRef)
 				u.Detail("    Version", info.Version)
+
 				if modTime, err := GetHelmfileModTime(deploymentPath); err == nil {
 					u.Detail("    Modified", modTime)
 				}
+
 				u.Blank()
 			} else {
 				u.Printf("  %s/%s (chart: %s, version: %s)",
 					appName, id, info.ChartRef, info.Version)
 			}
+
 			count++
 		}
 	}
@@ -432,11 +454,13 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 
 	// Check if namespace exists in cluster
 	namespaceExists := false
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := cmd.Run(); err == nil {
 			namespaceExists = true
 		}
@@ -445,11 +469,13 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 	// Display what will be deleted
 	u.Blank()
 	u.Print("Resources to be deleted:")
+
 	if namespaceExists {
 		u.Printf("  [x] Kubernetes namespace: %s", namespaceName)
 	} else {
 		u.Printf("  [ ] Kubernetes namespace: %s (not found)", namespaceName)
 	}
+
 	if configExists {
 		u.Printf("  [x] Configuration directory: %s", deploymentDir)
 	} else {
@@ -464,6 +490,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 	// Confirm deletion (unless --force)
 	if !force {
 		u.Blank()
+
 		if !u.Confirm("Proceed with deletion?", false) {
 			u.Print("Deletion cancelled")
 			return nil
@@ -475,9 +502,10 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName,
 			"--force", "--grace-period=0")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
 
-		if err := u.Exec(ui.ExecConfig{Name: fmt.Sprintf("Deleting namespace %s", namespaceName), Cmd: cmd}); err != nil {
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
+		if err := u.Exec(ui.ExecConfig{Name: "Deleting namespace " + namespaceName, Cmd: cmd}); err != nil {
 			return fmt.Errorf("failed to delete namespace: %w", err)
 		}
 	}
@@ -485,13 +513,16 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 	// Delete configuration directory
 	if configExists {
 		u.Info("Deleting configuration directory...")
+
 		if err := os.RemoveAll(deploymentDir); err != nil {
 			return fmt.Errorf("failed to delete config directory: %w", err)
 		}
+
 		u.Success("Configuration deleted")
 
 		// Clean up empty parent directories
 		appDir := filepath.Join(cfg.ConfigDir, "applications", appName)
+
 		entries, err := os.ReadDir(appDir)
 		if err == nil && len(entries) == 0 {
 			os.Remove(appDir)

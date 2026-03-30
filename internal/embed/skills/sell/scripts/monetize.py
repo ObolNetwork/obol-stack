@@ -25,6 +25,8 @@ from kube import load_sa, make_ssl_context, api_get, api_post, api_patch, api_de
 CRD_GROUP = "obol.org"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL = "serviceoffers"
+IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+BASE_SEPOLIA_CHAIN_ID = 84532
 CONDITION_TYPES = [
     "ModelReady",
     "UpstreamHealthy",
@@ -34,6 +36,7 @@ CONDITION_TYPES = [
     "Ready",
 ]
 APPROX_TOKENS_PER_REQUEST = Decimal("1000")
+APPROX_MINUTES_PER_REQUEST = 5
 
 
 def get_condition(conditions, cond_type):
@@ -62,7 +65,9 @@ def get_effective_price(spec):
         return price["perRequest"]
     if price.get("perMTok"):
         return _approximate_request_price(price["perMTok"])
-    return price.get("perHour") or "0"
+    if price.get("perHour"):
+        return _approximate_request_price_from_per_hour(price["perHour"])
+    return "0"
 
 
 def _approximate_request_price(per_mtok):
@@ -71,6 +76,14 @@ def _approximate_request_price(per_mtok):
     except InvalidOperation as exc:
         raise ValueError(f"invalid perMTok price: {per_mtok!r}") from exc
     return _decimal_to_string(value / APPROX_TOKENS_PER_REQUEST)
+
+
+def _approximate_request_price_from_per_hour(per_hour):
+    try:
+        value = Decimal(str(per_hour).strip())
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid perHour price: {per_hour!r}") from exc
+    return _decimal_to_string(value * APPROX_MINUTES_PER_REQUEST / 60)
 
 
 def _decimal_to_string(value):
@@ -91,7 +104,10 @@ def describe_price(spec):
             f"(approx from {price['perMTok']} USDC/MTok @ {int(APPROX_TOKENS_PER_REQUEST)} tok/request)"
         )
     if price.get("perHour"):
-        return f"{price['perHour']} USDC/hour"
+        return (
+            f"{get_effective_price(spec)} USDC/request "
+            f"(approx from {price['perHour']} USDC/hour @ {APPROX_MINUTES_PER_REQUEST} min/request)"
+        )
     return "0 USDC/request"
 
 
@@ -125,6 +141,103 @@ def _apply_resource(collection_path, name, resource, token, ssl_ctx):
             return
         body = err.read().decode() if err.fp else ""
         raise RuntimeError(f"k8s API error {err.code} for {name}: {body[:200]}") from err
+
+
+def _coerce_registration_metadata(registration):
+    raw = registration.get("metadata", {}) if isinstance(registration, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    meta = {}
+    for key, value in raw.items():
+        if key is None or value is None:
+            continue
+        key_text = str(key).strip()
+        value_text = str(value).strip()
+        if not key_text or not value_text:
+            continue
+        meta[key_text] = value_text
+    return meta
+
+
+def build_indexed_metadata(spec):
+    offer_type = spec.get("type", "http")
+    registration = spec.get("registration", {})
+    entries = {
+        "x402.supported": b"\x01",
+        "service.type": str(offer_type).encode("utf-8"),
+    }
+    for key, value in _coerce_registration_metadata(registration).items():
+        entries[f"metadata.{key}"] = value.encode("utf-8")
+    return entries
+
+
+def build_registration_doc(spec, name, agent_id, base_url):
+    registration = spec.get("registration", {})
+    url_path = spec.get("path", f"/services/{name}")
+
+    offer_type = spec.get("type", "http")
+    price_info = get_effective_price(spec)
+    model_info = spec.get("model", {})
+    default_desc = f"x402 payment-gated {offer_type} service: {name}"
+    if model_info.get("name"):
+        default_desc = f"{model_info['name']} inference via x402 micropayments ({price_info} USDC/request)"
+
+    default_skills = {
+        "inference": ["natural_language_processing/natural_language_generation/text_completion"],
+    }
+    default_domains = {
+        "inference": ["technology/data_science"],
+    }
+    skills = registration.get("skills", default_skills.get(offer_type, []))
+    domains = registration.get("domains", default_domains.get(offer_type, []))
+
+    document = {
+        "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+        "name": registration.get("name", name),
+        "description": registration.get("description", default_desc),
+        "image": registration.get("image", f"{base_url}/agent-icon.png"),
+        "x402Support": True,
+        "active": True,
+        "services": [
+            {
+                "name": "web",
+                "endpoint": f"{base_url}{url_path}",
+            },
+        ],
+        "registrations": [
+            {
+                "agentId": int(agent_id) if agent_id else 0,
+                "agentRegistry": f"eip155:{BASE_SEPOLIA_CHAIN_ID}:{IDENTITY_REGISTRY}",
+            }
+        ] if agent_id else [],
+        "supportedTrust": registration.get("supportedTrust", []),
+    }
+
+    if skills or domains:
+        oasf_entry = {"name": "OASF", "version": "0.8"}
+        if skills:
+            oasf_entry["skills"] = skills
+        if domains:
+            oasf_entry["domains"] = domains
+        document["services"].append(oasf_entry)
+
+    for service in registration.get("services", []):
+        if service.get("endpoint"):
+            document["services"].append(service)
+
+    metadata = _coerce_registration_metadata(registration)
+    if metadata:
+        document["metadata"] = metadata
+
+    provenance = {
+        str(key): str(value)
+        for key, value in spec.get("provenance", {}).items()
+        if key and value
+    }
+    if provenance:
+        document["provenance"] = provenance
+
+    return document
 
 
 def _build_skill_md(items, base_url):
@@ -338,6 +451,16 @@ def cmd_create(args, token, default_ns, ssl_ctx):
             registration["skills"] = args.register_skills
         if args.register_domains:
             registration["domains"] = args.register_domains
+        if args.register_metadata:
+            metadata = {}
+            for raw in args.register_metadata:
+                key, sep, value = raw.partition("=")
+                if not sep or not key.strip():
+                    print(f"Error: invalid --register-metadata value {raw!r}: expected key=value", file=sys.stderr)
+                    sys.exit(1)
+                metadata[key.strip()] = value.strip()
+            if metadata:
+                registration["metadata"] = metadata
         spec["registration"] = registration
 
     body = {
@@ -459,6 +582,7 @@ def main():
     create_parser.add_argument("--register-image", help="Registration image URL")
     create_parser.add_argument("--register-skills", nargs="*", help="OASF skills")
     create_parser.add_argument("--register-domains", nargs="*", help="OASF domains")
+    create_parser.add_argument("--register-metadata", nargs="*", help="Additional registration metadata as key=value")
 
     delete_parser = subparsers.add_parser("delete", help="Delete a ServiceOffer CR")
     delete_parser.add_argument("name", help="ServiceOffer name")
