@@ -434,10 +434,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	)
 
 	// In development mode, build and import local Docker images that aren't
-	// on a public registry yet (e.g. x402-verifier and the LiteLLM custom image).
-	// This must happen before helmfile sync so pods do not try to pull tags that
-	// only exist in the local k3d image store.
+	// on a public registry yet and prewarm the external images that the local
+	// stack depends on. This must happen before helmfile sync so pods do not
+	// spend cold-start time pulling every image from the internet.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		prewarmAndImportExternalImages(cfg)
 		buildAndImportLocalImages(cfg)
 	}
 
@@ -640,6 +641,35 @@ var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 
+// externalImages lists third-party or prebuilt Obol images used by the dev
+// stack. In development mode we pre-pull them into the host Docker cache and
+// import them into k3d so fresh clusters do not spend most of their time
+// waiting on internet image pulls.
+func externalImages() []string {
+	images := []string{
+		"ghcr.io/berriai/litellm:main-v1.82.3",
+		"ghcr.io/erpc/erpc:0.0.62",
+		"obolnetwork/obol-stack-front-end:v0.1.14",
+		"cloudflare/cloudflared:2026.1.2",
+		"docker.io/traefik:v3.6.6",
+		"rancher/local-path-provisioner:v0.0.30",
+		"rancher/mirrored-library-busybox:1.36.1",
+		"busybox:1.36",
+		"busybox:1.36.1",
+		"quay.io/prometheus-operator/prometheus-operator:v0.89.0",
+		"quay.io/prometheus-operator/prometheus-config-reloader:v0.89.0",
+		"quay.io/prometheus/node-exporter:v1.10.2",
+		"quay.io/prometheus/prometheus:v3.9.1",
+		"registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0",
+		"ghcr.io/obolnetwork/remote-signer:v0.1.0",
+	}
+	if tag := openclaw.ImageTag(); tag != "" {
+		images = append(images, "ghcr.io/obolnetwork/openclaw:"+tag)
+	}
+
+	return images
+}
+
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
@@ -681,15 +711,62 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			continue
 		}
 
-		fmt.Printf("Importing %s into cluster %s...\n", img.tag, clusterName)
-		importCmd := exec.Command(k3dBinary, "image", "import", img.tag, "-c", clusterName)
-		importCmd.Stdout = os.Stdout
-
-		importCmd.Stderr = os.Stderr
-		if err := importCmd.Run(); err != nil {
+		if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
 		}
 	}
+}
+
+// prewarmAndImportExternalImages ensures external stack images are cached on the
+// host and then imports them into the current k3d cluster.
+func prewarmAndImportExternalImages(cfg *config.Config) {
+	stackID := getStackID(cfg)
+	if stackID == "" {
+		return
+	}
+
+	clusterName := "obol-stack-" + stackID
+	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+
+	seen := make(map[string]struct{})
+	for _, image := range externalImages() {
+		if _, ok := seen[image]; ok {
+			continue
+		}
+		seen[image] = struct{}{}
+
+		if err := ensureDockerImage(image); err != nil {
+			fmt.Printf("Warning: failed to prewarm %s: %v\n", image, err)
+			continue
+		}
+		if err := importImageToCluster(k3dBinary, clusterName, image); err != nil {
+			fmt.Printf("Warning: failed to import %s into k3d: %v\n", image, err)
+		}
+	}
+}
+
+func ensureDockerImage(tag string) error {
+	inspectCmd := exec.Command("docker", "image", "inspect", tag)
+	if err := inspectCmd.Run(); err == nil {
+		fmt.Printf("Using cached image %s\n", tag)
+		return nil
+	}
+
+	fmt.Printf("Pulling %s...\n", tag)
+	pullCmd := exec.Command("docker", "pull", tag)
+	pullCmd.Stdout = os.Stdout
+	pullCmd.Stderr = os.Stderr
+
+	return pullCmd.Run()
+}
+
+func importImageToCluster(k3dBinary, clusterName, tag string) error {
+	fmt.Printf("Importing %s into cluster %s...\n", tag, clusterName)
+	importCmd := exec.Command(k3dBinary, "image", "import", tag, "-c", clusterName)
+	importCmd.Stdout = os.Stdout
+	importCmd.Stderr = os.Stderr
+
+	return importCmd.Run()
 }
 
 // findProjectRoot walks up from the current directory to find go.mod.

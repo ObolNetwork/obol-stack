@@ -4,8 +4,17 @@
 source "$(dirname "$0")/lib.sh"
 
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
-TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
-BASE_URL="${TUNNEL_URL:-http://obol.stack:8080}"
+TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
+BASE_URL="http://obol.stack:8080"
+if [ -n "$TUNNEL_URL" ]; then
+    tunnel_probe=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+        "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
+    if [ "$tunnel_probe" = "402" ]; then
+        BASE_URL="$TUNNEL_URL"
+    fi
+fi
 if [[ "$BASE_URL" == *"obol.stack"* ]]; then
     CURL_BASE="$CURL_OBOL"
 else

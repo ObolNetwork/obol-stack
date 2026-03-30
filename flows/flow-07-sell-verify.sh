@@ -50,7 +50,7 @@ fi
 # §1.5: Tunnel status
 step "Tunnel status"
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
-TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
 if [ -n "$TUNNEL_URL" ]; then
     pass "Tunnel URL: $TUNNEL_URL"
 else

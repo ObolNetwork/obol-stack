@@ -5,7 +5,7 @@
 # Aligns with internal/testutil/anvil.go + facilitator_real.go:
 #   - Free ports (or reuse if already running)
 #   - Facilitator signer = Anvil accounts[0] (0xf39Fd6e51...)
-#   - ClusterURL uses host.docker.internal (resolves inside k3d on macOS)
+#   - ClusterURL differs across macOS/Linux; probe the live cluster instead of hardcoding
 source "$(dirname "$0")/lib.sh"
 
 FLOW_STATE_DIR="$OBOL_ROOT/.workspace/state/flows"
@@ -14,6 +14,27 @@ ANVIL_LOG="$FLOW_STATE_DIR/anvil.log"
 ANVIL_PID_FILE="$FLOW_STATE_DIR/anvil.pid"
 FACILITATOR_LOG="$FLOW_STATE_DIR/facilitator.log"
 FACILITATOR_PID_FILE="$FLOW_STATE_DIR/facilitator.pid"
+
+cluster_facilitator_host() {
+    if [ -n "${CLUSTER_FACILITATOR_HOST:-}" ]; then
+        echo "$CLUSTER_FACILITATOR_HOST"
+        return 0
+    fi
+
+    local default_host="host.k3d.internal"
+    local candidates="host.k3d.internal host.docker.internal"
+    for host in $candidates; do
+        [ -n "$host" ] || continue
+        if "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
+            python3 -c "import urllib.request; urllib.request.urlopen('http://$host:$FACILITATOR_PORT/supported', timeout=3); print('ok')" \
+            2>/dev/null | grep -q '^ok$'; then
+            echo "$host"
+            return 0
+        fi
+    done
+
+    echo "$default_host"
+}
 
 # Anvil accounts (from internal/testutil/anvil.go defaultAnvilAccounts())
 # accounts[0] = facilitator signer
@@ -110,6 +131,11 @@ if curl -sf http://localhost:4040/supported >/dev/null 2>&1; then
     pass "Facilitator already running on port 4040"
     FACILITATOR_PORT=4040
 else
+    old_pid=$(cat "$FACILITATOR_PID_FILE" 2>/dev/null || true)
+    if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
+        rm -f "$FACILITATOR_PID_FILE"
+    fi
+
     # Binary discovery: X402_FACILITATOR_BIN env → ~/Development/R&D/x402-rs
     FACILITATOR_BIN="${X402_FACILITATOR_BIN:-}"
     if [ -z "$FACILITATOR_BIN" ]; then
@@ -139,11 +165,35 @@ else
   "schemes": [{"id": "v1-eip155-exact","chains":"eip155:*"},{"id":"v2-eip155-exact","chains":"eip155:*"}]
 }
 FEOF
-    nohup "$FACILITATOR_BIN" --config "$FACILITATOR_CONFIG" >"$FACILITATOR_LOG" 2>&1 &
-    echo $! > "$FACILITATOR_PID_FILE"
+    FACILITATOR_PID=$(FACILITATOR_LOG="$FACILITATOR_LOG" FACILITATOR_BIN="$FACILITATOR_BIN" FACILITATOR_CONFIG="$FACILITATOR_CONFIG" python3 - <<'PY'
+import os
+import subprocess
+
+log_path = os.environ["FACILITATOR_LOG"]
+bin_path = os.environ["FACILITATOR_BIN"]
+cfg_path = os.environ["FACILITATOR_CONFIG"]
+
+with open(log_path, "ab", buffering=0) as log_file:
+    proc = subprocess.Popen(
+        [bin_path, "--config", cfg_path],
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+    print(proc.pid)
+PY
+)
+    echo "$FACILITATOR_PID" > "$FACILITATOR_PID_FILE"
     sleep 3
     if curl -sf http://localhost:$FACILITATOR_PORT/supported >/dev/null 2>&1; then
-        pass "Facilitator started on port $FACILITATOR_PORT"
+        if kill -0 "$FACILITATOR_PID" 2>/dev/null; then
+            pass "Facilitator started on port $FACILITATOR_PORT"
+        else
+            fail "Facilitator exited after startup — inspect $FACILITATOR_LOG"
+            emit_metrics; exit 0
+        fi
     else
         fail "Facilitator failed to start (bin: $FACILITATOR_BIN)"
         emit_metrics; exit 0
@@ -153,10 +203,11 @@ fi
 run_step_grep "Facilitator /supported" "eip155" \
     curl -sf http://localhost:$FACILITATOR_PORT/supported
 
-# §3.4: Reconfigure stack to use local facilitator
-# Use host.docker.internal — resolves inside k3d containers on macOS
-# (host.k3d.internal does NOT resolve reliably on macOS; matches testutil/facilitator_real.go)
-CLUSTER_FACILITATOR_URL="http://host.docker.internal:$FACILITATOR_PORT"
+# §3.4: Reconfigure stack to use the host alias that is actually reachable
+# from inside the cluster. This differs between Linux/macOS and can drift
+# across Docker Desktop / k3d environments, so probe rather than hardcode.
+CLUSTER_FACILITATOR_HOST=$(cluster_facilitator_host)
+CLUSTER_FACILITATOR_URL="http://${CLUSTER_FACILITATOR_HOST}:$FACILITATOR_PORT"
 run_step_grep "sell pricing with local facilitator" \
     "configured.*facilitator\|x402 configured" \
     "$OBOL" sell pricing \
@@ -168,12 +219,22 @@ run_step_grep "sell pricing with local facilitator" \
 step "x402-pricing ConfigMap has local facilitator URL"
 pricing_yaml=$("$OBOL" kubectl get cm x402-pricing -n x402 \
     -o jsonpath='{.data.pricing\.yaml}' 2>&1) || true
-if echo "$pricing_yaml" | grep -q "host.docker.internal\|facilitatorURL:"; then
+if echo "$pricing_yaml" | grep -q "$CLUSTER_FACILITATOR_HOST"; then
     fac_line=$(echo "$pricing_yaml" | grep "facilitatorURL:" | head -1)
     pass "x402-pricing has facilitator URL: $fac_line"
 else
     fail "x402-pricing missing facilitatorURL — ${pricing_yaml:0:200}"
 fi
+
+cat > /tmp/m1-infra.env <<EOF
+export ANVIL_RPC="$ANVIL_RPC"
+export FACILITATOR_PORT="$FACILITATOR_PORT"
+export FACILITATOR_URL_LOCAL="http://127.0.0.1:$FACILITATOR_PORT"
+export FACILITATOR_URL_CLUSTER="$CLUSTER_FACILITATOR_URL"
+export BUYER_WALLET="$CONSUMER_WALLET"
+export BUYER_KEY="$CONSUMER_PRIVATE_KEY"
+export SELLER_WALLET="$SELLER_WALLET"
+EOF
 
 # obol sell pricing changes x402-pricing ConfigMap → Kubernetes Reloader restarts
 # x402-verifier pods.  Wait for them to be ready before flow-08 makes paid requests.
