@@ -116,6 +116,23 @@ When you fetch an agent's URI, the registration JSON follows this schema:
 - See also: `standards` skill for full ERC-8004 spec details
 - See also: `addresses` skill for verified contract addresses across chains
 
+## After Discovery: Buying Inference
+
+Once you find an agent with `"x402Support": true` and a service endpoint, use the `buy-inference` skill to purchase access:
+
+```bash
+# 1. Probe the endpoint for pricing
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
+
+# 2. Buy access (pre-signs payment auths, configures sidecar)
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy <name> \
+  --endpoint <service-endpoint> --model <model-name>
+
+# 3. Use via LiteLLM as paid/<model-name>
+```
+
+See the `buy-inference` skill for the full buy flow.
+
 ## Constraints
 
 - **Read-only** -- no private keys, no signing, no state changes
