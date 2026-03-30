@@ -90,6 +90,7 @@ func (b *K3dBackend) IsRunning(cfg *config.Config, stackID string) (bool, error)
 func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, error) {
 	stackName := "obol-stack-" + stackID
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
+	var registrySetup *devRegistrySetup
 
 	running, err := b.IsRunning(cfg, stackID)
 	if err != nil {
@@ -117,11 +118,18 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 			return nil, fmt.Errorf("failed to create data directory: %w", err)
 		}
 
+		if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+			setup, setupErr := ensureDevRegistries(cfg, u)
+			if setupErr != nil {
+				u.Warnf("Dev registry cache unavailable, falling back to direct upstream pulls: %v", setupErr)
+			} else {
+				registrySetup = setup
+			}
+		}
+
 		createCmd := exec.Command(
 			filepath.Join(cfg.BinDir, "k3d"),
-			"cluster", "create", stackName,
-			"--config", k3dConfigPath,
-			"--kubeconfig-update-default=false",
+			k3dCreateArgs(stackName, k3dConfigPath, registrySetup)...,
 		)
 		if err := u.Exec(ui.ExecConfig{
 			Name: "Creating k3d cluster",
@@ -178,7 +186,7 @@ func waitForAPIServer(u *ui.UI, kubeconfigData []byte) error {
 	}
 
 	return u.RunWithSpinner("Waiting for Kubernetes API server", func() error {
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(120 * time.Second)
 		for time.Now().Before(deadline) {
 			resp, err := client.Get(serverURL + "/version")
 			if err == nil {
@@ -192,7 +200,7 @@ func waitForAPIServer(u *ui.UI, kubeconfigData []byte) error {
 			time.Sleep(2 * time.Second)
 		}
 
-		return fmt.Errorf("timed out after 60s waiting for API server at %s", serverURL)
+		return fmt.Errorf("timed out after 120s waiting for API server at %s", serverURL)
 	})
 }
 

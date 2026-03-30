@@ -75,11 +75,6 @@ func openclawImageTag() string {
 	return ""
 }
 
-// ImageTag returns the pinned OpenClaw runtime image tag used by this build.
-func ImageTag() string {
-	return openclawImageTag()
-}
-
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
 	ID           string   // Deployment ID (empty = generate petname)
