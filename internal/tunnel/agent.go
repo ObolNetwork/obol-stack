@@ -21,6 +21,11 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 		return nil // agent not deployed yet — nothing to do
 	}
 
+	if currentURL, _ := readCurrentAgentBaseURL(overlayPath); currentURL == tunnelURL {
+		fmt.Printf("✓ AGENT_BASE_URL already set to %s — skipping sync\n", tunnelURL)
+		return nil
+	}
+
 	if err := patchAgentBaseURL(overlayPath, tunnelURL); err != nil {
 		return fmt.Errorf("failed to patch values-obol.yaml: %w", err)
 	}
@@ -64,6 +69,22 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 
 func agentOverlayPath(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, "applications", "openclaw", agentDeploymentID, "values-obol.yaml")
+}
+
+func readCurrentAgentBaseURL(overlayPath string) (string, error) {
+	data, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "name: AGENT_BASE_URL") {
+			if i+1 < len(lines) && strings.Contains(lines[i+1], "value:") {
+				return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i+1]), "value:")), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // patchAgentBaseURL reads values-obol.yaml and ensures the extraEnv list

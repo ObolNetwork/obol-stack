@@ -384,6 +384,7 @@ func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.Ser
 		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 		return err
 	}
+	log.Printf("serviceoffer-controller: route published for %s/%s at %s", offer.Namespace, offer.Name, offer.EffectivePath())
 	setCondition(status, "RoutePublished", "True", "Reconciled", fmt.Sprintf("HTTPRoute published at %s", offer.EffectivePath()))
 	return nil
 }
@@ -632,6 +633,7 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(request.Namespace), buildRegistrationHTTPRoute(request)); err != nil {
 		return err
 	}
+	log.Printf("serviceoffer-controller: registration resources published for %s/%s", request.Namespace, request.Name)
 	return nil
 }
 
@@ -670,6 +672,13 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
 		return err
 	}
+	readyOffers := 0
+	for _, offer := range offers {
+		if offer != nil && offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(offer.Status, "Ready") {
+			readyOffers++
+		}
+	}
+	log.Printf("serviceoffer-controller: /skill.md published with %d ready offer(s)", readyOffers)
 	return nil
 }
 
