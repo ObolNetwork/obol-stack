@@ -632,13 +632,13 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 // stageDefaultSkills writes embedded Obol skills to the deployment's config
 // directory on the host filesystem. These are pushed to the cluster as a
 // ConfigMap during doSync — no pod readiness required.
+//
+// Always re-stages embedded skills so that new skills added to the binary
+// (e.g. buy-inference, discovery) reach existing deployments on the next
+// sync. CopySkills only writes files from the embedded FS — user-added
+// skills with different names are preserved.
 func stageDefaultSkills(deploymentDir string, u *ui.UI) {
 	skillsDir := filepath.Join(deploymentDir, "skills")
-
-	// Don't overwrite if skills directory already exists (user may have customised)
-	if _, err := os.Stat(skillsDir); err == nil {
-		return
-	}
 
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		u.Warnf("could not create skills directory: %v", err)
