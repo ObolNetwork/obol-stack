@@ -3,6 +3,7 @@ package serviceoffercontroller
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/md5"
 	"fmt"
 	"log"
 	"math/big"
@@ -31,6 +32,7 @@ const (
 	registrationDesiredActive     = "Active"
 	registrationDesiredTombstoned = "Tombstoned"
 
+	registrationPhasePublishing   = "Publishing"
 	registrationPhaseRegistered   = "Registered"
 	registrationPhaseOffChainOnly = "OffChainOnly"
 	registrationPhaseTombstoned   = "Tombstoned"
@@ -235,6 +237,9 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if err := c.reconcileDeletingOffer(ctx, offer); err != nil {
 			return err
 		}
+		if err := c.reconcileSkillCatalog(ctx); err != nil {
+			return err
+		}
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
@@ -290,7 +295,10 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "Ready", "False", "Reconciling", "Offer is not fully reconciled yet")
 	}
 
-	return c.updateOfferStatus(ctx, raw, status)
+	if err := c.updateOfferStatus(ctx, raw, status); err != nil {
+		return err
+	}
+	return c.reconcileSkillCatalog(ctx)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -505,6 +513,15 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	}
 
 	status.PublishedURL = strings.TrimRight(baseURL, "/") + "/.well-known/agent-registration.json"
+	resourcesReady, message, err := c.registrationResourcesReady(ctx, request)
+	if err != nil {
+		return err
+	}
+	if !resourcesReady {
+		status.Phase = registrationPhasePublishing
+		status.Message = message
+		return c.updateRegistrationStatus(ctx, raw, status)
+	}
 
 	if agentID == "" && c.registrationKey != nil {
 		client, err := erc8004.NewClient(ctx, c.registrationRPCURL)
@@ -616,6 +633,88 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 		return err
 	}
 	return nil
+}
+
+func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
+	baseURL, err := c.registrationBaseURL(ctx)
+	if err != nil {
+		return err
+	}
+
+	list, err := c.offers.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	offers := make([]*monetizeapi.ServiceOffer, 0, len(list.Items))
+	for i := range list.Items {
+		offer, err := decodeServiceOffer(&list.Items[i])
+		if err != nil {
+			return err
+		}
+		offers = append(offers, offer)
+	}
+
+	content := buildSkillCatalogMarkdown(offers, baseURL)
+	contentHash := fmt.Sprintf("%x", md5Sum(content))[:8]
+
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content)); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.services.Namespace(skillCatalogNamespace), buildSkillCatalogService()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Controller) registrationResourcesReady(ctx context.Context, request *monetizeapi.RegistrationRequest) (bool, string, error) {
+	name := registrationWorkloadName(request.Name)
+
+	if _, err := c.configMaps.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		return false, "Waiting for registration ConfigMap", nil
+	} else if err != nil {
+		return false, "", err
+	}
+
+	deployment, err := c.deployments.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, "Waiting for registration Deployment", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	availableReplicas, _, err := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
+	if err != nil {
+		return false, "", err
+	}
+	if availableReplicas < 1 {
+		return false, "Waiting for registration Deployment availability", nil
+	}
+
+	if _, err := c.services.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		return false, "Waiting for registration Service", nil
+	} else if err != nil {
+		return false, "", err
+	}
+
+	route, err := c.httpRoutes.Namespace(request.Namespace).Get(ctx, registrationRouteName(request.Spec.ServiceOfferName), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, "Waiting for registration HTTPRoute", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if !httpRouteAccepted(route) {
+		return false, "Waiting for registration HTTPRoute acceptance", nil
+	}
+
+	return true, "", nil
 }
 
 func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -835,4 +934,45 @@ func getenvDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func httpRouteAccepted(route *unstructured.Unstructured) bool {
+	parents, found, err := unstructured.NestedSlice(route.Object, "status", "parents")
+	if err != nil || !found {
+		return false
+	}
+	for _, parent := range parents {
+		parentMap, ok := parent.(map[string]any)
+		if !ok {
+			continue
+		}
+		conditions, ok := parentMap["conditions"].([]any)
+		if !ok {
+			continue
+		}
+		accepted := false
+		resolvedRefs := true
+		for _, condition := range conditions {
+			condMap, ok := condition.(map[string]any)
+			if !ok {
+				continue
+			}
+			condType, _ := condMap["type"].(string)
+			condStatus, _ := condMap["status"].(string)
+			switch condType {
+			case "Accepted":
+				accepted = condStatus == "True"
+			case "ResolvedRefs":
+				resolvedRefs = condStatus == "True"
+			}
+		}
+		if accepted && resolvedRefs {
+			return true
+		}
+	}
+	return false
+}
+
+func md5Sum(content string) [16]byte {
+	return md5.Sum([]byte(content))
 }

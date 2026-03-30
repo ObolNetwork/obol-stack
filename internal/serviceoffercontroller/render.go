@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+)
+
+const (
+	skillCatalogNamespace     = "x402"
+	skillCatalogConfigMapName = "obol-skill-md"
+	skillCatalogRouteName     = "obol-skill-md-route"
 )
 
 func buildMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
@@ -196,8 +203,19 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 						"matches": []any{
 							map[string]any{
 								"path": map[string]any{
-									"type":  "Exact",
-									"value": "/.well-known/agent-registration.json",
+									"type":  "PathPrefix",
+									"value": "/.well-known/",
+								},
+							},
+						},
+						"filters": []any{
+							map[string]any{
+								"type": "URLRewrite",
+								"urlRewrite": map[string]any{
+									"path": map[string]any{
+										"type":               "ReplacePrefixMatch",
+										"replacePrefixMatch": "/",
+									},
 								},
 							},
 						},
@@ -205,6 +223,164 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 							map[string]any{
 								"name":      serviceName,
 								"namespace": request.Namespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildSkillCatalogConfigMap(content string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      skillCatalogConfigMapName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"app":                 skillCatalogConfigMapName,
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"data": map[string]any{
+				"skill.md":   content,
+				"httpd.conf": ".md:text/markdown\n",
+			},
+		},
+	}
+}
+
+func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured {
+	labels := map[string]any{
+		"app":                 skillCatalogConfigMapName,
+		"obol.org/managed-by": "serviceoffer-controller",
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]any{
+				"name":      skillCatalogConfigMapName,
+				"namespace": skillCatalogNamespace,
+				"labels":    labels,
+			},
+			"spec": map[string]any{
+				"replicas": 1,
+				"selector": map[string]any{
+					"matchLabels": labels,
+				},
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": labels,
+						"annotations": map[string]any{
+							"obol.org/content-hash": contentHash,
+						},
+					},
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name":    "httpd",
+								"image":   "busybox:1.36",
+								"command": []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"ports": []any{
+									map[string]any{"containerPort": int64(8080), "protocol": "TCP"},
+								},
+								"volumeMounts": []any{
+									map[string]any{"name": "content", "mountPath": "/www", "readOnly": true},
+									map[string]any{"name": "httpdconf", "mountPath": "/etc/httpd.conf", "subPath": "httpd.conf", "readOnly": true},
+								},
+								"resources": map[string]any{
+									"requests": map[string]any{"cpu": "5m", "memory": "8Mi"},
+									"limits":   map[string]any{"cpu": "50m", "memory": "32Mi"},
+								},
+							},
+						},
+						"volumes": []any{
+							map[string]any{
+								"name": "content",
+								"configMap": map[string]any{
+									"name":  skillCatalogConfigMapName,
+									"items": []any{map[string]any{"key": "skill.md", "path": "skill.md"}},
+								},
+							},
+							map[string]any{
+								"name": "httpdconf",
+								"configMap": map[string]any{
+									"name":  skillCatalogConfigMapName,
+									"items": []any{map[string]any{"key": "httpd.conf", "path": "httpd.conf"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildSkillCatalogService() *unstructured.Unstructured {
+	labels := map[string]any{
+		"app":                 skillCatalogConfigMapName,
+		"obol.org/managed-by": "serviceoffer-controller",
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]any{
+				"name":      skillCatalogConfigMapName,
+				"namespace": skillCatalogNamespace,
+				"labels":    labels,
+			},
+			"spec": map[string]any{
+				"type":     "ClusterIP",
+				"selector": labels,
+				"ports": []any{
+					map[string]any{"port": int64(8080), "targetPort": int64(8080), "protocol": "TCP"},
+				},
+			},
+		},
+	}
+}
+
+func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      skillCatalogRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/skill.md",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
 								"port":      int64(8080),
 							},
 						},
@@ -423,6 +599,93 @@ func buildTombstoneRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL
 	registration.X402Support = false
 	registration.Description = fmt.Sprintf("%s (deactivated)", registration.Description)
 	return registration
+}
+
+func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	var ready []*monetizeapi.ServiceOffer
+	for _, offer := range offers {
+		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
+			continue
+		}
+		if isConditionTrue(offer.Status, "Ready") {
+			ready = append(ready, offer)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		if ready[i].Namespace == ready[j].Namespace {
+			return ready[i].Name < ready[j].Name
+		}
+		return ready[i].Namespace < ready[j].Namespace
+	})
+
+	lines := []string{
+		"# Obol Stack Service Catalog",
+		"",
+		fmt.Sprintf("> Generated from %d ready ServiceOffer(s).", len(ready)),
+		"",
+		fmt.Sprintf("> For machine-readable agent identity, see [/.well-known/agent-registration.json](%s/.well-known/agent-registration.json).", baseURL),
+		"",
+	}
+
+	if len(ready) == 0 {
+		lines = append(lines, "**No services currently available.**", "")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "## Services", "")
+	lines = append(lines, "| Service | Type | Model | Price | Endpoint |")
+	lines = append(lines, "|---------|------|-------|-------|----------|")
+	for _, offer := range ready {
+		modelName := offer.Spec.Model.Name
+		if modelName == "" {
+			modelName = "—"
+		}
+		lines = append(lines, fmt.Sprintf(
+			"| [%s](#%s) | %s | %s | %s | `%s%s` |",
+			offer.Name,
+			offer.Name,
+			fallbackOfferType(offer),
+			modelName,
+			describeOfferPrice(offer),
+			baseURL,
+			offer.EffectivePath(),
+		))
+	}
+	lines = append(lines, "", "## Service Details", "")
+	for _, offer := range ready {
+		modelName := offer.Spec.Model.Name
+		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
+		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s%s`", baseURL, offer.EffectivePath()))
+		lines = append(lines, fmt.Sprintf("- **Type**: %s", fallbackOfferType(offer)))
+		if modelName != "" {
+			lines = append(lines, fmt.Sprintf("- **Model**: %s", modelName))
+		}
+		lines = append(lines, fmt.Sprintf("- **Price**: %s", describeOfferPrice(offer)))
+		lines = append(lines, fmt.Sprintf("- **Pay To**: `%s`", firstNonEmpty(offer.Spec.Payment.PayTo, "—")))
+		lines = append(lines, fmt.Sprintf("- **Network**: %s", firstNonEmpty(offer.Spec.Payment.Network, "—")))
+		description := offer.Spec.Registration.Description
+		if description == "" {
+			description = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
+		}
+		lines = append(lines, fmt.Sprintf("- **Description**: %s", description), "")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
+	switch {
+	case offer.Spec.Payment.Price.PerRequest != "":
+		return offer.Spec.Payment.Price.PerRequest + " USDC/request"
+	case offer.Spec.Payment.Price.PerMTok != "":
+		return offer.Spec.Payment.Price.PerMTok + " USDC/MTok"
+	case offer.Spec.Payment.Price.PerHour != "":
+		return offer.Spec.Payment.Price.PerHour + " USDC/hour"
+	default:
+		return "—"
+	}
 }
 
 func marshalRegistrationDocument(document erc8004.AgentRegistration) (string, string, error) {

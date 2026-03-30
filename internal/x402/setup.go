@@ -87,7 +87,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
-	fmt.Printf("x402 configured: wallet=%s chain=%s\n", wallet, chain)
+	fmt.Printf("x402 configured: wallet=%s chain=%s facilitator=%s\n", wallet, chain, facilitatorURL)
 	return nil
 }
 

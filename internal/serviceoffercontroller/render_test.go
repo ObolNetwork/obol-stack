@@ -104,6 +104,31 @@ func TestBuildRegistrationRequest(t *testing.T) {
 	}
 }
 
+func TestBuildRegistrationHTTPRoute(t *testing.T) {
+	request := &monetizeapi.RegistrationRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "so-demo-registration", Namespace: "llm", UID: types.UID("req-uid")},
+		Spec: monetizeapi.RegistrationRequestSpec{
+			ServiceOfferName: "demo",
+		},
+	}
+
+	route := buildRegistrationHTTPRoute(request)
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	firstRule := rules[0].(map[string]any)
+	matches := firstRule["matches"].([]any)
+	path := matches[0].(map[string]any)["path"].(map[string]any)
+	if path["value"] != "/.well-known/" {
+		t.Fatalf("match path = %v, want /.well-known/", path["value"])
+	}
+	filters := firstRule["filters"].([]any)
+	rewrite := filters[0].(map[string]any)["urlRewrite"].(map[string]any)
+	rewritePath := rewrite["path"].(map[string]any)
+	if rewritePath["replacePrefixMatch"] != "/" {
+		t.Fatalf("rewrite target = %v, want /", rewritePath["replacePrefixMatch"])
+	}
+}
+
 func TestBuildActiveRegistrationDocument(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
@@ -159,5 +184,69 @@ func TestRegistrationDataURL(t *testing.T) {
 	}
 	if !strings.HasPrefix(uri, "data:application/json,") {
 		t.Fatalf("uri = %q", uri)
+	}
+}
+
+func TestBuildSkillCatalogMarkdown(t *testing.T) {
+	readyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Upstream: monetizeapi.ServiceOfferUpstream{
+				Service: "ollama",
+				Port:    11434,
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1234",
+				Price: monetizeapi.ServiceOfferPriceTable{
+					PerRequest: "0.001",
+				},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+	notReadyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "llm"},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+		},
+	}
+
+	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+
+	if !strings.Contains(content, "# Obol Stack Service Catalog") {
+		t.Fatalf("catalog missing title:\n%s", content)
+	}
+	if !strings.Contains(content, "flow-qwen") {
+		t.Fatalf("catalog missing ready offer:\n%s", content)
+	}
+	if strings.Contains(content, "pending") {
+		t.Fatalf("catalog included non-ready offer:\n%s", content)
+	}
+	if !strings.Contains(content, "https://example.com/services/flow-qwen") {
+		t.Fatalf("catalog missing public endpoint:\n%s", content)
+	}
+}
+
+func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
+	route := buildSkillCatalogHTTPRoute()
+	if route.GetName() != skillCatalogRouteName {
+		t.Fatalf("route name = %q, want %q", route.GetName(), skillCatalogRouteName)
+	}
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	firstRule := rules[0].(map[string]any)
+	matches := firstRule["matches"].([]any)
+	path := matches[0].(map[string]any)["path"].(map[string]any)
+	if path["value"] != "/skill.md" {
+		t.Fatalf("match path = %v, want /skill.md", path["value"])
+	}
+	backends := firstRule["backendRefs"].([]any)
+	backend := backends[0].(map[string]any)
+	if backend["name"] != skillCatalogConfigMapName {
+		t.Fatalf("backend name = %v, want %s", backend["name"], skillCatalogConfigMapName)
 	}
 }

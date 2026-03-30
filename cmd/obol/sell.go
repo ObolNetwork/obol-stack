@@ -498,6 +498,13 @@ Example:
 
 			ns := cmd.String("namespace")
 
+			if cmd.String("upstream") == "" {
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+			}
+			if cmd.Int("port") == 0 {
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+			}
+
 			priceTable, err := resolvePriceTable(cmd, true)
 			if err != nil {
 				return err
@@ -565,10 +572,15 @@ Example:
 				"spec": spec,
 			}
 
-			if err := kubectlApply(cfg, manifest); err != nil {
+			applyOut, err := kubectlApplyOutput(cfg, manifest)
+			if err != nil {
 				return err
 			}
-			fmt.Printf("ServiceOffer %s/%s created (type: http)\n", ns, name)
+			action := "created"
+			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
+				action = "updated"
+			}
+			fmt.Printf("ServiceOffer %s/%s %s (type: http)\n", ns, name, action)
 			if priceTable.PerMTok != "" {
 				fmt.Printf("Requests will be charged at %s\n", formatPriceTableSummary(priceTable))
 			}
@@ -1505,12 +1517,17 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 // ---------------------------------------------------------------------------
 
 func kubectlApply(cfg *config.Config, manifest interface{}) error {
+	_, err := kubectlApplyOutput(cfg, manifest)
+	return err
+}
+
+func kubectlApplyOutput(cfg *config.Config, manifest interface{}) (string, error) {
 	raw, err := json.Marshal(manifest)
 	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
+		return "", fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 	bin, kc := kubectl.Paths(cfg)
-	return kubectl.Apply(bin, kc, raw)
+	return kubectl.ApplyOutput(bin, kc, raw)
 }
 
 func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
