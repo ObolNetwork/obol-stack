@@ -191,85 +191,10 @@ def _build_skill_md(items, base_url):
 
 
 def _publish_skill_md(items, token, ssl_ctx):
-    base_url = os.environ.get("AGENT_BASE_URL", "http://obol.stack:8080").rstrip("/")
-    _, agent_ns = load_sa()
-    content = _build_skill_md(items, base_url)
-    content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
-
-    cm_name = "obol-skill-md"
-    route_name = "obol-skill-md-route"
-    labels = {"app": cm_name, "obol.org/managed-by": "monetize"}
-
-    configmap = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {"name": cm_name, "namespace": agent_ns, "labels": labels},
-        "data": {
-            "skill.md": content,
-            "httpd.conf": ".md:text/markdown\n",
-        },
-    }
-    _apply_resource(f"/api/v1/namespaces/{agent_ns}/configmaps", cm_name, configmap, token, ssl_ctx)
-
-    deployment = {
-        "apiVersion": "apps/v1",
-        "kind": "Deployment",
-        "metadata": {"name": cm_name, "namespace": agent_ns, "labels": labels},
-        "spec": {
-            "replicas": 1,
-            "selector": {"matchLabels": labels},
-            "template": {
-                "metadata": {"labels": labels, "annotations": {"obol.org/content-hash": content_hash}},
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "httpd",
-                            "image": "busybox:1.36",
-                            "command": ["httpd", "-f", "-p", "8080", "-h", "/www"],
-                            "ports": [{"containerPort": 8080}],
-                            "volumeMounts": [
-                                {"name": "content", "mountPath": "/www", "readOnly": True},
-                                {"name": "httpdconf", "mountPath": "/etc/httpd.conf", "subPath": "httpd.conf", "readOnly": True},
-                            ],
-                        }
-                    ],
-                    "volumes": [
-                        {"name": "content", "configMap": {"name": cm_name, "items": [{"key": "skill.md", "path": "skill.md"}]}},
-                        {"name": "httpdconf", "configMap": {"name": cm_name, "items": [{"key": "httpd.conf", "path": "httpd.conf"}]}},
-                    ],
-                },
-            },
-        },
-    }
-    _apply_resource(f"/apis/apps/v1/namespaces/{agent_ns}/deployments", cm_name, deployment, token, ssl_ctx)
-
-    service = {
-        "apiVersion": "v1",
-        "kind": "Service",
-        "metadata": {"name": cm_name, "namespace": agent_ns, "labels": labels},
-        "spec": {
-            "type": "ClusterIP",
-            "selector": labels,
-            "ports": [{"port": 8080, "targetPort": 8080, "protocol": "TCP"}],
-        },
-    }
-    _apply_resource(f"/api/v1/namespaces/{agent_ns}/services", cm_name, service, token, ssl_ctx)
-
-    route = {
-        "apiVersion": "gateway.networking.k8s.io/v1",
-        "kind": "HTTPRoute",
-        "metadata": {"name": route_name, "namespace": agent_ns},
-        "spec": {
-            "parentRefs": [{"name": "traefik-gateway", "namespace": "traefik", "sectionName": "web"}],
-            "rules": [
-                {
-                    "matches": [{"path": {"type": "Exact", "value": "/skill.md"}}],
-                    "backendRefs": [{"name": cm_name, "namespace": agent_ns, "port": 8080}],
-                }
-            ],
-        },
-    }
-    _apply_resource(f"/apis/gateway.networking.k8s.io/v1/namespaces/{agent_ns}/httproutes", route_name, route, token, ssl_ctx)
+    # /skill.md is controller-owned in the serviceoffer-controller architecture.
+    # Keep this compatibility function as a no-op so legacy "process" commands
+    # do not race the controller or publish conflicting assets.
+    return
 
 
 def _last_true_condition(conditions):

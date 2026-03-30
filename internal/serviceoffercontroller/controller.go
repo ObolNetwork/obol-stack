@@ -9,7 +9,9 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
@@ -50,8 +52,10 @@ type Controller struct {
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
+	configMapInformer    cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
+	catalogMu            sync.Mutex
 
 	httpClient *http.Client
 
@@ -75,6 +79,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 30*time.Second, metav1.NamespaceAll, nil)
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	registrationInformer := factory.ForResource(monetizeapi.RegistrationRequestGVR).Informer()
+	configMapInformer := factory.ForResource(monetizeapi.ConfigMapGVR).Informer()
 
 	controller := &Controller{
 		client:               client,
@@ -87,6 +92,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		httpRoutes:           client.Resource(monetizeapi.HTTPRouteGVR),
 		offerInformer:        offerInformer,
 		registrationInformer: registrationInformer,
+		configMapInformer:    configMapInformer,
 		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		httpClient:           &http.Client{Timeout: 10 * time.Second},
@@ -111,6 +117,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueueOfferFromRegistration(newObj) },
 		DeleteFunc: controller.enqueueOfferFromRegistration,
 	})
+	configMapInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueDiscoveryRefresh,
+		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
+		DeleteFunc: controller.enqueueDiscoveryRefresh,
+	})
 
 	return controller, nil
 }
@@ -121,7 +132,8 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 
 	go c.offerInformer.Run(ctx.Done())
 	go c.registrationInformer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), c.offerInformer.HasSynced, c.registrationInformer.HasSynced) {
+	go c.configMapInformer.Run(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), c.offerInformer.HasSynced, c.registrationInformer.HasSynced, c.configMapInformer.HasSynced) {
 		return fmt.Errorf("wait for informer sync")
 	}
 
@@ -175,6 +187,23 @@ func (c *Controller) enqueueOfferFromRegistration(obj any) {
 		return
 	}
 	c.offerQueue.Add(request.Spec.ServiceOfferNamespace + "/" + request.Spec.ServiceOfferName)
+}
+
+func (c *Controller) enqueueDiscoveryRefresh(obj any) {
+	u := asUnstructured(obj)
+	if u == nil {
+		return
+	}
+	if u.GetNamespace() != "obol-frontend" || u.GetName() != "obol-stack-config" {
+		return
+	}
+	log.Printf("serviceoffer-controller: base URL change detected, refreshing offers and registration requests")
+	for _, item := range c.offerInformer.GetStore().List() {
+		c.enqueueOffer(item)
+	}
+	for _, item := range c.registrationInformer.GetStore().List() {
+		c.enqueueRegistration(item)
+	}
 }
 
 func (c *Controller) processNextOffer(ctx context.Context) bool {
@@ -391,7 +420,28 @@ func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.Ser
 
 func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
 	if !offer.Spec.Registration.Enabled {
+		if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
+			return err
+		}
 		setCondition(status, "Registered", "True", "Disabled", "Registration disabled")
+		return nil
+	}
+	owner, err := c.registrationOwner()
+	if err != nil {
+		return err
+	}
+	if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
+		if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
+			return err
+		}
+		setCondition(
+			status,
+			"Registered",
+			"False",
+			"SingletonConflict",
+			fmt.Sprintf("Registration path /.well-known/agent-registration.json is reserved by %s/%s", owner.Namespace, owner.Name),
+		)
+		log.Printf("serviceoffer-controller: registration for %s/%s blocked by singleton owner %s/%s", offer.Namespace, offer.Name, owner.Namespace, owner.Name)
 		return nil
 	}
 	if !isConditionTrue(*status, "RoutePublished") {
@@ -638,6 +688,9 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 }
 
 func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
+	c.catalogMu.Lock()
+	defer c.catalogMu.Unlock()
+
 	baseURL, err := c.registrationBaseURL(ctx)
 	if err != nil {
 		return err
@@ -766,6 +819,49 @@ func (c *Controller) deleteRegistrationRequest(ctx context.Context, namespace, o
 		return err
 	}
 	return nil
+}
+
+func (c *Controller) registrationOwner() (*monetizeapi.ServiceOffer, error) {
+	var candidates []*monetizeapi.ServiceOffer
+	for _, item := range c.offerInformer.GetStore().List() {
+		u := asUnstructured(item)
+		if u == nil {
+			continue
+		}
+		offer, err := decodeServiceOffer(u)
+		if err != nil {
+			return nil, err
+		}
+		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+			continue
+		}
+		candidates = append(candidates, offer)
+	}
+	return selectRegistrationOwner(candidates), nil
+}
+
+func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.ServiceOffer {
+	if len(offers) == 0 {
+		return nil
+	}
+	sort.Slice(offers, func(i, j int) bool {
+		ti := offers[i].CreationTimestamp.Time
+		tj := offers[j].CreationTimestamp.Time
+		switch {
+		case ti.Equal(tj):
+			if offers[i].Namespace == offers[j].Namespace {
+				return offers[i].Name < offers[j].Name
+			}
+			return offers[i].Namespace < offers[j].Namespace
+		case ti.IsZero():
+			return false
+		case tj.IsZero():
+			return true
+		default:
+			return ti.Before(tj)
+		}
+	})
+	return offers[0]
 }
 
 func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
