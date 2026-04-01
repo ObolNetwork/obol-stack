@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -16,11 +17,15 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/rest"
@@ -29,12 +34,14 @@ import (
 )
 
 const (
-	serviceOfferFinalizer = "monetize.obol.org/finalizer"
+	serviceOfferFinalizer  = "monetize.obol.org/finalizer"
+	controllerFieldManager = "serviceoffer-controller"
 
 	registrationDesiredActive     = "Active"
 	registrationDesiredTombstoned = "Tombstoned"
 
 	registrationPhasePublishing   = "Publishing"
+	registrationPhaseRegistering  = "Registering"
 	registrationPhaseRegistered   = "Registered"
 	registrationPhaseOffChainOnly = "OffChainOnly"
 	registrationPhaseTombstoned   = "Tombstoned"
@@ -59,10 +66,11 @@ type Controller struct {
 
 	httpClient *http.Client
 
-	registrationKey    *ecdsa.PrivateKey
-	registrationRPCURL string
-	baseURLOverride    string
-	defaultBaseURL     string
+	registrationKey          *ecdsa.PrivateKey
+	registrationOwnerAddress string
+	registrationRPCURL       string
+	baseURLOverride          string
+	defaultBaseURL           string
 }
 
 func New(cfg *rest.Config) (*Controller, error) {
@@ -76,30 +84,39 @@ func New(cfg *rest.Config) (*Controller, error) {
 		return nil, err
 	}
 
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 30*time.Second, metav1.NamespaceAll, nil)
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	registrationInformer := factory.ForResource(monetizeapi.RegistrationRequestGVR).Informer()
-	configMapInformer := factory.ForResource(monetizeapi.ConfigMapGVR).Informer()
+	configMapFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, "obol-frontend", func(options *metav1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
+	})
+	configMapInformer := configMapFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
+
+	registrationOwnerAddress := ""
+	if registrationKey != nil {
+		registrationOwnerAddress = crypto.PubkeyToAddress(registrationKey.PublicKey).Hex()
+	}
 
 	controller := &Controller{
-		client:               client,
-		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
-		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
-		services:             client.Resource(monetizeapi.ServiceGVR),
-		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
-		deployments:          client.Resource(monetizeapi.DeploymentGVR),
-		middlewares:          client.Resource(monetizeapi.MiddlewareGVR),
-		httpRoutes:           client.Resource(monetizeapi.HTTPRouteGVR),
-		offerInformer:        offerInformer,
-		registrationInformer: registrationInformer,
-		configMapInformer:    configMapInformer,
-		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		httpClient:           &http.Client{Timeout: 10 * time.Second},
-		registrationKey:      registrationKey,
-		registrationRPCURL:   getenvDefault("ERC8004_RPC_URL", erc8004.DefaultRPCURL),
-		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
-		defaultBaseURL:       "http://obol.stack:8080",
+		client:                   client,
+		offers:                   client.Resource(monetizeapi.ServiceOfferGVR),
+		registrationRequests:     client.Resource(monetizeapi.RegistrationRequestGVR),
+		services:                 client.Resource(monetizeapi.ServiceGVR),
+		configMaps:               client.Resource(monetizeapi.ConfigMapGVR),
+		deployments:              client.Resource(monetizeapi.DeploymentGVR),
+		middlewares:              client.Resource(monetizeapi.MiddlewareGVR),
+		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
+		offerInformer:            offerInformer,
+		registrationInformer:     registrationInformer,
+		configMapInformer:        configMapInformer,
+		offerQueue:               workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		registrationQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		httpClient:               &http.Client{Timeout: 3 * time.Second},
+		registrationKey:          registrationKey,
+		registrationOwnerAddress: registrationOwnerAddress,
+		registrationRPCURL:       getenvDefault("ERC8004_RPC_URL", erc8004.DefaultRPCURL),
+		baseURLOverride:          strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
+		defaultBaseURL:           "http://obol.stack:8080",
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -327,6 +344,9 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	if err := c.updateOfferStatus(ctx, raw, status); err != nil {
 		return err
 	}
+	if !c.shouldRefreshSkillCatalog(offer, status) {
+		return nil
+	}
 	return c.reconcileSkillCatalog(ctx)
 }
 
@@ -379,7 +399,10 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 		offer.EffectivePort(),
 		offer.EffectiveHealthPath(),
 	)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	healthCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(healthCtx, http.MethodGet, healthURL, nil)
 	if err != nil {
 		return false, err
 	}
@@ -574,59 +597,150 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
 
-	if agentID == "" && c.registrationKey != nil {
-		client, err := erc8004.NewClient(ctx, c.registrationRPCURL)
+	var client *erc8004.Client
+	if c.registrationKey != nil {
+		client, err = erc8004.NewClient(ctx, c.registrationRPCURL)
 		if err != nil {
-			status.Phase = registrationPhaseOffChainOnly
-			status.Message = truncateMessage(fmt.Sprintf("Published off-chain registration only: %v", err))
+			status.Phase = registrationPhaseRegistering
+			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity: %v", err))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 		defer client.Close()
+	}
 
-		registeredID, registeredTxHash, err := client.RegisterDetailed(ctx, c.registrationKey, status.PublishedURL)
-		if err != nil {
-			status.Phase = registrationPhaseOffChainOnly
-			status.Message = truncateMessage(fmt.Sprintf("Published off-chain registration only: %v", err))
+	if agentID == "" && c.registrationKey != nil {
+		if status.RegistrationURI != status.PublishedURL ||
+			!strings.EqualFold(status.RegistrationOwner, c.registrationOwnerAddress) ||
+			status.RegistrationSearchFromBlock == 0 {
+			height, err := client.CurrentBlockNumber(ctx)
+			if err != nil {
+				status.Phase = registrationPhaseRegistering
+				status.Message = truncateMessage(fmt.Sprintf("Preparing on-chain registration: %v", err))
+				return c.updateRegistrationStatus(ctx, raw, status)
+			}
+
+			status.Phase = registrationPhaseRegistering
+			status.Message = "Prepared on-chain registration and fenced duplicate retries"
+			status.RegistrationOwner = c.registrationOwnerAddress
+			status.RegistrationURI = status.PublishedURL
+			fromBlock := int64(height)
+			if fromBlock > 0 {
+				fromBlock--
+			}
+			status.RegistrationSearchFromBlock = fromBlock
+			status.RegistrationTxHash = ""
+			status.MetadataSynced = false
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 
-		agentID = registeredID.String()
-		txHash = registeredTxHash
-		status.AgentID = agentID
-		status.RegistrationTxHash = txHash
-
-		_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "x402.supported", []byte{1})
-		_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "service.type", []byte(fallbackOfferType(offer)))
-		for key, value := range offer.Spec.Registration.Metadata {
-			key = strings.TrimSpace(key)
-			value = strings.TrimSpace(value)
-			if key == "" || value == "" {
-				continue
-			}
-			_ = client.SetMetadata(ctx, c.registrationKey, registeredID, "metadata."+key, []byte(value))
-		}
-
-		document = buildActiveRegistrationDocument(offer, baseURL, agentID)
-		documentJSON, contentHash, err = marshalRegistrationDocument(document)
+		recoveredAgentID, recoveredTxHash, found, err := c.recoverRegistration(ctx, client, status)
 		if err != nil {
+			status.Phase = registrationPhaseRegistering
+			status.Message = truncateMessage(fmt.Sprintf("Recovering on-chain registration state: %v", err))
+			if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
+				return updateErr
+			}
 			return err
 		}
-		if err := c.publishRegistrationResources(ctx, request, documentJSON, contentHash); err != nil {
-			return err
+		switch {
+		case found:
+			agentID = recoveredAgentID
+			txHash = recoveredTxHash
+		case status.RegistrationTxHash == "":
+			submittedTxHash, err := client.SubmitRegister(ctx, c.registrationKey, status.PublishedURL)
+			if err != nil {
+				status.Phase = registrationPhaseRegistering
+				status.Message = truncateMessage(fmt.Sprintf("Submitting on-chain registration: %v", err))
+				if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
+					return updateErr
+				}
+				return err
+			}
+
+			status.Phase = registrationPhaseRegistering
+			status.Message = fmt.Sprintf("Submitted on-chain registration transaction %s", submittedTxHash)
+			status.RegistrationTxHash = submittedTxHash
+			return c.updateRegistrationStatus(ctx, raw, status)
+		default:
+			status.Phase = registrationPhaseRegistering
+			status.Message = fmt.Sprintf("Waiting for on-chain registration transaction %s", status.RegistrationTxHash)
+			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 	}
 
 	status.AgentID = agentID
 	status.RegistrationTxHash = txHash
+	status.RegistrationOwner = firstNonEmpty(status.RegistrationOwner, c.registrationOwnerAddress)
+	status.RegistrationURI = firstNonEmpty(status.RegistrationURI, status.PublishedURL)
+	if agentID != "" && c.registrationKey != nil && client != nil && !status.MetadataSynced {
+		agentIDBig, ok := newBigInt(agentID)
+		if !ok {
+			return fmt.Errorf("invalid agent id %q", agentID)
+		}
+		if err := c.syncRegistrationMetadata(ctx, client, offer, agentIDBig); err == nil {
+			status.MetadataSynced = true
+		} else {
+			log.Printf("serviceoffer-controller: metadata sync pending for agent %s: %v", agentID, err)
+		}
+	}
 	if agentID != "" {
 		status.Phase = registrationPhaseRegistered
-		status.Message = fmt.Sprintf("Published registration document and recorded agent %s", agentID)
+		if status.MetadataSynced || c.registrationKey == nil {
+			status.Message = fmt.Sprintf("Published registration document and recorded agent %s", agentID)
+		} else {
+			status.Message = fmt.Sprintf("Published registration document and recorded agent %s; metadata sync will retry on the next reconcile", agentID)
+		}
 	} else {
 		status.Phase = registrationPhaseOffChainOnly
 		status.Message = "Published registration document; controller has no ERC-8004 signing key"
 	}
 
 	return c.updateRegistrationStatus(ctx, raw, status)
+}
+
+func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Client, status monetizeapi.RegistrationRequestStatus) (string, string, bool, error) {
+	if txHash := strings.TrimSpace(status.RegistrationTxHash); txHash != "" {
+		agentID, resolvedTxHash, found, err := client.FindRegistrationByTxHash(ctx, txHash)
+		if err != nil || !found {
+			return "", "", found, err
+		}
+		return agentID.String(), resolvedTxHash, true, nil
+	}
+
+	if strings.TrimSpace(status.RegistrationOwner) == "" || strings.TrimSpace(status.RegistrationURI) == "" || status.RegistrationSearchFromBlock < 0 {
+		return "", "", false, nil
+	}
+
+	agentID, resolvedTxHash, found, err := client.FindRegistrationByOwnerAndURI(
+		ctx,
+		common.HexToAddress(status.RegistrationOwner),
+		status.RegistrationURI,
+		uint64(status.RegistrationSearchFromBlock),
+	)
+	if err != nil || !found {
+		return "", "", found, err
+	}
+	return agentID.String(), resolvedTxHash, true, nil
+}
+
+func (c *Controller) syncRegistrationMetadata(ctx context.Context, client *erc8004.Client, offer *monetizeapi.ServiceOffer, agentID *big.Int) error {
+	if err := client.SetMetadata(ctx, c.registrationKey, agentID, "x402.supported", []byte{1}); err != nil {
+		return err
+	}
+	if err := client.SetMetadata(ctx, c.registrationKey, agentID, "service.type", []byte(fallbackOfferType(offer))); err != nil {
+		return err
+	}
+	for key, value := range offer.Spec.Registration.Metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		if err := client.SetMetadata(ctx, c.registrationKey, agentID, "metadata."+key, []byte(value)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
@@ -704,14 +818,14 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 		return err
 	}
 
-	list, err := c.offers.List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return err
-	}
-
-	offers := make([]*monetizeapi.ServiceOffer, 0, len(list.Items))
-	for i := range list.Items {
-		offer, err := decodeServiceOffer(&list.Items[i])
+	items := c.offerInformer.GetStore().List()
+	offers := make([]*monetizeapi.ServiceOffer, 0, len(items))
+	for _, item := range items {
+		raw := asUnstructured(item)
+		if raw == nil {
+			continue
+		}
+		offer, err := decodeServiceOffer(raw)
 		if err != nil {
 			return err
 		}
@@ -872,19 +986,33 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 	return offers[0]
 }
 
+func (c *Controller) shouldRefreshSkillCatalog(offer *monetizeapi.ServiceOffer, nextStatus monetizeapi.ServiceOfferStatus) bool {
+	if offer == nil {
+		return false
+	}
+	if offer.Status.ObservedGeneration != offer.Generation || offer.IsPaused() {
+		return true
+	}
+	wasReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(offer.Status, "Ready")
+	nowReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(nextStatus, "Ready")
+	if wasReady != nowReady {
+		return true
+	}
+	return wasReady && offer.Status.Endpoint != nextStatus.Endpoint
+}
+
 func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
-	existing, err := resource.Get(ctx, desired.GetName(), metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		_, err = resource.Create(ctx, desired, metav1.CreateOptions{})
-		return err
-	case err != nil:
-		return err
-	default:
-		desired.SetResourceVersion(existing.GetResourceVersion())
-		_, err = resource.Update(ctx, desired, metav1.UpdateOptions{})
+	payload, err := json.Marshal(desired.Object)
+	if err != nil {
 		return err
 	}
+
+	force := true
+	_, err = resource.Patch(ctx, desired.GetName(), types.ApplyPatchType, payload, metav1.PatchOptions{
+		FieldManager: controllerFieldManager,
+		Force:        &force,
+	})
+	return err
 }
 
 func (c *Controller) updateOfferStatus(ctx context.Context, raw *unstructured.Unstructured, status monetizeapi.ServiceOfferStatus) error {
@@ -892,6 +1020,9 @@ func (c *Controller) updateOfferStatus(ctx context.Context, raw *unstructured.Un
 	statusObject, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&status)
 	if err != nil {
 		return err
+	}
+	if existing, found := copy.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
+		return nil
 	}
 	copy.Object["status"] = statusObject
 	_, err = c.offers.Namespace(copy.GetNamespace()).UpdateStatus(ctx, copy, metav1.UpdateOptions{})
@@ -903,6 +1034,9 @@ func (c *Controller) updateRegistrationStatus(ctx context.Context, raw *unstruct
 	statusObject, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&status)
 	if err != nil {
 		return err
+	}
+	if existing, found := copy.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
+		return nil
 	}
 	copy.Object["status"] = statusObject
 	_, err = c.registrationRequests.Namespace(copy.GetNamespace()).UpdateStatus(ctx, copy, metav1.UpdateOptions{})

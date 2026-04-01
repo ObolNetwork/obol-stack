@@ -71,3 +71,12 @@ spec:
                   type: string
                 registrationTxHash:
                   type: string
+                registrationOwner:
+                  type: string
+                registrationUri:
+                  type: string
+                registrationSearchFromBlock:
+                  type: integer
+                  format: int64
+                metadataSynced:
+                  type: boolean

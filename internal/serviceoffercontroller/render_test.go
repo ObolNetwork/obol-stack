@@ -118,14 +118,11 @@ func TestBuildRegistrationHTTPRoute(t *testing.T) {
 	firstRule := rules[0].(map[string]any)
 	matches := firstRule["matches"].([]any)
 	path := matches[0].(map[string]any)["path"].(map[string]any)
-	if path["value"] != "/.well-known/" {
-		t.Fatalf("match path = %v, want /.well-known/", path["value"])
+	if path["value"] != "/.well-known/agent-registration.json" {
+		t.Fatalf("match path = %v, want /.well-known/agent-registration.json", path["value"])
 	}
-	filters := firstRule["filters"].([]any)
-	rewrite := filters[0].(map[string]any)["urlRewrite"].(map[string]any)
-	rewritePath := rewrite["path"].(map[string]any)
-	if rewritePath["replacePrefixMatch"] != "/" {
-		t.Fatalf("rewrite target = %v, want /", rewritePath["replacePrefixMatch"])
+	if _, found := firstRule["filters"]; found {
+		t.Fatalf("registration route should not rewrite the full /.well-known/ prefix: %+v", firstRule["filters"])
 	}
 }
 

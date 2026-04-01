@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"reflect"
 	"sync"
 )
 
@@ -24,11 +25,15 @@ func (a *ConfigAccumulator) SetBase(base *PricingConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	previousBase := a.base
 	if base == nil {
 		a.base = PricingConfig{}
 	} else {
 		a.base = *base
 		a.base.Routes = append([]RouteRule(nil), base.Routes...)
+	}
+	if reflect.DeepEqual(previousBase, a.base) {
+		return nil
 	}
 
 	return a.applyLocked()
@@ -38,6 +43,9 @@ func (a *ConfigAccumulator) SetRoutes(routes []RouteRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if reflect.DeepEqual(a.routes, routes) {
+		return nil
+	}
 	a.routes = append([]RouteRule(nil), routes...)
 	return a.applyLocked()
 }

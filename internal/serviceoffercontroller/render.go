@@ -134,7 +134,7 @@ func buildRegistrationDeployment(request *monetizeapi.RegistrationRequest, conte
 								"name": "content",
 								"configMap": map[string]any{
 									"name":  name,
-									"items": []any{map[string]any{"key": "agent-registration.json", "path": "agent-registration.json"}},
+									"items": []any{map[string]any{"key": "agent-registration.json", "path": ".well-known/agent-registration.json"}},
 								},
 							},
 							map[string]any{
@@ -203,19 +203,8 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 						"matches": []any{
 							map[string]any{
 								"path": map[string]any{
-									"type":  "PathPrefix",
-									"value": "/.well-known/",
-								},
-							},
-						},
-						"filters": []any{
-							map[string]any{
-								"type": "URLRewrite",
-								"urlRewrite": map[string]any{
-									"path": map[string]any{
-										"type":               "ReplacePrefixMatch",
-										"replacePrefixMatch": "/",
-									},
+									"type":  "Exact",
+									"value": "/.well-known/agent-registration.json",
 								},
 							},
 						},

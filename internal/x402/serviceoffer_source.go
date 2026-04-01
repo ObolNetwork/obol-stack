@@ -7,12 +7,12 @@ import (
 	"log"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
@@ -26,9 +26,12 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 		return fmt.Errorf("create dynamic client: %w", err)
 	}
 
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 30*time.Second, metav1.NamespaceAll, nil)
-	offers := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
-	secrets := factory.ForResource(monetizeapi.SecretGVR).Informer()
+	offerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
+	secretFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "litellm-secrets").String()
+	})
+	offers := offerFactory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
+	secrets := secretFactory.ForResource(monetizeapi.SecretGVR).Informer()
 
 	refresh := func() {
 		routes, err := routesFromStore(offers.GetStore().List(), secrets.GetStore().List())

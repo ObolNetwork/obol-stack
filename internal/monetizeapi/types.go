@@ -124,11 +124,15 @@ type RegistrationRequestSpec struct {
 }
 
 type RegistrationRequestStatus struct {
-	Phase              string `json:"phase,omitempty"`
-	Message            string `json:"message,omitempty"`
-	PublishedURL       string `json:"publishedUrl,omitempty"`
-	AgentID            string `json:"agentId,omitempty"`
-	RegistrationTxHash string `json:"registrationTxHash,omitempty"`
+	Phase                       string `json:"phase,omitempty"`
+	Message                     string `json:"message,omitempty"`
+	PublishedURL                string `json:"publishedUrl,omitempty"`
+	AgentID                     string `json:"agentId,omitempty"`
+	RegistrationTxHash          string `json:"registrationTxHash,omitempty"`
+	RegistrationOwner           string `json:"registrationOwner,omitempty"`
+	RegistrationURI             string `json:"registrationUri,omitempty"`
+	RegistrationSearchFromBlock int64  `json:"registrationSearchFromBlock,omitempty"`
+	MetadataSynced              bool   `json:"metadataSynced,omitempty"`
 }
 
 func (o *ServiceOffer) EffectiveNamespace() string {
