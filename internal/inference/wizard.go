@@ -8,6 +8,9 @@ package inference
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,21 +24,30 @@ import (
 // inferenceConfigFile is the filename within ConfigDir that marks inference as configured.
 const inferenceConfigFile = "inference.json"
 
+// ErrUserDeclined is returned when the user explicitly declines the wizard.
+var ErrUserDeclined = errors.New("user declined inference configuration")
+
+// InferenceConfig holds the persisted inference endpoint configuration.
+type InferenceConfig struct {
+	BaseURL string `json:"base_url"`
+	Model   string `json:"model"`
+}
+
 // RunInferenceWizard runs the first-run inference setup flow.
 // It scans for local endpoints, displays them, and lets the user pick one.
 func RunInferenceWizard(cfg *config.Config) error {
-	return RunInferenceWizardIO(cfg, os.Stdin, os.Stdout)
+	return RunInferenceWizardIO(context.Background(), cfg, os.Stdin, os.Stdout)
 }
 
-// RunInferenceWizardIO is the testable version that accepts explicit I/O.
-func RunInferenceWizardIO(cfg *config.Config, in io.Reader, out io.Writer) error {
+// RunInferenceWizardIO is the testable version that accepts explicit I/O and context.
+func RunInferenceWizardIO(ctx context.Context, cfg *config.Config, in io.Reader, out io.Writer) error {
 	if IsInferenceConfigured(cfg) {
 		fmt.Fprintln(out, "Inference already configured — skipping wizard.")
 		return nil
 	}
 
 	fmt.Fprintln(out, "🔍 Scanning for local inference servers...")
-	endpoints, err := ScanLocalEndpoints()
+	endpoints, err := ScanLocalEndpointsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("scanning endpoints: %w", err)
 	}
@@ -61,12 +73,17 @@ func RunInferenceWizardIO(cfg *config.Config, in io.Reader, out io.Writer) error
 		fmt.Fprintf(out, "\nFound %s on %s (%s). Use this? [Y/n] ", m.ID, ep.BaseURL(), ep.ServerType)
 
 		scanner := bufio.NewScanner(in)
-		if scanner.Scan() {
-			answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
-			if answer != "" && answer != "y" && answer != "yes" {
-				fmt.Fprintln(out, "Skipped. Run 'obol config inference' to set up later.")
-				return nil
-			}
+		if !scanner.Scan() {
+			fmt.Fprintln(out, "\nNo input received (EOF).")
+			return fmt.Errorf("reading input: %w", io.EOF)
+		}
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if answer != "" && answer != "y" && answer != "yes" {
+			fmt.Fprintln(out, "Skipped. Run 'obol config inference' to set up later.")
+			return ErrUserDeclined
+		}
+		if err := persistConfig(cfg, ep.BaseURL(), m.ID); err != nil {
+			return fmt.Errorf("saving config: %w", err)
 		}
 		fmt.Fprintf(out, "✅ Configured %s via %s\n", m.ID, ep.BaseURL())
 		return nil
@@ -92,14 +109,42 @@ func RunInferenceWizardIO(cfg *config.Config, in io.Reader, out io.Writer) error
 	fmt.Fprint(out, "\n> ")
 
 	scanner := bufio.NewScanner(in)
-	if scanner.Scan() {
-		n, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
-		if err != nil || n < 1 || n > len(choices) {
-			fmt.Fprintln(out, "Invalid selection. Run 'obol config inference' to set up later.")
-			return nil
-		}
-		choice := choices[n-1]
-		fmt.Fprintf(out, "✅ Configured %s via %s\n", choice.model.ID, choice.ep.BaseURL())
+	if !scanner.Scan() {
+		fmt.Fprintln(out, "\nNo input received (EOF).")
+		return fmt.Errorf("reading input: %w", io.EOF)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
+	if err != nil || n < 1 || n > len(choices) {
+		fmt.Fprintln(out, "Invalid selection. Run 'obol config inference' to set up later.")
+		return nil
+	}
+	choice := choices[n-1]
+	if err := persistConfig(cfg, choice.ep.BaseURL(), choice.model.ID); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+	fmt.Fprintf(out, "✅ Configured %s via %s\n", choice.model.ID, choice.ep.BaseURL())
+	return nil
+}
+
+// persistConfig writes the InferenceConfig to ConfigDir/inference.json.
+func persistConfig(cfg *config.Config, baseURL, model string) error {
+	if cfg == nil || cfg.ConfigDir == "" {
+		return fmt.Errorf("config directory not set")
+	}
+	if err := os.MkdirAll(cfg.ConfigDir, 0755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	ic := InferenceConfig{
+		BaseURL: baseURL,
+		Model:   model,
+	}
+	data, err := json.MarshalIndent(ic, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	path := filepath.Join(cfg.ConfigDir, inferenceConfigFile)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
 }
@@ -108,6 +153,10 @@ func RunInferenceWizardIO(cfg *config.Config, in io.Reader, out io.Writer) error
 func FormatEndpointDisplay(endpoints []EndpointInfo) string {
 	var b strings.Builder
 	b.WriteString("Discovered inference endpoints:\n")
+	if len(endpoints) == 0 {
+		b.WriteString("  (none)\n")
+		return b.String()
+	}
 	for _, ep := range endpoints {
 		status := "✓ healthy"
 		if !ep.Healthy {
