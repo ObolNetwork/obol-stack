@@ -4,7 +4,8 @@ package inference
 //
 // Probes well-known ports for llama-server, ollama, vLLM, and LiteLLM,
 // hitting their OpenAI-compatible /v1/models endpoint to enumerate
-// available models. Used by the first-run wizard to auto-configure.
+// available models. Used by `obol sell inference` and `obol model setup`
+// to auto-detect providers when the user doesn't specify --upstream or --model.
 
 import (
 	"context"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -228,4 +230,32 @@ func ParseModelsResponse(data []byte) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("parsing models JSON: %w", err)
 	}
 	return mr.Data, nil
+}
+
+// FormatEndpointDisplay pretty-prints a list of discovered endpoints.
+func FormatEndpointDisplay(endpoints []EndpointInfo) string {
+	var b strings.Builder
+	b.WriteString("Discovered inference endpoints:\n")
+	if len(endpoints) == 0 {
+		b.WriteString("  (none)\n")
+		return b.String()
+	}
+	for _, ep := range endpoints {
+		status := "healthy"
+		if !ep.Healthy {
+			status = "unhealthy"
+		}
+		fmt.Fprintf(&b, "\n  %s (%s) [%s]\n", ep.BaseURL(), ep.ServerType, status)
+		if len(ep.Models) == 0 {
+			b.WriteString("    (no models loaded)\n")
+		}
+		for _, m := range ep.Models {
+			owner := m.OwnedBy
+			if owner == "" {
+				owner = "unknown"
+			}
+			fmt.Fprintf(&b, "    - %s (by %s)\n", m.ID, owner)
+		}
+	}
+	return b.String()
 }

@@ -192,6 +192,49 @@ Examples:
 				return err
 			}
 
+			// Auto-detect model and upstream if --model not specified.
+			modelFlag := cmd.String("model")
+			upstreamFlag := cmd.String("upstream")
+			if modelFlag == "" && u.IsTTY() {
+				detected, scanErr := inference.ScanLocalEndpointsContext(ctx)
+				if scanErr == nil && len(detected) > 0 {
+					fmt.Println("\nDetected local inference servers:")
+					fmt.Print(inference.FormatEndpointDisplay(detected))
+
+					type pick struct {
+						baseURL, modelID string
+					}
+					var picks []pick
+					idx := 1
+					for _, ep := range detected {
+						for _, m := range ep.Models {
+							fmt.Printf("  [%d] %s — %s (%s)\n", idx, m.ID, ep.BaseURL(), ep.ServerType)
+							picks = append(picks, pick{ep.BaseURL(), m.ID})
+							idx++
+						}
+					}
+
+					if len(picks) == 1 {
+						answer, _ := u.Input(fmt.Sprintf("Use %s on %s? [Y/n]", picks[0].modelID, picks[0].baseURL), "")
+						answer = strings.TrimSpace(strings.ToLower(answer))
+						if answer == "" || answer == "y" || answer == "yes" {
+							modelFlag = picks[0].modelID
+							upstreamFlag = picks[0].baseURL
+						}
+					} else if len(picks) > 1 {
+						sel, _ := u.Input("Select [1]", "1")
+						n, parseErr := strconv.Atoi(strings.TrimSpace(sel))
+						if parseErr == nil && n >= 1 && n <= len(picks) {
+							modelFlag = picks[n-1].modelID
+							upstreamFlag = picks[n-1].baseURL
+						}
+					}
+				}
+			}
+			if modelFlag == "" {
+				return fmt.Errorf("--model is required (or run interactively to auto-detect)")
+			}
+
 			teeType := cmd.String("tee")
 			modelHash := cmd.String("model-hash")
 			if teeType != "" {
@@ -221,7 +264,7 @@ Examples:
 				Name:            name,
 				EnclaveTag:      cmd.String("enclave-tag"),
 				ListenAddr:      cmd.String("listen"),
-				UpstreamURL:     cmd.String("upstream"),
+				UpstreamURL:     upstreamFlag,
 				WalletAddress:   wallet,
 				PricePerRequest: perRequest,
 				PricePerMTok:    priceTable.PerMTok,
