@@ -254,7 +254,7 @@ func dockerBridgeGatewayIP() (string, error) {
 }
 
 // Up starts the cluster using the configured backend
-func Up(cfg *config.Config, u *ui.UI) error {
+func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
@@ -285,13 +285,22 @@ func Up(cfg *config.Config, u *ui.UI) error {
 		return err
 	}
 
-	// Ensure DNS resolver is running for wildcard *.obol.stack
-	if err := dns.EnsureRunning(); err != nil {
-		u.Warnf("DNS resolver failed to start: %v", err)
-	} else if err := dns.ConfigureSystemResolver(); err != nil {
-		u.Warnf("Failed to configure system DNS resolver: %v", err)
-	} else {
-		u.Success("DNS resolver configured")
+	// Ensure obol.stack resolves to localhost via /etc/hosts (works everywhere).
+	if err := dns.EnsureHostsEntries(nil); err != nil {
+		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
+	}
+
+	// Wildcard *.obol.stack DNS is opt-in (--wildcard-dns) because it
+	// modifies system DNS config (NetworkManager/resolv.conf on Linux,
+	// /etc/resolver on macOS) which can break host DNS resolution.
+	if wildcardDNS {
+		if err := dns.EnsureRunning(); err != nil {
+			u.Warnf("DNS resolver failed to start: %v", err)
+		} else if err := dns.ConfigureSystemResolver(); err != nil {
+			u.Warnf("Wildcard DNS configuration failed: %v", err)
+		} else {
+			u.Success("Wildcard DNS configured (*.obol.stack)")
+		}
 	}
 
 	u.Blank()
