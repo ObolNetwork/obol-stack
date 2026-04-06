@@ -68,6 +68,32 @@
       "datasourceTemplate": "docker",
       "depNameTemplate": "ghcr.io/berriai/litellm",
       "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "Update pinned tool versions in obolup.sh",
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\nreadonly\\s+\\w+=\"(?<currentValue>[^\"]+)\""
+      ],
+      "fileMatch": [
+        "^obolup\\.sh$"
+      ],
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update k3s image tag in k3d config",
+      "matchStrings": [
+        "image:\\s*rancher/k3s:v(?<currentValue>[\\w.+-]+)"
+      ],
+      "fileMatch": [
+        "^internal/embed/k3d-config\\.yaml$"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "k3s-io/k3s",
+      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)([+-](?<build>.+))?$",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ],
   "packageRules": [
@@ -172,6 +198,48 @@
         "before 6am on monday"
       ],
       "groupName": "LiteLLM updates"
+    },
+    {
+      "description": "Batch obolup.sh tool version updates into a single PR",
+      "matchFileNames": [
+        "obolup.sh"
+      ],
+      "matchPackageNames": [
+        "kubernetes/kubernetes",
+        "helm/helm",
+        "k3d-io/k3d",
+        "helmfile/helmfile",
+        "derailed/k9s",
+        "databus23/helm-diff",
+        "ollama/ollama"
+      ],
+      "labels": [
+        "renovate/obolup-deps"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "obolup.sh dependency updates"
+    },
+    {
+      "description": "Limit Helm to 3.x (Helm 4 is a breaking major)",
+      "matchPackageNames": [
+        "helm/helm"
+      ],
+      "allowedVersions": "<4.0.0"
+    },
+    {
+      "description": "Group k3s image updates",
+      "matchPackageNames": [
+        "k3s-io/k3s"
+      ],
+      "labels": [
+        "renovate/k3s"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "k3s image updates"
     }
   ]
 }
