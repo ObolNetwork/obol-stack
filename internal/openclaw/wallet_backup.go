@@ -210,6 +210,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	if err := os.WriteFile(keystorePath, []byte(w.Keystore), 0600); err != nil {
 		return fmt.Errorf("failed to write keystore: %w", err)
 	}
+	fixVolumeOwnership(cfg, keystoreDir)
 
 	// Update values-remote-signer.yaml with restored password.
 	if err := writeKeystorePassword(deployDir, w.KeystorePassword); err != nil {

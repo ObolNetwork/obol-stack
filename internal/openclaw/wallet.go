@@ -335,6 +335,7 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
+	fixVolumeOwnership(cfg, dir)
 	return path, nil
 }
 
