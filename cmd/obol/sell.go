@@ -400,7 +400,7 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 Include --register to have the service listed on EIP8004 onchain agent registry.
 
 Example:
-  obol sell http my-cool-api --upstream my-svc --port 8080 --wallet 0x... --price 0.01 --chain base --register`,
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base --register`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "wallet",

@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"net"
-
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -53,10 +51,10 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 
 			// Step 4: Open browser
 			url := "http://obol.stack"
-			if ln, err := net.Listen("tcp", ":80"); err != nil {
+			if resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(url); err != nil {
 				url = "http://obol.stack:8080"
 			} else {
-				ln.Close()
+				resp.Body.Close()
 			}
 			u.Infof("Opening browser to %s", url)
 
