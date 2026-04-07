@@ -117,11 +117,11 @@ When tradeoffs conflict, operator safety and recoverability win.
 
 > SPEC SS 3.4
 
-#### B-2.4.1: The default OpenClaw instance is the canonical elevated agent runtime
+#### B-2.4.1: The default OpenClaw instance is the canonical agent runtime with static RBAC
 
 **Trigger**: `stack up` completes on a branch where the default agent can be configured.
-**Expected**: The `obol-agent` instance is created or re-synced and then elevated via RBAC patching and heartbeat injection.
-**Rationale**: Monetization and cluster-aware agent behavior rely on a single canonical elevated runtime.
+**Expected**: The `obol-agent` instance is created or re-synced. `agent.Init()` removes any legacy `HEARTBEAT.md`. RBAC is applied statically via k3s manifests (`openclaw-monetize-read` and `openclaw-monetize-write`), not patched at runtime. ServiceOffer reconciliation is handled by the `serviceoffer-controller` in the `x402` namespace.
+**Rationale**: Separating reconciliation from the agent runtime improves reliability and eliminates heartbeat-based polling latency.
 
 #### B-2.4.2: Additional OpenClaw instances remain operator-managed deployments
 
@@ -139,11 +139,11 @@ When tradeoffs conflict, operator safety and recoverability win.
 **Expected**: The resulting `ServiceOffer` is created in `<ns>` and references the chosen upstream namespace explicitly.
 **Rationale**: Namespace is an operator intent field and cannot be silently rewritten by the implementation or docs.
 
-#### B-2.5.2: Reconciliation advances through six explicit stages
+#### B-2.5.2: Reconciliation advances through six explicit stages via the serviceoffer-controller
 
 **Trigger**: A `ServiceOffer` is created or updated.
-**Expected**: The offer advances through `ModelReady`, `UpstreamHealthy`, `PaymentGateReady`, `RoutePublished`, `Registered`, and `Ready`, with status updates visible to operators.
-**Rationale**: Operators need a clear progress model for debugging sell-side failures.
+**Expected**: The `serviceoffer-controller` in the `x402` namespace advances the offer through `ModelReady`, `UpstreamHealthy`, `PaymentGateReady`, `RoutePublished`, `Registered`, and `Ready`, with status updates visible to operators. Registration side effects are isolated into a `RegistrationRequest` CR.
+**Rationale**: Operators need a clear progress model for debugging sell-side failures. The dedicated controller replaces the previous heartbeat-driven `monetize.py` skill loop.
 
 #### B-2.5.3: Registration failure degrades gracefully when possible
 
@@ -156,6 +156,18 @@ When tradeoffs conflict, operator safety and recoverability win.
 **Trigger**: The operator runs `obol sell probe <name> -n <ns>`.
 **Expected**: The command sends an unauthenticated request, expects a `402` pricing response, and confirms that the route is live and payment-gated.
 **Rationale**: Operators need a cheap verification path before involving a real buyer flow.
+
+#### B-2.5.5: Stopping a service pauses reconciliation without destroying state
+
+**Trigger**: The operator runs `obol sell stop <name> -n <ns>`.
+**Expected**: The `obol.org/paused` annotation is set on the ServiceOffer. The `serviceoffer-controller` skips reconciliation for paused offers, leaving existing routes and resources in place but preventing further stage progression.
+**Rationale**: Operators need a reversible way to take a service offline without destroying the ServiceOffer or its child resources.
+
+#### B-2.5.6: Deleting a service triggers finalizer-based cleanup and registration tombstoning
+
+**Trigger**: The operator runs `obol sell delete <name> -n <ns>`.
+**Expected**: The ServiceOffer is deleted. The `serviceoffer-controller` finalizer cleans up child Middleware, HTTPRoute, pricing routes, and registration resources. If the service had an active ERC-8004 registration, a `RegistrationRequest` with `desiredState: Tombstoned` is created to deactivate it on-chain.
+**Rationale**: Automated cleanup prevents orphaned resources and ensures on-chain registration state stays consistent with cluster state.
 
 ### 2.6 Buy-Side Payments
 
