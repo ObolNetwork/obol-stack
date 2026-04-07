@@ -283,6 +283,8 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
+	portsBlocked := checkPortsAvailable([]int{80, 443}) != nil
+
 	kubeconfigData, err := backend.Up(cfg, u, stackID)
 	if err != nil {
 		return err
@@ -319,7 +321,12 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Blank()
 	u.Bold("Stack started successfully.")
-	u.Print("Visit http://obol.stack in your browser to get started.")
+	if portsBlocked {
+		u.Warnf("Ports 80/443 are in use by another process — use http://obol.stack:8080 instead")
+		u.Print("Visit http://obol.stack:8080 in your browser to get started.")
+	} else {
+		u.Print("Visit http://obol.stack in your browser to get started.")
+	}
 	update.HintIfStale(cfg)
 
 	return nil

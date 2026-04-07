@@ -396,7 +396,7 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.`
+		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.
 Include --register to have the service listed on EIP8004 onchain agent registry.
 
 Example:
@@ -2091,25 +2091,7 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	return spec, nil
 }
 
-// removePricingRoute removes the x402-verifier pricing route for the given offer.
-func removePricingRoute(cfg *config.Config, u *ui.UI, name string) {
-	urlPath := fmt.Sprintf("/services/%s", name)
-	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
-	if err != nil {
-		return
-	}
-	updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
-	for _, r := range pricingCfg.Routes {
-		if !strings.Contains(r.Pattern, urlPath) {
-			updatedRoutes = append(updatedRoutes, r)
-		}
-	}
-	if len(updatedRoutes) < len(pricingCfg.Routes) {
-		pricingCfg.Routes = updatedRoutes
-		if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
-			u.Warnf("failed to remove pricing route: %v", err)
-		} else {
-			u.Infof("Removed pricing route for %s", urlPath)
-		}
-	}
-}
+// removePricingRoute is a no-op retained for compatibility.
+// The serviceoffer-controller now manages pricing routes via the ServiceOffer
+// informer; static ConfigMap routes are no longer used.
+func removePricingRoute(_ *config.Config, _ *ui.UI, _ string) {}
