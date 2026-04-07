@@ -14,7 +14,6 @@
 package dns
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -349,20 +348,15 @@ func removeMacOSResolver() {
 // --- Linux (NetworkManager dnsmasq plugin) ---
 
 // configureLinuxResolver sets up NM's dnsmasq plugin for *.obol.stack.
+// Returns a non-fatal error when NetworkManager is unavailable (e.g. headless
+// servers) — the caller falls back to /etc/hosts entries.
 func configureLinuxResolver() error {
 	if configureNMDnsmasq() {
 		return nil
 	}
 
-	// NM not available — print instructions
-	fmt.Println("\nWildcard DNS for *.obol.stack requires NetworkManager with dnsmasq.")
-	fmt.Println("Install with:")
-	fmt.Println("  sudo apt install network-manager dnsmasq-base  # Debian/Ubuntu")
-	fmt.Println("  sudo dnf install NetworkManager dnsmasq        # Fedora/RHEL")
-	fmt.Println("  sudo pacman -S networkmanager dnsmasq           # Arch")
-	fmt.Println("\nThen re-run: obol stack up")
-
-	return errors.New("NetworkManager required for wildcard DNS on Linux")
+	// NM not available — return quiet error; caller handles the fallback message.
+	return fmt.Errorf("NetworkManager not available (headless or server system)")
 }
 
 // hasNMDnsmasqConfig checks if the NM dnsmasq config for obol.stack exists.
@@ -394,11 +388,6 @@ func configureNMDnsmasq() bool {
 
 	// Check if dnsmasq binary is available (NM plugin requires it)
 	if _, err := exec.LookPath("dnsmasq"); err != nil {
-		fmt.Println("Note: dnsmasq not found. Install it for wildcard DNS support:")
-		fmt.Println("  sudo apt install dnsmasq-base  # Debian/Ubuntu")
-		fmt.Println("  sudo dnf install dnsmasq       # Fedora/RHEL")
-		fmt.Println("  sudo pacman -S dnsmasq          # Arch")
-
 		return false
 	}
 

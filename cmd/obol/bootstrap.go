@@ -40,7 +40,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			}
 
 			// Step 2: Start stack
-			if err := stack.Up(cfg, u); err != nil {
+			if err := stack.Up(cfg, u, false); err != nil {
 				return fmt.Errorf("bootstrap up failed: %w", err)
 			}
 
