@@ -6,6 +6,7 @@ package kubectl
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,8 +21,9 @@ import (
 func EnsureCluster(cfg *config.Config) error {
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
+
 	return nil
 }
 
@@ -35,17 +37,23 @@ func Paths(cfg *config.Config) (binary, kubeconfig string) {
 // capturing stderr. The error message includes stderr output on failure.
 func Run(binary, kubeconfig string, args ...string) error {
 	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
+
 	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
 			return fmt.Errorf("%w: %s", err, errMsg)
 		}
+
 		return err
 	}
+
 	return nil
 }
 
@@ -53,16 +61,21 @@ func Run(binary, kubeconfig string, args ...string) error {
 // and included in the returned error on failure.
 func RunSilent(binary, kubeconfig string, args ...string) error {
 	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+
 	var stderr bytes.Buffer
+
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
 			return fmt.Errorf("%w: %s", err, errMsg)
 		}
+
 		return err
 	}
+
 	return nil
 }
 
@@ -70,17 +83,23 @@ func RunSilent(binary, kubeconfig string, args ...string) error {
 // captured and included in the returned error on failure.
 func Output(binary, kubeconfig string, args ...string) (string, error) {
 	cmd := exec.Command(binary, args...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+
 	var stdout, stderr bytes.Buffer
+
 	cmd.Stdout = &stdout
+
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
 			return "", fmt.Errorf("%w: %s", err, errMsg)
 		}
+
 		return "", err
 	}
+
 	return stdout.String(), nil
 }
 
@@ -90,13 +109,15 @@ func Apply(binary, kubeconfig string, data []byte) error {
 	return err
 }
 
-// ApplyOutput runs kubectl apply and returns the stdout (for example
-// "serviceoffer.obol.org/foo configured").
+// ApplyOutput pipes the given data into kubectl apply -f - and returns stdout.
 func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 	cmd := exec.Command(binary, "apply", "-f", "-")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfig))
+
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 	cmd.Stdin = bytes.NewReader(data)
+
 	var stdout, stderr bytes.Buffer
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -104,11 +125,14 @@ func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 		if errMsg != "" {
 			return "", fmt.Errorf("kubectl apply: %w: %s", err, errMsg)
 		}
+
 		return "", fmt.Errorf("kubectl apply: %w", err)
 	}
+
 	out := strings.TrimSpace(stdout.String())
 	if out != "" {
 		fmt.Println(out)
 	}
+
 	return out, nil
 }

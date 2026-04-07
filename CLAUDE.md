@@ -140,7 +140,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 1. **Absolute paths required** — Docker volume mounts need absolute paths (resolved at `obol stack init`)
 2. **Two-stage templating** — Stage 1 (CLI flags) → Stage 2 (Helmfile) separation is critical
 3. **Unique namespaces** — each deployment must have unique namespace
-4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, x402-buyer)
+4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, serviceoffer-controller, x402-buyer)
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
 
 ### OpenClaw Version Management
