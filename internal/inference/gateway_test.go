@@ -21,6 +21,7 @@ type mockFacilitatorOpts struct {
 
 type mockFacilitator struct {
 	*httptest.Server
+
 	verifyCalls  atomic.Int32
 	settleCalls  atomic.Int32
 	supportCalls atomic.Int32
@@ -28,6 +29,7 @@ type mockFacilitator struct {
 
 func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator {
 	t.Helper()
+
 	mf := &mockFacilitator{}
 
 	mux := http.NewServeMux()
@@ -41,10 +43,12 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
 		mf.verifyCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+
 		if opts.rejectPayment {
 			fmt.Fprintf(w, `{"isValid":false,"invalidReason":"mock rejection"}`)
 			return
 		}
+
 		fmt.Fprintf(w, `{"isValid":true,"payer":"0xmockpayer"}`)
 	})
 
@@ -55,7 +59,8 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 	})
 
 	mf.Server = httptest.NewServer(mux)
-	t.Cleanup(mf.Server.Close)
+	t.Cleanup(mf.Close)
+
 	return mf
 }
 
@@ -63,6 +68,7 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 
 func newMockOllama(t *testing.T) *httptest.Server {
 	t.Helper()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
@@ -76,6 +82,7 @@ func newMockOllama(t *testing.T) *httptest.Server {
 		}
 	}))
 	t.Cleanup(srv.Close)
+
 	return srv
 }
 
@@ -86,6 +93,7 @@ func newMockOllama(t *testing.T) *httptest.Server {
 // The mock facilitator accepts any payload so no real signature is needed.
 func testPaymentHeader(t *testing.T) string {
 	t.Helper()
+
 	p := x402.PaymentPayload{
 		X402Version: 1,
 		Scheme:      "exact",
@@ -102,10 +110,12 @@ func testPaymentHeader(t *testing.T) string {
 			},
 		},
 	}
+
 	data, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal payment: %v", err)
 	}
+
 	return base64.StdEncoding.EncodeToString(data)
 }
 
@@ -113,6 +123,7 @@ func testPaymentHeader(t *testing.T) string {
 // using httptest.NewServer. VMMode and EnclaveTag are always disabled.
 func newTestGateway(t *testing.T, facilitatorURL, upstreamURL string, verifyOnly bool) *httptest.Server {
 	t.Helper()
+
 	gw, err := NewGateway(GatewayConfig{
 		UpstreamURL:     upstreamURL,
 		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
@@ -124,12 +135,15 @@ func newTestGateway(t *testing.T, facilitatorURL, upstreamURL string, verifyOnly
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
+
 	handler, err := gw.buildHandler(upstreamURL)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
+
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
+
 	return ts
 }
 
@@ -166,6 +180,7 @@ func TestGateway_NoPayment_Returns402(t *testing.T) {
 	if resp.StatusCode != http.StatusPaymentRequired {
 		t.Errorf("expected 402, got %d", resp.StatusCode)
 	}
+
 	if fac.verifyCalls.Load() != 0 {
 		t.Error("facilitator verify should not be called without X-PAYMENT header")
 	}
@@ -179,7 +194,7 @@ func TestGateway_ValidPayment_Returns200(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -190,9 +205,11 @@ func TestGateway_ValidPayment_Returns200(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
 	}
+
 	if fac.settleCalls.Load() != 1 {
 		t.Errorf("expected 1 settle call, got %d", fac.settleCalls.Load())
 	}
@@ -206,7 +223,7 @@ func TestGateway_VerifyOnly_SkipsSettle(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -217,9 +234,11 @@ func TestGateway_VerifyOnly_SkipsSettle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Errorf("expected 1 verify call, got %d", fac.verifyCalls.Load())
 	}
+
 	if fac.settleCalls.Load() != 0 {
 		t.Errorf("expected 0 settle calls (verifyOnly), got %d", fac.settleCalls.Load())
 	}
@@ -233,7 +252,7 @@ func TestGateway_FacilitatorRejects_Returns402(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -244,6 +263,7 @@ func TestGateway_FacilitatorRejects_Returns402(t *testing.T) {
 	if resp.StatusCode != http.StatusPaymentRequired {
 		t.Errorf("expected 402 on rejected payment, got %d", resp.StatusCode)
 	}
+
 	if fac.settleCalls.Load() != 0 {
 		t.Error("settle should not be called when verify fails")
 	}
@@ -262,7 +282,7 @@ func TestGateway_UpstreamDown_Returns502(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -286,6 +306,7 @@ func TestGateway_UnprotectedPassthrough(t *testing.T) {
 		t.Fatalf("GET /v1/models: %v", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusPaymentRequired {
 		t.Errorf("GET /v1/models without payment: expected 402, got %d", resp.StatusCode)
 	}
@@ -297,7 +318,7 @@ func TestGateway_ModelsEndpoint_WithPayment(t *testing.T) {
 	gw := newTestGateway(t, fac.URL, ollama.URL, true)
 
 	req, _ := http.NewRequest(http.MethodGet, gw.URL+"/v1/models", nil)
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -315,6 +336,7 @@ func TestGateway_ModelsEndpoint_WithPayment(t *testing.T) {
 // newTestGatewayTEE starts a gateway with TEE stub mode enabled.
 func newTestGatewayTEE(t *testing.T, facilitatorURL, upstreamURL string) *httptest.Server {
 	t.Helper()
+
 	gw, err := NewGateway(GatewayConfig{
 		UpstreamURL:     upstreamURL,
 		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
@@ -328,12 +350,15 @@ func newTestGatewayTEE(t *testing.T, facilitatorURL, upstreamURL string) *httpte
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
+
 	handler, err := gw.buildHandler(upstreamURL)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
+
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
+
 	return ts
 }
 
@@ -366,15 +391,19 @@ func TestGateway_TEE_Attestation(t *testing.T) {
 	if report.TEEType != "stub" {
 		t.Errorf("tee_type = %q, want %q", report.TEEType, "stub")
 	}
+
 	if report.Pubkey == "" {
 		t.Error("pubkey should not be empty")
 	}
+
 	if report.ModelHash == "" {
 		t.Error("model_hash should not be empty")
 	}
+
 	if len(report.Quote) == 0 {
 		t.Error("quote should not be empty")
 	}
+
 	if report.Timestamp == 0 {
 		t.Error("timestamp should not be zero")
 	}
@@ -402,6 +431,7 @@ func TestGateway_TEE_PubkeyEndpoint(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&pk); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+
 	if pk.Pubkey == "" {
 		t.Error("pubkey should not be empty")
 	}
@@ -418,6 +448,7 @@ func TestGateway_TEE_ECIES_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+
 	var pk struct {
 		Pubkey string `json:"pubkey"`
 	}

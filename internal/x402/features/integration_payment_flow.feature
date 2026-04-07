@@ -4,8 +4,8 @@ Feature: x402 Payment Flow — Real User Journey
   I want to sell inference and have buyers pay for it
   So that the full production path is verified end-to-end
 
-  # This test follows the EXACT user journey — no kubectl shortcuts.
-  # Every step maps to a real CLI command or agent behavior.
+  # This test follows the exact user journey. Every step maps to a real CLI
+  # command or controller-owned cluster behavior.
   #
   # Run (full bootstrap — creates cluster from scratch):
   #   go test -tags integration -v -run TestBDDIntegration -timeout 20m ./internal/x402/
@@ -24,13 +24,12 @@ Feature: x402 Payment Flow — Real User Journey
   # ─── Sell-side: the operator creates a ServiceOffer via CLI ─────────
 
   @integration @local @sell
-  Scenario: Operator sells inference via CLI and agent reconciles
+  Scenario: Operator sells inference via CLI and the controller reconciles
     When the operator runs "obol sell http" to create a ServiceOffer
-    And the agent reconciles the ServiceOffer
+    And the controller reconciles the ServiceOffer
     Then the ServiceOffer status is "Ready"
     And a Middleware "x402-bdd-test" exists in the offer namespace
     And an HTTPRoute "so-bdd-test" exists in the offer namespace
-    And the x402-pricing ConfigMap contains a route for the offer
 
   # ─── Buy-side: unpaid request gets 402 ──────────────────────────────
 
@@ -96,4 +95,5 @@ Feature: x402 Payment Flow — Real User Journey
   Scenario: Operator deletes ServiceOffer and resources are cleaned up
     When the operator deletes the ServiceOffer via CLI
     Then the ServiceOffer no longer exists
-    And the x402-pricing ConfigMap does not contain a route for the offer
+    And no Middleware exists for the offer
+    And no HTTPRoute exists for the offer

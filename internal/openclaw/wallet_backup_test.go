@@ -21,8 +21,9 @@ func setupTestInstance(t *testing.T) (*config.Config, string, *WalletInfo) {
 	}
 
 	id := "test-instance"
+
 	deployDir := DeploymentPath(cfg, id)
-	if err := os.MkdirAll(deployDir, 0755); err != nil {
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,7 +40,7 @@ func setupTestInstance(t *testing.T) (*config.Config, string, *WalletInfo) {
 
 	// Write values-remote-signer.yaml.
 	values := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(values), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(values), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,6 +53,7 @@ func TestBackupRestorePlainRoundTrip(t *testing.T) {
 	// Backup (no encryption).
 	backupPath := filepath.Join(t.TempDir(), "backup.json")
 	u := testUI()
+
 	err := BackupWalletCmd(cfg, id, BackupWalletOptions{
 		Output:      backupPath,
 		Passphrase:  "",
@@ -66,28 +68,33 @@ func TestBackupRestorePlainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var backup BackupFile
 	if err := json.Unmarshal(data, &backup); err != nil {
 		t.Fatalf("backup is not valid JSON: %v", err)
 	}
+
 	if backup.Version != 1 {
 		t.Errorf("version = %d, want 1", backup.Version)
 	}
+
 	if len(backup.Wallets) != 1 {
 		t.Fatalf("wallets count = %d, want 1", len(backup.Wallets))
 	}
+
 	if backup.Wallets[0].Address != origWallet.Address {
 		t.Errorf("address = %q, want %q", backup.Wallets[0].Address, origWallet.Address)
 	}
 
 	// Create a new instance to restore into.
 	restoreID := "restore-instance"
+
 	restoreDir := DeploymentPath(cfg, restoreID)
-	if err := os.MkdirAll(restoreDir, 0755); err != nil {
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// Write a dummy values-remote-signer.yaml so deployment looks valid.
-	if err := os.WriteFile(filepath.Join(restoreDir, "values-remote-signer.yaml"), []byte("dummy: true\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(restoreDir, "values-remote-signer.yaml"), []byte("dummy: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,9 +114,11 @@ func TestBackupRestorePlainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if restored.Address != origWallet.Address {
 		t.Errorf("restored address = %q, want %q", restored.Address, origWallet.Address)
 	}
+
 	if restored.KeystoreUUID != origWallet.KeystoreUUID {
 		t.Errorf("restored UUID = %q, want %q", restored.KeystoreUUID, origWallet.KeystoreUUID)
 	}
@@ -125,6 +134,7 @@ func TestBackupRestorePlainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if restoredPwd != origWallet.Password {
 		t.Errorf("restored password = %q, want %q", restoredPwd, origWallet.Password)
 	}
@@ -152,17 +162,20 @@ func TestBackupRestoreEncryptedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !isEncryptedBackup(data) {
 		t.Error("backup file should be encrypted")
 	}
 
 	// Restore.
 	restoreID := "restore-enc"
+
 	restoreDir := DeploymentPath(cfg, restoreID)
-	if err := os.MkdirAll(restoreDir, 0755); err != nil {
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(restoreDir, "values-remote-signer.yaml"), []byte("dummy: true\n"), 0644); err != nil {
+
+	if err := os.WriteFile(filepath.Join(restoreDir, "values-remote-signer.yaml"), []byte("dummy: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,6 +193,7 @@ func TestBackupRestoreEncryptedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if restored.Address != origWallet.Address {
 		t.Errorf("address = %q, want %q", restored.Address, origWallet.Address)
 	}
@@ -187,6 +201,7 @@ func TestBackupRestoreEncryptedRoundTrip(t *testing.T) {
 
 func TestDecryptWrongPassphrase(t *testing.T) {
 	plaintext := []byte(`{"version":1,"instance":"test","wallets":[]}`)
+
 	encrypted, err := encryptBackup(plaintext, "correct-passphrase")
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +259,7 @@ func TestIsEncryptedBackup(t *testing.T) {
 
 func TestCorruptEncryptedFile(t *testing.T) {
 	plaintext := []byte(`{"version":1}`)
+
 	encrypted, err := encryptBackup(plaintext, "pass")
 	if err != nil {
 		t.Fatal(err)
@@ -263,6 +279,7 @@ func TestRestoreRequiresForceForExisting(t *testing.T) {
 
 	// Create a backup first.
 	backupPath := filepath.Join(t.TempDir(), "backup.json")
+
 	u := testUI()
 	if err := BackupWalletCmd(cfg, id, BackupWalletOptions{
 		Output:      backupPath,
@@ -297,8 +314,9 @@ func TestRestoreRequiresForceForExisting(t *testing.T) {
 
 func TestRestoreInvalidVersion(t *testing.T) {
 	backup := `{"version":99,"instance":"test","wallets":[{"address":"0x1234"}]}`
+
 	backupPath := filepath.Join(t.TempDir(), "backup.json")
-	if err := os.WriteFile(backupPath, []byte(backup), 0644); err != nil {
+	if err := os.WriteFile(backupPath, []byte(backup), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -307,12 +325,14 @@ func TestRestoreInvalidVersion(t *testing.T) {
 		ConfigDir: filepath.Join(tmpDir, "config"),
 		DataDir:   filepath.Join(tmpDir, "data"),
 	}
+
 	deployDir := DeploymentPath(cfg, "test")
-	if err := os.MkdirAll(deployDir, 0755); err != nil {
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	u := testUI()
+
 	err := RestoreWalletCmd(cfg, "test", RestoreWalletOptions{
 		Input:       backupPath,
 		Passphrase:  "",
@@ -333,7 +353,7 @@ keystorePassword:
 persistence:
   enabled: true
 `
-	if err := os.WriteFile(filepath.Join(tmpDir, "values-remote-signer.yaml"), []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "values-remote-signer.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -341,6 +361,7 @@ persistence:
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if pwd != "my-password-123" {
 		t.Errorf("password = %q, want %q", pwd, "my-password-123")
 	}
@@ -356,7 +377,7 @@ func TestFindInstancesWithWallets(t *testing.T) {
 	// Create two instances, one with wallet, one without.
 	for _, id := range []string{"with-wallet", "no-wallet"} {
 		dir := DeploymentPath(cfg, id)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,6 +394,7 @@ func TestFindInstancesWithWallets(t *testing.T) {
 	if len(ids) != 1 {
 		t.Fatalf("expected 1 instance with wallet, got %d", len(ids))
 	}
+
 	if ids[0] != "with-wallet" {
 		t.Errorf("instance = %q, want %q", ids[0], "with-wallet")
 	}

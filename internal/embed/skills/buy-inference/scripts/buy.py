@@ -467,8 +467,14 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
           f"{total_cost / 1_000_000:.6f} USDC)")
 
     if int(balance) < total_cost:
+        force = "--force" in sys.argv
+        if not force:
+            print(f"  Error: balance ({balance}) < total cost ({total_cost}).", file=sys.stderr)
+            print(f"  Fund wallet {signer_address} with USDC on {chain}, "
+                  "or pass --force to proceed anyway.", file=sys.stderr)
+            sys.exit(1)
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
-              "Some auths may fail on-chain.", file=sys.stderr)
+              "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
     # 5. Pre-sign authorizations.
     auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, n)

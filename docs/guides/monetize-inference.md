@@ -19,6 +19,10 @@ This guide walks you through exposing a local LLM as a paid API endpoint using t
 > If you encounter an issue, please open a
 > [GitHub issue](https://github.com/ObolNetwork/obol-stack/issues).
 
+> [!IMPORTANT]
+> The current implementation is event-driven. `ServiceOffer` is the source of truth, `serviceoffer-controller` owns reconciliation, `RegistrationRequest` isolates registration side effects, and `x402-verifier` derives live routes directly from published ServiceOffers.
+> Older references below to the obol-agent reconcile loop, heartbeat polling, or direct `x402-pricing` route mutation are historical.
+
 ## System Overview
 
 ```

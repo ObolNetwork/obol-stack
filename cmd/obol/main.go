@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -135,6 +136,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			}
 			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
 			cmd.Metadata = map[string]any{"ui": u}
+
 			return ctx, nil
 		},
 		Commands: []*cli.Command{
@@ -331,7 +333,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						return errors.New("stack not running, use 'obol stack up' first")
 					}
 
 					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -343,20 +345,24 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Execute kubectl directly with KUBECONFIG set
 					proc := exec.Command(kubectlPath, cmd.Args().Slice()...)
-					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 					proc.Stdin = os.Stdin
 					proc.Stdout = os.Stdout
 					proc.Stderr = os.Stderr
 
 					if err := proc.Run(); err != nil {
 						// Preserve the exit code from kubectl
-						if exitErr, ok := err.(*exec.ExitError); ok {
+						exitErr := &exec.ExitError{}
+						if errors.As(err, &exitErr) {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 								os.Exit(status.ExitStatus())
 							}
 						}
+
 						return err
 					}
+
 					return nil
 				},
 			},
@@ -369,7 +375,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						return errors.New("stack not running, use 'obol stack up' first")
 					}
 
 					helmPath := filepath.Join(cfg.BinDir, "helm")
@@ -381,20 +387,24 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Execute helm directly with KUBECONFIG set
 					proc := exec.Command(helmPath, cmd.Args().Slice()...)
-					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 					proc.Stdin = os.Stdin
 					proc.Stdout = os.Stdout
 					proc.Stderr = os.Stderr
 
 					if err := proc.Run(); err != nil {
 						// Preserve the exit code from helm
-						if exitErr, ok := err.(*exec.ExitError); ok {
+						exitErr := &exec.ExitError{}
+						if errors.As(err, &exitErr) {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 								os.Exit(status.ExitStatus())
 							}
 						}
+
 						return err
 					}
+
 					return nil
 				},
 			},
@@ -407,7 +417,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						return errors.New("stack not running, use 'obol stack up' first")
 					}
 
 					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
@@ -420,9 +430,10 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					// Execute helmfile directly with KUBECONFIG and HELMFILE_FILE_PATH set
 					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
 					proc := exec.Command(helmfilePath, cmd.Args().Slice()...)
+
 					proc.Env = append(os.Environ(),
-						fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath),
-						fmt.Sprintf("HELMFILE_FILE_PATH=%s", helmfileConfigPath),
+						"KUBECONFIG="+kubeconfigPath,
+						"HELMFILE_FILE_PATH="+helmfileConfigPath,
 					)
 					proc.Stdin = os.Stdin
 					proc.Stdout = os.Stdout
@@ -430,13 +441,16 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					if err := proc.Run(); err != nil {
 						// Preserve the exit code from helmfile
-						if exitErr, ok := err.(*exec.ExitError); ok {
+						exitErr := &exec.ExitError{}
+						if errors.As(err, &exitErr) {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 								os.Exit(status.ExitStatus())
 							}
 						}
+
 						return err
 					}
+
 					return nil
 				},
 			},
@@ -449,7 +463,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Check if kubeconfig exists
 					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return fmt.Errorf("stack not running, use 'obol stack up' first")
+						return errors.New("stack not running, use 'obol stack up' first")
 					}
 
 					k9sPath := filepath.Join(cfg.BinDir, "k9s")
@@ -461,20 +475,24 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 
 					// Execute k9s directly with KUBECONFIG set
 					proc := exec.Command(k9sPath, cmd.Args().Slice()...)
-					proc.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 					proc.Stdin = os.Stdin
 					proc.Stdout = os.Stdout
 					proc.Stderr = os.Stderr
 
 					if err := proc.Run(); err != nil {
 						// Preserve the exit code from k9s
-						if exitErr, ok := err.(*exec.ExitError); ok {
+						exitErr := &exec.ExitError{}
+						if errors.As(err, &exitErr) {
 							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 								os.Exit(status.ExitStatus())
 							}
 						}
+
 						return err
 					}
+
 					return nil
 				},
 			},
@@ -559,7 +577,7 @@ Find charts at https://artifacthub.io`,
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.NArg() == 0 {
-								return fmt.Errorf("chart reference required\n\n" +
+								return errors.New("chart reference required\n\n" +
 									"Examples:\n" +
 									"  obol app install bitnami/redis\n" +
 									"  obol app install bitnami/postgresql@15.0.0\n" +
@@ -567,6 +585,7 @@ Find charts at https://artifacthub.io`,
 									"  obol app install oci://registry-1.docker.io/bitnamicharts/redis\n\n" +
 									"Find charts at https://artifacthub.io")
 							}
+
 							chartRef := cmd.Args().First()
 							opts := app.InstallOptions{
 								Name:    cmd.String("name"),
@@ -574,6 +593,7 @@ Find charts at https://artifacthub.io`,
 								ID:      cmd.String("id"),
 								Force:   cmd.Bool("force"),
 							}
+
 							return app.Install(cfg, getUI(cmd), chartRef, opts)
 						},
 					},
@@ -586,6 +606,7 @@ Find charts at https://artifacthub.io`,
 							if err != nil {
 								return err
 							}
+
 							return app.Sync(cfg, getUI(cmd), identifier)
 						},
 					},
@@ -603,6 +624,7 @@ Find charts at https://artifacthub.io`,
 							opts := app.ListOptions{
 								Verbose: cmd.Bool("verbose"),
 							}
+
 							return app.List(cfg, getUI(cmd), opts)
 						},
 					},
@@ -622,6 +644,7 @@ Find charts at https://artifacthub.io`,
 							if err != nil {
 								return err
 							}
+
 							return app.Delete(cfg, getUI(cmd), identifier, cmd.Bool("force"))
 						},
 					},
@@ -636,6 +659,7 @@ Find charts at https://artifacthub.io`,
 		if u == nil {
 			u = ui.New(false)
 		}
+
 		u.Error(err.Error())
 		os.Exit(1)
 	}
@@ -649,6 +673,7 @@ func getUI(cmd *cli.Command) *ui.UI {
 			return u
 		}
 	}
+
 	return ui.New(false)
 }
 

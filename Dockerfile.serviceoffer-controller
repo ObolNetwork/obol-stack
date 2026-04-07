@@ -1,0 +1,10 @@
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /serviceoffer-controller ./cmd/serviceoffer-controller
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=builder /serviceoffer-controller /serviceoffer-controller
+ENTRYPOINT ["/serviceoffer-controller"]

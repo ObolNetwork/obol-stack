@@ -1,0 +1,189 @@
+version: "2"
+run:
+  go: "1.25"
+linters:
+  default: all
+  disable:
+    - containedctx
+    - contextcheck
+    - cyclop
+    - depguard
+    - err113
+    - exhaustruct
+    - forbidigo       # CLI uses fmt.Print* for user output
+    - forcetypeassert
+    - funlen
+    - funcorder
+    - gochecknoglobals
+    - gocognit
+    - gocyclo
+    - godoclint       # don't require doc comments on all exports
+    - godot
+    - godox
+    - gomoddirectives
+    - inamedparam
+    - interfacebloat
+    - intrange
+    - ireturn
+    - lll
+    - maintidx
+    - mnd
+    - musttag
+    - nestif
+    - nlreturn        # stylistic, too noisy
+    - noctx           # too much to retrofit; revisit later
+    - noinlineerr
+    - nonamedreturns
+    - paralleltest
+    - prealloc
+    - recvcheck
+    - tagliatelle
+    - testpackage     # internal test packages are fine here
+    - varnamelen
+    - wrapcheck       # obol-stack has no app/errors wrapper package
+    - wsl
+    # TODO: re-enable incrementally as issues are fixed
+    # All linters re-enabled
+  settings:
+    dupl:
+      threshold: 400
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    gosec:
+      excludes:
+        - G115
+        - G204  # CLI tool intentionally runs subprocesses (k3d, helm, kubectl)
+        - G101  # false positives from variable names containing "key", "token", "secret"
+    govet:
+      disable:
+        - fieldalignment
+        - shadow
+      enable-all: true
+    revive:
+      severity: warning
+      enable-all-rules: true
+      rules:
+        - name: add-constant
+          disabled: true
+        - name: argument-limit
+          disabled: true
+        - name: banned-characters
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: comment-spacings
+          disabled: true
+        - name: cyclomatic
+          disabled: true
+        - name: file-header
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: function-result-limit
+          disabled: true
+        - name: line-length-limit
+          disabled: true
+        - name: max-public-structs
+          disabled: true
+        - name: range-val-address
+          disabled: true
+        - name: unhandled-error
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+        - name: unused-receiver
+          disabled: true
+        - name: use-fmt-print
+          disabled: true
+        - name: unnecessary-format
+          disabled: true
+        - name: enforce-switch-style
+          disabled: true
+        - name: unsecure-url-scheme
+          disabled: true
+        - name: deep-exit
+          disabled: true
+        # TODO: re-enable as issues are fixed
+        - name: confusing-results
+          disabled: true
+        - name: early-return
+          disabled: true
+        - name: exported
+          disabled: true
+        - name: identical-branches
+          disabled: true
+        - name: identical-switch-branches
+          disabled: true
+        - name: if-return
+          disabled: true
+        - name: import-alias-naming
+          disabled: true
+        - name: superfluous-else
+          disabled: true
+        - name: unchecked-type-assertion
+          disabled: true
+        - name: unexported-return
+          disabled: true
+        - name: use-slices-sort
+          disabled: true
+        - name: var-naming
+          disabled: true
+    staticcheck:
+      checks:
+        - -SA1019
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - bodyclose
+          - errcheck
+          - errchkjson
+          - gosec
+          - revive
+          - unparam
+          - goconst
+        path: (.+)_test\.go
+      - linters:
+          - gosec
+        path: internal/testutil/
+      - path: (.+)\.go$
+        text: error returned from interface method should be wrapped
+      - path: (.+)\.go$
+        text: "defer: prefer not to defer chains of function calls"
+      - path: (.+)\.go$
+        text: avoid control coupling
+      - path: (.+)\.go$
+        text: shadows an import name
+      - path: (.+)\.go$
+        text: confusing-naming
+      - path: (.+)\.go$
+        text: nested-structs
+      - path: (.+)\.go$
+        text: 'shadow: declaration of "err" shadows declaration'
+      - linters:
+          - cyclop
+        path: (.+)_test\.go
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  fix: false
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - prefix(github.com/ObolNetwork/obol-stack)
+  exclusions:
+    generated: lax

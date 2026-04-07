@@ -53,14 +53,17 @@ func (b *stubBackend) sign(digest []byte) ([]byte, error) {
 
 func (b *stubBackend) ecdh(peerPubKeyBytes []byte) ([]byte, error) {
 	curve := ecdh.P256()
+
 	peerKey, err := curve.NewPublicKey(peerPubKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("tee/stub: invalid peer public key: %w", err)
 	}
+
 	shared, err := b.ecdhPriv.ECDH(peerKey)
 	if err != nil {
 		return nil, fmt.Errorf("tee/stub: ECDH failed: %w", err)
 	}
+
 	return shared, nil
 }
 
@@ -70,19 +73,13 @@ func (b *stubBackend) attest(userData []byte) ([]byte, error) {
 		"user_data": hex.EncodeToString(userData),
 		"timestamp": time.Now().Unix(),
 	}
+
 	return json.Marshal(doc)
 }
 
 func (b *stubBackend) delete() error {
 	// No persistent state to clean up.
 	return nil
-}
-
-// pubKeyBytes returns the 65-byte uncompressed SEC1 encoding.
-func (b *stubBackend) pubKeyBytes() []byte {
-	pub := b.privKey.PublicKey
-	return elliptic.MarshalCompressed(pub.Curve, pub.X, pub.Y)
-	// Actually we need uncompressed (65 bytes), not compressed.
 }
 
 // NewKey generates (or loads) a P-256 key inside the TEE (or stub) and
@@ -99,7 +96,7 @@ func NewKey(tag, modelHash string) (enclave.Key, error) {
 
 	// 65-byte uncompressed SEC1 public key.
 	pub := b.privKey.PublicKey
-	pubBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y)
+	pubBytes := elliptic.Marshal(pub.Curve, pub.X, pub.Y) //nolint:staticcheck // elliptic.Marshal needed for raw SEC1 encoding, not ECDH
 
 	return &teeKey{
 		tag:       tag,
@@ -118,6 +115,7 @@ func marshalDER(r, s *big.Int) []byte {
 	if len(rb) > 0 && rb[0]&0x80 != 0 {
 		rb = append([]byte{0}, rb...)
 	}
+
 	if len(sb) > 0 && sb[0]&0x80 != 0 {
 		sb = append([]byte{0}, sb...)
 	}
@@ -131,5 +129,6 @@ func marshalDER(r, s *big.Int) []byte {
 	out := make([]byte, 0, 2+len(inner))
 	out = append(out, 0x30, byte(len(inner)))
 	out = append(out, inner...)
+
 	return out
 }

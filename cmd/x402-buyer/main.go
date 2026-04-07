@@ -34,6 +34,7 @@ func main() {
 		listen         = flag.String("listen", ":8402", "listen address")
 		reloadInterval = flag.Duration("reload-interval", 5*time.Second, "config/auth reload interval")
 	)
+
 	flag.Parse()
 
 	state, err := buyer.LoadStateStore(*statePath)
@@ -77,6 +78,7 @@ func main() {
 
 	go func() {
 		log.Printf("x402-buyer listening on %s", *listen)
+
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
@@ -85,6 +87,7 @@ func main() {
 	if *reloadInterval > 0 {
 		ticker := time.NewTicker(*reloadInterval)
 		defer ticker.Stop()
+
 		go func() {
 			for {
 				select {
@@ -96,11 +99,13 @@ func main() {
 						log.Printf("reload config: %v", err)
 						continue
 					}
+
 					auths, err := buyer.LoadAuths(*authsPath)
 					if err != nil {
 						log.Printf("reload auths: %v", err)
 						continue
 					}
+
 					if err := proxy.Reload(cfg, auths); err != nil {
 						log.Printf("reload proxy: %v", err)
 					}
@@ -114,6 +119,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "shutdown: %v\n", err)
 	}

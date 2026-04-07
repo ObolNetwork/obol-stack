@@ -20,18 +20,21 @@ func TestGenerateKeypair(t *testing.T) {
 	if len(privKey) != 32 {
 		t.Errorf("private key length = %d, want 32", len(privKey))
 	}
+
 	if len(pubKey) != 64 {
 		t.Errorf("public key length = %d, want 64 (uncompressed without prefix)", len(pubKey))
 	}
 
 	// Keys should be non-zero.
 	allZero := true
+
 	for _, b := range privKey {
 		if b != 0 {
 			allZero = false
 			break
 		}
 	}
+
 	if allZero {
 		t.Error("private key is all zeros")
 	}
@@ -42,10 +45,12 @@ func TestGenerateKeypairUniqueness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	priv2, _, err := generateKeypair()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if hex.EncodeToString(priv1) == hex.EncodeToString(priv2) {
 		t.Error("two generated keys are identical")
 	}
@@ -64,6 +69,7 @@ func TestAddressFromPublicKey(t *testing.T) {
 	if !strings.HasPrefix(addr, "0x") {
 		t.Errorf("address should start with 0x, got %s", addr)
 	}
+
 	if len(addr) != 42 {
 		t.Errorf("address length = %d, want 42", len(addr))
 	}
@@ -99,6 +105,7 @@ func TestEncryptToV3Keystore(t *testing.T) {
 	}
 
 	password := "test-password-123"
+
 	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
 	if err != nil {
 		t.Fatalf("encryptToV3Keystore: %v", err)
@@ -117,27 +124,35 @@ func TestEncryptToV3Keystore(t *testing.T) {
 	if ks.Version != 3 {
 		t.Errorf("version = %d, want 3", ks.Version)
 	}
+
 	if ks.Crypto.Cipher != "aes-128-ctr" {
 		t.Errorf("cipher = %q, want aes-128-ctr", ks.Crypto.Cipher)
 	}
+
 	if ks.Crypto.KDF != "scrypt" {
 		t.Errorf("kdf = %q, want scrypt", ks.Crypto.KDF)
 	}
+
 	if ks.Crypto.KDFParams.N != 262144 {
 		t.Errorf("scrypt N = %d, want 262144", ks.Crypto.KDFParams.N)
 	}
+
 	if ks.Crypto.KDFParams.R != 8 {
 		t.Errorf("scrypt r = %d, want 8", ks.Crypto.KDFParams.R)
 	}
+
 	if ks.Crypto.KDFParams.P != 1 {
 		t.Errorf("scrypt p = %d, want 1", ks.Crypto.KDFParams.P)
 	}
+
 	if ks.Crypto.KDFParams.DKLen != 32 {
 		t.Errorf("scrypt dklen = %d, want 32", ks.Crypto.KDFParams.DKLen)
 	}
+
 	if len(ks.Address) != 40 {
 		t.Errorf("address length = %d, want 40 (hex without 0x)", len(ks.Address))
 	}
+
 	if ks.ID != keystoreID {
 		t.Errorf("ID = %q, want %q", ks.ID, keystoreID)
 	}
@@ -150,6 +165,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	}
 
 	password := "round-trip-test-password"
+
 	keystoreJSON, _, err := encryptToV3Keystore(privKey, pubKey, password)
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +197,7 @@ func TestDecryptWrongPassword(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when decrypting with wrong password")
 	}
+
 	if !strings.Contains(err.Error(), "MAC mismatch") {
 		t.Errorf("expected MAC mismatch error, got: %v", err)
 	}
@@ -191,13 +208,14 @@ func TestGenerateRandomPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(p1) != 32 {
 		t.Errorf("password length = %d, want 32", len(p1))
 	}
 
 	// Verify charset (alphanumeric only).
 	for _, c := range p1 {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 			t.Errorf("password contains non-alphanumeric character: %c", c)
 		}
 	}
@@ -207,6 +225,7 @@ func TestGenerateRandomPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if p1 == p2 {
 		t.Error("two generated passwords are identical")
 	}
@@ -217,6 +236,7 @@ func TestKeystoreVolumePath(t *testing.T) {
 		DataDir: "/test/data",
 	}
 	path := KeystoreVolumePath(cfg, "my-agent")
+
 	want := "/test/data/openclaw-my-agent/remote-signer-keystores"
 	if path != want {
 		t.Errorf("keystoreVolumePath = %q, want %q", path, want)
@@ -238,6 +258,7 @@ func TestProvisionKeystoreToVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read keystore: %v", err)
 	}
+
 	if string(data) != string(keystoreJSON) {
 		t.Error("keystore content mismatch")
 	}
@@ -253,7 +274,8 @@ func TestProvisionKeystoreToVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0700 {
+
+	if info.Mode().Perm() != 0o700 {
 		t.Errorf("keystore dir permissions = %o, want 0700", info.Mode().Perm())
 	}
 }
@@ -270,9 +292,11 @@ func TestGenerateRemoteSignerValues(t *testing.T) {
 	if !strings.Contains(values, `keystorePassword:`) {
 		t.Error("values should contain keystorePassword section")
 	}
+
 	if !strings.Contains(values, `value: "my-secret-password"`) {
 		t.Error("values should contain password value")
 	}
+
 	if !strings.Contains(values, "persistence:") {
 		t.Error("values should contain persistence section")
 	}
@@ -299,6 +323,7 @@ func TestWalletMetadataRoundTrip(t *testing.T) {
 	if recovered.Address != wallet.Address {
 		t.Errorf("address = %q, want %q", recovered.Address, wallet.Address)
 	}
+
 	if recovered.KeystoreUUID != wallet.KeystoreUUID {
 		t.Errorf("UUID = %q, want %q", recovered.KeystoreUUID, wallet.KeystoreUUID)
 	}

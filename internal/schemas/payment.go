@@ -18,7 +18,16 @@ import (
 // convert per-million-token pricing into an x402 per-request charge.
 const ApproxTokensPerRequest = 1000
 
-var approxTokensPerRequestDecimal = decimal.NewFromInt(ApproxTokensPerRequest)
+// ApproxMinutesPerRequest is the temporary phase-1 time estimate used to
+// convert per-hour pricing into an x402 per-request charge.  Based on the
+// autoresearch 5-minute experiment budget.
+const ApproxMinutesPerRequest = 5
+
+var (
+	approxTokensPerRequestDecimal  = decimal.NewFromInt(ApproxTokensPerRequest)
+	minutesPerHour                 = decimal.NewFromInt(60)
+	approxMinutesPerRequestDecimal = decimal.NewFromInt(ApproxMinutesPerRequest)
+)
 
 // PaymentTerms defines x402 payment requirements for a ServiceOffer.
 // Field names align with x402 PaymentRequirements (V2).
@@ -70,6 +79,7 @@ func (p PriceTable) EffectiveRequestPrice() string {
 	if err != nil {
 		return "0"
 	}
+
 	return price
 }
 
@@ -80,12 +90,15 @@ func (p PriceTable) EffectiveRequestPriceE() (string, error) {
 	if p.PerRequest != "" {
 		return p.PerRequest, nil
 	}
+
 	if p.PerMTok != "" {
 		return ApproximateRequestPriceFromPerMTok(p.PerMTok)
 	}
+
 	if p.PerHour != "" {
-		return p.PerHour, nil
+		return ApproximateRequestPriceFromPerHour(p.PerHour)
 	}
+
 	return "0", nil
 }
 
@@ -96,5 +109,19 @@ func ApproximateRequestPriceFromPerMTok(perMTok string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return value.Div(approxTokensPerRequestDecimal).String(), nil
+}
+
+// ApproximateRequestPriceFromPerHour converts a per-hour price into a temporary
+// per-request x402 charge using ApproxMinutesPerRequest (default 5 min,
+// matching the autoresearch experiment budget).
+// Formula: perRequest = perHour * (minutesPerRequest / 60)
+func ApproximateRequestPriceFromPerHour(perHour string) (string, error) {
+	value, err := decimal.NewFromString(strings.TrimSpace(perHour))
+	if err != nil {
+		return "", err
+	}
+
+	return value.Mul(approxMinutesPerRequestDecimal).Div(minutesPerHour).String(), nil
 }

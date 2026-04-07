@@ -19,21 +19,31 @@ import (
 // If this test fails, update all three in the same commit.
 func TestOpenClawVersionConsistency(t *testing.T) {
 	// 1. Read the canonical version file.
-	_, thisFile, _, _ := runtime.Caller(0)
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
 	versionFile := filepath.Join(filepath.Dir(thisFile), "OPENCLAW_VERSION")
+
 	raw, err := os.ReadFile(versionFile)
 	if err != nil {
 		t.Fatalf("cannot read OPENCLAW_VERSION: %v", err)
 	}
+
 	var fileVersion string
-	for _, line := range strings.Split(string(raw), "\n") {
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
 		fileVersion = strings.TrimPrefix(line, "v")
+
 		break
 	}
+
 	if fileVersion == "" {
 		t.Fatal("OPENCLAW_VERSION file has no version line")
 	}
@@ -46,15 +56,19 @@ func TestOpenClawVersionConsistency(t *testing.T) {
 
 	// 3. Check obolup.sh constant matches.
 	obolupPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "obolup.sh")
+
 	obolupRaw, err := os.ReadFile(obolupPath)
 	if err != nil {
 		t.Fatalf("cannot read obolup.sh: %v", err)
 	}
+
 	re := regexp.MustCompile(`(?m)^readonly OPENCLAW_VERSION="([^"]+)"`)
+
 	matches := re.FindSubmatch(obolupRaw)
 	if matches == nil {
 		t.Fatal("obolup.sh does not contain OPENCLAW_VERSION constant")
 	}
+
 	shellVersion := string(matches[1])
 	if shellVersion != fileVersion {
 		t.Errorf("obolup.sh OPENCLAW_VERSION = %q, want %q (from OPENCLAW_VERSION file)", shellVersion, fileVersion)

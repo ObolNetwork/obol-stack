@@ -12,6 +12,7 @@ import (
 func TestSkillsVolumePath(t *testing.T) {
 	cfg := &config.Config{DataDir: "/data/obol"}
 	got := skillsVolumePath(cfg, "default")
+
 	want := filepath.Join("/data/obol", "openclaw-default", "openclaw-data", ".openclaw", "skills")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -39,30 +40,31 @@ func TestStageDefaultSkills(t *testing.T) {
 	}
 }
 
-func TestStageDefaultSkillsSkipsExisting(t *testing.T) {
+func TestStageDefaultSkillsMergesIntoExisting(t *testing.T) {
 	deploymentDir := t.TempDir()
 
-	// Pre-create skills directory with custom content
+	// Pre-create skills directory with custom user content
 	skillsDir := filepath.Join(deploymentDir, "skills")
-	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	marker := filepath.Join(skillsDir, "custom-marker.txt")
-	if err := os.WriteFile(marker, []byte("keep"), 0644); err != nil {
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	// stageDefaultSkills should skip because skills/ already exists
+	// stageDefaultSkills should merge embedded skills into existing directory
 	stageDefaultSkills(deploymentDir, ui.New(false))
 
-	// Marker file should still be there
+	// User file should still be there
 	if _, err := os.Stat(marker); err != nil {
-		t.Errorf("custom marker removed: %v", err)
+		t.Errorf("custom user file removed: %v", err)
 	}
 
-	// And no embedded skills should have been written (directory was pre-existing)
-	if _, err := os.Stat(filepath.Join(skillsDir, "ethereum-networks", "SKILL.md")); err == nil {
-		t.Errorf("embedded skills should NOT have been staged into existing directory")
+	// Embedded skills should now be present alongside user content
+	if _, err := os.Stat(filepath.Join(skillsDir, "ethereum-networks", "SKILL.md")); err != nil {
+		t.Errorf("embedded skills should have been staged into existing directory: %v", err)
 	}
 }
 

@@ -1171,9 +1171,39 @@ WRAPPER
 		return 0
 	fi
 
-	log_warn "Failed to install openclaw CLI"
+	log_warn "Failed to install openclaw CLI via npm"
+
+	# Fallback: use Docker image as a portable runtime.
+	# OpenClaw publishes multi-arch images (amd64+arm64) to GHCR,
+	# so this works on npm-deprived setups as long as Docker is available.
+	if command_exists docker && docker info >/dev/null 2>&1; then
+		log_info "Trying Docker fallback for openclaw..."
+		local image="ghcr.io/obolnetwork/openclaw:$target_version"
+		if docker pull "$image" 2>&1; then
+			cat > "$OBOL_BIN_DIR/openclaw" <<WRAPPER
+#!/usr/bin/env bash
+# openclaw via Docker — fallback for environments without npm/Node.js.
+# Volume mounts pass through the host config so openclaw sees the same
+# state as the rest of the obol toolchain.
+exec docker run --rm -i \\
+  --network host \\
+  -v "\${OBOL_CONFIG_DIR:-\${XDG_CONFIG_HOME:-\$HOME/.config}/obol}:/config" \\
+  -v "\${OBOL_DATA_DIR:-\${XDG_DATA_HOME:-\$HOME/.local/share}/obol}:/data" \\
+  -e OBOL_CONFIG_DIR=/config \\
+  -e OBOL_DATA_DIR=/data \\
+  -e KUBECONFIG=/config/kubeconfig.yaml \\
+  "$image" "\$@"
+WRAPPER
+			chmod +x "$OBOL_BIN_DIR/openclaw"
+			log_success "openclaw v$target_version installed (Docker fallback)"
+			return 0
+		fi
+		log_warn "Docker pull failed for $image"
+	fi
+
 	echo ""
 	echo "  Install manually: npm install -g openclaw@$target_version"
+	echo "  Or pull the Docker image: docker pull ghcr.io/obolnetwork/openclaw:$target_version"
 	echo ""
 	return 1
 }

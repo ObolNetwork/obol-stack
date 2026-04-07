@@ -1,87 +1,44 @@
 ---
 # Monetize RBAC for OpenClaw Agents
 #
-# Split into least-privilege roles:
-#   1. openclaw-monetize-read      — cluster-wide read-only (low risk)
-#   2. openclaw-monetize-workload  — cluster-wide mutate for agent-managed resources
-#   3. openclaw-x402-pricing       — namespace-scoped x402 pricing ConfigMap access
-#
-# Subjects pre-populated with default OpenClaw instance ServiceAccount.
-# Patched dynamically by `obol agent init` if needed.
+# The agent remains a compatibility CLI surface for creating and inspecting
+# ServiceOffer objects. The serviceoffer-controller owns all child resources,
+# verifier route state, and registration side effects.
 
+---
 #------------------------------------------------------------------------------
-# ClusterRole - Read-only permissions (low privilege, cluster-wide)
-# Allows reading ServiceOffers, workload status, and cluster capacity.
+# ClusterRole - Read-only permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: openclaw-monetize-read
 rules:
-  # ServiceOffer CRD - discover and watch across namespaces
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers", "serviceoffers/status"]
     verbs: ["get", "list", "watch"]
-  # Pods - read workload status
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  # Read pod logs for diagnostics
+    resources: ["pods", "services", "endpoints", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # Services/Endpoints - read workload status
-  - apiGroups: [""]
-    resources: ["services", "endpoints"]
-    verbs: ["get", "list"]
-  # Deployments - read workload status
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list"]
-  # Cluster-wide read for capacity assessment
-  - apiGroups: [""]
-    resources: ["namespaces", "nodes"]
-    verbs: ["get", "list", "watch"]
 
 ---
 #------------------------------------------------------------------------------
-# ClusterRole - Workload mutate permissions for agent-managed resources
-# Cluster-wide because the agent creates resources in the upstream's namespace
-# (e.g., Middlewares in "llm", HTTPRoutes in "llm", registration ConfigMaps).
+# ClusterRole - Minimal ServiceOffer write permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: openclaw-monetize-workload
+  name: openclaw-monetize-write
 rules:
-  # ServiceOffer CRD - full lifecycle management
   - apiGroups: ["obol.org"]
-    resources: ["serviceoffers", "serviceoffers/status"]
+    resources: ["serviceoffers"]
     verbs: ["create", "update", "patch", "delete"]
-  # Traefik middlewares - create ForwardAuth for x402 gating
-  - apiGroups: ["traefik.io"]
-    resources: ["middlewares"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
-  # Gateway API HTTPRoutes - expose services via traefik-gateway
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["httproutes"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
-  # ConfigMaps - agent-managed registration JSON (in upstream namespace)
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
-  # Services + Endpoints - agent-managed registration httpd
-  - apiGroups: [""]
-    resources: ["services", "endpoints"]
-    verbs: ["create", "update", "patch", "delete"]
-  # Deployments - agent-managed registration httpd
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["create", "update", "patch", "delete"]
-  # Monitoring resources for x402 components
-  - apiGroups: ["monitoring.coreos.com"]
-    resources: ["servicemonitors", "podmonitors"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
 
 ---
 #------------------------------------------------------------------------------
@@ -102,87 +59,16 @@ subjects:
 
 ---
 #------------------------------------------------------------------------------
-# ClusterRoleBinding - Workload mutate permissions
+# ClusterRoleBinding - Minimal write permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: openclaw-monetize-workload-binding
+  name: openclaw-monetize-write-binding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: openclaw-monetize-workload
-subjects:
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
-
-
----
-#------------------------------------------------------------------------------
-# Role - x402 pricing ConfigMap access (scoped to x402 namespace)
-# Separate from the cluster-wide workload role to limit pricing config
-# mutations to the x402 namespace only.
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: openclaw-x402-pricing
-  namespace: x402
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: ["x402-pricing"]
-    verbs: ["get", "list", "update", "patch"]
-
----
-#------------------------------------------------------------------------------
-# RoleBinding - Binds x402 pricing access to agent ServiceAccount
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: openclaw-x402-pricing-binding
-  namespace: x402
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: openclaw-x402-pricing
-subjects:
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
-
----
-#------------------------------------------------------------------------------
-# Role - LiteLLM secrets read access (scoped to llm namespace)
-# The agent reads the LiteLLM master key to write upstreamAuth in pricing
-# routes. Scoped to a single secret to prevent broad secret access.
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: openclaw-litellm-secrets
-  namespace: llm
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["litellm-secrets"]
-    verbs: ["get"]
-
----
-#------------------------------------------------------------------------------
-# RoleBinding - Binds LiteLLM secrets access to agent ServiceAccount
-#------------------------------------------------------------------------------
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: openclaw-litellm-secrets-binding
-  namespace: llm
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: openclaw-litellm-secrets
+  name: openclaw-monetize-write
 subjects:
   - kind: ServiceAccount
     name: openclaw

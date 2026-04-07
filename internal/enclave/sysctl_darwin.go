@@ -25,7 +25,9 @@ func sysctlCsrActiveConfig() (uint32, error) {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENODEV) {
 			return 0, nil
 		}
+
 		return 0, err
 	}
+
 	return val, nil
 }

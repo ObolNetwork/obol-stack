@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,6 +35,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 				if !strings.Contains(err.Error(), "already exists") {
 					return fmt.Errorf("bootstrap init failed: %w", err)
 				}
+
 				u.Warn("Stack already initialized, continuing")
 			}
 
@@ -50,6 +52,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			// Step 4: Open browser
 			url := "http://obol.stack"
 			u.Infof("Opening browser to %s", url)
+
 			if err := openBrowser(url); err != nil {
 				u.Warnf("Failed to open browser: %v", err)
 				u.Printf("  Please open manually: %s", url)
@@ -86,9 +89,11 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 			if _, err := os.Stat(kubeconfigPath); err == nil {
 				return nil
 			}
+
 			time.Sleep(pollInterval)
 		}
-		return fmt.Errorf("kubeconfig not created within timeout")
+
+		return errors.New("kubeconfig not created within timeout")
 	})
 	if err != nil {
 		return err
@@ -98,26 +103,33 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 	err = u.RunWithSpinner("Waiting for pods to be ready", func() error {
 		for time.Now().Before(deadline) {
 			cmd := exec.Command(kubectlPath, "get", "pods", "--all-namespaces", "-o", "jsonpath={.items[*].status.phase}")
-			cmd.Env = append(os.Environ(), fmt.Sprintf("KUBECONFIG=%s", kubeconfigPath))
+
+			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
 			output, err := cmd.Output()
 			if err != nil {
 				time.Sleep(pollInterval)
 				continue
 			}
+
 			phases := strings.Fields(string(output))
 			allReady := true
+
 			for _, phase := range phases {
 				if phase != "Running" && phase != "Succeeded" {
 					allReady = false
 					break
 				}
 			}
+
 			if allReady && len(phases) > 0 {
 				return nil
 			}
+
 			time.Sleep(pollInterval)
 		}
-		return fmt.Errorf("pods did not become ready within timeout")
+
+		return errors.New("pods did not become ready within timeout")
 	})
 	if err != nil {
 		return err
@@ -126,19 +138,24 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 	// Wait for ingress to respond
 	err = u.RunWithSpinner("Waiting for ingress to respond", func() error {
 		ingressURL := "http://obol.stack:8080"
+
 		client := &http.Client{Timeout: 5 * time.Second}
 		for time.Now().Before(deadline) {
 			resp, err := client.Get(ingressURL)
 			if err == nil {
 				resp.Body.Close()
+
 				if resp.StatusCode < 500 {
 					return nil
 				}
 			}
+
 			time.Sleep(pollInterval)
 		}
-		return fmt.Errorf("ingress did not respond within timeout")
+
+		return errors.New("ingress did not respond within timeout")
 	})
+
 	return err
 }
 

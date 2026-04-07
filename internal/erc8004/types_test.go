@@ -66,33 +66,43 @@ func TestAgentRegistration_UnmarshalJSON(t *testing.T) {
 	if reg.Type != RegistrationType {
 		t.Errorf("Type = %q, want %q", reg.Type, RegistrationType)
 	}
+
 	if reg.Name != "my-agent" {
 		t.Errorf("Name = %q, want %q", reg.Name, "my-agent")
 	}
+
 	if reg.Description != "An AI agent" {
 		t.Errorf("Description = %q, want %q", reg.Description, "An AI agent")
 	}
+
 	if !reg.X402Support {
 		t.Error("X402Support = false, want true")
 	}
+
 	if !reg.Active {
 		t.Error("Active = false, want true")
 	}
+
 	if len(reg.Services) != 1 {
 		t.Fatalf("len(Services) = %d, want 1", len(reg.Services))
 	}
+
 	if reg.Services[0].Name != "A2A" {
 		t.Errorf("Services[0].Name = %q, want %q", reg.Services[0].Name, "A2A")
 	}
+
 	if reg.Services[0].Version != "0.2.1" {
 		t.Errorf("Services[0].Version = %q, want %q", reg.Services[0].Version, "0.2.1")
 	}
+
 	if len(reg.Registrations) != 1 {
 		t.Fatalf("len(Registrations) = %d, want 1", len(reg.Registrations))
 	}
+
 	if reg.Registrations[0].AgentID != 7 {
 		t.Errorf("Registrations[0].AgentID = %d, want 7", reg.Registrations[0].AgentID)
 	}
+
 	if len(reg.SupportedTrust) != 2 {
 		t.Errorf("len(SupportedTrust) = %d, want 2", len(reg.SupportedTrust))
 	}
@@ -153,6 +163,7 @@ func TestServiceDef_VersionOptional(t *testing.T) {
 
 	// With version set, it should appear.
 	svc.Version = "2.0"
+
 	data, err = json.Marshal(svc)
 	if err != nil {
 		t.Fatalf("Marshal with version: %v", err)
@@ -162,6 +173,7 @@ func TestServiceDef_VersionOptional(t *testing.T) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+
 	if _, ok := m["version"]; !ok {
 		t.Error("version should be present when set")
 	}
@@ -199,6 +211,7 @@ func TestOnChainReg_AgentIDNumeric(t *testing.T) {
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatalf("round-trip Unmarshal: %v", err)
 	}
+
 	if back.AgentID != 42 {
 		t.Errorf("round-trip AgentID = %d, want 42", back.AgentID)
 	}

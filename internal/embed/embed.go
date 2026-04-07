@@ -47,15 +47,16 @@ func CopyDefaults(destDir string, replacements map[string]string) error {
 
 		if d.IsDir() {
 			// Create directory and continue walking
-			if err := os.MkdirAll(destPath, 0755); err != nil {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
 			}
+
 			return nil
 		}
 
 		// Ensure parent directory exists
 		parentDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
 			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 		}
 
@@ -72,7 +73,7 @@ func CopyDefaults(destDir string, replacements map[string]string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(destPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 
@@ -88,6 +89,7 @@ func GetAvailableNetworks() ([]string, error) {
 	}
 
 	var networks []string
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			networks = append(networks, entry.Name())
@@ -100,10 +102,12 @@ func GetAvailableNetworks() ([]string, error) {
 // ReadEmbeddedNetworkFile reads a file from an embedded network
 func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
 	path := filepath.Join("networks", networkName, filename)
+
 	content, err := networksFS.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s from network %s: %w", filename, networkName, err)
 	}
+
 	return content, nil
 }
 
@@ -113,6 +117,7 @@ func ReadInfrastructureFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read infrastructure file %s: %w", path, err)
 	}
+
 	return content, nil
 }
 
@@ -135,15 +140,16 @@ func CopySkills(destDir string) error {
 		destPath := filepath.Join(destDir, relPath)
 
 		if d.IsDir() {
-			if err := os.MkdirAll(destPath, 0755); err != nil {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
 			}
+
 			return nil
 		}
 
 		// Ensure parent directory exists
 		parentDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
 			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 		}
 
@@ -154,7 +160,7 @@ func CopySkills(destDir string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
+		if err := os.WriteFile(destPath, data, 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 
@@ -170,11 +176,13 @@ func GetEmbeddedSkillNames() ([]string, error) {
 	}
 
 	var names []string
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			names = append(names, entry.Name())
 		}
 	}
+
 	return names, nil
 }
 
@@ -204,15 +212,16 @@ func CopyNetwork(networkName, destDir string) error {
 
 		if d.IsDir() {
 			// Create directory and continue walking
-			if err := os.MkdirAll(destPath, 0755); err != nil {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
 			}
+
 			return nil
 		}
 
 		// Ensure parent directory exists
 		parentDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
 			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
 		}
 
@@ -223,7 +232,7 @@ func CopyNetwork(networkName, destDir string) error {
 		}
 
 		// Write to destination
-		if err := os.WriteFile(destPath, data, 0644); err != nil {
+		if err := os.WriteFile(destPath, data, 0o600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", destPath, err)
 		}
 

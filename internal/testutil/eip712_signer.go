@@ -49,6 +49,7 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 	if _, err := rand.Read(nonce); err != nil {
 		t.Fatalf("generate nonce: %v", err)
 	}
+
 	nonceHex := fmt.Sprintf("0x%x", nonce)
 
 	// Build EIP-712 typed data for TransferWithAuthorization (ERC-3009).
@@ -103,13 +104,13 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 
 	// Build the x402 V1 payment envelope.
 	// All numeric values that x402-rs expects as strings must be strings here.
-	envelope := map[string]interface{}{
+	envelope := map[string]any{
 		"x402Version": 1,
 		"scheme":      "exact",
 		"network":     chainName(chainID),
-		"payload": map[string]interface{}{
+		"payload": map[string]any{
 			"signature": sigHex,
-			"authorization": map[string]interface{}{
+			"authorization": map[string]any{
 				"from":        fromAddr.Hex(),
 				"to":          payTo,
 				"value":       amount,       // string — x402-rs decimal_u256
@@ -118,7 +119,7 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 				"nonce":       nonceHex,
 			},
 		},
-		"resource": map[string]interface{}{
+		"resource": map[string]any{
 			"payTo":             payTo,
 			"maxAmountRequired": amount,
 			"asset":             USDCBaseSepolia,
@@ -132,17 +133,21 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
+
 	t.Logf("signed real payment: from=%s, to=%s, amount=%s, chain=%d", fromAddr.Hex(), payTo, amount, chainID)
+
 	return encoded
 }
 
 // ParseAnvilKey converts a hex-encoded private key string to an ecdsa.PrivateKey.
 func ParseAnvilKey(t *testing.T, hexKey string) *ecdsa.PrivateKey {
 	t.Helper()
+
 	key, err := crypto.HexToECDSA(stripHexPrefix(hexKey))
 	if err != nil {
 		t.Fatalf("parse anvil key: %v", err)
 	}
+
 	return key
 }
 
@@ -150,6 +155,7 @@ func ParseAnvilKey(t *testing.T, hexKey string) *ecdsa.PrivateKey {
 func AnvilKeyAddress(t *testing.T, hexKey string) common.Address {
 	t.Helper()
 	key := ParseAnvilKey(t, hexKey)
+
 	return crypto.PubkeyToAddress(key.PublicKey)
 }
 
@@ -158,6 +164,7 @@ func USDCMicroUnits(usdc float64) *big.Int {
 	// USDC has 6 decimals.
 	micro := new(big.Float).Mul(big.NewFloat(usdc), big.NewFloat(1e6))
 	result, _ := micro.Int(nil)
+
 	return result
 }
 
@@ -165,6 +172,7 @@ func stripHexPrefix(s string) string {
 	if len(s) > 2 && (s[:2] == "0x" || s[:2] == "0X") {
 		return s[2:]
 	}
+
 	return s
 }
 
@@ -182,6 +190,7 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	if _, err := rand.Read(nonce); err != nil {
 		panic(fmt.Sprintf("generate nonce: %v", err))
 	}
+
 	nonceHex := fmt.Sprintf("0x%x", nonce)
 
 	typedData := apitypes.TypedData{
@@ -227,15 +236,16 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	if err != nil {
 		panic(fmt.Sprintf("sign: %v", err))
 	}
+
 	sig[64] += 27
 
-	envelope := map[string]interface{}{
+	envelope := map[string]any{
 		"x402Version": 1,
 		"scheme":      "exact",
 		"network":     chainName(chainID),
-		"payload": map[string]interface{}{
+		"payload": map[string]any{
 			"signature": fmt.Sprintf("0x%x", sig),
-			"authorization": map[string]interface{}{
+			"authorization": map[string]any{
 				"from":        fromAddr.Hex(),
 				"to":          payTo,
 				"value":       amount,
@@ -244,7 +254,7 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 				"nonce":       nonceHex,
 			},
 		},
-		"resource": map[string]interface{}{
+		"resource": map[string]any{
 			"payTo":             payTo,
 			"maxAmountRequired": amount,
 			"asset":             USDCBaseSepolia,
@@ -256,9 +266,9 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	if err != nil {
 		panic(fmt.Sprintf("marshal: %v", err))
 	}
+
 	return base64.StdEncoding.EncodeToString(data)
 }
-
 
 func chainName(chainID int64) string {
 	switch chainID {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	encoding_base64 "encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,13 +25,18 @@ const (
 	secretName    = "litellm-secrets"
 	configMapName = "litellm-config"
 	deployName    = "litellm"
+
+	// Provider name constants used in model routing and configuration.
+	ProviderOllama    = "ollama"
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
 )
 
 // Known provider definitions — no need to query the running pod.
 var knownProviders = []ProviderInfo{
-	{ID: "anthropic", Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
-	{ID: "openai", Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
-	{ID: "ollama", Name: "Ollama (local)", EnvVar: ""},
+	{ID: ProviderAnthropic, Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
+	{ID: ProviderOpenAI, Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
+	{ID: ProviderOllama, Name: "Ollama (local)", EnvVar: ""},
 }
 
 // ProviderInfo describes an LLM provider.
@@ -91,6 +97,7 @@ func HasConfiguredModels(cfg *config.Config) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -125,6 +132,7 @@ func HasProviderConfigured(cfg *config.Config, provider string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -133,27 +141,33 @@ func HasProviderConfigured(cfg *config.Config, provider string) bool {
 // Skips comments (#) and blank lines. Does not call os.Setenv.
 func LoadDotEnv(path string) map[string]string {
 	result := make(map[string]string)
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return result
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
 		idx := strings.IndexByte(line, '=')
 		if idx < 1 {
 			continue
 		}
+
 		key := strings.TrimSpace(line[:idx])
 		val := strings.TrimSpace(line[idx+1:])
 		// Strip surrounding quotes
 		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
 			val = val[1 : len(val)-1]
 		}
+
 		result[key] = val
 	}
+
 	return result
 }
 
@@ -166,6 +180,7 @@ func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, mod
 	if err := PatchLiteLLMProvider(cfg, u, provider, apiKey, models); err != nil {
 		return err
 	}
+
 	return RestartLiteLLM(cfg, u, provider)
 }
 
@@ -177,13 +192,14 @@ func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string,
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	// 1. Patch Secret with API key (if cloud provider)
 	envVar := ProviderEnvVar(provider)
 	if envVar != "" && apiKey != "" {
 		u.Infof("Setting %s API key", provider)
+
 		patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envVar, apiKey)
 		if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 			"patch", "secret", secretName, "-n", namespace,
@@ -200,6 +216,7 @@ func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string,
 
 	// 3. Patch ConfigMap with new model_list entries
 	u.Infof("Adding %d model(s) to LiteLLM config", len(entries))
+
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, entries); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
@@ -213,13 +230,14 @@ func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	u.Info("Restarting LiteLLM")
+
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
+		"rollout", "restart", "deployment/"+deployName, "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart LiteLLM: %w", err)
 	}
 
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
+		"rollout", "status", "deployment/"+deployName, "-n", namespace,
 		"--timeout=90s"); err != nil {
 		u.Warnf("LiteLLM rollout not confirmed: %v", err)
 		u.Print("The deployment may still be rolling out.")
@@ -236,7 +254,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	// Read current config
@@ -253,12 +271,15 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	// Find and remove matching entries
 	var kept []ModelEntry
+
 	removed := 0
+
 	for _, entry := range litellmConfig.ModelList {
 		if entry.ModelName == modelName {
 			removed++
 			continue
 		}
+
 		kept = append(kept, entry)
 	}
 
@@ -279,9 +300,11 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to escape YAML: %w", err)
 	}
+
 	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
 
 	u.Infof("Removing model %q from LiteLLM config", modelName)
+
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", patchJSON, "--type=merge"); err != nil {
@@ -290,13 +313,14 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	// Restart deployment
 	u.Info("Restarting LiteLLM")
+
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
+		"rollout", "restart", "deployment/"+deployName, "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart LiteLLM: %w", err)
 	}
 
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
+		"rollout", "status", "deployment/"+deployName, "-n", namespace,
 		"--timeout=90s"); err != nil {
 		u.Warnf("LiteLLM rollout not confirmed: %v", err)
 	} else {
@@ -313,18 +337,21 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	// Validate the endpoint from the host (use localhost-reachable URL)
 	u.Info("Validating custom endpoint...")
+
 	validationEndpoint := endpoint
 	// If the user gave a k3d-internal URL, translate for host validation
 	validationEndpoint = strings.Replace(validationEndpoint, "host.k3d.internal", "localhost", 1)
+
 	validationEndpoint = strings.Replace(validationEndpoint, "host.docker.internal", "localhost", 1)
 	if err := ValidateCustomEndpoint(validationEndpoint, modelName, apiKey); err != nil {
 		return fmt.Errorf("endpoint validation failed: %w", err)
 	}
+
 	u.Success("Endpoint validated successfully")
 
 	// For the cluster ConfigMap, translate localhost to k3d-internal
@@ -336,6 +363,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 	// Build model entry
 	litellmModel := "openai/" + modelName
 	modelID := fmt.Sprintf("custom/%s/%s", name, modelName)
+
 	entry := ModelEntry{
 		ModelName: modelID,
 		LiteLLMParams: LiteLLMParams{
@@ -350,18 +378,21 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 
 	// Patch config
 	u.Infof("Adding custom endpoint %q to LiteLLM config", name)
+
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, []ModelEntry{entry}); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
 
 	// Restart
 	u.Info("Restarting LiteLLM")
+
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "restart", fmt.Sprintf("deployment/%s", deployName), "-n", namespace); err != nil {
+		"rollout", "restart", "deployment/"+deployName, "-n", namespace); err != nil {
 		return fmt.Errorf("failed to restart LiteLLM: %w", err)
 	}
+
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "status", fmt.Sprintf("deployment/%s", deployName), "-n", namespace,
+		"rollout", "status", "deployment/"+deployName, "-n", namespace,
 		"--timeout=90s"); err != nil {
 		u.Warnf("LiteLLM rollout not confirmed: %v", err)
 	} else {
@@ -377,6 +408,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 // list the loaded model in /models but accept it for inference.
 func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 	client := &http.Client{Timeout: 60 * time.Second}
+
 	authHeader := ""
 	if apiKey != "" {
 		authHeader = "Bearer " + apiKey
@@ -385,48 +417,59 @@ func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 	// Step 1: Reachability check — try /models, /health, or / (in that order)
 	base := strings.TrimRight(endpoint, "/")
 	reachable := false
+
 	for _, path := range []string{"/models", "/health", ""} {
-		req, err := http.NewRequest("GET", base+path, nil)
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
 		if err != nil {
 			continue
 		}
+
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)
 		}
+
 		resp, err := client.Do(req)
 		if err != nil {
 			continue
 		}
+
 		resp.Body.Close()
+
 		if resp.StatusCode < 500 {
 			reachable = true
 			break
 		}
 	}
+
 	if !reachable {
 		return fmt.Errorf("endpoint unreachable — cannot connect to %s", base)
 	}
 
 	// Step 2: Inference probe — the definitive test
-	probePayload, _ := json.Marshal(map[string]any{
+	probePayload, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
 		"max_tokens": 1,
 	})
 	completionsURL := strings.TrimRight(endpoint, "/") + "/chat/completions"
-	probeReq, err := http.NewRequest("POST", completionsURL, bytes.NewReader(probePayload))
+
+	probeReq, err := http.NewRequest(http.MethodPost, completionsURL, bytes.NewReader(probePayload))
 	if err != nil {
 		return fmt.Errorf("failed to build inference probe: %w", err)
 	}
+
 	probeReq.Header.Set("Content-Type", "application/json")
+
 	if authHeader != "" {
 		probeReq.Header.Set("Authorization", authHeader)
 	}
+
 	probeResp, err := client.Do(probeReq)
 	if err != nil {
 		return fmt.Errorf("inference probe failed — cannot reach %s: %w", completionsURL, err)
 	}
 	defer probeResp.Body.Close()
+
 	if probeResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("inference probe failed — %s returned %d", completionsURL, probeResp.StatusCode)
 	}
@@ -441,8 +484,9 @@ func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 	if err := json.NewDecoder(probeResp.Body).Decode(&chatResp); err != nil {
 		return fmt.Errorf("inference probe returned invalid response: %w", err)
 	}
+
 	if len(chatResp.Choices) == 0 {
-		return fmt.Errorf("inference probe returned empty choices array")
+		return errors.New("inference probe returned empty choices array")
 	}
 
 	return nil
@@ -456,9 +500,10 @@ func GetAvailableProviders(_ *config.Config) ([]ProviderInfo, error) {
 // GetProviderStatus reads LiteLLM config and returns provider status.
 func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
+		return nil, errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
 	// Read config.yaml from ConfigMap
@@ -492,7 +537,9 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 	if err := json.Unmarshal(secretJSON, &secret); err != nil {
 		return nil, fmt.Errorf("failed to parse secret: %w", err)
 	}
+
 	secretKeys := make(map[string]bool)
+
 	for k, v := range secret.Data {
 		if strings.TrimSpace(v) != "" {
 			secretKeys[k] = true
@@ -501,6 +548,7 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 
 	// Build status from model_list
 	status := make(map[string]ProviderStatus)
+
 	for _, entry := range litellmConfig.ModelList {
 		provider := detectProvider(entry)
 		st := status[provider]
@@ -512,13 +560,16 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 	// Add env var info and API key status
 	for _, p := range knownProviders {
 		st := status[p.ID]
+
 		st.EnvVar = p.EnvVar
 		if p.EnvVar != "" && secretKeys[p.EnvVar] {
 			st.HasAPIKey = true
 		}
-		if p.ID == "ollama" {
+
+		if p.ID == ProviderOllama {
 			st.HasAPIKey = true // Ollama doesn't need a key
 		}
+
 		status[p.ID] = st
 	}
 
@@ -528,9 +579,10 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 // GetMasterKey reads the LiteLLM master key from the cluster Secret.
 func GetMasterKey(cfg *config.Config) (string, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("cluster not running")
+		return "", errors.New("cluster not running")
 	}
 
 	key, err := kubectl.Output(kubectlBinary, kubeconfigPath,
@@ -542,8 +594,9 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 	// The value is base64-encoded in .data
 	decoded, err := decodeBase64(strings.TrimSpace(key))
 	if err != nil {
-		return key, nil // If not base64, return raw
+		return key, nil //nolint:nilerr // secret may be stored unencoded; fall back to raw value
 	}
+
 	return decoded, nil
 }
 
@@ -553,9 +606,10 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 // baked-in WellKnownModels list if the cluster is unreachable.
 func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("cluster not running")
+		return nil, errors.New("cluster not running")
 	}
 
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
@@ -573,12 +627,15 @@ func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 	liveModels := queryLiteLLMModels(kubectlBinary, kubeconfigPath)
 
 	var models []string
+
 	seen := make(map[string]bool)
+
 	for _, entry := range litellmConfig.ModelList {
 		name := entry.ModelName
-		if strings.HasSuffix(name, "/*") {
+		if before, ok := strings.CutSuffix(name, "/*"); ok {
 			// Expand wildcard: prefer live models, fall back to well-known
-			provider := strings.TrimSuffix(name, "/*")
+			provider := before
+
 			expanded := expandWildcard(provider, liveModels)
 			for _, m := range expanded {
 				if !seen[m] {
@@ -586,13 +643,16 @@ func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 					seen[m] = true
 				}
 			}
+
 			continue
 		}
+
 		if !seen[name] {
 			models = append(models, name)
 			seen[name] = true
 		}
 	}
+
 	return models, nil
 }
 
@@ -601,11 +661,12 @@ func GetConfiguredModels(cfg *config.Config) ([]string, error) {
 func queryLiteLLMModels(kubectlBinary, kubeconfigPath string) []string {
 	// Use kubectl exec to query from inside the cluster (avoids port-forward)
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"exec", "-n", namespace, fmt.Sprintf("deployment/%s", deployName), "--",
+		"exec", "-n", namespace, "deployment/"+deployName, "--",
 		"curl", "-sf", "http://localhost:4000/v1/models")
 	if err != nil {
 		return nil
 	}
+
 	var resp struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -614,10 +675,12 @@ func queryLiteLLMModels(kubectlBinary, kubeconfigPath string) []string {
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		return nil
 	}
+
 	var models []string
 	for _, m := range resp.Data {
 		models = append(models, m.ID)
 	}
+
 	return models
 }
 
@@ -627,12 +690,14 @@ func expandWildcard(provider string, liveModels []string) []string {
 	// Filter live models that match this provider
 	if len(liveModels) > 0 {
 		var matched []string
+
 		for _, m := range liveModels {
 			p := ProviderFromModelName(m)
 			if p == provider {
 				matched = append(matched, m)
 			}
 		}
+
 		if len(matched) > 0 {
 			return matched
 		}
@@ -641,17 +706,20 @@ func expandWildcard(provider string, liveModels []string) []string {
 	if known, ok := WellKnownModels[provider]; ok {
 		return known
 	}
+
 	return nil
 }
 
 // ProviderFromModelName infers the provider from a model name string.
 func ProviderFromModelName(name string) string {
 	if strings.Contains(name, "claude") {
-		return "anthropic"
+		return ProviderAnthropic
 	}
+
 	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
-		return "openai"
+		return ProviderOpenAI
 	}
+
 	return ""
 }
 
@@ -665,18 +733,22 @@ func ResolveAPIKey(provider string) (key, envVarUsed string) {
 		if p.ID != provider {
 			continue
 		}
+
 		if p.EnvVar != "" {
 			if v := os.Getenv(p.EnvVar); v != "" {
 				return v, p.EnvVar
 			}
 		}
+
 		for _, alt := range p.AltEnvVars {
 			if v := os.Getenv(alt); v != "" {
 				return v, alt
 			}
 		}
+
 		return "", ""
 	}
+
 	return "", ""
 }
 
@@ -687,6 +759,7 @@ func ProviderEnvVar(provider string) string {
 			return p.EnvVar
 		}
 	}
+
 	return strings.ToUpper(provider) + "_API_KEY"
 }
 
@@ -694,13 +767,13 @@ func ProviderEnvVar(provider string) string {
 // Used to populate OpenClaw's model allowlist when a wildcard is configured
 // and the LiteLLM pod is not reachable for a live /v1/models query.
 var WellKnownModels = map[string][]string{
-	"anthropic": {
+	ProviderAnthropic: {
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5-20251001",
 		"claude-sonnet-4-5-20250929",
 	},
-	"openai": {
+	ProviderOpenAI: {
 		"gpt-5.4",
 		"gpt-4.1",
 		"gpt-4.1-mini",
@@ -715,8 +788,9 @@ var WellKnownModels = map[string][]string{
 // (wildcards are broken for ollama_chat/).
 func buildModelEntries(provider string, models []string) []ModelEntry {
 	var entries []ModelEntry
+
 	switch provider {
-	case "ollama":
+	case ProviderOllama:
 		// Explicit entries — ollama_chat/* wildcards are broken in LiteLLM
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
@@ -727,7 +801,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				},
 			})
 		}
-	case "anthropic":
+	case ProviderAnthropic:
 		// Wildcard: routes any anthropic model without explicit registration
 		entries = append(entries, ModelEntry{
 			ModelName:     "anthropic/*",
@@ -740,7 +814,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				LiteLLMParams: LiteLLMParams{Model: m, APIKey: "os.environ/ANTHROPIC_API_KEY"},
 			})
 		}
-	case "openai":
+	case ProviderOpenAI:
 		entries = append(entries, ModelEntry{
 			ModelName:     "openai/*",
 			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
@@ -762,6 +836,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 			})
 		}
 	}
+
 	return entries
 }
 
@@ -785,6 +860,7 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 	for i, e := range litellmConfig.ModelList {
 		existing[e.ModelName] = i
 	}
+
 	for _, entry := range entries {
 		if idx, ok := existing[entry.ModelName]; ok {
 			litellmConfig.ModelList[idx] = entry
@@ -804,6 +880,7 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 	if err != nil {
 		return fmt.Errorf("failed to escape YAML: %w", err)
 	}
+
 	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
 
 	return kubectl.Run(kubectlBinary, kubeconfigPath,
@@ -816,36 +893,44 @@ func detectProvider(entry ModelEntry) string {
 	if strings.HasPrefix(entry.ModelName, "custom/") {
 		return "custom"
 	}
+
 	if strings.HasPrefix(entry.ModelName, "paid/") {
 		return "paid"
 	}
+
 	model := entry.LiteLLMParams.Model
 	// Wildcard entries
-	if strings.HasPrefix(model, "anthropic/") {
-		return "anthropic"
+	if strings.HasPrefix(model, ProviderAnthropic+"/") {
+		return ProviderAnthropic
 	}
-	if strings.HasPrefix(model, "ollama/") || strings.HasPrefix(model, "ollama_chat/") {
-		return "ollama"
+
+	if strings.HasPrefix(model, ProviderOllama+"/") || strings.HasPrefix(model, "ollama_chat/") {
+		return ProviderOllama
 	}
-	if strings.HasPrefix(model, "openai/") {
-		return "openai"
+
+	if strings.HasPrefix(model, ProviderOpenAI+"/") {
+		return ProviderOpenAI
 	}
 	// Anthropic models without prefix
 	if strings.Contains(model, "claude") {
-		return "anthropic"
+		return ProviderAnthropic
 	}
+
 	if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") {
-		return "openai"
+		return ProviderOpenAI
 	}
+
 	return "unknown"
 }
 
 func decodeBase64(s string) (string, error) {
 	decoded := make([]byte, len(s))
+
 	n, err := encoding_base64.StdEncoding.Decode(decoded, []byte(s))
 	if err != nil {
 		return "", err
 	}
+
 	return string(decoded[:n]), nil
 }
 
@@ -857,8 +942,10 @@ func WarnAndStripV1Suffix(endpoint string) string {
 	if strings.HasSuffix(trimmed, "/v1") {
 		fmt.Printf("  Warning: stripping trailing /v1 from endpoint URL (LiteLLM adds it automatically)\n")
 		fmt.Printf("  %s → %s\n", trimmed, strings.TrimSuffix(trimmed, "/v1"))
+
 		return strings.TrimSuffix(trimmed, "/v1")
 	}
+
 	return endpoint
 }
 
@@ -870,6 +957,7 @@ func localhostToClusterEndpoint(endpoint string) string {
 			return strings.Replace(endpoint, local, "host.k3d.internal", 1)
 		}
 	}
+
 	return endpoint
 }
 
@@ -882,8 +970,10 @@ func ollamaEndpoint() string {
 		if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
 			host = "http://" + host
 		}
+
 		return strings.TrimRight(host, "/")
 	}
+
 	return "http://localhost:11434"
 }
 
@@ -898,20 +988,22 @@ type OllamaModel struct {
 // Returns nil and an error if Ollama is not reachable.
 func ListOllamaModels() ([]OllamaModel, error) {
 	endpoint := ollamaEndpoint()
+
 	tagsURL, err := url.JoinPath(endpoint, "api", "tags")
 	if err != nil {
 		return nil, fmt.Errorf("invalid Ollama endpoint: %w", err)
 	}
 
 	client := &http.Client{Timeout: 3 * time.Second}
+
 	resp, err := client.Get(tagsURL)
 	if err != nil {
-		return nil, fmt.Errorf("Ollama is not running at %s: %w", endpoint, err)
+		return nil, fmt.Errorf("ollama is not running at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Ollama returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -920,6 +1012,7 @@ func ListOllamaModels() ([]OllamaModel, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to parse Ollama response: %w", err)
 	}
+
 	return result.Models, nil
 }
 
@@ -927,6 +1020,7 @@ func ListOllamaModels() ([]OllamaModel, error) {
 // It streams progress to stdout, matching the UX of `ollama pull`.
 func PullOllamaModel(name string) error {
 	endpoint := ollamaEndpoint()
+
 	pullURL, err := url.JoinPath(endpoint, "api", "pull")
 	if err != nil {
 		return fmt.Errorf("invalid Ollama endpoint: %w", err)
@@ -934,14 +1028,16 @@ func PullOllamaModel(name string) error {
 
 	// Check Ollama is reachable first
 	client := &http.Client{Timeout: 3 * time.Second}
+
 	healthResp, err := client.Get(endpoint)
 	if err != nil {
-		return fmt.Errorf("Ollama is not running at %s — start it first", endpoint)
+		return fmt.Errorf("ollama is not running at %s — start it first", endpoint)
 	}
+
 	healthResp.Body.Close()
 
 	// POST /api/pull with streaming response
-	body, err := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]any{
 		"name":   name,
 		"stream": true,
 	})
@@ -951,6 +1047,7 @@ func PullOllamaModel(name string) error {
 
 	// Use a long timeout — model downloads can take a while
 	pullClient := &http.Client{Timeout: 0}
+
 	resp, err := pullClient.Post(pullURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to start pull: %w", err)
@@ -964,6 +1061,7 @@ func PullOllamaModel(name string) error {
 		if err := json.NewDecoder(resp.Body).Decode(&errBody); err == nil && errBody.Error != "" {
 			return fmt.Errorf("pull failed: %s", errBody.Error)
 		}
+
 		return fmt.Errorf("pull failed with status %d", resp.StatusCode)
 	}
 
@@ -973,6 +1071,7 @@ func PullOllamaModel(name string) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var lastStatus string
+
 	for scanner.Scan() {
 		var progress struct {
 			Status    string `json:"status"`
@@ -997,10 +1096,12 @@ func PullOllamaModel(name string) error {
 			if lastStatus != "" {
 				fmt.Println()
 			}
+
 			fmt.Printf("  %s", progress.Status)
 			lastStatus = progress.Status
 		}
 	}
+
 	fmt.Println()
 
 	if err := scanner.Err(); err != nil {

@@ -11,9 +11,10 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	x402 "github.com/mark3labs/x402-go"
-	x402http "github.com/mark3labs/x402-go/http"
+	"github.com/mark3labs/x402-go/encoding"
 )
 
 // Proxy is an OpenAI-compatible reverse proxy that routes requests to upstream
@@ -54,6 +55,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 	if state == nil {
 		state = &StateStore{}
 	}
+
 	if state.consumed == nil {
 		state.consumed = make(map[string]map[string]struct{})
 	}
@@ -90,13 +92,16 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 
 	for name, upstream := range cfg.Upstreams {
 		authPool := auths[name]
+
 		filtered := make([]*PreSignedAuth, 0, len(authPool))
 		for _, auth := range authPool {
 			if auth == nil || p.state.IsConsumed(name, auth.Nonce) {
 				continue
 			}
+
 			filtered = append(filtered, auth)
 		}
+
 		if len(filtered) == 0 {
 			log.Printf("WARNING: upstream %q has 0 remaining pre-signed auths", name)
 		}
@@ -117,6 +122,7 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 				return p.state.MarkConsumed(name, auth.Nonce)
 			},
 		)
+
 		handler, err := p.buildUpstreamHandler(name, remoteModel, upstream, signer)
 		if err != nil {
 			return fmt.Errorf("build handler for %q: %w", name, err)
@@ -203,20 +209,21 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 			pr.Out.Host = target.Host
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if resp != nil && resp.Request != nil && resp.Request.Header.Get("X-PAYMENT") != "" {
+			if resp != nil && resp.Request != nil && resp.Request.Header.Get("X-Payment") != "" {
 				switch {
 				case resp.StatusCode < http.StatusBadRequest:
 					p.metrics.paymentSuccessTotal.With(labels).Inc()
 				default:
 					p.metrics.paymentFailureTotal.With(labels).Inc()
 				}
+
 				p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 			}
 
 			return nil
 		},
-		Transport: &x402http.X402Transport{
+		Transport: &replayableX402Transport{
 			Base:     http.DefaultTransport,
 			Signers:  []x402.Signer{signer},
 			Selector: x402.NewDefaultPaymentSelector(),
@@ -241,6 +248,7 @@ func (p *Proxy) handleModelRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
+
 	r.Body.Close()
 
 	remoteModel, rewrittenBody, entry := p.resolveModelRequest(body)
@@ -278,6 +286,7 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 	}
 
 	modelValue, _ := payload["model"].(string)
+
 	remoteModel := normalizeRemoteModel(modelValue)
 	if remoteModel == "" {
 		return "", nil, nil
@@ -287,11 +296,13 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 	upstreamName, ok := p.modelRoutes[remoteModel]
 	entry := p.upstreams[upstreamName]
 	p.mu.RUnlock()
+
 	if !ok || entry == nil {
 		return "", nil, nil
 	}
 
 	payload["model"] = remoteModel
+
 	rewrittenBody, err := json.Marshal(payload)
 	if err != nil {
 		return "", nil, nil
@@ -302,6 +313,7 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 
 func normalizeRemoteModel(model string) string {
 	normalized := strings.TrimSpace(model)
+
 	for {
 		switch {
 		case strings.HasPrefix(normalized, "paid/"):
@@ -322,18 +334,235 @@ func bodyBufferMiddleware(next http.Handler) http.Handler {
 		if r.Body != nil && r.Body != http.NoBody {
 			body, err := io.ReadAll(r.Body)
 			r.Body.Close()
+
 			if err != nil {
 				http.Error(w, "failed to read request body", http.StatusBadRequest)
 				return
 			}
+
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 			r.GetBody = func() (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader(body)), nil
 			}
 		}
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// replayableX402Transport mirrors the x402-go retry flow, but rebuilds the
+// request body from GetBody for each attempt so retries stay valid under
+// httputil.ReverseProxy on newer Go versions.
+type replayableX402Transport struct {
+	Base             http.RoundTripper
+	Signers          []x402.Signer
+	Selector         x402.PaymentSelector
+	OnPaymentAttempt x402.PaymentCallback
+	OnPaymentSuccess x402.PaymentCallback
+	OnPaymentFailure x402.PaymentCallback
+}
+
+func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.Base == nil {
+		t.Base = http.DefaultTransport
+	}
+	if err := ensureReplayableBody(req); err != nil {
+		return nil, err
+	}
+
+	firstReq, err := cloneRequestWithFreshBody(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.Base.RoundTrip(firstReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusPaymentRequired {
+		return resp, nil
+	}
+
+	requirements, err := parsePaymentRequirements(resp)
+	if err != nil {
+		resp.Body.Close()
+		return nil, x402.NewPaymentError(x402.ErrCodeInvalidRequirements, "failed to parse payment requirements", err)
+	}
+	resp.Body.Close()
+
+	payment, err := t.Selector.SelectAndSign(requirements, t.Signers)
+	if err != nil {
+		return nil, err
+	}
+
+	var selectedRequirement *x402.PaymentRequirement
+	for i := range requirements {
+		if requirements[i].Network == payment.Network && requirements[i].Scheme == payment.Scheme {
+			selectedRequirement = &requirements[i]
+			break
+		}
+	}
+
+	startTime := time.Now()
+	if t.OnPaymentAttempt != nil && selectedRequirement != nil {
+		t.OnPaymentAttempt(x402.PaymentEvent{
+			Type:      x402.PaymentEventAttempt,
+			Timestamp: startTime,
+			Method:    "HTTP",
+			URL:       req.URL.String(),
+			Network:   payment.Network,
+			Scheme:    payment.Scheme,
+			Amount:    selectedRequirement.MaxAmountRequired,
+			Asset:     selectedRequirement.Asset,
+			Recipient: selectedRequirement.PayTo,
+		})
+	}
+
+	paymentHeader, err := encoding.EncodePayment(*payment)
+	if err != nil {
+		if t.OnPaymentFailure != nil {
+			t.OnPaymentFailure(x402.PaymentEvent{
+				Type:      x402.PaymentEventFailure,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Error:     err,
+				Duration:  time.Since(startTime),
+			})
+		}
+		return nil, x402.NewPaymentError(x402.ErrCodeSigningFailed, "failed to build payment header", err)
+	}
+
+	retryReq, err := cloneRequestWithFreshBody(req)
+	if err != nil {
+		return nil, err
+	}
+	retryReq.Header.Set("X-PAYMENT", paymentHeader)
+
+	respRetry, err := t.Base.RoundTrip(retryReq)
+	duration := time.Since(startTime)
+	if err != nil {
+		if t.OnPaymentFailure != nil {
+			t.OnPaymentFailure(x402.PaymentEvent{
+				Type:      x402.PaymentEventFailure,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Error:     err,
+				Duration:  duration,
+			})
+		}
+		return nil, err
+	}
+
+	settlement, _ := encoding.DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
+	if settlement.Success && t.OnPaymentSuccess != nil {
+		event := x402.PaymentEvent{
+			Type:        x402.PaymentEventSuccess,
+			Timestamp:   time.Now(),
+			Method:      "HTTP",
+			URL:         req.URL.String(),
+			Transaction: settlement.Transaction,
+			Payer:       settlement.Payer,
+			Duration:    duration,
+		}
+		if selectedRequirement != nil {
+			event.Network = selectedRequirement.Network
+			event.Scheme = selectedRequirement.Scheme
+			event.Amount = selectedRequirement.MaxAmountRequired
+			event.Asset = selectedRequirement.Asset
+			event.Recipient = selectedRequirement.PayTo
+		}
+		t.OnPaymentSuccess(event)
+	}
+
+	return respRetry, nil
+}
+
+func ensureReplayableBody(req *http.Request) error {
+	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
+		return nil
+	}
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	return nil
+}
+
+func cloneRequestWithFreshBody(req *http.Request) (*http.Request, error) {
+	clone := req.Clone(req.Context())
+	switch {
+	case req.Body == nil:
+		clone.Body = nil
+	case req.Body == http.NoBody:
+		clone.Body = http.NoBody
+	default:
+		if req.GetBody == nil {
+			return nil, fmt.Errorf("request body is not replayable")
+		}
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("clone request body: %w", err)
+		}
+		clone.Body = body
+		clone.ContentLength = req.ContentLength
+	}
+	return clone, nil
+}
+
+func parsePaymentRequirements(resp *http.Response) ([]x402.PaymentRequirement, error) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var paymentReqResp struct {
+		X402Version int    `json:"x402Version"`
+		Error       string `json:"error"`
+		Accepts     []struct {
+			Scheme            string                 `json:"scheme"`
+			Network           string                 `json:"network"`
+			MaxAmountRequired string                 `json:"maxAmountRequired"`
+			Asset             string                 `json:"asset"`
+			PayTo             string                 `json:"payTo"`
+			Resource          string                 `json:"resource"`
+			Description       string                 `json:"description,omitempty"`
+			MimeType          string                 `json:"mimeType,omitempty"`
+			MaxTimeoutSeconds int                    `json:"maxTimeoutSeconds"`
+			Extra             map[string]interface{} `json:"extra,omitempty"`
+		} `json:"accepts"`
+	}
+	if err := json.Unmarshal(body, &paymentReqResp); err != nil {
+		return nil, fmt.Errorf("failed to parse payment requirements JSON: %w", err)
+	}
+	if len(paymentReqResp.Accepts) == 0 {
+		return nil, fmt.Errorf("no payment requirements in response")
+	}
+
+	requirements := make([]x402.PaymentRequirement, len(paymentReqResp.Accepts))
+	for i, req := range paymentReqResp.Accepts {
+		requirements[i] = x402.PaymentRequirement{
+			Scheme:            req.Scheme,
+			Network:           req.Network,
+			MaxAmountRequired: req.MaxAmountRequired,
+			Asset:             req.Asset,
+			PayTo:             req.PayTo,
+			Resource:          req.Resource,
+			Description:       req.Description,
+			MimeType:          req.MimeType,
+			MaxTimeoutSeconds: req.MaxTimeoutSeconds,
+			Extra:             req.Extra,
+		}
+	}
+
+	return requirements, nil
 }
 
 // handleStatus returns JSON with remaining auths and spend per upstream.
@@ -342,6 +571,7 @@ func (p *Proxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 	defer p.mu.RUnlock()
 
 	result := make(map[string]upstreamStatus)
+
 	for name, signer := range p.signers {
 		us := p.upstreams[name]
 		result[name] = upstreamStatus{
@@ -355,12 +585,13 @@ func (p *Proxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result) //nolint:errchkjson // controlled status map
 }
 
 // singleJoiningSlash joins a base and suffix path with exactly one slash.
 func singleJoiningSlash(a, b string) string {
 	aslash := strings.HasSuffix(a, "/")
+
 	bslash := strings.HasPrefix(b, "/")
 	switch {
 	case aslash && bslash:
@@ -368,5 +599,6 @@ func singleJoiningSlash(a, b string) string {
 	case !aslash && !bslash:
 		return a + "/" + b
 	}
+
 	return a + b
 }

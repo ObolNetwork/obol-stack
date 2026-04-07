@@ -2,6 +2,9 @@
 
 **Branch:** `feat/secure-enclave-inference` | **Date:** 2026-02-25 | **Status:** Architecture proposal
 
+> Historical design note: the current implementation uses an event-driven `serviceoffer-controller`, `RegistrationRequest`, ServiceOffer-direct verifier watches, and controller finalizers.
+> References below to the obol-agent-owned reconcile loop, OpenClaw cron jobs, or direct `x402-pricing` route mutation are superseded.
+
 ---
 
 ## 1. The Goal

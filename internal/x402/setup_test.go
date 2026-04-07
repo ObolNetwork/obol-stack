@@ -7,87 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestRouteOption_WithPayTo(t *testing.T) {
-	r := RouteRule{Pattern: "/rpc/*", Price: "0.001", Description: "RPC"}
-	opt := WithPayTo("0xABCDEF1234567890ABCDEF1234567890ABCDEF12")
-	opt(&r)
-
-	if r.PayTo != "0xABCDEF1234567890ABCDEF1234567890ABCDEF12" {
-		t.Errorf("PayTo = %q, want 0xABCDEF...", r.PayTo)
-	}
-	// Other fields unchanged.
-	if r.Pattern != "/rpc/*" {
-		t.Errorf("Pattern mutated: %q", r.Pattern)
-	}
-	if r.Network != "" {
-		t.Errorf("Network should remain empty, got %q", r.Network)
-	}
-}
-
-func TestRouteOption_WithNetwork(t *testing.T) {
-	r := RouteRule{Pattern: "/inference/*", Price: "0.01", Description: "Inference"}
-	opt := WithNetwork("base")
-	opt(&r)
-
-	if r.Network != "base" {
-		t.Errorf("Network = %q, want base", r.Network)
-	}
-	if r.PayTo != "" {
-		t.Errorf("PayTo should remain empty, got %q", r.PayTo)
-	}
-}
-
-func TestRouteOption_Multiple(t *testing.T) {
-	r := RouteRule{Pattern: "/api/*", Price: "0.005", Description: "API"}
-	opts := []RouteOption{
-		WithPayTo("0x1111111111111111111111111111111111111111"),
-		WithNetwork("base-sepolia"),
-		WithUpstreamAuth("Bearer test"),
-		WithPriceMetadata("perMTok", "0.50", 1000),
-		WithOfferInfo("default", "api-offer"),
-	}
-	for _, opt := range opts {
-		opt(&r)
-	}
-
-	if r.PayTo != "0x1111111111111111111111111111111111111111" {
-		t.Errorf("PayTo = %q, want 0x1111...", r.PayTo)
-	}
-	if r.Network != "base-sepolia" {
-		t.Errorf("Network = %q, want base-sepolia", r.Network)
-	}
-	if r.UpstreamAuth != "Bearer test" {
-		t.Errorf("UpstreamAuth = %q, want %q", r.UpstreamAuth, "Bearer test")
-	}
-	if r.PriceModel != "perMTok" {
-		t.Errorf("PriceModel = %q, want %q", r.PriceModel, "perMTok")
-	}
-	if r.PerMTok != "0.50" {
-		t.Errorf("PerMTok = %q, want %q", r.PerMTok, "0.50")
-	}
-	if r.ApproxTokensPerRequest != 1000 {
-		t.Errorf("ApproxTokensPerRequest = %d, want %d", r.ApproxTokensPerRequest, 1000)
-	}
-	if r.OfferNamespace != "default" {
-		t.Errorf("OfferNamespace = %q, want %q", r.OfferNamespace, "default")
-	}
-	if r.OfferName != "api-offer" {
-		t.Errorf("OfferName = %q, want %q", r.OfferName, "api-offer")
-	}
-}
-
-func TestRouteOption_NoOptions(t *testing.T) {
-	r := RouteRule{Pattern: "/health", Price: "0", Description: "Health check"}
-
-	// No options applied — PayTo and Network should remain zero-value.
-	if r.PayTo != "" {
-		t.Errorf("PayTo should be empty, got %q", r.PayTo)
-	}
-	if r.Network != "" {
-		t.Errorf("Network should be empty, got %q", r.Network)
-	}
-}
-
 func TestRouteRule_YAMLRoundTrip(t *testing.T) {
 	original := RouteRule{
 		Pattern:                "/inference-*/v1/*",
@@ -325,18 +244,21 @@ func TestPricingConfig_YAMLWithPerRouteOverrides(t *testing.T) {
 	}
 }
 
-func TestX402Manifest_IncludesVerifierServiceMonitor(t *testing.T) {
+func TestX402Manifest_UsesServiceOfferControllerModel(t *testing.T) {
 	manifest := string(x402Manifest)
-	if !strings.Contains(manifest, "kind: ServiceMonitor") {
-		t.Fatalf("x402 manifest missing ServiceMonitor:\n%s", manifest)
+	if strings.Contains(manifest, "paymentroutes.obol.org") {
+		t.Fatalf("x402 manifest still references removed PaymentRoute CRD:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "name: x402-verifier") {
-		t.Fatalf("x402 manifest missing x402-verifier monitor name:\n%s", manifest)
+	if !strings.Contains(manifest, "name: serviceoffer-controller") {
+		t.Fatalf("x402 manifest missing serviceoffer-controller deployment:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "release: monitoring") {
-		t.Fatalf("x402 manifest missing monitoring release label:\n%s", manifest)
+	if !strings.Contains(manifest, "--route-source=kube") {
+		t.Fatalf("x402 verifier is not configured for kube-backed service offers:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "path: /metrics") {
-		t.Fatalf("x402 manifest missing metrics scrape path:\n%s", manifest)
+	if !strings.Contains(manifest, "resources: [\"serviceoffers\"]") {
+		t.Fatalf("x402 manifest missing serviceoffer watch RBAC:\n%s", manifest)
+	}
+	if strings.Contains(manifest, "kind: ServiceMonitor") {
+		t.Fatalf("x402 manifest still includes legacy ServiceMonitor stanza:\n%s", manifest)
 	}
 }

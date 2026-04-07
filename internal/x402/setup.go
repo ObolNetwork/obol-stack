@@ -1,12 +1,13 @@
 package x402
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	"encoding/json"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
@@ -17,160 +18,15 @@ const (
 	x402SecretName   = "x402-secrets"
 )
 
-// x402Manifest returns the Kubernetes manifest for the x402 verifier subsystem.
-// In development mode (OBOL_DEVELOPMENT=true) the image pull policy is IfNotPresent
-// so locally-built images imported via k3d are used. Otherwise it is Always so the
-// image is pulled from GHCR.
-var x402Manifest = []byte(`apiVersion: v1
-kind: Namespace
-metadata:
-  name: x402
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: x402-pricing
-  namespace: x402
-data:
-  pricing.yaml: |
-    wallet: ""
-    chain: "base-sepolia"
-    facilitatorURL: "https://facilitator.x402.rs"
-    verifyOnly: false
-    routes: []
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: x402-secrets
-  namespace: x402
-type: Opaque
-stringData:
-  WALLET_ADDRESS: ""
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: x402-verifier
-  namespace: x402
-  labels:
-    app: x402-verifier
-  annotations:
-    configmap.reloader.stakater.com/reload: "x402-pricing"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: x402-verifier
-  template:
-    metadata:
-      labels:
-        app: x402-verifier
-    spec:
-      containers:
-        - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:799fff1
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-          args:
-            - --config=/config/pricing.yaml
-            - --listen=:8080
-          volumeMounts:
-            - name: pricing-config
-              mountPath: /config
-              readOnly: true
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            initialDelaySeconds: 3
-            periodSeconds: 5
-            timeoutSeconds: 2
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 2
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
-      volumes:
-        - name: pricing-config
-          configMap:
-            name: x402-pricing
-            items:
-              - key: pricing.yaml
-                path: pricing.yaml
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: x402-verifier
-  namespace: x402
-  labels:
-    app: x402-verifier
-spec:
-  type: ClusterIP
-  selector:
-    app: x402-verifier
-  ports:
-    - name: http
-      port: 8080
-      targetPort: http
-      protocol: TCP
----
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: x402-verifier
-  namespace: x402
-  labels:
-    release: monitoring
-spec:
-  selector:
-    matchLabels:
-      app: x402-verifier
-  endpoints:
-    - port: http
-      path: /metrics
-      interval: 30s
----
-# RBAC: namespace-scoped pricing ConfigMap access for OpenClaw agents.
-# Deployed alongside the namespace so it's always present when x402 exists.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: openclaw-x402-pricing
-  namespace: x402
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: ["x402-pricing"]
-    verbs: ["get", "list", "update", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: openclaw-x402-pricing-binding
-  namespace: x402
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: openclaw-x402-pricing
-subjects:
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
-`)
+var x402Manifest = mustReadX402Manifest()
+
+func mustReadX402Manifest() []byte {
+	data, err := embed.ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		panic(fmt.Sprintf("read embedded x402 manifest: %v", err))
+	}
+	return data
+}
 
 // EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.
 // Idempotent — kubectl apply is safe to run multiple times.
@@ -180,12 +36,7 @@ func EnsureVerifier(cfg *config.Config) error {
 	}
 	bin, kc := kubectl.Paths(cfg)
 
-	// Quick check: if the namespace already exists, skip the apply.
-	if _, err := kubectl.Output(bin, kc, "get", "namespace", x402Namespace, "--no-headers"); err == nil {
-		return nil
-	}
-
-	fmt.Println("Deploying x402 payment verifier...")
+	fmt.Println("Applying x402 payment components...")
 	return kubectl.Apply(bin, kc, x402Manifest)
 }
 
@@ -214,8 +65,8 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("failed to patch x402 secret: %w", err)
 	}
 
-	// 2. Update the pricing ConfigMap with wallet and chain.
-	// Read existing config to preserve routes added by the ServiceOffer reconciler.
+	// 2. Update the pricing ConfigMap with wallet, chain, and any existing
+	// static/manual routes.
 	fmt.Printf("Updating x402 pricing config...\n")
 	if facilitatorURL == "" {
 		facilitatorURL = "https://facilitator.x402.rs"
@@ -236,74 +87,10 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
-	fmt.Printf("x402 configured: wallet=%s chain=%s\n", wallet, chain)
+	fmt.Printf("x402 configured: wallet=%s chain=%s facilitator=%s\n", wallet, chain, facilitatorURL)
 	return nil
 }
 
-// AddRoute adds a pricing route to the x402 ConfigMap.
-// Optional per-route payTo and network override the global config when set.
-func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
-	if err := EnsureVerifier(cfg); err != nil {
-		return fmt.Errorf("deploy x402 verifier: %w", err)
-	}
-
-	// Read current pricing config.
-	pricingCfg, err := GetPricingConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("read pricing config: %w", err)
-	}
-
-	// Build the route rule.
-	rule := RouteRule{
-		Pattern:     pattern,
-		Price:       price,
-		Description: description,
-	}
-	for _, opt := range opts {
-		opt(&rule)
-	}
-
-	pricingCfg.Routes = append(pricingCfg.Routes, rule)
-
-	// Re-serialize and patch.
-	bin, kc := kubectl.Paths(cfg)
-	return patchPricingConfig(bin, kc, pricingCfg)
-}
-
-// RouteOption is a functional option for AddRoute.
-type RouteOption func(*RouteRule)
-
-// WithPayTo sets a per-route payTo address (overrides global wallet).
-func WithPayTo(payTo string) RouteOption {
-	return func(r *RouteRule) { r.PayTo = payTo }
-}
-
-// WithNetwork sets a per-route network (overrides global chain).
-func WithNetwork(network string) RouteOption {
-	return func(r *RouteRule) { r.Network = network }
-}
-
-// WithUpstreamAuth sets the upstream Authorization header injected on success.
-func WithUpstreamAuth(upstreamAuth string) RouteOption {
-	return func(r *RouteRule) { r.UpstreamAuth = upstreamAuth }
-}
-
-// WithPriceMetadata records the source pricing model behind the enforced Price.
-func WithPriceMetadata(model, perMTok string, approxTokensPerRequest int) RouteOption {
-	return func(r *RouteRule) {
-		r.PriceModel = model
-		r.PerMTok = perMTok
-		r.ApproxTokensPerRequest = approxTokensPerRequest
-	}
-}
-
-// WithOfferInfo records the originating ServiceOffer identity.
-func WithOfferInfo(namespace, name string) RouteOption {
-	return func(r *RouteRule) {
-		r.OfferNamespace = namespace
-		r.OfferName = name
-	}
-}
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.
 func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
@@ -337,13 +124,11 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 	}
 	tmpFile.Close()
 
-	return LoadConfig(tmpFile.Name())
-}
-
-// WritePricingConfig writes the pricing config to the cluster ConfigMap.
-func WritePricingConfig(cfg *config.Config, pcfg *PricingConfig) error {
-	bin, kc := kubectl.Paths(cfg)
-	return patchPricingConfig(bin, kc, pcfg)
+	pcfg, err := LoadConfig(tmpFile.Name())
+	if err != nil {
+		return nil, err
+	}
+	return pcfg, nil
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
@@ -366,3 +151,4 @@ func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 		"patch", "configmap", pricingConfigMap, "-n", x402Namespace,
 		"-p", string(cmPatchJSON), "--type=merge")
 }
+

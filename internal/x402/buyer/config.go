@@ -66,13 +66,16 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+
 	if cfg.Upstreams == nil {
 		cfg.Upstreams = make(map[string]UpstreamConfig)
 	}
+
 	return &cfg, nil
 }
 
@@ -82,12 +85,15 @@ func LoadAuths(path string) (AuthsFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read auths %s: %w", path, err)
 	}
+
 	var auths AuthsFile
 	if err := json.Unmarshal(data, &auths); err != nil {
 		return nil, fmt.Errorf("parse auths %s: %w", path, err)
 	}
+
 	if auths == nil {
 		auths = make(AuthsFile)
 	}
+
 	return auths, nil
 }

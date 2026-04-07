@@ -31,6 +31,7 @@ type PreSignedSigner struct {
 func NewPreSignedSigner(network, payTo, asset, price string, auths []*PreSignedAuth, spent int, onConsume func(*PreSignedAuth) error) *PreSignedSigner {
 	pool := make([]*PreSignedAuth, len(auths))
 	copy(pool, auths)
+
 	return &PreSignedSigner{
 		network:   network,
 		payTo:     payTo,
@@ -55,21 +56,27 @@ func (s *PreSignedSigner) CanSign(req *x402.PaymentRequirement) bool {
 	if req == nil {
 		return false
 	}
+
 	if !strings.EqualFold(req.Network, s.network) {
 		return false
 	}
+
 	if !strings.EqualFold(req.PayTo, s.payTo) {
 		return false
 	}
+
 	if !strings.EqualFold(req.Asset, s.asset) {
 		return false
 	}
+
 	if req.MaxAmountRequired != "" && req.MaxAmountRequired != s.price {
 		return false
 	}
+
 	s.mu.Lock()
 	remaining := len(s.auths)
 	s.mu.Unlock()
+
 	return remaining > 0
 }
 
@@ -87,11 +94,13 @@ func (s *PreSignedSigner) Sign(req *x402.PaymentRequirement) (*x402.PaymentPaylo
 	// Pop from the front.
 	auth := s.auths[0]
 	s.auths = s.auths[1:]
+
 	s.spent++
 	if s.onConsume != nil {
 		if err := s.onConsume(auth); err != nil {
 			s.auths = append([]*PreSignedAuth{auth}, s.auths...)
 			s.spent--
+
 			return nil, err
 		}
 	}
@@ -131,6 +140,7 @@ func (s *PreSignedSigner) GetMaxAmount() *big.Int { return nil }
 func (s *PreSignedSigner) Remaining() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return len(s.auths)
 }
 
@@ -138,5 +148,6 @@ func (s *PreSignedSigner) Remaining() int {
 func (s *PreSignedSigner) Spent() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.spent
 }

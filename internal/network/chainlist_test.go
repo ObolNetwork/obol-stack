@@ -229,12 +229,15 @@ func TestResolveChainID(t *testing.T) {
 			if err == nil {
 				t.Errorf("ResolveChainID(%q): expected error, got chainID=%d", tt.input, chainID)
 			}
+
 			continue
 		}
+
 		if err != nil {
 			t.Errorf("ResolveChainID(%q): unexpected error: %v", tt.input, err)
 			continue
 		}
+
 		if chainID != tt.wantChainID {
 			t.Errorf("ResolveChainID(%q): got chainID=%d, want %d", tt.input, chainID, tt.wantChainID)
 		}

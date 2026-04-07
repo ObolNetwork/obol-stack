@@ -36,6 +36,7 @@ func LoadStateStore(path string) (*StateStore, error) {
 		if os.IsNotExist(err) {
 			return store, nil
 		}
+
 		return nil, fmt.Errorf("read state %s: %w", path, err)
 	}
 
@@ -43,11 +44,13 @@ func LoadStateStore(path string) (*StateStore, error) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return nil, fmt.Errorf("parse state %s: %w", path, err)
 	}
+
 	for upstream, nonces := range decoded.Consumed {
 		nonceSet := make(map[string]struct{}, len(nonces))
 		for _, nonce := range nonces {
 			nonceSet[nonce] = struct{}{}
 		}
+
 		store.consumed[upstream] = nonceSet
 	}
 
@@ -58,7 +61,9 @@ func LoadStateStore(path string) (*StateStore, error) {
 func (s *StateStore) IsConsumed(upstream, nonce string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	_, ok := s.consumed[upstream][nonce]
+
 	return ok
 }
 
@@ -66,6 +71,7 @@ func (s *StateStore) IsConsumed(upstream, nonce string) bool {
 func (s *StateStore) ConsumedCount(upstream string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	return len(s.consumed[upstream])
 }
 
@@ -78,9 +84,11 @@ func (s *StateStore) MarkConsumed(upstream, nonce string) error {
 	if s.consumed[upstream] == nil {
 		s.consumed[upstream] = make(map[string]struct{})
 	}
+
 	if _, ok := s.consumed[upstream][nonce]; ok {
 		return nil
 	}
+
 	s.consumed[upstream][nonce] = struct{}{}
 
 	return s.writeLocked()
@@ -90,6 +98,7 @@ func (s *StateStore) writeLocked() error {
 	if s.path == "" {
 		return nil
 	}
+
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("mkdir state dir: %w", err)
 	}
@@ -100,6 +109,7 @@ func (s *StateStore) writeLocked() error {
 		for nonce := range nonceSet {
 			nonces = append(nonces, nonce)
 		}
+
 		out.Consumed[upstream] = nonces
 	}
 
@@ -112,6 +122,7 @@ func (s *StateStore) writeLocked() error {
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("write temp state: %w", err)
 	}
+
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		return fmt.Errorf("rename state: %w", err)
 	}

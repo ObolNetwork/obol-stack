@@ -64,6 +64,7 @@ func NewClient(ctx context.Context, gatewayURL string) (*Client, error) {
 	if _, err := c.fetchPubkey(ctx); err != nil {
 		return nil, err
 	}
+
 	return c, nil
 }
 
@@ -80,9 +81,11 @@ func (c *Client) EnableEncryptedReplies(tag string) error {
 	if err != nil {
 		return fmt.Errorf("inference client: generate reply key: %w", err)
 	}
+
 	c.mu.Lock()
 	c.replyKey = k
 	c.mu.Unlock()
+
 	return nil
 }
 
@@ -91,6 +94,7 @@ func (c *Client) EnableEncryptedReplies(tag string) error {
 func (c *Client) Pubkey() []byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	return c.pubkey
 }
 
@@ -106,6 +110,7 @@ func (c *Client) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Read and encrypt the body.
 	plain, err := io.ReadAll(req.Body)
 	req.Body.Close()
+
 	if err != nil {
 		return nil, fmt.Errorf("inference client: read body: %w", err)
 	}
@@ -130,6 +135,7 @@ func (c *Client) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.mu.RLock()
 	rk := c.replyKey
 	c.mu.RUnlock()
+
 	if rk != nil {
 		out.Header.Set(headerReplyPubkey, hex.EncodeToString(rk.PublicKeyBytes()))
 	}
@@ -142,14 +148,17 @@ func (c *Client) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Decrypt an encrypted response.
 	if rk != nil && resp.Header.Get("Content-Type") == contentTypeEncrypted {
 		defer resp.Body.Close()
+
 		enc, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("inference client: read encrypted response: %w", err)
 		}
+
 		plainResp, err := rk.Decrypt(enc)
 		if err != nil {
 			return nil, fmt.Errorf("inference client: decrypt response: %w", err)
 		}
+
 		resp = &http.Response{
 			Status:     resp.Status,
 			StatusCode: resp.StatusCode,
@@ -173,24 +182,29 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 // if not yet available.
 func (c *Client) fetchPubkey(ctx context.Context) ([]byte, error) {
 	c.mu.RLock()
+
 	if c.pubkey != nil {
 		pk := c.pubkey
 		c.mu.RUnlock()
+
 		return pk, nil
 	}
+
 	c.mu.RUnlock()
 
 	// Fetch under write lock to avoid thundering herd.
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if c.pubkey != nil { // double-check after acquiring write lock
 		return c.pubkey, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.GatewayURL+"/v1/enclave/pubkey", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.GatewayURL+"/v1/enclave/pubkey", nil) //nolint:gosec // G704: URL from user-configured GatewayURL, not tainted input
 	if err != nil {
 		return nil, fmt.Errorf("inference client: build pubkey request: %w", err)
 	}
+
 	resp, err := c.transport().RoundTrip(req)
 	if err != nil {
 		return nil, fmt.Errorf("inference client: fetch pubkey: %w", err)
@@ -205,11 +219,14 @@ func (c *Client) fetchPubkey(ctx context.Context) ([]byte, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("inference client: decode pubkey response: %w", err)
 	}
+
 	pk, err := hex.DecodeString(body.Pubkey)
 	if err != nil {
 		return nil, fmt.Errorf("inference client: decode pubkey hex: %w", err)
 	}
+
 	c.pubkey = pk
+
 	return pk, nil
 }
 
@@ -217,5 +234,6 @@ func (c *Client) transport() http.RoundTripper {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
+
 	return http.DefaultTransport
 }

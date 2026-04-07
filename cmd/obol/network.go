@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -49,10 +50,12 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if cmd.Bool("all") {
 						return network.SyncAll(cfg, u)
 					}
+
 					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
 						return fmt.Errorf("%w\n\nOr use --all to sync all deployments", err)
 					}
+
 					return network.Sync(cfg, u, identifier)
 				},
 			},
@@ -65,6 +68,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+
 					return network.Delete(cfg, getUI(cmd), identifier)
 				},
 			},
@@ -84,6 +88,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 	}
 
 	var commands []*cli.Command
+
 	for _, networkName := range networks {
 		// Parse the embedded values template to get fields
 		fields, err := network.ParseTemplateFields(networkName)
@@ -113,7 +118,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 			// Build usage string
 			usage := field.Description
 			if usage == "" {
-				usage = fmt.Sprintf("Override %s", field.Name)
+				usage = "Override " + field.Name
 			}
 
 			// Mark as required if no default value
@@ -141,6 +146,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 		// Create the network-specific install command
 		netName := networkName // Capture for closure
 		netFields := fields    // Capture for validation
+
 		commands = append(commands, &cli.Command{
 			Name:  netName,
 			Usage: fmt.Sprintf("Install %s network", netName),
@@ -166,6 +172,7 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 									value, field.FlagName, strings.Join(field.EnumValues, ", "))
 							}
 						}
+
 						overrides[field.FlagName] = value
 					}
 				}
@@ -245,6 +252,7 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 				u.Printf("  (unable to read eRPC config: %v)\n", err)
 				return nil
 			}
+
 			if len(rpcNetworks) == 0 {
 				u.Info("  (none configured)")
 			} else {
@@ -256,6 +264,7 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 					u.Printf("  %-20s chain=%-8d %d upstream(s)\n", alias, net.ChainID, len(net.Upstreams))
 				}
 			}
+
 			return nil
 		},
 	}
@@ -361,10 +370,11 @@ Examples:
 			}
 
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network add base\n  obol network add base-sepolia --endpoint http://host.k3d.internal:8545")
+				return errors.New("chain name or ID required\n\nExamples:\n  obol network add base\n  obol network add base-sepolia --endpoint http://host.k3d.internal:8545")
 			}
 
 			chainArg := cmd.Args().First()
+
 			chainID, chainName, err := network.ResolveChainID(chainArg)
 			if err != nil {
 				return err
@@ -381,6 +391,7 @@ Examples:
 				if readOnly {
 					u.Infof("  Write methods blocked (use --allow-writes to enable)")
 				}
+
 				if err := network.AddCustomRPC(cfg, chainID, chainName, endpoint, readOnly); err != nil {
 					return fmt.Errorf("failed to add custom RPC: %w", err)
 				}
@@ -389,7 +400,7 @@ Examples:
 			}
 
 			// ChainList mode.
-			maxCount := int(cmd.Int("count"))
+			maxCount := cmd.Int("count")
 			if maxCount <= 0 {
 				maxCount = 3
 			}
@@ -452,10 +463,11 @@ Examples:
 			u := getUI(cmd)
 
 			if cmd.NArg() == 0 {
-				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network remove base\n  obol network remove 8453")
+				return errors.New("chain name or ID required\n\nExamples:\n  obol network remove base\n  obol network remove 8453")
 			}
 
 			chainArg := cmd.Args().First()
+
 			chainID, chainName, err := network.ResolveChainID(chainArg)
 			if err != nil {
 				return err
@@ -507,6 +519,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 				for id := range upstreamCounts {
 					chainIDs = append(chainIDs, id)
 				}
+
 				sort.Ints(chainIDs)
 
 				for _, id := range chainIDs {
@@ -543,5 +556,6 @@ func chainIDToName(chainID int) string {
 	if name, ok := names[chainID]; ok {
 		return name
 	}
+
 	return fmt.Sprintf("Chain %d", chainID)
 }

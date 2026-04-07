@@ -1,8 +1,16 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 Obol Stack: framework for AI agents to run decentralised infrastructure locally. k3d cluster with OpenClaw AI agent, blockchain networks, payment-gated inference (x402), Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
+
+## Conventions
+
+- **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
+- **Branches**: `feat/`, `fix/`, `research/`, `codex/` prefixes
+- **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 
 ## Build, Test, Run
 
@@ -60,29 +68,29 @@ obol
 
 ## Infrastructure Stack
 
-Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (verifier + ConfigMap), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
+Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (verifier + serviceoffer-controller), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `registrationrequest-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
 
-Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), Reloader, LiteLLM (`llm` ns), x402-verifier (`x402` ns), obol-agent (`openclaw-obol-agent` ns), ServiceOffer CRD.
+Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), LiteLLM (`llm` ns), x402-verifier (`x402` ns), serviceoffer-controller (`x402` ns), obol-agent (`openclaw-obol-agent` ns), ServiceOffer + RegistrationRequest CRDs.
 
 ## Monetize Subsystem
 
 Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC on Base/Base Sepolia, Traefik ForwardAuth).
 
-**Sell-side flow**: `obol sell http` → creates ServiceOffer CR → agent reconciles 6 stages: ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware + pricing route) → RoutePublished (HTTPRoute) → Registered (ERC-8004 on-chain) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
+**Sell-side flow**: `obol sell http` → creates ServiceOffer CR → serviceoffer-controller reconciles ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware) → RoutePublished (HTTPRoute) → Registered (RegistrationRequest + optional ERC-8004 side effects) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
 **CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
-**ServiceOffer CRD** (`obol.org`): Spec fields — `type` (inference|fine-tuning), `model{name,runtime}`, `upstream{service,ns,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image}`. In phase 1, `perMTok` is accepted but enforced as `perRequest = perMTok / 1000`.
+**ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image,skills,domains,supportedTrust}`.
 
-**x402-verifier** (`x402` ns): ForwardAuth middleware. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Config in `x402-pricing` ConfigMap: `wallet`, `chain`, `facilitatorURL`, `verifyOnly`, `routes[]{pattern, price, description, priceModel, perMTok, approxTokensPerRequest, offerNamespace, offerName}`. Exposes `/metrics` and is scraped via `ServiceMonitor`.
+**x402-verifier** (`x402` ns): ForwardAuth middleware only. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Static defaults still come from `x402-pricing`, but live per-offer routes are derived in-memory from published ServiceOffers.
 
-**Agent reconciler** (`internal/embed/skills/monetize/scripts/monetize.py`): Watches ServiceOffer CRs, creates Middleware (`traefik.io`), HTTPRoute, pricing route in ConfigMap, registration resources (ConfigMap + httpd + HTTPRoute at `/.well-known/`). All with ownerReferences for auto-GC.
+**serviceoffer-controller** (`internal/serviceoffercontroller/`): Watches ServiceOffers and RegistrationRequests, adds finalizers, creates Middleware + HTTPRoute, publishes registration resources, and drives tombstone cleanup on delete.
 
-**ERC-8004**: On-chain registration on Base Sepolia Identity Registry (`0xEA0fE4FCF9E3017a24d9Db6e0e39B552c8648B9D`). NFT mint via remote-signer wallet, publishes `/.well-known/agent-registration.json`.
+**ERC-8004**: Registration publication is isolated behind `RegistrationRequest`. The controller serves `/.well-known/agent-registration.json` from dedicated child resources and optionally registers/tombstones on Base Sepolia when an ERC-8004 signing key is configured.
 
-**RBAC**: ClusterRole `openclaw-monetize` grants CRUD on ServiceOffers (`obol.org`), Middlewares (`traefik.io`), HTTPRoutes (`gateway.networking.k8s.io`), ConfigMaps/Services/Deployments, read Pods/Endpoints/logs. Bound to SA `openclaw` in `openclaw-obol-agent` ns. Patched by `obol agent init` via `patchMonetizeBinding()`.
+**RBAC**: The controller owns child-resource and registration write access. The agent retains read access plus minimal ServiceOffer CRUD for compatibility commands only.
 
 ## RPC Gateway
 
@@ -113,41 +121,26 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## Standalone Inference Gateway
 
-`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM.
-
-| Component | File | Role |
-|-----------|------|------|
-| `Gateway` | `internal/inference/gateway.go` | HTTP server, x402 middleware, Ollama proxy |
-| `ContainerManager` | `internal/inference/container.go` | Apple Containerization VM lifecycle |
-| `Store` | `internal/inference/store.go` | Deployment config persistence |
-| `Key` interface | `internal/enclave/enclave.go` | Secure Enclave signing (`enclave_darwin.go`: CGo/Security.framework, `enclave_stub.go`: fallback) |
+`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM. Key code: `internal/inference/` (gateway, container, store) and `internal/enclave/` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
 
 ## OpenClaw & Skills
 
 Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`, 23 skills). Delivered via host-path PVC injection to `$DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/`. Categories: Infrastructure (ethereum-networks, ethereum-local-wallet, obol-stack, distributed-validators, monetize, discovery), Ethereum Dev (addresses, building-blocks, concepts, gas, indexing, l2s, orchestration, security, standards, ship, testing, tools, wallets), Frontend (frontend-playbook, frontend-ux, qa, why).
 
-**Monetize skill** (`internal/embed/skills/monetize/`): `monetize.py` 6-stage reconciliation loop.
+**Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, and `/skill.md` publication.
 
 **Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore, remote-signer REST API at port 9000 in same ns.
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
-
-| Component | File |
-|-----------|------|
-| Sidecar binary | `cmd/x402-buyer/main.go` |
-| PreSignedSigner | `internal/x402/buyer/signer.go` |
-| Reverse proxy | `internal/x402/buyer/proxy.go` |
-| Config/types | `internal/x402/buyer/config.go` |
-| Buy skill | `internal/embed/skills/buy-inference/` |
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price). Key code: `cmd/x402-buyer/` and `internal/x402/buyer/`.
 
 ## Development Constraints
 
 1. **Absolute paths required** — Docker volume mounts need absolute paths (resolved at `obol stack init`)
 2. **Two-stage templating** — Stage 1 (CLI flags) → Stage 2 (Helmfile) separation is critical
 3. **Unique namespaces** — each deployment must have unique namespace
-4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, x402-buyer)
+4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, serviceoffer-controller, x402-buyer)
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
 
 ### OpenClaw Version Management
@@ -183,18 +176,21 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 - `/skill.md` — machine-readable service catalog
 - `/` on tunnel hostname — static storefront landing page (busybox httpd)
 
-## Key Packages
+## Dependencies
 
 | Package | Key Files | Role |
 |---------|-----------|------|
 | `cmd/obol` | `main.go`, `sell.go`, `network.go`, `openclaw.go`, `model.go` | CLI commands |
+| `cmd/serviceoffer-controller` | `main.go` | ServiceOffer controller binary |
 | `internal/config` | `config.go` | XDG Config struct |
 | `internal/stack` | `stack.go` | Cluster lifecycle |
 | `internal/network` | `network.go`, `erpc.go`, `rpc.go`, `parser.go` | Networks, eRPC, RPC gateway |
-| `internal/x402` | `config.go`, `setup.go`, `verifier.go`, `matcher.go`, `watcher.go` | ForwardAuth verifier |
+| `internal/monetizeapi` | `types.go` | Shared CRD types and GVR constants |
+| `internal/serviceoffercontroller` | `controller.go`, `render.go` | ServiceOffer reconciliation controller |
+| `internal/x402` | `config.go`, `setup.go`, `verifier.go`, `matcher.go`, `watcher.go`, `serviceoffer_source.go`, `source.go` | ForwardAuth verifier |
 | `internal/x402/buyer` | `signer.go`, `proxy.go`, `config.go` | Buy-side sidecar |
 | `internal/erc8004` | `client.go`, `types.go`, `abi.go` | ERC-8004 Identity Registry |
-| `internal/agent` | `agent.go` | obol-agent singleton, RBAC patching |
+| `internal/agent` | `agent.go` | obol-agent singleton |
 | `internal/model` | `model.go` | LiteLLM gateway configuration |
 | `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution |
 | `internal/inference` | `gateway.go`, `container.go`, `store.go` | Standalone x402 gateway |
@@ -203,7 +199,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 
 **Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, helios, aztec), `internal/embed/skills/` (23 skills).
 
-**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`.
+**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 

@@ -28,6 +28,10 @@ const (
 	dnsImage      = "alpine:3.21"
 	domain        = "obol.stack"
 
+	// OS name constants for runtime.GOOS comparisons.
+	osDarwin = "darwin"
+	osLinux  = "linux"
+
 	// macOS: custom port, /etc/resolver handles port directive
 	macHostPort = "5553"
 
@@ -42,11 +46,11 @@ const (
 	nmDnsmasqFile = "obol-stack.conf"
 
 	// resolv.conf management — NM dnsmasq takes over from systemd-resolved stub
-	nmResolvConf        = "/run/NetworkManager/resolv.conf"
-	systemResolvConf    = "/etc/resolv.conf"
-	resolvedStubConf    = "/run/systemd/resolve/stub-resolv.conf"
-	resolvedDropInDir   = "/etc/systemd/resolved.conf.d"
-	resolvedDropInFile  = "obol-stack.conf"
+	nmResolvConf       = "/run/NetworkManager/resolv.conf"
+	systemResolvConf   = "/etc/resolv.conf"
+	resolvedStubConf   = "/run/systemd/resolve/stub-resolv.conf"
+	resolvedDropInDir  = "/etc/systemd/resolved.conf.d"
+	resolvedDropInFile = "obol-stack.conf"
 )
 
 // --- Public API ---
@@ -55,20 +59,23 @@ const (
 // Docker container. On Linux, this is a no-op — NM dnsmasq handles
 // resolution without a container.
 func EnsureRunning() error {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == osDarwin {
 		return ensureMacOSContainer()
 	}
+
 	return nil
 }
 
 // Stop removes the DNS resolver container (macOS only).
 func Stop() {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != osDarwin {
 		return
 	}
+
 	if out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", containerName).Output(); err != nil || strings.TrimSpace(string(out)) != "true" {
 		return
 	}
+
 	exec.Command("docker", "rm", "-f", containerName).Run() //nolint:errcheck
 	fmt.Println("DNS resolver stopped")
 }
@@ -80,9 +87,9 @@ func Stop() {
 // Linux: configures NM dnsmasq plugin for wildcard resolution
 func ConfigureSystemResolver() error {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		return configureMacOSResolver()
-	case "linux":
+	case osLinux:
 		return configureLinuxResolver()
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
@@ -92,21 +99,22 @@ func ConfigureSystemResolver() error {
 // RemoveSystemResolver removes the host OS DNS configuration for *.obol.stack.
 func RemoveSystemResolver() {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		removeMacOSResolver()
-	case "linux":
+	case osLinux:
 		removeNMDnsmasq()
 	}
+
 	RemoveHostsEntries()
 }
 
 // IsResolverConfigured checks whether the system resolver is already set up.
 func IsResolverConfigured() bool {
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		_, err := os.Stat(filepath.Join(macResolverDir, macResolverFile))
 		return err == nil
-	case "linux":
+	case osLinux:
 		return hasNMDnsmasqConfig() && isNMResolvConfActive()
 	default:
 		return false
@@ -119,9 +127,11 @@ func IsResolverConfigured() bool {
 // reliably forward subdomain queries to custom nameservers. As a fallback,
 // we also write entries to /etc/hosts for known hostnames.
 
-const hostsMarkerBegin = "# BEGIN obol-stack managed entries"
-const hostsMarkerEnd = "# END obol-stack managed entries"
-const hostsFile = "/etc/hosts"
+const (
+	hostsMarkerBegin = "# BEGIN obol-stack managed entries"
+	hostsMarkerEnd   = "# END obol-stack managed entries"
+	hostsFile        = "/etc/hosts"
+)
 
 // EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
 // Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
@@ -129,6 +139,7 @@ const hostsFile = "/etc/hosts"
 func EnsureHostsEntries(hostnames []string) error {
 	// Always include the base domain.
 	all := []string{domain}
+
 	seen := map[string]bool{domain: true}
 	for _, h := range hostnames {
 		if h != "" && !seen[h] {
@@ -140,9 +151,11 @@ func EnsureHostsEntries(hostnames []string) error {
 	// Build the managed block.
 	var block strings.Builder
 	block.WriteString(hostsMarkerBegin + "\n")
+
 	for _, h := range all {
-		block.WriteString(fmt.Sprintf("127.0.0.1 %s\n", h))
+		fmt.Fprintf(&block, "127.0.0.1 %s\n", h)
 	}
+
 	block.WriteString(hostsMarkerEnd + "\n")
 
 	data, err := os.ReadFile(hostsFile)
@@ -151,6 +164,7 @@ func EnsureHostsEntries(hostnames []string) error {
 	}
 
 	content := string(data)
+
 	newContent := replaceOrAppendBlock(content, block.String())
 	if newContent == content {
 		return nil // no change needed
@@ -167,10 +181,12 @@ func EnsureHostsEntries(hostnames []string) error {
 	writeCmd := exec.Command("sudo", "tee", hostsFile)
 	writeCmd.Stdin = strings.NewReader(newContent)
 	writeCmd.Stdout = nil
+
 	writeCmd.Stderr = os.Stderr
 	if err := writeCmd.Run(); err != nil {
 		return fmt.Errorf("write %s: %w", hostsFile, err)
 	}
+
 	return nil
 }
 
@@ -180,11 +196,14 @@ func RemoveHostsEntries() {
 	if err != nil {
 		return
 	}
+
 	content := string(data)
+
 	cleaned := removeBlock(content)
 	if cleaned == content {
 		return
 	}
+
 	writeCmd := exec.Command("sudo", "tee", hostsFile)
 	writeCmd.Stdin = strings.NewReader(cleaned)
 	writeCmd.Stdout = nil
@@ -205,12 +224,14 @@ func ensureSudoCached() error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	return cmd.Run()
 }
 
 // replaceOrAppendBlock replaces an existing managed block or appends a new one.
 func replaceOrAppendBlock(content, block string) string {
 	start := strings.Index(content, hostsMarkerBegin)
+
 	end := strings.Index(content, hostsMarkerEnd)
 	if start >= 0 && end > start {
 		return content[:start] + block + content[end+len(hostsMarkerEnd)+1:]
@@ -219,12 +240,14 @@ func replaceOrAppendBlock(content, block string) string {
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
+
 	return content + "\n" + block
 }
 
 // removeBlock strips the managed block from content.
 func removeBlock(content string) string {
 	start := strings.Index(content, hostsMarkerBegin)
+
 	end := strings.Index(content, hostsMarkerEnd)
 	if start < 0 || end <= start {
 		return content
@@ -234,6 +257,7 @@ func removeBlock(content string) string {
 	if after < len(content) && content[after] == '\n' {
 		after++
 	}
+
 	return content[:start] + content[after:]
 }
 
@@ -266,6 +290,7 @@ func ensureMacOSContainer() error {
 	}
 
 	fmt.Printf("DNS resolver running (*.obol.stack → 127.0.0.1, port %s)\n", macHostPort)
+
 	return nil
 }
 
@@ -284,6 +309,7 @@ func configureMacOSResolver() error {
 
 	mkdirCmd := exec.Command("sudo", "mkdir", "-p", macResolverDir)
 	mkdirCmd.Stdout = os.Stdout
+
 	mkdirCmd.Stderr = os.Stderr
 	if err := mkdirCmd.Run(); err != nil {
 		return fmt.Errorf("failed to create %s (sudo required): %w", macResolverDir, err)
@@ -292,12 +318,14 @@ func configureMacOSResolver() error {
 	writeCmd := exec.Command("sudo", "tee", path)
 	writeCmd.Stdin = strings.NewReader(content)
 	writeCmd.Stdout = nil
+
 	writeCmd.Stderr = os.Stderr
 	if err := writeCmd.Run(); err != nil {
 		return fmt.Errorf("failed to write %s: %w", path, err)
 	}
 
 	fmt.Printf("Resolver configured: %s → 127.0.0.1:%s\n", path, macHostPort)
+
 	return nil
 }
 
@@ -306,11 +334,14 @@ func removeMacOSResolver() {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
 	}
+
 	if err := exec.Command("sudo", "rm", path).Run(); err != nil {
 		fmt.Printf("Warning: failed to remove %s: %v\n", path, err)
 		fmt.Printf("  Remove manually: sudo rm %s\n", path)
+
 		return
 	}
+
 	fmt.Printf("Removed DNS resolver config: %s\n", path)
 }
 
@@ -332,6 +363,7 @@ func configureLinuxResolver() error {
 func hasNMDnsmasqConfig() bool {
 	path := filepath.Join(nmDnsmasqDir, nmDnsmasqFile)
 	_, err := os.Stat(path)
+
 	return err == nil
 }
 
@@ -342,6 +374,7 @@ func isNMResolvConfActive() bool {
 	if err != nil {
 		return false
 	}
+
 	return strings.Contains(string(data), "Generated by NetworkManager")
 }
 
@@ -370,6 +403,7 @@ func configureNMDnsmasq() bool {
 		updateResolvConf()
 		cleanupResolvedDropIn()
 		fmt.Printf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)\n", domain)
+
 		return true
 	}
 
@@ -380,6 +414,7 @@ func configureNMDnsmasq() bool {
 	// Create NM dnsmasq.d directory and write the rule
 	mkdirCmd := exec.Command("sudo", "mkdir", "-p", nmDnsmasqDir)
 	mkdirCmd.Stdout = os.Stdout
+
 	mkdirCmd.Stderr = os.Stderr
 	if err := mkdirCmd.Run(); err != nil {
 		fmt.Printf("Warning: failed to create %s: %v\n", nmDnsmasqDir, err)
@@ -390,6 +425,7 @@ func configureNMDnsmasq() bool {
 	writeCmd := exec.Command("sudo", "tee", filepath.Join(nmDnsmasqDir, nmDnsmasqFile))
 	writeCmd.Stdin = strings.NewReader(dnsmasqConf)
 	writeCmd.Stdout = nil
+
 	writeCmd.Stderr = os.Stderr
 	if err := writeCmd.Run(); err != nil {
 		fmt.Printf("Warning: failed to write dnsmasq config: %v\n", err)
@@ -400,6 +436,7 @@ func configureNMDnsmasq() bool {
 	if nmDNSMode != "dnsmasq" {
 		mkdirCmd2 := exec.Command("sudo", "mkdir", "-p", nmConfDir)
 		mkdirCmd2.Stdout = os.Stdout
+
 		mkdirCmd2.Stderr = os.Stderr
 		if err := mkdirCmd2.Run(); err != nil {
 			fmt.Printf("Warning: failed to create %s: %v\n", nmConfDir, err)
@@ -410,6 +447,7 @@ func configureNMDnsmasq() bool {
 		writeCmd2 := exec.Command("sudo", "tee", filepath.Join(nmConfDir, nmConfFile))
 		writeCmd2.Stdin = strings.NewReader(nmConf)
 		writeCmd2.Stdout = nil
+
 		writeCmd2.Stderr = os.Stderr
 		if err := writeCmd2.Run(); err != nil {
 			fmt.Printf("Warning: failed to write NM config: %v\n", err)
@@ -420,10 +458,12 @@ func configureNMDnsmasq() bool {
 	// Restart NetworkManager to pick up changes
 	restartCmd := exec.Command("sudo", "systemctl", "restart", "NetworkManager")
 	restartCmd.Stdout = os.Stdout
+
 	restartCmd.Stderr = os.Stderr
 	if err := restartCmd.Run(); err != nil {
 		fmt.Printf("Warning: failed to restart NetworkManager: %v\n", err)
 		fmt.Println("  Run manually: sudo systemctl restart NetworkManager")
+
 		return true // Config files are in place, will work after manual restart
 	}
 
@@ -435,6 +475,7 @@ func configureNMDnsmasq() bool {
 	cleanupResolvedDropIn()
 
 	fmt.Printf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)\n", domain)
+
 	return true
 }
 
@@ -444,30 +485,35 @@ func configureNMDnsmasq() bool {
 // local addresses) and sends all DNS queries directly to NM's dnsmasq.
 func updateResolvConf() {
 	// Wait for NM to generate its resolv.conf after restart (max 3s)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		if _, err := os.Stat(nmResolvConf); err == nil {
 			break
 		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	cmd := exec.Command("sudo", "ln", "-sf", nmResolvConf, systemResolvConf)
 	cmd.Stdout = os.Stdout
+
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("Warning: failed to update %s: %v\n", systemResolvConf, err)
 		fmt.Printf("  Run manually: sudo ln -sf %s %s\n", nmResolvConf, systemResolvConf)
+
 		return
 	}
 
 	// Wait for DNS to actually resolve after NM restart (max 10s).
 	// NM's dnsmasq needs a moment to start accepting queries.
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if err := exec.Command("nslookup", "github.com").Run(); err == nil {
 			return
 		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
+
 	fmt.Println("Warning: DNS not yet responding after NM restart; may need a moment to stabilize")
 }
 
@@ -479,6 +525,7 @@ func cleanupResolvedDropIn() {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
 	}
+
 	exec.Command("sudo", "rm", path).Run() //nolint:errcheck
 }
 
@@ -487,9 +534,9 @@ func getNMDNSMode() string {
 	// Check our own conf file first
 	path := filepath.Join(nmConfDir, nmConfFile)
 	if data, err := os.ReadFile(path); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "dns=") {
-				return strings.TrimPrefix(strings.TrimSpace(line), "dns=")
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if after, ok := strings.CutPrefix(strings.TrimSpace(line), "dns="); ok {
+				return after
 			}
 		}
 	}
@@ -499,11 +546,13 @@ func getNMDNSMode() string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "dns=") {
-			return strings.TrimPrefix(strings.TrimSpace(line), "dns=")
+
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(line), "dns="); ok {
+			return after
 		}
 	}
+
 	return ""
 }
 
@@ -542,6 +591,7 @@ func removeNMDnsmasq() {
 				fmt.Printf("  Run manually: sudo ln -sf %s %s\n", resolvedStubConf, systemResolvConf)
 			}
 		}
+
 		fmt.Println("Removed NM dnsmasq DNS config")
 	}
 }

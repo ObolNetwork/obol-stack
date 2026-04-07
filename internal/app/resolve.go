@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,18 +20,22 @@ func ListInstanceIDs(cfg *config.Config) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, fmt.Errorf("failed to read applications directory: %w", err)
 	}
 
 	var ids []string
+
 	for _, appDir := range appDirs {
 		if !appDir.IsDir() {
 			continue
 		}
+
 		deployments, err := os.ReadDir(filepath.Join(appsDir, appDir.Name()))
 		if err != nil {
 			continue
 		}
+
 		for _, deployment := range deployments {
 			if !deployment.IsDir() {
 				continue
@@ -42,9 +47,11 @@ func ListInstanceIDs(cfg *config.Config) ([]string, error) {
 			if _, err := os.Stat(valuesPath); err != nil {
 				continue
 			}
+
 			ids = append(ids, fmt.Sprintf("%s/%s", appDir.Name(), deployment.Name()))
 		}
 	}
+
 	return ids, nil
 }
 
@@ -63,7 +70,7 @@ func ResolveInstance(cfg *config.Config, args []string) (identifier string, rema
 
 	switch len(instances) {
 	case 0:
-		return "", nil, fmt.Errorf("no app deployments found — run 'obol app install <chart>' to create one")
+		return "", nil, errors.New("no app deployments found — run 'obol app install <chart>' to create one")
 	case 1:
 		return instances[0], args, nil
 	default:
@@ -76,15 +83,18 @@ func ResolveInstance(cfg *config.Config, args []string) (identifier string, rema
 			}
 			// Type-prefix match: "postgresql" → auto-select if only one of that type
 			var prefixMatches []string
+
 			for _, inst := range instances {
 				if typ, _, ok := strings.Cut(inst, "/"); ok && typ == args[0] {
 					prefixMatches = append(prefixMatches, inst)
 				}
 			}
+
 			if len(prefixMatches) == 1 {
 				return prefixMatches[0], args[1:], nil
 			}
 		}
+
 		return "", nil, fmt.Errorf("multiple app deployments found, specify one: %s", strings.Join(instances, ", "))
 	}
 }
