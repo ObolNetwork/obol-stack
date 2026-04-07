@@ -91,7 +91,8 @@ func restoreVerifierConfigMap(t *testing.T, kubectlBin, kubeconfig, originalJSON
 }
 
 // waitForVerifierRestart restarts the x402-verifier deployment and waits
-// for the new pod to start with the expected facilitator URL in its logs.
+// for the rollout to complete (pod passes /readyz) and the new pod to log
+// the expected facilitator URL.
 func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL string) {
 	t.Helper()
 
@@ -101,7 +102,15 @@ func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL st
 		t.Fatalf("rollout restart x402-verifier: %v", err)
 	}
 
-	deadline := time.Now().Add(60 * time.Second)
+	// Wait for rollout to complete — this blocks until the new pod passes its
+	// /readyz probe, which returns 200 only after pricing config is loaded.
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig, "rollout", "status",
+		"deploy/x402-verifier", "-n", "x402", "--timeout=60s"); err != nil {
+		t.Logf("Warning: rollout status timed out: %v (continuing anyway)", err)
+	}
+
+	// Confirm the new pod has the expected facilitator URL in its logs.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		logs, err := kubectl.Output(kubectlBin, kubeconfig, "logs", "deploy/x402-verifier",
 			"-n", "x402", "--tail=10")
@@ -110,7 +119,7 @@ func waitForVerifierRestart(t *testing.T, kubectlBin, kubeconfig, expectedURL st
 			return
 		}
 
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 
 	t.Log("Warning: did not confirm verifier restart with new URL (continuing anyway)")
