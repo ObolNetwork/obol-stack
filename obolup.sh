@@ -54,15 +54,23 @@ fi
 
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
-readonly KUBECTL_VERSION="1.35.0"
-readonly HELM_VERSION="3.19.4"
+# renovate: datasource=github-releases depName=kubernetes/kubernetes
+readonly KUBECTL_VERSION="1.35.3"
+# renovate: datasource=github-releases depName=helm/helm
+readonly HELM_VERSION="3.20.1"
+# renovate: datasource=github-releases depName=k3d-io/k3d
 readonly K3D_VERSION="5.8.3"
-readonly HELMFILE_VERSION="1.2.3"
+# renovate: datasource=github-releases depName=helmfile/helmfile
+readonly HELMFILE_VERSION="1.4.3"
+# renovate: datasource=github-releases depName=derailed/k9s
 readonly K9S_VERSION="0.50.18"
-readonly HELM_DIFF_VERSION="3.14.1"
+# renovate: datasource=github-releases depName=databus23/helm-diff
+readonly HELM_DIFF_VERSION="3.15.4"
+# renovate: datasource=github-releases depName=ollama/ollama
+readonly OLLAMA_VERSION="0.20.2"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
-readonly OPENCLAW_VERSION="2026.3.13-1"
+readonly OPENCLAW_VERSION="2026.3.24"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -96,6 +104,49 @@ command_exists() {
 	command -v "$1" >/dev/null 2>&1
 }
 
+# Check host prerequisites that the installer cannot provide itself.
+# Binaries we download (helm, kubectl, k3d, etc.) are not checked here —
+# only tools the user must install separately.
+check_prerequisites() {
+	local missing=()
+
+	# Node.js 22+ / npm — required for openclaw CLI (unless already installed)
+	local need_npm=true
+	if command_exists openclaw; then
+		local oc_version
+		oc_version=$(openclaw --version 2>/dev/null | tr -d '[:space:]' || echo "")
+		if [[ -n "$oc_version" ]] && version_ge "$oc_version" "$OPENCLAW_VERSION"; then
+			need_npm=false
+		fi
+	fi
+
+	if [[ "$need_npm" == "true" ]]; then
+		if ! command_exists npm; then
+			missing+=("Node.js 22+ (npm) — required to install openclaw CLI")
+		else
+			local node_major
+			node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+			if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
+				missing+=("Node.js 22+ (found: v${node_major:-none}) — required for openclaw CLI")
+			fi
+		fi
+	fi
+
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		log_error "Missing prerequisites:"
+		echo ""
+		for dep in "${missing[@]}"; do
+			echo "  • $dep"
+		done
+		echo ""
+		log_dim "  Install the above, then re-run obolup.sh"
+		echo ""
+		return 1
+	fi
+
+	return 0
+}
+
 # Detect installation mode (install vs upgrade)
 detect_installation_mode() {
 	if [[ -f "$OBOL_BIN_DIR/obol" ]]; then
@@ -123,8 +174,24 @@ check_docker() {
 		return 1
 	fi
 
-	# Check if Docker daemon is running; try to start it automatically
+	# Check if Docker daemon is running and accessible
 	if ! docker info >/dev/null 2>&1; then
+		# Distinguish permission errors from daemon-not-running
+		local docker_err
+		docker_err=$(docker info 2>&1)
+
+		if echo "$docker_err" | grep -qi "permission denied"; then
+			log_error "Docker is installed but your user does not have permission to access it"
+			echo ""
+			echo "  Add your user to the docker group and apply the change:"
+			echo "    sudo usermod -aG docker \$USER"
+			echo "    newgrp docker"
+			echo ""
+			log_dim "  Then run this installer again."
+			echo ""
+			return 1
+		fi
+
 		if [[ "$(uname -s)" == "Linux" ]]; then
 			log_warn "Docker daemon is not running — attempting to start..."
 			# Try systemd first (apt/yum installs), then snap
@@ -181,21 +248,6 @@ check_docker() {
 	if [[ "$major" -lt 20 ]] || { [[ "$major" -eq 20 ]] && [[ "$minor" -lt 10 ]]; }; then
 		log_warn "Docker version $docker_version is older than recommended (20.10.0+)"
 		log_warn "k3d may not work correctly with older Docker versions"
-	fi
-
-	# Check if user can run Docker without sudo (Linux-specific)
-	if [[ "$(uname -s)" == "Linux" ]]; then
-		if ! docker ps >/dev/null 2>&1; then
-			log_warn "Current user cannot run Docker commands"
-			echo ""
-			echo "You may need to add your user to the docker group:"
-			echo "  sudo usermod -aG docker \$USER"
-			echo "  newgrp docker"
-			echo ""
-			echo "Or run commands with sudo."
-			echo ""
-			# Don't fail here - user might be running with sudo
-		fi
 	fi
 
 	# Check Docker networking (ensure bridge network works)
@@ -1126,18 +1178,50 @@ WRAPPER
 	return 1
 }
 
+# Configure Ollama to listen on 0.0.0.0 so k3d containers can reach it.
+# On macOS, Docker Desktop routes host.docker.internal through the hypervisor,
+# so Ollama's bind address doesn't matter. On Linux, k3d uses the docker
+# bridge network, so Ollama must accept connections from the bridge gateway IP.
+configure_ollama_host_binding() {
+	# Only needed on Linux with systemd
+	[[ "$(uname -s)" != "Linux" ]] && return 0
+	command_exists systemctl || return 0
+	systemctl list-unit-files ollama.service >/dev/null 2>&1 || return 0
+
+	local override_dir="/etc/systemd/system/ollama.service.d"
+	local override_file="$override_dir/obol-host.conf"
+
+	# Skip if already configured
+	if [[ -f "$override_file" ]]; then
+		return 0
+	fi
+
+	log_info "Configuring Ollama to listen on 0.0.0.0 (required for k3d)..."
+
+	if sudo mkdir -p "$override_dir" && \
+	   sudo tee "$override_file" >/dev/null <<'OVERRIDE'
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+OVERRIDE
+	then
+		sudo systemctl daemon-reload
+		sudo systemctl restart ollama 2>/dev/null || true
+		log_success "Ollama configured to listen on all interfaces"
+	else
+		log_warn "Could not configure Ollama host binding (non-fatal)"
+		echo "  Manually set OLLAMA_HOST=0.0.0.0 in your Ollama config"
+	fi
+}
+
 # Install Ollama (host runtime for local AI inference)
 # Unlike other dependencies, Ollama is a full application with a background server.
 # On macOS it installs Ollama.app; on Linux it sets up a systemd service.
 # We delegate to Ollama's official installer rather than downloading a binary ourselves.
 install_ollama() {
-	# Check for existing ollama installation
-	if command_exists ollama; then
-		local version
-		version=$(ollama --version 2>/dev/null | sed 's/ollama version is //' || echo "unknown")
-		log_success "Ollama v$version already installed"
+	local target_version="$OLLAMA_VERSION"
 
-		# Check if the server is running
+	# Helper: check if server is running and print status
+	check_ollama_server() {
 		if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
 			log_success "Ollama server is running"
 		else
@@ -1153,7 +1237,60 @@ install_ollama() {
 			esac
 			echo ""
 		fi
-		return 0
+	}
+
+	# Check for existing ollama installation
+	if command_exists ollama; then
+		local version
+		version=$(ollama --version 2>/dev/null | sed 's/ollama version is //' || echo "unknown")
+
+		# Check if upgrade is needed
+		if [[ "$version" != "unknown" ]] && version_ge "$version" "$target_version"; then
+			log_success "Ollama v$version is up to date"
+			configure_ollama_host_binding
+			check_ollama_server
+			return 0
+		fi
+
+		if [[ "$version" != "unknown" ]]; then
+			log_warn "Ollama v$version is older than pinned v$target_version"
+
+			# Prompt for upgrade if interactive
+			if [[ -c /dev/tty ]]; then
+				local choice
+				read -p "  Upgrade Ollama to v$target_version? [Y/n]: " choice </dev/tty
+
+				case "$choice" in
+				[Nn]*)
+					log_warn "Skipping Ollama upgrade"
+					check_ollama_server
+					return 0
+					;;
+				esac
+			else
+				log_warn "Non-interactive — skipping Ollama upgrade"
+				check_ollama_server
+				return 0
+			fi
+
+			log_info "Upgrading Ollama to v$target_version..."
+			echo ""
+			if env OLLAMA_VERSION="$target_version" bash -c 'curl -fsSL https://ollama.com/install.sh | sh'; then
+				echo ""
+				log_success "Ollama upgraded to v$target_version"
+				configure_ollama_host_binding
+				check_ollama_server
+				return 0
+			else
+				log_warn "Ollama upgrade failed — continuing with v$version"
+				check_ollama_server
+				return 0
+			fi
+		else
+			log_success "Ollama already installed (version unknown)"
+			check_ollama_server
+			return 0
+		fi
 	fi
 
 	# Ollama not found — ask user if they want to install it
@@ -1181,11 +1318,12 @@ install_ollama() {
 			;;
 		*)
 			# Yes — delegate to official installer
-			log_info "Installing Ollama..."
+			log_info "Installing Ollama v$target_version..."
 			echo ""
-			if curl -fsSL https://ollama.com/install.sh | sh; then
+			if env OLLAMA_VERSION="$target_version" bash -c 'curl -fsSL https://ollama.com/install.sh | sh'; then
 				echo ""
-				log_success "Ollama installed"
+				log_success "Ollama v$target_version installed"
+				configure_ollama_host_binding
 
 				# On macOS, the installer starts Ollama.app automatically.
 				# On Linux with systemd, the installer enables and starts the service.
@@ -1240,6 +1378,13 @@ install_ollama() {
 install_dependencies() {
 	log_info "Checking and installing dependencies..."
 	echo ""
+
+	# Ensure OBOL_BIN_DIR is in PATH for the current process so that
+	# binaries installed here (helm, helmfile, etc.) are immediately
+	# available to each other and to later steps like `obol bootstrap`.
+	if ! echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
+		export PATH="$OBOL_BIN_DIR:$PATH"
+	fi
 
 	# Install each dependency
 	install_kubectl || log_warn "kubectl installation failed (continuing...)"
@@ -1433,20 +1578,13 @@ add_to_profile() {
 # In interactive mode, asks user whether to auto-modify or show manual instructions.
 # In non-interactive mode (CI/CD), prints manual instructions only unless OBOL_MODIFY_PATH=yes.
 configure_path() {
-	# Check if OBOL_BIN_DIR is already in current PATH
-	if echo "$PATH" | grep -q "$OBOL_BIN_DIR"; then
-		log_success "OBOL_BIN_DIR already in PATH"
-		return 0
-	fi
-
 	# Detect appropriate profile file
 	local profile
 	profile=$(detect_shell_profile)
 
-	# Check if already configured in detected profile
+	# Check if already persisted in the shell profile
 	if [[ -f "$profile" ]] && grep -qF "$OBOL_BIN_DIR" "$profile" 2>/dev/null; then
 		log_success "OBOL_BIN_DIR already configured in $profile"
-		log_info "Will be available in new shell sessions"
 		return 0
 	fi
 
@@ -1689,6 +1827,11 @@ main() {
 		log_info "Backend: k3s (Docker not required)"
 	fi
 	echo ""
+
+	# Check host prerequisites (npm/Node.js, etc.) before starting installs
+	if ! check_prerequisites; then
+		exit 1
+	fi
 
 	create_directories
 	install_obol_binary

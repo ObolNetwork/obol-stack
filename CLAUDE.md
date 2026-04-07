@@ -178,7 +178,29 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 
 ## Dependencies
 
-Docker 20.10.0+, Go 1.25+. Toolchain installed by `obolup.sh` (kubectl, helm, k3d, helmfile, k9s). Key Go deps: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `mark3labs/x402-go`. E2E monetize walkthrough: `@docs/guides/monetize-inference.md`.
+| Package | Key Files | Role |
+|---------|-----------|------|
+| `cmd/obol` | `main.go`, `sell.go`, `network.go`, `openclaw.go`, `model.go` | CLI commands |
+| `internal/config` | `config.go` | XDG Config struct |
+| `internal/stack` | `stack.go` | Cluster lifecycle |
+| `internal/network` | `network.go`, `erpc.go`, `rpc.go`, `parser.go` | Networks, eRPC, RPC gateway |
+| `internal/x402` | `config.go`, `setup.go`, `verifier.go`, `matcher.go`, `watcher.go` | ForwardAuth verifier |
+| `internal/x402/buyer` | `signer.go`, `proxy.go`, `config.go` | Buy-side sidecar |
+| `internal/erc8004` | `client.go`, `types.go`, `abi.go` | ERC-8004 Identity Registry |
+| `internal/agent` | `agent.go` | obol-agent singleton, RBAC patching |
+| `internal/model` | `model.go` | LiteLLM gateway configuration |
+| `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution |
+| `internal/inference` | `gateway.go`, `container.go`, `store.go` | Standalone x402 gateway |
+| `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
+| `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
+
+**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, helios, aztec), `internal/embed/skills/` (23 skills).
+
+**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`.
+
+**Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
+
+**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.35.3, helm 3.20.1, k3d 5.8.3, helmfile 1.4.3, k9s 0.50.18, helm-diff 3.15.4, ollama 0.20.2. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `mark3labs/x402-go`.
 
 ## Related Codebases
 

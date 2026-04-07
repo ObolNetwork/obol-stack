@@ -1,4 +1,4 @@
-name: Build and Publish x402-verifier Image
+name: Build and Publish x402 Images
 
 on:
   push:
@@ -10,33 +10,45 @@ on:
     paths:
       - 'internal/x402/**'
       - 'cmd/x402-verifier/**'
+      - 'cmd/x402-buyer/**'
       - 'Dockerfile.x402-verifier'
+      - 'Dockerfile.x402-buyer'
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/docker-publish-x402-verifier.yml'
+      - '.github/workflows/docker-publish-x402.yml'
   workflow_dispatch:
 
 concurrency:
-  group: x402-verifier-${{ github.ref }}
+  group: x402-${{ github.ref }}
   cancel-in-progress: true
-
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: obolnetwork/x402-verifier
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Build the x402-verifier binary and publish the image.
-  # Uses the same action versions as the working OpenClaw workflow.
+  # Build each x402 component and publish its image.
   # ---------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: x402-verifier
+            image: obolnetwork/x402-verifier
+            dockerfile: Dockerfile.x402-verifier
+            description: x402 payment verification sidecar for Obol Stack
+          - component: x402-buyer
+            image: obolnetwork/x402-buyer
+            dockerfile: Dockerfile.x402-buyer
+            description: x402 buy-side payment sidecar for Obol Stack
     outputs:
-      digest: ${{ steps.build-push.outputs.digest }}
+      verifier-digest: ${{ steps.build-push.outputs.digest }}
+      buyer-digest: ${{ steps.build-push.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -59,16 +71,16 @@ jobs:
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
           labels: |
-            org.opencontainers.image.title=x402-verifier
-            org.opencontainers.image.description=x402 payment verification sidecar for Obol Stack
-            org.opencontainers.image.vendor=Obol Network
+            org.opencontainers.image.title=${{ matrix.component }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.vendor=Obol
             org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
 
       - name: Build and push
@@ -76,30 +88,38 @@ jobs:
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
-          file: Dockerfile.x402-verifier
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=x402-verifier
-          cache-to: type=gha,scope=x402-verifier,mode=max
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,scope=${{ matrix.component }},mode=max
           provenance: true
           sbom: true
 
   # ---------------------------------------------------------------------------
-  # Job 2: Security scan the published image using the exact digest from build.
+  # Security scan each published image.
   # ---------------------------------------------------------------------------
   security-scan:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: x402-verifier
+            image: obolnetwork/x402-verifier
+          - component: x402-buyer
+            image: obolnetwork/x402-buyer
 
     steps:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:latest
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
