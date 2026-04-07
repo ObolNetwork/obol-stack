@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"net"
+
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -51,6 +53,11 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 
 			// Step 4: Open browser
 			url := "http://obol.stack"
+			if ln, err := net.Listen("tcp", ":80"); err != nil {
+				url = "http://obol.stack:8080"
+			} else {
+				ln.Close()
+			}
 			u.Infof("Opening browser to %s", url)
 
 			if err := openBrowser(url); err != nil {
@@ -62,7 +69,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			u.Bold("Bootstrap complete! Your Obol Stack is ready.")
 			u.Blank()
 			u.Print("Next steps:")
-			u.Print("  • View the stack interface at http://obol.stack")
+			u.Printf("  • View the stack interface at %s", url)
 			u.Print("  • Create an Obol Agent: obol agent init")
 			u.Print("  • View what's running from the terminal (press '0'): obol k9s")
 			u.Print("  • Shut down the stack: obol stack down")
