@@ -49,9 +49,10 @@ export async function POST(request: NextRequest) {
     // Get service URL
     const url = openclawClient.getServiceUrl(instanceId);
 
-    // Get model from config
-    const configInfo = await openclawClient.getConfigInfo(namespace);
-    const model = configInfo.model || 'ollama/gpt-oss:120b-cloud';
+    // The OpenClaw gateway expects model "openclaw" (or "openclaw/<agentId>"),
+    // not the backend model name (e.g. "openai/claude-sonnet-4-6") which is
+    // the internal model the agent routes to via LiteLLM.
+    const model = 'openclaw';
 
     // Forward request to OpenClaw
     const openclawResponse = await fetch(`${url}/v1/chat/completions`, {
