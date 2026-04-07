@@ -294,9 +294,9 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	// modifies system DNS config (NetworkManager/resolv.conf on Linux,
 	// /etc/resolver on macOS) which can break host DNS resolution.
 	if wildcardDNS {
-		if err := dns.EnsureRunning(); err != nil {
+		if err := dns.EnsureRunning(u); err != nil {
 			u.Warnf("DNS resolver failed to start: %v", err)
-		} else if err := dns.ConfigureSystemResolver(); err != nil {
+		} else if err := dns.ConfigureSystemResolver(u); err != nil {
 			u.Warnf("Wildcard DNS configuration failed: %v", err)
 		} else {
 			u.Success("Wildcard DNS configured (*.obol.stack)")
@@ -306,7 +306,7 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	u.Blank()
 	u.Bold("Stack started successfully.")
 	u.Print("Visit http://obol.stack in your browser to get started.")
-	update.HintIfStale(cfg)
+	update.HintIfStale(cfg, u)
 	return nil
 }
 
@@ -323,7 +323,7 @@ func Down(cfg *config.Config, u *ui.UI) error {
 	}
 
 	// Stop the DNS resolver container
-	dns.Stop()
+	dns.Stop(u)
 
 	return backend.Down(cfg, u, stackID)
 }
@@ -351,8 +351,8 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 	}
 
 	// Stop DNS resolver and remove system resolver config
-	dns.Stop()
-	dns.RemoveSystemResolver()
+	dns.Stop(u)
+	dns.RemoveSystemResolver(u)
 
 	// Remove stack config directory
 	if err := os.RemoveAll(cfg.ConfigDir); err != nil {
@@ -426,7 +426,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// This must happen before helmfile sync so pods do not try to pull tags that
 	// only exist in the local k3d image store.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		buildAndImportLocalImages(cfg)
+		buildAndImportLocalImages(cfg, u)
 	}
 
 	if err := u.Exec(ui.ExecConfig{
@@ -617,7 +617,7 @@ var localImages = []localImage{
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
-func buildAndImportLocalImages(cfg *config.Config) {
+func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return
@@ -626,7 +626,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	// Find the project root (where go.mod lives).
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
-		fmt.Println("Warning: could not find project root, skipping local image build")
+		u.Warn("could not find project root, skipping local image build")
 		return
 	}
 
@@ -640,7 +640,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			continue // Dockerfile not present (production install without source)
 		}
 
-		fmt.Printf("Building %s from %s...\n", img.tag, img.dockerfile)
+		u.Infof("Building %s from %s...", img.tag, img.dockerfile)
 		buildCmd := exec.Command("docker", "build",
 			"-f", dockerfilePath,
 			"-t", img.tag,
@@ -649,16 +649,16 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		buildCmd.Stdout = os.Stdout
 		buildCmd.Stderr = os.Stderr
 		if err := buildCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to build %s: %v\n", img.tag, err)
+			u.Warnf("failed to build %s: %v", img.tag, err)
 			continue
 		}
 
-		fmt.Printf("Importing %s into cluster %s...\n", img.tag, clusterName)
+		u.Infof("Importing %s into cluster %s...", img.tag, clusterName)
 		importCmd := exec.Command(k3dBinary, "image", "import", img.tag, "-c", clusterName)
 		importCmd.Stdout = os.Stdout
 		importCmd.Stderr = os.Stderr
 		if err := importCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+			u.Warnf("failed to import %s into k3d: %v", img.tag, err)
 		}
 	}
 }

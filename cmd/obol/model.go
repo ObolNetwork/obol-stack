@@ -212,7 +212,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			name := cmd.String("name")
-			endpoint := model.WarnAndStripV1Suffix(cmd.String("endpoint"))
+			endpoint := model.WarnAndStripV1Suffix(cmd.String("endpoint"), u)
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
@@ -322,11 +322,13 @@ func modelPullCommand() *cli.Command {
 				}
 			}
 
-			fmt.Printf("Pulling model: %s\n\n", modelName)
-			if err := model.PullOllamaModel(modelName); err != nil {
+			u.Infof("Pulling model: %s", modelName)
+			u.Blank()
+			if err := model.PullOllamaModel(modelName, u); err != nil {
 				return err
 			}
-			fmt.Printf("\nModel %s is ready.\n", modelName)
+			u.Blank()
+			u.Successf("Model %s is ready.", modelName)
 			return nil
 		},
 	}
@@ -390,27 +392,27 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 			// List local Ollama models
 			models, err := model.ListOllamaModels()
 			if err != nil {
-				fmt.Printf("Local models (Ollama): not available (%s)\n", err)
+				u.Printf("Local models (Ollama): not available (%s)", err)
 			} else if len(models) == 0 {
-				fmt.Println("Local models (Ollama): none pulled")
-				fmt.Println()
-				fmt.Println("  Pull a model with: obol model pull")
+				u.Print("Local models (Ollama): none pulled")
+				u.Blank()
+				u.Dim("  Pull a model with: obol model pull")
 			} else {
-				fmt.Println("Local models (Ollama):")
-				fmt.Println()
-				fmt.Printf("  %-35s %s\n", "NAME", "SIZE")
+				u.Print("Local models (Ollama):")
+				u.Blank()
+				u.Printf("  %-35s %s", "NAME", "SIZE")
 				for _, m := range models {
-					fmt.Printf("  %-35s %s\n", m.Name, model.FormatBytes(m.Size))
+					u.Printf("  %-35s %s", m.Name, model.FormatBytes(m.Size))
 				}
 			}
-			fmt.Println()
+			u.Blank()
 
 			// Show LiteLLM configured models
 			providerStatus, err := model.GetProviderStatus(cfg)
 			if err != nil {
-				fmt.Println("LiteLLM gateway: cluster not running")
-				fmt.Println()
-				fmt.Println("  Run 'obol stack up' then 'obol model setup' to configure a provider.")
+				u.Print("LiteLLM gateway: cluster not running")
+				u.Blank()
+				u.Dim("  Run 'obol stack up' then 'obol model setup' to configure a provider.")
 			} else {
 				providers := make([]string, 0, len(providerStatus))
 				for name := range providerStatus {
@@ -418,9 +420,9 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 				}
 				sort.Strings(providers)
 
-				fmt.Println("LiteLLM gateway models:")
-				fmt.Println()
-				fmt.Printf("  %-20s %-10s %s\n", "PROVIDER", "STATUS", "MODELS")
+				u.Print("LiteLLM gateway models:")
+				u.Blank()
+				u.Printf("  %-20s %-10s %s", "PROVIDER", "STATUS", "MODELS")
 				for _, name := range providers {
 					s := providerStatus[name]
 					status := "disabled"
@@ -431,7 +433,7 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 					if modelList == "" {
 						modelList = "-"
 					}
-					fmt.Printf("  %-20s %-10s %s\n", name, status, modelList)
+					u.Printf("  %-20s %-10s %s", name, status, modelList)
 				}
 			}
 

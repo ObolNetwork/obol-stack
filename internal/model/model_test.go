@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 func TestBuildModelEntries(t *testing.T) {
@@ -573,7 +575,7 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		defer srv.Close()
 
 		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
-		err := PullOllamaModel("llama3.2:3b")
+		err := PullOllamaModel("llama3.2:3b", ui.New(false))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -592,7 +594,7 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 		defer srv.Close()
 
 		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
-		err := PullOllamaModel("nonexistent:latest")
+		err := PullOllamaModel("nonexistent:latest", ui.New(false))
 		if err == nil {
 			t.Fatal("expected error for nonexistent model")
 		}
@@ -603,7 +605,7 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 
 	t.Run("server not running", func(t *testing.T) {
 		t.Setenv("OLLAMA_HOST", "localhost:19999")
-		err := PullOllamaModel("llama3.2:3b")
+		err := PullOllamaModel("llama3.2:3b", ui.New(false))
 		if err == nil {
 			t.Fatal("expected error when server is not running")
 		}

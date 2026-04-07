@@ -363,7 +363,7 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	}
 	// EnsureRunning already calls InjectBaseURL + SyncTunnelConfigMap.
 	// Also sync the agent overlay for helmfile consistency.
-	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
+	if err := SyncAgentBaseURL(cfg, tunnelURL, u); err != nil {
 		u.Warnf("could not sync AGENT_BASE_URL to obol-agent overlay: %v", err)
 	}
 	// Create the storefront landing page for the tunnel hostname.

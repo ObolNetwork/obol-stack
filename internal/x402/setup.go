@@ -8,6 +8,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -174,7 +175,7 @@ subjects:
 
 // EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.
 // Idempotent — kubectl apply is safe to run multiple times.
-func EnsureVerifier(cfg *config.Config) error {
+func EnsureVerifier(cfg *config.Config, u *ui.UI) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
@@ -185,24 +186,24 @@ func EnsureVerifier(cfg *config.Config) error {
 		return nil
 	}
 
-	fmt.Println("Deploying x402 payment verifier...")
+	u.Info("Deploying x402 payment verifier...")
 	return kubectl.Apply(bin, kc, x402Manifest)
 }
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
 // If facilitatorURL is empty, the default (https://facilitator.x402.rs) is used.
-func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
+func Setup(cfg *config.Config, wallet, chain, facilitatorURL string, u *ui.UI) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
 	}
-	if err := EnsureVerifier(cfg); err != nil {
+	if err := EnsureVerifier(cfg, u); err != nil {
 		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 	bin, kc := kubectl.Paths(cfg)
 
 	// 1. Patch the Secret with the wallet address.
-	fmt.Printf("Configuring x402: setting wallet address...\n")
+	u.Info("Configuring x402: setting wallet address...")
 	secretPatch := map[string]any{"stringData": map[string]string{"WALLET_ADDRESS": wallet}}
 	patchJSON, err := json.Marshal(secretPatch)
 	if err != nil {
@@ -216,7 +217,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 
 	// 2. Update the pricing ConfigMap with wallet and chain.
 	// Read existing config to preserve routes added by the ServiceOffer reconciler.
-	fmt.Printf("Updating x402 pricing config...\n")
+	u.Info("Updating x402 pricing config...")
 	if facilitatorURL == "" {
 		facilitatorURL = "https://facilitator.x402.rs"
 	}
@@ -236,14 +237,14 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
-	fmt.Printf("x402 configured: wallet=%s chain=%s\n", wallet, chain)
+	u.Successf("x402 configured: wallet=%s chain=%s", wallet, chain)
 	return nil
 }
 
 // AddRoute adds a pricing route to the x402 ConfigMap.
 // Optional per-route payTo and network override the global config when set.
-func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
-	if err := EnsureVerifier(cfg); err != nil {
+func AddRoute(cfg *config.Config, u *ui.UI, pattern, price, description string, opts ...RouteOption) error {
+	if err := EnsureVerifier(cfg, u); err != nil {
 		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 

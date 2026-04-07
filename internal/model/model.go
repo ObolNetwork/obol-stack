@@ -852,11 +852,11 @@ func decodeBase64(s string) (string, error) {
 // WarnAndStripV1Suffix checks if an endpoint URL has a trailing /v1 suffix,
 // warns the user, and returns the stripped URL. For OpenAI-compatible providers,
 // LiteLLM auto-appends /v1, causing double /v1/v1 if the user includes it.
-func WarnAndStripV1Suffix(endpoint string) string {
+func WarnAndStripV1Suffix(endpoint string, u *ui.UI) string {
 	trimmed := strings.TrimRight(endpoint, "/")
 	if strings.HasSuffix(trimmed, "/v1") {
-		fmt.Printf("  Warning: stripping trailing /v1 from endpoint URL (LiteLLM adds it automatically)\n")
-		fmt.Printf("  %s → %s\n", trimmed, strings.TrimSuffix(trimmed, "/v1"))
+		u.Warn("stripping trailing /v1 from endpoint URL (LiteLLM adds it automatically)")
+		u.Dim(fmt.Sprintf("  %s → %s", trimmed, strings.TrimSuffix(trimmed, "/v1")))
 		return strings.TrimSuffix(trimmed, "/v1")
 	}
 	return endpoint
@@ -925,7 +925,7 @@ func ListOllamaModels() ([]OllamaModel, error) {
 
 // PullOllamaModel pulls a model from the Ollama registry.
 // It streams progress to stdout, matching the UX of `ollama pull`.
-func PullOllamaModel(name string) error {
+func PullOllamaModel(name string, u *ui.UI) error {
 	endpoint := ollamaEndpoint()
 	pullURL, err := url.JoinPath(endpoint, "api", "pull")
 	if err != nil {

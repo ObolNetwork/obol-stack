@@ -21,6 +21,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/testutil"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
@@ -1347,7 +1348,7 @@ func setupMockFacilitator(t *testing.T, cfg *config.Config) *testutil.MockFacili
 // addPricingRoute adds a route to the x402-verifier ConfigMap with per-route payTo.
 func addPricingRoute(t *testing.T, cfg *config.Config, pattern, price, wallet string) {
 	t.Helper()
-	if err := x402verifier.AddRoute(cfg, pattern, price, "test route",
+	if err := x402verifier.AddRoute(cfg, ui.New(false), pattern, price, "test route",
 		x402verifier.WithPayTo(wallet)); err != nil {
 		t.Fatalf("add pricing route: %v", err)
 	}

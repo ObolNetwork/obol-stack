@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const agentDeploymentID = "obol-agent"
@@ -15,7 +16,7 @@ const agentDeploymentID = "obol-agent"
 // SyncAgentBaseURL patches AGENT_BASE_URL in the obol-agent's values-obol.yaml
 // and runs helmfile sync to apply the change. It is a no-op if the obol-agent
 // deployment directory does not exist (agent not yet initialized).
-func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
+func SyncAgentBaseURL(cfg *config.Config, tunnelURL string, u *ui.UI) error {
 	overlayPath := agentOverlayPath(cfg)
 	if _, err := os.Stat(overlayPath); os.IsNotExist(err) {
 		return nil // agent not deployed yet — nothing to do
@@ -30,23 +31,23 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
 		// Overlay exists but helmfile.yaml is missing — unusual, skip sync.
-		fmt.Printf("⚠ AGENT_BASE_URL updated in values-obol.yaml but helmfile.yaml not found; run 'obol openclaw sync %s' manually.\n", agentDeploymentID)
+		u.Warnf("AGENT_BASE_URL updated in values-obol.yaml but helmfile.yaml not found; run 'obol openclaw sync %s' manually.", agentDeploymentID)
 		return nil
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		fmt.Printf("⚠ AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol openclaw sync %s'.\n", agentDeploymentID)
+		u.Warnf("AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol openclaw sync %s'.", agentDeploymentID)
 		return nil
 	}
 
 	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
 	if _, err := os.Stat(helmfileBin); os.IsNotExist(err) {
-		fmt.Printf("⚠ helmfile not found at %s; run 'obol openclaw sync %s' manually.\n", helmfileBin, agentDeploymentID)
+		u.Warnf("helmfile not found at %s; run 'obol openclaw sync %s' manually.", helmfileBin, agentDeploymentID)
 		return nil
 	}
 
-	fmt.Printf("Syncing AGENT_BASE_URL=%s to obol-agent...\n", tunnelURL)
+	u.Infof("Syncing AGENT_BASE_URL=%s to obol-agent...", tunnelURL)
 	cmd := exec.Command(helmfileBin, "-f", helmfilePath, "sync")
 	cmd.Dir = deploymentDir
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
@@ -58,7 +59,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 		return fmt.Errorf("helmfile sync failed for obol-agent: %w", err)
 	}
 
-	fmt.Println("✓ AGENT_BASE_URL synced to obol-agent")
+	u.Success("AGENT_BASE_URL synced to obol-agent")
 	return nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/scrypt"
@@ -386,7 +387,7 @@ func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 // ensureWallet checks if wallet files exist for a deployment. If not
 // (e.g., a pre-wallet deployment), it generates and provisions them.
 // This is called during doSync to handle upgrades gracefully.
-func ensureWallet(cfg *config.Config, id, deploymentDir string) {
+func ensureWallet(cfg *config.Config, id, deploymentDir string, u *ui.UI) {
 	// Check if wallet metadata already exists.
 	if _, err := os.Stat(walletMetadataPath(deploymentDir)); err == nil {
 		return // wallet already provisioned
@@ -399,31 +400,31 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	// No wallet yet — generate one.
-	fmt.Println("Generating Ethereum wallet for this instance...")
+	u.Info("Generating Ethereum wallet for this instance...")
 	wallet, err := GenerateWallet(cfg, id)
 	if err != nil {
-		fmt.Printf("Warning: could not generate wallet: %v\n", err)
+		u.Warnf("could not generate wallet: %v", err)
 		return
 	}
 
 	values := generateRemoteSignerValues(wallet)
 	if err := os.WriteFile(valuesPath, []byte(values), 0644); err != nil {
-		fmt.Printf("Warning: could not write remote-signer values: %v\n", err)
+		u.Warnf("could not write remote-signer values: %v", err)
 		return
 	}
 
 	if err := WriteWalletMetadata(deploymentDir, wallet); err != nil {
-		fmt.Printf("Warning: could not write wallet metadata: %v\n", err)
+		u.Warnf("could not write wallet metadata: %v", err)
 		return
 	}
 
-	fmt.Printf("  Wallet address: %s\n", wallet.Address)
+	u.Detail("Wallet address", wallet.Address)
 }
 
 // applyWalletMetadataConfigMap creates or updates a wallet-metadata ConfigMap
 // in the instance namespace. The frontend reads this to display wallet addresses.
 // Must be called after helmfile sync (namespace must exist).
-func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) {
+func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string, u *ui.UI) {
 	wallet, err := ReadWalletMetadata(deploymentDir)
 	if err != nil {
 		return // no wallet metadata, nothing to apply
@@ -449,7 +450,7 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 
 	addressesData, err := json.Marshal(addressesJSON)
 	if err != nil {
-		fmt.Printf("Warning: could not marshal wallet metadata: %v\n", err)
+		u.Warnf("could not marshal wallet metadata: %v", err)
 		return
 	}
 
@@ -471,7 +472,7 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 
 	raw, err := json.Marshal(manifest)
 	if err != nil {
-		fmt.Printf("Warning: could not marshal ConfigMap: %v\n", err)
+		u.Warnf("could not marshal ConfigMap: %v", err)
 		return
 	}
 
@@ -481,6 +482,6 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Warning: could not apply wallet-metadata ConfigMap: %v\n%s", err, stderr.String())
+		u.Warnf("could not apply wallet-metadata ConfigMap: %v\n%s", err, stderr.String())
 	}
 }

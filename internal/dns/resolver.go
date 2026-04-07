@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -54,15 +56,15 @@ const (
 // EnsureRunning starts the DNS resolver. On macOS, this starts a dnsmasq
 // Docker container. On Linux, this is a no-op — NM dnsmasq handles
 // resolution without a container.
-func EnsureRunning() error {
+func EnsureRunning(u *ui.UI) error {
 	if runtime.GOOS == "darwin" {
-		return ensureMacOSContainer()
+		return ensureMacOSContainer(u)
 	}
 	return nil
 }
 
 // Stop removes the DNS resolver container (macOS only).
-func Stop() {
+func Stop(u *ui.UI) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
@@ -70,7 +72,7 @@ func Stop() {
 		return
 	}
 	exec.Command("docker", "rm", "-f", containerName).Run() //nolint:errcheck
-	fmt.Println("DNS resolver stopped")
+	u.Print("DNS resolver stopped")
 }
 
 // ConfigureSystemResolver sets up the host OS to route *.obol.stack queries
@@ -78,24 +80,24 @@ func Stop() {
 //
 // macOS: creates /etc/resolver/obol.stack
 // Linux: configures NM dnsmasq plugin for wildcard resolution
-func ConfigureSystemResolver() error {
+func ConfigureSystemResolver(u *ui.UI) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return configureMacOSResolver()
+		return configureMacOSResolver(u)
 	case "linux":
-		return configureLinuxResolver()
+		return configureLinuxResolver(u)
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 }
 
 // RemoveSystemResolver removes the host OS DNS configuration for *.obol.stack.
-func RemoveSystemResolver() {
+func RemoveSystemResolver(u *ui.UI) {
 	switch runtime.GOOS {
 	case "darwin":
-		removeMacOSResolver()
+		removeMacOSResolver(u)
 	case "linux":
-		removeNMDnsmasq()
+		removeNMDnsmasq(u)
 	}
 	RemoveHostsEntries()
 }
@@ -239,7 +241,7 @@ func removeBlock(content string) string {
 
 // --- macOS ---
 
-func ensureMacOSContainer() error {
+func ensureMacOSContainer(u *ui.UI) error {
 	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", containerName).Output()
 	if err == nil && strings.TrimSpace(string(out)) == "true" {
 		return nil
@@ -247,7 +249,7 @@ func ensureMacOSContainer() error {
 
 	exec.Command("docker", "rm", "-f", containerName).Run() //nolint:errcheck
 
-	fmt.Println("Starting DNS resolver for *.obol.stack...")
+	u.Info("Starting DNS resolver for *.obol.stack...")
 
 	cmd := exec.Command("docker", "run", "-d", "--name", containerName,
 		"-p", macHostPort+":53/udp",
@@ -265,11 +267,11 @@ func ensureMacOSContainer() error {
 		return fmt.Errorf("failed to start DNS container: %w\n%s", err, output)
 	}
 
-	fmt.Printf("DNS resolver running (*.obol.stack → 127.0.0.1, port %s)\n", macHostPort)
+	u.Successf("DNS resolver running (*.obol.stack → 127.0.0.1, port %s)", macHostPort)
 	return nil
 }
 
-func configureMacOSResolver() error {
+func configureMacOSResolver(u *ui.UI) error {
 	path := filepath.Join(macResolverDir, macResolverFile)
 
 	if data, err := os.ReadFile(path); err == nil {
@@ -280,7 +282,7 @@ func configureMacOSResolver() error {
 
 	content := fmt.Sprintf("# Managed by obol-stack — resolves *.obol.stack to localhost\nnameserver 127.0.0.1\nport %s\n", macHostPort)
 
-	fmt.Println("Configuring macOS DNS resolver for *.obol.stack (requires sudo)...")
+	u.Info("Configuring macOS DNS resolver for *.obol.stack (requires sudo)...")
 
 	mkdirCmd := exec.Command("sudo", "mkdir", "-p", macResolverDir)
 	mkdirCmd.Stdout = os.Stdout
@@ -297,21 +299,21 @@ func configureMacOSResolver() error {
 		return fmt.Errorf("failed to write %s: %w", path, err)
 	}
 
-	fmt.Printf("Resolver configured: %s → 127.0.0.1:%s\n", path, macHostPort)
+	u.Successf("Resolver configured: %s → 127.0.0.1:%s", path, macHostPort)
 	return nil
 }
 
-func removeMacOSResolver() {
+func removeMacOSResolver(u *ui.UI) {
 	path := filepath.Join(macResolverDir, macResolverFile)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
 	}
 	if err := exec.Command("sudo", "rm", path).Run(); err != nil {
-		fmt.Printf("Warning: failed to remove %s: %v\n", path, err)
-		fmt.Printf("  Remove manually: sudo rm %s\n", path)
+		u.Warnf("failed to remove %s: %v", path, err)
+		u.Dim("  Remove manually: sudo rm " + path)
 		return
 	}
-	fmt.Printf("Removed DNS resolver config: %s\n", path)
+	u.Successf("Removed DNS resolver config: %s", path)
 }
 
 // --- Linux (NetworkManager dnsmasq plugin) ---
@@ -319,8 +321,8 @@ func removeMacOSResolver() {
 // configureLinuxResolver sets up NM's dnsmasq plugin for *.obol.stack.
 // Returns a non-fatal error when NetworkManager is unavailable (e.g. headless
 // servers) — the caller falls back to /etc/hosts entries.
-func configureLinuxResolver() error {
-	if configureNMDnsmasq() {
+func configureLinuxResolver(u *ui.UI) error {
+	if configureNMDnsmasq(u) {
 		return nil
 	}
 
@@ -347,7 +349,7 @@ func isNMResolvConfActive() bool {
 
 // configureNMDnsmasq sets up NM's built-in dnsmasq plugin for *.obol.stack.
 // Returns true if successful, false if NM is not available.
-func configureNMDnsmasq() bool {
+func configureNMDnsmasq(u *ui.UI) bool {
 	// Check if NetworkManager is running
 	if err := exec.Command("systemctl", "is-active", "--quiet", "NetworkManager").Run(); err != nil {
 		return false
@@ -367,13 +369,13 @@ func configureNMDnsmasq() bool {
 	// resolv.conf update (handles systems where NM was restarted but symlink
 	// wasn't updated, e.g. because of a prior partial installation).
 	if hasNMDnsmasqConfig() {
-		updateResolvConf()
+		updateResolvConf(u)
 		cleanupResolvedDropIn()
-		fmt.Printf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)\n", domain)
+		u.Successf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)", domain)
 		return true
 	}
 
-	fmt.Println("Configuring NetworkManager DNS for *.obol.stack (requires sudo)...")
+	u.Info("Configuring NetworkManager DNS for *.obol.stack (requires sudo)...")
 
 	nmDNSMode := getNMDNSMode()
 
@@ -382,7 +384,7 @@ func configureNMDnsmasq() bool {
 	mkdirCmd.Stdout = os.Stdout
 	mkdirCmd.Stderr = os.Stderr
 	if err := mkdirCmd.Run(); err != nil {
-		fmt.Printf("Warning: failed to create %s: %v\n", nmDnsmasqDir, err)
+		u.Warnf("failed to create %s: %v", nmDnsmasqDir, err)
 		return false
 	}
 
@@ -392,7 +394,7 @@ func configureNMDnsmasq() bool {
 	writeCmd.Stdout = nil
 	writeCmd.Stderr = os.Stderr
 	if err := writeCmd.Run(); err != nil {
-		fmt.Printf("Warning: failed to write dnsmasq config: %v\n", err)
+		u.Warnf("failed to write dnsmasq config: %v", err)
 		return false
 	}
 
@@ -402,7 +404,7 @@ func configureNMDnsmasq() bool {
 		mkdirCmd2.Stdout = os.Stdout
 		mkdirCmd2.Stderr = os.Stderr
 		if err := mkdirCmd2.Run(); err != nil {
-			fmt.Printf("Warning: failed to create %s: %v\n", nmConfDir, err)
+			u.Warnf("failed to create %s: %v", nmConfDir, err)
 			return false
 		}
 
@@ -412,7 +414,7 @@ func configureNMDnsmasq() bool {
 		writeCmd2.Stdout = nil
 		writeCmd2.Stderr = os.Stderr
 		if err := writeCmd2.Run(); err != nil {
-			fmt.Printf("Warning: failed to write NM config: %v\n", err)
+			u.Warnf("failed to write NM config: %v", err)
 			return false
 		}
 	}
@@ -422,19 +424,19 @@ func configureNMDnsmasq() bool {
 	restartCmd.Stdout = os.Stdout
 	restartCmd.Stderr = os.Stderr
 	if err := restartCmd.Run(); err != nil {
-		fmt.Printf("Warning: failed to restart NetworkManager: %v\n", err)
-		fmt.Println("  Run manually: sudo systemctl restart NetworkManager")
+		u.Warnf("failed to restart NetworkManager: %v", err)
+		u.Dim("  Run manually: sudo systemctl restart NetworkManager")
 		return true // Config files are in place, will work after manual restart
 	}
 
 	// Point /etc/resolv.conf to NM's resolv.conf so applications query NM's
 	// dnsmasq directly, bypassing systemd-resolved's DoT stub.
-	updateResolvConf()
+	updateResolvConf(u)
 
 	// Remove the legacy systemd-resolved drop-in if left from a prior install.
 	cleanupResolvedDropIn()
 
-	fmt.Printf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)\n", domain)
+	u.Successf("DNS resolver configured: *.%s → 127.0.0.1 (NM dnsmasq plugin)", domain)
 	return true
 }
 
@@ -442,7 +444,7 @@ func configureNMDnsmasq() bool {
 // NM writes nameserver 127.0.1.1 there when dns=dnsmasq is active.
 // This bypasses systemd-resolved's stub (which may have DoT issues with
 // local addresses) and sends all DNS queries directly to NM's dnsmasq.
-func updateResolvConf() {
+func updateResolvConf(u *ui.UI) {
 	// Wait for NM to generate its resolv.conf after restart (max 3s)
 	for i := 0; i < 6; i++ {
 		if _, err := os.Stat(nmResolvConf); err == nil {
@@ -455,8 +457,8 @@ func updateResolvConf() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Warning: failed to update %s: %v\n", systemResolvConf, err)
-		fmt.Printf("  Run manually: sudo ln -sf %s %s\n", nmResolvConf, systemResolvConf)
+		u.Warnf("failed to update %s: %v", systemResolvConf, err)
+		u.Dim(fmt.Sprintf("  Run manually: sudo ln -sf %s %s", nmResolvConf, systemResolvConf))
 		return
 	}
 
@@ -468,7 +470,7 @@ func updateResolvConf() {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	fmt.Println("Warning: DNS not yet responding after NM restart; may need a moment to stabilize")
+	u.Warn("DNS not yet responding after NM restart; may need a moment to stabilize")
 }
 
 // cleanupResolvedDropIn removes the legacy systemd-resolved drop-in that was
@@ -508,7 +510,7 @@ func getNMDNSMode() string {
 }
 
 // removeNMDnsmasq removes the NM dnsmasq config files and restarts NM.
-func removeNMDnsmasq() {
+func removeNMDnsmasq(u *ui.UI) {
 	dnsmasqPath := filepath.Join(nmDnsmasqDir, nmDnsmasqFile)
 	nmPath := filepath.Join(nmConfDir, nmConfFile)
 
@@ -516,7 +518,7 @@ func removeNMDnsmasq() {
 
 	if _, err := os.Stat(dnsmasqPath); err == nil {
 		if err := exec.Command("sudo", "rm", dnsmasqPath).Run(); err != nil {
-			fmt.Printf("Warning: failed to remove %s: %v\n", dnsmasqPath, err)
+			u.Warnf("failed to remove %s: %v", dnsmasqPath, err)
 		} else {
 			removedAny = true
 		}
@@ -524,7 +526,7 @@ func removeNMDnsmasq() {
 
 	if _, err := os.Stat(nmPath); err == nil {
 		if err := exec.Command("sudo", "rm", nmPath).Run(); err != nil {
-			fmt.Printf("Warning: failed to remove %s: %v\n", nmPath, err)
+			u.Warnf("failed to remove %s: %v", nmPath, err)
 		} else {
 			removedAny = true
 		}
@@ -532,16 +534,16 @@ func removeNMDnsmasq() {
 
 	if removedAny {
 		if err := exec.Command("sudo", "systemctl", "restart", "NetworkManager").Run(); err != nil {
-			fmt.Printf("Warning: failed to restart NetworkManager: %v\n", err)
+			u.Warnf("failed to restart NetworkManager: %v", err)
 		}
 		// Restore systemd-resolved's stub resolver in /etc/resolv.conf
 		if isNMResolvConfActive() {
 			restoreCmd := exec.Command("sudo", "ln", "-sf", resolvedStubConf, systemResolvConf)
 			if err := restoreCmd.Run(); err != nil {
-				fmt.Printf("Warning: failed to restore %s: %v\n", systemResolvConf, err)
-				fmt.Printf("  Run manually: sudo ln -sf %s %s\n", resolvedStubConf, systemResolvConf)
+				u.Warnf("failed to restore %s: %v", systemResolvConf, err)
+				u.Dim(fmt.Sprintf("  Run manually: sudo ln -sf %s %s", resolvedStubConf, systemResolvConf))
 			}
 		}
-		fmt.Println("Removed NM dnsmasq DNS config")
+		u.Success("Removed NM dnsmasq DNS config")
 	}
 }

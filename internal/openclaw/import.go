@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 // ImportResult holds the parsed configuration from ~/.openclaw/openclaw.json
@@ -14,6 +16,7 @@ type ImportResult struct {
 	AgentModel   string
 	Channels     ImportedChannels
 	WorkspaceDir string // path to ~/.openclaw/workspace/ if it exists and contains marker files
+	Notes        []string // informational notes collected during detection
 }
 
 // ImportedProvider represents a model provider extracted from openclaw.json
@@ -127,12 +130,16 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 	}
 
 	// Detect workspace directory
-	result.WorkspaceDir = detectWorkspace(home, cfg.Agents.Defaults.Workspace)
+	wsDir, wsNote := detectWorkspace(home, cfg.Agents.Defaults.Workspace)
+	result.WorkspaceDir = wsDir
+	if wsNote != "" {
+		result.Notes = append(result.Notes, wsNote)
+	}
 
 	for name, p := range cfg.Models.Providers {
 		sanitized := sanitizeModelAPI(p.API)
 		if p.API != "" && sanitized == "" {
-			fmt.Printf("  Note: unknown API type '%s' for provider '%s', will auto-detect\n", p.API, name)
+			result.Notes = append(result.Notes, fmt.Sprintf("unknown API type '%s' for provider '%s', will auto-detect", p.API, name))
 		}
 		ip := ImportedProvider{
 			Name:         name,
@@ -147,7 +154,7 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 			if envVar, ok := extractEnvVarName(p.APIKey); ok {
 				ip.APIKeyEnvVar = envVar
 			} else {
-				fmt.Printf("  Note: provider '%s' uses an env-var reference for its API key (will need manual configuration)\n", name)
+				result.Notes = append(result.Notes, fmt.Sprintf("provider '%s' uses an env-var reference for its API key (will need manual configuration)", name))
 			}
 		}
 		for _, m := range p.Models {
@@ -160,14 +167,14 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 		if !isEnvVarRef(cfg.Channels.Telegram.BotToken) {
 			result.Channels.Telegram = &ImportedTelegram{BotToken: cfg.Channels.Telegram.BotToken}
 		} else {
-			fmt.Printf("  Note: Telegram bot token uses env-var reference (will need manual configuration)\n")
+			result.Notes = append(result.Notes, "Telegram bot token uses env-var reference (will need manual configuration)")
 		}
 	}
 	if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
 		if !isEnvVarRef(cfg.Channels.Discord.BotToken) {
 			result.Channels.Discord = &ImportedDiscord{BotToken: cfg.Channels.Discord.BotToken}
 		} else {
-			fmt.Printf("  Note: Discord bot token uses env-var reference (will need manual configuration)\n")
+			result.Notes = append(result.Notes, "Discord bot token uses env-var reference (will need manual configuration)")
 		}
 	}
 	if cfg.Channels.Slack != nil {
@@ -180,10 +187,10 @@ func detectExistingConfigAt(home string) (*ImportResult, error) {
 			if appToken != "" && !isEnvVarRef(appToken) {
 				result.Channels.Slack.AppToken = appToken
 			} else if appToken != "" {
-				fmt.Printf("  Note: Slack app token uses env-var reference (will need manual configuration)\n")
+				result.Notes = append(result.Notes, "Slack app token uses env-var reference (will need manual configuration)")
 			}
 		} else if botToken != "" {
-			fmt.Printf("  Note: Slack bot token uses env-var reference (will need manual configuration)\n")
+			result.Notes = append(result.Notes, "Slack bot token uses env-var reference (will need manual configuration)")
 		}
 	}
 
@@ -262,35 +269,37 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 }
 
 // PrintImportSummary prints a human-readable summary of detected config
-func PrintImportSummary(result *ImportResult) {
+func PrintImportSummary(result *ImportResult, u *ui.UI) {
 	if result == nil {
 		return
 	}
 
-	fmt.Println("Detected existing OpenClaw installation (~/.openclaw/):")
+	u.Info("Detected existing OpenClaw installation (~/.openclaw/):")
 	if len(result.Providers) > 0 {
-		fmt.Printf("  Providers: ")
 		names := make([]string, 0, len(result.Providers))
 		for _, p := range result.Providers {
 			names = append(names, p.Name)
 		}
-		fmt.Println(strings.Join(names, ", "))
+		u.Detail("Providers", strings.Join(names, ", "))
 	}
 	if result.AgentModel != "" {
-		fmt.Printf("  Agent model: %s\n", result.AgentModel)
+		u.Detail("Agent model", result.AgentModel)
 	}
 	if result.Channels.Telegram != nil {
-		fmt.Println("  Telegram: configured")
+		u.Detail("Telegram", "configured")
 	}
 	if result.Channels.Discord != nil {
-		fmt.Println("  Discord: configured")
+		u.Detail("Discord", "configured")
 	}
 	if result.Channels.Slack != nil {
-		fmt.Println("  Slack: configured")
+		u.Detail("Slack", "configured")
 	}
 	if result.WorkspaceDir != "" {
 		files := detectWorkspaceFiles(result.WorkspaceDir)
-		fmt.Printf("  Workspace: %s (%s)\n", result.WorkspaceDir, strings.Join(files, ", "))
+		u.Detail("Workspace", fmt.Sprintf("%s (%s)", result.WorkspaceDir, strings.Join(files, ", ")))
+	}
+	for _, note := range result.Notes {
+		u.Dim("  Note: " + note)
 	}
 }
 
@@ -299,7 +308,8 @@ var workspaceMarkers = []string{"SOUL.md", "AGENTS.md", "IDENTITY.md"}
 
 // detectWorkspace checks for an OpenClaw workspace directory and returns
 // its path if it exists and contains at least one marker file.
-func detectWorkspace(home, configWorkspace string) string {
+// Returns a note string if the directory exists but has no marker files.
+func detectWorkspace(home, configWorkspace string) (string, string) {
 	// Use custom workspace path from config if set
 	wsDir := configWorkspace
 	if wsDir == "" {
@@ -308,19 +318,18 @@ func detectWorkspace(home, configWorkspace string) string {
 
 	info, err := os.Stat(wsDir)
 	if err != nil || !info.IsDir() {
-		return ""
+		return "", ""
 	}
 
 	// Verify at least one marker file exists
 	for _, marker := range workspaceMarkers {
 		if _, err := os.Stat(filepath.Join(wsDir, marker)); err == nil {
-			return wsDir
+			return wsDir, ""
 		}
 	}
 
 	// Directory exists but has no marker files
-	fmt.Printf("  Note: workspace at %s has no marker files (SOUL.md, AGENTS.md, IDENTITY.md)\n", wsDir)
-	return ""
+	return "", fmt.Sprintf("workspace at %s has no marker files (SOUL.md, AGENTS.md, IDENTITY.md)", wsDir)
 }
 
 // detectWorkspaceFiles returns the names of workspace files that exist

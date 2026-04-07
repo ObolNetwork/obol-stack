@@ -104,7 +104,7 @@ func TestDetectWorkspace(t *testing.T) {
 		os.MkdirAll(wsDir, 0755)
 		os.WriteFile(filepath.Join(wsDir, "SOUL.md"), []byte("test"), 0644)
 
-		got := detectWorkspace(home, "")
+		got, _ := detectWorkspace(home, "")
 		if got != wsDir {
 			t.Errorf("detectWorkspace() = %q, want %q", got, wsDir)
 		}
@@ -116,7 +116,7 @@ func TestDetectWorkspace(t *testing.T) {
 		os.MkdirAll(wsDir, 0755)
 		os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("test"), 0644)
 
-		got := detectWorkspace(home, "")
+		got, _ := detectWorkspace(home, "")
 		if got != wsDir {
 			t.Errorf("detectWorkspace() = %q, want %q", got, wsDir)
 		}
@@ -128,7 +128,7 @@ func TestDetectWorkspace(t *testing.T) {
 		os.MkdirAll(wsDir, 0755)
 		os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"), []byte("test"), 0644)
 
-		got := detectWorkspace(home, "")
+		got, _ := detectWorkspace(home, "")
 		if got != wsDir {
 			t.Errorf("detectWorkspace() = %q, want %q", got, wsDir)
 		}
@@ -140,15 +140,18 @@ func TestDetectWorkspace(t *testing.T) {
 		os.MkdirAll(wsDir, 0755)
 		os.WriteFile(filepath.Join(wsDir, "readme.txt"), []byte("test"), 0644)
 
-		got := detectWorkspace(home, "")
+		got, note := detectWorkspace(home, "")
 		if got != "" {
 			t.Errorf("detectWorkspace() = %q, want empty", got)
+		}
+		if note == "" {
+			t.Error("expected a note about missing marker files")
 		}
 	})
 
 	t.Run("dir does not exist", func(t *testing.T) {
 		home := t.TempDir()
-		got := detectWorkspace(home, "")
+		got, _ := detectWorkspace(home, "")
 		if got != "" {
 			t.Errorf("detectWorkspace() = %q, want empty", got)
 		}
@@ -160,7 +163,7 @@ func TestDetectWorkspace(t *testing.T) {
 		os.MkdirAll(customWs, 0755)
 		os.WriteFile(filepath.Join(customWs, "SOUL.md"), []byte("test"), 0644)
 
-		got := detectWorkspace(home, customWs)
+		got, _ := detectWorkspace(home, customWs)
 		if got != customWs {
 			t.Errorf("detectWorkspace() = %q, want %q", got, customWs)
 		}

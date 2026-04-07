@@ -123,7 +123,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	tunnelURL := fmt.Sprintf("https://%s", hostname)
 
 	// Inject AGENT_BASE_URL into obol-agent overlay if deployed.
-	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
+	if err := SyncAgentBaseURL(cfg, tunnelURL, u); err != nil {
 		u.Warnf("could not sync AGENT_BASE_URL to obol-agent: %v", err)
 	}
 

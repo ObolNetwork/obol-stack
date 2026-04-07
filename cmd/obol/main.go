@@ -505,7 +505,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 						return u.JSON(result)
 					}
 					// Version output should always be unformatted for parseability.
-					fmt.Print(version.BuildInfo())
+					u.Print(version.BuildInfo())
 					return nil
 				},
 			},

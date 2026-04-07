@@ -201,7 +201,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		u.Warnf("failed to read existing config: %v", err)
 	}
 	if imported != nil {
-		PrintImportSummary(imported)
+		PrintImportSummary(imported, u)
 	}
 
 	// Interactive setup: auto-skip prompts when existing config has providers
@@ -210,7 +210,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			u.Print("\nUsing detected configuration from ~/.openclaw/")
 		} else {
 			var cloudProvider *CloudProviderInfo
-			imported, cloudProvider, err = interactiveSetup(cfg, imported)
+			imported, cloudProvider, err = interactiveSetup(cfg, imported, u)
 			if err != nil {
 				return fmt.Errorf("interactive setup failed: %w", err)
 			}
@@ -382,7 +382,7 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 
 	// Ensure wallet keystore + remote-signer values exist (handles
 	// deployments created before wallet was added, or manual re-syncs).
-	ensureWallet(cfg, id, deploymentDir)
+	ensureWallet(cfg, id, deploymentDir, u)
 
 	// Stage default skills and inject directly to the host-side PVC path.
 	// The local-path-provisioner creates the PV directory on the host at a
@@ -417,10 +417,10 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	// agents.defaults.model and agents.defaults.workspace into openclaw.json,
 	// so heartbeat config from values-obol.yaml is silently dropped. We read
 	// the rendered ConfigMap, merge heartbeat fields, and re-apply.
-	patchHeartbeatConfig(cfg, id, deploymentDir)
+	patchHeartbeatConfig(cfg, id, deploymentDir, u)
 
 	// Apply wallet-metadata ConfigMap (namespace now exists after helmfile sync).
-	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
+	applyWalletMetadataConfigMap(cfg, id, deploymentDir, u)
 
 	hostname := fmt.Sprintf("openclaw-%s.%s", id, defaultDomain)
 
@@ -1012,7 +1012,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	}
 
 	// Always show the provider prompt — that's the whole point of setup.
-	imported, cloudProvider, err := interactiveSetup(cfg, nil)
+	imported, cloudProvider, err := interactiveSetup(cfg, nil, u)
 	if err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
@@ -1955,7 +1955,7 @@ secrets:
 // patchHeartbeatConfig reads the rendered openclaw-config ConfigMap, injects
 // heartbeat configuration from values-obol.yaml, and re-applies it. This
 // compensates for the upstream Helm chart not rendering agents.defaults.heartbeat.
-func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
+func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string, u *ui.UI) {
 	// Read values-obol.yaml to check for heartbeat config.
 	valuesPath := filepath.Join(deploymentDir, "values-obol.yaml")
 	valuesRaw, err := os.ReadFile(valuesPath)
@@ -1996,14 +1996,14 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	var out bytes.Buffer
 	getCmd.Stdout = &out
 	if err := getCmd.Run(); err != nil {
-		fmt.Printf("Warning: could not read openclaw-config ConfigMap: %v\n", err)
+		u.Warnf("could not read openclaw-config ConfigMap: %v", err)
 		return
 	}
 
 	// Parse JSON config.
 	var cfgJSON map[string]interface{}
 	if err := json.Unmarshal(out.Bytes(), &cfgJSON); err != nil {
-		fmt.Printf("Warning: could not parse openclaw.json: %v\n", err)
+		u.Warnf("could not parse openclaw.json: %v", err)
 		return
 	}
 
@@ -2030,7 +2030,7 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	// Re-serialize.
 	patched, err := json.MarshalIndent(cfgJSON, "    ", "  ")
 	if err != nil {
-		fmt.Printf("Warning: could not marshal patched config: %v\n", err)
+		u.Warnf("could not marshal patched config: %v", err)
 		return
 	}
 
@@ -2056,11 +2056,11 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 	var applyErr bytes.Buffer
 	applyCmd.Stderr = &applyErr
 	if err := applyCmd.Run(); err != nil {
-		fmt.Printf("Warning: could not patch heartbeat config: %v\n%s\n", err, applyErr.String())
+		u.Warnf("could not patch heartbeat config: %v\n%s", err, applyErr.String())
 		return
 	}
 
-	fmt.Printf("✓ Heartbeat config injected (every: %s, target: %s)\n", every, target)
+	u.Successf("Heartbeat config injected (every: %s, target: %s)", every, target)
 }
 
 // ollamaEndpoint returns the base URL where host Ollama should be reachable.
@@ -2157,7 +2157,7 @@ func ollamaModelDisplayName(name string) string {
 // If imported is non-nil, offers to use the detected config.
 // Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
 // when a cloud provider was selected (so the caller can configure LiteLLM).
-func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
+func interactiveSetup(cfg *config.Config, imported *ImportResult, u *ui.UI) (*ImportResult, *CloudProviderInfo, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	if imported != nil {
@@ -2165,7 +2165,7 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(strings.ToLower(line))
 		if line == "" || line == "y" || line == "yes" {
-			fmt.Println("Using detected configuration.")
+			u.Print("Using detected configuration.")
 			return imported, nil, nil
 		}
 	}
@@ -2173,19 +2173,19 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 	// Detect Ollama on the host to decide whether to offer it as an option
 	ollamaAvailable := detectOllama()
 	if ollamaAvailable {
-		fmt.Printf("  ✓ Ollama detected at %s\n", ollamaEndpoint())
+		u.Successf("Ollama detected at %s", ollamaEndpoint())
 	} else {
-		fmt.Printf("  ⚠ Ollama not detected on host (%s)\n", ollamaEndpoint())
+		u.Warnf("Ollama not detected on host (%s)", ollamaEndpoint())
 	}
 
 	if ollamaAvailable {
-		fmt.Println("\nSelect a model provider:")
-		fmt.Println("  [1] Local Ollama via the Obol model gateway (default)")
-		fmt.Println("  [2] Anthropic API key via the Obol model gateway")
-		fmt.Println("  [3] OpenAI API key via the Obol model gateway")
-		fmt.Println("  [4] Direct Anthropic API key to the Openclaw gateway")
-		fmt.Println("  [5] Direct OpenAI API key to Openclaw gateway")
-		fmt.Println("  [6] Custom OpenAI-compatible endpoint to the Openclaw gateway")
+		u.Print("\nSelect a model provider:")
+		u.Print("  [1] Local Ollama via the Obol model gateway (default)")
+		u.Print("  [2] Anthropic API key via the Obol model gateway")
+		u.Print("  [3] OpenAI API key via the Obol model gateway")
+		u.Print("  [4] Direct Anthropic API key to the Openclaw gateway")
+		u.Print("  [5] Direct OpenAI API key to Openclaw gateway")
+		u.Print("  [6] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 		fmt.Print("\nChoice [1]: ")
 
 		line, _ := reader.ReadString('\n')
@@ -2196,53 +2196,53 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 		switch choice {
 		case "1":
-			fmt.Println("Using global Ollama route via LiteLLM.")
+			u.Print("Using global Ollama route via LiteLLM.")
 			return nil, nil, nil
 		case "2":
-			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+			cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", u)
 			if err != nil {
 				return nil, nil, err
 			}
 			result := buildLiteLLMRoutedOverlay(cfg, cloud)
 			return result, cloud, nil
 		case "3":
-			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
+			cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2", u)
 			if err != nil {
 				return nil, nil, err
 			}
 			result := buildLiteLLMRoutedOverlay(cfg, cloud)
 			return result, cloud, nil
 		case "4":
-			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+			result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6", u)
 			if err != nil {
 				return nil, nil, err
 			}
 			return result, nil, nil
 		case "5":
-			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+			result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2", u)
 			if err != nil {
 				return nil, nil, err
 			}
 			return result, nil, nil
 		case "6":
-			result, err := promptForCustomProvider(reader)
+			result, err := promptForCustomProvider(reader, u)
 			if err != nil {
 				return nil, nil, err
 			}
 			return result, nil, nil
 		default:
-			fmt.Printf("Unknown choice '%s', using global Ollama route.\n", choice)
+			u.Warnf("Unknown choice '%s', using global Ollama route.", choice)
 			return nil, nil, nil
 		}
 	}
 
 	// Ollama not available — offer cloud/global and direct overrides
-	fmt.Println("\nSelect a remote model provider:")
-	fmt.Println("  [1] Anthropic API key via the Obol model gateway")
-	fmt.Println("  [2] OpenAI API key via the Obol model gateway")
-	fmt.Println("  [3] Direct Anthropic API key to the Openclaw gateway")
-	fmt.Println("  [4] Direct OpenAI API key to Openclaw gateway")
-	fmt.Println("  [5] Custom OpenAI-compatible endpoint to the Openclaw gateway")
+	u.Print("\nSelect a remote model provider:")
+	u.Print("  [1] Anthropic API key via the Obol model gateway")
+	u.Print("  [2] OpenAI API key via the Obol model gateway")
+	u.Print("  [3] Direct Anthropic API key to the Openclaw gateway")
+	u.Print("  [4] Direct OpenAI API key to Openclaw gateway")
+	u.Print("  [5] Custom OpenAI-compatible endpoint to the Openclaw gateway")
 	fmt.Print("\nChoice [1]: ")
 
 	line, _ := reader.ReadString('\n')
@@ -2253,33 +2253,33 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 	switch choice {
 	case "1":
-		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+		cloud, err := promptForCloudProvider(reader, "anthropic", "Anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", u)
 		if err != nil {
 			return nil, nil, err
 		}
 		result := buildLiteLLMRoutedOverlay(cfg, cloud)
 		return result, cloud, nil
 	case "2":
-		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2")
+		cloud, err := promptForCloudProvider(reader, "openai", "OpenAI", "gpt-5.2", "GPT-5.2", u)
 		if err != nil {
 			return nil, nil, err
 		}
 		result := buildLiteLLMRoutedOverlay(cfg, cloud)
 		return result, cloud, nil
 	case "3":
-		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6")
+		result, err := promptForDirectProvider(reader, "anthropic", "Anthropic", "https://api.anthropic.com", "anthropic-messages", "ANTHROPIC_API_KEY", "claude-sonnet-4-6", "Claude Sonnet 4.6", u)
 		if err != nil {
 			return nil, nil, err
 		}
 		return result, nil, nil
 	case "4":
-		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2")
+		result, err := promptForDirectProvider(reader, "openai", "OpenAI", "https://api.openai.com/v1", "openai-completions", "OPENAI_API_KEY", "gpt-5.2", "GPT-5.2", u)
 		if err != nil {
 			return nil, nil, err
 		}
 		return result, nil, nil
 	case "5":
-		result, err := promptForCustomProvider(reader)
+		result, err := promptForCustomProvider(reader, u)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2291,7 +2291,7 @@ func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult
 
 // promptForCloudProvider asks for an API key and returns cloud provider info.
 // The actual overlay (ImportResult) is built separately via buildLiteLLMRoutedOverlay.
-func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string) (*CloudProviderInfo, error) {
+func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelName string, _ *ui.UI) (*CloudProviderInfo, error) {
 	fmt.Printf("\n%s API key: ", display)
 	apiKey, _ := reader.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)
@@ -2308,7 +2308,7 @@ func promptForCloudProvider(reader *bufio.Reader, name, display, modelID, modelN
 }
 
 // promptForDirectProvider asks for direct-provider settings for an instance-local override.
-func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaultBaseURL, defaultAPI, defaultAPIKeyEnvVar, defaultModelID, defaultModelName string) (*ImportResult, error) {
+func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaultBaseURL, defaultAPI, defaultAPIKeyEnvVar, defaultModelID, defaultModelName string, u *ui.UI) (*ImportResult, error) {
 	fmt.Printf("\n%s API key (instance-local): ", display)
 	apiKey, _ := reader.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)
@@ -2337,13 +2337,13 @@ func promptForDirectProvider(reader *bufio.Reader, providerName, display, defaul
 		baseURL = defaultBaseURL
 	}
 	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
+	baseURL = model.WarnAndStripV1Suffix(baseURL, u)
 
 	return buildDirectProviderOverlay(providerName, baseURL, defaultAPI, defaultAPIKeyEnvVar, modelID, modelName, apiKey), nil
 }
 
 // promptForCustomProvider asks for an OpenAI-compatible custom endpoint override.
-func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
+func promptForCustomProvider(reader *bufio.Reader, u *ui.UI) (*ImportResult, error) {
 	fmt.Printf("\nCustom base URL (OpenAI-compatible, e.g. https://example.com/v1): ")
 	baseURL, _ := reader.ReadString('\n')
 	baseURL = strings.TrimSpace(baseURL)
@@ -2351,7 +2351,7 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 		return nil, fmt.Errorf("custom base URL is required")
 	}
 	// Strip trailing /v1 — LiteLLM auto-appends it for OpenAI-compatible providers.
-	baseURL = model.WarnAndStripV1Suffix(baseURL)
+	baseURL = model.WarnAndStripV1Suffix(baseURL, u)
 
 	fmt.Printf("Custom model ID: ")
 	modelID, _ := reader.ReadString('\n')
@@ -2385,7 +2385,7 @@ func promptForCustomProvider(reader *bufio.Reader) (*ImportResult, error) {
 	apiKey, _ := reader.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		fmt.Println("  Note: no API key provided; set it later via the OpenClaw user secret.")
+		u.Dim("  Note: no API key provided; set it later via the OpenClaw user secret.")
 	}
 
 	// Custom endpoints use the "openai" slot because the Helm chart only iterates

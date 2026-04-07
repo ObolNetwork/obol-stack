@@ -1,19 +1,19 @@
 package update
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 // HintIfStale compares embedded helmfile chart versions against the on-disk
 // deployed versions. If any embedded version is newer than on-disk, prints a
 // one-line hint suggesting `obol upgrade`. This is best-effort and never errors.
-func HintIfStale(cfg *config.Config) {
+func HintIfStale(cfg *config.Config, u *ui.UI) {
 	// Read embedded helmfile
 	embeddedData, err := embed.ReadInfrastructureFile("helmfile.yaml")
 	if err != nil {
@@ -53,11 +53,13 @@ func HintIfStale(cfg *config.Config) {
 		onDiskVer, ok := onDiskVersions[rel.Chart]
 		if !ok {
 			// New chart in embedded that doesn't exist on disk
-			fmt.Println("\nHint: Some stack components have updates available. Run 'obol upgrade' to apply.")
+			u.Blank()
+			u.Dim("Hint: Some stack components have updates available. Run 'obol upgrade' to apply.")
 			return
 		}
 		if CompareVersions(onDiskVer, rel.Version) < 0 {
-			fmt.Println("\nHint: Some stack components have updates available. Run 'obol upgrade' to apply.")
+			u.Blank()
+			u.Dim("Hint: Some stack components have updates available. Run 'obol upgrade' to apply.")
 			return
 		}
 	}
