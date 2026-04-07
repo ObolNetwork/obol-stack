@@ -83,6 +83,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
+	if registrationKey != nil {
+		log.Printf("serviceoffer-controller: ERC-8004 signing key loaded")
+	} else {
+		log.Printf("serviceoffer-controller: no ERC-8004 signing key configured; on-chain registration disabled")
+	}
 
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
@@ -364,7 +369,7 @@ func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetize
 		return err
 	}
 	if !ready {
-		return nil
+		return fmt.Errorf("registration cleanup pending for %s/%s", offer.Namespace, offer.Name)
 	}
 
 	return c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name)
@@ -679,8 +684,9 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		}
 		if err := c.syncRegistrationMetadata(ctx, client, offer, agentIDBig); err == nil {
 			status.MetadataSynced = true
+			log.Printf("serviceoffer-controller: on-chain metadata synced for agent %s", agentID)
 		} else {
-			log.Printf("serviceoffer-controller: metadata sync pending for agent %s: %v", agentID, err)
+			log.Printf("serviceoffer-controller: metadata sync failed for agent %s (will retry): %v", agentID, err)
 		}
 	}
 	if agentID != "" {
@@ -775,7 +781,9 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 			}
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
-		_ = client.SetMetadata(ctx, c.registrationKey, agentIDBig, "x402.supported", []byte{0})
+		if err := client.SetMetadata(ctx, c.registrationKey, agentIDBig, "x402.supported", []byte{0}); err != nil {
+			log.Printf("serviceoffer-controller: failed to clear x402.supported metadata for agent %s: %v", agentID, err)
+		}
 		status.Phase = registrationPhaseTombstoned
 		status.Message = fmt.Sprintf("Tombstoned registration for agent %s", agentID)
 	} else if agentID != "" {

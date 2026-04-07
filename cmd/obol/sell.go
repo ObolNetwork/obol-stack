@@ -48,11 +48,12 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellHTTPCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
-			sellProbeCommand(cfg),
+			sellTestCommand(cfg),
 			sellStopCommand(cfg),
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
+			sellInfoCommand(cfg),
 		},
 	}
 }
@@ -347,7 +348,10 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					if err != nil {
+						return err
+					}
 
 					soManifest := map[string]any{
 						"apiVersion": "obol.org/v1alpha1",
@@ -933,22 +937,20 @@ func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
 }
 
 // ---------------------------------------------------------------------------
-// sell probe — send an unauthenticated request to verify 402 payment gate
+// sell test — verify a service is live and payment-gated
 // ---------------------------------------------------------------------------
 
-func sellProbeCommand(cfg *config.Config) *cli.Command {
+func sellTestCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:      "probe",
-		Usage:     "Probe a ServiceOffer endpoint to verify it returns 402 pricing",
+		Name:      "test",
+		Usage:     "Test that a service is live and requiring payment",
 		ArgsUsage: "<name>",
-		Description: `Sends an unauthenticated request through Traefik to the ServiceOffer's
-endpoint and displays the HTTP status code and x402 pricing response.
-
-A 402 response with x402Version=1 confirms the endpoint is live and payment-gated.
+		Description: `Checks that a published service is reachable and correctly gated behind
+x402 payments. Returns the HTTP status and pricing details.
 
 Examples:
-  obol sell probe flow-qwen -n llm
-  obol sell probe my-api -n default --path /health`,
+  obol sell test flow-qwen -n llm
+  obol sell test my-api -n default --path /health`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -970,12 +972,12 @@ Examples:
 			u := getUI(cmd)
 			name := cmd.Args().First()
 			if name == "" {
-				return errors.New("name required: obol sell probe <name> -n <ns>")
+				return errors.New("name required: obol sell test <name> -n <ns>")
 			}
 
 			ns := cmd.String("namespace")
 			if ns == "" {
-				return errors.New("namespace required: obol sell probe <name> -n <ns>")
+				return errors.New("namespace required: obol sell test <name> -n <ns>")
 			}
 
 			// Get the ServiceOffer's endpoint from the CR status.
@@ -991,6 +993,12 @@ Examples:
 			}
 
 			subpath := cmd.String("path")
+			if !strings.HasPrefix(endpoint, "/") {
+				return fmt.Errorf("invalid endpoint %q: must start with /", endpoint)
+			}
+			if strings.Contains(endpoint, "..") {
+				return fmt.Errorf("invalid endpoint %q: path traversal not allowed", endpoint)
+			}
 			probeURL := "http://" + cmd.String("host") + endpoint + subpath
 			u.Infof("Probing %s ...", probeURL)
 
@@ -1962,7 +1970,10 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 		return fmt.Errorf("cannot resolve host IP for cluster routing: %w", err)
 	}
 
-	portNum, _ := strconv.Atoi(port)
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
+	}
 
 	svc := map[string]any{
 		"apiVersion": "v1",
@@ -2042,8 +2053,11 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]any {
-	portNum, _ := strconv.Atoi(port)
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) (map[string]any, error) {
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
+	}
 	spec := map[string]any{
 		"type": "inference",
 		"upstream": map[string]any{
@@ -2075,7 +2089,7 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 		}
 	}
 
-	return spec
+	return spec, nil
 }
 
 // removePricingRoute removes the x402-verifier pricing route for the given offer.
