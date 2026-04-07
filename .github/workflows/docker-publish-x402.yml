@@ -9,10 +9,14 @@ on:
       - 'v*'
     paths:
       - 'internal/x402/**'
+      - 'internal/serviceoffercontroller/**'
+      - 'internal/monetizeapi/**'
       - 'cmd/x402-verifier/**'
       - 'cmd/x402-buyer/**'
+      - 'cmd/serviceoffer-controller/**'
       - 'Dockerfile.x402-verifier'
       - 'Dockerfile.x402-buyer'
+      - 'Dockerfile.serviceoffer-controller'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/docker-publish-x402.yml'
@@ -46,6 +50,10 @@ jobs:
             image: obolnetwork/x402-buyer
             dockerfile: Dockerfile.x402-buyer
             description: x402 buy-side payment sidecar for Obol Stack
+          - component: serviceoffer-controller
+            image: obolnetwork/serviceoffer-controller
+            dockerfile: Dockerfile.serviceoffer-controller
+            description: ServiceOffer reconciler for Obol Stack monetization
 
     steps:
       - name: Checkout
@@ -111,6 +119,8 @@ jobs:
             image: obolnetwork/x402-verifier
           - component: x402-buyer
             image: obolnetwork/x402-buyer
+          - component: serviceoffer-controller
+            image: obolnetwork/serviceoffer-controller
 
     steps:
       - name: Run Trivy vulnerability scanner
