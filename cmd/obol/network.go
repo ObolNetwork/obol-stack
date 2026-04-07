@@ -231,29 +231,29 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 			}
 
 			// Show local node deployments.
-			fmt.Println("Local Nodes:")
+			u.Info("Local Nodes:")
 			if err := network.List(cfg, u); err != nil {
-				fmt.Printf("  (unable to list: %v)\n", err)
+				u.Printf("  (unable to list: %v)\n", err)
 			}
 
-			fmt.Println()
+			u.Blank()
 
 			// Show remote RPC networks from eRPC config.
-			fmt.Println("Remote RPCs:")
+			u.Info("Remote RPCs:")
 			rpcNetworks, err := network.ListRPCNetworks(cfg)
 			if err != nil {
-				fmt.Printf("  (unable to read eRPC config: %v)\n", err)
+				u.Printf("  (unable to read eRPC config: %v)\n", err)
 				return nil
 			}
 			if len(rpcNetworks) == 0 {
-				fmt.Println("  (none configured)")
+				u.Info("  (none configured)")
 			} else {
 				for _, net := range rpcNetworks {
 					alias := net.Alias
 					if alias == "" {
 						alias = fmt.Sprintf("chain-%d", net.ChainID)
 					}
-					fmt.Printf("  %-20s chain=%-8d %d upstream(s)\n", alias, net.ChainID, len(net.Upstreams))
+					u.Printf("  %-20s chain=%-8d %d upstream(s)\n", alias, net.ChainID, len(net.Upstreams))
 				}
 			}
 			return nil
@@ -300,6 +300,8 @@ Examples:
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
 			// --from-json: read network add config from file/stdin.
 			if jsonPath := cmd.String("from-json"); jsonPath != "" {
 				data, err := readJSONInput(jsonPath)
@@ -326,17 +328,17 @@ Examples:
 				readOnly := !netCfg.AllowWrites
 
 				if netCfg.Endpoint != "" {
-					fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, netCfg.Endpoint)
+					u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, netCfg.Endpoint)
 					if err := network.AddCustomRPC(cfg, chainID, chainName, netCfg.Endpoint, readOnly); err != nil {
 						return fmt.Errorf("failed to add custom RPC: %w", err)
 					}
-					fmt.Printf("Added custom RPC for %s (chain ID: %d) to eRPC\n", chainName, chainID)
+					u.Successf("Added custom RPC for %s (chain ID: %d) to eRPC", chainName, chainID)
 					return nil
 				}
 
 				// ChainList mode with defaults.
 				maxCount := 3
-				fmt.Printf("Fetching public RPCs for %s (chain ID: %d) from ChainList...\n", chainName, chainID)
+				u.Infof("Fetching public RPCs for %s (chain ID: %d) from ChainList...", chainName, chainID)
 				endpoints, displayName, err := network.FetchChainListRPCs(chainID, nil)
 				if err != nil {
 					return fmt.Errorf("failed to fetch RPCs: %w", err)
@@ -350,11 +352,11 @@ Examples:
 				if displayName != "" {
 					chainName = displayName
 				}
-				fmt.Printf("Found %d quality RPCs for %s\n", len(endpoints), chainName)
+				u.Infof("Found %d quality RPCs for %s", len(endpoints), chainName)
 				if err := network.AddPublicRPCs(cfg, chainID, chainName, endpoints, readOnly); err != nil {
 					return fmt.Errorf("failed to add RPCs: %w", err)
 				}
-				fmt.Printf("Added %d RPCs for %s (chain ID: %d) to eRPC\n", len(endpoints), chainName, chainID)
+				u.Successf("Added %d RPCs for %s (chain ID: %d) to eRPC", len(endpoints), chainName, chainID)
 				return nil
 			}
 
@@ -375,14 +377,14 @@ Examples:
 				if err := validate.URL(endpoint); err != nil {
 					return fmt.Errorf("invalid --endpoint: %w", err)
 				}
-				fmt.Printf("Adding custom RPC for %s (chain ID: %d): %s\n", chainName, chainID, endpoint)
+				u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, endpoint)
 				if readOnly {
-					fmt.Printf("  Write methods blocked (use --allow-writes to enable)\n")
+					u.Infof("  Write methods blocked (use --allow-writes to enable)")
 				}
 				if err := network.AddCustomRPC(cfg, chainID, chainName, endpoint, readOnly); err != nil {
 					return fmt.Errorf("failed to add custom RPC: %w", err)
 				}
-				fmt.Printf("Added custom RPC for %s (chain ID: %d) to eRPC\n", chainName, chainID)
+				u.Successf("Added custom RPC for %s (chain ID: %d) to eRPC", chainName, chainID)
 				return nil
 			}
 
@@ -392,7 +394,7 @@ Examples:
 				maxCount = 3
 			}
 
-			fmt.Printf("Fetching public RPCs for %s (chain ID: %d) from ChainList...\n", chainName, chainID)
+			u.Infof("Fetching public RPCs for %s (chain ID: %d) from ChainList...", chainName, chainID)
 
 			endpoints, displayName, err := network.FetchChainListRPCs(chainID, nil)
 			if err != nil {
@@ -411,21 +413,21 @@ Examples:
 				chainName = displayName
 			}
 
-			fmt.Printf("Found %d quality RPCs for %s:\n", len(endpoints), chainName)
+			u.Infof("Found %d quality RPCs for %s:", len(endpoints), chainName)
 			for i, ep := range endpoints {
-				fmt.Printf("  %d. %s (tracking: %s)\n", i+1, ep.URL, ep.Tracking)
+				u.Printf("  %d. %s (tracking: %s)\n", i+1, ep.URL, ep.Tracking)
 			}
 
 			if readOnly {
-				fmt.Printf("\nWrite methods blocked (use --allow-writes to enable)\n")
+				u.Warnf("Write methods blocked (use --allow-writes to enable)")
 			}
 
-			fmt.Printf("Adding to eRPC gateway...\n")
+			u.Infof("Adding to eRPC gateway...")
 			if err := network.AddPublicRPCs(cfg, chainID, chainName, endpoints, readOnly); err != nil {
 				return fmt.Errorf("failed to add RPCs: %w", err)
 			}
 
-			fmt.Printf("Added %d RPCs for %s (chain ID: %d) to eRPC\n", len(endpoints), chainName, chainID)
+			u.Successf("Added %d RPCs for %s (chain ID: %d) to eRPC", len(endpoints), chainName, chainID)
 			return nil
 		},
 	}
@@ -447,6 +449,8 @@ Examples:
   obol network remove base
   obol network remove 8453`,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
 			if cmd.NArg() == 0 {
 				return fmt.Errorf("chain name or ID required\n\nExamples:\n  obol network remove base\n  obol network remove 8453")
 			}
@@ -457,13 +461,13 @@ Examples:
 				return err
 			}
 
-			fmt.Printf("Removing ChainList RPCs for %s (chain ID: %d)...\n", chainName, chainID)
+			u.Infof("Removing ChainList RPCs for %s (chain ID: %d)...", chainName, chainID)
 
 			if err := network.RemovePublicRPCs(cfg, chainID); err != nil {
 				return err
 			}
 
-			fmt.Printf("Removed ChainList RPCs for %s (chain ID: %d) from eRPC\n", chainName, chainID)
+			u.Successf("Removed ChainList RPCs for %s (chain ID: %d) from eRPC", chainName, chainID)
 			return nil
 		},
 	}
@@ -478,24 +482,26 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 		Name:  "status",
 		Usage: "Show eRPC gateway health and upstream counts",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
 			podStatus, upstreamCounts, err := network.GetERPCStatus(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to get eRPC status: %w", err)
 			}
 
-			fmt.Printf("eRPC Gateway Status\n")
-			fmt.Printf("====================\n\n")
+			u.Printf("eRPC Gateway Status\n")
+			u.Printf("====================\n\n")
 
-			fmt.Printf("Pod:\n")
+			u.Info("Pod:")
 			if podStatus != "" {
-				fmt.Printf("  %s\n", podStatus)
+				u.Printf("  %s\n", podStatus)
 			} else {
-				fmt.Printf("  (no pods found)\n")
+				u.Info("  (no pods found)")
 			}
 
-			fmt.Printf("\nUpstreams per chain:\n")
+			u.Printf("\nUpstreams per chain:\n")
 			if len(upstreamCounts) == 0 {
-				fmt.Printf("  (no upstreams configured)\n")
+				u.Info("  (no upstreams configured)")
 			} else {
 				var chainIDs []int
 				for id := range upstreamCounts {
@@ -505,7 +511,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 
 				for _, id := range chainIDs {
 					name := chainIDToName(id)
-					fmt.Printf("  %-20s (chain %d): %d upstream(s)\n", name, id, upstreamCounts[id])
+					u.Printf("  %-20s (chain %d): %d upstream(s)\n", name, id, upstreamCounts[id])
 				}
 			}
 
