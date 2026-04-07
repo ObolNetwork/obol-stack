@@ -201,6 +201,49 @@ Examples:
 				return err
 			}
 
+			// Auto-detect model and upstream if --model not specified.
+			modelFlag := cmd.String("model")
+			upstreamFlag := cmd.String("upstream")
+			if modelFlag == "" && u.IsTTY() {
+				detected, scanErr := inference.ScanLocalEndpointsContext(ctx)
+				if scanErr == nil && len(detected) > 0 {
+					fmt.Println("\nDetected local inference servers:")
+					fmt.Print(inference.FormatEndpointDisplay(detected))
+
+					type pick struct {
+						baseURL, modelID string
+					}
+					var picks []pick
+					idx := 1
+					for _, ep := range detected {
+						for _, m := range ep.Models {
+							fmt.Printf("  [%d] %s — %s (%s)\n", idx, m.ID, ep.BaseURL(), ep.ServerType)
+							picks = append(picks, pick{ep.BaseURL(), m.ID})
+							idx++
+						}
+					}
+
+					if len(picks) == 1 {
+						answer, _ := u.Input(fmt.Sprintf("Use %s on %s? [Y/n]", picks[0].modelID, picks[0].baseURL), "")
+						answer = strings.TrimSpace(strings.ToLower(answer))
+						if answer == "" || answer == "y" || answer == "yes" {
+							modelFlag = picks[0].modelID
+							upstreamFlag = picks[0].baseURL
+						}
+					} else if len(picks) > 1 {
+						sel, _ := u.Input("Select [1]", "1")
+						n, parseErr := strconv.Atoi(strings.TrimSpace(sel))
+						if parseErr == nil && n >= 1 && n <= len(picks) {
+							modelFlag = picks[n-1].modelID
+							upstreamFlag = picks[n-1].baseURL
+						}
+					}
+				}
+			}
+			if modelFlag == "" {
+				return fmt.Errorf("--model is required (or run interactively to auto-detect)")
+			}
+
 			teeType := cmd.String("tee")
 			modelHash := cmd.String("model-hash")
 
@@ -233,7 +276,7 @@ Examples:
 				Name:            name,
 				EnclaveTag:      cmd.String("enclave-tag"),
 				ListenAddr:      cmd.String("listen"),
-				UpstreamURL:     cmd.String("upstream"),
+				UpstreamURL:     upstreamFlag,
 				WalletAddress:   wallet,
 				PricePerRequest: perRequest,
 				PricePerMTok:    priceTable.PerMTok,
@@ -351,7 +394,8 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.
+		Description: `Creates a payment gated ServiceOffer in the cluster. The serviceoffer-controller reconciles it through:
+health-check → payment gate → route publishing → optional ERC-8004 registration.
 Include --register to have the service listed on EIP8004 onchain agent registry.
 
 Example:
@@ -535,6 +579,13 @@ Example:
 
 			ns := cmd.String("namespace")
 
+			if cmd.String("upstream") == "" {
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+			}
+			if cmd.Int("port") == 0 {
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+			}
+
 			priceTable, err := resolvePriceTable(cmd, true)
 			if err != nil {
 				return err
@@ -640,17 +691,19 @@ Example:
 				"spec": spec,
 			}
 
-			if err := kubectlApply(cfg, manifest); err != nil {
+			applyOut, err := kubectlApplyOutput(cfg, manifest)
+			if err != nil {
 				return err
 			}
-
-			fmt.Printf("ServiceOffer %s/%s created (type: http)\n", ns, name)
-
+			action := "created"
+			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
+				action = "updated"
+			}
+			fmt.Printf("ServiceOffer %s/%s %s (type: http)\n", ns, name, action)
 			if priceTable.PerMTok != "" {
 				fmt.Printf("Requests will be charged at %s\n", formatPriceTableSummary(priceTable))
 			}
-
-			fmt.Printf("The agent will reconcile: health-check → payment gate → route\n")
+			fmt.Printf("The serviceoffer-controller will reconcile: health-check → payment gate → route → registration\n")
 			fmt.Printf("Check status: obol sell status %s -n %s\n", name, ns)
 
 			// Ensure tunnel is active for public access.
@@ -992,7 +1045,7 @@ Examples:
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Stop selling a service",
+		Usage:     "Pause a ServiceOffer without deleting it",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -1013,19 +1066,16 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 			}
 			ns := cmd.String("namespace")
 
-			fmt.Printf("Stopping the service offering %s/%s...\n", ns, name)
+			fmt.Printf("Pausing ServiceOffer %s/%s...\n", ns, name)
 
-			removePricingRoute(cfg, name)
-
-			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
-
+			patchJSON := `{"metadata":{"annotations":{"obol.org/paused":"true"}}}`
 			err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
-				"--type=merge", "--subresource=status", "-p", patchJSON)
+				"--type=merge", "-p", patchJSON)
 			if err != nil {
-				return fmt.Errorf("failed to patch status: %w", err)
+				return fmt.Errorf("failed to pause serviceoffer: %w", err)
 			}
 
-			fmt.Printf("Service offering %s/%s stopped.\n", ns, name)
+			fmt.Printf("ServiceOffer %s/%s paused.\n", ns, name)
 			return nil
 		},
 	}
@@ -1066,49 +1116,19 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			ns := cmd.String("namespace")
 
 			if !cmd.Bool("force") {
-				msg := fmt.Sprintf("Delete the service offering %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove the pricing route from the x402 verifier\n  - Deactivate the ERC-8004 registration (if registered)", ns, name)
+				msg := fmt.Sprintf(
+					"Delete ServiceOffer %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove x402 enforcement for the service\n  - Deactivate the ERC-8004 registration (if registered)\n  - Let the serviceoffer-controller finalizer clean up published state",
+					ns,
+					name,
+				)
 				if !u.Confirm(msg, false) {
 					fmt.Println("Aborted.")
 					return nil
 				}
 			}
 
-			removePricingRoute(cfg, name)
-
-			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
-				"-o", "jsonpath={.status.agentId}")
-			if err == nil && strings.TrimSpace(soOut) != "" {
-				agentID := strings.TrimSpace(soOut)
-				fmt.Printf("Deactivating ERC-8004 registration (agent %s)...\n", agentID)
-
-				cmName := fmt.Sprintf("so-%s-registration", name)
-
-				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
-					"-o", `jsonpath={.data.agent-registration\.json}`)
-				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
-					fmt.Printf("  No registration document found. Agent %s NFT persists on-chain.\n", agentID)
-				} else {
-					var regDoc map[string]any
-					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
-						fmt.Printf("  Warning: corrupt registration JSON, skipping deactivation: %v\n", jsonErr)
-					} else {
-						regDoc["active"] = false
-
-						patchJSON, _ := json.Marshal(map[string]any{
-							"data": map[string]string{
-								"agent-registration.json": mustMarshal(regDoc),
-							},
-						})
-						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
-							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							fmt.Printf("  Warning: could not deactivate agent registration: %v\n", patchErr)
-						} else {
-							fmt.Printf("  Registration deactivated (active=false). On-chain NFT persists.\n")
-						}
-					}
-				}
-			}
-
+			fmt.Printf("Deleting ServiceOffer %s/%s...\n", ns, name)
+			fmt.Printf("The serviceoffer-controller finalizer will clean up published routes and registration state.\n")
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
 			}
@@ -1731,15 +1751,19 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 // kubectl helpers
 // ---------------------------------------------------------------------------
 
-func kubectlApply(cfg *config.Config, manifest any) error {
+func kubectlApply(cfg *config.Config, manifest interface{}) error {
+	_, err := kubectlApplyOutput(cfg, manifest)
+	return err
+}
+
+func kubectlApplyOutput(cfg *config.Config, manifest interface{}) (string, error) {
 	raw, err := json.Marshal(manifest)
 	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
+		return "", fmt.Errorf("failed to marshal manifest: %w", err)
 	}
 
 	bin, kc := kubectl.Paths(cfg)
-
-	return kubectl.Apply(bin, kc, raw)
+	return kubectl.ApplyOutput(bin, kc, raw)
 }
 
 func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
@@ -2018,30 +2042,4 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	}
 
 	return spec
-}
-
-// removePricingRoute removes the x402-verifier pricing route for the given offer.
-func removePricingRoute(cfg *config.Config, name string) {
-	urlPath := "/services/" + name
-
-	pricingCfg, err := x402verifier.GetPricingConfig(cfg)
-	if err != nil {
-		return
-	}
-
-	updatedRoutes := make([]x402verifier.RouteRule, 0, len(pricingCfg.Routes))
-	for _, r := range pricingCfg.Routes {
-		if !strings.Contains(r.Pattern, urlPath) {
-			updatedRoutes = append(updatedRoutes, r)
-		}
-	}
-
-	if len(updatedRoutes) < len(pricingCfg.Routes) {
-		pricingCfg.Routes = updatedRoutes
-		if err := x402verifier.WritePricingConfig(cfg, pricingCfg); err != nil {
-			fmt.Printf("Warning: failed to remove pricing route: %v\n", err)
-		} else {
-			fmt.Printf("Removed pricing route for %s\n", urlPath)
-		}
-	}
 }

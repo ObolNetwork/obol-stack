@@ -626,19 +626,20 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 		return
 	}
 
+	fixVolumeOwnership(cfg, targetDir)
 	u.Success("Imported workspace to volume")
 }
 
 // stageDefaultSkills writes embedded Obol skills to the deployment's config
 // directory on the host filesystem. These are pushed to the cluster as a
 // ConfigMap during doSync — no pod readiness required.
+//
+// Always re-stages embedded skills so that new skills added to the binary
+// (e.g. buy-inference, discovery) reach existing deployments on the next
+// sync. CopySkills only writes files from the embedded FS — user-added
+// skills with different names are preserved.
 func stageDefaultSkills(deploymentDir string, u *ui.UI) {
 	skillsDir := filepath.Join(deploymentDir, "skills")
-
-	// Don't overwrite if skills directory already exists (user may have customised)
-	if _, err := os.Stat(skillsDir); err == nil {
-		return
-	}
 
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		u.Warnf("could not create skills directory: %v", err)
@@ -727,6 +728,48 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 		}
 
 		u.Successf("Injected skill: %s", e.Name())
+	}
+
+	fixVolumeOwnership(cfg, targetDir)
+}
+
+// fixVolumeOwnership normalises file ownership on a host-side PVC path so the
+// container (UID 1000 / node) can read and write. On k3d the host path is
+// inside a Docker container (the k3d node), so we exec into it as root and
+// chown recursively. On k3s the host IS the node, so we attempt a direct
+// chown (works when the CLI runs as root, harmless no-op otherwise).
+func fixVolumeOwnership(cfg *config.Config, hostPath string) {
+	// Determine backend (default: k3d for backward compat).
+	backendName := "k3d"
+	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
+		backendName = strings.TrimSpace(string(data))
+	}
+
+	switch backendName {
+	case "k3d":
+		stackID := ""
+		if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-id")); err == nil {
+			stackID = strings.TrimSpace(string(data))
+		}
+		if stackID == "" {
+			return
+		}
+		container := fmt.Sprintf("k3d-obol-stack-%s-server-0", stackID)
+
+		// Convert host path to the in-node path. k3d mounts $DATA_DIR → /data.
+		relPath, err := filepath.Rel(cfg.DataDir, hostPath)
+		if err != nil {
+			return
+		}
+		nodePath := filepath.Join("/data", relPath)
+
+		cmd := exec.Command("docker", "exec", container,
+			"chown", "-R", "1000:1000", nodePath)
+		_ = cmd.Run() // best-effort
+	default:
+		// k3s — direct host, try chown (succeeds if root).
+		cmd := exec.Command("chown", "-R", "1000:1000", hostPath)
+		_ = cmd.Run()
 	}
 }
 
@@ -1391,6 +1434,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 		u.Successf("Synced skill: %s", e.Name())
 	}
 
+	fixVolumeOwnership(cfg, targetDir)
 	u.Success("Skills synced to volume (file watcher will reload)")
 
 	return nil

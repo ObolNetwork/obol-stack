@@ -136,6 +136,71 @@ Agent (buy.py)                       Runtime
 - **Max 1000 auths per batch** — signing takes ~50s at 1000; use `refill` for more
 - **Auth pool is finite** — monitor via `status` or `list`, refill before exhaustion
 
+## Full Buy Flow (Discovery → Probe → Buy → Use)
+
+This is the complete journey from discovering a seller to using purchased inference:
+
+### Step 1: Discover sellers on-chain (use `discovery` skill)
+
+```bash
+# Search the ERC-8004 registry for recently registered agents
+python3 /data/.openclaw/skills/discovery/scripts/discovery.py search --chain base-sepolia
+
+# Fetch a candidate's registration JSON to check x402Support and services
+python3 /data/.openclaw/skills/discovery/scripts/discovery.py uri <agent-id> --chain base-sepolia
+```
+
+Look for agents with `"x402Support": true` and a `"web"` service endpoint.
+
+### Step 2: Probe the seller endpoint
+
+```bash
+# Send an unauthenticated request to get 402 pricing
+python3 scripts/buy.py probe <service-endpoint> --model <model-name>
+```
+
+This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USDC contract).
+
+### Step 3: Check balance and buy
+
+```bash
+# Check USDC balance
+python3 scripts/buy.py balance --chain base-sepolia
+
+# Buy access (pre-sign auths, configure sidecar)
+python3 scripts/buy.py buy <friendly-name> \
+  --endpoint <service-endpoint> \
+  --model <model-name> \
+  --count 20
+```
+
+### Step 4: Use the purchased model
+
+After buying, the model is available through LiteLLM as `paid/<model-name>`:
+
+```bash
+curl -X POST http://litellm.llm.svc.cluster.local:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "paid/<model-name>", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+The `paid/` prefix routes through the x402-buyer sidecar, which transparently attaches payment headers.
+
+### Step 5: Monitor and refill
+
+```bash
+# Check remaining auths
+python3 scripts/buy.py list
+
+# Refill when running low
+python3 scripts/buy.py refill <friendly-name> --count 50
+
+# Auto-maintain all pools
+python3 scripts/buy.py maintain
+```
+
 ## References
 
 - `references/x402-buyer-api.md` — Wire formats for 402 responses, X-PAYMENT headers, and sidecar config
+- See also: `discovery` skill for finding sellers on the ERC-8004 registry

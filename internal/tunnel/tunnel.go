@@ -365,18 +365,16 @@ data:
 }
 
 // EnsureTunnelForSell ensures the tunnel is running and propagates the URL to
-// all downstream consumers (obol-agent env, frontend ConfigMap, agent overlay).
-// It also creates a storefront landing page at the tunnel hostname.
+// the public service discovery surfaces needed by seller flows. It updates the
+// frontend ConfigMap and storefront, but deliberately avoids syncing the
+// obol-agent overlay. The agent overlay should be updated by explicit tunnel
+// provisioning/login flows, not every ServiceOffer mutation.
 func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	tunnelURL, err := EnsureRunning(cfg, u)
 	if err != nil {
 		return "", err
 	}
 	// EnsureRunning already calls InjectBaseURL + SyncTunnelConfigMap.
-	// Also sync the agent overlay for helmfile consistency.
-	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
-		u.Warnf("could not sync AGENT_BASE_URL to obol-agent overlay: %v", err)
-	}
 	// Create the storefront landing page for the tunnel hostname.
 	if err := CreateStorefront(cfg, tunnelURL); err != nil {
 		u.Warnf("could not create storefront: %v", err)

@@ -44,9 +44,8 @@ const (
 //  2. obol stack init + up (real cluster)
 //  3. obol model setup (real LLM provider)
 //  4. obol sell pricing (real x402 configuration)
-//  5. obol agent init (real agent singleton + RBAC + monetize skill)
-//  6. obol sell http (real ServiceOffer CR)
-//  7. Wait for agent reconciliation (real heartbeat cron)
+//  5. obol sell http (real ServiceOffer CR)
+//  6. Wait for controller reconciliation
 //
 // No kubectl shortcuts. Every step matches what a user runs.
 func TestMain(m *testing.M) {
@@ -153,23 +152,8 @@ func TestMain(m *testing.M) {
 		log.Fatalf("obol sell pricing: %v", err)
 	}
 
-	// ── Step 5: obol agent init ──────────────────────────────────────
-	log.Println("═══ Step 5: obol agent init (deploys agent + RBAC + monetize skill) ═══")
-	if err := runObol(obolBin, "agent", "init"); err != nil {
-		teardown(obolBin)
-		log.Fatalf("obol agent init: %v", err)
-	}
-
-	// Wait for the obol-agent pod to be Running.
-	log.Println("  Waiting for obol-agent pod...")
-	if err := waitForAnyPod(kubectlBin, kubeconfigPath, "openclaw-obol-agent",
-		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 300*time.Second); err != nil {
-		teardown(obolBin)
-		log.Fatalf("obol-agent not ready: %v", err)
-	}
-
-	// ── Step 6: obol sell http ───────────────────────────────────────
-	log.Println("═══ Step 6: obol sell http (creates ServiceOffer CR) ═══")
+	// ── Step 5: obol sell http ───────────────────────────────────────
+	log.Println("═══ Step 5: obol sell http (creates ServiceOffer CR) ═══")
 	if err := runObol(obolBin, "sell", "http", serviceOfferName,
 		"--wallet", serviceOfferPayTo,
 		"--chain", "base-sepolia",
@@ -185,25 +169,12 @@ func TestMain(m *testing.M) {
 		log.Fatalf("obol sell http: %v", err)
 	}
 
-	// ── Step 7: Wait for agent reconciliation ────────────────────────
-	log.Println("═══ Step 7: Waiting for agent to reconcile ServiceOffer ═══")
+	// ── Step 6: Wait for controller reconciliation ───────────────────
+	log.Println("═══ Step 6: Waiting for serviceoffer-controller to reconcile ServiceOffer ═══")
 	if err := waitForServiceOfferReady(kubectlBin, kubeconfigPath, serviceOfferName, serviceOfferNamespace, 180*time.Second); err != nil {
-		// If the heartbeat hasn't fired yet, manually trigger reconciliation.
-		log.Println("  ServiceOffer not Ready, triggering manual reconciliation...")
-		triggerReconciliation(kubectlBin, kubeconfigPath)
-		if err := waitForServiceOfferReady(kubectlBin, kubeconfigPath, serviceOfferName, serviceOfferNamespace, 120*time.Second); err != nil {
-			teardown(obolBin)
-			log.Fatalf("ServiceOffer not Ready after reconciliation: %v", err)
-		}
+		teardown(obolBin)
+		log.Fatalf("ServiceOffer not Ready after reconciliation: %v", err)
 	}
-
-	// Restart x402-verifier to pick up the pricing route added by reconciliation.
-	log.Println("  Restarting x402-verifier...")
-	_ = kubectl.RunSilent(kubectlBin, kubeconfigPath, "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
-	_ = waitForPod(kubectlBin, kubeconfigPath, "x402", "app=x402-verifier", 120*time.Second)
-
-	// Let Traefik pick up the new HTTPRoute.
-	time.Sleep(5 * time.Second)
 
 	integrationRoutePath = "/services/" + serviceOfferName + "/v1/chat/completions"
 	integrationPayTo = serviceOfferPayTo
@@ -299,10 +270,6 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 	if err := waitForPod(kubectlBin, kubeconfig, "x402", "app=x402-verifier", 120*time.Second); err != nil {
 		return fmt.Errorf("x402-verifier not ready: %w", err)
 	}
-	if err := waitForAnyPod(kubectlBin, kubeconfig, "openclaw-obol-agent",
-		[]string{"app=openclaw", "app.kubernetes.io/name=openclaw"}, 180*time.Second); err != nil {
-		return fmt.Errorf("obol-agent not ready: %w", err)
-	}
 
 	soOut, err := kubectl.Output(kubectlBin, kubeconfig,
 		"get", "serviceoffers.obol.org", serviceOfferName, "-n", serviceOfferNamespace, "-o", "jsonpath={.spec.registration.enabled}")
@@ -333,17 +300,8 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 	// Wait up to 5min for Ready. The Registered stage may call real Base Sepolia
 	// via eRPC, which takes ~120s to fail when the wallet isn't funded.
 	if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 300*time.Second); err != nil {
-		log.Println("  ServiceOffer not Ready on existing cluster, triggering manual reconciliation...")
-		triggerReconciliation(kubectlBin, kubeconfig)
-		if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 180*time.Second); err != nil {
-			return fmt.Errorf("existing-cluster ServiceOffer not Ready: %w", err)
-		}
+		return fmt.Errorf("existing-cluster ServiceOffer not Ready: %w", err)
 	}
-
-	log.Println("  Restarting x402-verifier to pick up existing-cluster pricing route...")
-	_ = kubectl.RunSilent(kubectlBin, kubeconfig, "rollout", "restart", "deployment/x402-verifier", "-n", "x402")
-	_ = waitForPod(kubectlBin, kubeconfig, "x402", "app=x402-verifier", 120*time.Second)
-	time.Sleep(5 * time.Second)
 
 	return nil
 }
@@ -387,19 +345,6 @@ func waitForServiceOfferReady(kubectlBin, kubeconfig, name, namespace string, ti
 		"-o", "jsonpath={range .status.conditions[*]}{.type}: {.status} ({.message}){\"\\n\"}{end}")
 	log.Printf("  ServiceOffer conditions:\n%s", out)
 	return fmt.Errorf("timeout waiting for ServiceOffer %s/%s to be Ready", namespace, name)
-}
-
-// triggerReconciliation manually runs monetize.py inside the obol-agent pod.
-// This simulates the heartbeat cron firing.
-func triggerReconciliation(kubectlBin, kubeconfig string) {
-	out, err := kubectl.Output(kubectlBin, kubeconfig,
-		"exec", "-i", "-n", "openclaw-obol-agent", "deploy/openclaw", "-c", "openclaw",
-		"--", "python3", "/data/.openclaw/skills/sell/scripts/monetize.py", "process", "--all")
-	if err != nil {
-		log.Printf("  manual reconciliation error: %v\n%s", err, out)
-	} else {
-		log.Printf("  reconciliation output:\n%s", out)
-	}
 }
 
 func decodeBase64(s string) string {

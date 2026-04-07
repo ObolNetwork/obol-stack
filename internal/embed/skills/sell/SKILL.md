@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "\ud83d\udcb0", "requires": { "bins": ["pytho
 
 # Sell
 
-Sell access to services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments — the reconciliation script handles health-checking, route creation, payment middleware, and optional model pulling for inference services.
+Sell access to services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments. The cluster's `serviceoffer-controller` performs reconciliation; `monetize.py process` now waits for controller convergence and refreshes `/skill.md`.
 
 ## When to Use
 
@@ -42,7 +42,7 @@ python3 scripts/monetize.py create my-inference \
 # Check status of an offer
 python3 scripts/monetize.py status my-inference --namespace llm
 
-# Process all pending offers (runs reconciliation)
+# Process all pending offers (waits for controller convergence)
 python3 scripts/monetize.py process --all
 
 # Process a single offer
@@ -59,22 +59,22 @@ python3 scripts/monetize.py delete my-inference --namespace llm
 | `list` | List all ServiceOffer CRs across namespaces |
 | `status <name> --namespace <ns>` | Show conditions and endpoint for one offer |
 | `create <name> --model ... --namespace ...` | Create a new ServiceOffer CR |
-| `process <name> --namespace <ns>` | Reconcile a single offer |
-| `process --all` | Reconcile all non-Ready offers |
+| `process <name> --namespace <ns>` | Wait for a single offer to converge |
+| `process --all` | Wait for all non-Ready offers to converge |
 | `delete <name> --namespace <ns>` | Delete an offer and its owned resources |
 
 ## Reconciliation Flow
 
-When `process` runs on an offer, it steps through these stages:
+The `serviceoffer-controller` drives these stages:
 
 1. **ModelReady** — Pull the model via Ollama API (if runtime is ollama)
 2. **UpstreamHealthy** — Health-check the upstream service
-3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier AND add a pricing route to the x402-pricing ConfigMap so the verifier returns 402 for requests without payment
+3. **PaymentGateReady** — Create a Traefik ForwardAuth Middleware pointing at x402-verifier
 4. **RoutePublished** — Create a Gateway API HTTPRoute with the middleware
-5. **Registered** — (Optional) Register on ERC-8004 via the local wallet
+5. **Registered** — (Optional) create a `RegistrationRequest`; the controller publishes `/.well-known/agent-registration.json` and performs ERC-8004 side effects when configured
 6. **Ready** — All conditions met, service is live
 
-When `delete` runs, it also removes the pricing route from the x402-pricing ConfigMap.
+The x402-verifier watches published ServiceOffers directly, so deleting or pausing the offer removes enforcement without a separate rendered route object.
 
 ## Payment (x402-aligned)
 
@@ -97,17 +97,19 @@ Phase 1 pricing behavior:
 ```
 ServiceOffer CR (obol.org/v1alpha1)
     |
-    v
-monetize.py process
+    +-- serviceoffer-controller
+    |     +-- Health-check upstream
+    |     +-- Create Middleware (ForwardAuth -> x402-verifier)
+    |     +-- Create HTTPRoute (path -> upstream, with middleware)
+    |     +-- Register on-chain (ERC-8004, optional)
     |
-    +-- Pull model (Ollama API)
-    +-- Health-check upstream
-    +-- Create Middleware (ForwardAuth -> x402-verifier)
-    +-- Create HTTPRoute (path -> upstream, with middleware)
-    +-- Register on-chain (ERC-8004, optional)
+    +-- x402-verifier
+    |     +-- Watch published ServiceOffers
+    |     +-- Derive in-memory pricing rules + upstream auth
     |
-    v
-Status conditions updated on CR
+    +-- monetize.py process
+          +-- Wait for convergence
+          +-- Refresh /skill.md
 ```
 
 ## References

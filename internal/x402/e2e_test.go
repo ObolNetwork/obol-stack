@@ -47,20 +47,18 @@ func TestIntegration_PaymentGate_FullLifecycle(t *testing.T) {
 		t.Skip("x402-verifier not running")
 	}
 
-	// Check that a pricing route exists (from monetize.py reconciliation).
-	cmYAML, err := kubectl.Output(kubectlBin, kubeconfig, "get", "cm", "x402-pricing",
-		"-n", "x402", "-o", `jsonpath={.data.pricing\.yaml}`)
+	// Check that a published ServiceOffer exists.
+	raw, err := kubectl.Output(kubectlBin, kubeconfig, "get", "serviceoffers.obol.org",
+		"-A", "-o", "json")
 	if err != nil {
-		t.Fatalf("kubectl get cm: %v", err)
+		t.Fatalf("kubectl get serviceoffers: %v", err)
 	}
-	if !strings.Contains(cmYAML, "pattern:") {
-		t.Skip("no pricing routes configured — run: obol sell http + monetize.py process first")
+	routePath, err := firstPublishedOfferPath(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Extract the route pattern to know which path to hit.
-	routePath := extractRoutePath(cmYAML)
-	if routePath == "" {
-		t.Fatal("could not extract route path from pricing config")
+	if strings.TrimSpace(routePath) == "" {
+		t.Skip("no published service offers configured — run: obol sell http and wait for the controller")
 	}
 	t.Logf("Testing route: %s", routePath)
 
@@ -180,21 +178,45 @@ func requireClusterConfig(t *testing.T) clusterConfig {
 	return cfg
 }
 
-func extractRoutePath(pricingYAML string) string {
-	// Extract the first route pattern and convert from glob to path.
-	// Pattern format: "/services/qwen35/*"  → path: "/services/qwen35/v1/chat/completions"
-	for _, line := range strings.Split(pricingYAML, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- pattern:") || strings.HasPrefix(line, "pattern:") {
-			pattern := strings.Trim(strings.TrimPrefix(strings.TrimPrefix(line, "- "), "pattern:"), " \"'")
-			// Convert glob pattern to a concrete path for testing.
-			// "/services/qwen35/*" → "/services/qwen35/v1/chat/completions"
-			path := strings.TrimSuffix(pattern, "/*")
-			path = strings.TrimSuffix(path, "/*")
-			return path + "/v1/chat/completions"
+func pathFromPattern(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	path := strings.TrimSuffix(pattern, "/*")
+	path = strings.TrimSuffix(path, "/*")
+	if path == "" {
+		return ""
+	}
+	return path + "/v1/chat/completions"
+}
+
+func firstPublishedOfferPath(raw string) (string, error) {
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Endpoint   string `json:"endpoint"`
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", err
+	}
+	for _, item := range payload.Items {
+		for _, condition := range item.Status.Conditions {
+			if condition.Type == "RoutePublished" && condition.Status == "True" {
+				if item.Status.Endpoint != "" {
+					return item.Status.Endpoint + "/v1/chat/completions", nil
+				}
+				return "/services/" + item.Metadata.Name + "/v1/chat/completions", nil
+			}
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // httpPost and mustQuoteJSON are in helpers_test.go (shared with non-integration tests).

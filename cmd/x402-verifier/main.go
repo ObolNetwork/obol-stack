@@ -13,13 +13,16 @@ import (
 	"time"
 
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
 	configPath := flag.String("config", "/config/pricing.yaml", "Path to pricing config YAML")
 	listen := flag.String("listen", ":8080", "Listen address")
 	watch := flag.Bool("watch", true, "Watch config file for changes")
-
+	routeSource := flag.String("route-source", "file", "Route source: file or kube")
+	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig for out-of-cluster kube route source")
 	flag.Parse()
 
 	cfg, err := x402verifier.LoadConfig(*configPath)
@@ -33,7 +36,9 @@ func main() {
 		}
 	}
 
-	v, err := x402verifier.NewVerifier(cfg)
+	initialCfg := *cfg
+
+	v, err := x402verifier.NewVerifier(&initialCfg)
 	if err != nil {
 		log.Fatalf("create verifier: %v", err)
 	}
@@ -42,7 +47,6 @@ func main() {
 	mux.HandleFunc("/verify", v.HandleVerify)
 	mux.HandleFunc("/healthz", v.HandleHealthz)
 	mux.HandleFunc("/readyz", v.HandleReadyz)
-	mux.HandleFunc("GET /.well-known/agent-registration.json", v.HandleWellKnown)
 	mux.Handle("GET /metrics", v.MetricsHandler())
 
 	server := &http.Server{
@@ -56,21 +60,39 @@ func main() {
 	defer cancel()
 
 	if *watch {
-		go x402verifier.WatchConfig(ctx, *configPath, v, 5*time.Second)
+		switch *routeSource {
+		case "file":
+			go x402verifier.WatchConfig(ctx, *configPath, v, 5*time.Second)
+		case "kube":
+			accumulator := x402verifier.NewConfigAccumulator(&initialCfg, v)
+			go x402verifier.WatchConfigWithHandler(ctx, *configPath, 5*time.Second, func(next *x402verifier.PricingConfig) error {
+				updated := *next
+				return accumulator.SetBase(&updated)
+			})
+
+			kubeCfg, err := loadKubeConfig(*kubeconfig)
+			if err != nil {
+				log.Fatalf("load kube route source config: %v", err)
+			}
+			go func() {
+				if err := x402verifier.WatchServiceOffers(ctx, kubeCfg, accumulator.SetRoutes); err != nil {
+					log.Printf("x402-serviceoffer-source: stopped: %v", err)
+				}
+			}()
+		default:
+			log.Fatalf("unsupported --route-source=%q (use file or kube)", *routeSource)
+		}
 	}
 
 	// Handle graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
 		<-sigCh
 		log.Println("shutting down...")
 		cancel()
-
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
 		}
@@ -78,7 +100,7 @@ func main() {
 
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
-		log.Fatalf("listen: %v", err) //nolint:gocritic // intentional fatal in main; defers are for graceful shutdown only
+		log.Fatalf("listen: %v", err)
 	}
 
 	log.Printf("x402 verifier listening on %s", *listen)
@@ -88,9 +110,20 @@ func main() {
 	log.Printf("  facilitator: %s", cfg.FacilitatorURL)
 	log.Printf("  routes:      %d", len(cfg.Routes))
 	log.Printf("  verifyOnly:  %v", cfg.VerifyOnly)
+	log.Printf("  routeSource: %s", *routeSource)
 
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func loadKubeConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig != "" {
+		return clientcmd.BuildConfigFromFlags("", kubeconfig)
+	}
+	if env := os.Getenv("KUBECONFIG"); env != "" {
+		return clientcmd.BuildConfigFromFlags("", env)
+	}
+	return rest.InClusterConfig()
 }
