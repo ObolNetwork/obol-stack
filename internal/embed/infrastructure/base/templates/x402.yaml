@@ -219,7 +219,7 @@ metadata:
   labels:
     app: serviceoffer-controller
 spec:
-  replicas: 1
+  replicas: 1  # Do not scale — multiple replicas race on ERC-8004 on-chain registration
   selector:
     matchLabels:
       app: serviceoffer-controller
@@ -238,8 +238,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-          args:
-            - --workers=4
+          args: []
           resources:
             requests:
               cpu: 25m
