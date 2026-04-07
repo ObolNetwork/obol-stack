@@ -262,3 +262,43 @@ func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 		t.Fatalf("backend name = %v, want %s", backend["name"], skillCatalogConfigMapName)
 	}
 }
+
+func TestSafeName_Short(t *testing.T) {
+	// Short names should pass through unchanged.
+	if got := childName("demo"); got != "so-demo" {
+		t.Errorf("childName(demo) = %q, want so-demo", got)
+	}
+	if got := registrationRequestName("demo"); got != "so-demo-registration" {
+		t.Errorf("registrationRequestName(demo) = %q, want so-demo-registration", got)
+	}
+	if got := registrationRouteName("demo"); got != "so-demo-wellknown" {
+		t.Errorf("registrationRouteName(demo) = %q, want so-demo-wellknown", got)
+	}
+}
+
+func TestSafeName_Truncation(t *testing.T) {
+	// Name long enough to exceed 253 chars with prefix+suffix.
+	longName := strings.Repeat("a", 260)
+
+	got := childName(longName)
+	if len(got) > maxK8sNameLen {
+		t.Errorf("childName(260 chars) length = %d, want <= %d", len(got), maxK8sNameLen)
+	}
+	if !strings.HasPrefix(got, "so-") {
+		t.Errorf("childName should start with so-, got %q", got[:10])
+	}
+
+	got2 := registrationRouteName(longName)
+	if len(got2) > maxK8sNameLen {
+		t.Errorf("registrationRouteName(260 chars) length = %d, want <= %d", len(got2), maxK8sNameLen)
+	}
+	if !strings.HasSuffix(got2, "-wellknown") {
+		t.Errorf("registrationRouteName should end with -wellknown, got %q", got2[len(got2)-15:])
+	}
+
+	// Different long names should produce different results (hash disambiguates).
+	otherLong := strings.Repeat("b", 260)
+	if childName(longName) == childName(otherLong) {
+		t.Error("different long names should produce different childNames")
+	}
+}

@@ -82,7 +82,7 @@ After the service is live, periodically check:
 obol sell status <name> -n <namespace>
 
 # Verify endpoint is payment-gated
-obol sell probe <name> -n <namespace>
+obol sell test <name> -n <namespace>
 
 # Check x402 verifier logs for payment activity
 obol kubectl logs -l app=x402-verifier -n x402 --tail=20

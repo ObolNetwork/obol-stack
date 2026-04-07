@@ -103,6 +103,8 @@ spec:
                       type: integer
                       description: "Port on the upstream Service."
                       default: 11434
+                      minimum: 1
+                      maximum: 65535
                     healthPath:
                       type: string
                       description: "HTTP path used for health probes against the upstream."
@@ -182,6 +184,7 @@ spec:
                 path:
                   type: string
                   description: "URL path prefix for the HTTPRoute, defaults to /services/<name>."
+                  pattern: "^/[a-zA-Z0-9/_.-]*$"
                 registration:
                   type: object
                   description: >-

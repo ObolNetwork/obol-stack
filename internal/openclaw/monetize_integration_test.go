@@ -1370,14 +1370,12 @@ func setupMockFacilitator(t *testing.T, cfg *config.Config) *testutil.MockFacili
 	return mf
 }
 
-// addPricingRoute adds a route to the x402-verifier ConfigMap with per-route payTo.
-func addPricingRoute(t *testing.T, cfg *config.Config, pattern, price, wallet string) {
+// addPricingRoute is a no-op retained for integration test compatibility.
+// The serviceoffer-controller now manages routes via the ServiceOffer informer;
+// pricing routes are derived automatically when the offer reaches RoutePublished.
+// The sleep preserves the original timing to let the controller converge.
+func addPricingRoute(t *testing.T, _ *config.Config, _, _, _ string) {
 	t.Helper()
-	if err := x402verifier.AddRoute(cfg, pattern, price, "test route",
-		x402verifier.WithPayTo(wallet)); err != nil {
-		t.Fatalf("add pricing route: %v", err)
-	}
-	// Wait for Reloader to pick up changes.
 	time.Sleep(5 * time.Second)
 }
 

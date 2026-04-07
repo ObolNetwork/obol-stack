@@ -442,12 +442,31 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 	return obj
 }
 
+// maxK8sNameLen is the maximum length for a Kubernetes resource name (DNS subdomain).
+const maxK8sNameLen = 253
+
+// safeName truncates a name to fit within Kubernetes DNS naming limits after
+// applying the given prefix and suffix. If truncation is needed, a short hash
+// is appended to avoid collisions.
+func safeName(prefix, name, suffix string) string {
+	full := prefix + name + suffix
+	if len(full) <= maxK8sNameLen {
+		return full
+	}
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(name)))[:8]
+	maxName := maxK8sNameLen - len(prefix) - len(suffix) - 1 - len(hash) // 1 for the dash before hash
+	if maxName < 1 {
+		maxName = 1
+	}
+	return prefix + name[:maxName] + "-" + hash + suffix
+}
+
 func childName(name string) string {
-	return "so-" + name
+	return safeName("so-", name, "")
 }
 
 func registrationRequestName(name string) string {
-	return "so-" + name + "-registration"
+	return safeName("so-", name, "-registration")
 }
 
 func registrationWorkloadName(requestName string) string {
@@ -455,7 +474,7 @@ func registrationWorkloadName(requestName string) string {
 }
 
 func registrationRouteName(name string) string {
-	return "so-" + name + "-wellknown"
+	return safeName("so-", name, "-wellknown")
 }
 
 func ownerRef(offer *monetizeapi.ServiceOffer) metav1.OwnerReference {

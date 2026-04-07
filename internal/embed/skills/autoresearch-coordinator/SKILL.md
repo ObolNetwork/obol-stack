@@ -10,7 +10,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 
 ## When to Use
 
-- Discovering GPU workers advertising `devops_mlops/model_versioning` capabilities via the preferred public index API (internal Reth indexer first, then 8004scan fallback)
+- Discovering GPU workers advertising `devops_mlops/model_versioning` capabilities via the 8004scan public index API
 - Probing worker endpoints for x402 pricing before submitting experiments
 - Submitting `train.py` experiments to remote GPU workers through x402 payment gates
 - Running the continuous THINK/CLAIM/RUN/PUBLISH experiment loop
@@ -77,7 +77,7 @@ Each step is atomic and idempotent. If a worker fails mid-experiment, the coordi
 
 ## How Discovery Works
 
-Workers register on-chain via ERC-8004 and advertise capabilities through OASF (Open Agent Skills Framework) metadata. The coordinator prefers an internal Reth-backed indexer when `OBOL_INDEXER_API_URL` is healthy and otherwise falls back to the public 8004scan API:
+Workers register on-chain via ERC-8004 and advertise capabilities through OASF (Open Agent Skills Framework) metadata. The coordinator discovers workers via the public 8004scan API:
 
 ```
 GET https://www.8004scan.io/api/v1/public/agents
@@ -127,8 +127,7 @@ Results are appended to `$DATA_DIR/autoresearch/results.jsonl` (one JSON object 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OBOL_INDEXER_API_URL` | `` | Preferred internal index API base URL. Accepts either the service root or `/api/v1/public`; `/health` must report ready before it will be used |
-| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | Fallback public API base URL used when the preferred internal indexer is unavailable or unhealthy |
+| `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | Public 8004scan API base URL for worker discovery |
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API for payment signing |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
 | `ERPC_NETWORK` | `base-sepolia` | Default chain for payment |

@@ -220,8 +220,8 @@ obol kubectl get pods -n x402
 # Get the tunnel URL
 obol tunnel status
 
-# Probe the endpoint (should return 402 with pricing)
-obol sell probe <name> -n <namespace>
+# Test the endpoint is live and payment-gated (should return 402 with pricing)
+obol sell test <name> -n <namespace>
 
 # Or manually:
 TUNNEL_URL=$(obol tunnel status 2>&1 | grep -o 'https://[^ ]*')
