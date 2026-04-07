@@ -1016,51 +1016,51 @@ func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceI
 }
 
 func (c *Controller) updateOfferStatus(ctx context.Context, raw *unstructured.Unstructured, status monetizeapi.ServiceOfferStatus) error {
-	copy := raw.DeepCopy()
+	patched := raw.DeepCopy()
 	statusObject, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&status)
 	if err != nil {
 		return err
 	}
-	if existing, found := copy.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
+	if existing, found := patched.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
 		return nil
 	}
-	copy.Object["status"] = statusObject
-	_, err = c.offers.Namespace(copy.GetNamespace()).UpdateStatus(ctx, copy, metav1.UpdateOptions{})
+	patched.Object["status"] = statusObject
+	_, err = c.offers.Namespace(patched.GetNamespace()).UpdateStatus(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 
 func (c *Controller) updateRegistrationStatus(ctx context.Context, raw *unstructured.Unstructured, status monetizeapi.RegistrationRequestStatus) error {
-	copy := raw.DeepCopy()
+	patched := raw.DeepCopy()
 	statusObject, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&status)
 	if err != nil {
 		return err
 	}
-	if existing, found := copy.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
+	if existing, found := patched.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObject) {
 		return nil
 	}
-	copy.Object["status"] = statusObject
-	_, err = c.registrationRequests.Namespace(copy.GetNamespace()).UpdateStatus(ctx, copy, metav1.UpdateOptions{})
+	patched.Object["status"] = statusObject
+	_, err = c.registrationRequests.Namespace(patched.GetNamespace()).UpdateStatus(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 
 func (c *Controller) addFinalizer(ctx context.Context, raw *unstructured.Unstructured, finalizer string) error {
-	copy := raw.DeepCopy()
-	copy.SetFinalizers(append(copy.GetFinalizers(), finalizer))
-	_, err := c.offers.Namespace(copy.GetNamespace()).Update(ctx, copy, metav1.UpdateOptions{})
+	patched := raw.DeepCopy()
+	patched.SetFinalizers(append(patched.GetFinalizers(), finalizer))
+	_, err := c.offers.Namespace(patched.GetNamespace()).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 
 func (c *Controller) removeFinalizer(ctx context.Context, raw *unstructured.Unstructured, finalizer string) error {
-	copy := raw.DeepCopy()
-	finalizers := copy.GetFinalizers()
+	patched := raw.DeepCopy()
+	finalizers := patched.GetFinalizers()
 	filtered := finalizers[:0]
 	for _, item := range finalizers {
 		if item != finalizer {
 			filtered = append(filtered, item)
 		}
 	}
-	copy.SetFinalizers(filtered)
-	_, err := c.offers.Namespace(copy.GetNamespace()).Update(ctx, copy, metav1.UpdateOptions{})
+	patched.SetFinalizers(filtered)
+	_, err := c.offers.Namespace(patched.GetNamespace()).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 

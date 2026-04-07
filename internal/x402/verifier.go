@@ -27,6 +27,7 @@ func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
 	if err := v.load(cfg); err != nil {
 		return nil, err
 	}
+
 	return v, nil
 }
 
@@ -51,6 +52,7 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 				if err != nil {
 					return fmt.Errorf("resolve chain for route %q: %w", r.Pattern, err)
 				}
+
 				chains[r.Network] = rc
 			}
 		}
@@ -59,6 +61,7 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	v.chain.Store(&chain)
 	v.chains.Store(&chains)
 	v.config.Store(cfg)
+
 	return nil
 }
 
@@ -77,10 +80,12 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		// Fail-closed: deny rather than silently allowing through.
 		log.Printf("x402-verifier: missing X-Forwarded-Uri header (misconfiguration or direct access)")
 		http.Error(w, "forbidden: missing forwarded URI", http.StatusForbidden)
+
 		return
 	}
 
 	cfg := v.config.Load()
+
 	rule := matchRoute(cfg.Routes, uri)
 	if rule == nil {
 		// No pricing rule matches — route is free.
@@ -101,10 +106,12 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Look up pre-resolved chain (populated during config load).
 	chains := v.chains.Load()
+
 	chain, ok := (*chains)[chainName]
 	if !ok {
 		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+
 		return
 	}
 
@@ -116,6 +123,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("x402-verifier: failed to create payment requirement: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+
 		return
 	}
 
@@ -124,7 +132,9 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	if host := r.Header.Get("X-Forwarded-Host"); host != "" {
 		r.Host = host
 	}
+
 	r.URL.Path = uri
+
 	r.RequestURI = uri
 	if method := r.Header.Get("X-Forwarded-Method"); method != "" {
 		r.Method = method
@@ -136,6 +146,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	// copies this to the forwarded request, authenticating it with the upstream.
 	labels := prometheusLabels(rule)
 	v.metrics.requestsTotal.With(labels).Inc()
+
 	middleware := x402http.NewX402Middleware(&x402http.Config{
 		FacilitatorURL:      cfg.FacilitatorURL,
 		PaymentRequirements: []x402lib.PaymentRequirement{requirement},
@@ -147,16 +158,18 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		if upstreamAuth != "" {
 			w.Header().Set("Authorization", upstreamAuth)
 		}
+
 		w.WriteHeader(http.StatusOK)
 	})
 
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	middleware(inner).ServeHTTP(tracker, r)
+
 	switch {
-	case tracker.status == http.StatusOK && r.Header.Get("X-PAYMENT") != "":
+	case tracker.status == http.StatusOK && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentVerified.With(labels).Inc()
 		v.metrics.chargedRequests.With(labels).Inc()
-	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-PAYMENT") != "":
+	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentFailed.With(labels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
 		v.metrics.paymentRequired.With(labels).Inc()
@@ -175,6 +188,7 @@ func (v *Verifier) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, `{"status":"ready"}`)
 }
@@ -186,6 +200,7 @@ func (v *Verifier) MetricsHandler() http.Handler {
 
 type statusRecorder struct {
 	http.ResponseWriter
+
 	status int
 }
 
