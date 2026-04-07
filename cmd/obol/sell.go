@@ -48,7 +48,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellHTTPCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
-			sellProbeCommand(cfg),
+			sellTestCommand(cfg),
 			sellStopCommand(cfg),
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
@@ -942,22 +942,20 @@ func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
 }
 
 // ---------------------------------------------------------------------------
-// sell probe — send an unauthenticated request to verify 402 payment gate
+// sell test — verify a service is live and payment-gated
 // ---------------------------------------------------------------------------
 
-func sellProbeCommand(cfg *config.Config) *cli.Command {
+func sellTestCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:      "probe",
-		Usage:     "Probe a ServiceOffer endpoint to verify it returns 402 pricing",
+		Name:      "test",
+		Usage:     "Test that a service is live and requiring payment",
 		ArgsUsage: "<name>",
-		Description: `Sends an unauthenticated request through Traefik to the ServiceOffer's
-endpoint and displays the HTTP status code and x402 pricing response.
-
-A 402 response with x402Version=1 confirms the endpoint is live and payment-gated.
+		Description: `Checks that a published service is reachable and correctly gated behind
+x402 payments. Returns the HTTP status and pricing details.
 
 Examples:
-  obol sell probe flow-qwen -n llm
-  obol sell probe my-api -n default --path /health`,
+  obol sell test flow-qwen -n llm
+  obol sell test my-api -n default --path /health`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -978,12 +976,12 @@ Examples:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			name := cmd.Args().First()
 			if name == "" {
-				return errors.New("name required: obol sell probe <name> -n <ns>")
+				return errors.New("name required: obol sell test <name> -n <ns>")
 			}
 
 			ns := cmd.String("namespace")
 			if ns == "" {
-				return errors.New("namespace required: obol sell probe <name> -n <ns>")
+				return errors.New("namespace required: obol sell test <name> -n <ns>")
 			}
 
 			// Get the ServiceOffer's endpoint from the CR status.

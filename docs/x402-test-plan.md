@@ -145,7 +145,7 @@ These require a running k3d cluster with `OBOL_DEVELOPMENT=true`.
 |------|-----------------|---------|----------|
 | `TestIntegration_X402Setup` | `obol x402 setup --wallet 0x... --chain base-sepolia` patches configmap + secret in cluster | 30s | HIGH |
 | `TestIntegration_X402Status` | `obol x402 status` reads correct config from cluster | 15s | HIGH |
-| `TestIntegration_X402AddRoute` | `obol x402 setup` then AddRoute() adds route, verifiable via GetPricingConfig | 30s | MEDIUM |
+| `TestIntegration_X402ServiceOfferRoutes` | Create ServiceOffer, verify verifier picks up live route via informer | 30s | MEDIUM |
 | `TestIntegration_VerifierDeployment` | x402-verifier pod is running, responds to /healthz | 15s | HIGH |
 | `TestIntegration_VerifierForwardAuth` | Send request to /verify endpoint with X-Forwarded-Uri, verify 200/402 behavior | 30s | HIGH |
 | `TestIntegration_WellKnownEndpoint` | GET /.well-known/agent-registration.json returns valid JSON (after registration set) | 15s | MEDIUM |
@@ -259,7 +259,7 @@ Pattern: Build the CLI app, run subcommands against mocked infrastructure.
 | `ResolveChain()` | config.go:69 | partial (error case only) | Add all chains |
 | `WatchConfig()` | watcher.go:16 | **UNTESTED** | Add tests |
 | `Setup()` | setup.go:23 | **UNTESTED** | Needs kubectl abstraction |
-| `AddRoute()` | setup.go:70 | **UNTESTED** | Needs kubectl abstraction |
+| `WatchServiceOffers()` | serviceoffer_source.go:23 | **UNTESTED** | Integration only |
 | `GetPricingConfig()` | setup.go:96 | **UNTESTED** | Needs kubectl abstraction |
 | `matchRoute()` | matcher.go:19 | TESTED (8 cases) | - |
 | `matchPattern()` | matcher.go:29 | TESTED | - |
