@@ -14,6 +14,17 @@ import (
 //
 // WatchConfig blocks until the context is cancelled.
 func WatchConfig(ctx context.Context, path string, v *Verifier, interval time.Duration) {
+	WatchConfigWithHandler(ctx, path, interval, func(cfg *PricingConfig) error {
+		if err := v.Reload(cfg); err != nil {
+			log.Printf("x402-watcher: apply config failed: %v", err)
+			return err
+		}
+		log.Printf("x402-watcher: config reloaded (%d routes)", len(cfg.Routes))
+		return nil
+	})
+}
+
+func WatchConfigWithHandler(ctx context.Context, path string, interval time.Duration, apply func(*PricingConfig) error) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -47,12 +58,9 @@ func WatchConfig(ctx context.Context, path string, v *Verifier, interval time.Du
 				continue
 			}
 
-			if err := v.Reload(cfg); err != nil {
-				log.Printf("x402-watcher: apply config failed: %v", err)
+			if err := apply(cfg); err != nil {
 				continue
 			}
-
-			log.Printf("x402-watcher: config reloaded (%d routes)", len(cfg.Routes))
 		}
 	}
 }

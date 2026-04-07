@@ -3,6 +3,9 @@
 **Feature branch:** `feat/secure-enclave-inference`
 **Scope:** 100% coverage of x402 payment gating, ERC-8004 on-chain registration, verifier service, and CLI commands.
 
+> Historical note: `/.well-known/agent-registration.json` is no longer served by `x402-verifier`.
+> Registration publication now belongs to `serviceoffer-controller` and `RegistrationRequest`, so any verifier-specific well-known endpoint references below are outdated.
+
 ---
 
 ## 1. Coverage Inventory

@@ -30,6 +30,9 @@ type ServiceOfferSpec struct {
 	// Defaults to /services/<name>.
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 
+	// Provenance tracks how the service or model was produced.
+	Provenance map[string]string `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
 	// Registration holds ERC-8004 registration metadata.
 	Registration *RegistrationSpec `json:"registration,omitempty" yaml:"registration,omitempty"`
 }

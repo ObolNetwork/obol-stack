@@ -433,10 +433,9 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		"STACK_DATA_DIR="+dataDir,
 	)
 
-	// In development mode, build and import local Docker images that aren't
-	// on a public registry yet (e.g. x402-verifier and the LiteLLM custom image).
-	// This must happen before helmfile sync so pods do not try to pull tags that
-	// only exist in the local k3d image store.
+	// In development mode, build and import local repo images that aren't on a
+	// public registry yet. Third-party images use the k3d registry-mirror path
+	// configured during cluster creation.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		buildAndImportLocalImages(cfg)
 	}
@@ -636,6 +635,7 @@ type localImage struct {
 // localImages lists images that should be built locally and imported into k3d.
 var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
+	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 
@@ -680,15 +680,19 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			continue
 		}
 
-		fmt.Printf("Importing %s into cluster %s...\n", img.tag, clusterName)
-		importCmd := exec.Command(k3dBinary, "image", "import", img.tag, "-c", clusterName)
-		importCmd.Stdout = os.Stdout
-
-		importCmd.Stderr = os.Stderr
-		if err := importCmd.Run(); err != nil {
+		if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
 		}
 	}
+}
+
+func importImageToCluster(k3dBinary, clusterName, tag string) error {
+	fmt.Printf("Importing %s into cluster %s...\n", tag, clusterName)
+	importCmd := exec.Command(k3dBinary, "image", "import", tag, "-c", clusterName)
+	importCmd.Stdout = os.Stdout
+	importCmd.Stderr = os.Stderr
+
+	return importCmd.Run()
 }
 
 // findProjectRoot walks up from the current directory to find go.mod.

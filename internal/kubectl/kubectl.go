@@ -105,23 +105,34 @@ func Output(binary, kubeconfig string, args ...string) (string, error) {
 
 // Apply pipes the given data into kubectl apply -f -.
 func Apply(binary, kubeconfig string, data []byte) error {
+	_, err := ApplyOutput(binary, kubeconfig, data)
+	return err
+}
+
+// ApplyOutput pipes the given data into kubectl apply -f - and returns stdout.
+func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 	cmd := exec.Command(binary, "apply", "-f", "-")
 
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stdout = os.Stdout
 
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
 
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return fmt.Errorf("kubectl apply: %w: %s", err, errMsg)
+			return "", fmt.Errorf("kubectl apply: %w: %s", err, errMsg)
 		}
 
-		return fmt.Errorf("kubectl apply: %w", err)
+		return "", fmt.Errorf("kubectl apply: %w", err)
 	}
 
-	return nil
+	out := strings.TrimSpace(stdout.String())
+	if out != "" {
+		fmt.Println(out)
+	}
+
+	return out, nil
 }
