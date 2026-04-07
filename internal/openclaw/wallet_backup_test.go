@@ -27,7 +27,7 @@ func setupTestInstance(t *testing.T) (*config.Config, string, *WalletInfo) {
 	}
 
 	// Generate a wallet.
-	wallet, err := GenerateWallet(cfg, id)
+	wallet, err := GenerateWallet(cfg, id, testUI())
 	if err != nil {
 		t.Fatal(err)
 	}

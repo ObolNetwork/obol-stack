@@ -46,9 +46,6 @@ jobs:
             image: obolnetwork/x402-buyer
             dockerfile: Dockerfile.x402-buyer
             description: x402 buy-side payment sidecar for Obol Stack
-    outputs:
-      verifier-digest: ${{ steps.build-push.outputs.digest }}
-      buyer-digest: ${{ steps.build-push.outputs.digest }}
 
     steps:
       - name: Checkout
@@ -99,7 +96,7 @@ jobs:
           sbom: true
 
   # ---------------------------------------------------------------------------
-  # Security scan each published image.
+  # Security scan each published image using the exact SHA tag from the build.
   # ---------------------------------------------------------------------------
   security-scan:
     needs: build
@@ -119,7 +116,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:latest
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'

@@ -1205,7 +1205,10 @@ Environment="OLLAMA_HOST=0.0.0.0"
 OVERRIDE
 	then
 		sudo systemctl daemon-reload
-		sudo systemctl restart ollama 2>/dev/null || true
+		if systemctl is-active --quiet ollama; then
+			log_warn "Restarting Ollama service to apply new bind address..."
+			sudo systemctl restart ollama 2>/dev/null || true
+		fi
 		log_success "Ollama configured to listen on all interfaces"
 	else
 		log_warn "Could not configure Ollama host binding (non-fatal)"
