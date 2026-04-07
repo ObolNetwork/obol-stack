@@ -1,7 +1,7 @@
 @bdd
 Feature: Sell-side monetization
   As a local operator
-  I want to expose priced services through a ServiceOffer control loop
+  I want to expose priced services through the serviceoffer-controller reconciliation loop
   So that public buyers can discover and pay for bounded compute or HTTP endpoints
 
   # References: SPEC Section 3.5 (Sell-Side Monetization), B&E Section 2.5 (Sell-Side Monetization)

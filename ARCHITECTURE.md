@@ -87,6 +87,7 @@ C4Container
             Container(buyer, "x402-buyer", "Go sidecar", "Attaches pre-signed payments")
             Container(erpc, "eRPC", "Go", "Blockchain RPC gateway")
             Container(verifier, "x402-verifier", "Go", "ForwardAuth payment checks")
+            Container(soctl, "serviceoffer-controller", "Go", "Reconciles ServiceOffer and RegistrationRequest CRs")
             Container(agent, "OpenClaw", "OpenClaw runtime", "Agent instances and skills")
             Container(frontend, "Frontend", "React app", "Operator dashboard")
             ContainerDb(prom, "Prometheus", "Monitoring stack", "Metrics and scrape targets")
@@ -110,7 +111,8 @@ C4Container
     Rel(verifier, facilitator, "Verify payment")
     Rel(erpc, chain, "JSON-RPC")
     Rel(agent, erpc, "Chain queries")
-    Rel(agent, verifier, "Pricing config and registration side effects")
+    Rel(soctl, verifier, "Derives dynamic routes from ServiceOffers")
+    Rel(soctl, agent, "Reconciles offers created by agent")
     Rel(prom, buyer, "Scrapes /metrics")
 ```
 
@@ -122,16 +124,17 @@ C4Component
 
     Component(cli, "sell commands", "Go", "Creates ServiceOffers and local gateways")
     Component(offer, "ServiceOffer CRD", "Kubernetes API", "Declarative sell contract")
-    Component(mon, "monetize.py", "Python skill", "Skill-driven reconcile loop")
-    Component(ver, "x402-verifier", "Go", "Payment gate")
+    Component(soctl, "serviceoffer-controller", "Go", "Informer-based reconcile loop in x402 ns")
+    Component(rr, "RegistrationRequest CRD", "Kubernetes API", "Isolates ERC-8004 side effects")
+    Component(ver, "x402-verifier", "Go", "Payment gate with kube route source")
     Component(route, "HTTPRoute / Middleware", "Gateway API + Traefik", "Traffic publication")
-    Component(reg, "registration publisher", "Python skill", "Generates well-known document and optional on-chain registration")
 
-    Rel(cli, offer, "Create / update")
-    Rel(offer, mon, "Read / status patch")
-    Rel(mon, ver, "Update pricing inputs")
-    Rel(mon, route, "Create route + middleware")
-    Rel(mon, reg, "Publish registration")
+    Rel(cli, offer, "Create / update / pause / delete")
+    Rel(offer, soctl, "Watch / status patch")
+    Rel(soctl, ver, "Derives dynamic pricing routes")
+    Rel(soctl, route, "Create route + middleware")
+    Rel(soctl, rr, "Create / update registration request")
+    Rel(rr, soctl, "Watch / reconcile publication + on-chain registration")
 ```
 
 ---
@@ -144,8 +147,10 @@ C4Component
 | `internal/model` | Central LiteLLM routing and provider patching | Section 3.2 |
 | `internal/network` | eRPC, local network deployments, public RPC management | Section 3.3 |
 | `internal/openclaw` | OpenClaw overlays, tokens, skills, wallets, dashboards | Section 3.4 |
-| `internal/agent` | Elevation of the default agent with monetization powers | Section 3.4 |
-| `cmd/obol/sell.go` + `internal/x402` | Sell-side operator and verifier paths | Section 3.5 |
+| `internal/agent` | Cleans up legacy heartbeat from the default agent | Section 3.4 |
+| `cmd/serviceoffer-controller` + `internal/serviceoffercontroller` | ServiceOffer and RegistrationRequest reconciliation | Section 3.5 |
+| `internal/monetizeapi` | Go types for ServiceOffer, RegistrationRequest, and GVR constants | Section 3.5 |
+| `cmd/obol/sell.go` + `internal/x402` | Sell-side operator CLI and verifier paths | Section 3.5 |
 | `internal/x402/buyer` | Buy-side sidecar runtime | Section 3.6 |
 | `internal/tunnel` | Quick and DNS tunnel lifecycle | Section 3.7 |
 | `internal/app` | Managed Helm-chart workloads | Section 3.8 |
@@ -174,7 +179,7 @@ sequenceDiagram
     H-->>CLI: baseline infrastructure ready
     CLI->>L: autoConfigureLLM()
     CLI->>OC: SetupDefault()
-    CLI->>A: patch RBAC + HEARTBEAT.md
+    CLI->>A: remove legacy HEARTBEAT.md
     CLI->>T: start only if persistent DNS tunnel exists
     CLI-->>O: obol.stack ready
 ```
@@ -186,19 +191,19 @@ sequenceDiagram
     participant O as Operator
     participant CLI as sell command
     participant K as Kubernetes API
-    participant M as monetize.py
+    participant C as serviceoffer-controller
     participant V as x402-verifier
     participant G as Traefik / Gateway API
-    participant R as Registry publisher
 
     O->>CLI: obol sell http ...
     CLI->>K: create ServiceOffer
-    M->>K: read ServiceOffer
-    M->>K: patch status ModelReady / UpstreamHealthy
-    M->>V: publish pricing route
-    M->>G: create Middleware + HTTPRoute
-    M->>R: publish agent-registration.json
-    M->>K: patch Ready
+    C->>K: watch ServiceOffer
+    C->>K: patch status ModelReady / UpstreamHealthy
+    C->>K: create Middleware + HTTPRoute
+    C->>V: verifier picks up dynamic route (kube source)
+    C->>K: create RegistrationRequest
+    C->>K: publish agent-registration.json + attempt on-chain registration
+    C->>K: patch Ready
 ```
 
 ### 4.3 Buy-Side Request
@@ -246,6 +251,7 @@ State is intentionally split between:
 | Local config dir | stack metadata | `.stack-id`, `.stack-backend`, `kubeconfig.yaml` | Stack identity and runtime targeting |
 | Local config dir | deployment config | `applications/<app>/<id>`, `networks/<type>/<id>` | Declarative deployment inputs |
 | Kubernetes API | `ServiceOffer` | `spec.upstream`, `spec.payment`, `status.conditions` | Sell-side contract and reconcile status |
+| Kubernetes API | `RegistrationRequest` | `spec.serviceOfferName`, `spec.desiredState`, `status.phase` | ERC-8004 publication and on-chain registration lifecycle |
 | Kubernetes ConfigMaps | routing and pricing state | LiteLLM, eRPC, x402, buyer config | Dynamic runtime routing |
 | Kubernetes Secrets | provider creds and tunnel token | API keys, tunnel token | Sensitive runtime inputs |
 
@@ -269,6 +275,7 @@ graph TD
         LLM["LiteLLM + x402-buyer"]
         ERPC["eRPC"]
         X402["x402-verifier"]
+        SOCTL["serviceoffer-controller"]
         OCA["OpenClaw / obol-agent"]
         FE["Frontend"]
         MON["Monitoring"]
@@ -283,6 +290,7 @@ graph TD
     TRAEFIK --> FE
     TRAEFIK --> ERPC
     TRAEFIK --> X402
+    SOCTL --> X402
     TRAEFIK --> LLM
 ```
 

@@ -73,8 +73,10 @@ The system does **not**:
 | **eRPC** | In-cluster blockchain RPC gateway that multiplexes local node and public RPC upstreams. |
 | **LiteLLM** | Central OpenAI-compatible model gateway in the `llm` namespace. |
 | **OpenClaw instance** | A deployed AI agent runtime managed through `obol openclaw ...`. |
-| **obol-agent** | The canonical default OpenClaw instance with elevated RBAC and a heartbeat-based reconciliation loop. |
-| **x402-verifier** | ForwardAuth service that matches routes, emits `402 Payment Required`, and delegates verification to a facilitator. |
+| **obol-agent** | The canonical default OpenClaw instance with read-only monetization RBAC and ServiceOffer write access. |
+| **serviceoffer-controller** | Dedicated Go controller in the `x402` namespace that reconciles `ServiceOffer` and `RegistrationRequest` CRs into Middleware, HTTPRoute, pricing, and registration resources. Leader-elected, informer-based. |
+| **RegistrationRequest** | Namespaced CRD (`obol.org/v1alpha1`) that isolates ERC-8004 publication and on-chain registration side effects from the main ServiceOffer reconciliation loop. |
+| **x402-verifier** | ForwardAuth service that matches routes, emits `402 Payment Required`, and delegates verification to a facilitator. In `--route-source=kube` mode, merges static ConfigMap routes with live ServiceOffer-derived routes. |
 | **x402-buyer** | Sidecar in the LiteLLM pod that attaches pre-signed payment headers to paid upstream requests. |
 | **Remote signer** | In-cluster signing service used by OpenClaw and registration flows; separate from the buyer sidecar. |
 | **AGENT_BASE_URL** | Environment variable injected into the default agent deployment so generated registration documents use the current tunnel URL. |
@@ -109,12 +111,15 @@ Obol Stack is a single-node, operator-managed platform with three concentric pla
 | Module | Purpose | Key Dependencies |
 |--------|---------|-----------------|
 | `cmd/obol` | User-facing CLI surface | `internal/*`, `urfave/cli/v3` |
+| `cmd/serviceoffer-controller` | Entry point for the ServiceOffer reconciliation controller | `internal/serviceoffercontroller`, `internal/monetizeapi` |
 | `internal/stack` | Stack init/up/down/purge, backend management, default infra sync | `internal/embed`, `internal/model`, `internal/openclaw`, `internal/agent`, `internal/tunnel` |
 | `internal/model` | LiteLLM provider configuration and model synchronization | Kubernetes ConfigMaps/Secrets, Ollama, cloud APIs |
 | `internal/network` | Local node deployment and eRPC remote upstream management | Embedded network charts, ChainList, eRPC ConfigMap |
 | `internal/openclaw` | Instance onboarding, overlays, dashboard, token, skills, wallet flows | Helmfile, embedded skills, DNS, LiteLLM |
-| `internal/agent` | Elevates the default OpenClaw instance with monetization RBAC and heartbeat behavior | Kubernetes RBAC, local data volume |
-| `internal/x402` | Sell-side verifier, pricing config, watcher, setup, metrics | x402 facilitator, Traefik ForwardAuth |
+| `internal/agent` | Cleans up legacy heartbeat from the default OpenClaw instance | Local data volume |
+| `internal/serviceoffercontroller` | Informer-based reconciliation of ServiceOffer and RegistrationRequest CRs | Kubernetes dynamic client, `internal/monetizeapi`, `internal/erc8004` |
+| `internal/monetizeapi` | Go types for ServiceOffer, RegistrationRequest, and related GVRs | `k8s.io/apimachinery` |
+| `internal/x402` | Sell-side verifier, pricing config, watcher, ServiceOffer route source, setup, metrics | x402 facilitator, Traefik ForwardAuth, Kubernetes informers |
 | `internal/x402/buyer` | Buy-side paid upstream proxy with pre-signed auth pools | LiteLLM, remote sellers, ConfigMaps |
 | `internal/erc8004` | Registration clients, network registry, types, signer integration | eRPC, registry contracts, remote signer |
 | `internal/tunnel` | Quick and DNS Cloudflare tunnel lifecycle | cloudflared, Cloudflare APIs, frontend ConfigMap |
@@ -129,14 +134,14 @@ Obol Stack is a single-node, operator-managed platform with three concentric pla
 3. `syncDefaults()` deploys baseline infrastructure via Helmfile.
 4. `autoConfigureLLM()` patches LiteLLM for detected Ollama models and imported cloud credentials.
 5. `openclaw.SetupDefault()` creates or re-syncs the default `obol-agent` instance.
-6. `agent.Init()` patches monetization RBAC and injects `HEARTBEAT.md`.
+6. `agent.Init()` removes any legacy `HEARTBEAT.md` from the default agent workspace (reconciliation is handled by the `serviceoffer-controller` in the `x402` namespace).
 7. DNS is configured for `obol.stack` and, if provisioned, a persistent tunnel is started.
 
 #### 2.3.2 Sell-Side Lifecycle
 
 1. The operator creates a sell surface using `obol sell http ...` or `obol sell inference ...`.
 2. A `ServiceOffer` CR or host-side gateway deployment is created and persisted.
-3. The `monetize.py` reconciler evaluates the offer through `ModelReady`, `UpstreamHealthy`, `PaymentGateReady`, `RoutePublished`, `Registered`, and `Ready`.
+3. The `serviceoffer-controller` reconciles the offer through `ModelReady`, `UpstreamHealthy`, `PaymentGateReady`, `RoutePublished`, `Registered`, and `Ready`.
 4. Traefik routes public traffic through x402 ForwardAuth.
 5. If registration is enabled, `/.well-known/agent-registration.json` is published and on-chain registration is attempted.
 
@@ -275,13 +280,9 @@ Each instance has:
 
 The canonical default instance is `obol-agent`. It is re-synced idempotently by `stack up`.
 
-#### 3.4.3 Agent Elevation
+#### 3.4.3 Agent Cleanup and Controller Handoff
 
-`agent.Init()` does not create a separate controller binary. Instead it:
-- patches monetization ClusterRoleBindings and a pricing RoleBinding
-- injects `HEARTBEAT.md` into the default agent workspace so heartbeat cycles run `monetize.py process --all --quick`
-
-This makes monetization behavior part of the default agent runtime, not a parallel control plane.
+`agent.Init()` removes any legacy `HEARTBEAT.md` from the default agent workspace. ServiceOffer reconciliation is now handled by the dedicated `serviceoffer-controller` Deployment in the `x402` namespace, not inside the OpenClaw runtime. The agent retains read-only cluster visibility (`openclaw-monetize-read`) and minimal ServiceOffer write access (`openclaw-monetize-write`) via static RBAC manifests applied by k3s, not patched at runtime.
 
 #### 3.4.4 Operator Surfaces
 
@@ -298,7 +299,7 @@ Key instance operations:
 
 #### 3.5.1 Purpose
 
-Expose local services through x402 payment gates and optional ERC-8004 public discovery without requiring a separate Kubernetes operator binary.
+Expose local services through x402 payment gates and optional ERC-8004 public discovery via a dedicated `serviceoffer-controller` and the x402 verifier.
 
 #### 3.5.2 Operator Commands
 
@@ -308,6 +309,7 @@ Current sell-side CLI surface:
 - `sell list`
 - `sell status`
 - `sell probe`
+- `sell info`
 - `sell stop`
 - `sell delete`
 - `sell pricing`
@@ -322,19 +324,20 @@ Current sell-side CLI surface:
 Optional but meaningful fields are:
 - `spec.type`
 - `spec.model`
-- `spec.provenance`
+- `spec.provenance` (key-value map for experiment metadata such as framework, metric name/value, experiment ID, training hash, parameter count)
 - `spec.path`
-- `spec.registration`
+- `spec.registration` (includes `enabled`, `name`, `description`, `image`, `services[]`, `skills[]`, `domains[]`, `supportedTrust[]`, `metadata`)
 
 Status includes:
 - `conditions[]`
 - `endpoint`
 - `agentId`
 - `registrationTxHash`
+- `observedGeneration`
 
 #### 3.5.4 Reconciliation Stages
 
-The current skill-driven reconcile loop uses these stages:
+The `serviceoffer-controller` reconciles each ServiceOffer through these stages:
 1. `ModelReady`
 2. `UpstreamHealthy`
 3. `PaymentGateReady`
@@ -342,7 +345,11 @@ The current skill-driven reconcile loop uses these stages:
 5. `Registered`
 6. `Ready`
 
-Registration is intentionally degradable. If the signer, RPC path, or gas funding is unavailable, the service can remain public and payment-gated with `Registered=True` and reason `OffChainOnly`.
+The controller uses a finalizer (`monetize.obol.org/finalizer`) for cleanup on deletion: child Middleware, HTTPRoute, pricing routes, and registration resources are garbage-collected, and an active ERC-8004 registration is tombstoned via a `RegistrationRequest` with `desiredState: Tombstoned`.
+
+`obol sell stop` pauses an offer by setting the `obol.org/paused` annotation; the controller skips reconciliation for paused offers. `obol sell delete` removes the ServiceOffer and lets the controller finalizer clean up all dependent resources.
+
+Registration is intentionally degradable. If the signer, RPC path, or gas funding is unavailable, the service can remain public and payment-gated with `Registered=True` and reason `OffChainOnly`. Registration side effects are isolated into a separate `RegistrationRequest` CR, which the controller reconciles through `Publishing`, `Registering`, `Registered`, `OffChainOnly`, or `Tombstoned` phases.
 
 #### 3.5.5 Pricing Models
 
@@ -459,7 +466,7 @@ These supporting operations are part of the repository surface, but not all of t
 | Models | `model setup`, `model status`, `model sync`, `model pull`, `model list`, `model remove` |
 | Networks | `network list`, `network install`, `network sync`, `network delete`, `network add`, `network remove`, `network status` |
 | OpenClaw | `openclaw onboard`, `sync`, `token`, `list`, `delete`, `setup`, `dashboard`, `skills`, `wallet`, `cli` |
-| Sell | `sell inference`, `http`, `list`, `status`, `probe`, `stop`, `delete`, `pricing`, `register` |
+| Sell | `sell inference`, `http`, `list`, `status`, `probe`, `info`, `stop`, `delete`, `pricing`, `register` |
 | Tunnel | `tunnel status`, `login`, `provision`, `restart`, `stop`, `logs` |
 | Apps | `app install`, `sync`, `list`, `delete` |
 | Operations | `update`, `upgrade`, `version`, Kubernetes passthrough commands |
@@ -469,6 +476,7 @@ These supporting operations are part of the repository surface, but not all of t
 | Interface | Kind | Purpose |
 |----------|------|---------|
 | `obol.org/v1alpha1` | `ServiceOffer` | Declares sell-side services, pricing, provenance, and registration metadata |
+| `obol.org/v1alpha1` | `RegistrationRequest` | Isolates ERC-8004 publication and on-chain registration side effects from ServiceOffer reconciliation |
 | `gateway.networking.k8s.io/v1` | `HTTPRoute` | Exposes frontend, eRPC, public services, and registration document routes |
 | `traefik.io/v1alpha1` | `Middleware` | ForwardAuth integration for x402 payment checks |
 | `monitoring.coreos.com/v1` | `PodMonitor` | Scrapes buyer sidecar metrics |
@@ -523,7 +531,7 @@ There is no global user quota service in the current branch. Effective limits ar
 | `traefik` | Traefik, cloudflared, gateway | Ingress and tunnel connector |
 | `llm` | LiteLLM, x402-buyer sidecar, buyer PodMonitor | Model gateway and buy-side runtime |
 | `erpc` | eRPC, HTTPRoute, metadata ConfigMap | Blockchain RPC gateway |
-| `x402` | x402-verifier, pricing config | Sell-side payment verification |
+| `x402` | x402-verifier, serviceoffer-controller, pricing config | Sell-side payment verification and ServiceOffer reconciliation |
 | `openclaw-obol-agent` | Default OpenClaw agent, remote signer | Canonical agent runtime |
 | `openclaw-<id>` | Additional OpenClaw instances | User-managed agent runtimes |
 | `obol-frontend` | Frontend deployment, HTTPRoute, RBAC | Dashboard |
@@ -543,6 +551,7 @@ There is no global user quota service in the current branch. Effective limits ar
 | `x402-buyer-auths` | Pre-signed authorization pools |
 | `cloudflared-tunnel-token` | DNS tunnel token for persistent Cloudflare tunnel |
 | `so-<name>-registration` ConfigMap | Generated `agent-registration.json` for a ServiceOffer |
+| `RegistrationRequest` CR | Isolates ERC-8004 publication lifecycle (publishing, registering, tombstoning) from ServiceOffer reconciliation |
 
 ### 5.4 Data Lifecycle
 
@@ -599,9 +608,11 @@ Primary threats:
 
 ### 7.5 RBAC Model
 
-- Default agent elevation is explicit and applied by `agent.Init()`.
+- The `serviceoffer-controller` runs under its own ServiceAccount and ClusterRole in the `x402` namespace with permissions to manage ServiceOffers, RegistrationRequests, Middlewares, HTTPRoutes, ConfigMaps, Services, and Deployments.
+- The `x402-verifier` has a separate ServiceAccount and ClusterRole scoped to reading ServiceOffers and the `litellm-secrets` Secret.
+- The default agent (`obol-agent`) retains two static ClusterRoles: `openclaw-monetize-read` (cluster-wide read) and `openclaw-monetize-write` (ServiceOffer CRUD only). These are applied by k3s manifests, not patched at runtime.
 - Frontend has a narrow but meaningful ClusterRole for discovery and `ServiceOffer` CRUD.
-- Sell-side resource cleanup relies on namespaced ownership and cluster-scoped permissions where required.
+- Sell-side resource cleanup relies on controller finalizers and ownerReferences for automatic garbage collection.
 
 ---
 
@@ -677,7 +688,7 @@ Primary threats:
 - Add operator-safe JSON, headless, and introspection surfaces to the CLI before promoting broader agent or MCP control paths.
 - Package `reth-erc8004-indexer` as a first-class managed application instead of a repository-adjacent subproject.
 - Promote autoresearch worker and coordinator workflows from skill-level building blocks into operator-visible flows with clearer provenance surfaces.
-- Tighten reconcile and heartbeat latency rather than relying on the current default cadence.
+- Tighten controller reconcile latency and add observability for reconciliation performance.
 - Extend and document multi-chain sell-side support only when the CLI, verifier, and registration surfaces agree on the contract.
 - Extend monetized publication beyond the current inference-centric path only after explicit isolation, ownership, and routing rules are specified.
 - Validate the buy-side path more deeply through LiteLLM-routed hands-off tests and in-pod skill smoke coverage.
