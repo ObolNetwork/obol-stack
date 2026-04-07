@@ -396,8 +396,7 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Creates a payment gated ServiceOffer in the cluster. The serviceoffer-controller reconciles it through:
-health-check → payment gate → route publishing → optional ERC-8004 registration.
+		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.`
 Include --register to have the service listed on EIP8004 onchain agent registry.
 
 Example:
