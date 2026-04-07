@@ -108,8 +108,7 @@ ServiceOffer CR (obol.org/v1alpha1)
     |     +-- Derive in-memory pricing rules + upstream auth
     |
     +-- monetize.py process
-          +-- Wait for convergence
-          +-- Refresh /skill.md
+          +-- Wait for controller convergence (no-op — controller owns all resources)
 ```
 
 ## References

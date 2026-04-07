@@ -91,75 +91,6 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	return nil
 }
 
-// AddRoute adds a pricing route to the x402 ConfigMap.
-// Optional per-route payTo and network override the global config when set.
-func AddRoute(cfg *config.Config, pattern, price, description string, opts ...RouteOption) error {
-	if err := EnsureVerifier(cfg); err != nil {
-		return fmt.Errorf("deploy x402 verifier: %w", err)
-	}
-
-	rule := RouteRule{
-		Pattern:     pattern,
-		Price:       price,
-		Description: description,
-	}
-	for _, opt := range opts {
-		opt(&rule)
-	}
-
-	pcfg, err := GetPricingConfig(cfg)
-	if err != nil {
-		return err
-	}
-
-	replaced := false
-	for i := range pcfg.Routes {
-		if sameRouteIdentity(pcfg.Routes[i], rule) {
-			pcfg.Routes[i] = rule
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		pcfg.Routes = append(pcfg.Routes, rule)
-	}
-	return WritePricingConfig(cfg, pcfg)
-}
-
-// RouteOption is a functional option for AddRoute.
-type RouteOption func(*RouteRule)
-
-// WithPayTo sets a per-route payTo address (overrides global wallet).
-func WithPayTo(payTo string) RouteOption {
-	return func(r *RouteRule) { r.PayTo = payTo }
-}
-
-// WithNetwork sets a per-route network (overrides global chain).
-func WithNetwork(network string) RouteOption {
-	return func(r *RouteRule) { r.Network = network }
-}
-
-// WithUpstreamAuth sets the upstream Authorization header injected on success.
-func WithUpstreamAuth(upstreamAuth string) RouteOption {
-	return func(r *RouteRule) { r.UpstreamAuth = upstreamAuth }
-}
-
-// WithPriceMetadata records the source pricing model behind the enforced Price.
-func WithPriceMetadata(model, perMTok string, approxTokensPerRequest int) RouteOption {
-	return func(r *RouteRule) {
-		r.PriceModel = model
-		r.PerMTok = perMTok
-		r.ApproxTokensPerRequest = approxTokensPerRequest
-	}
-}
-
-// WithOfferInfo records the originating ServiceOffer identity.
-func WithOfferInfo(namespace, name string) RouteOption {
-	return func(r *RouteRule) {
-		r.OfferNamespace = namespace
-		r.OfferName = name
-	}
-}
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.
 func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
@@ -200,14 +131,6 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 	return pcfg, nil
 }
 
-// WritePricingConfig writes the pricing config to the cluster ConfigMap.
-func WritePricingConfig(cfg *config.Config, pcfg *PricingConfig) error {
-	bin, kc := kubectl.Paths(cfg)
-	copy := *pcfg
-	copy.Routes = nil
-	return patchPricingConfig(bin, kc, &copy)
-}
-
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 	pricingBytes, err := yaml.Marshal(pcfg)
 	if err != nil {
@@ -229,35 +152,3 @@ func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 		"-p", string(cmPatchJSON), "--type=merge")
 }
 
-func DeleteStaticOfferRoute(cfg *config.Config, namespace, offerName string) error {
-	if namespace == "" {
-		namespace = x402Namespace
-	}
-	pcfg, err := GetPricingConfig(cfg)
-	if err != nil {
-		return err
-	}
-
-	filtered := pcfg.Routes[:0]
-	for _, route := range pcfg.Routes {
-		if route.OfferNamespace == namespace && route.OfferName == offerName {
-			continue
-		}
-		filtered = append(filtered, route)
-	}
-	pcfg.Routes = filtered
-	return WritePricingConfig(cfg, pcfg)
-}
-
-// DeletePaymentRoute is kept as a compatibility alias for the old static
-// ConfigMap-backed route management path.
-func DeletePaymentRoute(cfg *config.Config, namespace, offerName string) error {
-	return DeleteStaticOfferRoute(cfg, namespace, offerName)
-}
-
-func sameRouteIdentity(left, right RouteRule) bool {
-	if left.OfferNamespace != "" || right.OfferNamespace != "" || left.OfferName != "" || right.OfferName != "" {
-		return left.OfferNamespace == right.OfferNamespace && left.OfferName == right.OfferName
-	}
-	return left.Pattern == right.Pattern
-}

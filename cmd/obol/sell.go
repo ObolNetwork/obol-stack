@@ -53,6 +53,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
+			sellInfoCommand(cfg),
 		},
 	}
 }
@@ -347,7 +348,10 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					if err != nil {
+						return err
+					}
 
 					soManifest := map[string]any{
 						"apiVersion": "obol.org/v1alpha1",
@@ -995,6 +999,12 @@ Examples:
 			}
 
 			subpath := cmd.String("path")
+			if !strings.HasPrefix(endpoint, "/") {
+				return fmt.Errorf("invalid endpoint %q: must start with /", endpoint)
+			}
+			if strings.Contains(endpoint, "..") {
+				return fmt.Errorf("invalid endpoint %q: path traversal not allowed", endpoint)
+			}
 			probeURL := "http://" + cmd.String("host") + endpoint + subpath
 			fmt.Printf("Probing %s ...\n", probeURL)
 
@@ -1928,7 +1938,10 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 		return fmt.Errorf("cannot resolve host IP for cluster routing: %w", err)
 	}
 
-	portNum, _ := strconv.Atoi(port)
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
+	}
 
 	svc := map[string]any{
 		"apiVersion": "v1",
@@ -2008,8 +2021,11 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) map[string]any {
-	portNum, _ := strconv.Atoi(port)
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) (map[string]any, error) {
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
+	}
 	spec := map[string]any{
 		"type": "inference",
 		"upstream": map[string]any{
@@ -2041,5 +2057,5 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 		}
 	}
 
-	return spec
+	return spec, nil
 }
