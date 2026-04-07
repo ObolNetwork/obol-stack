@@ -293,8 +293,7 @@ agents:
 	// Generate Ethereum signing wallet (key + remote-signer config).
 	u.Blank()
 	u.Info("Generating Ethereum wallet...")
-
-	wallet, err := GenerateWallet(cfg, id)
+	wallet, err := GenerateWallet(cfg, id, u)
 	if err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to generate wallet: %w", err)
@@ -409,7 +408,7 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 
 	// Ensure wallet keystore + remote-signer values exist (handles
 	// deployments created before wallet was added, or manual re-syncs).
-	ensureWallet(cfg, id, deploymentDir)
+	ensureWallet(cfg, id, deploymentDir, u)
 
 	// Stage default skills and inject directly to the host-side PVC path.
 	// The local-path-provisioner creates the PV directory on the host at a
@@ -626,7 +625,7 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 		return
 	}
 
-	fixVolumeOwnership(cfg, targetDir)
+	fixVolumeOwnership(cfg, targetDir, u)
 	u.Success("Imported workspace to volume")
 }
 
@@ -730,7 +729,7 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 		u.Successf("Injected skill: %s", e.Name())
 	}
 
-	fixVolumeOwnership(cfg, targetDir)
+	fixVolumeOwnership(cfg, targetDir, u)
 }
 
 // fixVolumeOwnership normalises file ownership on a host-side PVC path so the
@@ -738,7 +737,10 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 // inside a Docker container (the k3d node), so we exec into it as root and
 // chown recursively. On k3s the host IS the node, so we attempt a direct
 // chown (works when the CLI runs as root, harmless no-op otherwise).
-func fixVolumeOwnership(cfg *config.Config, hostPath string) {
+//
+// The optional ui parameter enables user-visible warnings when chown fails.
+// Pass nil when no UI context is available (e.g. GenerateWallet).
+func fixVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	// Determine backend (default: k3d for backward compat).
 	backendName := "k3d"
 	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
@@ -759,17 +761,26 @@ func fixVolumeOwnership(cfg *config.Config, hostPath string) {
 		// Convert host path to the in-node path. k3d mounts $DATA_DIR → /data.
 		relPath, err := filepath.Rel(cfg.DataDir, hostPath)
 		if err != nil {
+			u.Warnf("fixVolumeOwnership: cannot compute relative path from %s to %s: %v", cfg.DataDir, hostPath, err)
+			return
+		}
+		if strings.HasPrefix(relPath, "..") {
+			u.Warnf("fixVolumeOwnership: path %s is not under DataDir %s, skipping", hostPath, cfg.DataDir)
 			return
 		}
 		nodePath := filepath.Join("/data", relPath)
 
 		cmd := exec.Command("docker", "exec", container,
 			"chown", "-R", "1000:1000", nodePath)
-		_ = cmd.Run() // best-effort
+		if err := cmd.Run(); err != nil {
+			u.Warnf("Failed to fix volume ownership for %s: %v", nodePath, err)
+		}
 	default:
 		// k3s — direct host, try chown (succeeds if root).
 		cmd := exec.Command("chown", "-R", "1000:1000", hostPath)
-		_ = cmd.Run()
+		if err := cmd.Run(); err != nil {
+			u.Warnf("Failed to fix volume ownership for %s: %v (expected if not root)", hostPath, err)
+		}
 	}
 }
 
@@ -1434,7 +1445,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 		u.Successf("Synced skill: %s", e.Name())
 	}
 
-	fixVolumeOwnership(cfg, targetDir)
+	fixVolumeOwnership(cfg, targetDir, u)
 	u.Success("Skills synced to volume (file watcher will reload)")
 
 	return nil

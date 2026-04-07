@@ -14,12 +14,22 @@ OBOL="${OBOL:-$OBOL_BIN_DIR/obol}"
 STEP_COUNT=0
 PASS_COUNT=0
 
-# Anvil deterministic accounts (same on every Foundry install)
-export SELLER_WALLET="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-export SELLER_KEY="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
-export CONSUMER_WALLET="0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
-export CONSUMER_PRIVATE_KEY="0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6"
-export FACILITATOR_PRIVATE_KEY="0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97"
+# Well-known Hardhat/Anvil test mnemonic (deterministic, same on every install).
+# NEVER commit real private keys -- derive at runtime from this public mnemonic.
+HARDHAT_MNEMONIC="test test test test test test test test test test test junk"
+
+# Derive key + address for a given Hardhat account index.
+# Usage: hh_key <index>   -> private key (0x-prefixed)
+#        hh_addr <index>  -> address (0x-prefixed)
+hh_key()  { cast wallet derive-private-key "$HARDHAT_MNEMONIC" "$1"; }
+hh_addr() { cast wallet address --private-key "$(hh_key "$1")"; }
+
+# Anvil deterministic accounts (derived at runtime -- no secrets in source)
+export SELLER_WALLET=$(hh_addr 1)
+export SELLER_KEY=$(hh_key 1)
+export CONSUMER_WALLET=$(hh_addr 0)
+export CONSUMER_PRIVATE_KEY=$(hh_key 0)
+export FACILITATOR_PRIVATE_KEY=$(hh_key 3)
 export USDC_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 export CHAIN="base-sepolia"
 export ANVIL_RPC="http://localhost:8545"

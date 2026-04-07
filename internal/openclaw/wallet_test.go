@@ -248,8 +248,7 @@ func TestProvisionKeystoreToVolume(t *testing.T) {
 	cfg := &config.Config{DataDir: tmpDir}
 
 	keystoreJSON := []byte(`{"version": 3, "test": true}`)
-
-	path, err := provisionKeystoreToVolume(cfg, "test-id", "my-uuid", keystoreJSON)
+	path, err := provisionKeystoreToVolume(cfg, "test-id", "my-uuid", keystoreJSON, testUI())
 	if err != nil {
 		t.Fatal(err)
 	}

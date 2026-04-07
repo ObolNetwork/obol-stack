@@ -1,0 +1,15 @@
+title = "obol-stack gitleaks config"
+
+[allowlist]
+description = "Global allowlist"
+regexTarget = "line"
+regexes = [
+    # The well-known Hardhat test mnemonic is intentionally public
+    '''test test test test test test test test test test test junk''',
+    # USDC storage slot values (uint256 padded, not secrets)
+    '''0x0{50,}[0-9a-fA-F]{1,14}''',
+]
+paths = [
+    # Gitleaks own config
+    '''\.gitleaks\.toml''',
+]

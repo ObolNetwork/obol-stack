@@ -24,6 +24,19 @@ data:
     routes: []
 
 ---
+# CA certificates for outbound TLS (e.g. facilitator.x402.rs).
+# The verifier image is minimal and lacks a system CA bundle; this
+# ConfigMap is populated at deploy time from the host cert store.
+# Created by: kubectl create configmap ca-certificates -n x402 \
+#   --from-file=ca-certificates.crt=/etc/ssl/certs/ca-certificates.crt
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ca-certificates
+  namespace: x402
+data: {}
+
+---
 apiVersion: v1
 kind: Secret
 metadata:
@@ -161,6 +174,9 @@ spec:
             - name: pricing-config
               mountPath: /config
               readOnly: true
+            - name: ca-certs
+              mountPath: /etc/ssl/certs
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -189,6 +205,10 @@ spec:
             items:
               - key: pricing.yaml
                 path: pricing.yaml
+        - name: ca-certs
+          configMap:
+            name: ca-certificates
+            optional: true
 
 ---
 apiVersion: apps/v1

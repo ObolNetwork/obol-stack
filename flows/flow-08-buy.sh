@@ -94,7 +94,7 @@ from eth_account.messages import encode_typed_data
 
 SERVICE_URL = os.environ.get('BASE_URL', 'http://obol.stack:8080')
 SERVICE_PATH = "/services/flow-qwen/v1/chat/completions"
-CONSUMER_KEY  = "0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6"
+CONSUMER_KEY  = os.environ["CONSUMER_PRIVATE_KEY"]  # derived from Hardhat mnemonic in lib.sh
 USDC_ADDRESS  = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 CHAIN_ID      = 84532  # Base Sepolia
 MODEL         = os.environ.get("FLOW_MODEL", "qwen3.5:9b")

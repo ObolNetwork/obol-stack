@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/scrypt"
@@ -72,7 +73,7 @@ const (
 
 // GenerateWallet creates a new secp256k1 signing key, encrypts it as a V3
 // keystore, and provisions it to the host-side PVC path for the remote-signer.
-func GenerateWallet(cfg *config.Config, id string) (*WalletInfo, error) {
+func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error) {
 	privKey, pubKey, err := generateKeypair()
 	if err != nil {
 		return nil, fmt.Errorf("key generation failed: %w", err)
@@ -90,7 +91,7 @@ func GenerateWallet(cfg *config.Config, id string) (*WalletInfo, error) {
 		return nil, fmt.Errorf("keystore encryption failed: %w", err)
 	}
 
-	keystorePath, err := provisionKeystoreToVolume(cfg, id, keystoreID, keystoreJSON)
+	keystorePath, err := provisionKeystoreToVolume(cfg, id, keystoreID, keystoreJSON, u)
 	if err != nil {
 		return nil, fmt.Errorf("keystore provisioning failed: %w", err)
 	}
@@ -338,7 +339,7 @@ func KeystoreVolumePath(cfg *config.Config, id string) string {
 // provisionKeystoreToVolume writes the V3 keystore JSON to the host-side PVC
 // path before the remote-signer pod starts. Returns the absolute path to the
 // written keystore file.
-func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte) (string, error) {
+func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte, u *ui.UI) (string, error) {
 	dir := KeystoreVolumePath(cfg, id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create keystore directory: %w", err)
@@ -351,7 +352,7 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
-	fixVolumeOwnership(cfg, dir)
+	fixVolumeOwnership(cfg, dir, u)
 	return path, nil
 }
 
@@ -405,7 +406,7 @@ func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 // ensureWallet checks if wallet files exist for a deployment. If not
 // (e.g., a pre-wallet deployment), it generates and provisions them.
 // This is called during doSync to handle upgrades gracefully.
-func ensureWallet(cfg *config.Config, id, deploymentDir string) {
+func ensureWallet(cfg *config.Config, id, deploymentDir string, u *ui.UI) {
 	// Check if wallet metadata already exists.
 	if _, err := os.Stat(walletMetadataPath(deploymentDir)); err == nil {
 		return // wallet already provisioned
@@ -418,11 +419,10 @@ func ensureWallet(cfg *config.Config, id, deploymentDir string) {
 	}
 
 	// No wallet yet — generate one.
-	fmt.Println("Generating Ethereum wallet for this instance...")
-
-	wallet, err := GenerateWallet(cfg, id)
+	u.Info("Generating Ethereum wallet for this instance...")
+	wallet, err := GenerateWallet(cfg, id, u)
 	if err != nil {
-		fmt.Printf("Warning: could not generate wallet: %v\n", err)
+		u.Warnf("Could not generate wallet: %v", err)
 		return
 	}
 

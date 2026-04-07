@@ -37,8 +37,8 @@ cluster_facilitator_host() {
 }
 
 # Anvil accounts (from internal/testutil/anvil.go defaultAnvilAccounts())
-# accounts[0] = facilitator signer
-export FACILITATOR_SIGNER_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+# accounts[0] = facilitator signer (derived at runtime -- no secrets in source)
+export FACILITATOR_SIGNER_KEY=$(hh_key 0)
 # accounts[1] = seller wallet (same as SELLER_WALLET / SELLER_KEY in lib.sh)
 # accounts[9] = consumer wallet (same as CONSUMER_WALLET in lib.sh)
 
