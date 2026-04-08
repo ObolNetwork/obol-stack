@@ -174,14 +174,30 @@ func LoadDotEnv(path string) map[string]string {
 // ConfigureLiteLLM adds a provider to the LiteLLM gateway.
 // For cloud providers, it patches the Secret with the API key and adds
 // the model to config.yaml. For Ollama, it discovers local models and adds them.
-// Restarts the deployment after patching. Use PatchLiteLLMProvider +
-// RestartLiteLLM to batch multiple providers with a single restart.
+//
+// When only models change (no API key), models are hot-added via the
+// /model/new API — no restart required. When API keys change, a rolling
+// restart is triggered so the new Secret values are picked up.
 func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
 	if err := PatchLiteLLMProvider(cfg, u, provider, apiKey, models); err != nil {
 		return err
 	}
 
-	return RestartLiteLLM(cfg, u, provider)
+	// API key changes require a restart (Secret mounted as envFrom).
+	// Model-only changes can be hot-added via the /model/new API.
+	needsRestart := apiKey != ""
+	if needsRestart {
+		return RestartLiteLLM(cfg, u, provider)
+	}
+
+	entries := buildModelEntries(provider, models)
+	if err := hotAddModels(cfg, u, entries); err != nil {
+		u.Warnf("Hot-add failed, falling back to restart: %v", err)
+		return RestartLiteLLM(cfg, u, provider)
+	}
+
+	u.Successf("LiteLLM configured with %s provider", provider)
+	return nil
 }
 
 // PatchLiteLLMProvider patches the LiteLLM Secret (API key) and ConfigMap
@@ -243,6 +259,59 @@ func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 		u.Print("The deployment may still be rolling out.")
 	} else {
 		u.Successf("LiteLLM configured with %s provider", provider)
+	}
+
+	return nil
+}
+
+// hotAddModels uses the LiteLLM /model/new API to add models to the running
+// router without a restart. The ConfigMap is already patched by
+// PatchLiteLLMProvider for persistence across restarts.
+func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
+	masterKey, err := GetMasterKey(cfg)
+	if err != nil {
+		return fmt.Errorf("get master key: %w", err)
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Get the LiteLLM ClusterIP for direct access.
+	svcIP, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "svc", deployName, "-n", namespace,
+		"-o", "jsonpath={.spec.clusterIP}")
+	if err != nil || strings.TrimSpace(svcIP) == "" {
+		return fmt.Errorf("get litellm service IP: %w", err)
+	}
+
+	// Use kubectl exec to call the API from inside the cluster (avoids
+	// port-forward complexity and works on any host OS).
+	for _, entry := range entries {
+		body := map[string]any{
+			"model_name": entry.ModelName,
+			"litellm_params": map[string]any{
+				"model":    entry.LiteLLMParams.Model,
+				"api_base": entry.LiteLLMParams.APIBase,
+				"api_key":  entry.LiteLLMParams.APIKey,
+			},
+		}
+		bodyJSON, err := json.Marshal(body)
+		if err != nil {
+			continue
+		}
+
+		// POST /model/new via kubectl exec on a running litellm pod.
+		curlCmd := fmt.Sprintf(
+			`wget -qO- --post-data='%s' --header='Content-Type: application/json' --header='Authorization: Bearer %s' http://localhost:4000/model/new`,
+			string(bodyJSON), masterKey)
+
+		out, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+			"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
+			"--", "sh", "-c", curlCmd)
+		if err != nil {
+			u.Warnf("Hot-add %s failed: %v (%s)", entry.ModelName, err, strings.TrimSpace(out))
+			return fmt.Errorf("hot-add %s: %w", entry.ModelName, err)
+		}
 	}
 
 	return nil
