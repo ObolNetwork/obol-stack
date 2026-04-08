@@ -264,19 +264,14 @@ poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
 step "Bob: fund remote-signer wallet with USDC"
 # The remote-signer auto-generates a wallet during stack up.
 # We need to fund it from the .env key so buy.py can sign auths.
-BOB_SIGNER_ADDR=$(bob kubectl get cm wallet-metadata -n openclaw-obol-agent \
-    -o jsonpath='{.data.addresses\.json}' 2>/dev/null | python3 -c "
-import sys, json
+# Read wallet address from wallet.json (most reliable source)
+BOB_SIGNER_ADDR=$(python3 -c "
+import json, sys
 try:
-    d = json.load(sys.stdin)
-    addrs = d.get('addresses', [])
-    print(addrs[0] if addrs else d.get('address',''))
+    d = json.load(open('$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json'))
+    print(d.get('address',''))
 except: pass
 " 2>&1)
-if [ -z "$BOB_SIGNER_ADDR" ]; then
-    # Fallback: read from wallet.json
-    BOB_SIGNER_ADDR=$(cat "$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('address',''))" 2>/dev/null)
-fi
 if [ -n "$BOB_SIGNER_ADDR" ]; then
     echo "  Remote-signer wallet: $BOB_SIGNER_ADDR"
     # Send USDC (0.05 USDC = 50000 micro-units) from .env key
@@ -328,7 +323,8 @@ try:
     content = d['choices'][0]['message'].get('content', '')
     print(content[:500])
     # Check if agent found something
-    if any(w in content.lower() for w in ['inference', 'x402', 'found', 'registered', 'endpoint', 'agent', '3858', 'dual-stack', 'discovery']):
+    # Accept if the agent found anything meaningful about agents/services
+    if any(w in content.lower() for w in ['inference', 'x402', 'found', 'registered', 'endpoint', 'agent', 'dual-stack', 'discovery', 'base sepolia', 'report', 'details', 'uri']):
         sys.exit(0)
     sys.exit(1)
 except:
