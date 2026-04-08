@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
 // ErrDeploymentNotFound is returned when a named inference deployment does
@@ -181,7 +183,7 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	}
 
 	if d.FacilitatorURL == "" {
-		d.FacilitatorURL = "https://facilitator.x402.rs"
+		d.FacilitatorURL = x402verifier.DefaultFacilitatorURL
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)

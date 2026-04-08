@@ -16,6 +16,10 @@ const (
 	x402Namespace    = "x402"
 	pricingConfigMap = "x402-pricing"
 	x402SecretName   = "x402-secrets"
+
+	// DefaultFacilitatorURL is the Obol-operated x402 facilitator for payment
+	// verification and settlement. Supports Base Mainnet and Base Sepolia.
+	DefaultFacilitatorURL = "https://x402.gcp.obol.tech"
 )
 
 var x402Manifest = mustReadX402Manifest()
@@ -42,7 +46,7 @@ func EnsureVerifier(cfg *config.Config) error {
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
-// If facilitatorURL is empty, the default (https://facilitator.x402.rs) is used.
+// If facilitatorURL is empty, the Obol-operated facilitator is used.
 func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
@@ -53,7 +57,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	bin, kc := kubectl.Paths(cfg)
 
 	// Populate the CA certificates bundle from the host so the distroless
-	// verifier image can TLS-verify the facilitator (e.g. facilitator.x402.rs).
+	// verifier image can TLS-verify the facilitator.
 	populateCABundle(bin, kc)
 
 	// 1. Patch the Secret with the wallet address.
@@ -73,7 +77,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	// static/manual routes.
 	fmt.Printf("Updating x402 pricing config...\n")
 	if facilitatorURL == "" {
-		facilitatorURL = "https://facilitator.x402.rs"
+		facilitatorURL = DefaultFacilitatorURL
 	}
 	existingCfg, _ := GetPricingConfig(cfg)
 	var existingRoutes []RouteRule

@@ -91,7 +91,7 @@ func LoadConfig(path string) (*PricingConfig, error) {
 
 	// Apply defaults.
 	if cfg.FacilitatorURL == "" {
-		cfg.FacilitatorURL = "https://facilitator.x402.rs"
+		cfg.FacilitatorURL = DefaultFacilitatorURL
 	}
 
 	if cfg.Chain == "" {
