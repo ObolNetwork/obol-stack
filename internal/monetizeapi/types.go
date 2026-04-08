@@ -184,13 +184,24 @@ type PurchaseRequest struct {
 }
 
 type PurchaseRequestSpec struct {
-	Endpoint       string                    `json:"endpoint"`
-	Model          string                    `json:"model"`
-	Count          int                       `json:"count"`
-	SignerNamespace string                   `json:"signerNamespace,omitempty"`
-	BuyerNamespace string                    `json:"buyerNamespace,omitempty"`
-	AutoRefill     PurchaseAutoRefill        `json:"autoRefill,omitempty"`
-	Payment        PurchasePayment           `json:"payment"`
+	Endpoint        string                   `json:"endpoint"`
+	Model           string                   `json:"model"`
+	Count           int                      `json:"count"`
+	SignerNamespace string                    `json:"signerNamespace,omitempty"`
+	BuyerNamespace  string                   `json:"buyerNamespace,omitempty"`
+	PreSignedAuths  []PreSignedAuth          `json:"preSignedAuths,omitempty"`
+	AutoRefill      PurchaseAutoRefill       `json:"autoRefill,omitempty"`
+	Payment         PurchasePayment          `json:"payment"`
+}
+
+type PreSignedAuth struct {
+	Signature   string `json:"signature"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	ValidAfter  string `json:"validAfter"`
+	ValidBefore string `json:"validBefore"`
+	Nonce       string `json:"nonce"`
 }
 
 type PurchaseAutoRefill struct {

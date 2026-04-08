@@ -66,6 +66,19 @@ spec:
                   type: string
                   default: llm
                   description: "Namespace of the x402-buyer sidecar ConfigMaps"
+                preSignedAuths:
+                  type: array
+                  description: "Pre-signed ERC-3009 auths (created by buy.py, consumed by controller)"
+                  items:
+                    type: object
+                    properties:
+                      signature: { type: string }
+                      from: { type: string }
+                      to: { type: string }
+                      value: { type: string }
+                      validAfter: { type: string }
+                      validBefore: { type: string }
+                      nonce: { type: string }
                 autoRefill:
                   type: object
                   properties:

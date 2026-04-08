@@ -45,6 +45,9 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["purchaserequests/status"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update"]
 
 ---
 #------------------------------------------------------------------------------

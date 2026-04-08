@@ -147,29 +147,41 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 	return nil
 }
 
-// ── Stage 2: Sign auths ─────────────────────────────────────────────────────
+// ── Stage 2: Read pre-signed auths from spec ────────────────────────────────
+//
+// buy.py signs the auths locally (it has remote-signer access in the same
+// namespace) and embeds them in spec.preSignedAuths. The controller reads
+// them directly from the CR — no cross-namespace Secret read needed.
 
 func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
-	signerNS := pr.EffectiveSignerNamespace()
-	signerURL := fmt.Sprintf("http://remote-signer.%s.svc.cluster.local:9000", signerNS)
-
-	addr, err := c.getSignerAddress(ctx, signerURL)
-	if err != nil {
-		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "SignerError", err.Error())
-		return err
+	if len(pr.Spec.PreSignedAuths) == 0 {
+		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "NoAuths",
+			"spec.preSignedAuths is empty — buy.py should embed auths in the CR")
+		return fmt.Errorf("no pre-signed auths in spec")
 	}
-	status.SignerAddress = addr
 
-	auths, err := c.signAuths(ctx, signerURL, addr, pr)
-	if err != nil {
-		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "SignError", err.Error())
-		return err
+	// Convert typed auths to map format for the buyer ConfigMap.
+	auths := make([]map[string]string, len(pr.Spec.PreSignedAuths))
+	for i, a := range pr.Spec.PreSignedAuths {
+		auths[i] = map[string]string{
+			"signature":   a.Signature,
+			"from":        a.From,
+			"to":          a.To,
+			"value":       a.Value,
+			"validAfter":  a.ValidAfter,
+			"validBefore": a.ValidBefore,
+			"nonce":       a.Nonce,
+		}
+	}
+
+	if pr.Spec.PreSignedAuths[0].From != "" {
+		status.SignerAddress = pr.Spec.PreSignedAuths[0].From
 	}
 
 	c.pendingAuths.Store(pr.Namespace+"/"+pr.Name, auths)
 	status.TotalSigned += len(auths)
-	setPurchaseCondition(&status.Conditions, "AuthsSigned", "True", "Signed",
-		fmt.Sprintf("Signed %d auths via %s", len(auths), addr))
+	setPurchaseCondition(&status.Conditions, "AuthsSigned", "True", "Loaded",
+		fmt.Sprintf("Loaded %d pre-signed auths from spec", len(auths)))
 	return nil
 }
 

@@ -240,8 +240,50 @@ def _get_agent_namespace():
         return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
 
 
-def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset):
-    """Create or update a PurchaseRequest CR in the agent's namespace."""
+def _store_auths_secret(name, auths):
+    """Store pre-signed auths in a Secret in the agent's namespace.
+
+    The controller reads this Secret and copies the auths to the buyer
+    ConfigMaps in the llm namespace. This avoids cross-namespace writes
+    from the agent and keeps signing in buy.py (which has remote-signer access).
+    """
+    import base64
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    ns = _get_agent_namespace()
+
+    secret_name = f"purchase-auths-{name}"
+    auths_json = json.dumps(auths, indent=2)
+    auths_b64 = base64.b64encode(auths_json.encode()).decode()
+
+    secret = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": secret_name, "namespace": ns},
+        "data": {"auths.json": auths_b64},
+    }
+
+    path = f"/api/v1/namespaces/{ns}/secrets"
+    try:
+        _kube_json("POST", path, token, ssl_ctx, secret)
+        print(f"  Stored {len(auths)} auths in Secret {ns}/{secret_name}")
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            existing = _kube_json("GET", f"{path}/{secret_name}", token, ssl_ctx)
+            secret["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
+            _kube_json("PUT", f"{path}/{secret_name}", token, ssl_ctx, secret)
+            print(f"  Updated Secret {ns}/{secret_name} with {len(auths)} auths")
+        else:
+            raise
+
+
+def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None):
+    """Create or update a PurchaseRequest CR in the agent's namespace.
+
+    When auths are provided, they are embedded in spec.preSignedAuths so the
+    controller can read them directly from the CR — no cross-namespace Secret
+    read required.
+    """
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
     ns = _get_agent_namespace()
@@ -264,6 +306,8 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
             },
         },
     }
+    if auths:
+        pr["spec"]["preSignedAuths"] = auths
 
     path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}"
     try:
@@ -566,9 +610,13 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
               "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
-    # 5. Create PurchaseRequest CR (controller handles signing + ConfigMap writes).
+    # 5. Pre-sign authorizations locally (via remote-signer in same namespace).
+    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, n)
+
+    # 6. Create PurchaseRequest CR with auths embedded in spec.
+    #    Controller reads auths from the CR itself — no cross-NS Secret read.
     ep = _normalize_endpoint(endpoint)
-    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr)
+    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths)
 
     # 6. Wait for controller to reconcile.
     print("Waiting for controller to reconcile PurchaseRequest ...")
