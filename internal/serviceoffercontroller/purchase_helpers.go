@@ -110,6 +110,36 @@ func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
 	}
 }
 
+func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
+	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
+	if err != nil {
+		log.Printf("purchase: failed to read litellm-config: %v", err)
+		return
+	}
+
+	configYAML := cm.Data["config.yaml"]
+
+	// Check if the model entry already exists.
+	if strings.Contains(configYAML, "model_name: "+modelName) {
+		return
+	}
+
+	// Append explicit model entry that routes to the x402-buyer sidecar.
+	entry := fmt.Sprintf(`    - model_name: %s
+      litellm_params:
+        model: openai/%s
+        api_base: http://127.0.0.1:8402
+        api_key: unused
+`, modelName, modelName)
+
+	configYAML = strings.TrimRight(configYAML, "\n") + "\n" + entry
+	cm.Data["config.yaml"] = configYAML
+
+	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		log.Printf("purchase: failed to add LiteLLM model entry: %v", err)
+	}
+}
+
 func (c *Controller) restartLiteLLM(ctx context.Context, ns string) {
 	deploy, err := c.kubeClient.AppsV1().Deployments(ns).Get(ctx, "litellm", metav1.GetOptions{})
 	if err != nil {

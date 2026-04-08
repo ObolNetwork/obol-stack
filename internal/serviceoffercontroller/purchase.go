@@ -218,10 +218,15 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 		return err
 	}
 
+	// Add an explicit LiteLLM model entry for this paid model.
+	// The paid/* wildcard doesn't match model names with colons (e.g. qwen3.5:9b).
+	paidModel := "paid/" + pr.Spec.Model
+	c.addLiteLLMModelEntry(ctx, buyerNS, paidModel)
+
 	c.restartLiteLLM(ctx, buyerNS)
 
 	status.Remaining = len(auths)
-	status.PublicModel = "paid/" + pr.Spec.Model
+	status.PublicModel = paidModel
 	setPurchaseCondition(&status.Conditions, "Configured", "True", "Written",
 		fmt.Sprintf("Wrote %d auths to %s/x402-buyer-auths", len(auths), buyerNS))
 	return nil
