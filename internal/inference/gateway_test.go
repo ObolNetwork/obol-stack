@@ -10,7 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	x402 "github.com/mark3labs/x402-go"
+	x402pkg "github.com/ObolNetwork/obol-stack/internal/x402"
+	x402types "github.com/coinbase/x402/go/types"
 )
 
 // ── Mock facilitator ──────────────────────────────────────────────────────────
@@ -94,10 +95,10 @@ func newMockOllama(t *testing.T) *httptest.Server {
 func testPaymentHeader(t *testing.T) string {
 	t.Helper()
 
-	p := x402.PaymentPayload{
+	p := x402types.PaymentPayloadV1{
 		X402Version: 1,
 		Scheme:      "exact",
-		Network:     x402.BaseSepolia.NetworkID,
+		Network:     x402pkg.ChainBaseSepolia.NetworkID,
 		Payload: map[string]any{
 			"signature": "0xmocksignature",
 			"authorization": map[string]any{
@@ -128,7 +129,7 @@ func newTestGateway(t *testing.T, facilitatorURL, upstreamURL string, verifyOnly
 		UpstreamURL:     upstreamURL,
 		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		PricePerRequest: "0.001",
-		Chain:           x402.BaseSepolia,
+		Chain:           x402pkg.ChainBaseSepolia,
 		FacilitatorURL:  facilitatorURL,
 		VerifyOnly:      verifyOnly,
 	})
@@ -341,7 +342,7 @@ func newTestGatewayTEE(t *testing.T, facilitatorURL, upstreamURL string) *httpte
 		UpstreamURL:     upstreamURL,
 		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		PricePerRequest: "0.001",
-		Chain:           x402.BaseSepolia,
+		Chain:           x402pkg.ChainBaseSepolia,
 		FacilitatorURL:  facilitatorURL,
 		VerifyOnly:      true,
 		TEEType:         "stub",

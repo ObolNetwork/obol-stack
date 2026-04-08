@@ -13,8 +13,7 @@ import (
 	"sync"
 	"time"
 
-	x402 "github.com/mark3labs/x402-go"
-	"github.com/mark3labs/x402-go/encoding"
+	x402types "github.com/coinbase/x402/go/types"
 )
 
 // Proxy is an OpenAI-compatible reverse proxy that routes requests to upstream
@@ -225,12 +224,12 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 		},
 		Transport: &replayableX402Transport{
 			Base:     http.DefaultTransport,
-			Signers:  []x402.Signer{signer},
-			Selector: x402.NewDefaultPaymentSelector(),
-			OnPaymentAttempt: func(event x402.PaymentEvent) {
+			Signers:  []Signer{signer},
+			Selector: NewDefaultPaymentSelector(),
+			OnPaymentAttempt: func(event PaymentEvent) {
 				p.metrics.paymentAttempts.With(labels).Inc()
 			},
-			OnPaymentFailure: func(event x402.PaymentEvent) {
+			OnPaymentFailure: func(event PaymentEvent) {
 				p.metrics.paymentFailureTotal.With(labels).Inc()
 				p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
@@ -356,11 +355,11 @@ func bodyBufferMiddleware(next http.Handler) http.Handler {
 // httputil.ReverseProxy on newer Go versions.
 type replayableX402Transport struct {
 	Base             http.RoundTripper
-	Signers          []x402.Signer
-	Selector         x402.PaymentSelector
-	OnPaymentAttempt x402.PaymentCallback
-	OnPaymentSuccess x402.PaymentCallback
-	OnPaymentFailure x402.PaymentCallback
+	Signers          []Signer
+	Selector         PaymentSelector
+	OnPaymentAttempt PaymentCallback
+	OnPaymentSuccess PaymentCallback
+	OnPaymentFailure PaymentCallback
 }
 
 func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -386,7 +385,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	requirements, err := parsePaymentRequirements(resp)
 	if err != nil {
 		resp.Body.Close()
-		return nil, x402.NewPaymentError(x402.ErrCodeInvalidRequirements, "failed to parse payment requirements", err)
+		return nil, NewPaymentError(ErrCodeInvalidRequirements, "failed to parse payment requirements", err)
 	}
 	resp.Body.Close()
 
@@ -395,7 +394,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		return nil, err
 	}
 
-	var selectedRequirement *x402.PaymentRequirement
+	var selectedRequirement *x402types.PaymentRequirementsV1
 	for i := range requirements {
 		if requirements[i].Network == payment.Network && requirements[i].Scheme == payment.Scheme {
 			selectedRequirement = &requirements[i]
@@ -405,8 +404,8 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 
 	startTime := time.Now()
 	if t.OnPaymentAttempt != nil && selectedRequirement != nil {
-		t.OnPaymentAttempt(x402.PaymentEvent{
-			Type:      x402.PaymentEventAttempt,
+		t.OnPaymentAttempt(PaymentEvent{
+			Type:      PaymentEventAttempt,
 			Timestamp: startTime,
 			Method:    "HTTP",
 			URL:       req.URL.String(),
@@ -418,11 +417,11 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		})
 	}
 
-	paymentHeader, err := encoding.EncodePayment(*payment)
+	paymentHeader, err := EncodePayment(*payment)
 	if err != nil {
 		if t.OnPaymentFailure != nil {
-			t.OnPaymentFailure(x402.PaymentEvent{
-				Type:      x402.PaymentEventFailure,
+			t.OnPaymentFailure(PaymentEvent{
+				Type:      PaymentEventFailure,
 				Timestamp: time.Now(),
 				Method:    "HTTP",
 				URL:       req.URL.String(),
@@ -430,7 +429,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 				Duration:  time.Since(startTime),
 			})
 		}
-		return nil, x402.NewPaymentError(x402.ErrCodeSigningFailed, "failed to build payment header", err)
+		return nil, NewPaymentError(ErrCodeSigningFailed, "failed to build payment header", err)
 	}
 
 	retryReq, err := cloneRequestWithFreshBody(req)
@@ -443,8 +442,8 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	duration := time.Since(startTime)
 	if err != nil {
 		if t.OnPaymentFailure != nil {
-			t.OnPaymentFailure(x402.PaymentEvent{
-				Type:      x402.PaymentEventFailure,
+			t.OnPaymentFailure(PaymentEvent{
+				Type:      PaymentEventFailure,
 				Timestamp: time.Now(),
 				Method:    "HTTP",
 				URL:       req.URL.String(),
@@ -455,10 +454,10 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		return nil, err
 	}
 
-	settlement, _ := encoding.DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
+	settlement, _ := DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
 	if settlement.Success && t.OnPaymentSuccess != nil {
-		event := x402.PaymentEvent{
-			Type:        x402.PaymentEventSuccess,
+		event := PaymentEvent{
+			Type:        PaymentEventSuccess,
 			Timestamp:   time.Now(),
 			Method:      "HTTP",
 			URL:         req.URL.String(),
@@ -517,7 +516,7 @@ func cloneRequestWithFreshBody(req *http.Request) (*http.Request, error) {
 	return clone, nil
 }
 
-func parsePaymentRequirements(resp *http.Response) ([]x402.PaymentRequirement, error) {
+func parsePaymentRequirements(resp *http.Response) ([]x402types.PaymentRequirementsV1, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
@@ -546,9 +545,16 @@ func parsePaymentRequirements(resp *http.Response) ([]x402.PaymentRequirement, e
 		return nil, fmt.Errorf("no payment requirements in response")
 	}
 
-	requirements := make([]x402.PaymentRequirement, len(paymentReqResp.Accepts))
+	requirements := make([]x402types.PaymentRequirementsV1, len(paymentReqResp.Accepts))
 	for i, req := range paymentReqResp.Accepts {
-		requirements[i] = x402.PaymentRequirement{
+		var extra *json.RawMessage
+		if req.Extra != nil {
+			raw, _ := json.Marshal(req.Extra)
+			rm := json.RawMessage(raw)
+			extra = &rm
+		}
+
+		requirements[i] = x402types.PaymentRequirementsV1{
 			Scheme:            req.Scheme,
 			Network:           req.Network,
 			MaxAmountRequired: req.MaxAmountRequired,
@@ -558,7 +564,7 @@ func parsePaymentRequirements(resp *http.Response) ([]x402.PaymentRequirement, e
 			Description:       req.Description,
 			MimeType:          req.MimeType,
 			MaxTimeoutSeconds: req.MaxTimeoutSeconds,
-			Extra:             req.Extra,
+			Extra:             extra,
 		}
 	}
 

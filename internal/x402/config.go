@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"os"
 
-	x402lib "github.com/mark3labs/x402-go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -132,35 +131,4 @@ func ValidateFacilitatorURL(u string) error {
 	}
 
 	return fmt.Errorf("facilitator URL must use HTTPS (except localhost): %q", u)
-}
-
-// EthereumMainnet is the x402 ChainConfig for Ethereum mainnet USDC.
-var EthereumMainnet = x402lib.ChainConfig{
-	NetworkID:      "ethereum",
-	USDCAddress:    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-	Decimals:       6,
-	EIP3009Name:    "USD Coin",
-	EIP3009Version: "2",
-}
-
-// ResolveChain maps a chain name string to an x402 ChainConfig.
-func ResolveChain(name string) (x402lib.ChainConfig, error) {
-	switch name {
-	case "base", "base-mainnet":
-		return x402lib.BaseMainnet, nil
-	case "base-sepolia":
-		return x402lib.BaseSepolia, nil
-	case "ethereum", "ethereum-mainnet", "mainnet":
-		return EthereumMainnet, nil
-	case "polygon", "polygon-mainnet":
-		return x402lib.PolygonMainnet, nil
-	case "polygon-amoy":
-		return x402lib.PolygonAmoy, nil
-	case "avalanche", "avalanche-mainnet":
-		return x402lib.AvalancheMainnet, nil
-	case "avalanche-fuji":
-		return x402lib.AvalancheFuji, nil
-	default:
-		return x402lib.ChainConfig{}, fmt.Errorf("unsupported chain: %s (use: base, base-sepolia, ethereum, polygon, polygon-amoy, avalanche, avalanche-fuji)", name)
-	}
 }

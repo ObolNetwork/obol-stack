@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	x402 "github.com/mark3labs/x402-go"
+	x402types "github.com/coinbase/x402/go/types"
 )
 
-// PreSignedSigner implements x402.Signer using pre-signed ERC-3009
+// PreSignedSigner implements Signer using pre-signed ERC-3009
 // TransferWithAuthorization vouchers. It pops one auth from the pool per
 // Sign() call. The pool is finite — once exhausted, CanSign returns false.
 //
@@ -52,7 +52,7 @@ func (s *PreSignedSigner) Scheme() string { return "exact" }
 // CanSign checks if this signer can satisfy the given payment requirement.
 // Returns true if network, payTo, asset, and amount match and there are
 // remaining auths in the pool.
-func (s *PreSignedSigner) CanSign(req *x402.PaymentRequirement) bool {
+func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirementsV1) bool {
 	if req == nil {
 		return false
 	}
@@ -82,13 +82,13 @@ func (s *PreSignedSigner) CanSign(req *x402.PaymentRequirement) bool {
 
 // Sign pops one pre-signed authorization from the pool and returns it as a
 // PaymentPayload. Returns an error when the pool is exhausted.
-func (s *PreSignedSigner) Sign(req *x402.PaymentRequirement) (*x402.PaymentPayload, error) {
+func (s *PreSignedSigner) Sign(req *x402types.PaymentRequirementsV1) (*x402types.PaymentPayloadV1, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.auths) == 0 {
 		return nil, fmt.Errorf("pre-signed auth pool exhausted (spent %d): %w",
-			s.spent, x402.ErrNoValidSigner)
+			s.spent, ErrNoValidSigner)
 	}
 
 	// Pop from the front.
@@ -105,19 +105,19 @@ func (s *PreSignedSigner) Sign(req *x402.PaymentRequirement) (*x402.PaymentPaylo
 		}
 	}
 
-	return &x402.PaymentPayload{
+	return &x402types.PaymentPayloadV1{
 		X402Version: 1,
 		Scheme:      "exact",
 		Network:     s.network,
-		Payload: x402.EVMPayload{
-			Signature: auth.Signature,
-			Authorization: x402.EVMAuthorization{
-				From:        auth.From,
-				To:          auth.To,
-				Value:       auth.Value,
-				ValidAfter:  auth.ValidAfter,
-				ValidBefore: auth.ValidBefore,
-				Nonce:       auth.Nonce,
+		Payload: map[string]interface{}{
+			"signature": auth.Signature,
+			"authorization": map[string]interface{}{
+				"from":        auth.From,
+				"to":          auth.To,
+				"value":       auth.Value,
+				"validAfter":  auth.ValidAfter,
+				"validBefore": auth.ValidBefore,
+				"nonce":       auth.Nonce,
 			},
 		},
 	}, nil
@@ -127,8 +127,8 @@ func (s *PreSignedSigner) Sign(req *x402.PaymentRequirement) (*x402.PaymentPaylo
 func (s *PreSignedSigner) GetPriority() int { return 0 }
 
 // GetTokens returns the single USDC token this signer handles.
-func (s *PreSignedSigner) GetTokens() []x402.TokenConfig {
-	return []x402.TokenConfig{
+func (s *PreSignedSigner) GetTokens() []TokenConfig {
+	return []TokenConfig{
 		{Address: s.asset, Symbol: "USDC", Decimals: 6, Priority: 0},
 	}
 }

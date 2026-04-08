@@ -15,9 +15,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
-	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
-	"github.com/mark3labs/x402-go"
-	x402http "github.com/mark3labs/x402-go/http"
+	x402pkg "github.com/ObolNetwork/obol-stack/internal/x402"
+	x402types "github.com/coinbase/x402/go/types"
 )
 
 // GatewayConfig holds configuration for the x402 inference gateway.
@@ -34,8 +33,8 @@ type GatewayConfig struct {
 	// PricePerRequest is the USDC amount charged per inference request (e.g., "0.001").
 	PricePerRequest string
 
-	// Chain is the x402 chain configuration (e.g., x402.BaseMainnet).
-	Chain x402.ChainConfig
+	// Chain is the x402 chain configuration (e.g., x402pkg.ChainBaseSepolia).
+	Chain x402pkg.ChainInfo
 
 	// FacilitatorURL is the x402 facilitator service URL.
 	FacilitatorURL string
@@ -125,12 +124,12 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 		cfg.FacilitatorURL = "https://facilitator.x402.rs"
 	}
 
-	if err := x402verifier.ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {
+	if err := x402pkg.ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {
 		return nil, err
 	}
 
 	if cfg.Chain.NetworkID == "" {
-		cfg.Chain = x402.BaseSepolia
+		cfg.Chain = x402pkg.ChainBaseSepolia
 	}
 
 	if cfg.PricePerRequest == "" {
@@ -159,22 +158,13 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	}
 
 	// Create x402 payment requirement.
-	requirement, err := x402.NewUSDCPaymentRequirement(x402.USDCRequirementConfig{
-		Chain:            g.config.Chain,
-		Amount:           g.config.PricePerRequest,
-		RecipientAddress: g.config.WalletAddress,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create payment requirement: %w", err)
-	}
+	requirement := x402pkg.BuildV1Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress)
 
-	// Configure x402 middleware.
-	x402Config := &x402http.Config{
-		FacilitatorURL:      g.config.FacilitatorURL,
-		PaymentRequirements: []x402.PaymentRequirement{requirement},
-		VerifyOnly:          g.config.VerifyOnly,
-	}
-	paymentMiddleware := x402http.NewX402Middleware(x402Config)
+	// Configure x402 ForwardAuth middleware.
+	paymentMiddleware := x402pkg.NewForwardAuthMiddleware(x402pkg.ForwardAuthConfig{
+		FacilitatorURL: g.config.FacilitatorURL,
+		VerifyOnly:     g.config.VerifyOnly,
+	}, []x402types.PaymentRequirementsV1{requirement})
 
 	// Initialise key backend: TEE (Linux) or SE (macOS), mutually exclusive.
 	var em *enclaveMiddleware
