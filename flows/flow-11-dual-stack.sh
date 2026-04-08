@@ -258,6 +258,38 @@ poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
     bob kubectl get pods -n openclaw-obol-agent -l app.kubernetes.io/name=openclaw --no-headers
 
 # ═════════════════════════════════════════════════════════════════
+# BOB: FUND REMOTE-SIGNER WALLET (shortcut — see #331 for obol wallet import)
+# ═════════════════════════════════════════════════════════════════
+
+step "Bob: fund remote-signer wallet with USDC"
+# The remote-signer auto-generates a wallet during stack up.
+# We need to fund it from the .env key so buy.py can sign auths.
+BOB_SIGNER_ADDR=$(bob kubectl get cm wallet-metadata -n openclaw-obol-agent \
+    -o jsonpath='{.data.addresses\.json}' 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    addrs = d.get('addresses', [])
+    print(addrs[0] if addrs else d.get('address',''))
+except: pass
+" 2>&1)
+if [ -z "$BOB_SIGNER_ADDR" ]; then
+    # Fallback: read from wallet.json
+    BOB_SIGNER_ADDR=$(cat "$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('address',''))" 2>/dev/null)
+fi
+if [ -n "$BOB_SIGNER_ADDR" ]; then
+    echo "  Remote-signer wallet: $BOB_SIGNER_ADDR"
+    # Send USDC (0.05 USDC = 50000 micro-units) from .env key
+    env -u CHAIN cast send --private-key "$SIGNER_KEY" \
+        0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+        "transfer(address,uint256)" "$BOB_SIGNER_ADDR" 50000 \
+        --rpc-url https://sepolia.base.org 2>&1 | grep -E "status" || true
+    pass "Funded $BOB_SIGNER_ADDR with 0.05 USDC"
+else
+    fail "Could not determine Bob's remote-signer address"
+fi
+
+# ═════════════════════════════════════════════════════════════════
 # BOB'S AGENT: DISCOVER ALICE VIA ERC-8004 + BUY + USE
 # ═════════════════════════════════════════════════════════════════
 
