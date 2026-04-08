@@ -119,6 +119,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		Chain:            chain,
 		Amount:           rule.Price,
 		RecipientAddress: wallet,
+		Description:      fmt.Sprintf("Payment required for %s", rule.Pattern),
 	})
 	if err != nil {
 		log.Printf("x402-verifier: failed to create payment requirement: %v", err)
