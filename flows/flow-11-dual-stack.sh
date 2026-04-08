@@ -100,9 +100,8 @@ else
 fi
 
 step "Preflight: ports 80 and 9080 free"
-# Check for LISTEN state only (ignore FIN_WAIT/TIME_WAIT from recently killed containers)
-if lsof -i:80 -sTCP:LISTEN >/dev/null 2>&1 || lsof -i:9080 -sTCP:LISTEN >/dev/null 2>&1; then
-    fail "Ports 80 or 9080 in use (LISTEN) — cleanup existing clusters first"
+if lsof -i:80 >/dev/null 2>&1 || lsof -i:9080 >/dev/null 2>&1; then
+    fail "Ports 80 or 9080 in use — cleanup existing clusters first"
     emit_metrics; exit 1
 fi
 pass "Ports free"
@@ -134,10 +133,12 @@ pass "Alice workspace ready"
 step "Alice: stack init + up"
 alice stack init 2>&1 | tail -1
 alice stack up 2>&1 | tail -3
-pass "Alice stack up completed"
-
-poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
-    alice kubectl get pods -n x402 --no-headers
+if alice kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
+    pass "Alice stack running"
+else
+    fail "Alice stack failed to start"
+    emit_metrics; exit 1
+fi
 
 # ═════════════════════════════════════════════════════════════════
 # ALICE: SELL INFERENCE + REGISTER ON-CHAIN
@@ -199,8 +200,8 @@ fi
 step "Alice: add Base Sepolia RPC to eRPC (for on-chain registration)"
 alice network add base-sepolia --endpoint https://sepolia.base.org --allow-writes 2>&1 | tail -2
 # eRPC needs a restart to pick up the new chain config
-alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null
-alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null
+alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
+alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
 pass "Base Sepolia RPC added to eRPC (with write access)"
 
 step "Alice: register on ERC-8004 (Base Sepolia)"
@@ -215,7 +216,7 @@ register_out=$(alice sell register \
 rm -f "$KEY_FILE"
 echo "$register_out" | tail -5
 if echo "$register_out" | grep -q "Agent ID:\|registered"; then
-    AGENT_ID=$(echo "$register_out" | grep -oP 'Agent ID: \K[0-9]+' | head -1)
+    AGENT_ID=$(echo "$register_out" | grep -o 'Agent ID: [0-9]*' | grep -o '[0-9]*' | head -1)
     pass "ERC-8004 registered: Agent ID $AGENT_ID"
 else
     fail "Registration failed: ${register_out:0:200}"
@@ -237,27 +238,27 @@ pass "Bob workspace ready"
 
 step "Bob: stack init (offset ports)"
 bob stack init 2>&1 | tail -1
-# Remap ports so Bob doesn't conflict with Alice.
-# Use anchored patterns to avoid cascading replacements (e.g. 8080 matching 80).
+# Remap ports so Bob doesn't conflict with Alice
 sed -i.bak \
-    -e 's/port: 8080:80/port: 9180:80/' \
-    -e 's/port: 80:80/port: 9080:80/' \
-    -e 's/port: 8443:443/port: 9543:443/' \
-    -e 's/port: 443:443/port: 9443:443/' \
+    -e 's/80:80/9080:80/' \
+    -e 's/8080:80/9180:80/' \
+    -e 's/443:443/9443:443/' \
+    -e 's/8443:443/9543:443/' \
     "$BOB_DIR/config/k3d.yaml"
 pass "Bob ports remapped to 9080/9180/9443/9543"
 
 step "Bob: stack up"
 bob stack up 2>&1 | tail -3
-pass "Bob stack up completed"
-
-poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
-    bob kubectl get pods -n x402 --no-headers
+if bob kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
+    pass "Bob stack running"
+else
+    fail "Bob stack failed to start"
+    emit_metrics; exit 1
+fi
 
 # Wait for Bob's OpenClaw agent to be ready
-poll_step "Bob: OpenClaw agent ready" 24 5 \
-    bob kubectl get pods -n openclaw-obol-agent -l app.kubernetes.io/name=openclaw \
-    --no-headers -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Running
+poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
+    bob kubectl get pods -n openclaw-obol-agent -l app.kubernetes.io/name=openclaw --no-headers
 
 # ═════════════════════════════════════════════════════════════════
 # BOB'S AGENT: DISCOVER ALICE VIA ERC-8004 + BUY + USE
@@ -362,7 +363,7 @@ else
 fi
 
 # Extract the paid model name from sidecar status
-PAID_MODEL=$(echo "$buyer_status" | grep -oP 'model=\K[^ ]+' | head -1)
+PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1)
 if [ -z "$PAID_MODEL" ]; then
     PAID_MODEL="paid/qwen3.5:9b"  # fallback
 fi
