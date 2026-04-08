@@ -11,10 +11,10 @@ Sell-side publication needs declarative state, observable status, and reconcilia
 
 ## Decision
 
-Sell-side publication is driven by the `ServiceOffer` custom resource and reconciled by the elevated agent's monetize skill. The reconcile loop advances through explicit stages that cover model readiness, upstream health, payment gate setup, route publication, optional registration, and final readiness.
+Sell-side publication is driven by the `ServiceOffer` custom resource and reconciled by a dedicated Go controller (`serviceoffer-controller`) deployed in the `x402` namespace. The reconcile loop advances through explicit stages that cover model readiness, upstream health, payment gate setup, route publication, optional registration, and final readiness.
 
 ## Consequences
 
 - **Positive**: Operators get one declarative resource and one status model for sell-side lifecycle.
-- **Negative**: Reconcile latency is bounded by the agent heartbeat cadence rather than a dedicated controller loop.
+- **Positive**: Dedicated controller provides sub-second reconciliation latency via Kubernetes informers, independent of the agent heartbeat cadence.
 - **Neutral**: Future generalized agent-authored services should extend this pattern only if they preserve explicit ownership, isolation, and stage visibility.
