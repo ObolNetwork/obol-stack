@@ -136,3 +136,47 @@ func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 
 	return out, nil
 }
+
+// PipeCommands pipes the stdout of the first kubectl command into the stdin
+// of the second. Both commands run with the correct KUBECONFIG. This is useful
+// for patterns like "kubectl create --dry-run -o yaml | kubectl replace -f -"
+// which avoid the 262KB annotation limit that kubectl apply imposes.
+func PipeCommands(binary, kubeconfig string, args1, args2 []string) error {
+	env := append(os.Environ(), "KUBECONFIG="+kubeconfig)
+
+	cmd1 := exec.Command(binary, args1...)
+	cmd1.Env = env
+
+	cmd2 := exec.Command(binary, args2...)
+	cmd2.Env = env
+
+	pipe, err := cmd1.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("pipe: %w", err)
+	}
+	cmd2.Stdin = pipe
+
+	var stderr1, stderr2 bytes.Buffer
+	cmd1.Stderr = &stderr1
+	cmd2.Stderr = &stderr2
+
+	if err := cmd1.Start(); err != nil {
+		return fmt.Errorf("cmd1 start: %w", err)
+	}
+	if err := cmd2.Start(); err != nil {
+		_ = cmd1.Process.Kill()
+		return fmt.Errorf("cmd2 start: %w", err)
+	}
+
+	err1 := cmd1.Wait()
+	err2 := cmd2.Wait()
+
+	if err1 != nil {
+		return fmt.Errorf("cmd1: %w: %s", err1, strings.TrimSpace(stderr1.String()))
+	}
+	if err2 != nil {
+		return fmt.Errorf("cmd2: %w: %s", err2, strings.TrimSpace(stderr2.String()))
+	}
+
+	return nil
+}

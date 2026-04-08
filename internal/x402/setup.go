@@ -139,10 +139,14 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 	return pcfg, nil
 }
 
-// populateCABundle reads the host's CA certificate bundle and patches
-// it into the ca-certificates ConfigMap in the x402 namespace. The
-// x402-verifier image is distroless and ships without a CA store, so
-// TLS verification of external facilitators fails without this.
+// populateCABundle reads the host's CA certificate bundle and replaces
+// the ca-certificates ConfigMap in the x402 namespace. The x402-verifier
+// image is distroless and ships without a CA store, so TLS verification
+// of external facilitators fails without this.
+//
+// Uses "kubectl create --dry-run | kubectl replace" instead of "kubectl
+// apply" because the macOS CA bundle (~290KB) exceeds the 262KB
+// annotation limit that kubectl apply requires.
 func populateCABundle(bin, kc string) {
 	// Common CA bundle paths across Linux distros and macOS.
 	candidates := []string{
@@ -150,26 +154,24 @@ func populateCABundle(bin, kc string) {
 		"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/Fedora
 		"/etc/ssl/cert.pem",                   // macOS / Alpine
 	}
-	var caData []byte
+	var caPath string
 	for _, path := range candidates {
-		data, err := os.ReadFile(path)
-		if err == nil && len(data) > 0 {
-			caData = data
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			caPath = path
 			break
 		}
 	}
-	if len(caData) == 0 {
+	if caPath == "" {
 		return // no CA bundle found — skip silently
 	}
 
-	patch := map[string]any{"data": map[string]string{"ca-certificates.crt": string(caData)}}
-	patchJSON, err := json.Marshal(patch)
-	if err != nil {
-		return
-	}
-	_ = kubectl.RunSilent(bin, kc,
-		"patch", "configmap", "ca-certificates", "-n", x402Namespace,
-		"-p", string(patchJSON), "--type=merge")
+	// Pipe through kubectl create --dry-run to generate the ConfigMap YAML,
+	// then kubectl replace to apply it without the annotation size limit.
+	_ = kubectl.PipeCommands(bin, kc,
+		[]string{"create", "configmap", "ca-certificates", "-n", x402Namespace,
+			"--from-file=ca-certificates.crt=" + caPath,
+			"--dry-run=client", "-o", "yaml"},
+		[]string{"replace", "-f", "-"})
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
