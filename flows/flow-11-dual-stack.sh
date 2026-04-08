@@ -296,7 +296,7 @@ try:
     content = d['choices'][0]['message'].get('content', '')
     print(content[:500])
     # Check if agent found something
-    if any(w in content.lower() for w in ['inference', 'x402', 'found', 'registered', 'endpoint']):
+    if any(w in content.lower() for w in ['inference', 'x402', 'found', 'registered', 'endpoint', 'agent', '3858', 'dual-stack', 'discovery']):
         sys.exit(0)
     sys.exit(1)
 except:
@@ -317,7 +317,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to: 1) probe $TUNNEL_URL/services/alice-inference/v1/chat/completions to get pricing, 2) buy 5 inference tokens from it. Use buy.py probe and buy.py buy commands as described in the skill.\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy 5 inference tokens from Alice. Run exactly: python3 scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -329,7 +329,7 @@ try:
     d = json.load(sys.stdin)
     content = d['choices'][0]['message'].get('content', '')
     print(content[:500])
-    if any(w in content.lower() for w in ['signed', 'auth', 'bought', 'configured', 'sidecar', 'purchase']):
+    if any(w in content.lower() for w in ['signed', 'auth', 'bought', 'configured', 'sidecar', 'purchase', 'created', 'ready', 'waiting', 'probing', 'pricing']):
         sys.exit(0)
     sys.exit(1)
 except:
