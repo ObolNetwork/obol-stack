@@ -343,7 +343,17 @@ else
     fail "Buy response: ${buy_response:0:300}"
 fi
 
-# Cross-check: verify sidecar has auths
+# Cross-check: verify PurchaseRequest CR exists and reaches Ready
+step "Bob: verify PurchaseRequest CR"
+pr_status=$(bob kubectl get purchaserequests.obol.org -n openclaw-obol-agent --no-headers 2>&1)
+if echo "$pr_status" | grep -q "True\|alice-inference"; then
+    pass "PurchaseRequest CR exists: $pr_status"
+else
+    # PurchaseRequest may not exist if the agent used the old path or
+    # the controller hasn't reconciled yet. Fall through to sidecar check.
+    echo "  PurchaseRequest not found or not Ready yet: $pr_status"
+fi
+
 step "Bob: verify buyer sidecar has auths"
 buyer_status=$(bob kubectl exec -n llm deployment/litellm -c litellm -- \
     python3 -c "
