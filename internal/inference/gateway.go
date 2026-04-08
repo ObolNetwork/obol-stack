@@ -122,7 +122,7 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	}
 
 	if cfg.FacilitatorURL == "" {
-		cfg.FacilitatorURL = "https://facilitator.x402.rs"
+		cfg.FacilitatorURL = x402verifier.DefaultFacilitatorURL
 	}
 
 	if err := x402verifier.ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {

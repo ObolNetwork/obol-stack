@@ -103,7 +103,7 @@ func TestPricingConfig_YAMLRoundTrip(t *testing.T) {
 	original := PricingConfig{
 		Wallet:         "0xGLOBALGLOBALGLOBALGLOBALGLOBALGLOBALGL",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		VerifyOnly:     true,
 		Routes: []RouteRule{
 			{
@@ -188,7 +188,7 @@ func TestPricingConfig_YAMLWithPerRouteOverrides(t *testing.T) {
 	pcfg := PricingConfig{
 		Wallet:         "0xGLOBALGLOBALGLOBALGLOBALGLOBALGLOBALGL",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes: []RouteRule{
 			{
 				Pattern:     "/inference-llama/v1/*",
