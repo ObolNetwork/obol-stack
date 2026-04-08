@@ -167,11 +167,20 @@ func populateCABundle(bin, kc string) {
 
 	// Pipe through kubectl create --dry-run to generate the ConfigMap YAML,
 	// then kubectl replace to apply it without the annotation size limit.
-	_ = kubectl.PipeCommands(bin, kc,
+	if err := kubectl.PipeCommands(bin, kc,
 		[]string{"create", "configmap", "ca-certificates", "-n", x402Namespace,
 			"--from-file=ca-certificates.crt=" + caPath,
 			"--dry-run=client", "-o", "yaml"},
-		[]string{"replace", "-f", "-"})
+		[]string{"replace", "-f", "-"}); err != nil {
+		return
+	}
+
+	// Restart the verifier so it picks up the newly populated CA bundle.
+	// The ConfigMap is mounted as a volume; Kubernetes may take 60-120s to
+	// propagate changes, and we need TLS to work immediately for the
+	// facilitator connection.
+	_ = kubectl.RunSilent(bin, kc,
+		"rollout", "restart", "deployment/x402-verifier", "-n", x402Namespace)
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
