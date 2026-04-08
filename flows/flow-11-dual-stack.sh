@@ -100,8 +100,8 @@ else
 fi
 
 step "Preflight: ports 80 and 9080 free"
-if lsof -i:80 >/dev/null 2>&1 || lsof -i:9080 >/dev/null 2>&1; then
-    fail "Ports 80 or 9080 in use — cleanup existing clusters first"
+if lsof -i:80 -sTCP:LISTEN >/dev/null 2>&1 || lsof -i:9080 -sTCP:LISTEN >/dev/null 2>&1; then
+    fail "Ports 80 or 9080 in use (LISTEN) — cleanup existing clusters first"
     emit_metrics; exit 1
 fi
 pass "Ports free"
@@ -133,12 +133,10 @@ pass "Alice workspace ready"
 step "Alice: stack init + up"
 alice stack init 2>&1 | tail -1
 alice stack up 2>&1 | tail -3
-if alice kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
-    pass "Alice stack running"
-else
-    fail "Alice stack failed to start"
-    emit_metrics; exit 1
-fi
+pass "Alice stack up completed"
+
+poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
+    alice kubectl get pods -n x402 --no-headers
 
 # ═════════════════════════════════════════════════════════════════
 # ALICE: SELL INFERENCE + REGISTER ON-CHAIN
@@ -238,23 +236,22 @@ pass "Bob workspace ready"
 
 step "Bob: stack init (offset ports)"
 bob stack init 2>&1 | tail -1
-# Remap ports so Bob doesn't conflict with Alice
+# Remap ports so Bob doesn't conflict with Alice.
+# Use anchored patterns to avoid cascading replacements (e.g. 8080 matching 80).
 sed -i.bak \
-    -e 's/80:80/9080:80/' \
-    -e 's/8080:80/9180:80/' \
-    -e 's/443:443/9443:443/' \
-    -e 's/8443:443/9543:443/' \
+    -e 's/port: 8080:80/port: 9180:80/' \
+    -e 's/port: 80:80/port: 9080:80/' \
+    -e 's/port: 8443:443/port: 9543:443/' \
+    -e 's/port: 443:443/port: 9443:443/' \
     "$BOB_DIR/config/k3d.yaml"
 pass "Bob ports remapped to 9080/9180/9443/9543"
 
 step "Bob: stack up"
 bob stack up 2>&1 | tail -3
-if bob kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
-    pass "Bob stack running"
-else
-    fail "Bob stack failed to start"
-    emit_metrics; exit 1
-fi
+pass "Bob stack up completed"
+
+poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
+    bob kubectl get pods -n x402 --no-headers
 
 # Wait for Bob's OpenClaw agent to be ready
 poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
