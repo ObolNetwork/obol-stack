@@ -203,7 +203,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 
-**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.35.3, helm 3.20.1, k3d 5.8.3, helmfile 1.4.3, k9s 0.50.18, helm-diff 3.15.4, ollama 0.20.2. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `mark3labs/x402-go`.
+**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.35.3, helm 3.20.1, k3d 5.8.3, helmfile 1.4.3, k9s 0.50.18, helm-diff 3.15.4, ollama 0.20.2. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
 
 ## Related Codebases
 
