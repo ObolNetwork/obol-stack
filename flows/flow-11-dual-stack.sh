@@ -100,8 +100,9 @@ else
 fi
 
 step "Preflight: ports 80 and 9080 free"
-if lsof -i:80 >/dev/null 2>&1 || lsof -i:9080 >/dev/null 2>&1; then
-    fail "Ports 80 or 9080 in use — cleanup existing clusters first"
+# Check for LISTEN state only (ignore FIN_WAIT/TIME_WAIT from recently killed containers)
+if lsof -i:80 -sTCP:LISTEN >/dev/null 2>&1 || lsof -i:9080 -sTCP:LISTEN >/dev/null 2>&1; then
+    fail "Ports 80 or 9080 in use (LISTEN) — cleanup existing clusters first"
     emit_metrics; exit 1
 fi
 pass "Ports free"
