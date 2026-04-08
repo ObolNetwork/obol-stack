@@ -238,12 +238,13 @@ pass "Bob workspace ready"
 
 step "Bob: stack init (offset ports)"
 bob stack init 2>&1 | tail -1
-# Remap ports so Bob doesn't conflict with Alice
+# Remap ports so Bob doesn't conflict with Alice.
+# Use anchored patterns to avoid cascading replacements (e.g. 8080 matching 80).
 sed -i.bak \
-    -e 's/80:80/9080:80/' \
-    -e 's/8080:80/9180:80/' \
-    -e 's/443:443/9443:443/' \
-    -e 's/8443:443/9543:443/' \
+    -e 's/port: 8080:80/port: 9180:80/' \
+    -e 's/port: 80:80/port: 9080:80/' \
+    -e 's/port: 8443:443/port: 9543:443/' \
+    -e 's/port: 443:443/port: 9443:443/' \
     "$BOB_DIR/config/k3d.yaml"
 pass "Bob ports remapped to 9080/9180/9443/9543"
 
