@@ -300,14 +300,16 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 			continue
 		}
 
-		// POST /model/new via kubectl exec on a running litellm pod.
-		curlCmd := fmt.Sprintf(
-			`wget -qO- --post-data='%s' --header='Content-Type: application/json' --header='Authorization: Bearer %s' http://localhost:4000/model/new`,
-			string(bodyJSON), masterKey)
-
+		// POST /model/new via kubectl exec on a running litellm pod, invoking wget directly.
 		out, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 			"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
-			"--", "sh", "-c", curlCmd)
+			"--",
+			"wget", "-qO-",
+			"--post-data="+string(bodyJSON),
+			"--header=Content-Type: application/json",
+			"--header=Authorization: Bearer "+masterKey,
+			"http://localhost:4000/model/new",
+		)
 		if err != nil {
 			u.Warnf("Hot-add %s failed: %v (%s)", entry.ModelName, err, strings.TrimSpace(out))
 			return fmt.Errorf("hot-add %s: %w", entry.ModelName, err)
