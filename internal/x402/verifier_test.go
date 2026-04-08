@@ -161,6 +161,12 @@ func TestVerifier_PaidRoute_NoPayment_Returns402(t *testing.T) {
 	if len(body) == 0 {
 		t.Error("expected non-empty 402 response body with payment requirements")
 	}
+
+	// Verify the Description field is populated in the payment requirement.
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "Payment required for") {
+		t.Errorf("402 body missing Description field, got: %s", bodyStr[:min(len(bodyStr), 200)])
+	}
 }
 
 func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
