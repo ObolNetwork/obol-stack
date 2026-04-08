@@ -10,7 +10,7 @@ import (
 
 const validWatcherYAML = `wallet: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 chain: "base-sepolia"
-facilitatorURL: "https://facilitator.x402.rs"
+facilitatorURL: "https://x402.gcp.obol.tech"
 routes:
   - pattern: "/rpc/*"
     price: "0.0001"
@@ -32,7 +32,7 @@ func TestWatchConfig_DetectsChange(t *testing.T) {
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes:         []RouteRule{{Pattern: "/rpc/*", Price: "0.0001"}},
 	})
 	if err != nil {
@@ -49,7 +49,7 @@ func TestWatchConfig_DetectsChange(t *testing.T) {
 	// Write updated config with a new route.
 	updatedYAML := `wallet: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 chain: "base-sepolia"
-facilitatorURL: "https://facilitator.x402.rs"
+facilitatorURL: "https://x402.gcp.obol.tech"
 routes:
   - pattern: "/rpc/*"
     price: "0.0001"
@@ -79,7 +79,7 @@ func TestWatchConfig_IgnoresUnchanged(t *testing.T) {
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes:         []RouteRule{{Pattern: "/rpc/*", Price: "0.0001"}},
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestWatchConfig_InvalidConfig(t *testing.T) {
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes:         []RouteRule{{Pattern: "/rpc/*", Price: "0.0001"}},
 	})
 	if err != nil {
@@ -149,7 +149,7 @@ func TestWatchConfig_CancelContext(t *testing.T) {
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes:         []RouteRule{{Pattern: "/rpc/*", Price: "0.0001"}},
 	})
 	if err != nil {
@@ -181,7 +181,7 @@ func TestWatchConfig_MissingFile(t *testing.T) {
 	v, err := NewVerifier(&PricingConfig{
 		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:          "base-sepolia",
-		FacilitatorURL: "https://facilitator.x402.rs",
+		FacilitatorURL: "https://x402.gcp.obol.tech",
 		Routes:         []RouteRule{{Pattern: "/rpc/*", Price: "0.0001"}},
 	})
 	if err != nil {

@@ -186,7 +186,7 @@ func TestSellInference_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "chain", "base-sepolia")
 	assertStringDefault(t, flags, "listen", ":8402")
 	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
-	assertStringDefault(t, flags, "facilitator", "https://facilitator.x402.rs")
+	assertStringDefault(t, flags, "facilitator", "https://x402.gcp.obol.tech")
 	assertStringDefault(t, flags, "vm-image", "ollama/ollama:latest")
 	assertIntDefault(t, flags, "vm-cpus", 4)
 	assertIntDefault(t, flags, "vm-memory", 8192)

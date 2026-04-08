@@ -105,7 +105,7 @@ Examples:
 			&cli.StringFlag{
 				Name:  "facilitator",
 				Usage: "x402 facilitator URL",
-				Value: "https://facilitator.x402.rs",
+				Value: x402verifier.DefaultFacilitatorURL,
 			},
 			&cli.StringFlag{
 				Name:    "listen",

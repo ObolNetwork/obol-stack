@@ -89,8 +89,8 @@ routes:
 		t.Errorf("default chain = %q, want base-sepolia", cfg.Chain)
 	}
 
-	if cfg.FacilitatorURL != "https://facilitator.x402.rs" {
-		t.Errorf("default facilitatorURL = %q, want https://facilitator.x402.rs", cfg.FacilitatorURL)
+	if cfg.FacilitatorURL != "https://x402.gcp.obol.tech" {
+		t.Errorf("default facilitatorURL = %q, want https://x402.gcp.obol.tech", cfg.FacilitatorURL)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestValidateFacilitatorURL(t *testing.T) {
 		wantErr bool
 	}{
 		// HTTPS always allowed.
-		{"https standard", "https://facilitator.x402.rs", false},
+		{"https standard", "https://x402.gcp.obol.tech", false},
 		{"https custom", "https://my-facilitator.example.com:8443/verify", false},
 
 		// Loopback/internal addresses allowed over HTTP.
