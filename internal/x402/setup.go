@@ -52,6 +52,10 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	}
 	bin, kc := kubectl.Paths(cfg)
 
+	// Populate the CA certificates bundle from the host so the distroless
+	// verifier image can TLS-verify the facilitator (e.g. facilitator.x402.rs).
+	populateCABundle(bin, kc)
+
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
 	secretPatch := map[string]any{"stringData": map[string]string{"WALLET_ADDRESS": wallet}}
@@ -129,6 +133,39 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 		return nil, err
 	}
 	return pcfg, nil
+}
+
+// populateCABundle reads the host's CA certificate bundle and patches
+// it into the ca-certificates ConfigMap in the x402 namespace. The
+// x402-verifier image is distroless and ships without a CA store, so
+// TLS verification of external facilitators fails without this.
+func populateCABundle(bin, kc string) {
+	// Common CA bundle paths across Linux distros and macOS.
+	candidates := []string{
+		"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
+		"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/Fedora
+		"/etc/ssl/cert.pem",                   // macOS / Alpine
+	}
+	var caData []byte
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			caData = data
+			break
+		}
+	}
+	if len(caData) == 0 {
+		return // no CA bundle found — skip silently
+	}
+
+	patch := map[string]any{"data": map[string]string{"ca-certificates.crt": string(caData)}}
+	patchJSON, err := json.Marshal(patch)
+	if err != nil {
+		return
+	}
+	_ = kubectl.RunSilent(bin, kc,
+		"patch", "configmap", "ca-certificates", "-n", x402Namespace,
+		"-p", string(patchJSON), "--type=merge")
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
