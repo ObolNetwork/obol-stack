@@ -181,15 +181,14 @@ func (c *Controller) getSignerAddress(ctx context.Context, signerURL string) (st
 	}
 	defer resp.Body.Close()
 
+	// The remote-signer returns keys as a string array: {"keys": ["0x..."]}
 	var result struct {
-		Keys []struct {
-			Address string `json:"address"`
-		} `json:"keys"`
+		Keys []string `json:"keys"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Keys) == 0 {
 		return "", fmt.Errorf("no signing keys in remote-signer")
 	}
-	return result.Keys[0].Address, nil
+	return result.Keys[0], nil
 }
 
 func (c *Controller) signAuths(ctx context.Context, signerURL, fromAddr string, pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
