@@ -39,6 +39,12 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
     verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests/status"]
+    verbs: ["get"]
 
 ---
 #------------------------------------------------------------------------------

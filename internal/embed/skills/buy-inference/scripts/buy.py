@@ -223,6 +223,94 @@ def _kube_json(method, path, token, ssl_ctx, body=None, content_type="applicatio
 
 
 # ---------------------------------------------------------------------------
+# PurchaseRequest CR helpers
+# ---------------------------------------------------------------------------
+
+PR_GROUP = "obol.org"
+PR_VERSION = "v1alpha1"
+PR_RESOURCE = "purchaserequests"
+
+
+def _get_agent_namespace():
+    """Read the agent's namespace from the mounted ServiceAccount."""
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
+
+
+def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset):
+    """Create or update a PurchaseRequest CR in the agent's namespace."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    ns = _get_agent_namespace()
+
+    pr = {
+        "apiVersion": f"{PR_GROUP}/{PR_VERSION}",
+        "kind": "PurchaseRequest",
+        "metadata": {"name": name, "namespace": ns},
+        "spec": {
+            "endpoint": endpoint + "/v1/chat/completions",
+            "model": model,
+            "count": count,
+            "signerNamespace": ns,
+            "buyerNamespace": BUYER_NS,
+            "payment": {
+                "network": network,
+                "payTo": pay_to,
+                "price": price,
+                "asset": asset,
+            },
+        },
+    }
+
+    path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}"
+    try:
+        result = _kube_json("POST", path, token, ssl_ctx, pr)
+        print(f"  Created PurchaseRequest {ns}/{name}")
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            # Already exists — update it.
+            result = _kube_json("PUT", f"{path}/{name}", token, ssl_ctx, pr)
+            print(f"  Updated PurchaseRequest {ns}/{name}")
+        else:
+            raise
+    return result
+
+
+def _wait_for_purchase_ready(name, timeout=180):
+    """Wait for the PurchaseRequest to reach Ready=True."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    ns = _get_agent_namespace()
+    path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}/{name}"
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            pr = _kube_json("GET", path, token, ssl_ctx)
+            conditions = pr.get("status", {}).get("conditions", [])
+            for cond in conditions:
+                if cond.get("type") == "Ready" and cond.get("status") == "True":
+                    remaining = pr.get("status", {}).get("remaining", 0)
+                    public_model = pr.get("status", {}).get("publicModel", "")
+                    print(f"  Ready: {remaining} auths, model={public_model}")
+                    return True
+                if cond.get("type") == "Ready" and cond.get("status") == "False":
+                    print(f"  Not ready: {cond.get('message', '?')}")
+            # Print latest condition for progress feedback.
+            if conditions:
+                latest = conditions[-1]
+                print(f"  [{latest.get('type')}] {latest.get('message', '')}")
+        except Exception as e:
+            print(f"  Waiting... ({e})")
+        time.sleep(5)
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # USDC balance helper
 # ---------------------------------------------------------------------------
 
@@ -476,42 +564,26 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
               "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
-    # 5. Pre-sign authorizations.
-    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, n)
-
-    # 6. Write ConfigMaps.
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-
-    print("Writing buyer ConfigMaps ...")
-    buyer_config = _read_buyer_config(token, ssl_ctx)
+    # 5. Create PurchaseRequest CR (controller handles signing + ConfigMap writes).
     ep = _normalize_endpoint(endpoint)
-    existing_auths = _read_buyer_auths(token, ssl_ctx)
-    replaced = _remove_conflicting_model_mappings(
-        buyer_config, existing_auths, model_id, keep_name=name
-    )
-    buyer_config["upstreams"][name] = {
-        "url": ep,
-        "remoteModel": model_id,
-        "network": chain,
-        "payTo": pay_to,
-        "asset": usdc_addr,
-        "price": price,
-    }
-    _write_buyer_configmap(BUYER_CM_CONFIG, "config.json", buyer_config, token, ssl_ctx)
+    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr)
 
-    existing_auths[name] = auths
-    _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", existing_auths, token, ssl_ctx)
+    # 6. Wait for controller to reconcile.
+    print("Waiting for controller to reconcile PurchaseRequest ...")
+    ready = _wait_for_purchase_ready(name, timeout=180)
 
     print()
-    print(f"Purchased upstream '{name}' configured via x402-buyer sidecar.")
+    if ready:
+        print(f"Purchased upstream '{name}' configured via x402-buyer sidecar.")
+    else:
+        print(f"Warning: PurchaseRequest '{name}' created but not yet Ready.")
+        print("  The controller may still be reconciling. Check status with:")
+        print(f"  python3 scripts/buy.py status {name}")
     print(f"  Alias:      paid/{model_id}")
     print(f"  Endpoint:   {ep}")
     print(f"  Price:      {price} micro-units per request")
     print(f"  Chain:      {chain}")
-    print(f"  Auths:      {n} pre-signed (max spend: {total_cost} micro-units)")
-    if replaced:
-        print(f"  Replaced:   {', '.join(replaced)}")
+    print(f"  Count:      {n} auths requested")
     print()
     print(f"The model is now available as: paid/{model_id}")
     print(f"Use 'refill {name}' or 'maintain' to top up authorizations.")
