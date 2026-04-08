@@ -121,7 +121,12 @@ metadata:
   labels:
     app: litellm
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: litellm
@@ -129,7 +134,10 @@ spec:
     metadata:
       labels:
         app: litellm
+      annotations:
+        secret.reloader.stakater.com/reload: "litellm-secrets"
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: litellm
           # Pinned to v1.82.3 — main-stable is a floating tag vulnerable to
@@ -178,6 +186,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
           resources:
             requests:
               cpu: 100m
@@ -238,6 +250,18 @@ spec:
                   name: x402-buyer-auths
         - name: x402-buyer-state
           emptyDir: {}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm
+  namespace: llm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: litellm
 
 ---
 apiVersion: v1
