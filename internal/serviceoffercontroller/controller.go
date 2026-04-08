@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -48,6 +49,8 @@ const (
 )
 
 type Controller struct {
+	kubeClient *kubernetes.Clientset
+	dynClient  dynamic.Interface
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
@@ -59,10 +62,14 @@ type Controller struct {
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
+	purchaseInformer     cache.SharedIndexInformer
 	configMapInformer    cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
+	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
 	catalogMu            sync.Mutex
+
+	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
 	httpClient *http.Client
 
@@ -89,9 +96,15 @@ func New(cfg *rest.Config) (*Controller, error) {
 		log.Printf("serviceoffer-controller: no ERC-8004 signing key configured; on-chain registration disabled")
 	}
 
+	kubeClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create kube client: %w", err)
+	}
+
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	registrationInformer := factory.ForResource(monetizeapi.RegistrationRequestGVR).Informer()
+	purchaseInformer := factory.ForResource(monetizeapi.PurchaseRequestGVR).Informer()
 	configMapFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, "obol-frontend", func(options *metav1.ListOptions) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
 	})
@@ -103,6 +116,8 @@ func New(cfg *rest.Config) (*Controller, error) {
 	}
 
 	controller := &Controller{
+		kubeClient:               kubeClient,
+		dynClient:                client,
 		client:                   client,
 		offers:                   client.Resource(monetizeapi.ServiceOfferGVR),
 		registrationRequests:     client.Resource(monetizeapi.RegistrationRequestGVR),
@@ -113,9 +128,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
 		offerInformer:            offerInformer,
 		registrationInformer:     registrationInformer,
+		purchaseInformer:         purchaseInformer,
 		configMapInformer:        configMapInformer,
 		offerQueue:               workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		purchaseQueue:            workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		httpClient:               &http.Client{Timeout: 3 * time.Second},
 		registrationKey:          registrationKey,
 		registrationOwnerAddress: registrationOwnerAddress,
@@ -139,6 +156,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueueOfferFromRegistration(newObj) },
 		DeleteFunc: controller.enqueueOfferFromRegistration,
 	})
+	purchaseInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueuePurchase,
+		UpdateFunc: func(_, newObj any) { controller.enqueuePurchase(newObj) },
+		DeleteFunc: controller.enqueuePurchase,
+	})
 	configMapInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    controller.enqueueDiscoveryRefresh,
 		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
@@ -151,11 +173,13 @@ func New(cfg *rest.Config) (*Controller, error) {
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer c.offerQueue.ShutDown()
 	defer c.registrationQueue.ShutDown()
+	defer c.purchaseQueue.ShutDown()
 
 	go c.offerInformer.Run(ctx.Done())
 	go c.registrationInformer.Run(ctx.Done())
+	go c.purchaseInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), c.offerInformer.HasSynced, c.registrationInformer.HasSynced, c.configMapInformer.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), c.offerInformer.HasSynced, c.registrationInformer.HasSynced, c.purchaseInformer.HasSynced, c.configMapInformer.HasSynced) {
 		return fmt.Errorf("wait for informer sync")
 	}
 
@@ -169,6 +193,10 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		}()
 		go func() {
 			for c.processNextRegistration(ctx) {
+			}
+		}()
+		go func() {
+			for c.processNextPurchase(ctx) {
 			}
 		}()
 	}
@@ -259,6 +287,32 @@ func (c *Controller) processNextRegistration(ctx context.Context) bool {
 	}
 
 	c.registrationQueue.Forget(key)
+	return true
+}
+
+func (c *Controller) enqueuePurchase(obj any) {
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		log.Printf("serviceoffer-controller: build purchase queue key: %v", err)
+		return
+	}
+	c.purchaseQueue.Add(key)
+}
+
+func (c *Controller) processNextPurchase(ctx context.Context) bool {
+	key, shutdown := c.purchaseQueue.Get()
+	if shutdown {
+		return false
+	}
+	defer c.purchaseQueue.Done(key)
+
+	if err := c.reconcilePurchase(ctx, key); err != nil {
+		log.Printf("serviceoffer-controller: reconcile purchase %s: %v", key, err)
+		c.purchaseQueue.AddRateLimited(key)
+		return true
+	}
+
+	c.purchaseQueue.Forget(key)
 	return true
 }
 
