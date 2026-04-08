@@ -1,0 +1,172 @@
+package x402
+
+import (
+	"fmt"
+	"math/big"
+
+	x402types "github.com/coinbase/x402/go/types"
+)
+
+// ChainInfo holds chain-specific configuration for x402 payment gating.
+// It maps a human-friendly chain name to the on-wire identifiers the
+// facilitator expects (v1 network names, USDC contract address, EIP-3009
+// domain parameters).
+type ChainInfo struct {
+	// Name is the human-friendly identifier used by the CLI (e.g., "base-sepolia").
+	Name string
+
+	// NetworkID is the v1 wire-format network name sent to the facilitator.
+	NetworkID string
+
+	// USDCAddress is the USDC token contract address on this chain.
+	USDCAddress string
+
+	// Decimals is the token decimal precision (6 for USDC).
+	Decimals int
+
+	// EIP3009Name is the EIP-712 domain name for TransferWithAuthorization.
+	EIP3009Name string
+
+	// EIP3009Version is the EIP-712 domain version.
+	EIP3009Version string
+}
+
+// Chain constants — USDC addresses verified against coinbase/x402/go v2.7.0
+// mechanisms/evm/constants.go and on-chain contract deployments.
+var (
+	ChainBaseMainnet = ChainInfo{
+		Name:           "base",
+		NetworkID:      "base",
+		USDCAddress:    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainBaseSepolia = ChainInfo{
+		Name:           "base-sepolia",
+		NetworkID:      "base-sepolia",
+		USDCAddress:    "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainEthereumMainnet = ChainInfo{
+		Name:           "ethereum",
+		NetworkID:      "ethereum",
+		USDCAddress:    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainPolygonMainnet = ChainInfo{
+		Name:           "polygon",
+		NetworkID:      "polygon",
+		USDCAddress:    "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainPolygonAmoy = ChainInfo{
+		Name:           "polygon-amoy",
+		NetworkID:      "polygon-amoy",
+		USDCAddress:    "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainAvalancheMainnet = ChainInfo{
+		Name:           "avalanche",
+		NetworkID:      "avalanche",
+		USDCAddress:    "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainAvalancheFuji = ChainInfo{
+		Name:           "avalanche-fuji",
+		NetworkID:      "avalanche-fuji",
+		USDCAddress:    "0x5425890298aed601595a70AB815c96711a31Bc65",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainArbitrumOne = ChainInfo{
+		Name:           "arbitrum-one",
+		NetworkID:      "arbitrum-one",
+		USDCAddress:    "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+
+	ChainArbitrumSepolia = ChainInfo{
+		Name:           "arbitrum-sepolia",
+		NetworkID:      "arbitrum-sepolia",
+		USDCAddress:    "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+		Decimals:       6,
+		EIP3009Name:    "USD Coin",
+		EIP3009Version: "2",
+	}
+)
+
+// ResolveChainInfo maps a human-friendly chain name to its ChainInfo.
+// Phase 2 renames this to ResolveChain after deleting the old one in config.go.
+func ResolveChainInfo(name string) (ChainInfo, error) {
+	switch name {
+	case "base", "base-mainnet":
+		return ChainBaseMainnet, nil
+	case "base-sepolia":
+		return ChainBaseSepolia, nil
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return ChainEthereumMainnet, nil
+	case "polygon", "polygon-mainnet":
+		return ChainPolygonMainnet, nil
+	case "polygon-amoy":
+		return ChainPolygonAmoy, nil
+	case "avalanche", "avalanche-mainnet":
+		return ChainAvalancheMainnet, nil
+	case "avalanche-fuji":
+		return ChainAvalancheFuji, nil
+	case "arbitrum-one", "arbitrum":
+		return ChainArbitrumOne, nil
+	case "arbitrum-sepolia":
+		return ChainArbitrumSepolia, nil
+	default:
+		return ChainInfo{}, fmt.Errorf(
+			"unsupported chain: %s (use: base, base-sepolia, ethereum, polygon, polygon-amoy, avalanche, avalanche-fuji, arbitrum-one, arbitrum-sepolia)",
+			name,
+		)
+	}
+}
+
+// BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
+// the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
+func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirementsV1 {
+	// Convert decimal USDC to atomic units (6 decimals) using big.Float with
+	// enough precision to avoid floating-point truncation (e.g., 0.001 * 1e6
+	// must produce 1000, not 999).
+	amountFloat, _, _ := new(big.Float).SetPrec(128).Parse(amount, 10)
+	multiplier := new(big.Float).SetPrec(128).SetInt(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(chain.Decimals)), nil),
+	)
+	atomicFloat := new(big.Float).SetPrec(128).Mul(amountFloat, multiplier)
+	// Add 0.5 before truncating to int so we round to nearest.
+	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
+	atomicInt, _ := atomicFloat.Int(nil)
+
+	return x402types.PaymentRequirementsV1{
+		Scheme:            "exact",
+		Network:           chain.NetworkID,
+		MaxAmountRequired: atomicInt.String(),
+		Asset:             chain.USDCAddress,
+		PayTo:             recipientAddress,
+		MaxTimeoutSeconds: 60,
+	}
+}
