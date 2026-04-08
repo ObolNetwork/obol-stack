@@ -271,7 +271,9 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
         print(f"  Created PurchaseRequest {ns}/{name}")
     except urllib.error.HTTPError as e:
         if e.code == 409:
-            # Already exists — update it.
+            # Already exists — read current to get resourceVersion, then replace.
+            existing = _kube_json("GET", f"{path}/{name}", token, ssl_ctx)
+            pr["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
             result = _kube_json("PUT", f"{path}/{name}", token, ssl_ctx, pr)
             print(f"  Updated PurchaseRequest {ns}/{name}")
         else:
