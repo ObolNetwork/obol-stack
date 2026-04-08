@@ -133,12 +133,10 @@ pass "Alice workspace ready"
 step "Alice: stack init + up"
 alice stack init 2>&1 | tail -1
 alice stack up 2>&1 | tail -3
-if alice kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
-    pass "Alice stack running"
-else
-    fail "Alice stack failed to start"
-    emit_metrics; exit 1
-fi
+pass "Alice stack up completed"
+
+poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
+    alice kubectl get pods -n x402 --no-headers
 
 # ═════════════════════════════════════════════════════════════════
 # ALICE: SELL INFERENCE + REGISTER ON-CHAIN
@@ -250,12 +248,10 @@ pass "Bob ports remapped to 9080/9180/9443/9543"
 
 step "Bob: stack up"
 bob stack up 2>&1 | tail -3
-if bob kubectl get pods -n x402 --no-headers 2>&1 | grep -q "Running"; then
-    pass "Bob stack running"
-else
-    fail "Bob stack failed to start"
-    emit_metrics; exit 1
-fi
+pass "Bob stack up completed"
+
+poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
+    bob kubectl get pods -n x402 --no-headers
 
 # Wait for Bob's OpenClaw agent to be ready
 poll_step "Bob: OpenClaw agent ready" 24 5 \
