@@ -110,7 +110,9 @@ command_exists() {
 check_prerequisites() {
 	local missing=()
 
-	# Node.js 22+ / npm — required for openclaw CLI (unless already installed)
+	# Node.js 22+ / npm — preferred for openclaw CLI install.
+	# If missing, install_openclaw() will fall back to Docker image extraction.
+	# Only block here if neither npm NOR docker is available.
 	local need_npm=true
 	if command_exists openclaw; then
 		local oc_version
@@ -122,12 +124,17 @@ check_prerequisites() {
 
 	if [[ "$need_npm" == "true" ]]; then
 		if ! command_exists npm; then
-			missing+=("Node.js 22+ (npm) — required to install openclaw CLI")
+			if ! command_exists docker; then
+				missing+=("Node.js 22+ (npm) or Docker — required to install openclaw CLI")
+			fi
+			# npm missing but docker available — install_openclaw() will use Docker fallback
 		else
 			local node_major
 			node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
 			if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
-				missing+=("Node.js 22+ (found: v${node_major:-none}) — required for openclaw CLI")
+				if ! command_exists docker; then
+					missing+=("Node.js 22+ (found: v${node_major:-none}) or Docker — required for openclaw CLI")
+				fi
 			fi
 		fi
 	fi
@@ -1126,23 +1133,48 @@ install_openclaw() {
 		return 0
 	fi
 
-	# Require Node.js 22+ and npm
+	# Prefer npm install; fall back to extracting the binary from Docker image.
+	local use_npm=true
 	if ! command_exists npm; then
-		log_warn "npm not found — cannot install openclaw CLI"
-		echo ""
-		echo "  Install Node.js 22+ first, then re-run obolup.sh"
-		echo "  Or install manually: npm install -g openclaw@$target_version"
-		echo ""
-		return 1
+		use_npm=false
+	else
+		local node_major
+		node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+		if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
+			use_npm=false
+		fi
 	fi
 
-	local node_major
-	node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
-	if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
-		log_warn "Node.js 22+ required for openclaw (found: v${node_major:-none})"
+	if [[ "$use_npm" == "false" ]]; then
+		# Docker fallback: extract openclaw binary from the published image.
+		if command_exists docker; then
+			log_info "npm/Node.js not available — extracting openclaw from Docker image..."
+			local image="ghcr.io/obolnetwork/openclaw:$target_version"
+			if docker pull "$image" 2>&1 | tail -1; then
+				local cid
+				cid=$(docker create "$image" 2>/dev/null)
+				if [[ -n "$cid" ]]; then
+					docker cp "$cid:/usr/local/bin/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null \
+						|| docker cp "$cid:/app/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null \
+						|| docker cp "$cid:/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null
+					docker rm "$cid" >/dev/null 2>&1
+					if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
+						chmod +x "$OBOL_BIN_DIR/openclaw"
+						log_success "openclaw v$target_version installed (from Docker image)"
+						return 0
+					fi
+				fi
+			fi
+			log_warn "Docker extraction failed"
+			echo "  Pull the Docker image: docker pull $image"
+			echo ""
+			return 1
+		fi
+
+		log_warn "npm and Docker both unavailable — cannot install openclaw CLI"
 		echo ""
-		echo "  Upgrade Node.js, then re-run obolup.sh"
-		echo "  Or install manually: npm install -g openclaw@$target_version"
+		echo "  Install Node.js 22+ first, then re-run obolup.sh"
+		echo "  Or pull the Docker image: docker pull ghcr.io/obolnetwork/openclaw:$target_version"
 		echo ""
 		return 1
 	fi
