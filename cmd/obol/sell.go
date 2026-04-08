@@ -1375,15 +1375,19 @@ Examples:
 			}
 			agentURI := endpoint + "/.well-known/agent-registration.json"
 
-			// Determine signing method: remote-signer (preferred) or private key file (fallback).
+			// Determine signing method: private key file (if explicitly provided)
+			// or remote-signer (default when OpenClaw agent is deployed).
 			useRemoteSigner := false
 			var signerNS string
 
-			if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-				ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
-				if nsErr == nil {
-					useRemoteSigner = true
-					signerNS = ns
+			// If --private-key-file is explicitly provided, honour user intent.
+			if !cmd.IsSet("private-key-file") {
+				if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+					ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+					if nsErr == nil {
+						useRemoteSigner = true
+						signerNS = ns
+					}
 				}
 			}
 
@@ -1494,7 +1498,7 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	u.Printf("    Wallet:   %s", addr.Hex())
 
 	// Connect to eRPC for this network.
-	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	client, err := erc8004.NewClientForNetwork(ctx, "http://obol.stack/rpc", net)
 	if err != nil {
 		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
 	}
@@ -1529,7 +1533,7 @@ func registerDirectWithKey(ctx context.Context, u *ui.UI, net erc8004.NetworkCon
 		return fmt.Errorf("invalid private key: %w", err)
 	}
 
-	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	client, err := erc8004.NewClientForNetwork(ctx, "http://obol.stack/rpc", net)
 	if err != nil {
 		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
 	}
