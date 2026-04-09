@@ -141,7 +141,7 @@ spec:
           # No Postgres required — /model/new and /model/delete work via
           # in-memory router + config.yaml persistence.
           # Source: https://github.com/ObolNetwork/litellm
-          image: ghcr.io/obolnetwork/litellm:sha-fe892e3
+          image: ghcr.io/obolnetwork/litellm:sha-778111d
           imagePullPolicy: IfNotPresent
           args:
             - --config
