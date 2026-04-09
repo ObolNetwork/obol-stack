@@ -285,20 +285,20 @@ func litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, path string, bo
 
 	var firstErr error
 	for _, pod := range podNames {
-		var wgetCmd string
-		if len(body) > 0 {
-			wgetCmd = fmt.Sprintf(
-				`wget -qO- --post-data='%s' --header='Content-Type: application/json' --header='Authorization: Bearer %s' http://localhost:4000%s`,
-				string(body), masterKey, path)
-		} else {
-			wgetCmd = fmt.Sprintf(
-				`wget -qO- --header='Authorization: Bearer %s' http://localhost:4000%s`,
-				masterKey, path)
-		}
-
-		_, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		// Pass arguments directly to wget without sh -c to avoid
+		// shell-quoting issues with JSON body or auth tokens.
+		args := []string{
 			"exec", "-n", namespace, pod, "-c", "litellm",
-			"--", "sh", "-c", wgetCmd)
+			"--", "wget", "-qO-",
+			"--header=Content-Type: application/json",
+			"--header=Authorization: Bearer " + masterKey,
+		}
+		if len(body) > 0 {
+			args = append(args, "--post-data="+string(body))
+		}
+		args = append(args, "http://localhost:4000"+path)
+
+		_, err := kubectl.Output(kubectlBinary, kubeconfigPath, args...)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("pod %s: %w", pod, err)
 		}
@@ -356,8 +356,9 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	// Query /model/info on one pod to get model IDs.
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
-		"--", "sh", "-c",
-		fmt.Sprintf(`wget -qO- --header='Authorization: Bearer %s' http://localhost:4000/model/info`, masterKey))
+		"--", "wget", "-qO-",
+		"--header=Authorization: Bearer "+masterKey,
+		"http://localhost:4000/model/info")
 	if err != nil {
 		return fmt.Errorf("query /model/info: %w", err)
 	}
