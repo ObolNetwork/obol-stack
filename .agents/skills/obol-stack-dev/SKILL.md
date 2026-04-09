@@ -261,3 +261,4 @@ go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_
 - **ConfigMap propagation**: File watcher takes 60-120s. Force restart verifier for immediate effect.
 - **Projected ConfigMap refresh**: the LiteLLM pod can take ~60s to reflect updated buyer ConfigMaps in the sidecar.
 - **eRPC balance lag**: `buy.py balance` uses `eth_call` through eRPC, and the default unfinalized cache TTL is 10s. After a paid request, poll until the reported balance catches up with the on-chain delta.
+- **kubectl exec shell quoting**: NEVER use `sh -c` with `fmt.Sprintf` to embed JSON or secrets in shell commands passed via `kubectl exec`. JSON body or auth tokens containing single quotes will break the shell. Instead, pass args directly: `kubectl exec ... -- wget -qO- --post-data=<json> --header=Authorization:\ Bearer\ <key> <url>`. Each argument goes as a separate argv element, bypassing shell interpretation entirely.
