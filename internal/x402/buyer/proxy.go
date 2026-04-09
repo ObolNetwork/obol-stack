@@ -32,6 +32,7 @@ type Proxy struct {
 	mux         *http.ServeMux
 	metrics     *metrics
 	state       *StateStore
+	reloadCh    chan struct{} // signals an immediate config reload
 }
 
 type upstreamEntry struct {
@@ -67,6 +68,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 		mux:         http.NewServeMux(),
 		metrics:     newMetrics(),
 		state:       state,
+		reloadCh:    make(chan struct{}, 1),
 	}
 
 	p.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +76,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 		fmt.Fprint(w, "ok")
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
+	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
 
@@ -161,6 +164,7 @@ func (p *Proxy) syncCompatibilityRoutesLocked() {
 		fmt.Fprint(w, "ok")
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
+	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
 
@@ -586,6 +590,25 @@ func (p *Proxy) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result) //nolint:errchkjson // controlled status map
+}
+
+// handleAdminReload triggers an immediate config/auth reload from disk.
+func (p *Proxy) handleAdminReload(w http.ResponseWriter, _ *http.Request) {
+	select {
+	case p.reloadCh <- struct{}{}:
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"reload triggered"}`)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"reload already pending"}`)
+	}
+}
+
+// ReloadCh returns a channel that signals when an immediate reload is requested
+// via the /admin/reload endpoint. The main goroutine should select on this
+// alongside the periodic ticker.
+func (p *Proxy) ReloadCh() <-chan struct{} {
+	return p.reloadCh
 }
 
 // singleJoiningSlash joins a base and suffix path with exactly one slash.

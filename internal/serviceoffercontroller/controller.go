@@ -49,7 +49,7 @@ const (
 )
 
 type Controller struct {
-	kubeClient *kubernetes.Clientset
+	kubeClient kubernetes.Interface
 	dynClient  dynamic.Interface
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
@@ -71,7 +71,8 @@ type Controller struct {
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
-	httpClient *http.Client
+	httpClient          *http.Client
+	litellmURLOverride  string // test-only: override LiteLLM base URL
 
 	registrationKey          *ecdsa.PrivateKey
 	registrationOwnerAddress string

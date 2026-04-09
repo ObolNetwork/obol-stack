@@ -79,6 +79,7 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 
 func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetizeapi.PurchaseRequest, raw *unstructured.Unstructured) error {
 	buyerNS := pr.EffectiveBuyerNamespace()
+	c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
 	c.removeBuyerUpstream(ctx, buyerNS, pr.Name)
 
 	patched := raw.DeepCopy()
@@ -218,12 +219,13 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 		return err
 	}
 
-	// Add an explicit LiteLLM model entry for this paid model.
-	// The paid/* wildcard doesn't match model names with colons (e.g. qwen3.5:9b).
+	// Trigger immediate sidecar reload so it picks up the new config/auths
+	// without waiting for the 5-second ticker.
+	c.triggerBuyerReload(ctx, buyerNS)
+
+	// Hot-add via /model/new API — no pod restart needed.
 	paidModel := "paid/" + pr.Spec.Model
 	c.addLiteLLMModelEntry(ctx, buyerNS, paidModel)
-
-	c.restartLiteLLM(ctx, buyerNS)
 
 	status.Remaining = len(auths)
 	status.PublicModel = paidModel

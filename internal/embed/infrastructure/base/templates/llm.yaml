@@ -76,16 +76,15 @@ data:
       drop_params: true
 
 ---
+# Buyer ConfigMaps — keys are managed via SSA by the serviceoffer-controller.
+# Each PurchaseRequest applies its own <upstreamKey>.json key with a unique
+# field manager, eliminating merge races between concurrent purchases.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: x402-buyer-config
   namespace: llm
-data:
-  config.json: |
-    {
-      "upstreams": {}
-    }
+data: {}
 
 ---
 apiVersion: v1
@@ -93,9 +92,7 @@ kind: ConfigMap
 metadata:
   name: x402-buyer-auths
   namespace: llm
-data:
-  auths.json: |
-    {}
+data: {}
 
 ---
 # Secret for LiteLLM master key and cloud provider API keys.
@@ -140,10 +137,11 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: litellm
-          # Pinned to v1.82.3 — main-stable is a floating tag vulnerable to
-          # supply-chain attacks (see BerriAI/litellm#24512: PyPI 1.82.7-1.82.8
-          # contained credential-stealing malware). Always pin to a versioned tag.
-          image: ghcr.io/berriai/litellm:main-v1.82.3
+          # Obol fork of LiteLLM with config-only model management API.
+          # No Postgres required — /model/new and /model/delete work via
+          # in-memory router + config.yaml persistence.
+          # Source: https://github.com/ObolNetwork/litellm
+          image: ghcr.io/obolnetwork/litellm:sha-fe892e3
           imagePullPolicy: IfNotPresent
           args:
             - --config
@@ -201,8 +199,8 @@ spec:
           image: ghcr.io/obolnetwork/x402-buyer:latest
           imagePullPolicy: IfNotPresent
           args:
-            - --config=/config/config.json
-            - --auths=/config/auths.json
+            - --config-dir=/config/buyer-config
+            - --auths-dir=/config/buyer-auths
             - --state=/state/consumed.json
             - --listen=:8402
           ports:
@@ -229,8 +227,11 @@ spec:
               cpu: 500m
               memory: 256Mi
           volumeMounts:
-            - name: x402-buyer-config
-              mountPath: /config
+            - name: buyer-config
+              mountPath: /config/buyer-config
+              readOnly: true
+            - name: buyer-auths
+              mountPath: /config/buyer-auths
               readOnly: true
             - name: x402-buyer-state
               mountPath: /state
@@ -241,13 +242,14 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
-        - name: x402-buyer-config
-          projected:
-            sources:
-              - configMap:
-                  name: x402-buyer-config
-              - configMap:
-                  name: x402-buyer-auths
+        - name: buyer-config
+          configMap:
+            name: x402-buyer-config
+            optional: true
+        - name: buyer-auths
+          configMap:
+            name: x402-buyer-auths
+            optional: true
         - name: x402-buyer-state
           emptyDir: {}
 

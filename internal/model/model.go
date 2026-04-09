@@ -264,6 +264,49 @@ func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 	return nil
 }
 
+// litellmAPIViaExec calls a LiteLLM HTTP endpoint on every running litellm
+// pod via kubectl exec. With replicas>1, this fans out to all pods so every
+// router is updated immediately. The CLI runs on the host and cannot reach
+// in-cluster services directly; kubectl exec is the bridge.
+func litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, path string, body []byte) error {
+	// List running litellm pod names.
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "pods", "-n", namespace, "-l", "app=litellm",
+		"--field-selector=status.phase=Running",
+		"-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil {
+		return fmt.Errorf("list litellm pods: %w", err)
+	}
+
+	podNames := strings.Fields(strings.TrimSpace(raw))
+	if len(podNames) == 0 {
+		return fmt.Errorf("no running litellm pods in %s namespace", namespace)
+	}
+
+	var firstErr error
+	for _, pod := range podNames {
+		var wgetCmd string
+		if len(body) > 0 {
+			wgetCmd = fmt.Sprintf(
+				`wget -qO- --post-data='%s' --header='Content-Type: application/json' --header='Authorization: Bearer %s' http://localhost:4000%s`,
+				string(body), masterKey, path)
+		} else {
+			wgetCmd = fmt.Sprintf(
+				`wget -qO- --header='Authorization: Bearer %s' http://localhost:4000%s`,
+				masterKey, path)
+		}
+
+		_, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+			"exec", "-n", namespace, pod, "-c", "litellm",
+			"--", "sh", "-c", wgetCmd)
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("pod %s: %w", pod, err)
+		}
+	}
+
+	return firstErr
+}
+
 // hotAddModels uses the LiteLLM /model/new API to add models to the running
 // router without a restart. The ConfigMap is already patched by
 // PatchLiteLLMProvider for persistence across restarts.
@@ -276,16 +319,6 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	// Get the LiteLLM ClusterIP for direct access.
-	svcIP, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "svc", deployName, "-n", namespace,
-		"-o", "jsonpath={.spec.clusterIP}")
-	if err != nil || strings.TrimSpace(svcIP) == "" {
-		return fmt.Errorf("get litellm service IP: %w", err)
-	}
-
-	// Use kubectl exec to call the API from inside the cluster (avoids
-	// port-forward complexity and works on any host OS).
 	for _, entry := range entries {
 		body := map[string]any{
 			"model_name": entry.ModelName,
@@ -300,16 +333,8 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 			continue
 		}
 
-		// POST /model/new via kubectl exec on a running litellm pod.
-		curlCmd := fmt.Sprintf(
-			`wget -qO- --post-data='%s' --header='Content-Type: application/json' --header='Authorization: Bearer %s' http://localhost:4000/model/new`,
-			string(bodyJSON), masterKey)
-
-		out, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-			"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
-			"--", "sh", "-c", curlCmd)
-		if err != nil {
-			u.Warnf("Hot-add %s failed: %v (%s)", entry.ModelName, err, strings.TrimSpace(out))
+		if err := litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, "/model/new", bodyJSON); err != nil {
+			u.Warnf("Hot-add %s failed: %v", entry.ModelName, err)
 			return fmt.Errorf("hot-add %s: %w", entry.ModelName, err)
 		}
 	}
@@ -317,7 +342,62 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 	return nil
 }
 
-// RemoveModel removes a model entry from the LiteLLM ConfigMap and restarts the deployment.
+// hotDeleteModel removes a model from the running LiteLLM router(s) via the
+// /model/delete API. It first queries /model/info to resolve model IDs.
+func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
+	masterKey, err := GetMasterKey(cfg)
+	if err != nil {
+		return fmt.Errorf("get master key: %w", err)
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Query /model/info on one pod to get model IDs.
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
+		"--", "sh", "-c",
+		fmt.Sprintf(`wget -qO- --header='Authorization: Bearer %s' http://localhost:4000/model/info`, masterKey))
+	if err != nil {
+		return fmt.Errorf("query /model/info: %w", err)
+	}
+
+	var infoResp struct {
+		Data []struct {
+			ModelName string `json:"model_name"`
+			ModelInfo struct {
+				ID string `json:"id"`
+			} `json:"model_info"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &infoResp); err != nil {
+		return fmt.Errorf("parse /model/info: %w", err)
+	}
+
+	deleted := 0
+	for _, m := range infoResp.Data {
+		if m.ModelName != modelName || m.ModelInfo.ID == "" {
+			continue
+		}
+
+		deleteBody, _ := json.Marshal(map[string]any{"id": m.ModelInfo.ID})
+		if err := litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, "/model/delete", deleteBody); err != nil {
+			u.Warnf("Hot-delete model %s (id=%s) failed: %v", modelName, m.ModelInfo.ID, err)
+		} else {
+			deleted++
+		}
+	}
+
+	if deleted == 0 {
+		return fmt.Errorf("model %q not found in LiteLLM router", modelName)
+	}
+
+	return nil
+}
+
+// RemoveModel removes a model entry from the LiteLLM ConfigMap (persistence)
+// and hot-deletes it from the running router via the API (immediate effect).
+// No pod restart is required.
 func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -326,7 +406,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	// Read current config
+	// 1. Patch ConfigMap for persistence (survives pod restarts).
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
 	if err != nil {
@@ -338,7 +418,6 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 		return fmt.Errorf("failed to parse config.yaml: %w", err)
 	}
 
-	// Find and remove matching entries
 	var kept []ModelEntry
 
 	removed := 0
@@ -358,13 +437,11 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	litellmConfig.ModelList = kept
 
-	// Marshal back to YAML
 	updated, err := yaml.Marshal(&litellmConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Build ConfigMap patch
 	escapedYAML, err := json.Marshal(string(updated))
 	if err != nil {
 		return fmt.Errorf("failed to escape YAML: %w", err)
@@ -380,20 +457,12 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
 	}
 
-	// Restart deployment
-	u.Info("Restarting LiteLLM")
-
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "restart", "deployment/"+deployName, "-n", namespace); err != nil {
-		return fmt.Errorf("failed to restart LiteLLM: %w", err)
-	}
-
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "status", "deployment/"+deployName, "-n", namespace,
-		"--timeout=90s"); err != nil {
-		u.Warnf("LiteLLM rollout not confirmed: %v", err)
+	// 2. Hot-delete from running router via API (immediate, no restart).
+	if err := hotDeleteModel(cfg, u, modelName); err != nil {
+		u.Warnf("Hot-remove from LiteLLM router failed: %v", err)
+		u.Dim("  The model is removed from config; it will disappear after next restart.")
 	} else {
-		u.Successf("Model %q removed", modelName)
+		u.Successf("Model %q removed (live + config)", modelName)
 	}
 
 	return nil
@@ -445,28 +514,20 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 		entry.LiteLLMParams.APIKey = "none"
 	}
 
-	// Patch config
+	// Patch ConfigMap for persistence.
 	u.Infof("Adding custom endpoint %q to LiteLLM config", name)
 
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, []ModelEntry{entry}); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
 
-	// Restart
-	u.Info("Restarting LiteLLM")
-
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "restart", "deployment/"+deployName, "-n", namespace); err != nil {
-		return fmt.Errorf("failed to restart LiteLLM: %w", err)
+	// Hot-add via API (no restart needed).
+	if err := hotAddModels(cfg, u, []ModelEntry{entry}); err != nil {
+		u.Warnf("Hot-add failed, falling back to restart: %v", err)
+		return RestartLiteLLM(cfg, u, name)
 	}
 
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
-		"rollout", "status", "deployment/"+deployName, "-n", namespace,
-		"--timeout=90s"); err != nil {
-		u.Warnf("LiteLLM rollout not confirmed: %v", err)
-	} else {
-		u.Successf("Custom endpoint %q added (model: %s)", name, modelID)
-	}
+	u.Successf("Custom endpoint %q added (model: %s)", name, modelID)
 
 	return nil
 }
