@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	x402 "github.com/mark3labs/x402-go"
+	x402types "github.com/coinbase/x402/go/types"
 )
 
 func TestPreSignedSigner_CanSign(t *testing.T) {
@@ -20,33 +20,33 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *x402.PaymentRequirement
+		req  *x402types.PaymentRequirements
 		want bool
 	}{
 		{
 			name: "matching requirement",
-			req: &x402.PaymentRequirement{
-				Network:           "base-sepolia",
-				PayTo:             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-				Asset:             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-				MaxAmountRequired: "1000",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:84532",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Amount:  "1000",
 			},
 			want: true,
 		},
 		{
 			name: "case-insensitive match",
-			req: &x402.PaymentRequirement{
-				Network:           "Base-Sepolia",
-				PayTo:             "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
-				Asset:             "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-				MaxAmountRequired: "1000",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:84532",
+				PayTo:   "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+				Asset:   "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+				Amount:  "1000",
 			},
 			want: true,
 		},
 		{
 			name: "wrong network",
-			req: &x402.PaymentRequirement{
-				Network: "base",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:8453",
 				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 			},
@@ -54,8 +54,8 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 		},
 		{
 			name: "wrong payTo",
-			req: &x402.PaymentRequirement{
-				Network: "base-sepolia",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:84532",
 				PayTo:   "0xdeadbeef",
 				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 			},
@@ -63,8 +63,8 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 		},
 		{
 			name: "wrong asset",
-			req: &x402.PaymentRequirement{
-				Network: "base-sepolia",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:84532",
 				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 				Asset:   "0xdeadbeef",
 			},
@@ -72,11 +72,11 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 		},
 		{
 			name: "wrong amount",
-			req: &x402.PaymentRequirement{
-				Network:           "base-sepolia",
-				PayTo:             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-				Asset:             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-				MaxAmountRequired: "999",
+			req: &x402types.PaymentRequirements{
+				Network: "eip155:84532",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Amount:  "999",
 			},
 			want: false,
 		},
@@ -112,11 +112,11 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 		nil,
 	)
 
-	req := &x402.PaymentRequirement{
-		Network:           "base-sepolia",
-		PayTo:             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-		Asset:             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-		MaxAmountRequired: "1000",
+	req := &x402types.PaymentRequirements{
+		Network: "eip155:84532",
+		PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Amount:  "1000",
 	}
 
 	// First sign — should pop "0xaaa".
@@ -125,14 +125,14 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 		t.Fatalf("first Sign: %v", err)
 	}
 
-	payload1 := p1.Payload.(x402.EVMPayload)
-	if payload1.Signature != "0xaaa" {
-		t.Errorf("first signature = %q, want %q", payload1.Signature, "0xaaa")
+	payload1 := p1.Payload
+	if sig, _ := payload1["signature"].(string); sig != "0xaaa" {
+		t.Errorf("first signature = %q, want %q", sig, "0xaaa")
 	}
 
-	if p1.X402Version != 1 || p1.Scheme != "exact" || p1.Network != "base-sepolia" {
+	if p1.X402Version != 2 || p1.Accepted.Scheme != "exact" || p1.Accepted.Network != "eip155:84532" {
 		t.Errorf("unexpected payload fields: version=%d scheme=%s network=%s",
-			p1.X402Version, p1.Scheme, p1.Network)
+			p1.X402Version, p1.Accepted.Scheme, p1.Accepted.Network)
 	}
 
 	if signer.Remaining() != 1 {
@@ -149,9 +149,9 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 		t.Fatalf("second Sign: %v", err)
 	}
 
-	payload2 := p2.Payload.(x402.EVMPayload)
-	if payload2.Signature != "0xbbb" {
-		t.Errorf("second signature = %q, want %q", payload2.Signature, "0xbbb")
+	payload2 := p2.Payload
+	if sig, _ := payload2["signature"].(string); sig != "0xbbb" {
+		t.Errorf("second signature = %q, want %q", sig, "0xbbb")
 	}
 
 	// Third sign — pool exhausted.
@@ -184,11 +184,11 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 		nil,
 	)
 
-	req := &x402.PaymentRequirement{
-		Network:           "base-sepolia",
-		PayTo:             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-		Asset:             "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-		MaxAmountRequired: "1000",
+	req := &x402types.PaymentRequirements{
+		Network: "eip155:84532",
+		PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Amount:  "1000",
 	}
 
 	var wg sync.WaitGroup
@@ -231,9 +231,9 @@ func TestPreSignedSigner_Interface(t *testing.T) {
 	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", nil, 0, nil)
 
 	// Verify interface compliance.
-	var _ x402.Signer = signer
+	var _ Signer = signer
 
-	if signer.Network() != "base-sepolia" {
+	if signer.Network() != "eip155:84532" {
 		t.Errorf("Network() = %q", signer.Network())
 	}
 

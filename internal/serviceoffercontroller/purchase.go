@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -51,19 +52,21 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 	status.Conditions = append([]monetizeapi.Condition{}, pr.Status.Conditions...)
 
 	// Stage 1: Probe
-	if err := c.reconcilePurchaseProbe(ctx, &status, &pr); err != nil {
-		log.Printf("purchase %s/%s: probe failed: %v", ns, name, err)
+	if !purchaseConditionIsTrue(status.Conditions, "Probed") {
+		if err := c.reconcilePurchaseProbe(ctx, &status, &pr); err != nil {
+			log.Printf("purchase %s/%s: probe failed: %v", ns, name, err)
+		}
 	}
 
 	// Stage 2: Sign auths
-	if purchaseConditionIsTrue(status.Conditions, "Probed") {
+	if purchaseConditionIsTrue(status.Conditions, "Probed") && !purchaseConditionIsTrue(status.Conditions, "AuthsSigned") {
 		if err := c.reconcilePurchaseSign(ctx, &status, &pr); err != nil {
 			log.Printf("purchase %s/%s: sign failed: %v", ns, name, err)
 		}
 	}
 
 	// Stage 3: Configure sidecar
-	if purchaseConditionIsTrue(status.Conditions, "AuthsSigned") {
+	if purchaseConditionIsTrue(status.Conditions, "AuthsSigned") && !purchaseConditionIsTrue(status.Conditions, "Configured") {
 		if err := c.reconcilePurchaseConfigure(ctx, &status, &pr); err != nil {
 			log.Printf("purchase %s/%s: configure failed: %v", ns, name, err)
 		}
@@ -126,6 +129,7 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 		Accepts []struct {
 			PayTo             string `json:"payTo"`
 			MaxAmountRequired string `json:"maxAmountRequired"`
+			Amount            string `json:"amount"`
 			Network           string `json:"network"`
 		} `json:"accepts"`
 	}
@@ -135,16 +139,20 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 	}
 
 	accept := pricing.Accepts[0]
-	if accept.MaxAmountRequired != pr.Spec.Payment.Price {
+	price := accept.Amount
+	if price == "" {
+		price = accept.MaxAmountRequired
+	}
+	if price != pr.Spec.Payment.Price {
 		setPurchaseCondition(&status.Conditions, "Probed", "False", "PricingMismatch",
-			fmt.Sprintf("spec.price=%s but endpoint wants %s", pr.Spec.Payment.Price, accept.MaxAmountRequired))
+			fmt.Sprintf("spec.price=%s but endpoint wants %s", pr.Spec.Payment.Price, price))
 		return fmt.Errorf("pricing mismatch")
 	}
 
 	status.ProbedAt = time.Now().UTC().Format(time.RFC3339)
-	status.ProbedPrice = accept.MaxAmountRequired
+	status.ProbedPrice = price
 	setPurchaseCondition(&status.Conditions, "Probed", "True", "Validated",
-		fmt.Sprintf("402: %s micro-USDC on %s", accept.MaxAmountRequired, accept.Network))
+		fmt.Sprintf("402: %s micro-USDC on %s", price, accept.Network))
 	return nil
 }
 
@@ -155,24 +163,11 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 // them directly from the CR — no cross-namespace Secret read needed.
 
 func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
-	if len(pr.Spec.PreSignedAuths) == 0 {
+	auths, err := preSignedAuthMaps(pr)
+	if err != nil {
 		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "NoAuths",
 			"spec.preSignedAuths is empty — buy.py should embed auths in the CR")
-		return fmt.Errorf("no pre-signed auths in spec")
-	}
-
-	// Convert typed auths to map format for the buyer ConfigMap.
-	auths := make([]map[string]string, len(pr.Spec.PreSignedAuths))
-	for i, a := range pr.Spec.PreSignedAuths {
-		auths[i] = map[string]string{
-			"signature":   a.Signature,
-			"from":        a.From,
-			"to":          a.To,
-			"value":       a.Value,
-			"validAfter":  a.ValidAfter,
-			"validBefore": a.ValidBefore,
-			"nonce":       a.Nonce,
-		}
+		return err
 	}
 
 	if pr.Spec.PreSignedAuths[0].From != "" {
@@ -180,7 +175,7 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 	}
 
 	c.pendingAuths.Store(pr.Namespace+"/"+pr.Name, auths)
-	status.TotalSigned += len(auths)
+	status.TotalSigned = len(auths)
 	setPurchaseCondition(&status.Conditions, "AuthsSigned", "True", "Loaded",
 		fmt.Sprintf("Loaded %d pre-signed auths from spec", len(auths)))
 	return nil
@@ -191,17 +186,24 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
 	key := pr.Namespace + "/" + pr.Name
 	authsRaw, ok := c.pendingAuths.Load(key)
-	if !ok {
-		setPurchaseCondition(&status.Conditions, "Configured", "False", "NoAuths", "No pending auths to write")
-		return fmt.Errorf("no pending auths")
+	var auths []map[string]string
+	var err error
+	if ok {
+		auths = authsRaw.([]map[string]string)
+		c.pendingAuths.Delete(key)
+	} else {
+		// Rebuild from spec so crash-restart does not wedge the request.
+		auths, err = preSignedAuthMaps(pr)
+		if err != nil {
+			setPurchaseCondition(&status.Conditions, "Configured", "False", "NoAuths", "No auths available to write")
+			return err
+		}
 	}
-	auths := authsRaw.([]map[string]string)
-	c.pendingAuths.Delete(key)
 
 	buyerNS := pr.EffectiveBuyerNamespace()
 
 	upstream := map[string]any{
-		"url":         pr.Spec.Endpoint,
+		"url":         normalizePurchasedUpstreamURL(pr.Spec.Endpoint),
 		"network":     pr.Spec.Payment.Network,
 		"payTo":       pr.Spec.Payment.PayTo,
 		"price":       pr.Spec.Payment.Price,
@@ -254,14 +256,18 @@ func (c *Controller) reconcilePurchaseReady(ctx context.Context, status *monetiz
 // ── Status helpers ──────────────────────────────────────────────────────────
 
 func (c *Controller) updatePurchaseStatus(ctx context.Context, raw *unstructured.Unstructured, status *monetizeapi.PurchaseRequestStatus) error {
-	statusMap, _ := json.Marshal(status)
-	var statusObj map[string]any
-	json.Unmarshal(statusMap, &statusObj)
-
-	raw.Object["status"] = statusObj
-	_, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).
-		Namespace(raw.GetNamespace()).
-		UpdateStatus(ctx, raw, metav1.UpdateOptions{})
+	patched := raw.DeepCopy()
+	statusObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(status)
+	if err != nil {
+		return err
+	}
+	if existing, found := patched.Object["status"]; found && equality.Semantic.DeepEqual(existing, statusObj) {
+		return nil
+	}
+	patched.Object["status"] = statusObj
+	_, err = c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).
+		Namespace(patched.GetNamespace()).
+		UpdateStatus(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 

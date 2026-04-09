@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 )
 
@@ -310,9 +311,9 @@ func TestResolveX402Chain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := resolveX402Chain(tt.name)
+			_, err := x402verifier.ResolveChainInfo(tt.name)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveX402Chain(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+				t.Errorf("ResolveChainInfo(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
 			}
 		})
 	}

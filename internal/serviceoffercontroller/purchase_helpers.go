@@ -187,6 +187,27 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 	log.Printf("purchase: added LiteLLM model %s via API", modelName)
 }
 
+func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
+	if len(pr.Spec.PreSignedAuths) == 0 {
+		return nil, fmt.Errorf("no pre-signed auths in spec")
+	}
+
+	auths := make([]map[string]string, len(pr.Spec.PreSignedAuths))
+	for i, a := range pr.Spec.PreSignedAuths {
+		auths[i] = map[string]string{
+			"signature":   normalizeRecoverySignature(a.Signature),
+			"from":        a.From,
+			"to":          a.To,
+			"value":       a.Value,
+			"validAfter":  a.ValidAfter,
+			"validBefore": a.ValidBefore,
+			"nonce":       a.Nonce,
+		}
+	}
+
+	return auths, nil
+}
+
 // removeLiteLLMModelEntry removes a model entry from the running LiteLLM
 // router via the /model/delete HTTP API. It queries /model/info to resolve
 // the internal model_id, then deletes by ID. Best-effort: logs errors but
@@ -396,7 +417,7 @@ func (c *Controller) signAuths(ctx context.Context, signerURL, fromAddr string, 
 		}
 
 		auths = append(auths, map[string]string{
-			"signature":   signResult.Signature,
+			"signature":   normalizeRecoverySignature(signResult.Signature),
 			"from":        fromAddr,
 			"to":          pr.Spec.Payment.PayTo,
 			"value":       pr.Spec.Payment.Price,
@@ -406,6 +427,33 @@ func (c *Controller) signAuths(ctx context.Context, signerURL, fromAddr string, 
 		})
 	}
 	return auths, nil
+}
+
+func normalizeRecoverySignature(sig string) string {
+	if len(sig) != 132 || !strings.HasPrefix(sig, "0x") {
+		return sig
+	}
+
+	lastByte, err := strconv.ParseUint(sig[len(sig)-2:], 16, 8)
+	if err != nil {
+		return sig
+	}
+	if lastByte <= 1 {
+		return sig[:len(sig)-2] + fmt.Sprintf("%02x", lastByte+27)
+	}
+
+	return sig
+}
+
+func normalizePurchasedUpstreamURL(endpoint string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	for _, suffix := range []string{"/v1/chat/completions", "/chat/completions"} {
+		if strings.HasSuffix(trimmed, suffix) {
+			return strings.TrimSuffix(trimmed, suffix)
+		}
+	}
+
+	return trimmed
 }
 
 func buildERC3009TypedData(from, to, value, validBefore, nonce string, chainID int, usdcAddr string) map[string]any {

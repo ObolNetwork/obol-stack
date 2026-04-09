@@ -101,6 +101,42 @@ func TestFormatPorts(t *testing.T) {
 	}
 }
 
+func TestLocalIngressURL_DefaultK3dPort(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{ConfigDir: tmpDir}
+
+	err := os.WriteFile(filepath.Join(tmpDir, k3dConfigFile), []byte(`
+ports:
+  - port: 80:80
+  - port: 8080:80
+`), 0o644)
+	if err != nil {
+		t.Fatalf("write k3d config: %v", err)
+	}
+
+	if got := LocalIngressURL(cfg); got != "http://obol.stack" {
+		t.Fatalf("LocalIngressURL() = %q, want %q", got, "http://obol.stack")
+	}
+}
+
+func TestLocalIngressURL_CustomK3dPort(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{ConfigDir: tmpDir}
+
+	err := os.WriteFile(filepath.Join(tmpDir, k3dConfigFile), []byte(`
+ports:
+  - port: 18080:80
+  - port: 18081:80
+`), 0o644)
+	if err != nil {
+		t.Fatalf("write k3d config: %v", err)
+	}
+
+	if got := LocalIngressURL(cfg); got != "http://obol.stack:18080" {
+		t.Fatalf("LocalIngressURL() = %q, want %q", got, "http://obol.stack:18080")
+	}
+}
+
 func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 	// Simulate a k3d → k3s switch: k3d.yaml should be cleaned up
 	tmpDir := t.TempDir()

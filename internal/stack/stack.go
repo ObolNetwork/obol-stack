@@ -732,6 +732,39 @@ func findProjectRoot() string {
 	}
 }
 
+// LocalIngressURL returns the best local HTTP base URL for the current stack.
+// For k3d, it prefers the first host port mapped to container port 80 in the
+// generated k3d config. For historical/default setups it falls back to
+// http://obol.stack or http://obol.stack:8080.
+func LocalIngressURL(cfg *config.Config) string {
+	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
+	if data, err := os.ReadFile(k3dConfigPath); err == nil {
+		for line := range strings.SplitSeq(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "- port:") {
+				continue
+			}
+
+			portSpec := strings.TrimSpace(strings.TrimPrefix(line, "- port:"))
+			parts := strings.Split(portSpec, ":")
+			if len(parts) != 2 || parts[1] != "80" {
+				continue
+			}
+
+			if parts[0] == "80" {
+				return "http://obol.stack"
+			}
+			return fmt.Sprintf("http://obol.stack:%s", parts[0])
+		}
+	}
+
+	if checkPortsAvailable([]int{80}) == nil {
+		return "http://obol.stack"
+	}
+
+	return "http://obol.stack:8080"
+}
+
 // checkPortsAvailable verifies that all required ports can be bound.
 func checkPortsAvailable(ports []int) error {
 	var blocked []int

@@ -70,6 +70,13 @@ CHAIN_IDS = {
     "sepolia": 11155111,
 }
 
+CAIP2_TO_CHAIN = {
+    "eip155:84532": "base-sepolia",
+    "eip155:8453": "base",
+    "eip155:1": "ethereum",
+    "eip155:11155111": "sepolia",
+}
+
 # EIP-712 domain for USDC TransferWithAuthorization
 USDC_DOMAIN_NAME = "USDC"
 USDC_DOMAIN_VERSION = "2"
@@ -95,6 +102,24 @@ def _normalize_endpoint(url):
             base = base[:-len(suffix)]
             break
     return base
+
+
+def _normalize_signature_recovery(sig):
+    """Convert 65-byte signatures from v=0/1 to Ethereum v=27/28."""
+    if not isinstance(sig, str) or not sig.startswith("0x") or len(sig) != 132:
+        return sig
+    try:
+        v = int(sig[-2:], 16)
+    except ValueError:
+        return sig
+    if v in (0, 1):
+        return sig[:-2] + f"{v + 27:02x}"
+    return sig
+
+
+def _normalize_chain_name(network):
+    """Map facilitator/network identifiers to the local eRPC network name."""
+    return CAIP2_TO_CHAIN.get(network, network)
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +458,7 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count):
             print(f"Error: remote-signer returned no signature for auth {i+1}",
                   file=sys.stderr)
             sys.exit(1)
+        sig = _normalize_signature_recovery(sig)
 
         auths.append({
             "signature": sig,
@@ -530,10 +556,11 @@ def cmd_probe(endpoint_url, model_id=None):
     print(f"x402 Version: {pricing.get('x402Version', '?')}")
     print()
     for i, acc in enumerate(pricing.get("accepts", [])):
+        amount = acc.get("amount", acc.get("maxAmountRequired", "?"))
         print(f"  Payment option {i + 1}:")
         print(f"    payTo:   {acc.get('payTo', '?')}")
         print(f"    network: {acc.get('network', '?')}")
-        print(f"    price:   {acc.get('maxAmountRequired', '?')} USDC micro-units")
+        print(f"    price:   {amount} USDC micro-units")
         asset = acc.get("asset")
         if asset:
             print(f"    asset:   {asset}")
@@ -562,8 +589,8 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
 
     payment = accepts[0]
     pay_to = payment.get("payTo", "")
-    chain = payment.get("network", DEFAULT_CHAIN)
-    price = str(payment.get("maxAmountRequired", "0"))
+    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
 
     if not pay_to:

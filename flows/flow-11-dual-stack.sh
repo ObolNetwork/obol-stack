@@ -11,7 +11,7 @@
 #
 # Requires:
 #   - .env with REMOTE_SIGNER_PRIVATE_KEY (funded on Base Sepolia with ETH + USDC)
-#   - Docker running, ports 80 + 9080 free
+#   - Docker running, with the configured Alice/Bob ingress ports free
 #   - Ollama running (Alice serves local model inference)
 #   - cast (Foundry) for balance checks
 #
@@ -20,6 +20,16 @@
 #
 # Approximate runtime: 15-20 minutes (first run, image pulls)
 #                       8-12 minutes (subsequent, cached images)
+#
+# Facilitator defaults to the Obol-operated service.
+# Override if needed:
+#   FLOW11_FACILITATOR_URL=https://...
+#
+# Optional port overrides for isolated worktrees:
+#   FLOW11_ALICE_HTTP_PORT FLOW11_ALICE_HTTP_ALT_PORT
+#   FLOW11_ALICE_HTTPS_PORT FLOW11_ALICE_HTTPS_ALT_PORT
+#   FLOW11_BOB_HTTP_PORT   FLOW11_BOB_HTTP_ALT_PORT
+#   FLOW11_BOB_HTTPS_PORT  FLOW11_BOB_HTTPS_ALT_PORT
 source "$(dirname "$0")/lib.sh"
 
 # ═════════════════════════════════════════════════════════════════
@@ -29,9 +39,87 @@ source "$(dirname "$0")/lib.sh"
 ALICE_DIR="$OBOL_ROOT/.workspace-alice"
 BOB_DIR="$OBOL_ROOT/.workspace-bob"
 
+# Host port overrides for running multiple isolated worktrees at once.
+ALICE_HTTP_PORT="${FLOW11_ALICE_HTTP_PORT:-80}"
+ALICE_HTTP_ALT_PORT="${FLOW11_ALICE_HTTP_ALT_PORT:-8080}"
+ALICE_HTTPS_PORT="${FLOW11_ALICE_HTTPS_PORT:-443}"
+ALICE_HTTPS_ALT_PORT="${FLOW11_ALICE_HTTPS_ALT_PORT:-8443}"
+
+BOB_HTTP_PORT="${FLOW11_BOB_HTTP_PORT:-9080}"
+BOB_HTTP_ALT_PORT="${FLOW11_BOB_HTTP_ALT_PORT:-9180}"
+BOB_HTTPS_PORT="${FLOW11_BOB_HTTPS_PORT:-9443}"
+BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-9543}"
+FACILITATOR_URL="${FLOW11_FACILITATOR_URL:-https://x402.gcp.obol.tech}"
+
+is_port_listening() {
+    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+require_ports_free() {
+    local busy=()
+    local port
+    for port in "$@"; do
+        if is_port_listening "$port"; then
+            busy+=("$port")
+        fi
+    done
+    if [ "${#busy[@]}" -gt 0 ]; then
+        echo "${busy[*]}"
+        return 1
+    fi
+}
+
+pick_free_port() {
+    python3 - <<'PY'
+import socket
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+rewrite_k3d_ports() {
+    local config_path="$1"
+    local http_port="$2"
+    local http_alt_port="$3"
+    local https_port="$4"
+    local https_alt_port="$5"
+
+    if [ ! -f "$config_path" ]; then
+        echo "missing k3d config: $config_path" >&2
+        return 1
+    fi
+
+    sed -i.bak \
+        -e "s/port: 80:80/port: ${http_port}:80/" \
+        -e "s/port: 8080:80/port: ${http_alt_port}:80/" \
+        -e "s/port: 443:443/port: ${https_port}:443/" \
+        -e "s/port: 8443:443/port: ${https_alt_port}:443/" \
+        "$config_path"
+}
+
+extract_assistant_content() {
+    FLOW11_RESPONSE="$1" python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    data = json.loads(os.environ["FLOW11_RESPONSE"])
+    content = data["choices"][0]["message"].get("content", "")
+    if isinstance(content, list):
+        content = json.dumps(content)
+    sys.stdout.write(content)
+except Exception:
+    sys.exit(1)
+PY
+}
+
 # Helper to run obol as Alice or Bob
 alice() {
     OBOL_DEVELOPMENT=true \
+    OBOL_NONINTERACTIVE=true \
     OBOL_CONFIG_DIR="$ALICE_DIR/config" \
     OBOL_BIN_DIR="$ALICE_DIR/bin" \
     OBOL_DATA_DIR="$ALICE_DIR/data" \
@@ -39,10 +127,55 @@ alice() {
 }
 bob() {
     OBOL_DEVELOPMENT=true \
+    OBOL_NONINTERACTIVE=true \
     OBOL_CONFIG_DIR="$BOB_DIR/config" \
     OBOL_BIN_DIR="$BOB_DIR/bin" \
     OBOL_DATA_DIR="$BOB_DIR/data" \
     "$BOB_DIR/bin/obol" "$@"
+}
+
+purchase_request_status() {
+    bob kubectl get purchaserequests.obol.org -n openclaw-obol-agent --no-headers 2>&1 || true
+}
+
+buyer_sidecar_status() {
+    bob kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request, json
+try:
+    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    d = json.loads(resp.read())
+    for name, info in d.items():
+        print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
+except Exception as e:
+    print('error: %s' % e)
+" 2>&1 || true
+}
+
+litellm_paid_inference() {
+    bob kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request, urllib.error, json, time
+t0 = time.time()
+req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
+    data=json.dumps({
+        'model': '$PAID_MODEL',
+        'messages': [{'role': 'user', 'content': 'What is the meaning of life? Answer in one sentence.'}],
+        'max_tokens': 100, 'stream': False
+    }).encode(),
+    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer $BOB_MASTER_KEY'})
+try:
+    resp = urllib.request.urlopen(req, timeout=180)
+    elapsed = time.time() - t0
+    body = json.loads(resp.read())
+    c = body['choices'][0]['message']
+    content = c.get('content', '') or c.get('reasoning_content', '')
+    print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
+    print('MODEL=%s' % body.get('model', '?'))
+    print('CONTENT=%s' % content[:300])
+except urllib.error.HTTPError as e:
+    print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
+" 2>&1 || true
 }
 
 step "Preflight: .env key"
@@ -92,19 +225,46 @@ done
 pass "No ethereum full nodes deployed (using eRPC proxy for RPC)"
 
 step "Preflight: facilitator reachable"
-if curl -sf --max-time 5 https://facilitator.x402.rs/supported >/dev/null 2>&1; then
-    pass "facilitator.x402.rs reachable"
+if curl -sf --max-time 5 "$FACILITATOR_URL/supported" >/dev/null 2>&1; then
+    pass "$FACILITATOR_URL reachable"
 else
-    fail "facilitator.x402.rs unreachable"
+    fail "$FACILITATOR_URL unreachable"
     emit_metrics; exit 1
 fi
 
-step "Preflight: ports 80 and 9080 free"
-if lsof -i:80 -sTCP:LISTEN >/dev/null 2>&1 || lsof -i:9080 -sTCP:LISTEN >/dev/null 2>&1; then
-    fail "Ports 80 or 9080 in use (LISTEN) — cleanup existing clusters first"
+step "Preflight: facilitator supports Base Sepolia exact"
+supported_json=$(curl -sf --max-time 10 "$FACILITATOR_URL/supported" 2>/dev/null || true)
+if SUPPORTED_JSON="$supported_json" python3 -c '
+import json, os, sys
+try:
+    data = json.loads(os.environ["SUPPORTED_JSON"])
+except Exception:
+    sys.exit(1)
+for kind in data.get("kinds", []):
+    if kind.get("scheme") != "exact":
+        continue
+    network = kind.get("network")
+    if network in ("base-sepolia", "eip155:84532"):
+        sys.exit(0)
+sys.exit(1)
+'
+then
+    pass "$FACILITATOR_URL supports Base Sepolia exact"
+else
+    fail "$FACILITATOR_URL does not advertise Base Sepolia exact in /supported"
+    echo "  Supported kinds:"
+    echo "$supported_json" | python3 -m json.tool 2>/dev/null | sed 's/^/  /'
     emit_metrics; exit 1
 fi
-pass "Ports free"
+
+step "Preflight: Alice/Bob ingress ports free"
+busy_ports=$(require_ports_free \
+    "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT" \
+    "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT") || {
+    fail "Ports in use (LISTEN): $busy_ports — set FLOW11_*_PORT overrides or cleanup existing clusters first"
+    emit_metrics; exit 1
+}
+pass "Ports free: Alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT Bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
 # Record pre-test balances (strip cast's scientific notation suffix)
 PRE_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
@@ -112,7 +272,7 @@ PRE_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF
 PRE_BOB_USDC=$bob_usdc
 
 # ═════════════════════════════════════════════════════════════════
-# BOOTSTRAP ALICE (seller, default ports)
+# BOOTSTRAP ALICE (seller, configurable ports)
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: build obol binary"
@@ -130,8 +290,13 @@ for tool in kubectl helm helmfile k3d k9s openclaw; do
 done
 pass "Alice workspace ready"
 
-step "Alice: stack init + up"
+step "Alice: stack init"
 alice stack init 2>&1 | tail -1
+rewrite_k3d_ports "$ALICE_DIR/config/k3d.yaml" \
+    "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT"
+pass "Alice ports set to $ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT"
+
+step "Alice: stack up"
 alice stack up 2>&1 | tail -3
 pass "Alice stack up completed"
 
@@ -146,7 +311,7 @@ step "Alice: configure x402 pricing"
 alice sell pricing \
     --wallet "$ALICE_WALLET" \
     --chain base-sepolia \
-    --facilitator-url https://facilitator.x402.rs 2>&1 | tail -1
+    --facilitator-url "$FACILITATOR_URL" 2>&1 | tail -1
 pass "Pricing configured"
 
 step "Alice: CA bundle populated"
@@ -206,14 +371,17 @@ step "Alice: register on ERC-8004 (Base Sepolia)"
 # Use the .env private key for on-chain registration (has ETH for gas)
 KEY_FILE=$(mktemp)
 echo "$SIGNER_KEY" > "$KEY_FILE"
+set +e
 register_out=$(alice sell register \
     --chain base-sepolia \
     --name "Dual-Stack Test Inference" \
     --description "Integration test: local model inference via x402" \
     --private-key-file "$KEY_FILE" 2>&1)
+register_rc=$?
+set -e
 rm -f "$KEY_FILE"
 echo "$register_out" | tail -5
-if echo "$register_out" | grep -q "Agent ID:\|registered"; then
+if [ "$register_rc" -eq 0 ] && echo "$register_out" | grep -q "Agent ID:\|registered"; then
     AGENT_ID=$(echo "$register_out" | grep -o 'Agent ID: [0-9]*' | grep -o '[0-9]*' | head -1)
     pass "ERC-8004 registered: Agent ID $AGENT_ID"
 else
@@ -221,7 +389,7 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# BOOTSTRAP BOB (buyer, offset ports)
+# BOOTSTRAP BOB (buyer, configurable ports)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: bootstrap workspace"
@@ -234,17 +402,11 @@ for tool in kubectl helm helmfile k3d k9s openclaw; do
 done
 pass "Bob workspace ready"
 
-step "Bob: stack init (offset ports)"
+step "Bob: stack init"
 bob stack init 2>&1 | tail -1
-# Remap ports so Bob doesn't conflict with Alice.
-# Use anchored patterns to avoid cascading replacements (e.g. 8080 matching 80).
-sed -i.bak \
-    -e 's/port: 8080:80/port: 9180:80/' \
-    -e 's/port: 80:80/port: 9080:80/' \
-    -e 's/port: 8443:443/port: 9543:443/' \
-    -e 's/port: 443:443/port: 9443:443/' \
-    "$BOB_DIR/config/k3d.yaml"
-pass "Bob ports remapped to 9080/9180/9443/9543"
+rewrite_k3d_ports "$BOB_DIR/config/k3d.yaml" \
+    "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
+pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
 step "Bob: stack up"
 bob stack up 2>&1 | tail -3
@@ -252,6 +414,12 @@ pass "Bob stack up completed"
 
 poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
+
+step "Bob: add Base Sepolia RPC to eRPC"
+bob network add base-sepolia --endpoint https://sepolia.base.org 2>&1 | tail -2
+bob kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
+bob kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
+pass "Bob eRPC configured for Base Sepolia"
 
 # Wait for Bob's OpenClaw agent to be ready
 poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
@@ -279,6 +447,10 @@ if [ -n "$BOB_SIGNER_ADDR" ]; then
         0x036CbD53842c5426634e7929541eC2318f3dCF7e \
         "transfer(address,uint256)" "$BOB_SIGNER_ADDR" 50000 \
         --rpc-url https://sepolia.base.org 2>&1 | grep -E "status" || true
+    POST_FUND_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+        "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
+    POST_FUND_BOB_SIGNER_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+        "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
     pass "Funded $BOB_SIGNER_ADDR with 0.05 USDC"
 else
     fail "Could not determine Bob's remote-signer address"
@@ -296,14 +468,49 @@ if [ -z "$BOB_TOKEN" ]; then
 fi
 pass "Token: ${BOB_TOKEN:0:10}..."
 
-# Port-forward to Bob's OpenClaw for chat API access
-bob kubectl port-forward -n openclaw-obol-agent svc/openclaw 28789:18789 &>/dev/null &
+# Port-forward to Bob's OpenClaw for chat API access.
+BOB_AGENT_PORT=$(pick_free_port)
+PF_AGENT_LOG=$(mktemp)
+bob kubectl port-forward -n openclaw-obol-agent svc/openclaw "${BOB_AGENT_PORT}:18789" >"$PF_AGENT_LOG" 2>&1 &
 PF_AGENT=$!
-sleep 3
+
+step "Bob: OpenClaw API port-forward ready"
+pf_ready=0
+for i in $(seq 1 20); do
+    if python3 - "$BOB_AGENT_PORT" <<'PY'
+import socket
+import sys
+
+sock = socket.socket()
+sock.settimeout(1)
+try:
+    sock.connect(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+    then
+        pf_ready=1
+        break
+    fi
+    if ! kill -0 "$PF_AGENT" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+if [ "$pf_ready" = "1" ]; then
+    pass "OpenClaw API available on localhost:$BOB_AGENT_PORT"
+else
+    fail "OpenClaw port-forward failed: $(tail -n 10 "$PF_AGENT_LOG" 2>/dev/null | tr '\n' ' ')"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
+fi
 
 step "Bob's agent: discover Alice via ERC-8004 registry"
 discover_response=$(curl -sf --max-time 300 \
-    -X POST http://localhost:28789/v1/chat/completions \
+    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
@@ -313,23 +520,12 @@ discover_response=$(curl -sf --max-time 300 \
             \"content\": \"Search the ERC-8004 agent identity registry on Base Sepolia for recently registered AI inference services that support x402 payments. Use the discovery skill to scan for agents. Look for one named 'Dual-Stack Test Inference' or similar with natural_language_processing skills. Report what you find — the agent ID, name, endpoint URL, and whether it supports x402.\"
         }],
         \"max_tokens\": 4000,
-        \"stream\": false
-    }" 2>&1)
+	        \"stream\": false
+	    }" 2>&1)
 
-if echo "$discover_response" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    content = d['choices'][0]['message'].get('content', '')
-    print(content[:500])
-    # Check if agent found something
-    # Accept if the agent produced any substantive output about discovery
-    if len(content) > 100:
-        sys.exit(0)  # agent did real work
-    sys.exit(1)
-except:
-    sys.exit(1)
-" 2>&1; then
+discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
+echo "${discover_content:0:500}"
+if [ -n "$discover_content" ] && [ "${#discover_content}" -gt 100 ]; then
     pass "Agent discovered Alice's service"
 else
     fail "Discovery response: ${discover_response:0:300}"
@@ -337,7 +533,7 @@ fi
 
 step "Bob's agent: buy inference from Alice"
 buy_response=$(curl -sf --max-time 300 \
-    -X POST http://localhost:28789/v1/chat/completions \
+    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
@@ -348,55 +544,35 @@ buy_response=$(curl -sf --max-time 300 \
             {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy 5 inference tokens from Alice. Run exactly: python3 scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
         ],
         \"max_tokens\": 4000,
-        \"stream\": false
-    }" 2>&1)
+	        \"stream\": false
+	    }" 2>&1)
 
-if echo "$buy_response" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    content = d['choices'][0]['message'].get('content', '')
-    print(content[:500])
-    # Accept if the agent produced any substantive output about buying
-    if len(content) > 100:
-        sys.exit(0)  # agent did real work
-    sys.exit(1)
-except:
-    sys.exit(1)
-" 2>&1; then
+buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
+echo "${buy_content:0:500}"
+if [ -n "$buy_content" ] && [ "${#buy_content}" -gt 100 ]; then
     pass "Agent bought Alice's inference"
 else
     fail "Buy response: ${buy_response:0:300}"
 fi
 
-# Cross-check: verify PurchaseRequest CR exists and reaches Ready
-step "Bob: verify PurchaseRequest CR"
-pr_status=$(bob kubectl get purchaserequests.obol.org -n openclaw-obol-agent --no-headers 2>&1)
-if echo "$pr_status" | grep -q "True\|alice-inference"; then
-    pass "PurchaseRequest CR exists: $pr_status"
+poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
+pr_status=$(purchase_request_status)
+if echo "$pr_status" | grep -q "True"; then
+    pass "PurchaseRequest CR ready: $pr_status"
 else
-    # PurchaseRequest may not exist if the agent used the old path or
-    # the controller hasn't reconciled yet. Fall through to sidecar check.
-    echo "  PurchaseRequest not found or not Ready yet: $pr_status"
+    fail "PurchaseRequest CR not ready: $pr_status"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
-step "Bob: verify buyer sidecar has auths"
-buyer_status=$(bob kubectl exec -n llm deployment/litellm -c litellm -- \
-    python3 -c "
-import urllib.request, json
-try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
-    d = json.loads(resp.read())
-    for name, info in d.items():
-        print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
-except Exception as e:
-    print('error: %s' % e)
-" 2>&1)
-if echo "$buyer_status" | grep -q "remaining=[1-9]"; then
-    pass "Sidecar has auths: $buyer_status"
-else
-    fail "Sidecar status: $buyer_status"
-fi
+step "Bob: LiteLLM rollout settled"
+bob kubectl rollout status deployment/litellm -n llm --timeout=180s 2>&1 | tail -2
+pass "LiteLLM rollout settled"
+
+poll_step_grep "Bob: verify buyer sidecar has auths" "remaining=[1-9]" 24 5 buyer_sidecar_status
+buyer_status=$(buyer_sidecar_status)
+pass "Sidecar has auths: $buyer_status"
 
 # Extract the paid model name from sidecar status
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1)
@@ -407,39 +583,21 @@ fi
 step "Bob's agent: use paid model for inference"
 BOB_MASTER_KEY=$(bob kubectl get secret litellm-secrets -n llm \
     -o jsonpath='{.data.LITELLM_MASTER_KEY}' 2>/dev/null | base64 -d)
+BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url https://sepolia.base.org 2>/dev/null | tr -d ' ')
 
-inference_response=$(bob kubectl exec -n llm deployment/litellm -c litellm -- \
-    python3 -c "
-import urllib.request, json, time
-t0 = time.time()
-req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
-    data=json.dumps({
-        'model': '$PAID_MODEL',
-        'messages': [{'role': 'user', 'content': 'What is the meaning of life? Answer in one sentence.'}],
-        'max_tokens': 100, 'stream': False
-    }).encode(),
-    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer $BOB_MASTER_KEY'})
-try:
-    resp = urllib.request.urlopen(req, timeout=180)
-    elapsed = time.time() - t0
-    body = json.loads(resp.read())
-    c = body['choices'][0]['message']
-    content = c.get('content', '') or c.get('reasoning_content', '')
-    print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
-    print('MODEL=%s' % body.get('model', '?'))
-    print('CONTENT=%s' % content[:300])
-except urllib.error.HTTPError as e:
-    print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
-" 2>&1)
-
+inference_response=$(litellm_paid_inference)
 if echo "$inference_response" | grep -q "STATUS=200"; then
     pass "Paid inference succeeded"
     echo "$inference_response"
 else
     fail "Paid inference failed: $inference_response"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
 cleanup_pid $PF_AGENT
+rm -f "$PF_AGENT_LOG"
 
 # ═════════════════════════════════════════════════════════════════
 # VERIFY ON-CHAIN SETTLEMENT
@@ -448,20 +606,53 @@ cleanup_pid $PF_AGENT
 step "On-chain: balance changes"
 POST_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
     "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-POST_BOB_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
-    "balanceOf(address)(uint256)" "$BOB_WALLET" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-echo "  Alice: $PRE_ALICE_USDC → $POST_ALICE_USDC"
-echo "  Bob:   $PRE_BOB_USDC → $POST_BOB_USDC"
-if [ -n "$POST_ALICE_USDC" ] && [ -n "$PRE_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$PRE_ALICE_USDC" ] 2>/dev/null; then
-    pass "Alice received USDC payment"
+POST_BOB_SIGNER_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+    "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
+echo "  Alice (post-funding): $POST_FUND_ALICE_USDC → $POST_ALICE_USDC"
+echo "  Bob signer:           $POST_FUND_BOB_SIGNER_USDC → $POST_BOB_SIGNER_USDC"
+if [ -n "$POST_ALICE_USDC" ] && [ -n "$POST_FUND_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$POST_FUND_ALICE_USDC" ] 2>/dev/null; then
+    pass "Alice received USDC settlement"
 else
-    fail "Alice balance did not increase (pre=$PRE_ALICE_USDC post=$POST_ALICE_USDC)"
+    fail "Alice balance did not increase after Bob funding (baseline=$POST_FUND_ALICE_USDC post=$POST_ALICE_USDC)"
+fi
+if [ -n "$POST_BOB_SIGNER_USDC" ] && [ -n "$POST_FUND_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$POST_FUND_BOB_SIGNER_USDC" ] 2>/dev/null; then
+    pass "Bob remote-signer spent USDC"
+else
+    fail "Bob remote-signer balance did not decrease (baseline=$POST_FUND_BOB_SIGNER_USDC post=$POST_BOB_SIGNER_USDC)"
 fi
 
 step "On-chain: settlement tx hash"
-for pod in $(alice kubectl get pods -n x402 -l app=x402-verifier -o name 2>/dev/null); do
-    alice kubectl logs -n x402 "$pod" --tail=20 2>/dev/null | grep "transaction=" | tail -1
-done
+transfer_logs=$(env -u CHAIN cast logs --json --rpc-url https://sepolia.base.org \
+    --address 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+    --from-block "$BUY_START_BLOCK" --to-block latest \
+    "Transfer(address,address,uint256)" 2>/dev/null || true)
+if FLOW11_TRANSFER_LOGS="$transfer_logs" FLOW11_ALICE="$ALICE_WALLET" FLOW11_BOB_SIGNER="$BOB_SIGNER_ADDR" python3 - <<'PY'
+import json, os, sys
+
+logs = json.loads(os.environ["FLOW11_TRANSFER_LOGS"] or "[]")
+alice = os.environ["FLOW11_ALICE"].lower().replace("0x", "")
+bob = os.environ["FLOW11_BOB_SIGNER"].lower().replace("0x", "")
+matches = []
+for log in logs:
+    topics = log.get("topics", [])
+    if len(topics) < 3:
+        continue
+    src = topics[1][-40:].lower()
+    dst = topics[2][-40:].lower()
+    if src != bob or dst != alice:
+        continue
+    amount = int(log.get("data", "0x0"), 16)
+    matches.append((log.get("transactionHash"), amount))
+if not matches:
+    sys.exit(1)
+for tx, amount in matches:
+    print(f"  tx={tx} amount={amount}")
+PY
+then
+    pass "Settlement tx hashes printed above"
+else
+    fail "No Bob-signer -> Alice USDC transfer logs found after block $BUY_START_BLOCK"
+fi
 
 # ═════════════════════════════════════════════════════════════════
 # CLEANUP
