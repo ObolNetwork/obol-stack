@@ -113,7 +113,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts. Custom endpoints: `obol model setup custom --name --endpoint --model` (validates before adding). Paid remote inference stays on vanilla LiteLLM with a static route `paid/* -> openai/* -> http://127.0.0.1:8402`; no LiteLLM fork is required. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via the LiteLLM model API. Paid remote inference uses the Obol LiteLLM fork plus the `x402-buyer` sidecar, with a static `paid/* -> openai/* -> http://127.0.0.1:8402` route and explicit paid-model entries when needed. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
 **Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
 
@@ -133,7 +133,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` commands mutate only buyer ConfigMaps; LiteLLM keeps one static public namespace `paid/<remote-model>`. The sidecar exposes `/status`, `/healthz`, and `/metrics`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price). Key code: `cmd/x402-buyer/` and `internal/x402/buyer/`.
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer config/auth files into the buyer ConfigMaps and keeps LiteLLM routes in sync. The sidecar exposes `/status`, `/healthz`, `/metrics`, and `/admin/reload`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price). Key code: `cmd/x402-buyer/` and `internal/x402/buyer/`.
 
 ## Development Constraints
 

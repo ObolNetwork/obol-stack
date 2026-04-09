@@ -163,6 +163,7 @@ func (p *Proxy) syncCompatibilityRoutesLocked() {
 		fmt.Fprint(w, "ok")
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
+	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
 
@@ -557,7 +558,7 @@ func parsePaymentRequirements(resp *http.Response) ([]x402types.PaymentRequireme
 		}
 		requirements[i] = x402types.PaymentRequirements{
 			Scheme:            req.Scheme,
-			Network:           req.Network,
+			Network:           normalizeNetworkID(req.Network),
 			Amount:            amount,
 			Asset:             req.Asset,
 			PayTo:             req.PayTo,

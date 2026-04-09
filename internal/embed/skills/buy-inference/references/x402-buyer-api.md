@@ -9,12 +9,12 @@ HTTP/1.1 402 Payment Required
 Content-Type: application/json
 
 {
-  "x402Version": 1,
+  "x402Version": 2,
   "accepts": [
     {
       "scheme": "exact",
-      "network": "base-sepolia",
-      "maxAmountRequired": "1000",
+      "network": "eip155:84532",
+      "amount": "1000",
       "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
     }
@@ -26,11 +26,11 @@ Content-Type: application/json
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `x402Version` | int | Protocol version (currently 1) |
+| `x402Version` | int | Protocol version (currently 2) |
 | `accepts` | array | List of payment options (usually one) |
 | `accepts[].scheme` | string | Payment scheme (always "exact") |
-| `accepts[].network` | string | Chain: `base-sepolia`, `base`, `ethereum` |
-| `accepts[].maxAmountRequired` | string | Price in USDC micro-units (6 decimals). `"1000000"` = 1.0 USDC |
+| `accepts[].network` | string | CAIP-2 chain id, e.g. `eip155:84532` for Base Sepolia |
+| `accepts[].amount` | string | Price in USDC micro-units (6 decimals). `"1000000"` = 1.0 USDC |
 | `accepts[].asset` | address | USDC contract address on the chain |
 | `accepts[].payTo` | address | Seller's USDC receiving address |
 
@@ -38,34 +38,29 @@ Content-Type: application/json
 
 ```json
 {
-  "upstreams": {
-    "remote-qwen": {
-      "url": "https://seller.example.com/services/qwen",
-      "network": "base-sepolia",
-      "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-      "price": "1000"
-    }
-  }
+  "url": "https://seller.example.com/services/qwen",
+  "network": "base-sepolia",
+  "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+  "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "price": "1000",
+  "remoteModel": "qwen3.5:9b"
 }
 ```
 
 ## Pre-Signed Auths Format (`x402-buyer-auths` ConfigMap)
 
 ```json
-{
-  "remote-qwen": [
-    {
-      "signature": "0xabc...",
-      "from": "0xBuyerAddr",
-      "to": "0xSellerAddr",
-      "value": "1000",
-      "validAfter": "0",
-      "validBefore": "4294967295",
-      "nonce": "0xdeadbeef..."
-    }
-  ]
-}
+[
+  {
+    "signature": "0xabc...",
+    "from": "0xBuyerAddr",
+    "to": "0xSellerAddr",
+    "value": "1000",
+    "validAfter": "0",
+    "validBefore": "4294967295",
+    "nonce": "0xdeadbeef..."
+  }
+]
 ```
 
 Each auth is a single-use ERC-3009 `TransferWithAuthorization` voucher:
@@ -79,16 +74,21 @@ Each auth is a single-use ERC-3009 `TransferWithAuthorization` voucher:
 The sidecar builds this automatically from the pre-signed auth pool:
 
 ```
-X-PAYMENT: eyJ4NDAyVmVyc2lvbiI6MSwic2NoZW1lIjoiZXhhY3QiLC4uLn0=
+X-PAYMENT: eyJ4NDAyVmVyc2lvbiI6MiwgImFjY2VwdGVkIjp7Li4ufX0=
 ```
 
 ### Decoded envelope
 
 ```json
 {
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "base-sepolia",
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "amount": "1000",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "payTo": "0xSellerAddr"
+  },
   "payload": {
     "signature": "0xabc123...",
     "authorization": {

@@ -118,16 +118,29 @@ func TestBuySidecar_EndToEnd(t *testing.T) {
 	}
 
 	// Check wire format fields.
-	if v, ok := envelope["x402Version"]; !ok || v != float64(1) {
-		t.Errorf("x402Version = %v, want 1", v)
+	if v, ok := envelope["x402Version"]; !ok || v != float64(2) {
+		t.Errorf("x402Version = %v, want 2", v)
 	}
 
-	if v, ok := envelope["scheme"]; !ok || v != "exact" {
-		t.Errorf("scheme = %v, want exact", v)
+	accepted, ok := envelope["accepted"].(map[string]any)
+	if !ok {
+		t.Fatal("accepted missing or wrong type")
 	}
 
-	if v, ok := envelope["network"]; !ok || v != "base-sepolia" {
-		t.Errorf("network = %v, want base-sepolia", v)
+	if v, ok := accepted["scheme"]; !ok || v != "exact" {
+		t.Errorf("accepted.scheme = %v, want exact", v)
+	}
+
+	if v, ok := accepted["network"]; !ok || v != "eip155:84532" {
+		t.Errorf("accepted.network = %v, want eip155:84532", v)
+	}
+
+	if v, ok := accepted["amount"]; !ok || v != "1000" {
+		t.Errorf("accepted.amount = %v, want 1000", v)
+	}
+
+	if v, ok := accepted["payTo"]; !ok || v != payTo {
+		t.Errorf("accepted.payTo = %v, want %s", v, payTo)
 	}
 
 	// Check payload has authorization with correct fields.

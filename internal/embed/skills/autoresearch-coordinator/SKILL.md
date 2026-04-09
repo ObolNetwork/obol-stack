@@ -103,7 +103,7 @@ Experiment submission uses the same x402 payment flow as `buy-inference`:
 3. **Submit** -- Re-send the POST with the `X-PAYMENT` header containing the signed voucher
 4. **Settle** -- Worker's x402 verifier validates payment via the facilitator, forwards request to GPU
 
-Payment is per-experiment (not per-token). The 402 response includes `maxAmountRequired` which is the cost for one experiment run.
+Payment is per-experiment (not per-token). The 402 response includes `amount` in the v2 wire format; legacy sellers may still return `maxAmountRequired`.
 
 ## How Results are Published
 

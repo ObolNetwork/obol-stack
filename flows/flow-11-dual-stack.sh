@@ -339,7 +339,8 @@ alice sell http alice-inference \
 pass "ServiceOffer created"
 
 poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
-    alice sell list --namespace llm
+    alice kubectl get serviceoffers.obol.org alice-inference -n llm \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 
 step "Alice: tunnel URL"
 TUNNEL_URL=$(alice tunnel status 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
@@ -349,16 +350,11 @@ if [ -z "$TUNNEL_URL" ]; then
 fi
 pass "Tunnel: $TUNNEL_URL"
 
-step "Alice: 402 gate works"
-http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
-    "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}')
-if [ "$http_code" = "402" ]; then
-    pass "402 gate active"
-else
-    fail "Expected 402, got $http_code"
-fi
+poll_step_grep "Alice: 402 gate works" "402" 12 5 \
+    curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+        "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
 
 step "Alice: add Base Sepolia RPC to eRPC (for on-chain registration)"
 alice network add base-sepolia --endpoint https://sepolia.base.org --allow-writes 2>&1 | tail -2
@@ -608,17 +604,20 @@ POST_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dC
     "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
 POST_BOB_SIGNER_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
     "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-echo "  Alice (post-funding): $POST_FUND_ALICE_USDC → $POST_ALICE_USDC"
-echo "  Bob signer:           $POST_FUND_BOB_SIGNER_USDC → $POST_BOB_SIGNER_USDC"
-if [ -n "$POST_ALICE_USDC" ] && [ -n "$POST_FUND_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$POST_FUND_ALICE_USDC" ] 2>/dev/null; then
+ALICE_AFTER_FUND_ONLY=$((PRE_ALICE_USDC - 50000))
+echo "  Alice (pre-run):      $PRE_ALICE_USDC"
+echo "  Alice (expected after funding only): $ALICE_AFTER_FUND_ONLY"
+echo "  Alice (final):        $POST_ALICE_USDC"
+echo "  Bob signer (final):   $POST_BOB_SIGNER_USDC"
+if [ -n "$POST_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$ALICE_AFTER_FUND_ONLY" ] 2>/dev/null; then
     pass "Alice received USDC settlement"
 else
-    fail "Alice balance did not increase after Bob funding (baseline=$POST_FUND_ALICE_USDC post=$POST_ALICE_USDC)"
+    fail "Alice balance did not recover above funding-only expectation (expected > $ALICE_AFTER_FUND_ONLY, got $POST_ALICE_USDC)"
 fi
-if [ -n "$POST_BOB_SIGNER_USDC" ] && [ -n "$POST_FUND_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$POST_FUND_BOB_SIGNER_USDC" ] 2>/dev/null; then
+if [ -n "$POST_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt 50000 ] 2>/dev/null; then
     pass "Bob remote-signer spent USDC"
 else
-    fail "Bob remote-signer balance did not decrease (baseline=$POST_FUND_BOB_SIGNER_USDC post=$POST_BOB_SIGNER_USDC)"
+    fail "Bob remote-signer balance did not drop below funded amount (expected < 50000, got $POST_BOB_SIGNER_USDC)"
 fi
 
 step "On-chain: settlement tx hash"

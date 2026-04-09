@@ -62,22 +62,29 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 
 // testPaymentHeader returns a base64-encoded x402 PaymentPayload for BaseSepolia.
 func testPaymentHeader(t *testing.T) string {
+	return testPaymentHeaderFor(t,
+		"0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		"100",
+	)
+}
+
+func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
 	t.Helper()
 	p := x402types.PaymentPayload{
 		X402Version: 2,
 		Accepted: x402types.PaymentRequirements{
 			Scheme:  "exact",
 			Network: ChainBaseSepolia.CAIP2Network,
-			Amount:  "1000",
+			Amount:  amount,
 			Asset:   ChainBaseSepolia.USDCAddress,
-			PayTo:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+			PayTo:   payTo,
 		},
 		Payload: map[string]any{
 			"signature": "0xmocksignature",
 			"authorization": map[string]any{
 				"from":        "0x1234567890123456789012345678901234567890",
-				"to":          "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-				"value":       "1000",
+				"to":          payTo,
+				"value":       amount,
 				"validAfter":  "0",
 				"validBefore": "9999999999",
 				"nonce":       "0xabcdef",
@@ -492,7 +499,7 @@ func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-PAYMENT", testPaymentHeaderFor(t, routeWallet, "1000"))
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 

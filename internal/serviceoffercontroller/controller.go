@@ -404,6 +404,13 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	if err := c.updateOfferStatus(ctx, raw, status); err != nil {
 		return err
 	}
+	if !ready {
+		// Dependent resources like the upstream Deployment, Middleware, HTTPRoute,
+		// and RegistrationRequest can become ready after this reconcile completes.
+		// Requeue offers that are still converging so status can advance without
+		// requiring a spec mutation or unrelated ConfigMap update.
+		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
+	}
 	if !c.shouldRefreshSkillCatalog(offer, status) {
 		return nil
 	}

@@ -1,7 +1,6 @@
 package serviceoffercontroller
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -30,23 +31,12 @@ func (c *Controller) mergeBuyerConfig(ctx context.Context, ns, name string, upst
 	if err != nil {
 		return fmt.Errorf("get %s/%s: %w", ns, buyerConfigCM, err)
 	}
-
-	// Parse existing config.
-	var config struct {
-		Upstreams map[string]any `json:"upstreams"`
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
 	}
-	if raw, ok := cm.Data["config.json"]; ok {
-		json.Unmarshal([]byte(raw), &config)
-	}
-	if config.Upstreams == nil {
-		config.Upstreams = make(map[string]any)
-	}
-
-	// Merge the new upstream.
-	config.Upstreams[name] = upstream
-
-	configJSON, _ := json.MarshalIndent(config, "", "  ")
-	cm.Data["config.json"] = string(configJSON)
+	delete(cm.Data, "config.json")
+	configJSON, _ := json.MarshalIndent(upstream, "", "  ")
+	cm.Data[name+".json"] = string(configJSON)
 
 	_, err = c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
 	return err
@@ -57,21 +47,12 @@ func (c *Controller) mergeBuyerAuths(ctx context.Context, ns, name string, auths
 	if err != nil {
 		return fmt.Errorf("get %s/%s: %w", ns, buyerAuthsCM, err)
 	}
-
-	// Parse existing auths.
-	var allAuths map[string]any
-	if raw, ok := cm.Data["auths.json"]; ok {
-		json.Unmarshal([]byte(raw), &allAuths)
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
 	}
-	if allAuths == nil {
-		allAuths = make(map[string]any)
-	}
-
-	// Set auths for this upstream (replace, not append).
-	allAuths[name] = auths
-
-	authsJSON, _ := json.MarshalIndent(allAuths, "", "  ")
-	cm.Data["auths.json"] = string(authsJSON)
+	delete(cm.Data, "auths.json")
+	authsJSON, _ := json.MarshalIndent(auths, "", "  ")
+	cm.Data[name+".json"] = string(authsJSON)
 
 	_, err = c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
 	return err
@@ -81,33 +62,23 @@ func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
 	// Remove from config.
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerConfigCM, metav1.GetOptions{})
 	if err == nil {
-		var config struct {
-			Upstreams map[string]any `json:"upstreams"`
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
 		}
-		if raw, ok := cm.Data["config.json"]; ok {
-			json.Unmarshal([]byte(raw), &config)
-		}
-		if config.Upstreams != nil {
-			delete(config.Upstreams, name)
-			configJSON, _ := json.MarshalIndent(config, "", "  ")
-			cm.Data["config.json"] = string(configJSON)
-			c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
-		}
+		delete(cm.Data, "config.json")
+		delete(cm.Data, name+".json")
+		c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
 	}
 
 	// Remove from auths.
 	authsCM, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerAuthsCM, metav1.GetOptions{})
 	if err == nil {
-		var allAuths map[string]any
-		if raw, ok := authsCM.Data["auths.json"]; ok {
-			json.Unmarshal([]byte(raw), &allAuths)
+		if authsCM.Data == nil {
+			authsCM.Data = make(map[string]string)
 		}
-		if allAuths != nil {
-			delete(allAuths, name)
-			authsJSON, _ := json.MarshalIndent(allAuths, "", "  ")
-			authsCM.Data["auths.json"] = string(authsJSON)
-			c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, authsCM, metav1.UpdateOptions{})
-		}
+		delete(authsCM.Data, "auths.json")
+		delete(authsCM.Data, name+".json")
+		c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, authsCM, metav1.UpdateOptions{})
 	}
 }
 
@@ -135,56 +106,50 @@ func (c *Controller) litellmBaseURL(ns string) string {
 	return fmt.Sprintf("http://litellm.%s.svc.cluster.local:4000", ns)
 }
 
-// addLiteLLMModelEntry adds a model entry to the running LiteLLM router via
-// the /model/new HTTP API. This avoids the fragile read-modify-write cycle
-// on the ConfigMap and does not require a pod restart.
 func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
-	masterKey, err := c.getLiteLLMMasterKey(ctx, ns)
+	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {
-		log.Printf("purchase: failed to get LiteLLM master key: %v", err)
+		log.Printf("purchase: failed to read litellm-config: %v", err)
+		return
+	}
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+
+	var cfg model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &cfg); err != nil {
+		log.Printf("purchase: failed to parse litellm-config: %v", err)
 		return
 	}
 
-	body := map[string]any{
-		"model_name": modelName,
-		"litellm_params": map[string]any{
-			"model":    "openai/" + modelName,
-			"api_base": "http://127.0.0.1:8402",
-			"api_key":  "unused",
+	for _, entry := range cfg.ModelList {
+		if entry.ModelName == modelName {
+			return
+		}
+	}
+
+	cfg.ModelList = append(cfg.ModelList, model.ModelEntry{
+		ModelName: modelName,
+		LiteLLMParams: model.LiteLLMParams{
+			Model:   "openai/" + modelName,
+			APIBase: "http://127.0.0.1:8402",
+			APIKey:  "unused",
 		},
-	}
-	bodyJSON, err := json.Marshal(body)
+	})
+
+	rendered, err := yaml.Marshal(&cfg)
 	if err != nil {
-		log.Printf("purchase: failed to marshal model request: %v", err)
+		log.Printf("purchase: failed to serialize litellm-config: %v", err)
 		return
 	}
 
-	url := c.litellmBaseURL(ns) + "/model/new"
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		log.Printf("purchase: failed to create model request: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+masterKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("purchase: LiteLLM /model/new failed for %s: %v", modelName, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("purchase: LiteLLM /model/new returned %d for %s: %s",
-			resp.StatusCode, modelName, strings.TrimSpace(string(respBody)))
+	cm.Data["config.yaml"] = string(rendered)
+	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		log.Printf("purchase: failed to update litellm-config: %v", err)
 		return
 	}
 
-	log.Printf("purchase: added LiteLLM model %s via API", modelName)
+	c.restartLiteLLM(ctx, ns)
 }
 
 func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
@@ -208,87 +173,63 @@ func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, er
 	return auths, nil
 }
 
-// removeLiteLLMModelEntry removes a model entry from the running LiteLLM
-// router via the /model/delete HTTP API. It queries /model/info to resolve
-// the internal model_id, then deletes by ID. Best-effort: logs errors but
-// does not fail the reconcile.
 func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
-	masterKey, err := c.getLiteLLMMasterKey(ctx, ns)
+	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {
-		log.Printf("purchase: remove model: failed to get master key: %v", err)
+		log.Printf("purchase: remove model: failed to read litellm-config: %v", err)
+		return
+	}
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+
+	var cfg model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &cfg); err != nil {
+		log.Printf("purchase: remove model: failed to parse litellm-config: %v", err)
 		return
 	}
 
-	infoURL := c.litellmBaseURL(ns) + "/model/info"
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "GET", infoURL, nil)
-	if err != nil {
-		log.Printf("purchase: remove model: request error: %v", err)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+masterKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("purchase: remove model: /model/info failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	var infoResp struct {
-		Data []struct {
-			ModelName string `json:"model_name"`
-			ModelInfo struct {
-				ID string `json:"id"`
-			} `json:"model_info"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&infoResp); err != nil {
-		log.Printf("purchase: remove model: parse /model/info: %v", err)
-		return
-	}
-
-	for _, m := range infoResp.Data {
-		if m.ModelName != modelName {
+	filtered := cfg.ModelList[:0]
+	changed := false
+	for _, entry := range cfg.ModelList {
+		if entry.ModelName == modelName {
+			changed = true
 			continue
 		}
-		c.deleteLiteLLMModel(ctx, ns, masterKey, m.ModelInfo.ID, modelName)
+		filtered = append(filtered, entry)
 	}
+	if !changed {
+		return
+	}
+	cfg.ModelList = filtered
+
+	rendered, err := yaml.Marshal(&cfg)
+	if err != nil {
+		log.Printf("purchase: remove model: failed to serialize litellm-config: %v", err)
+		return
+	}
+	cm.Data["config.yaml"] = string(rendered)
+	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		log.Printf("purchase: remove model: failed to update litellm-config: %v", err)
+		return
+	}
+
+	c.restartLiteLLM(ctx, ns)
 }
 
-func (c *Controller) deleteLiteLLMModel(ctx context.Context, ns, masterKey, modelID, modelName string) {
-	body := map[string]any{"id": modelID}
-	bodyJSON, _ := json.Marshal(body)
-
-	url := c.litellmBaseURL(ns) + "/model/delete"
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(bodyJSON))
+func (c *Controller) restartLiteLLM(ctx context.Context, ns string) {
+	deploy, err := c.kubeClient.AppsV1().Deployments(ns).Get(ctx, "litellm", metav1.GetOptions{})
 	if err != nil {
-		log.Printf("purchase: delete model request error: %v", err)
+		log.Printf("purchase: failed to get litellm deployment: %v", err)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+masterKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("purchase: /model/delete failed for %s: %v", modelName, err)
-		return
+	if deploy.Spec.Template.Annotations == nil {
+		deploy.Spec.Template.Annotations = make(map[string]string)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("purchase: /model/delete returned %d for %s: %s",
-			resp.StatusCode, modelName, strings.TrimSpace(string(respBody)))
-		return
+	deploy.Spec.Template.Annotations["obol.org/restartedAt"] = time.Now().UTC().Format(time.RFC3339)
+	if _, err := c.kubeClient.AppsV1().Deployments(ns).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil {
+		log.Printf("purchase: failed to restart litellm: %v", err)
 	}
-
-	log.Printf("purchase: removed LiteLLM model %s (id=%s) via API", modelName, modelID)
 }
 
 // triggerBuyerReload sends POST /admin/reload to the x402-buyer sidecar

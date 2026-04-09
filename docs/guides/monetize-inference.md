@@ -253,12 +253,12 @@ A **402 Payment Required** response confirms the x402 gate is working. The respo
 
 ```json
 {
-  "x402Version": 1,
+  "x402Version": 2,
   "error": "Payment required for this resource",
   "accepts": [{
     "scheme": "exact",
-    "network": "base-sepolia",
-    "maxAmountRequired": "1000",
+    "network": "eip155:84532",
+    "amount": "1000",
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
     "description": "Payment required for /services/my-qwen/v1/chat/completions",
@@ -268,7 +268,7 @@ A **402 Payment Required** response confirms the x402 gate is working. The respo
 }
 ```
 
-The `maxAmountRequired` is in USDC micro-units (6 decimals): `1000` = 0.001 USDC.
+The `amount` is in USDC micro-units (6 decimals): `1000` = 0.001 USDC.
 
 ### 1.7 Monitoring
 
@@ -354,7 +354,7 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Step 2: Sign the EIP-712 payment (requires SDK or custom code)
-# The 402 body contains: payTo, maxAmountRequired, asset, network, extra.name, extra.version
+# The 402 body contains: payTo, amount, asset, network, extra.name, extra.version
 # Sign a TransferWithAuthorization (ERC-3009) message with:
 #   Domain: {name: "USDC", version: "2", chainId: 84532, verifyingContract: <USDC address>}
 
@@ -409,7 +409,7 @@ This proves the full public path: **Internet → Cloudflare → Traefik → x402
 
 ## Part 3: Self-Hosted Facilitator
 
-The x402 facilitator verifies and settles payments on-chain. By default, the stack points at `https://facilitator.x402.rs`. For reliability, sovereignty, or testing, you can run your own.
+The x402 facilitator verifies and settles payments on-chain. The stack currently defaults to the Obol-operated facilitator, but the validated Base Sepolia flow in this guide uses `https://facilitator.x402.rs` because that endpoint currently advertises Base Sepolia exact support.
 
 ### 3.1 Why Self-Host
 

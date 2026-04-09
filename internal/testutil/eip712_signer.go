@@ -22,7 +22,7 @@ const (
 
 // SignRealPaymentHeader constructs a real EIP-712 TransferWithAuthorization
 // (ERC-3009) payment header and returns it as a base64-encoded string
-// compatible with the x402 V1 wire format.
+// compatible with the x402 v2 wire format.
 //
 // The signerKey is the buyer's private key (signs the authorization).
 // payTo is the seller's address (from ServiceOffer payment.payTo).
@@ -102,12 +102,16 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 	sig[64] += 27
 	sigHex := fmt.Sprintf("0x%x", sig)
 
-	// Build the x402 V1 payment envelope.
-	// All numeric values that x402-rs expects as strings must be strings here.
+	// Build the x402 v2 payment envelope.
 	envelope := map[string]any{
-		"x402Version": 1,
-		"scheme":      "exact",
-		"network":     chainName(chainID),
+		"x402Version": 2,
+		"accepted": map[string]any{
+			"scheme":  "exact",
+			"network": chainCAIP2(chainID),
+			"amount":  amount,
+			"asset":   USDCBaseSepolia,
+			"payTo":   payTo,
+		},
 		"payload": map[string]any{
 			"signature": sigHex,
 			"authorization": map[string]any{
@@ -118,12 +122,6 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 				"validBefore": "4294967295", // string — x402-rs UnixTimestamp
 				"nonce":       nonceHex,
 			},
-		},
-		"resource": map[string]any{
-			"payTo":             payTo,
-			"maxAmountRequired": amount,
-			"asset":             USDCBaseSepolia,
-			"network":           chainName(chainID),
 		},
 	}
 
@@ -240,9 +238,14 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	sig[64] += 27
 
 	envelope := map[string]any{
-		"x402Version": 1,
-		"scheme":      "exact",
-		"network":     chainName(chainID),
+		"x402Version": 2,
+		"accepted": map[string]any{
+			"scheme":  "exact",
+			"network": chainCAIP2(chainID),
+			"amount":  amount,
+			"asset":   USDCBaseSepolia,
+			"payTo":   payTo,
+		},
 		"payload": map[string]any{
 			"signature": fmt.Sprintf("0x%x", sig),
 			"authorization": map[string]any{
@@ -253,12 +256,6 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 				"validBefore": "4294967295",
 				"nonce":       nonceHex,
 			},
-		},
-		"resource": map[string]any{
-			"payTo":             payTo,
-			"maxAmountRequired": amount,
-			"asset":             USDCBaseSepolia,
-			"network":           chainName(chainID),
 		},
 	}
 
@@ -278,6 +275,19 @@ func chainName(chainID int64) string {
 		return "base"
 	case 1:
 		return "ethereum"
+	default:
+		return fmt.Sprintf("eip155:%d", chainID)
+	}
+}
+
+func chainCAIP2(chainID int64) string {
+	switch chainID {
+	case 84532:
+		return "eip155:84532"
+	case 8453:
+		return "eip155:8453"
+	case 1:
+		return "eip155:1"
 	default:
 		return fmt.Sprintf("eip155:%d", chainID)
 	}
