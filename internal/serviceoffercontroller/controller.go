@@ -71,8 +71,7 @@ type Controller struct {
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
-	httpClient          *http.Client
-	litellmURLOverride  string // test-only: override LiteLLM base URL
+	httpClient *http.Client
 
 	registrationKey          *ecdsa.PrivateKey
 	registrationOwnerAddress string

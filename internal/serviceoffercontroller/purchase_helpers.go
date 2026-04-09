@@ -82,30 +82,6 @@ func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
 	}
 }
 
-// getLiteLLMMasterKey reads the LITELLM_MASTER_KEY from the litellm-secrets
-// Secret in the given namespace.
-func (c *Controller) getLiteLLMMasterKey(ctx context.Context, ns string) (string, error) {
-	secret, err := c.kubeClient.CoreV1().Secrets(ns).Get(ctx, "litellm-secrets", metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("get litellm-secrets: %w", err)
-	}
-	key, ok := secret.Data["LITELLM_MASTER_KEY"]
-	if !ok {
-		return "", fmt.Errorf("LITELLM_MASTER_KEY not found in litellm-secrets")
-	}
-	return string(key), nil
-}
-
-// litellmBaseURL returns the in-cluster base URL for the LiteLLM service in
-// the given namespace. The controller field litellmURLOverride, when set,
-// takes precedence (used in tests).
-func (c *Controller) litellmBaseURL(ns string) string {
-	if c.litellmURLOverride != "" {
-		return c.litellmURLOverride
-	}
-	return fmt.Sprintf("http://litellm.%s.svc.cluster.local:4000", ns)
-}
-
 func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {

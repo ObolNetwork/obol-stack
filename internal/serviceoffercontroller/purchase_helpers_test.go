@@ -14,23 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func newTestControllerWithSecret(ns, masterKey string) *Controller {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "litellm-secrets",
-			Namespace: ns,
-		},
-		Data: map[string][]byte{
-			"LITELLM_MASTER_KEY": []byte(masterKey),
-		},
-	}
-	kubeClient := fake.NewSimpleClientset(secret)
-	return &Controller{
-		kubeClient: kubeClient,
-		httpClient: &http.Client{},
-	}
-}
-
 func newTestControllerWithLiteLLM(ns string) *Controller {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -50,47 +33,6 @@ func newTestControllerWithLiteLLM(ns string) *Controller {
 	kubeClient := fake.NewSimpleClientset(cm, deploy)
 	return &Controller{
 		kubeClient: kubeClient,
-	}
-}
-
-func TestGetLiteLLMMasterKey(t *testing.T) {
-	c := newTestControllerWithSecret("llm", "sk-obol-test-key")
-
-	key, err := c.getLiteLLMMasterKey(context.Background(), "llm")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if key != "sk-obol-test-key" {
-		t.Fatalf("key = %q, want %q", key, "sk-obol-test-key")
-	}
-}
-
-func TestGetLiteLLMMasterKeyMissingSecret(t *testing.T) {
-	kubeClient := fake.NewSimpleClientset()
-	c := &Controller{kubeClient: kubeClient}
-
-	_, err := c.getLiteLLMMasterKey(context.Background(), "llm")
-	if err == nil {
-		t.Fatal("expected error for missing secret, got nil")
-	}
-}
-
-func TestGetLiteLLMMasterKeyMissingKey(t *testing.T) {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "litellm-secrets",
-			Namespace: "llm",
-		},
-		Data: map[string][]byte{
-			"OTHER_KEY": []byte("value"),
-		},
-	}
-	kubeClient := fake.NewSimpleClientset(secret)
-	c := &Controller{kubeClient: kubeClient}
-
-	_, err := c.getLiteLLMMasterKey(context.Background(), "llm")
-	if err == nil {
-		t.Fatal("expected error for missing LITELLM_MASTER_KEY, got nil")
 	}
 }
 
