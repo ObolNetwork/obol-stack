@@ -91,7 +91,7 @@ This means the test suite always passes in CI without infrastructure. Only tests
 1. Sell and reconcile a `ServiceOffer` through the LiteLLM gateway
 2. Register the offer on ERC-8004 and discover it again from the agent
 3. Probe pricing and buy it with `buy.py`
-4. Serve the model as `paid/qwen3.5:9b` through vanilla LiteLLM and the in-pod `x402-buyer` sidecar
+4. Serve the model as `paid/qwen3.5:9b` through the Obol LiteLLM fork and the in-pod `x402-buyer` sidecar
 5. Confirm the sidecar quota moves `remaining 3 -> 2` and `spent 0 -> 1`
 6. Confirm USDC moves buyer -> seller and that `buy.py balance` eventually matches the on-chain balance
 
