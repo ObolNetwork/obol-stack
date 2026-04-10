@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
-	"gopkg.in/yaml.v3"
 )
 
 // litellmFake is a minimal httptest stand-in for the LiteLLM admin API.
@@ -200,10 +200,30 @@ func TestRemoveLiteLLMModelEntryNoMatch(t *testing.T) {
 	c, fakeAPI := newTestControllerWithLiteLLM("llm")
 	defer fakeAPI.close()
 
-	// Config map has no matching entry → early return, no API call.
+	// ConfigMap and live router both have no matching entry -> no delete call.
 	c.removeLiteLLMModelEntry(context.Background(), "llm", "paid/nonexistent")
 	if got := fakeAPI.delCalls.Load(); got != 0 {
 		t.Fatalf("expected no /model/delete calls for missing entry, got %d", got)
+	}
+}
+
+func TestRemoveLiteLLMModelEntryRetriesHotDeleteWhenConfigMapAlreadyClean(t *testing.T) {
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
+
+	// Simulates a previous reconcile that removed the persistent ConfigMap entry
+	// but crashed before, or failed during, the live /model/delete API call.
+	fakeAPI.infoResp = []map[string]any{
+		{
+			"model_name": "paid/qwen3.5:9b",
+			"model_info": map[string]any{"id": "stale-live-route"},
+		},
+	}
+
+	c.removeLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
+
+	if got := fakeAPI.delCalls.Load(); got != 1 {
+		t.Fatalf("expected /model/delete retry for stale live route, got %d calls", got)
 	}
 }
 

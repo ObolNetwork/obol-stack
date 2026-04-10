@@ -14,9 +14,9 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -361,20 +361,19 @@ func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName 
 		}
 		filtered = append(filtered, entry)
 	}
-	if !changed {
-		return
-	}
-	cfg.ModelList = filtered
+	if changed {
+		cfg.ModelList = filtered
 
-	rendered, err := yaml.Marshal(&cfg)
-	if err != nil {
-		log.Printf("purchase: remove model: failed to serialize litellm-config: %v", err)
-		return
-	}
-	cm.Data["config.yaml"] = string(rendered)
-	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
-		log.Printf("purchase: remove model: failed to update litellm-config: %v", err)
-		return
+		rendered, err := yaml.Marshal(&cfg)
+		if err != nil {
+			log.Printf("purchase: remove model: failed to serialize litellm-config: %v", err)
+			return
+		}
+		cm.Data["config.yaml"] = string(rendered)
+		if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			log.Printf("purchase: remove model: failed to update litellm-config: %v", err)
+			return
+		}
 	}
 
 	if err := c.hotDeleteLiteLLMModel(ctx, ns, modelName); err != nil {
