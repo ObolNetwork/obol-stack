@@ -2,8 +2,6 @@ package serviceoffercontroller
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -271,81 +269,6 @@ func (c *Controller) checkBuyerStatus(ctx context.Context, ns, name string) (rem
 	return 0, 0, fmt.Errorf("upstream %q not found in sidecar status", name)
 }
 
-// ── ERC-3009 typed data builder ─────────────────────────────────────────────
-
-func (c *Controller) getSignerAddress(ctx context.Context, signerURL string) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", signerURL+"/api/v1/keys", nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("remote-signer unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// The remote-signer returns keys as a string array: {"keys": ["0x..."]}
-	var result struct {
-		Keys []string `json:"keys"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Keys) == 0 {
-		return "", fmt.Errorf("no signing keys in remote-signer")
-	}
-	return result.Keys[0], nil
-}
-
-func (c *Controller) signAuths(ctx context.Context, signerURL, fromAddr string, pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	auths := make([]map[string]string, 0, pr.Spec.Count)
-	chainID := chainIDFromNetwork(pr.Spec.Payment.Network)
-
-	for i := 0; i < pr.Spec.Count; i++ {
-		nonce := randomNonce()
-		validBefore := "4294967295"
-
-		typedData := buildERC3009TypedData(
-			fromAddr, pr.Spec.Payment.PayTo, pr.Spec.Payment.Price,
-			validBefore, nonce, chainID, pr.Spec.Payment.Asset,
-		)
-
-		body, _ := json.Marshal(map[string]any{"typed_data": typedData})
-		req, err := http.NewRequestWithContext(ctx, "POST",
-			fmt.Sprintf("%s/api/v1/sign/%s/typed-data", signerURL, fromAddr),
-			io.NopCloser(strings.NewReader(string(body))))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("sign auth %d: %w", i+1, err)
-		}
-
-		var signResult struct {
-			Signature string `json:"signature"`
-		}
-		json.NewDecoder(resp.Body).Decode(&signResult)
-		resp.Body.Close()
-
-		if signResult.Signature == "" {
-			return nil, fmt.Errorf("sign auth %d: empty signature", i+1)
-		}
-
-		auths = append(auths, map[string]string{
-			"signature":   normalizeRecoverySignature(signResult.Signature),
-			"from":        fromAddr,
-			"to":          pr.Spec.Payment.PayTo,
-			"value":       pr.Spec.Payment.Price,
-			"validAfter":  "0",
-			"validBefore": validBefore,
-			"nonce":       nonce,
-		})
-	}
-	return auths, nil
-}
-
 func normalizeRecoverySignature(sig string) string {
 	if len(sig) != 132 || !strings.HasPrefix(sig, "0x") {
 		return sig
@@ -371,61 +294,6 @@ func normalizePurchasedUpstreamURL(endpoint string) string {
 	}
 
 	return trimmed
-}
-
-func buildERC3009TypedData(from, to, value, validBefore, nonce string, chainID int, usdcAddr string) map[string]any {
-	return map[string]any{
-		"types": map[string]any{
-			"EIP712Domain": []map[string]string{
-				{"name": "name", "type": "string"},
-				{"name": "version", "type": "string"},
-				{"name": "chainId", "type": "uint256"},
-				{"name": "verifyingContract", "type": "address"},
-			},
-			"TransferWithAuthorization": []map[string]string{
-				{"name": "from", "type": "address"},
-				{"name": "to", "type": "address"},
-				{"name": "value", "type": "uint256"},
-				{"name": "validAfter", "type": "uint256"},
-				{"name": "validBefore", "type": "uint256"},
-				{"name": "nonce", "type": "bytes32"},
-			},
-		},
-		"primaryType": "TransferWithAuthorization",
-		"domain": map[string]any{
-			"name":              "USDC",
-			"version":           "2",
-			"chainId":           strconv.Itoa(chainID),
-			"verifyingContract": usdcAddr,
-		},
-		"message": map[string]any{
-			"from":        from,
-			"to":          to,
-			"value":       value,
-			"validAfter":  "0",
-			"validBefore": validBefore,
-			"nonce":       nonce,
-		},
-	}
-}
-
-func randomNonce() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return "0x" + hex.EncodeToString(b)
-}
-
-func chainIDFromNetwork(network string) int {
-	switch network {
-	case "base-sepolia":
-		return 84532
-	case "base":
-		return 8453
-	case "mainnet", "ethereum":
-		return 1
-	default:
-		return 84532
-	}
 }
 
 // ── Condition helpers ───────────────────────────────────────────────────────

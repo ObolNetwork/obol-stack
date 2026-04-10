@@ -187,8 +187,6 @@ type PurchaseRequestSpec struct {
 	Endpoint        string                   `json:"endpoint"`
 	Model           string                   `json:"model"`
 	Count           int                      `json:"count"`
-	SignerNamespace string                    `json:"signerNamespace,omitempty"`
-	BuyerNamespace  string                   `json:"buyerNamespace,omitempty"`
 	PreSignedAuths  []PreSignedAuth          `json:"preSignedAuths,omitempty"`
 	AutoRefill      PurchaseAutoRefill       `json:"autoRefill,omitempty"`
 	Payment         PurchasePayment          `json:"payment"`
@@ -220,28 +218,19 @@ type PurchasePayment struct {
 }
 
 type PurchaseRequestStatus struct {
-	Conditions    []Condition `json:"conditions,omitempty"`
-	PublicModel   string      `json:"publicModel,omitempty"`
-	Remaining     int         `json:"remaining,omitempty"`
-	Spent         int         `json:"spent,omitempty"`
-	TotalSigned   int         `json:"totalSigned,omitempty"`
-	TotalSpent    string      `json:"totalSpent,omitempty"`
-	ProbedAt      string      `json:"probedAt,omitempty"`
-	ProbedPrice   string      `json:"probedPrice,omitempty"`
-	WalletBalance string      `json:"walletBalance,omitempty"`
-	SignerAddress string      `json:"signerAddress,omitempty"`
-}
-
-func (pr *PurchaseRequest) EffectiveSignerNamespace() string {
-	if pr.Spec.SignerNamespace != "" {
-		return pr.Spec.SignerNamespace
-	}
-	return pr.Namespace
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Conditions         []Condition `json:"conditions,omitempty"`
+	PublicModel        string      `json:"publicModel,omitempty"`
+	Remaining          int         `json:"remaining,omitempty"`
+	Spent              int         `json:"spent,omitempty"`
+	TotalSigned        int         `json:"totalSigned,omitempty"`
+	TotalSpent         string      `json:"totalSpent,omitempty"`
+	ProbedAt           string      `json:"probedAt,omitempty"`
+	ProbedPrice        string      `json:"probedPrice,omitempty"`
+	WalletBalance      string      `json:"walletBalance,omitempty"`
+	SignerAddress      string      `json:"signerAddress,omitempty"`
 }
 
 func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
-	if pr.Spec.BuyerNamespace != "" {
-		return pr.Spec.BuyerNamespace
-	}
 	return "llm"
 }

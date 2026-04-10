@@ -76,9 +76,9 @@ data:
       drop_params: true
 
 ---
-# Buyer ConfigMaps — keys are managed via SSA by the serviceoffer-controller.
-# Each PurchaseRequest applies its own <upstreamKey>.json key with a unique
-# field manager, eliminating merge races between concurrent purchases.
+# Buyer ConfigMaps — the serviceoffer-controller writes one <upstreamKey>.json
+# entry per PurchaseRequest. This matches x402-buyer --config-dir/--auths-dir
+# loading and avoids the old single shared config.json/auths.json merge point.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -118,7 +118,10 @@ metadata:
   labels:
     app: litellm
 spec:
-  replicas: 2
+  # Keep a single LiteLLM + x402-buyer pod while buyer auth consumption state
+  # is local to the sidecar pod. Scale this back out only after consumed auth
+  # state is shared or auth pools are sharded per replica.
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:

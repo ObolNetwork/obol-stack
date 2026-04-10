@@ -59,13 +59,6 @@ spec:
                   minimum: 1
                   maximum: 2500
                   description: "Number of pre-signed auths to create"
-                signerNamespace:
-                  type: string
-                  description: "Namespace of the remote-signer (default: same as CR)"
-                buyerNamespace:
-                  type: string
-                  default: llm
-                  description: "Namespace of the x402-buyer sidecar ConfigMaps"
                 preSignedAuths:
                   type: array
                   description: "Pre-signed ERC-3009 auths (created by buy.py, consumed by controller)"
@@ -115,9 +108,12 @@ spec:
                       description: "USDC contract address"
             status:
               type: object
-              properties:
-                conditions:
-                  type: array
+            properties:
+              observedGeneration:
+                type: integer
+                format: int64
+              conditions:
+                type: array
                   items:
                     type: object
                     properties:

@@ -49,7 +49,11 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 	}
 
 	status := pr.Status
-	status.Conditions = append([]monetizeapi.Condition{}, pr.Status.Conditions...)
+	if pr.Status.ObservedGeneration != pr.Generation {
+		status = monetizeapi.PurchaseRequestStatus{}
+	}
+	status.ObservedGeneration = pr.Generation
+	status.Conditions = append([]monetizeapi.Condition{}, status.Conditions...)
 
 	// Stage 1: Probe
 	if !purchaseConditionIsTrue(status.Conditions, "Probed") {

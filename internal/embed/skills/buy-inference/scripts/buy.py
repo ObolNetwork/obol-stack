@@ -284,8 +284,6 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
             "endpoint": endpoint + "/v1/chat/completions",
             "model": model,
             "count": count,
-            "signerNamespace": ns,
-            "buyerNamespace": BUYER_NS,
             "payment": {
                 "network": network,
                 "payTo": pay_to,

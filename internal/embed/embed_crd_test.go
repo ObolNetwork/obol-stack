@@ -296,21 +296,27 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("read ClusterRole missing core API group")
 	}
 
-	// ── Write ClusterRole ───────────────────────────────────────────────
-	writeCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-write")
-	if writeCR == nil {
-		t.Fatal("no ClusterRole 'openclaw-monetize-write' found")
+	// ── Write Role ──────────────────────────────────────────────────────
+	writeRole := findDocByName(docs, "Role", "openclaw-monetize-write")
+	if writeRole == nil {
+		t.Fatal("no Role 'openclaw-monetize-write' found")
 	}
-	writeRules, ok := writeCR["rules"].([]interface{})
+	if ns := nested(writeRole, "metadata", "namespace"); ns != "openclaw-obol-agent" {
+		t.Errorf("write Role namespace = %v, want openclaw-obol-agent", ns)
+	}
+	writeRules, ok := writeRole["rules"].([]interface{})
 	if !ok || len(writeRules) == 0 {
-		t.Fatal("write ClusterRole has no rules")
+		t.Fatal("write Role has no rules")
 	}
 
 	if !hasVerbOnResource(writeRules, "obol.org", "serviceoffers", "create") {
-		t.Error("write ClusterRole missing 'create' on obol.org/serviceoffers")
+		t.Error("write Role missing 'create' on obol.org/serviceoffers")
 	}
 	if hasVerbOnResource(writeRules, "traefik.io", "middlewares", "create") {
-		t.Error("write ClusterRole should not grant child-resource access")
+		t.Error("write Role should not grant child-resource access")
+	}
+	if hasVerbOnResource(writeRules, "", "secrets", "create") {
+		t.Error("write Role should not grant Secret writes")
 	}
 
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
@@ -323,12 +329,15 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
 	}
 
-	writeCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-write-binding")
-	if writeCRB == nil {
-		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-write-binding' found")
+	writeRB := findDocByName(docs, "RoleBinding", "openclaw-monetize-write-binding")
+	if writeRB == nil {
+		t.Fatal("no RoleBinding 'openclaw-monetize-write-binding' found")
 	}
-	if ref := nested(writeCRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
+	if ref := nested(writeRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
 		t.Errorf("write binding roleRef.name = %v, want openclaw-monetize-write", ref)
+	}
+	if ref := nested(writeRB, "roleRef", "kind"); ref != "Role" {
+		t.Errorf("write binding roleRef.kind = %v, want Role", ref)
 	}
 }
 
