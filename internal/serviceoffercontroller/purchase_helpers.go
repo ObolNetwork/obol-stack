@@ -424,8 +424,7 @@ func (c *Controller) checkBuyerStatus(ctx context.Context, ns, name string) (rem
 			continue
 		}
 
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Get(fmt.Sprintf("http://%s:8402/status", pod.Status.PodIP))
+		resp, err := c.httpClient.Get(fmt.Sprintf("http://%s:8402/status", pod.Status.PodIP))
 		if err != nil {
 			continue
 		}
@@ -475,13 +474,3 @@ func normalizePurchasedUpstreamURL(endpoint string) string {
 	return trimmed
 }
 
-// ── Condition helpers ───────────────────────────────────────────────────────
-
-func conditionIsTrue(conditions []monetizeapi.Condition, condType string) bool {
-	for _, c := range conditions {
-		if c.Type == condType {
-			return c.Status == "True"
-		}
-	}
-	return false
-}

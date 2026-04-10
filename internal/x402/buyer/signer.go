@@ -175,6 +175,9 @@ func (s *PreSignedSigner) Spent() int {
 	return s.spent
 }
 
+// normalizeNetworkID maps human-friendly chain names to CAIP-2 identifiers.
+// Mirrors x402.NormalizeNetworkID — kept local to avoid an import cycle
+// (x402 test files import buyer).
 func normalizeNetworkID(network string) string {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "base", "base-mainnet":
