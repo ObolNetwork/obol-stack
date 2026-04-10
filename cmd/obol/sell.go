@@ -101,29 +101,9 @@ Examples:
 				Usage: "Payment chain (base-sepolia, base, ethereum)",
 				Value: "base-sepolia",
 			},
-			&cli.StringFlag{
-				Name:  "asset-address",
-				Usage: "Override ERC-20 contract address for x402 settlement",
-			},
-			&cli.StringFlag{
-				Name:  "asset-symbol",
-				Usage: "Override token symbol for x402 settlement",
-			},
-			&cli.IntFlag{
-				Name:  "asset-decimals",
-				Usage: "Override token decimals for x402 settlement",
-			},
-			&cli.StringFlag{
-				Name:  "asset-transfer-method",
-				Usage: "Override x402 asset transfer method (eip3009 or permit2)",
-			},
-			&cli.StringFlag{
-				Name:  "asset-name",
-				Usage: "Override EIP-712 domain name for the settlement asset",
-			},
-			&cli.StringFlag{
-				Name:  "asset-version",
-				Usage: "Override EIP-712 domain version for the settlement asset",
+			&cli.BoolFlag{
+				Name:  "obol-token",
+				Usage: "Use Ethereum mainnet OBOL via Permit2 instead of the default chain asset",
 			},
 			&cli.StringFlag{
 				Name:  "facilitator",
@@ -282,7 +262,13 @@ Examples:
 				}
 			}
 
-			chain, err := x402verifier.ResolveChainInfo(cmd.String("chain"))
+			chainName := cmd.String("chain")
+			assetTerms, err := resolveAssetTerms(cmd, &chainName)
+			if err != nil {
+				return err
+			}
+
+			chain, err := x402verifier.ResolveChainInfo(chainName)
 			if err != nil {
 				return err
 			}
@@ -305,7 +291,7 @@ Examples:
 				WalletAddress:   wallet,
 				PricePerRequest: perRequest,
 				PricePerMTok:    priceTable.PerMTok,
-				Chain:           cmd.String("chain"),
+				Chain:           chainName,
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
 				VMImage:         cmd.String("vm-image"),
@@ -371,10 +357,6 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					assetTerms, err := resolveAssetTerms(cmd)
-					if err != nil {
-						return err
-					}
 					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms)
 					if err != nil {
 						return err
@@ -440,29 +422,9 @@ Example:
 				Usage: "Payment chain (base-sepolia, base, ethereum)",
 				Value: "base-sepolia",
 			},
-			&cli.StringFlag{
-				Name:  "asset-address",
-				Usage: "Override ERC-20 contract address for x402 settlement",
-			},
-			&cli.StringFlag{
-				Name:  "asset-symbol",
-				Usage: "Override token symbol for x402 settlement",
-			},
-			&cli.IntFlag{
-				Name:  "asset-decimals",
-				Usage: "Override token decimals for x402 settlement",
-			},
-			&cli.StringFlag{
-				Name:  "asset-transfer-method",
-				Usage: "Override x402 asset transfer method (eip3009 or permit2)",
-			},
-			&cli.StringFlag{
-				Name:  "asset-name",
-				Usage: "Override EIP-712 domain name for the settlement asset",
-			},
-			&cli.StringFlag{
-				Name:  "asset-version",
-				Usage: "Override EIP-712 domain version for the settlement asset",
+			&cli.BoolFlag{
+				Name:  "obol-token",
+				Usage: "Use Ethereum mainnet OBOL via Permit2 instead of the default chain asset",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -654,7 +616,8 @@ Example:
 				price["perHour"] = priceTable.PerHour
 			}
 
-			assetTerms, err := resolveAssetTerms(cmd)
+			chainName := cmd.String("chain")
+			assetTerms, err := resolveAssetTerms(cmd, &chainName)
 			if err != nil {
 				return err
 			}
@@ -669,7 +632,7 @@ Example:
 				},
 				"payment": map[string]any{
 					"scheme":            "exact",
-					"network":           cmd.String("chain"),
+					"network":           chainName,
 					"payTo":             wallet,
 					"maxTimeoutSeconds": cmd.Int("max-timeout"),
 					"price":             price,
@@ -1938,29 +1901,33 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 	}
 }
 
-func resolveAssetTerms(cmd *cli.Command) (schemas.AssetTerms, error) {
-	asset := schemas.AssetTerms{
-		Address:        cmd.String("asset-address"),
-		Symbol:         cmd.String("asset-symbol"),
-		Decimals:       cmd.Int("asset-decimals"),
-		TransferMethod: cmd.String("asset-transfer-method"),
-		EIP712Name:     cmd.String("asset-name"),
-		EIP712Version:  cmd.String("asset-version"),
+func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms, error) {
+	if !cmd.Bool("obol-token") {
+		return schemas.AssetTerms{}, nil
 	}
-	if asset.Address != "" {
-		if err := validate.WalletAddress(asset.Address); err != nil {
-			return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-address: %w", err)
-		}
+
+	if chainName == nil {
+		return schemas.AssetTerms{}, fmt.Errorf("internal error: chain name pointer is nil")
 	}
-	switch asset.TransferMethod {
-	case "", schemas.AssetTransferMethodEIP3009, schemas.AssetTransferMethodPermit2:
+
+	if !cmd.IsSet("chain") {
+		*chainName = "ethereum"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(*chainName)) {
+	case "ethereum", "ethereum-mainnet", "mainnet":
 	default:
-		return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-transfer-method %q: use eip3009 or permit2", asset.TransferMethod)
+		return schemas.AssetTerms{}, fmt.Errorf("--obol-token requires --chain ethereum")
 	}
-	if asset.Decimals < 0 {
-		return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-decimals %d: must be non-negative", asset.Decimals)
-	}
-	return asset, nil
+
+	return schemas.AssetTerms{
+		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		Symbol:         "OBOL",
+		Decimals:       18,
+		TransferMethod: schemas.AssetTransferMethodPermit2,
+		EIP712Name:     "Obol Network",
+		EIP712Version:  "1",
+	}, nil
 }
 
 func formatPriceTableSummary(priceTable schemas.PriceTable) string {
