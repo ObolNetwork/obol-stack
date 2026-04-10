@@ -27,6 +27,7 @@ Please describe the tests that you ran to verify your changes.
 - [ ] Visual regression testing
 
 **Test Configuration**:
+
 - Node.js version:
 - Browser(s):
 - OS:

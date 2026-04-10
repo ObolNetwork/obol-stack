@@ -1,6 +1,6 @@
 # Security Policy
 
-View more about Obol's security in our [documentation](https://docs.obol.org/advanced-and-troubleshooting/security/overview). 
+View more about Obol's security in our [documentation](https://docs.obol.org/advanced-and-troubleshooting/security/overview).
 
 ## Supported Versions
 
