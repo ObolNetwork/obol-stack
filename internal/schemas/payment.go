@@ -45,8 +45,47 @@ type PaymentTerms struct {
 	// MaxTimeoutSeconds is the payment validity window. Default: 300.
 	MaxTimeoutSeconds int `json:"maxTimeoutSeconds,omitempty" yaml:"maxTimeoutSeconds,omitempty"`
 
+	// Asset defines the token metadata used for x402 settlement. When omitted,
+	// the verifier falls back to the chain default asset (currently USDC).
+	Asset AssetTerms `json:"asset,omitempty" yaml:"asset,omitempty"`
+
 	// Price defines the pricing model (type-specific).
 	Price PriceTable `json:"price" yaml:"price"`
+}
+
+const (
+	AssetTransferMethodEIP3009 = "eip3009"
+	AssetTransferMethodPermit2 = "permit2"
+)
+
+// AssetTerms defines token metadata for x402 payment requirements.
+type AssetTerms struct {
+	// Address is the ERC-20 contract address.
+	Address string `json:"address,omitempty" yaml:"address,omitempty"`
+
+	// Symbol is a human-friendly token symbol (e.g. USDC, OBOL).
+	Symbol string `json:"symbol,omitempty" yaml:"symbol,omitempty"`
+
+	// Decimals is the token precision in atomic units.
+	Decimals int `json:"decimals,omitempty" yaml:"decimals,omitempty"`
+
+	// TransferMethod is the x402 asset transfer method (eip3009 or permit2).
+	TransferMethod string `json:"transferMethod,omitempty" yaml:"transferMethod,omitempty"`
+
+	// EIP712Name is the EIP-712 domain name for the token or permit flow.
+	EIP712Name string `json:"eip712Name,omitempty" yaml:"eip712Name,omitempty"`
+
+	// EIP712Version is the EIP-712 domain version for the token or permit flow.
+	EIP712Version string `json:"eip712Version,omitempty" yaml:"eip712Version,omitempty"`
+}
+
+func (a AssetTerms) IsZero() bool {
+	return a.Address == "" &&
+		a.Symbol == "" &&
+		a.Decimals == 0 &&
+		a.TransferMethod == "" &&
+		a.EIP712Name == "" &&
+		a.EIP712Version == ""
 }
 
 // PriceTable holds per-unit prices in USDC as human-readable decimal strings.

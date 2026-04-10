@@ -145,6 +145,12 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 			MaxAmountRequired string `json:"maxAmountRequired"`
 			Amount            string `json:"amount"`
 			Network           string `json:"network"`
+			Asset             string `json:"asset"`
+			Extra             struct {
+				Name                string `json:"name"`
+				Version             string `json:"version"`
+				AssetTransferMethod string `json:"assetTransferMethod"`
+			} `json:"extra"`
 		} `json:"accepts"`
 	}
 	if err := json.Unmarshal(respBody, &pricing); err != nil || len(pricing.Accepts) == 0 {
@@ -165,6 +171,10 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 
 	status.ProbedAt = time.Now().UTC().Format(time.RFC3339)
 	status.ProbedPrice = price
+	pr.Spec.Payment.Asset = accept.Asset
+	pr.Spec.Payment.AssetTransferMethod = accept.Extra.AssetTransferMethod
+	pr.Spec.Payment.EIP712Name = accept.Extra.Name
+	pr.Spec.Payment.EIP712Version = accept.Extra.Version
 	setPurchaseCondition(&status.Conditions, "Probed", "True", "Validated",
 		fmt.Sprintf("402: %s micro-USDC on %s", price, accept.Network))
 	return nil
@@ -217,12 +227,17 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 	buyerNS := pr.EffectiveBuyerNamespace()
 
 	upstream := map[string]any{
-		"url":         normalizePurchasedUpstreamURL(pr.Spec.Endpoint),
-		"network":     pr.Spec.Payment.Network,
-		"payTo":       pr.Spec.Payment.PayTo,
-		"price":       pr.Spec.Payment.Price,
-		"asset":       pr.Spec.Payment.Asset,
-		"remoteModel": pr.Spec.Model,
+		"url":                 normalizePurchasedUpstreamURL(pr.Spec.Endpoint),
+		"network":             pr.Spec.Payment.Network,
+		"payTo":               pr.Spec.Payment.PayTo,
+		"price":               pr.Spec.Payment.Price,
+		"asset":               pr.Spec.Payment.Asset,
+		"assetSymbol":         pr.Spec.Payment.AssetSymbol,
+		"assetDecimals":       pr.Spec.Payment.AssetDecimals,
+		"assetTransferMethod": pr.Spec.Payment.AssetTransferMethod,
+		"eip712Name":          pr.Spec.Payment.EIP712Name,
+		"eip712Version":       pr.Spec.Payment.EIP712Version,
+		"remoteModel":         pr.Spec.Model,
 	}
 
 	if err := c.mergeBuyerConfig(ctx, buyerNS, pr.Name, upstream); err != nil {

@@ -265,7 +265,7 @@ def _get_agent_namespace():
         return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
 
 
-def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None):
+def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None, payment_meta=None):
     """Create or update a PurchaseRequest CR in the agent's namespace.
 
     When auths are provided, they are embedded in spec.preSignedAuths so the
@@ -292,6 +292,8 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
             },
         },
     }
+    if payment_meta:
+        pr["spec"]["payment"].update(payment_meta)
     if auths:
         pr["spec"]["preSignedAuths"] = auths
 
@@ -553,6 +555,12 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
+    extra = payment.get("extra", {}) or {}
+    payment_meta = {
+        "assetTransferMethod": extra.get("assetTransferMethod", ""),
+        "eip712Name": extra.get("name", ""),
+        "eip712Version": extra.get("version", ""),
+    }
 
     if not pay_to:
         print("Error: 402 response missing payTo.", file=sys.stderr)
@@ -604,7 +612,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     # 6. Create PurchaseRequest CR with auths embedded in spec.
     #    Controller reads auths from the CR itself — no cross-NS Secret read.
     ep = _normalize_endpoint(endpoint)
-    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths)
+    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths, payment_meta)
 
     # 6. Wait for controller to reconcile.
     print("Waiting for controller to reconcile PurchaseRequest ...")

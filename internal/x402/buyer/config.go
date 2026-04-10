@@ -41,6 +41,21 @@ type UpstreamConfig struct {
 	// Asset is the token contract address (e.g. USDC on Base Sepolia).
 	Asset string `json:"asset"`
 
+	// AssetSymbol is the human-friendly token symbol (e.g. USDC, OBOL).
+	AssetSymbol string `json:"assetSymbol,omitempty"`
+
+	// AssetDecimals is the token precision in atomic units.
+	AssetDecimals int `json:"assetDecimals,omitempty"`
+
+	// AssetTransferMethod is the x402 transfer method (eip3009 or permit2).
+	AssetTransferMethod string `json:"assetTransferMethod,omitempty"`
+
+	// EIP712Name is the EIP-712 domain name for the token or permit flow.
+	EIP712Name string `json:"eip712Name,omitempty"`
+
+	// EIP712Version is the EIP-712 domain version for the token or permit flow.
+	EIP712Version string `json:"eip712Version,omitempty"`
+
 	// Price is the amount in atomic units per request (e.g. "1000" for 0.001 USDC).
 	Price string `json:"price"`
 }

@@ -102,6 +102,30 @@ Examples:
 				Value: "base-sepolia",
 			},
 			&cli.StringFlag{
+				Name:  "asset-address",
+				Usage: "Override ERC-20 contract address for x402 settlement",
+			},
+			&cli.StringFlag{
+				Name:  "asset-symbol",
+				Usage: "Override token symbol for x402 settlement",
+			},
+			&cli.IntFlag{
+				Name:  "asset-decimals",
+				Usage: "Override token decimals for x402 settlement",
+			},
+			&cli.StringFlag{
+				Name:  "asset-transfer-method",
+				Usage: "Override x402 asset transfer method (eip3009 or permit2)",
+			},
+			&cli.StringFlag{
+				Name:  "asset-name",
+				Usage: "Override EIP-712 domain name for the settlement asset",
+			},
+			&cli.StringFlag{
+				Name:  "asset-version",
+				Usage: "Override EIP-712 domain version for the settlement asset",
+			},
+			&cli.StringFlag{
 				Name:  "facilitator",
 				Usage: "x402 facilitator URL",
 				Value: x402verifier.DefaultFacilitatorURL,
@@ -347,7 +371,11 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					assetTerms, err := resolveAssetTerms(cmd)
+					if err != nil {
+						return err
+					}
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms)
 					if err != nil {
 						return err
 					}
@@ -411,6 +439,30 @@ Example:
 				Name:  "chain",
 				Usage: "Payment chain (base-sepolia, base, ethereum)",
 				Value: "base-sepolia",
+			},
+			&cli.StringFlag{
+				Name:  "asset-address",
+				Usage: "Override ERC-20 contract address for x402 settlement",
+			},
+			&cli.StringFlag{
+				Name:  "asset-symbol",
+				Usage: "Override token symbol for x402 settlement",
+			},
+			&cli.IntFlag{
+				Name:  "asset-decimals",
+				Usage: "Override token decimals for x402 settlement",
+			},
+			&cli.StringFlag{
+				Name:  "asset-transfer-method",
+				Usage: "Override x402 asset transfer method (eip3009 or permit2)",
+			},
+			&cli.StringFlag{
+				Name:  "asset-name",
+				Usage: "Override EIP-712 domain name for the settlement asset",
+			},
+			&cli.StringFlag{
+				Name:  "asset-version",
+				Usage: "Override EIP-712 domain version for the settlement asset",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -602,6 +654,11 @@ Example:
 				price["perHour"] = priceTable.PerHour
 			}
 
+			assetTerms, err := resolveAssetTerms(cmd)
+			if err != nil {
+				return err
+			}
+
 			spec := map[string]any{
 				"type": "http",
 				"upstream": map[string]any{
@@ -617,6 +674,9 @@ Example:
 					"maxTimeoutSeconds": cmd.Int("max-timeout"),
 					"price":             price,
 				},
+			}
+			if !assetTerms.IsZero() {
+				spec["payment"].(map[string]any)["asset"] = assetTerms
 			}
 
 			if path := cmd.String("path"); path != "" {
@@ -1874,9 +1934,33 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 		if allowPerHour {
 			return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, --per-mtok, or --per-hour")
 		}
-
 		return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, or --per-mtok")
 	}
+}
+
+func resolveAssetTerms(cmd *cli.Command) (schemas.AssetTerms, error) {
+	asset := schemas.AssetTerms{
+		Address:        cmd.String("asset-address"),
+		Symbol:         cmd.String("asset-symbol"),
+		Decimals:       cmd.Int("asset-decimals"),
+		TransferMethod: cmd.String("asset-transfer-method"),
+		EIP712Name:     cmd.String("asset-name"),
+		EIP712Version:  cmd.String("asset-version"),
+	}
+	if asset.Address != "" {
+		if err := validate.WalletAddress(asset.Address); err != nil {
+			return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-address: %w", err)
+		}
+	}
+	switch asset.TransferMethod {
+	case "", schemas.AssetTransferMethodEIP3009, schemas.AssetTransferMethodPermit2:
+	default:
+		return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-transfer-method %q: use eip3009 or permit2", asset.TransferMethod)
+	}
+	if asset.Decimals < 0 {
+		return schemas.AssetTerms{}, fmt.Errorf("invalid --asset-decimals %d: must be non-negative", asset.Decimals)
+	}
+	return asset, nil
 }
 
 func formatPriceTableSummary(priceTable schemas.PriceTable) string {
@@ -2036,7 +2120,7 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) (map[string]any, error) {
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms) (map[string]any, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 1 || portNum > 65535 {
 		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
@@ -2056,6 +2140,9 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 			"price":   map[string]any{},
 		},
 		"path": "/services/" + d.Name,
+	}
+	if !asset.IsZero() {
+		spec["payment"].(map[string]any)["asset"] = asset
 	}
 
 	price := spec["payment"].(map[string]any)["price"].(map[string]any)

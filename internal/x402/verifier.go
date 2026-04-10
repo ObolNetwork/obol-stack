@@ -114,7 +114,8 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requirement := BuildV2Requirement(chain, rule.Price, wallet)
+	asset := ResolveAssetInfo(chain, rule)
+	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
 
 	// Reconstruct the original request context so the middleware generates
 	// correct payment requirements (resource URL, host, etc.).
