@@ -203,13 +203,15 @@ type PurchaseRequestSpec struct {
 }
 
 type PreSignedAuth struct {
-	Signature   string `json:"signature"`
-	From        string `json:"from"`
-	To          string `json:"to"`
-	Value       string `json:"value"`
-	ValidAfter  string `json:"validAfter"`
-	ValidBefore string `json:"validBefore"`
-	Nonce       string `json:"nonce"`
+	ID          string                 `json:"id,omitempty"`
+	Payment     map[string]interface{} `json:"payment,omitempty"`
+	Signature   string                 `json:"signature"`
+	From        string                 `json:"from"`
+	To          string                 `json:"to"`
+	Value       string                 `json:"value"`
+	ValidAfter  string                 `json:"validAfter"`
+	ValidBefore string                 `json:"validBefore"`
+	Nonce       string                 `json:"nonce"`
 }
 
 type PurchaseAutoRefill struct {

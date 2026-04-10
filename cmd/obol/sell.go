@@ -1911,22 +1911,47 @@ func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms,
 	}
 
 	if !cmd.IsSet("chain") {
-		*chainName = "ethereum"
+		if envChain := strings.TrimSpace(os.Getenv("OBOL_TOKEN_CHAIN")); envChain != "" {
+			*chainName = envChain
+		} else {
+			*chainName = "ethereum"
+		}
+	}
+
+	address := strings.TrimSpace(os.Getenv("OBOL_TOKEN_ADDRESS"))
+	if address == "" {
+		address = "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7"
+	}
+	symbol := strings.TrimSpace(os.Getenv("OBOL_TOKEN_SYMBOL"))
+	if symbol == "" {
+		symbol = "OBOL"
+	}
+	eip712Name := strings.TrimSpace(os.Getenv("OBOL_TOKEN_NAME"))
+	if eip712Name == "" {
+		eip712Name = "Obol Network"
+	}
+	eip712Version := strings.TrimSpace(os.Getenv("OBOL_TOKEN_VERSION"))
+	if eip712Version == "" {
+		eip712Version = "1"
 	}
 
 	switch strings.ToLower(strings.TrimSpace(*chainName)) {
 	case "ethereum", "ethereum-mainnet", "mainnet":
+	case "base-sepolia", "base", "base-mainnet":
+		if os.Getenv("OBOL_TOKEN_ADDRESS") == "" {
+			return schemas.AssetTerms{}, fmt.Errorf("--obol-token on %s requires OBOL_TOKEN_ADDRESS to point at the test deployment", *chainName)
+		}
 	default:
-		return schemas.AssetTerms{}, fmt.Errorf("--obol-token requires --chain ethereum")
+		return schemas.AssetTerms{}, fmt.Errorf("--obol-token requires an Ethereum-family chain")
 	}
 
 	return schemas.AssetTerms{
-		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
-		Symbol:         "OBOL",
+		Address:        address,
+		Symbol:         symbol,
 		Decimals:       18,
 		TransferMethod: schemas.AssetTransferMethodPermit2,
-		EIP712Name:     "Obol Network",
-		EIP712Version:  "1",
+		EIP712Name:     eip712Name,
+		EIP712Version:  eip712Version,
 	}, nil
 }
 

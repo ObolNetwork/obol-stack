@@ -80,8 +80,11 @@ CAIP2_TO_CHAIN = {
 # EIP-712 domain for USDC TransferWithAuthorization
 USDC_DOMAIN_NAME = "USDC"
 USDC_DOMAIN_VERSION = "2"
+PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001"
 
 SEL_BALANCE_OF = "70a08231"
+SEL_NONCES = "7ecebe00"
 
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
@@ -365,73 +368,250 @@ def _get_usdc_balance(address, usdc_contract, chain=None):
     return str(int(result, 16))
 
 
+def _get_erc20_permit_nonce(address, token_contract, chain=None):
+    """Get ERC20Permit nonces(address) via eth_call."""
+    addr_hex = address.lower().replace("0x", "").zfill(64)
+    calldata = f"0x{SEL_NONCES}{addr_hex}"
+    result = _rpc_call(
+        "eth_call",
+        [{"to": token_contract, "data": calldata}, "latest"],
+        chain,
+    )
+    if not result or result == "0x":
+        return "0"
+    return str(int(result, 16))
+
+
+def _supports_erc20_permit(address, token_contract, chain=None):
+    """Best-effort detection for ERC20Permit support via nonces(address)."""
+    try:
+        _get_erc20_permit_nonce(address, token_contract, chain)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # EIP-712 pre-signing
 # ---------------------------------------------------------------------------
 
-def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count):
-    """Pre-sign N ERC-3009 TransferWithAuthorization vouchers."""
+def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
+    """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
     chain_id = CHAIN_IDS.get(chain, 84532)
     auths = []
+    payment = payment or {}
+    extensions = extensions or {}
+    extra = payment.get("extra", {}) or {}
+    transfer_method = extra.get("assetTransferMethod", "eip3009")
+    domain_name = extra.get("name", USDC_DOMAIN_NAME)
+    domain_version = extra.get("version", USDC_DOMAIN_VERSION)
 
     print(f"Pre-signing {count} payment authorizations ...")
     for i in range(count):
-        nonce = "0x" + secrets.token_hex(32)
+        if transfer_method == "permit2":
+            valid_after = str(max(0, int(time.time()) - 600))
+            deadline = str(int(time.time()) + int(payment.get("maxTimeoutSeconds", 60)))
+            permit2_nonce = str(int.from_bytes(secrets.token_bytes(32), "big"))
+            typed_data = {
+                "types": {
+                    "EIP712Domain": [
+                        {"name": "name", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                        {"name": "verifyingContract", "type": "address"},
+                    ],
+                    "TokenPermissions": [
+                        {"name": "token", "type": "address"},
+                        {"name": "amount", "type": "uint256"},
+                    ],
+                    "Witness": [
+                        {"name": "to", "type": "address"},
+                        {"name": "validAfter", "type": "uint256"},
+                    ],
+                    "PermitWitnessTransferFrom": [
+                        {"name": "permitted", "type": "TokenPermissions"},
+                        {"name": "spender", "type": "address"},
+                        {"name": "nonce", "type": "uint256"},
+                        {"name": "deadline", "type": "uint256"},
+                        {"name": "witness", "type": "Witness"},
+                    ],
+                },
+                "primaryType": "PermitWitnessTransferFrom",
+                "domain": {
+                    "name": "Permit2",
+                    "chainId": chain_id,
+                    "verifyingContract": PERMIT2_ADDRESS,
+                },
+                "message": {
+                    "permitted": {"token": usdc_addr, "amount": str(price)},
+                    "spender": X402_EXACT_PERMIT2_PROXY,
+                    "nonce": permit2_nonce,
+                    "deadline": deadline,
+                    "witness": {"to": pay_to, "validAfter": valid_after},
+                },
+            }
+            result = _signer_post(f"/api/v1/sign/{signer_address}/typed-data", typed_data)
+            sig = result.get("signature", "")
+            if not sig:
+                print(f"Error: remote-signer returned no Permit2 signature for auth {i+1}", file=sys.stderr)
+                sys.exit(1)
+            payload = {
+                "x402Version": 2,
+                "accepted": {
+                    "scheme": payment.get("scheme", "exact"),
+                    "network": payment.get("network", f"eip155:{chain_id}"),
+                    "amount": str(payment.get("amount", price)),
+                    "asset": payment.get("asset", usdc_addr),
+                    "payTo": payment.get("payTo", pay_to),
+                    "maxTimeoutSeconds": int(payment.get("maxTimeoutSeconds", 60)),
+                    "extra": extra,
+                },
+                "payload": {
+                    "signature": sig,
+                    "permit2Authorization": {
+                        "permitted": {"token": payment.get("asset", usdc_addr), "amount": str(price)},
+                        "from": signer_address,
+                        "spender": X402_EXACT_PERMIT2_PROXY,
+                        "nonce": permit2_nonce,
+                        "deadline": deadline,
+                        "witness": {"to": pay_to, "validAfter": valid_after},
+                    },
+                },
+            }
+            if "eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain):
+                permit_nonce = _get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)
+                permit_typed_data = {
+                    "types": {
+                        "EIP712Domain": [
+                            {"name": "name", "type": "string"},
+                            {"name": "version", "type": "string"},
+                            {"name": "chainId", "type": "uint256"},
+                            {"name": "verifyingContract", "type": "address"},
+                        ],
+                        "Permit": [
+                            {"name": "owner", "type": "address"},
+                            {"name": "spender", "type": "address"},
+                            {"name": "value", "type": "uint256"},
+                            {"name": "nonce", "type": "uint256"},
+                            {"name": "deadline", "type": "uint256"},
+                        ],
+                    },
+                    "primaryType": "Permit",
+                    "domain": {
+                        "name": domain_name,
+                        "version": domain_version,
+                        "chainId": chain_id,
+                        "verifyingContract": payment.get("asset", usdc_addr),
+                    },
+                    "message": {
+                        "owner": signer_address,
+                        "spender": PERMIT2_ADDRESS,
+                        "value": str(price),
+                        "nonce": permit_nonce,
+                        "deadline": deadline,
+                    },
+                }
+                permit_result = _signer_post(f"/api/v1/sign/{signer_address}/typed-data", permit_typed_data)
+                permit_sig = permit_result.get("signature", "")
+                if not permit_sig:
+                    print(f"Error: remote-signer returned no EIP-2612 signature for auth {i+1}", file=sys.stderr)
+                    sys.exit(1)
+                payload["extensions"] = {
+                    "eip2612GasSponsoring": {
+                        "info": {
+                            "from": signer_address,
+                            "asset": payment.get("asset", usdc_addr),
+                            "spender": PERMIT2_ADDRESS,
+                            "amount": str(price),
+                            "nonce": permit_nonce,
+                            "deadline": deadline,
+                            "signature": permit_sig,
+                            "version": "1",
+                        }
+                    }
+                }
+            auths.append({
+                "id": permit2_nonce,
+                "payment": payload,
+            })
+        else:
+            # Keep the proven legacy USDC domain for ERC-3009/Base Sepolia.
+            # The current stack flow relies on this exact signing shape.
+            domain_name = USDC_DOMAIN_NAME
+            domain_version = USDC_DOMAIN_VERSION
+            nonce = "0x" + secrets.token_hex(32)
 
-        typed_data = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
-                ],
-                "TransferWithAuthorization": [
-                    {"name": "from", "type": "address"},
-                    {"name": "to", "type": "address"},
-                    {"name": "value", "type": "uint256"},
-                    {"name": "validAfter", "type": "uint256"},
-                    {"name": "validBefore", "type": "uint256"},
-                    {"name": "nonce", "type": "bytes32"},
-                ],
-            },
-            "primaryType": "TransferWithAuthorization",
-            "domain": {
-                "name": USDC_DOMAIN_NAME,
-                "version": USDC_DOMAIN_VERSION,
-                "chainId": chain_id,
-                "verifyingContract": usdc_addr,
-            },
-            "message": {
-                "from": signer_address,
-                "to": pay_to,
-                "value": str(price),
-                "validAfter": "0",
-                "validBefore": "4294967295",
-                "nonce": nonce,
-            },
-        }
+            typed_data = {
+                "types": {
+                    "EIP712Domain": [
+                        {"name": "name", "type": "string"},
+                        {"name": "version", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                        {"name": "verifyingContract", "type": "address"},
+                    ],
+                    "TransferWithAuthorization": [
+                        {"name": "from", "type": "address"},
+                        {"name": "to", "type": "address"},
+                        {"name": "value", "type": "uint256"},
+                        {"name": "validAfter", "type": "uint256"},
+                        {"name": "validBefore", "type": "uint256"},
+                        {"name": "nonce", "type": "bytes32"},
+                    ],
+                },
+                "primaryType": "TransferWithAuthorization",
+                "domain": {
+                    "name": domain_name,
+                    "version": domain_version,
+                    "chainId": chain_id,
+                    "verifyingContract": usdc_addr,
+                },
+                "message": {
+                    "from": signer_address,
+                    "to": pay_to,
+                    "value": str(price),
+                    "validAfter": "0",
+                    "validBefore": "4294967295",
+                    "nonce": nonce,
+                },
+            }
 
-        result = _signer_post(
-            f"/api/v1/sign/{signer_address}/typed-data",
-            typed_data,
-        )
-        sig = result.get("signature", "")
-        if not sig:
-            print(f"Error: remote-signer returned no signature for auth {i+1}",
-                  file=sys.stderr)
-            sys.exit(1)
-        sig = _normalize_signature_recovery(sig)
+            result = _signer_post(
+                f"/api/v1/sign/{signer_address}/typed-data",
+                typed_data,
+            )
+            sig = result.get("signature", "")
+            if not sig:
+                print(f"Error: remote-signer returned no signature for auth {i+1}",
+                      file=sys.stderr)
+                sys.exit(1)
+            sig = _normalize_signature_recovery(sig)
 
-        auths.append({
-            "signature": sig,
-            "from": signer_address,
-            "to": pay_to,
-            "value": str(price),
-            "validAfter": "0",
-            "validBefore": "4294967295",
-            "nonce": nonce,
-        })
+            payload = {
+                "x402Version": 2,
+                "accepted": {
+                    "scheme": payment.get("scheme", "exact"),
+                    "network": payment.get("network", f"eip155:{chain_id}"),
+                    "amount": str(payment.get("amount", price)),
+                    "asset": payment.get("asset", usdc_addr),
+                    "payTo": payment.get("payTo", pay_to),
+                    "maxTimeoutSeconds": int(payment.get("maxTimeoutSeconds", 60)),
+                    "extra": extra,
+                },
+                "payload": {
+                    "signature": sig,
+                    "authorization": {
+                        "from": signer_address,
+                        "to": pay_to,
+                        "value": str(price),
+                        "validAfter": "0",
+                        "validBefore": "4294967295",
+                        "nonce": nonce,
+                    },
+                },
+            }
+            auths.append({
+                "id": nonce,
+                "payment": payload,
+            })
 
         if (i + 1) % 50 == 0:
             print(f"  Signed {i + 1}/{count}")
@@ -520,6 +700,7 @@ def cmd_probe(endpoint_url, model_id=None):
     print()
     for i, acc in enumerate(pricing.get("accepts", [])):
         amount = acc.get("amount", acc.get("maxAmountRequired", "?"))
+        extra = acc.get("extra", {}) or {}
         print(f"  Payment option {i + 1}:")
         print(f"    payTo:   {acc.get('payTo', '?')}")
         print(f"    network: {acc.get('network', '?')}")
@@ -527,6 +708,10 @@ def cmd_probe(endpoint_url, model_id=None):
         asset = acc.get("asset")
         if asset:
             print(f"    asset:   {asset}")
+        if extra.get("assetTransferMethod"):
+            print(f"    transfer:{extra.get('assetTransferMethod')}")
+        if extra.get("name") or extra.get("version"):
+            print(f"    eip712:  {extra.get('name', '?')} / {extra.get('version', '?')}")
         print()
 
     return pricing
@@ -607,7 +792,16 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
               "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
     # 5. Pre-sign authorizations locally (via remote-signer in same namespace).
-    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, n)
+    auths = _presign_auths(
+        signer_address,
+        pay_to,
+        price,
+        chain,
+        usdc_addr,
+        n,
+        payment=payment,
+        extensions=pricing.get("extensions", {}) or {},
+    )
 
     # 6. Create PurchaseRequest CR with auths embedded in spec.
     #    Controller reads auths from the CR itself — no cross-NS Secret read.

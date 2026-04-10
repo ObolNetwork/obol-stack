@@ -26,6 +26,10 @@ type RealFacilitator struct {
 	cancel context.CancelFunc
 }
 
+type RealFacilitatorOptions struct {
+	EnableEIP2612GasSponsoring bool
+}
+
 // StartRealFacilitator discovers/builds the x402-rs facilitator binary,
 // generates a config pointing at the given Anvil fork, starts the facilitator
 // on a free port, and waits for it to become ready.
@@ -39,6 +43,10 @@ type RealFacilitator struct {
 //
 // Registers t.Cleanup to kill the process and remove temp config.
 func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
+	return StartRealFacilitatorWithOptions(t, anvil, RealFacilitatorOptions{})
+}
+
+func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFacilitatorOptions) *RealFacilitator {
 	t.Helper()
 
 	bin := discoverFacilitatorBinary(t)
@@ -57,7 +65,7 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	anvilLocalURL := fmt.Sprintf("http://127.0.0.1:%d", anvil.Port)
 
 	// Generate config file.
-	configPath := writeRealFacilitatorConfig(t, port, anvilLocalURL, anvil.Accounts[0].PrivateKey)
+	configPath := writeRealFacilitatorConfig(t, port, anvilLocalURL, anvil.Accounts[0].PrivateKey, opts)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -182,7 +190,7 @@ func discoverFacilitatorBinary(t *testing.T) string {
 }
 
 // writeRealFacilitatorConfig writes a temporary config-test.json for the facilitator.
-func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey string) string {
+func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey string, opts RealFacilitatorOptions) string {
 	t.Helper()
 
 	// Strip 0x prefix from signer key if present.
@@ -214,6 +222,9 @@ func writeRealFacilitatorConfig(t *testing.T, port int, anvilRPCURL, signerKey s
 			{
 				"id":     "v2-eip155-exact",
 				"chains": "eip155:*",
+				"config": map[string]any{
+					"eip2612_gas_sponsoring": opts.EnableEIP2612GasSponsoring,
+				},
 			},
 		},
 	}

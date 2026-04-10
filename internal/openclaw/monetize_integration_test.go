@@ -10,8 +10,10 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -3473,6 +3475,180 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	}
 
 	t.Logf("tunnel sidecar flow complete: registered agent %s, discovered endpoint, bought paid/%s, auths 3->2, spent 0->1", agentID, model)
+}
+
+// TestIntegration_SellBuySidecar_OBOLPermit2 validates the in-cluster buy path
+// using a fork-local OBOL-compatible ERC20Permit token deployed on an Anvil fork
+// of Base Sepolia. This avoids any dependence on a public bridged OBOL testnet
+// deployment while exercising:
+//   - seller-side OBOL asset metadata
+//   - buyer-side Permit2 payload construction
+//   - automatic EIP-2612 gas sponsoring attachment
+//   - x402-buyer replay of a full signed x402 payload
+func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
+	if os.Getenv("X402_FACILITATOR_BIN") == "" {
+		t.Skip("set X402_FACILITATOR_BIN to an ObolNetwork/x402-rs main build with eip2612GasSponsoring support")
+	}
+
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireExactOllamaModel(t, "qwen3.5:9b")
+	anvil := requireAnvil(t)
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	obolRun(t, cfg, "openclaw", "skills", "sync", "obol-agent", "--from", filepath.Join(repoRoot, "internal", "embed", "skills"))
+	t.Log("synced embedded skills to running OpenClaw instance")
+	obolRun(t, cfg, "kubectl", "delete", "purchaserequests.obol.org", "-n", agentNamespace(cfg), "--all", "--ignore-not-found")
+	time.Sleep(5 * time.Second)
+
+	facilitator := testutil.StartRealFacilitatorWithOptions(t, anvil, testutil.RealFacilitatorOptions{
+		EnableEIP2612GasSponsoring: true,
+	})
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	obolToken := anvil.DeployForkObolToken(t, anvil.Accounts[0].PrivateKey, anvil.Accounts[0].Address, big.NewInt(0))
+
+	agentWallet := getAgentWalletAddress(t, cfg)
+	sellerAddr := anvil.Accounts[1].Address
+	for _, addr := range []string{
+		anvil.Accounts[0].Address, // facilitator signer / token deployer
+		agentWallet,               // buyer / remote signer
+		sellerAddr,                // seller payTo
+	} {
+		anvil.ClearCode(t, addr)
+	}
+	anvil.FundETH(t, agentWallet, big.NewInt(1e18))
+	anvil.MintMintableERC20(t, obolToken, anvil.Accounts[0].PrivateKey, agentWallet, new(big.Int).Mul(big.NewInt(10), big.NewInt(1e18)))
+	t.Logf("funded agent wallet %s with 10 OBOL on fork token %s", agentWallet, obolToken)
+
+	originalERPCConfig := getERPCConfigYAML(t, cfg)
+	t.Cleanup(func() {
+		setERPCConfigYAML(t, cfg, originalERPCConfig)
+	})
+
+	anvilClusterURL := fmt.Sprintf("http://%s:%d", testutil.ClusterHostAddress(), anvil.Port)
+	obolRun(t, cfg, "network", "add", "base-sepolia", "--endpoint", anvilClusterURL, "--allow-writes")
+	pinERPCChainToSingleUpstream(t, cfg, 84532, "custom-84532-0")
+	t.Logf("eRPC route: base-sepolia -> %s", anvilClusterURL)
+
+	runID := petname.Generate(2, "-")
+	name := "test-obol-sidecar-" + runID
+	buyerName := "obol-sidecar-" + runID
+	ns := "llm"
+	offerYAML := fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  upstream:
+    service: litellm
+    namespace: llm
+    port: 4000
+    healthPath: /health/readiness
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    asset:
+      address: "%s"
+      symbol: "OBOL"
+      decimals: 18
+      transferMethod: "permit2"
+      eip712Name: "Obol Network"
+      eip712Version: "1"
+    price:
+      perRequest: "0.001"
+  path: /services/%s
+`, name, ns, sellerAddr, obolToken, name)
+
+	applyServiceOffer(t, cfg, offerYAML)
+	t.Cleanup(func() {
+		_, _ = execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"remove", buyerName)
+		_, _ = execInAgentErr(cfg, "python3",
+			monetizePy,
+			"delete", name, "--namespace", ns)
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	processOut, processErr := execInAgentErr(cfg, "python3",
+		monetizePy,
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", processOut)
+	if processErr != nil {
+		t.Fatalf("reconcile ServiceOffer: %v", processErr)
+	}
+	for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		waitForCondition(t, cfg, name, ns, cond, "True", 2*time.Minute)
+	}
+
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
+	obolRun(t, cfg, "kubectl", "patch", "httproute", fmt.Sprintf("so-%s", name),
+		"-n", ns, "--type=json", "-p", patchJSON)
+	time.Sleep(15 * time.Second)
+
+	localBaseURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
+	probeOut := waitForBuyerProbePricing(t, cfg, 90*time.Second, localBaseURL+"/v1/chat/completions", model)
+	t.Logf("probe output:\n%s", probeOut)
+	if !strings.Contains(probeOut, obolToken) {
+		t.Fatalf("probe output did not include OBOL token address %s:\n%s", obolToken, probeOut)
+	}
+	if !strings.Contains(probeOut, "permit2") {
+		t.Fatalf("probe output did not include permit2 transfer method:\n%s", probeOut)
+	}
+
+	buyOut, buyErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", buyerName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "3")
+	t.Logf("buy output:\n%s", buyOut)
+	if buyErr != nil {
+		t.Fatalf("buy.py buy failed: %v", buyErr)
+	}
+	if !strings.Contains(buyOut, "paid/"+model) {
+		t.Fatalf("buy output did not advertise paid/%s:\n%s", model, buyOut)
+	}
+
+	liveBefore := waitForBuyerLiveAuthCount(t, cfg, buyerName, 3, 90*time.Second)
+	t.Logf("buyer live status before inference:\n%s", liveBefore)
+
+	buyerBefore := anvil.GetERC20Balance(t, obolToken, agentWallet)
+	sellerBefore := anvil.GetERC20Balance(t, obolToken, sellerAddr)
+
+	statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "reply with one short paid word")
+	if statusCode != http.StatusOK {
+		t.Fatalf("paid alias request returned %d: %s", statusCode, string(body))
+	}
+
+	liveAfter := waitForBuyerLiveAuthCount(t, cfg, buyerName, 2, 60*time.Second)
+	t.Logf("buyer live status after inference:\n%s", liveAfter)
+
+	deadline := time.Now().Add(20 * time.Second)
+	var buyerAfter, sellerAfter *big.Int
+	for time.Now().Before(deadline) {
+		buyerAfter = anvil.GetERC20Balance(t, obolToken, agentWallet)
+		sellerAfter = anvil.GetERC20Balance(t, obolToken, sellerAddr)
+		if buyerAfter.Cmp(buyerBefore) < 0 && sellerAfter.Cmp(sellerBefore) > 0 {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if buyerAfter == nil || sellerAfter == nil || buyerAfter.Cmp(buyerBefore) >= 0 || sellerAfter.Cmp(sellerBefore) <= 0 {
+		t.Fatalf("OBOL settlement did not complete: buyer before=%s after=%s seller before=%s after=%s", buyerBefore, buyerAfter, sellerBefore, sellerAfter)
+	}
+
+	t.Logf("OBOL sidecar flow complete: token=%s buyer delta=-%s seller delta=+%s", obolToken, new(big.Int).Sub(buyerBefore, buyerAfter), new(big.Int).Sub(sellerAfter, sellerBefore))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

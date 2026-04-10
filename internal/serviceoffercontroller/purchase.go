@@ -194,8 +194,8 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 		return err
 	}
 
-	if pr.Spec.PreSignedAuths[0].From != "" {
-		status.SignerAddress = pr.Spec.PreSignedAuths[0].From
+	if signer := purchaseSignerAddress(pr.Spec.PreSignedAuths[0]); signer != "" {
+		status.SignerAddress = signer
 	}
 
 	c.pendingAuths.Store(pr.Namespace+"/"+pr.Name, auths)
@@ -210,10 +210,10 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
 	key := pr.Namespace + "/" + pr.Name
 	authsRaw, ok := c.pendingAuths.Load(key)
-	var auths []map[string]string
+	var auths []map[string]any
 	var err error
 	if ok {
-		auths = authsRaw.([]map[string]string)
+		auths = authsRaw.([]map[string]any)
 		c.pendingAuths.Delete(key)
 	} else {
 		// Rebuild from spec so crash-restart does not wedge the request.

@@ -611,8 +611,9 @@ func DeleteStorefront(cfg *config.Config) error {
 func parseQuickTunnelURL(logs string) (string, bool) {
 	// Quick tunnel logs print a random *.trycloudflare.com URL.
 	re := regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
-	if url := re.FindString(logs); url != "" {
-		return url, true
+	matches := re.FindAllString(logs, -1)
+	if len(matches) > 0 {
+		return matches[len(matches)-1], true
 	}
 
 	return "", false

@@ -208,7 +208,7 @@ func (c *Controller) mergeBuyerConfig(ctx context.Context, ns, name string, upst
 	return err
 }
 
-func (c *Controller) mergeBuyerAuths(ctx context.Context, ns, name string, auths []map[string]string) error {
+func (c *Controller) mergeBuyerAuths(ctx context.Context, ns, name string, auths []map[string]any) error {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerAuthsCM, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get %s/%s: %w", ns, buyerAuthsCM, err)
@@ -311,14 +311,21 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 	}
 }
 
-func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
+func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]any, error) {
 	if len(pr.Spec.PreSignedAuths) == 0 {
 		return nil, fmt.Errorf("no pre-signed auths in spec")
 	}
 
-	auths := make([]map[string]string, len(pr.Spec.PreSignedAuths))
+	auths := make([]map[string]any, len(pr.Spec.PreSignedAuths))
 	for i, a := range pr.Spec.PreSignedAuths {
-		auths[i] = map[string]string{
+		if len(a.Payment) > 0 {
+			auths[i] = map[string]any{
+				"id":      a.ID,
+				"payment": a.Payment,
+			}
+			continue
+		}
+		auths[i] = map[string]any{
 			"signature":   normalizeRecoverySignature(a.Signature),
 			"from":        a.From,
 			"to":          a.To,
@@ -330,6 +337,30 @@ func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, er
 	}
 
 	return auths, nil
+}
+
+func purchaseSignerAddress(a monetizeapi.PreSignedAuth) string {
+	if a.From != "" {
+		return a.From
+	}
+	if len(a.Payment) == 0 {
+		return ""
+	}
+	payload, ok := a.Payment["payload"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if authz, ok := payload["authorization"].(map[string]interface{}); ok {
+		if from, ok := authz["from"].(string); ok {
+			return from
+		}
+	}
+	if authz, ok := payload["permit2Authorization"].(map[string]interface{}); ok {
+		if from, ok := authz["from"].(string); ok {
+			return from
+		}
+	}
+	return ""
 }
 
 // removeLiteLLMModelEntry drops a paid/<model> route from LiteLLM. Mirrors
@@ -473,4 +504,3 @@ func normalizePurchasedUpstreamURL(endpoint string) string {
 
 	return trimmed
 }
-
