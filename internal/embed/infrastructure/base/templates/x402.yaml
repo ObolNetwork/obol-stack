@@ -19,12 +19,12 @@ data:
   pricing.yaml: |
     wallet: ""
     chain: "base-sepolia"
-    facilitatorURL: "https://facilitator.x402.rs"
+    facilitatorURL: "https://x402.gcp.obol.tech"
     verifyOnly: false
     routes: []
 
 ---
-# CA certificates for outbound TLS (e.g. facilitator.x402.rs).
+# CA certificates for outbound TLS (e.g. x402.gcp.obol.tech).
 # The verifier image is minimal and lacks a system CA bundle; this
 # ConfigMap is populated at deploy time from the host cert store.
 # Created by: kubectl create configmap ca-certificates -n x402 \
