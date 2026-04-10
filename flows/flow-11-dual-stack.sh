@@ -152,6 +152,30 @@ except Exception as e:
 " 2>&1 || true
 }
 
+run_tail_or_fail() {
+    local desc="$1"
+    local success="$2"
+    local success_lines="${3:-3}"
+    shift 3
+
+    step "$desc"
+    local out rc
+    set +e
+    out=$("$@" 2>&1)
+    rc=$?
+    set -e
+
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$out" | tail -120
+        fail "$desc failed (exit $rc)"
+        emit_metrics
+        exit "$rc"
+    fi
+
+    printf '%s\n' "$out" | tail -"$success_lines"
+    pass "$success"
+}
+
 litellm_paid_inference() {
     bob kubectl exec -n llm deployment/litellm -c litellm -- \
         python3 -c "
@@ -296,9 +320,7 @@ rewrite_k3d_ports "$ALICE_DIR/config/k3d.yaml" \
     "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT"
 pass "Alice ports set to $ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT"
 
-step "Alice: stack up"
-alice stack up 2>&1 | tail -3
-pass "Alice stack up completed"
+run_tail_or_fail "Alice: stack up" "Alice stack up completed" 3 alice stack up
 
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
@@ -404,9 +426,7 @@ rewrite_k3d_ports "$BOB_DIR/config/k3d.yaml" \
     "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
 pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
-step "Bob: stack up"
-bob stack up 2>&1 | tail -3
-pass "Bob stack up completed"
+run_tail_or_fail "Bob: stack up" "Bob stack up completed" 3 bob stack up
 
 poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers

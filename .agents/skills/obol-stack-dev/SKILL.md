@@ -187,6 +187,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 
 ### MUST DO
 - Always route through `obol` CLI verbs in tests (covers CLI + helmfile + helm chart)
+- Preserve failing exit codes when logging or filtering command output. Use `set -o pipefail` or capture `PIPESTATUS` for any pipeline such as `flow.sh | tee log`, `obol stack up 2>&1 | tail`, or `helmfile ... | tee`; otherwise Helm/obol failures can be masked by the final command in the pipe.
 - Use `obol openclaw token <id>` to get Bearer token before API calls
 - Set `Authorization: Bearer <token>` on all `/v1/chat/completions` requests
 - Use `obol model setup --provider <name> --api-key <key>` for cloud provider config
@@ -195,6 +196,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
 - Prefer `qwen3.5:9b` when validating the current local paid-inference route
 - Use unique buy-side names in reused-cluster commerce tests so the sidecar cannot inherit stale in-memory spend counters
+- Use narrow review/delegation scopes for x402 changes. Name the exact files and invariants to verify, such as "controller never signs or reads remote-signer", "agent write RBAC is namespace-scoped", "paid route uses real obol CLI/human flow", and "tests support x402 v2 amount fields".
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -203,6 +205,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Assume TCP connectivity means HTTP is ready (port-forward warmup race)
 - Use `app.kubernetes.io/instance=openclaw-<id>` for pod labels (Helm uses `openclaw`)
 - Run multiple integration tests without cleaning up between them (pod sandbox errors)
+- Delegate or accept broad "review the architecture" findings without converting them into concrete file-level checks and reproducible tests.
 
 ## Sell-Side Monetize Lifecycle
 

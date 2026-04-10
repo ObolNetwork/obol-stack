@@ -106,11 +106,20 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 	envelope := map[string]any{
 		"x402Version": 2,
 		"accepted": map[string]any{
-			"scheme":  "exact",
-			"network": chainCAIP2(chainID),
-			"amount":  amount,
-			"asset":   USDCBaseSepolia,
-			"payTo":   payTo,
+			"scheme":            "exact",
+			"network":           chainCAIP2(chainID),
+			"amount":            amount,
+			"asset":             USDCBaseSepolia,
+			"payTo":             payTo,
+			"maxTimeoutSeconds": 60,
+			// x402-rs strict v2 deserialization requires the EIP-3009 marker.
+			// The signature itself intentionally uses the deployed USDC
+			// contract's EIP-712 domain above.
+			"extra": map[string]any{
+				"assetTransferMethod": "eip3009",
+				"name":                "USD Coin",
+				"version":             "2",
+			},
 		},
 		"payload": map[string]any{
 			"signature": sigHex,
@@ -240,11 +249,20 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	envelope := map[string]any{
 		"x402Version": 2,
 		"accepted": map[string]any{
-			"scheme":  "exact",
-			"network": chainCAIP2(chainID),
-			"amount":  amount,
-			"asset":   USDCBaseSepolia,
-			"payTo":   payTo,
+			"scheme":            "exact",
+			"network":           chainCAIP2(chainID),
+			"amount":            amount,
+			"asset":             USDCBaseSepolia,
+			"payTo":             payTo,
+			"maxTimeoutSeconds": 60,
+			// x402-rs strict v2 deserialization requires the EIP-3009 marker.
+			// The signature itself intentionally uses the deployed USDC
+			// contract's EIP-712 domain above.
+			"extra": map[string]any{
+				"assetTransferMethod": "eip3009",
+				"name":                "USD Coin",
+				"version":             "2",
+			},
 		},
 		"payload": map[string]any{
 			"signature": fmt.Sprintf("0x%x", sig),

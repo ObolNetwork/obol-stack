@@ -41,6 +41,7 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		if _, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(ns).Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("add finalizer: %w", err)
 		}
+		return nil
 	}
 
 	// Handle deletion.
@@ -81,7 +82,16 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		c.reconcilePurchaseReady(ctx, &status, &pr)
 	}
 
-	return c.updatePurchaseStatus(ctx, raw, &status)
+	ready := purchaseConditionIsTrue(status.Conditions, "Ready")
+	if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
+		return err
+	}
+	if !ready {
+		// ConfigMap projection and sidecar reload are asynchronous; requeue so
+		// readiness can advance without requiring a CR spec/status mutation.
+		c.purchaseQueue.AddAfter(key, 5*time.Second)
+	}
+	return nil
 }
 
 func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetizeapi.PurchaseRequest, raw *unstructured.Unstructured) error {

@@ -64,8 +64,9 @@ assert d.get('x402Version') is not None, 'missing x402Version'
 a = d['accepts'][0]
 assert a['payTo'], 'missing payTo'
 assert a['network'], 'missing network'
-assert a['maxAmountRequired'], 'missing maxAmountRequired'
-print('OK: payTo=%s network=%s amount=%s' % (a['payTo'], a['network'], a['maxAmountRequired']))
+amount = a.get('amount') or a.get('maxAmountRequired')
+assert amount, 'missing amount/maxAmountRequired'
+print('OK: payTo=%s network=%s amount=%s' % (a['payTo'], a['network'], amount))
 " 2>&1; then
     pass "402 body validated"
 else
@@ -116,8 +117,11 @@ if resp.status_code != 402:
 req_data = resp.json()
 accept = req_data["accepts"][0]
 pay_to  = accept["payTo"]
-amount  = accept["maxAmountRequired"]  # micro-USDC string e.g. "1000"
+amount  = accept.get("amount") or accept.get("maxAmountRequired")  # micro-USDC string e.g. "1000"
 network = accept["network"]
+asset   = accept.get("asset") or USDC_ADDRESS
+domain_name = "USDC"
+domain_version = "2"
 
 # 2. Sign EIP-712 TransferWithAuthorization (ERC-3009)
 nonce = "0x" + secrets.token_hex(32)
@@ -142,7 +146,7 @@ structured = {
     },
     "primaryType": "TransferWithAuthorization",
     "domain": {
-        "name": "USDC", "version": "2",
+        "name": domain_name, "version": domain_version,
         "chainId": CHAIN_ID, "verifyingContract": USDC_ADDRESS,
     },
     "message": {
@@ -157,11 +161,14 @@ structured = {
 signed = acct.sign_message(encode_typed_data(full_message=structured))
 sig_hex = "0x" + signed.signature.hex()
 
-# 3. Build x402 payment envelope
+# 3. Build x402 v2 payment envelope. The accepted requirement must round-trip
+# exactly enough for strict facilitators to deserialize the EIP-3009 variant.
+accepted = dict(accept)
+accepted["amount"] = amount
+accepted["asset"] = asset
 envelope = {
-    "x402Version": 1,
-    "scheme": "exact",
-    "network": network,
+    "x402Version": 2,
+    "accepted": accepted,
     "payload": {
         "signature": sig_hex,
         "authorization": {
@@ -172,10 +179,6 @@ envelope = {
             "validBefore": valid_before,
             "nonce":       nonce,
         },
-    },
-    "resource": {
-        "payTo": pay_to, "maxAmountRequired": amount,
-        "asset": USDC_ADDRESS, "network": network,
     },
 }
 payment_header = base64.b64encode(json.dumps(envelope).encode()).decode()

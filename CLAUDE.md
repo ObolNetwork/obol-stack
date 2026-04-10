@@ -11,6 +11,7 @@ Obol Stack: framework for AI agents to run decentralised infrastructure locally.
 - **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
 - **Branches**: `feat/`, `fix/`, `research/`, `codex/` prefixes
 - **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
+- **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
 
 ## Build, Test, Run
 
@@ -142,6 +143,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 3. **Unique namespaces** — each deployment must have unique namespace
 4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, serviceoffer-controller, x402-buyer)
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
+6. **Narrow review boundaries** — for controller/RBAC/payment changes, spell out exact security and user-journey invariants before editing or delegating; broad review prompts have previously produced noisy findings and missed test drift
 
 ### OpenClaw Version Management
 

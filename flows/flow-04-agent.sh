@@ -64,6 +64,7 @@ fi
 NS=$("$OBOL" openclaw list 2>/dev/null | grep -oE 'openclaw-[a-z0-9-]+' | head -1 || echo "openclaw-obol-agent")
 
 step "Agent inference via port-forward"
+kill $(lsof -ti:18789) 2>/dev/null || true
 "$OBOL" kubectl port-forward -n "$NS" svc/openclaw 18789:18789 &>/dev/null &
 PF_PID=$!
 
@@ -78,7 +79,7 @@ done
 out=$(curl -sf --max-time 120 -X POST http://localhost:18789/v1/chat/completions \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
-    -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"}],\"max_tokens\":50,\"stream\":false}" 2>&1) || true
+    -d "{\"model\":\"openclaw\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"}],\"max_tokens\":50,\"stream\":false}" 2>&1) || true
 
 if echo "$out" | grep -q "choices"; then
     pass "Agent inference returned response"
@@ -159,20 +160,20 @@ else
     fail "OpenClaw not routing through LiteLLM — base URL: ${litellm_base:-empty}"
 fi
 
-# §4 RBAC: controller design keeps separate read/write roles for the agent.
-step "RBAC: monetize ClusterRoles exist"
+# §4 RBAC: controller design keeps read cluster-wide, but write namespace-scoped.
+step "RBAC: monetize read ClusterRole and write Role exist"
 cr_read=$("$OBOL" kubectl get clusterrole openclaw-monetize-read 2>&1) || true
-cr_write=$("$OBOL" kubectl get clusterrole openclaw-monetize-write 2>&1) || true
+role_write=$("$OBOL" kubectl get role openclaw-monetize-write -n openclaw-obol-agent 2>&1) || true
 if echo "$cr_read" | grep -q "openclaw-monetize-read" && \
-   echo "$cr_write" | grep -q "openclaw-monetize-write"; then
-    pass "ClusterRoles: openclaw-monetize-read + openclaw-monetize-write"
+   echo "$role_write" | grep -q "openclaw-monetize-write"; then
+    pass "RBAC: read ClusterRole + write Role"
 else
-    fail "Missing monetize ClusterRole(s)"
+    fail "Missing monetize RBAC — read: ${cr_read:0:80} write: ${role_write:0:80}"
 fi
 
-# §4 RBAC: write ClusterRole allows CRUD on ServiceOffers (obol.org)
+# §4 RBAC: write Role allows CRUD on ServiceOffers (obol.org) only in the agent namespace.
 step "RBAC: openclaw-monetize-write can CRUD ServiceOffers"
-write_rules=$("$OBOL" kubectl get clusterrole openclaw-monetize-write \
+write_rules=$("$OBOL" kubectl get role openclaw-monetize-write -n openclaw-obol-agent \
     -o jsonpath='{.rules}' 2>&1) || true
 if echo "$write_rules" | python3 -c "
 import sys, json
@@ -191,16 +192,16 @@ else
     fail "RBAC write rule missing ServiceOffer CRUD — ${write_rules:0:100}"
 fi
 
-# §4: Both monetize ClusterRoleBindings must include openclaw SA as a subject.
+# §4: Read ClusterRoleBinding and write RoleBinding must include openclaw SA as subject.
 step "RBAC: openclaw-monetize bindings have openclaw SA as subject"
 rbac_out=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-read-binding \
     -o jsonpath='{.subjects}' 2>&1) || true
-rbac_write=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-write-binding \
+rbac_write=$("$OBOL" kubectl get rolebinding openclaw-monetize-write-binding -n openclaw-obol-agent \
     -o jsonpath='{.subjects}' 2>&1) || true
 if echo "$rbac_out" | grep -q "openclaw" && echo "$rbac_write" | grep -q "openclaw"; then
-    pass "Both monetize ClusterRoleBindings have openclaw SA"
+    pass "Read ClusterRoleBinding and write RoleBinding have openclaw SA"
 else
-    fail "ClusterRoleBinding missing openclaw SA — read: ${rbac_out:0:50} write: ${rbac_write:0:50}"
+    fail "RBAC binding missing openclaw SA — read: ${rbac_out:0:50} write: ${rbac_write:0:50}"
 fi
 
 # §2 component table: Remote Signer running (getting-started §2 lists it as a component)

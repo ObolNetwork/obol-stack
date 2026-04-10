@@ -37,7 +37,7 @@ Feature: x402 Payment Flow — Real User Journey
   Scenario: Unpaid request returns 402 with pricing
     When the buyer sends an unpaid POST to the priced route
     Then the response status is 402
-    And the response body contains x402Version 1
+    And the response body contains x402Version 2
     And the response body contains a valid accepts array
 
   # ─── Buy-side: paid request returns real inference ──────────────────
