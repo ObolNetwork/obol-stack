@@ -73,6 +73,10 @@ type Controller struct {
 
 	httpClient *http.Client
 
+	// litellmURLOverride is used in tests to point at a local httptest server
+	// instead of the in-cluster litellm Service DNS. Empty in production.
+	litellmURLOverride string
+
 	registrationKey          *ecdsa.PrivateKey
 	registrationOwnerAddress string
 	registrationRPCURL       string

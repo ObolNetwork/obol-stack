@@ -2,19 +2,65 @@ package serviceoffercontroller
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"gopkg.in/yaml.v3"
 )
 
-func newTestControllerWithLiteLLM(ns string) *Controller {
+// litellmFake is a minimal httptest stand-in for the LiteLLM admin API.
+// It records every received request and responds to /model/new, /model/info,
+// and /model/delete. Used to assert that addLiteLLMModelEntry and
+// removeLiteLLMModelEntry hot-add/hot-delete instead of restarting the pod.
+type litellmFake struct {
+	server   *httptest.Server
+	addCalls atomic.Int32
+	delCalls atomic.Int32
+	infoResp []map[string]any // returned from /model/info
+	authSeen atomic.Value     // last Authorization header value
+}
+
+func newLiteLLMFake() *litellmFake {
+	f := &litellmFake{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/model/new", func(w http.ResponseWriter, r *http.Request) {
+		f.authSeen.Store(r.Header.Get("Authorization"))
+		f.addCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		_ = body
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("/model/info", func(w http.ResponseWriter, r *http.Request) {
+		f.authSeen.Store(r.Header.Get("Authorization"))
+		payload := map[string]any{"data": f.infoResp}
+		b, _ := json.Marshal(payload)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	})
+	mux.HandleFunc("/model/delete", func(w http.ResponseWriter, r *http.Request) {
+		f.authSeen.Store(r.Header.Get("Authorization"))
+		f.delCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	f.server = httptest.NewServer(mux)
+	return f
+}
+
+func (f *litellmFake) close() { f.server.Close() }
+
+func newTestControllerWithLiteLLM(ns string) (*Controller, *litellmFake) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "litellm-config",
@@ -24,20 +70,27 @@ func newTestControllerWithLiteLLM(ns string) *Controller {
 			"config.yaml": "model_list: []\n",
 		},
 	}
-	deploy := &appsv1.Deployment{
+	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "litellm",
+			Name:      "litellm-secrets",
 			Namespace: ns,
 		},
+		Data: map[string][]byte{
+			"LITELLM_MASTER_KEY": []byte("sk-obol-test"),
+		},
 	}
-	kubeClient := fake.NewSimpleClientset(cm, deploy)
+	kubeClient := fake.NewSimpleClientset(cm, secret)
+	fakeAPI := newLiteLLMFake()
 	return &Controller{
-		kubeClient: kubeClient,
-	}
+		kubeClient:         kubeClient,
+		httpClient:         &http.Client{Timeout: 5 * time.Second},
+		litellmURLOverride: fakeAPI.server.URL,
+	}, fakeAPI
 }
 
-func TestAddLiteLLMModelEntryUpdatesConfigMapAndRestarts(t *testing.T) {
-	c := newTestControllerWithLiteLLM("llm")
+func TestAddLiteLLMModelEntryUpdatesConfigMapAndHotAdds(t *testing.T) {
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
 
 	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
 
@@ -61,43 +114,74 @@ func TestAddLiteLLMModelEntryUpdatesConfigMapAndRestarts(t *testing.T) {
 		t.Fatalf("litellm_params.model = %q", entry.LiteLLMParams.Model)
 	}
 
-	deploy, err := c.kubeClient.AppsV1().Deployments("llm").Get(context.Background(), "litellm", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get litellm deployment: %v", err)
+	if got := fakeAPI.addCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 call to /model/new, got %d", got)
 	}
-	if deploy.Spec.Template.Annotations["obol.org/restartedAt"] == "" {
-		t.Fatal("expected rollout restart annotation to be set")
+	if auth, _ := fakeAPI.authSeen.Load().(string); auth != "Bearer sk-obol-test" {
+		t.Fatalf("authorization header = %q, want Bearer sk-obol-test", auth)
 	}
 }
 
 func TestAddLiteLLMModelEntryIsIdempotent(t *testing.T) {
-	c := newTestControllerWithLiteLLM("llm")
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
 
 	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
-	deploy1, _ := c.kubeClient.AppsV1().Deployments("llm").Get(context.Background(), "litellm", metav1.GetOptions{})
-	restartedAt := deploy1.Spec.Template.Annotations["obol.org/restartedAt"]
+	firstCalls := fakeAPI.addCalls.Load()
 	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
 
 	cm, _ := c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), "litellm-config", metav1.GetOptions{})
 	if strings.Count(cm.Data["config.yaml"], "paid/qwen3.5:9b") != 2 {
 		t.Fatal("expected exactly one model entry and one openai target reference")
 	}
-	deploy2, _ := c.kubeClient.AppsV1().Deployments("llm").Get(context.Background(), "litellm", metav1.GetOptions{})
-	if deploy2.Spec.Template.Annotations["obol.org/restartedAt"] != restartedAt {
-		t.Fatal("idempotent add should not trigger a second restart")
+	if got := fakeAPI.addCalls.Load(); got != firstCalls {
+		t.Fatalf("idempotent add should not re-hit /model/new, got %d calls total", got)
+	}
+}
+
+func TestAddLiteLLMModelEntryNeverRestartsDeployment(t *testing.T) {
+	// Deliberately omit any Deployment from the fake client. The controller
+	// must never touch Deployments during model add — if it tries, the fake
+	// client will surface a NotFound error that would be logged but harmless.
+	// What matters: no rollout annotation should appear under any code path,
+	// because restartLiteLLM no longer exists.
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
+
+	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
+
+	// There should be no Deployment list action at all.
+	deployList, err := c.kubeClient.AppsV1().Deployments("llm").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list deployments: %v", err)
+	}
+	if len(deployList.Items) != 0 {
+		t.Fatalf("add should not create a Deployment; got %d", len(deployList.Items))
 	}
 }
 
 func TestAddLiteLLMModelEntryHandlesMissingConfigMap(t *testing.T) {
 	kubeClient := fake.NewSimpleClientset()
-	c := &Controller{kubeClient: kubeClient}
+	c := &Controller{
+		kubeClient: kubeClient,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
 	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/test-model")
 }
 
-func TestRemoveLiteLLMModelEntryUpdatesConfigMapAndRestarts(t *testing.T) {
-	c := newTestControllerWithLiteLLM("llm")
-	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
+func TestRemoveLiteLLMModelEntryUpdatesConfigMapAndHotDeletes(t *testing.T) {
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
 
+	// Seed /model/info with a matching entry so hot-delete resolves an ID.
+	fakeAPI.infoResp = []map[string]any{
+		{
+			"model_name": "paid/qwen3.5:9b",
+			"model_info": map[string]any{"id": "abc-123"},
+		},
+	}
+
+	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
 	c.removeLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
 
 	cm, err := c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), "litellm-config", metav1.GetOptions{})
@@ -107,16 +191,29 @@ func TestRemoveLiteLLMModelEntryUpdatesConfigMapAndRestarts(t *testing.T) {
 	if strings.Contains(cm.Data["config.yaml"], "paid/qwen3.5:9b") {
 		t.Fatal("expected model entry to be removed from config.yaml")
 	}
+	if got := fakeAPI.delCalls.Load(); got != 1 {
+		t.Fatalf("expected 1 call to /model/delete, got %d", got)
+	}
 }
 
 func TestRemoveLiteLLMModelEntryNoMatch(t *testing.T) {
-	c := newTestControllerWithLiteLLM("llm")
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
+
+	// Config map has no matching entry → early return, no API call.
 	c.removeLiteLLMModelEntry(context.Background(), "llm", "paid/nonexistent")
+	if got := fakeAPI.delCalls.Load(); got != 0 {
+		t.Fatalf("expected no /model/delete calls for missing entry, got %d", got)
+	}
 }
 
 func TestRemoveLiteLLMModelEntryServerError(t *testing.T) {
+	// No ConfigMap in the fake client → read fails, function logs and returns.
 	kubeClient := fake.NewSimpleClientset()
-	c := &Controller{kubeClient: kubeClient}
+	c := &Controller{
+		kubeClient: kubeClient,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
 	c.removeLiteLLMModelEntry(context.Background(), "llm", "paid/test-model")
 }
 

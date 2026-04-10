@@ -108,12 +108,12 @@ spec:
                       description: "USDC contract address"
             status:
               type: object
-            properties:
-              observedGeneration:
-                type: integer
-                format: int64
-              conditions:
-                type: array
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
                   items:
                     type: object
                     properties:

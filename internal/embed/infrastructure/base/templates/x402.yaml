@@ -127,6 +127,13 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Scoped to litellm-secrets only. Needed to read LITELLM_MASTER_KEY for
+  # hot-add/hot-delete via the LiteLLM HTTP API (no pod restart — preserves
+  # the x402-buyer sidecar's pod-local consumed-auth state).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["litellm-secrets"]
+    verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "create", "update", "patch", "delete"]

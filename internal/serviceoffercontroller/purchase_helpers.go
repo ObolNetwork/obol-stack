@@ -1,6 +1,7 @@
 package serviceoffercontroller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,14 +14,181 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	buyerConfigCM = "x402-buyer-config"
-	buyerAuthsCM  = "x402-buyer-auths"
+	buyerConfigCM    = "x402-buyer-config"
+	buyerAuthsCM     = "x402-buyer-auths"
+	litellmSecret    = "litellm-secrets"
+	litellmMasterKey = "LITELLM_MASTER_KEY"
 )
+
+// litellmBaseURL returns the LiteLLM HTTP base URL. In production it resolves
+// to the in-cluster Service DNS; tests can set Controller.litellmURLOverride
+// to an httptest server instead.
+func (c *Controller) litellmBaseURL(ns string) string {
+	if c.litellmURLOverride != "" {
+		return c.litellmURLOverride
+	}
+	return fmt.Sprintf("http://litellm.%s.svc:4000", ns)
+}
+
+// getLiteLLMMasterKey reads the master key from the litellm-secrets Secret.
+// The controller needs `secrets:get` RBAC on this Secret in the target
+// namespace (granted to the serviceoffer-controller ClusterRole).
+func (c *Controller) getLiteLLMMasterKey(ctx context.Context, ns string) (string, error) {
+	secret, err := c.kubeClient.CoreV1().Secrets(ns).Get(ctx, litellmSecret, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get %s/%s: %w", ns, litellmSecret, err)
+	}
+	key := string(secret.Data[litellmMasterKey])
+	if key == "" {
+		return "", fmt.Errorf("%s has empty %s", litellmSecret, litellmMasterKey)
+	}
+	return key, nil
+}
+
+// hotAddLiteLLMModel adds a model via the LiteLLM /model/new HTTP API. The
+// in-memory router is updated without a pod restart, preserving the x402-buyer
+// sidecar's consumed-auth state (which lives in a pod-local emptyDir and would
+// be wiped by a rollout).
+//
+// Returns an error if the API call fails; callers fall back to a pod restart
+// only as a last resort — see addLiteLLMModelEntry.
+func (c *Controller) hotAddLiteLLMModel(ctx context.Context, ns string, entry model.ModelEntry) error {
+	masterKey, err := c.getLiteLLMMasterKey(ctx, ns)
+	if err != nil {
+		return err
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model_name": entry.ModelName,
+		"litellm_params": map[string]any{
+			"model":    entry.LiteLLMParams.Model,
+			"api_base": entry.LiteLLMParams.APIBase,
+			"api_key":  entry.LiteLLMParams.APIKey,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal model_new body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.litellmBaseURL(ns)+"/model/new", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+masterKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST /model/new: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("POST /model/new: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+// hotDeleteLiteLLMModel removes a model via the LiteLLM /model/info →
+// /model/delete API. It first queries model IDs by name, then deletes each
+// matching entry. No pod restart — the router mutates in place.
+func (c *Controller) hotDeleteLiteLLMModel(ctx context.Context, ns, modelName string) error {
+	masterKey, err := c.getLiteLLMMasterKey(ctx, ns)
+	if err != nil {
+		return err
+	}
+
+	ids, err := c.litellmModelIDsByName(ctx, ns, masterKey, modelName)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var firstErr error
+	for _, id := range ids {
+		body, _ := json.Marshal(map[string]string{"id": id})
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost,
+			c.litellmBaseURL(ns)+"/model/delete", bytes.NewReader(body))
+		if reqErr != nil {
+			if firstErr == nil {
+				firstErr = reqErr
+			}
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+masterKey)
+
+		resp, doErr := c.httpClient.Do(req)
+		if doErr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("POST /model/delete: %w", doErr)
+			}
+			continue
+		}
+		if resp.StatusCode >= 300 {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			resp.Body.Close()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("POST /model/delete: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+			}
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	return firstErr
+}
+
+// litellmModelIDsByName queries /model/info and returns the model_id values
+// for every entry whose model_name matches. LiteLLM stores one entry per
+// deployment; a single name can map to multiple IDs under load-balanced routes.
+func (c *Controller) litellmModelIDsByName(ctx context.Context, ns, masterKey, modelName string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.litellmBaseURL(ns)+"/model/info", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+masterKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET /model/info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET /model/info: %s", resp.Status)
+	}
+
+	var payload struct {
+		Data []struct {
+			ModelName string `json:"model_name"`
+			ModelInfo struct {
+				ID string `json:"id"`
+			} `json:"model_info"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode model_info: %w", err)
+	}
+
+	var ids []string
+	for _, entry := range payload.Data {
+		if entry.ModelName == modelName && entry.ModelInfo.ID != "" {
+			ids = append(ids, entry.ModelInfo.ID)
+		}
+	}
+	return ids, nil
+}
 
 // ── ConfigMap merge (optimistic concurrency) ────────────────────────────────
 
@@ -80,6 +248,14 @@ func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
 	}
 }
 
+// addLiteLLMModelEntry adds a paid/<model> route to LiteLLM. Writes the
+// ConfigMap (persistence across restarts) and then hot-adds via /model/new
+// (no pod restart — preserves the buyer sidecar's consumed-auth state).
+//
+// If the hot-add API call fails, we do NOT fall back to a pod restart: that
+// would wipe the sidecar's emptyDir /state/consumed.json and cause the
+// facilitator to reject previously-spent auths as double-spends. Instead we
+// log and rely on the ConfigMap being reloaded on the next natural restart.
 func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {
@@ -102,14 +278,15 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 		}
 	}
 
-	cfg.ModelList = append(cfg.ModelList, model.ModelEntry{
+	entry := model.ModelEntry{
 		ModelName: modelName,
 		LiteLLMParams: model.LiteLLMParams{
 			Model:   "openai/" + modelName,
 			APIBase: "http://127.0.0.1:8402",
 			APIKey:  "unused",
 		},
-	})
+	}
+	cfg.ModelList = append(cfg.ModelList, entry)
 
 	rendered, err := yaml.Marshal(&cfg)
 	if err != nil {
@@ -123,7 +300,15 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 		return
 	}
 
-	c.restartLiteLLM(ctx, ns)
+	if err := c.hotAddLiteLLMModel(ctx, ns, entry); err != nil {
+		// Secret missing is a legitimate "API not available" signal — LiteLLM
+		// will pick the model up on its next reload of config.yaml.
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			log.Printf("purchase: hot-add skipped (%v); model will load on next config reload", err)
+			return
+		}
+		log.Printf("purchase: hot-add %s failed: %v; relying on ConfigMap reload", modelName, err)
+	}
 }
 
 func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, error) {
@@ -147,6 +332,10 @@ func preSignedAuthMaps(pr *monetizeapi.PurchaseRequest) ([]map[string]string, er
 	return auths, nil
 }
 
+// removeLiteLLMModelEntry drops a paid/<model> route from LiteLLM. Mirrors
+// addLiteLLMModelEntry: ConfigMap patch (persistence) + hot-delete via the
+// /model/delete API (no pod restart). See addLiteLLMModelEntry for the
+// rationale on not falling back to a rollout restart.
 func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {
@@ -188,21 +377,12 @@ func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName 
 		return
 	}
 
-	c.restartLiteLLM(ctx, ns)
-}
-
-func (c *Controller) restartLiteLLM(ctx context.Context, ns string) {
-	deploy, err := c.kubeClient.AppsV1().Deployments(ns).Get(ctx, "litellm", metav1.GetOptions{})
-	if err != nil {
-		log.Printf("purchase: failed to get litellm deployment: %v", err)
-		return
-	}
-	if deploy.Spec.Template.Annotations == nil {
-		deploy.Spec.Template.Annotations = make(map[string]string)
-	}
-	deploy.Spec.Template.Annotations["obol.org/restartedAt"] = time.Now().UTC().Format(time.RFC3339)
-	if _, err := c.kubeClient.AppsV1().Deployments(ns).Update(ctx, deploy, metav1.UpdateOptions{}); err != nil {
-		log.Printf("purchase: failed to restart litellm: %v", err)
+	if err := c.hotDeleteLiteLLMModel(ctx, ns, modelName); err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			log.Printf("purchase: hot-delete skipped (%v); model will drop on next config reload", err)
+			return
+		}
+		log.Printf("purchase: hot-delete %s failed: %v; relying on ConfigMap reload", modelName, err)
 	}
 }
 
