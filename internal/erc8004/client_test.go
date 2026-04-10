@@ -486,6 +486,37 @@ func TestSetMetadata(t *testing.T) {
 	}
 }
 
+func TestSetMetadata_TransactRevert(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := txMockHandlers(common.HexToHash("0x2222"))
+	handlers["eth_estimateGas"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return nil, errors.New("execution reverted")
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	if err == nil {
+		t.Fatal("expected setMetadata revert error, got nil")
+	}
+	if !strings.Contains(err.Error(), "erc8004: setMetadata tx: execution reverted") {
+		t.Fatalf("error = %q, want setMetadata tx execution reverted", err)
+	}
+}
+
 func TestNewClient_DialError(t *testing.T) {
 	ctx := context.Background()
 	// Use an unreachable address to trigger a dial/chain-id error.
