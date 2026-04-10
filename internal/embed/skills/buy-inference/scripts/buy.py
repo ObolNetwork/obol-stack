@@ -624,7 +624,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     print(f"  Count:      {n} auths requested")
     print()
     print(f"The model is now available as: paid/{model_id}")
-    print(f"Use 'refill {name}' or 'maintain' to top up authorizations.")
+    print(f"Use 'buy {name} --endpoint ... --model ... --count N' again to replace the purchase with a fresh auth pool.")
 
 
 # ---------------------------------------------------------------------------
@@ -632,45 +632,10 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
 # ---------------------------------------------------------------------------
 
 def cmd_refill(name, count=None):
-    """Sign more authorizations for an existing upstream."""
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-
-    buyer_config = _read_buyer_config(token, ssl_ctx)
-    if name not in buyer_config.get("upstreams", {}):
-        print(f"Error: upstream '{name}' not found in sidecar config.",
-              file=sys.stderr)
-        sys.exit(1)
-
-    upstream = buyer_config["upstreams"][name]
-    pay_to = upstream["payTo"]
-    chain = upstream["network"]
-    price = upstream["price"]
-    asset = upstream["asset"]
-
-    # Get signer address.
-    keys_data = _signer_get("/api/v1/keys")
-    keys = keys_data.get("keys", [])
-    if not keys:
-        print("Error: no signing keys.", file=sys.stderr)
-        sys.exit(1)
-    signer_address = keys[0]
-
-    n = min(int(count), MAX_AUTH_COUNT) if count else REFILL_BATCH
-    n = max(n, 1)
-
-    # Pre-sign.
-    new_auths = _presign_auths(signer_address, pay_to, price, chain, asset, n)
-
-    # Merge with existing auths.
-    existing_auths = _read_buyer_auths(token, ssl_ctx)
-    existing = existing_auths.get(name, [])
-    existing.extend(new_auths)
-    existing_auths[name] = existing
-    _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", existing_auths, token, ssl_ctx)
-
-    total = len(existing)
-    print(f"Refilled '{name}': added {n} auths (total pool: {total})")
+    """Refill is disabled until it is implemented via PurchaseRequest reconciliation."""
+    print("refill is not available in the controller-based buy path.", file=sys.stderr)
+    print("Run the buy command again with a new --count to replace the PurchaseRequest auth pool.", file=sys.stderr)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -678,28 +643,19 @@ def cmd_refill(name, count=None):
 # ---------------------------------------------------------------------------
 
 def cmd_list():
-    """List purchased providers from buyer config and sidecar status."""
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-
-    buyer_config = _read_buyer_config(token, ssl_ctx)
-    upstreams = buyer_config.get("upstreams", {})
-
-    if not upstreams:
+    """List purchased providers from live sidecar status."""
+    live_status = _buyer_status() or {}
+    if not live_status:
         print("No purchased x402 providers.")
         return
 
-    live_status = _buyer_status() or {}
-    auths = _read_buyer_auths(token, ssl_ctx)
-
     print(f"{'NAME':<20} {'ALIAS':<32} {'PRICE':<12} {'CHAIN':<15} {'REMAINING'}")
     print("-" * 120)
-    for name, cfg in upstreams.items():
-        status = live_status.get(name, {})
-        remaining = status.get("remaining", len(auths.get(name, [])))
-        alias = f"paid/{cfg.get('remoteModel', name)}"
+    for name, status in live_status.items():
+        remaining = status.get("remaining", 0)
+        alias = status.get("public_model", f"paid/{status.get('remote_model', name)}")
         print(f"{name:<20} {alias:<32} "
-              f"{cfg.get('price', '?'):<12} {cfg.get('network', '?'):<15} "
+              f"{'?':<12} {status.get('network', '?'):<15} "
               f"{remaining}")
 
 
@@ -712,25 +668,18 @@ def cmd_status(name):
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
-    buyer_config = _read_buyer_config(token, ssl_ctx)
-    if name not in buyer_config.get("upstreams", {}):
+    live_status = (_buyer_status() or {}).get(name, {})
+    if not live_status:
         print(f"Upstream '{name}' not found.", file=sys.stderr)
         sys.exit(1)
 
-    cfg = buyer_config["upstreams"][name]
-    live_status = (_buyer_status() or {}).get(name, {})
-    auths = _read_buyer_auths(token, ssl_ctx)
-    auth_count = live_status.get("remaining", len(auths.get(name, [])))
-
     print(f"Upstream: {name}")
-    print(f"Alias:    paid/{cfg.get('remoteModel', name)}")
-    print(f"Endpoint: {cfg.get('url', '?')}")
-    print(f"Model:    {cfg.get('remoteModel', '?')}")
-    print(f"Chain:    {cfg.get('network', '?')}")
-    print(f"Price:    {cfg.get('price', '?')} USDC micro-units")
-    print(f"Asset:    {cfg.get('asset', '?')}")
-    print(f"PayTo:    {cfg.get('payTo', '?')}")
-    print(f"Auths remaining: {auth_count}")
+    print(f"Alias:    {live_status.get('public_model', '?')}")
+    print(f"Endpoint: {live_status.get('url', '?')}")
+    print(f"Model:    {live_status.get('remote_model', '?')}")
+    print(f"Chain:    {live_status.get('network', '?')}")
+    print(f"Auths remaining: {live_status.get('remaining', 0)}")
+    print(f"Auths spent:     {live_status.get('spent', 0)}")
     print()
 
     pod = _get_litellm_pod(token, ssl_ctx)
@@ -769,83 +718,17 @@ def cmd_balance(chain=None):
 # ---------------------------------------------------------------------------
 
 def cmd_remove(name):
-    """Remove a purchased upstream from the sidecar config."""
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-
-    # Remove from sidecar config.
-    buyer_config = _read_buyer_config(token, ssl_ctx)
-    if name in buyer_config.get("upstreams", {}):
-        del buyer_config["upstreams"][name]
-        _write_buyer_configmap(BUYER_CM_CONFIG, "config.json", buyer_config,
-                               token, ssl_ctx)
-        print(f"Removed '{name}' from sidecar config.")
-
-    # Remove auths.
-    auths = _read_buyer_auths(token, ssl_ctx)
-    if name in auths:
-        del auths[name]
-        _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", auths, token, ssl_ctx)
-        print(f"Removed '{name}' auths.")
-
-    print("Done.")
+    """Remove is disabled until it is implemented via PurchaseRequest deletion."""
+    print("remove is not available in the controller-based buy path.", file=sys.stderr)
+    print("Delete the PurchaseRequest through the controller-owned API instead.", file=sys.stderr)
+    sys.exit(1)
 
 
 def cmd_maintain():
-    """Refill low pools, warn on low balance, and remove exhausted mappings."""
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-
-    buyer_config = _read_buyer_config(token, ssl_ctx)
-    upstreams = buyer_config.get("upstreams", {})
-    if not upstreams:
-        print("No purchased x402 providers.")
-        return
-
-    auths = _read_buyer_auths(token, ssl_ctx)
-    status = _buyer_status() or {}
-
-    keys_data = _signer_get("/api/v1/keys")
-    keys = keys_data.get("keys", [])
-    if not keys:
-        print("Error: no signing keys in remote-signer.", file=sys.stderr)
-        sys.exit(1)
-    signer_address = keys[0]
-
-    changed = False
-    for name, upstream in list(upstreams.items()):
-        remaining = status.get(name, {}).get("remaining", len(auths.get(name, [])))
-        if remaining > LOW_WATERMARK:
-            continue
-
-        price = int(upstream["price"])
-        target_cost = REFILL_BATCH * price
-        balance = int(_get_usdc_balance(signer_address, upstream["asset"], upstream["network"]))
-
-        if balance < target_cost:
-            print(f"WARNING {name}: balance {balance} < refill cost {target_cost}")
-            if remaining == 0:
-                del upstreams[name]
-                auths.pop(name, None)
-                changed = True
-                print(f"REMOVED {name}: exhausted and unable to refill")
-            continue
-
-        new_auths = _presign_auths(
-            signer_address,
-            upstream["payTo"],
-            upstream["price"],
-            upstream["network"],
-            upstream["asset"],
-            REFILL_BATCH,
-        )
-        auths.setdefault(name, []).extend(new_auths)
-        changed = True
-        print(f"REFILLED {name}: added {REFILL_BATCH} auths (remaining was {remaining})")
-
-    if changed:
-        _write_buyer_configmap(BUYER_CM_CONFIG, "config.json", buyer_config, token, ssl_ctx)
-        _write_buyer_configmap(BUYER_CM_AUTHS, "auths.json", auths, token, ssl_ctx)
+    """Maintain is disabled until it is implemented via PurchaseRequest reconciliation."""
+    print("maintain is not available in the controller-based buy path.", file=sys.stderr)
+    print("Use status/list to inspect purchases and rerun buy with a new --count when needed.", file=sys.stderr)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -885,12 +768,10 @@ def usage():
     print("  probe <endpoint-url> [--model <id>]          Probe x402 pricing")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
-    print("  refill <name> [--count <N>]                  Sign more auths")
-    print("  maintain                                     Refill low pools and remove exhausted mappings")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
     print("  balance [--chain <network>]                  Check USDC balance")
-    print("  remove <name>                                Remove provider")
+    print("  refill|maintain|remove                       Not available in controller mode")
 
 
 if __name__ == "__main__":
