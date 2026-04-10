@@ -29,6 +29,9 @@ func TestStoreCreateAndGet(t *testing.T) {
 	if d.Chain == "" {
 		t.Error("Chain should have been set by Create")
 	}
+	if d.Chain != "base" {
+		t.Errorf("Chain = %q, want %q", d.Chain, "base")
+	}
 
 	if d.CreatedAt == "" {
 		t.Error("CreatedAt should have been set by Create")
@@ -49,6 +52,9 @@ func TestStoreCreateAndGet(t *testing.T) {
 
 	if got.EnclaveTag != "com.obol.inference.test-deploy" {
 		t.Errorf("unexpected EnclaveTag: %s", got.EnclaveTag)
+	}
+	if got.Chain != "base" {
+		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")
 	}
 }
 

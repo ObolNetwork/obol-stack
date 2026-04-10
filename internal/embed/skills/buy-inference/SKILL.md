@@ -128,7 +128,7 @@ Agent (buy.py)                       Runtime
 |----------|---------|-------------|
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
-| `ERPC_NETWORK` | `base-sepolia` | Default chain for balance queries |
+| `ERPC_NETWORK` | `base` | Default chain for balance queries |
 
 ## Constraints
 
