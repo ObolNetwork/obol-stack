@@ -329,32 +329,84 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 
 // agentNamespace returns the namespace of the OpenClaw instance that has
 // monetize RBAC. This is always the "obol-agent" instance ("openclaw-obol-agent").
-func agentNamespace(cfg *config.Config) string {
+type listedAgentInstance struct {
+	ID        string
+	Namespace string
+}
+
+func listedAgentInstances(cfg *config.Config) []listedAgentInstance {
 	out, err := obolRunErr(cfg, "openclaw", "list")
 	if err != nil {
-		return "openclaw-obol-agent"
+		return nil
 	}
-	// Collect all namespaces from output.
-	var namespaces []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Namespace:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				namespaces = append(namespaces, parts[1])
+
+	var (
+		instances []listedAgentInstance
+		currentID string
+	)
+	for _, raw := range strings.Split(out, "\n") {
+		if strings.HasPrefix(raw, "  ") {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if strings.HasPrefix(trimmed, "Namespace:") {
+				if currentID == "" {
+					continue
+				}
+				parts := strings.Fields(trimmed)
+				if len(parts) >= 2 {
+					instances = append(instances, listedAgentInstance{
+						ID:        currentID,
+						Namespace: parts[1],
+					})
+				}
+				continue
+			}
+			if !strings.Contains(trimmed, ":") {
+				currentID = trimmed
 			}
 		}
 	}
-	// Prefer obol-agent (has RBAC from `obol agent init`).
-	for _, ns := range namespaces {
-		if ns == "openclaw-obol-agent" {
-			return ns
+
+	return instances
+}
+
+func hasOpenClawDeployment(cfg *config.Config, namespace string) bool {
+	_, err := obolRunErr(cfg, "kubectl", "get", "deploy", "openclaw", "-n", namespace)
+	return err == nil
+}
+
+func agentNamespace(cfg *config.Config) string {
+	instances := listedAgentInstances(cfg)
+	for _, inst := range instances {
+		if inst.ID == "obol-agent" && hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.Namespace
 		}
 	}
-	if len(namespaces) > 0 {
-		return namespaces[0]
+	for _, inst := range instances {
+		if hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.Namespace
+		}
 	}
+
 	return "openclaw-obol-agent"
+}
+
+func agentInstanceID(cfg *config.Config) string {
+	instances := listedAgentInstances(cfg)
+	for _, inst := range instances {
+		if inst.ID == "obol-agent" && hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.ID
+		}
+	}
+	for _, inst := range instances {
+		if hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.ID
+		}
+	}
+
+	return "obol-agent"
 }
 
 // requireAgent skips the test if no OpenClaw instance is deployed.
@@ -3501,7 +3553,7 @@ func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
 		t.Fatal("runtime.Caller failed")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	obolRun(t, cfg, "openclaw", "skills", "sync", "obol-agent", "--from", filepath.Join(repoRoot, "internal", "embed", "skills"))
+	obolRun(t, cfg, "openclaw", "skills", "sync", agentInstanceID(cfg), "--from", filepath.Join(repoRoot, "internal", "embed", "skills"))
 	t.Log("synced embedded skills to running OpenClaw instance")
 	obolRun(t, cfg, "kubectl", "delete", "purchaserequests.obol.org", "-n", agentNamespace(cfg), "--all", "--ignore-not-found")
 	time.Sleep(5 * time.Second)
@@ -3625,6 +3677,7 @@ spec:
 
 	buyerBefore := anvil.GetERC20Balance(t, obolToken, agentWallet)
 	sellerBefore := anvil.GetERC20Balance(t, obolToken, sellerAddr)
+	settlementFromBlock := anvil.BlockNumber(t)
 
 	statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "reply with one short paid word")
 	if statusCode != http.StatusOK {
@@ -3648,6 +3701,21 @@ spec:
 		t.Fatalf("OBOL settlement did not complete: buyer before=%s after=%s seller before=%s after=%s", buyerBefore, buyerAfter, sellerBefore, sellerAfter)
 	}
 
+	receipt := anvil.FindERC20TransferReceipt(t, obolToken, agentWallet, sellerAddr, settlementFromBlock)
+	gasUsed := testutil.ParseHexBigInt(t, receipt.GasUsed)
+	effectiveGasPrice := testutil.ParseHexBigInt(t, receipt.EffectiveGasPrice)
+	totalGasWei := new(big.Int).Mul(new(big.Int).Set(gasUsed), effectiveGasPrice)
+	t.Logf(
+		"OBOL settlement receipt: tx=%s block=%s from=%s to=%s status=%s gasUsed=%s effectiveGasPriceWei=%s totalGasWei=%s",
+		receipt.TransactionHash,
+		receipt.BlockNumber,
+		receipt.From,
+		receipt.To,
+		receipt.Status,
+		gasUsed.String(),
+		effectiveGasPrice.String(),
+		totalGasWei.String(),
+	)
 	t.Logf("OBOL sidecar flow complete: token=%s buyer delta=-%s seller delta=+%s", obolToken, new(big.Int).Sub(buyerBefore, buyerAfter), new(big.Int).Sub(sellerAfter, sellerBefore))
 }
 

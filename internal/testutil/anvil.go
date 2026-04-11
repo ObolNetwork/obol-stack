@@ -48,6 +48,16 @@ type AnvilAccount struct {
 	PrivateKey string
 }
 
+type AnvilTransactionReceipt struct {
+	TransactionHash   string `json:"transactionHash"`
+	BlockNumber       string `json:"blockNumber"`
+	From              string `json:"from"`
+	To                string `json:"to"`
+	Status            string `json:"status"`
+	GasUsed           string `json:"gasUsed"`
+	EffectiveGasPrice string `json:"effectiveGasPrice"`
+}
+
 // defaultAnvilAccounts returns the 10 deterministic accounts that Anvil
 // always creates with 10000 ETH each.
 func defaultAnvilAccounts() []AnvilAccount {
@@ -296,6 +306,120 @@ func (f *AnvilFork) GetERC20Balance(t *testing.T, tokenAddr, addr string) *big.I
 	balance.SetString(strings.TrimPrefix(result.Result, "0x"), 16)
 
 	return balance
+}
+
+func (f *AnvilFork) BlockNumber(t *testing.T) uint64 {
+	t.Helper()
+
+	body := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("eth_blockNumber failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &result); err != nil {
+		t.Fatalf("parse eth_blockNumber response: %v", err)
+	}
+
+	block, err := strconv.ParseUint(strings.TrimPrefix(result.Result, "0x"), 16, 64)
+	if err != nil {
+		t.Fatalf("parse eth_blockNumber %q: %v", result.Result, err)
+	}
+
+	return block
+}
+
+func (f *AnvilFork) FindERC20TransferReceipt(t *testing.T, tokenAddr, from, to string, fromBlock uint64) *AnvilTransactionReceipt {
+	t.Helper()
+
+	transferTopic := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)")).Hex()
+	fromTopic := common.LeftPadBytes(common.HexToAddress(from).Bytes(), 32)
+	toTopic := common.LeftPadBytes(common.HexToAddress(to).Bytes(), 32)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getLogs",
+		"params": []any{
+			map[string]any{
+				"address":   tokenAddr,
+				"fromBlock": fmt.Sprintf("0x%x", fromBlock),
+				"toBlock":   "latest",
+				"topics": []string{
+					transferTopic,
+					common.BytesToHash(fromTopic).Hex(),
+					common.BytesToHash(toTopic).Hex(),
+				},
+			},
+		},
+		"id": 1,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal eth_getLogs payload: %v", err)
+	}
+
+	resp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getLogs failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var logsResp struct {
+		Result []struct {
+			TransactionHash string `json:"transactionHash"`
+		} `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &logsResp); err != nil {
+		t.Fatalf("parse eth_getLogs response: %v", err)
+	}
+	if len(logsResp.Result) == 0 {
+		t.Fatalf("no ERC20 Transfer logs found for token=%s from=%s to=%s fromBlock=%d", tokenAddr, from, to, fromBlock)
+	}
+
+	txHash := logsResp.Result[len(logsResp.Result)-1].TransactionHash
+	receiptPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getTransactionReceipt",
+		"params":  []string{txHash},
+		"id":      1,
+	}
+	data, err = json.Marshal(receiptPayload)
+	if err != nil {
+		t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
+	}
+
+	receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getTransactionReceipt failed: %v", err)
+	}
+	defer receiptResp.Body.Close()
+
+	var receipt struct {
+		Result *AnvilTransactionReceipt `json:"result"`
+	}
+	if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
+		t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
+	}
+	if receipt.Result == nil {
+		t.Fatalf("no transaction receipt found for hash %s", txHash)
+	}
+
+	return receipt.Result
+}
+
+func ParseHexBigInt(t *testing.T, hexValue string) *big.Int {
+	t.Helper()
+
+	value := new(big.Int)
+	if _, ok := value.SetString(strings.TrimPrefix(hexValue, "0x"), 16); !ok {
+		t.Fatalf("parse hex big.Int %q", hexValue)
+	}
+
+	return value
 }
 
 // DeployForkObolToken deploys a fork-local OBOL-compatible ERC20Permit token
