@@ -89,6 +89,7 @@ SEL_NONCES = "7ecebe00"
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
 MAX_AUTH_COUNT = 1000         # Cap to prevent excessive signing time
+PERMIT2_SAFE_AUTH_COUNT = 500 # Current ConfigMap-backed exact path ceiling is ~537 auths
 LOW_WATERMARK = 10
 REFILL_BATCH = 100
 
@@ -809,6 +810,9 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
         n = min(budget_val // price_int, MAX_AUTH_COUNT)
     else:
         n = DEFAULT_AUTH_COUNT
+    if extra.get("assetTransferMethod", "eip3009") == "permit2" and n > PERMIT2_SAFE_AUTH_COUNT:
+        print(f"  Capping permit2 auth pool from {n} to {PERMIT2_SAFE_AUTH_COUNT} to stay within current ConfigMap storage limits")
+        n = PERMIT2_SAFE_AUTH_COUNT
     n = max(n, 1)
 
     total_cost = n * price_int

@@ -176,7 +176,7 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 	pr.Spec.Payment.EIP712Name = accept.Extra.Name
 	pr.Spec.Payment.EIP712Version = accept.Extra.Version
 	setPurchaseCondition(&status.Conditions, "Probed", "True", "Validated",
-		fmt.Sprintf("402: %s micro-USDC on %s", price, accept.Network))
+		fmt.Sprintf("402: %s on %s", price, accept.Network))
 	return nil
 }
 
