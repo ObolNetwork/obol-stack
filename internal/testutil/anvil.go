@@ -500,72 +500,6 @@ func (f *AnvilFork) FindERC20TransferReceipts(t *testing.T, tokenAddr, from, to 
 	return receipts
 }
 
-func (f *AnvilFork) TransactionReceipt(t *testing.T, txHash string) *AnvilTransactionReceipt {
-	t.Helper()
-
-	receiptPayload := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "eth_getTransactionReceipt",
-		"params":  []string{txHash},
-		"id":      1,
-	}
-	data, err := json.Marshal(receiptPayload)
-	if err != nil {
-		t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
-	}
-
-	receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("eth_getTransactionReceipt failed: %v", err)
-	}
-	defer receiptResp.Body.Close()
-
-	var receipt struct {
-		Result *AnvilTransactionReceipt `json:"result"`
-	}
-	if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
-		t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
-	}
-	if receipt.Result == nil {
-		t.Fatalf("no transaction receipt found for hash %s", txHash)
-	}
-
-	return receipt.Result
-}
-
-func (f *AnvilFork) SendContractTx(
-	t *testing.T,
-	privateKey,
-	contractAddr,
-	signature string,
-	args ...string,
-) *AnvilTransactionReceipt {
-	t.Helper()
-
-	cmdArgs := []string{
-		"send",
-		"--async",
-		"--rpc-url", f.RPCURL,
-		"--private-key", privateKey,
-		contractAddr,
-		signature,
-	}
-	cmdArgs = append(cmdArgs, args...)
-
-	cmd := exec.Command("cast", cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("cast send failed: %v\n%s", err, string(out))
-	}
-
-	txHash := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(txHash, "0x") {
-		t.Fatalf("cast send did not return a tx hash: %s", txHash)
-	}
-
-	return f.TransactionReceipt(t, txHash)
-}
-
 func ParseHexBigInt(t *testing.T, hexValue string) *big.Int {
 	t.Helper()
 
@@ -623,52 +557,6 @@ func (f *AnvilFork) DeployForkObolToken(t *testing.T, deployerKey, initialHolder
 		t.Fatalf("forge create did not return deployedTo: %s", out.String())
 	}
 	t.Logf("deployed fork OBOL token at %s", result.DeployedTo)
-	return result.DeployedTo
-}
-
-func (f *AnvilFork) DeploySessionPermitEscrow(t *testing.T, deployerKey, facilitator string) string {
-	t.Helper()
-
-	if _, err := exec.LookPath("forge"); err != nil {
-		t.Skip("forge not installed — required for session escrow deployment")
-	}
-
-	build := exec.Command("forge", "build")
-	build.Dir = filepathJoinRepoRoot(t, ForkObolProjectDir)
-	build.Stdout = os.Stderr
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatalf("forge build fork-obol failed: %v", err)
-	}
-
-	args := []string{
-		"create",
-		"--root", filepathJoinRepoRoot(t, ForkObolProjectDir),
-		"src/SessionPermitEscrow.sol:SessionPermitEscrow",
-		"--rpc-url", f.RPCURL,
-		"--private-key", deployerKey,
-		"--broadcast",
-		"--json",
-		"--constructor-args", facilitator,
-	}
-	cmd := exec.Command("forge", args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("forge create SessionPermitEscrow failed: %v", err)
-	}
-
-	var result struct {
-		DeployedTo string `json:"deployedTo"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatalf("parse forge create output: %v\n%s", err, out.String())
-	}
-	if result.DeployedTo == "" {
-		t.Fatalf("forge create did not return deployedTo: %s", out.String())
-	}
-	t.Logf("deployed session escrow at %s", result.DeployedTo)
 	return result.DeployedTo
 }
 
