@@ -125,6 +125,27 @@ def _normalize_chain_name(network):
     return CAIP2_TO_CHAIN.get(network, network)
 
 
+def _asset_display_meta(asset, extra=None):
+    """Best-effort display metadata for user-facing balance/price output."""
+    extra = extra or {}
+    asset_lower = (asset or "").lower()
+    if asset_lower in {addr.lower() for addr in USDC_CONTRACTS.values()}:
+        return ("USDC", 6, "micro-units")
+    if extra.get("name") == "Obol Network":
+        return ("OBOL", 18, "base-units")
+    return ("asset", None, "base-units")
+
+
+def _format_amount(amount, asset, extra=None):
+    """Render an integer token amount with best-effort symbol/decimals."""
+    symbol, decimals, units_label = _asset_display_meta(asset, extra)
+    raw = int(amount)
+    if decimals is None:
+        return f"{raw} {units_label}"
+    scaled = raw / (10 ** decimals)
+    return f"{raw} {units_label} ({scaled:.6f} {symbol})"
+
+
 # ---------------------------------------------------------------------------
 # Buyer sidecar status helpers
 # ---------------------------------------------------------------------------
@@ -704,8 +725,11 @@ def cmd_probe(endpoint_url, model_id=None):
         print(f"  Payment option {i + 1}:")
         print(f"    payTo:   {acc.get('payTo', '?')}")
         print(f"    network: {acc.get('network', '?')}")
-        print(f"    price:   {amount} USDC micro-units")
         asset = acc.get("asset")
+        if amount != "?":
+            print(f"    price:   {_format_amount(amount, asset, extra)}")
+        else:
+            print(f"    price:   {amount}")
         if asset:
             print(f"    asset:   {asset}")
         if extra.get("assetTransferMethod"):
@@ -764,7 +788,8 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     # 3. Check USDC balance.
     usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
     balance = _get_usdc_balance(signer_address, usdc_addr, chain)
-    print(f"  USDC balance: {balance} micro-units ({int(balance) / 1_000_000:.6f} USDC)")
+    symbol, _, _ = _asset_display_meta(usdc_addr, extra)
+    print(f"  {symbol} balance: {_format_amount(balance, usdc_addr, extra)}")
 
     # 4. Calculate count.
     budget_val = int(budget) if budget else int(DEFAULT_BUDGET)
@@ -778,14 +803,13 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     n = max(n, 1)
 
     total_cost = n * price_int
-    print(f"  Signing {n} authorizations (total cost: {total_cost} micro-units = "
-          f"{total_cost / 1_000_000:.6f} USDC)")
+    print(f"  Signing {n} authorizations (total cost: {_format_amount(total_cost, usdc_addr, extra)})")
 
     if int(balance) < total_cost:
         force = "--force" in sys.argv
         if not force:
             print(f"  Error: balance ({balance}) < total cost ({total_cost}).", file=sys.stderr)
-            print(f"  Fund wallet {signer_address} with USDC on {chain}, "
+            print(f"  Fund wallet {signer_address} with {symbol} on {chain}, "
                   "or pass --force to proceed anyway.", file=sys.stderr)
             sys.exit(1)
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
@@ -821,7 +845,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
         print(f"  python3 scripts/buy.py status {name}")
     print(f"  Alias:      paid/{model_id}")
     print(f"  Endpoint:   {ep}")
-    print(f"  Price:      {price} micro-units per request")
+    print(f"  Price:      {_format_amount(price, usdc_addr, extra)} per request")
     print(f"  Chain:      {chain}")
     print(f"  Count:      {n} auths requested")
     print()
