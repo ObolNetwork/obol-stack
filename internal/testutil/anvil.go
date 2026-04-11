@@ -411,6 +411,161 @@ func (f *AnvilFork) FindERC20TransferReceipt(t *testing.T, tokenAddr, from, to s
 	return receipt.Result
 }
 
+func (f *AnvilFork) FindERC20TransferReceipts(t *testing.T, tokenAddr, from, to string, fromBlock uint64) []*AnvilTransactionReceipt {
+	t.Helper()
+
+	transferTopic := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)")).Hex()
+	fromTopic := common.LeftPadBytes(common.HexToAddress(from).Bytes(), 32)
+	toTopic := common.LeftPadBytes(common.HexToAddress(to).Bytes(), 32)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getLogs",
+		"params": []any{
+			map[string]any{
+				"address":   tokenAddr,
+				"fromBlock": fmt.Sprintf("0x%x", fromBlock),
+				"toBlock":   "latest",
+				"topics": []string{
+					transferTopic,
+					common.BytesToHash(fromTopic).Hex(),
+					common.BytesToHash(toTopic).Hex(),
+				},
+			},
+		},
+		"id": 1,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal eth_getLogs payload: %v", err)
+	}
+
+	resp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getLogs failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var logsResp struct {
+		Result []struct {
+			TransactionHash string `json:"transactionHash"`
+		} `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &logsResp); err != nil {
+		t.Fatalf("parse eth_getLogs response: %v", err)
+	}
+	if len(logsResp.Result) == 0 {
+		t.Fatalf("no ERC20 Transfer logs found for token=%s from=%s to=%s fromBlock=%d", tokenAddr, from, to, fromBlock)
+	}
+
+	seen := make(map[string]struct{}, len(logsResp.Result))
+	receipts := make([]*AnvilTransactionReceipt, 0, len(logsResp.Result))
+	for _, logEntry := range logsResp.Result {
+		txHash := logEntry.TransactionHash
+		if _, ok := seen[txHash]; ok {
+			continue
+		}
+		seen[txHash] = struct{}{}
+
+		receiptPayload := map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "eth_getTransactionReceipt",
+			"params":  []string{txHash},
+			"id":      1,
+		}
+		data, err = json.Marshal(receiptPayload)
+		if err != nil {
+			t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
+		}
+
+		receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("eth_getTransactionReceipt failed: %v", err)
+		}
+
+		var receipt struct {
+			Result *AnvilTransactionReceipt `json:"result"`
+		}
+		if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
+			receiptResp.Body.Close()
+			t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
+		}
+		receiptResp.Body.Close()
+		if receipt.Result == nil {
+			t.Fatalf("no transaction receipt found for hash %s", txHash)
+		}
+		receipts = append(receipts, receipt.Result)
+	}
+
+	return receipts
+}
+
+func (f *AnvilFork) TransactionReceipt(t *testing.T, txHash string) *AnvilTransactionReceipt {
+	t.Helper()
+
+	receiptPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getTransactionReceipt",
+		"params":  []string{txHash},
+		"id":      1,
+	}
+	data, err := json.Marshal(receiptPayload)
+	if err != nil {
+		t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
+	}
+
+	receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getTransactionReceipt failed: %v", err)
+	}
+	defer receiptResp.Body.Close()
+
+	var receipt struct {
+		Result *AnvilTransactionReceipt `json:"result"`
+	}
+	if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
+		t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
+	}
+	if receipt.Result == nil {
+		t.Fatalf("no transaction receipt found for hash %s", txHash)
+	}
+
+	return receipt.Result
+}
+
+func (f *AnvilFork) SendContractTx(
+	t *testing.T,
+	privateKey,
+	contractAddr,
+	signature string,
+	args ...string,
+) *AnvilTransactionReceipt {
+	t.Helper()
+
+	cmdArgs := []string{
+		"send",
+		"--async",
+		"--rpc-url", f.RPCURL,
+		"--private-key", privateKey,
+		contractAddr,
+		signature,
+	}
+	cmdArgs = append(cmdArgs, args...)
+
+	cmd := exec.Command("cast", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cast send failed: %v\n%s", err, string(out))
+	}
+
+	txHash := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(txHash, "0x") {
+		t.Fatalf("cast send did not return a tx hash: %s", txHash)
+	}
+
+	return f.TransactionReceipt(t, txHash)
+}
+
 func ParseHexBigInt(t *testing.T, hexValue string) *big.Int {
 	t.Helper()
 
@@ -468,6 +623,52 @@ func (f *AnvilFork) DeployForkObolToken(t *testing.T, deployerKey, initialHolder
 		t.Fatalf("forge create did not return deployedTo: %s", out.String())
 	}
 	t.Logf("deployed fork OBOL token at %s", result.DeployedTo)
+	return result.DeployedTo
+}
+
+func (f *AnvilFork) DeploySessionPermitEscrow(t *testing.T, deployerKey, facilitator string) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("forge"); err != nil {
+		t.Skip("forge not installed — required for session escrow deployment")
+	}
+
+	build := exec.Command("forge", "build")
+	build.Dir = filepathJoinRepoRoot(t, ForkObolProjectDir)
+	build.Stdout = os.Stderr
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("forge build fork-obol failed: %v", err)
+	}
+
+	args := []string{
+		"create",
+		"--root", filepathJoinRepoRoot(t, ForkObolProjectDir),
+		"src/SessionPermitEscrow.sol:SessionPermitEscrow",
+		"--rpc-url", f.RPCURL,
+		"--private-key", deployerKey,
+		"--broadcast",
+		"--json",
+		"--constructor-args", facilitator,
+	}
+	cmd := exec.Command("forge", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("forge create SessionPermitEscrow failed: %v", err)
+	}
+
+	var result struct {
+		DeployedTo string `json:"deployedTo"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("parse forge create output: %v\n%s", err, out.String())
+	}
+	if result.DeployedTo == "" {
+		t.Fatalf("forge create did not return deployedTo: %s", out.String())
+	}
+	t.Logf("deployed session escrow at %s", result.DeployedTo)
 	return result.DeployedTo
 }
 

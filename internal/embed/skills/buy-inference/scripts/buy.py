@@ -426,12 +426,18 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
     transfer_method = extra.get("assetTransferMethod", "eip3009")
     domain_name = extra.get("name", USDC_DOMAIN_NAME)
     domain_version = extra.get("version", USDC_DOMAIN_VERSION)
+    eip2612_enabled = (
+        transfer_method == "permit2" and
+        ("eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain))
+    )
+    permit_nonce_base = int(_get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)) if eip2612_enabled else None
 
     print(f"Pre-signing {count} payment authorizations ...")
     for i in range(count):
         if transfer_method == "permit2":
             valid_after = str(max(0, int(time.time()) - 600))
-            deadline = str(int(time.time()) + int(payment.get("maxTimeoutSeconds", 60)))
+            expiry_window = max(int(payment.get("maxTimeoutSeconds", 60)), 300)
+            deadline = str(int(time.time()) + expiry_window)
             permit2_nonce = str(int.from_bytes(secrets.token_bytes(32), "big"))
             typed_data = {
                 "types": {
@@ -498,8 +504,11 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                     },
                 },
             }
-            if "eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain):
-                permit_nonce = _get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)
+            if eip2612_enabled:
+                # The current exact Permit2 proxy requires the EIP-2612 permit
+                # value to match the per-request Permit2 amount, so we pre-sign
+                # one permit per auth and advance the token nonce locally.
+                permit_nonce = str(permit_nonce_base + i)
                 permit_typed_data = {
                     "types": {
                         "EIP712Domain": [

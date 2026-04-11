@@ -3679,42 +3679,69 @@ spec:
 	sellerBefore := anvil.GetERC20Balance(t, obolToken, sellerAddr)
 	settlementFromBlock := anvil.BlockNumber(t)
 
-	statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "reply with one short paid word")
-	if statusCode != http.StatusOK {
-		t.Fatalf("paid alias request returned %d: %s", statusCode, string(body))
+	requestCount := 3
+	for i := 1; i <= requestCount; i++ {
+		statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, fmt.Sprintf("reply with one short paid word %d", i))
+		if statusCode != http.StatusOK {
+			t.Fatalf("paid alias request %d returned %d: %s", i, statusCode, string(body))
+		}
+		wantRemaining := requestCount - i
+		liveStatus := waitForBuyerLiveAuthCount(t, cfg, buyerName, wantRemaining, 60*time.Second)
+		t.Logf("buyer live status after request %d:\n%s", i, liveStatus)
 	}
-
-	liveAfter := waitForBuyerLiveAuthCount(t, cfg, buyerName, 2, 60*time.Second)
-	t.Logf("buyer live status after inference:\n%s", liveAfter)
 
 	deadline := time.Now().Add(20 * time.Second)
 	var buyerAfter, sellerAfter *big.Int
 	for time.Now().Before(deadline) {
 		buyerAfter = anvil.GetERC20Balance(t, obolToken, agentWallet)
 		sellerAfter = anvil.GetERC20Balance(t, obolToken, sellerAddr)
-		if buyerAfter.Cmp(buyerBefore) < 0 && sellerAfter.Cmp(sellerBefore) > 0 {
+		expectedBuyerDelta := new(big.Int).Mul(big.NewInt(int64(requestCount)), big.NewInt(1_000_000_000_000_000))
+		if new(big.Int).Sub(buyerBefore, buyerAfter).Cmp(expectedBuyerDelta) == 0 &&
+			new(big.Int).Sub(sellerAfter, sellerBefore).Cmp(expectedBuyerDelta) == 0 {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
-	if buyerAfter == nil || sellerAfter == nil || buyerAfter.Cmp(buyerBefore) >= 0 || sellerAfter.Cmp(sellerBefore) <= 0 {
+	expectedDelta := new(big.Int).Mul(big.NewInt(int64(requestCount)), big.NewInt(1_000_000_000_000_000))
+	if buyerAfter == nil || sellerAfter == nil ||
+		new(big.Int).Sub(buyerBefore, buyerAfter).Cmp(expectedDelta) != 0 ||
+		new(big.Int).Sub(sellerAfter, sellerBefore).Cmp(expectedDelta) != 0 {
 		t.Fatalf("OBOL settlement did not complete: buyer before=%s after=%s seller before=%s after=%s", buyerBefore, buyerAfter, sellerBefore, sellerAfter)
 	}
 
-	receipt := anvil.FindERC20TransferReceipt(t, obolToken, agentWallet, sellerAddr, settlementFromBlock)
-	gasUsed := testutil.ParseHexBigInt(t, receipt.GasUsed)
-	effectiveGasPrice := testutil.ParseHexBigInt(t, receipt.EffectiveGasPrice)
-	totalGasWei := new(big.Int).Mul(new(big.Int).Set(gasUsed), effectiveGasPrice)
+	receipts := anvil.FindERC20TransferReceipts(t, obolToken, agentWallet, sellerAddr, settlementFromBlock)
+	if len(receipts) != requestCount {
+		t.Fatalf("expected %d OBOL settlement receipts, got %d", requestCount, len(receipts))
+	}
+	totalGasWei := big.NewInt(0)
+	totalGasUsed := big.NewInt(0)
+	for i, receipt := range receipts {
+		gasUsed := testutil.ParseHexBigInt(t, receipt.GasUsed)
+		effectiveGasPrice := testutil.ParseHexBigInt(t, receipt.EffectiveGasPrice)
+		receiptGasWei := new(big.Int).Mul(new(big.Int).Set(gasUsed), effectiveGasPrice)
+		totalGasUsed.Add(totalGasUsed, gasUsed)
+		totalGasWei.Add(totalGasWei, receiptGasWei)
+		t.Logf(
+			"OBOL settlement receipt %d/%d: tx=%s block=%s from=%s to=%s status=%s gasUsed=%s effectiveGasPriceWei=%s totalGasWei=%s",
+			i+1,
+			requestCount,
+			receipt.TransactionHash,
+			receipt.BlockNumber,
+			receipt.From,
+			receipt.To,
+			receipt.Status,
+			gasUsed.String(),
+			effectiveGasPrice.String(),
+			receiptGasWei.String(),
+		)
+	}
 	t.Logf(
-		"OBOL settlement receipt: tx=%s block=%s from=%s to=%s status=%s gasUsed=%s effectiveGasPriceWei=%s totalGasWei=%s",
-		receipt.TransactionHash,
-		receipt.BlockNumber,
-		receipt.From,
-		receipt.To,
-		receipt.Status,
-		gasUsed.String(),
-		effectiveGasPrice.String(),
+		"OBOL exact pack benchmark: requests=%d totalGasUsed=%s totalGasWei=%s avgGasUsedPerRequest=%s avgGasWeiPerRequest=%s",
+		requestCount,
+		totalGasUsed.String(),
 		totalGasWei.String(),
+		new(big.Int).Div(new(big.Int).Set(totalGasUsed), big.NewInt(int64(requestCount))).String(),
+		new(big.Int).Div(new(big.Int).Set(totalGasWei), big.NewInt(int64(requestCount))).String(),
 	)
 	t.Logf("OBOL sidecar flow complete: token=%s buyer delta=-%s seller delta=+%s", obolToken, new(big.Int).Sub(buyerBefore, buyerAfter), new(big.Int).Sub(sellerAfter, sellerBefore))
 }
