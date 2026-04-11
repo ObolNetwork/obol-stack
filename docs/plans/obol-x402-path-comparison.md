@@ -46,9 +46,9 @@ Observations:
 ### Session prototype
 
 Source:
-- `contracts/fork-obol/src/SessionPermitEscrow.sol`
-- `internal/testutil/session_benchmark_test.go`
-- `TestBenchmark_OBOLSessionPermitEscrow`
+- measured from a local prototype on the same forked Base Sepolia / fork-local OBOL setup
+- kept here as comparison data only
+- not included in the current exact-path implementation diff
 
 Workload:
 - authorize once for `3 * 0.001 OBOL`
