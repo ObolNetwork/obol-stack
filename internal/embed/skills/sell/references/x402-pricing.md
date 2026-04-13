@@ -57,12 +57,11 @@ Upstream Service (e.g., Ollama)
 2. Verifier returns `402 Payment Required` with JSON body:
    ```json
    {
-     "x402Version": 1,
+     "x402Version": 2,
      "accepts": [{
        "scheme": "exact",
-       "network": "base-sepolia",
-       "maxAmountRequired": "500000",
-       "resource": "/services/my-model",
+       "network": "eip155:84532",
+       "amount": "500000",
        "payTo": "0x...",
        "extra": {}
      }]

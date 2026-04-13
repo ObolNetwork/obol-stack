@@ -6,8 +6,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	x402lib "github.com/mark3labs/x402-go"
-	x402http "github.com/mark3labs/x402-go/http"
+	x402types "github.com/coinbase/x402/go/types"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -16,8 +15,8 @@ import (
 // to /verify; the Verifier either returns 200 (allow) or 402 (pay-wall).
 type Verifier struct {
 	config  atomic.Pointer[PricingConfig]
-	chain   atomic.Pointer[x402lib.ChainConfig]
-	chains  atomic.Pointer[map[string]x402lib.ChainConfig] // pre-resolved: chain name → config
+	chain   atomic.Pointer[ChainInfo]
+	chains  atomic.Pointer[map[string]ChainInfo] // pre-resolved: chain name → config
 	metrics *verifierMetrics
 }
 
@@ -37,18 +36,18 @@ func (v *Verifier) Reload(cfg *PricingConfig) error {
 }
 
 func (v *Verifier) load(cfg *PricingConfig) error {
-	chain, err := ResolveChain(cfg.Chain)
+	chain, err := ResolveChainInfo(cfg.Chain)
 	if err != nil {
 		return fmt.Errorf("resolve chain: %w", err)
 	}
 
 	// Pre-resolve all unique chain names (global + per-route overrides)
 	// so HandleVerify avoids per-request chain resolution.
-	chains := map[string]x402lib.ChainConfig{cfg.Chain: chain}
+	chains := map[string]ChainInfo{cfg.Chain: chain}
 	for _, r := range cfg.Routes {
 		if r.Network != "" {
 			if _, ok := chains[r.Network]; !ok {
-				rc, err := ResolveChain(r.Network)
+				rc, err := ResolveChainInfo(r.Network)
 				if err != nil {
 					return fmt.Errorf("resolve chain for route %q: %w", r.Pattern, err)
 				}
@@ -115,20 +114,10 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requirement, err := x402lib.NewUSDCPaymentRequirement(x402lib.USDCRequirementConfig{
-		Chain:            chain,
-		Amount:           rule.Price,
-		RecipientAddress: wallet,
-	})
-	if err != nil {
-		log.Printf("x402-verifier: failed to create payment requirement: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	requirement := BuildV2Requirement(chain, rule.Price, wallet)
 
-		return
-	}
-
-	// Reconstruct the original request context so x402-go generates correct
-	// payment requirements (resource URL, host, etc.).
+	// Reconstruct the original request context so the middleware generates
+	// correct payment requirements (resource URL, host, etc.).
 	if host := r.Header.Get("X-Forwarded-Host"); host != "" {
 		r.Host = host
 	}
@@ -140,18 +129,17 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		r.Method = method
 	}
 
-	// Reuse x402-go's middleware wrapping a handler that returns 200.
+	// Use the local ForwardAuth middleware wrapping a handler that returns 200.
 	// When the inner handler runs (payment approved), it sets the Authorization
 	// header if the route has upstreamAuth configured. Traefik's authResponseHeaders
 	// copies this to the forwarded request, authenticating it with the upstream.
 	labels := prometheusLabels(rule)
 	v.metrics.requestsTotal.With(labels).Inc()
 
-	middleware := x402http.NewX402Middleware(&x402http.Config{
-		FacilitatorURL:      cfg.FacilitatorURL,
-		PaymentRequirements: []x402lib.PaymentRequirement{requirement},
-		VerifyOnly:          cfg.VerifyOnly,
-	})
+	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: cfg.FacilitatorURL,
+		VerifyOnly:     cfg.VerifyOnly,
+	}, []x402types.PaymentRequirements{requirement})
 
 	upstreamAuth := rule.UpstreamAuth
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

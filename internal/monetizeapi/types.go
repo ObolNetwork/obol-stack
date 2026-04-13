@@ -13,9 +13,11 @@ const (
 
 	ServiceOfferKind        = "ServiceOffer"
 	RegistrationRequestKind = "RegistrationRequest"
+	PurchaseRequestKind     = "PurchaseRequest"
 
 	ServiceOfferResource        = "serviceoffers"
 	RegistrationRequestResource = "registrationrequests"
+	PurchaseRequestResource     = "purchaserequests"
 
 	PausedAnnotation = "obol.org/paused"
 )
@@ -23,6 +25,7 @@ const (
 var (
 	ServiceOfferGVR        = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceOfferResource}
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
+	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
 
 	ServiceGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 	SecretGVR     = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
@@ -169,4 +172,65 @@ func (o *ServiceOffer) IsInference() bool {
 
 func (o *ServiceOffer) IsPaused() bool {
 	return o.Annotations != nil && o.Annotations[PausedAnnotation] == "true"
+}
+
+// ── PurchaseRequest ─────────────────────────────────────────────────────────
+
+type PurchaseRequest struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              PurchaseRequestSpec   `json:"spec,omitempty"`
+	Status            PurchaseRequestStatus `json:"status,omitempty"`
+}
+
+type PurchaseRequestSpec struct {
+	Endpoint        string                   `json:"endpoint"`
+	Model           string                   `json:"model"`
+	Count           int                      `json:"count"`
+	PreSignedAuths  []PreSignedAuth          `json:"preSignedAuths,omitempty"`
+	AutoRefill      PurchaseAutoRefill       `json:"autoRefill,omitempty"`
+	Payment         PurchasePayment          `json:"payment"`
+}
+
+type PreSignedAuth struct {
+	Signature   string `json:"signature"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	ValidAfter  string `json:"validAfter"`
+	ValidBefore string `json:"validBefore"`
+	Nonce       string `json:"nonce"`
+}
+
+type PurchaseAutoRefill struct {
+	Enabled        bool   `json:"enabled,omitempty"`
+	Threshold      int    `json:"threshold,omitempty"`
+	Count          int    `json:"count,omitempty"`
+	MaxTotal       int    `json:"maxTotal,omitempty"`
+	MaxSpendPerDay string `json:"maxSpendPerDay,omitempty"`
+}
+
+type PurchasePayment struct {
+	Network string `json:"network"`
+	PayTo   string `json:"payTo"`
+	Price   string `json:"price"`
+	Asset   string `json:"asset"`
+}
+
+type PurchaseRequestStatus struct {
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Conditions         []Condition `json:"conditions,omitempty"`
+	PublicModel        string      `json:"publicModel,omitempty"`
+	Remaining          int         `json:"remaining,omitempty"`
+	Spent              int         `json:"spent,omitempty"`
+	TotalSigned        int         `json:"totalSigned,omitempty"`
+	TotalSpent         string      `json:"totalSpent,omitempty"`
+	ProbedAt           string      `json:"probedAt,omitempty"`
+	ProbedPrice        string      `json:"probedPrice,omitempty"`
+	WalletBalance      string      `json:"walletBalance,omitempty"`
+	SignerAddress      string      `json:"signerAddress,omitempty"`
+}
+
+func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
+	return "llm"
 }

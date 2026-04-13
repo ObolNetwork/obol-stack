@@ -35,7 +35,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/mark3labs/x402-go"
 	"github.com/urfave/cli/v3"
 )
 
@@ -105,7 +104,7 @@ Examples:
 			&cli.StringFlag{
 				Name:  "facilitator",
 				Usage: "x402 facilitator URL",
-				Value: "https://facilitator.x402.rs",
+				Value: x402verifier.DefaultFacilitatorURL,
 			},
 			&cli.StringFlag{
 				Name:    "listen",
@@ -259,7 +258,7 @@ Examples:
 				}
 			}
 
-			chain, err := resolveX402Chain(cmd.String("chain"))
+			chain, err := x402verifier.ResolveChainInfo(cmd.String("chain"))
 			if err != nil {
 				return err
 			}
@@ -1375,15 +1374,19 @@ Examples:
 			}
 			agentURI := endpoint + "/.well-known/agent-registration.json"
 
-			// Determine signing method: remote-signer (preferred) or private key file (fallback).
+			// Determine signing method: private key file (if explicitly provided)
+			// or remote-signer (default when OpenClaw agent is deployed).
 			useRemoteSigner := false
 			var signerNS string
 
-			if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-				ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
-				if nsErr == nil {
-					useRemoteSigner = true
-					signerNS = ns
+			// If --private-key-file is explicitly provided, honour user intent.
+			if !cmd.IsSet("private-key-file") {
+				if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+					ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+					if nsErr == nil {
+						useRemoteSigner = true
+						signerNS = ns
+					}
 				}
 			}
 
@@ -1430,7 +1433,7 @@ Examples:
 					}
 				} else {
 					// Fallback: direct on-chain with private key file.
-					if err := registerDirectWithKey(ctx, u, net, agentURI, fallbackKey); err != nil {
+					if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
 						u.Warnf("registration failed: %v", err)
 						continue
 					}
@@ -1494,7 +1497,8 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	u.Printf("    Wallet:   %s", addr.Hex())
 
 	// Connect to eRPC for this network.
-	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
+	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
 	if err != nil {
 		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
 	}
@@ -1520,7 +1524,7 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 }
 
 // registerDirectWithKey performs a direct on-chain registration using a raw private key.
-func registerDirectWithKey(ctx context.Context, u *ui.UI, net erc8004.NetworkConfig, agentURI, keyHex string) error {
+func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, keyHex string) error {
 	u.Printf("    Using direct on-chain registration with private key...")
 
 	keyHex = strings.TrimPrefix(keyHex, "0x")
@@ -1529,7 +1533,8 @@ func registerDirectWithKey(ctx context.Context, u *ui.UI, net erc8004.NetworkCon
 		return fmt.Errorf("invalid private key: %w", err)
 	}
 
-	client, err := erc8004.NewClientForNetwork(ctx, "http://localhost/rpc", net)
+	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
+	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
 	if err != nil {
 		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
 	}
@@ -1556,7 +1561,7 @@ func registerDirectWithKey(ctx context.Context, u *ui.UI, net erc8004.NetworkCon
 // ---------------------------------------------------------------------------
 
 // runInferenceGateway starts the x402 inference gateway and blocks until shutdown.
-func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402.ChainConfig) error {
+func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402verifier.ChainInfo) error {
 	gw, err := inference.NewGateway(inference.GatewayConfig{
 		ListenAddr:      d.ListenAddr,
 		UpstreamURL:     d.UpstreamURL,
@@ -1591,27 +1596,6 @@ func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402.ChainConf
 	}()
 
 	return gw.Start()
-}
-
-// resolveX402Chain maps a chain name to an x402 ChainConfig.
-func resolveX402Chain(name string) (x402.ChainConfig, error) {
-	switch name {
-	case "base", "base-mainnet":
-		return x402.BaseMainnet, nil
-	case "base-sepolia":
-		return x402.BaseSepolia, nil
-	case "ethereum", "ethereum-mainnet", "mainnet":
-		// Ethereum mainnet USDC: verified 2025-10-28
-		return x402.ChainConfig{
-			NetworkID:      "ethereum",
-			USDCAddress:    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-			Decimals:       6,
-			EIP3009Name:    "USD Coin",
-			EIP3009Version: "2",
-		}, nil
-	default:
-		return x402.ChainConfig{}, fmt.Errorf("unsupported chain: %s (supported: base-sepolia, base, ethereum)", name)
-	}
 }
 
 // startSignerPortForward launches a temporary port-forward to the remote-signer

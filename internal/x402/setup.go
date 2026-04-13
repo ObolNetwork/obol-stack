@@ -16,6 +16,10 @@ const (
 	x402Namespace    = "x402"
 	pricingConfigMap = "x402-pricing"
 	x402SecretName   = "x402-secrets"
+
+	// DefaultFacilitatorURL is the Obol-operated x402 facilitator for payment
+	// verification and settlement. Supports Base Mainnet and Base Sepolia.
+	DefaultFacilitatorURL = "https://x402.gcp.obol.tech"
 )
 
 var x402Manifest = mustReadX402Manifest()
@@ -42,7 +46,7 @@ func EnsureVerifier(cfg *config.Config) error {
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
 // and Secret. Stakater Reloader auto-restarts the verifier pod.
-// If facilitatorURL is empty, the default (https://facilitator.x402.rs) is used.
+// If facilitatorURL is empty, the Obol-operated facilitator is used.
 func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	if err := ValidateWallet(wallet); err != nil {
 		return err
@@ -51,6 +55,10 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 	bin, kc := kubectl.Paths(cfg)
+
+	// Populate the CA certificates bundle from the host so the distroless
+	// verifier image can TLS-verify the facilitator.
+	populateCABundle(bin, kc)
 
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
@@ -69,7 +77,7 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	// static/manual routes.
 	fmt.Printf("Updating x402 pricing config...\n")
 	if facilitatorURL == "" {
-		facilitatorURL = "https://facilitator.x402.rs"
+		facilitatorURL = DefaultFacilitatorURL
 	}
 	existingCfg, _ := GetPricingConfig(cfg)
 	var existingRoutes []RouteRule
@@ -129,6 +137,50 @@ func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
 		return nil, err
 	}
 	return pcfg, nil
+}
+
+// populateCABundle reads the host's CA certificate bundle and replaces
+// the ca-certificates ConfigMap in the x402 namespace. The x402-verifier
+// image is distroless and ships without a CA store, so TLS verification
+// of external facilitators fails without this.
+//
+// Uses "kubectl create --dry-run | kubectl replace" instead of "kubectl
+// apply" because the macOS CA bundle (~290KB) exceeds the 262KB
+// annotation limit that kubectl apply requires.
+func populateCABundle(bin, kc string) {
+	// Common CA bundle paths across Linux distros and macOS.
+	candidates := []string{
+		"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
+		"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/Fedora
+		"/etc/ssl/cert.pem",                   // macOS / Alpine
+	}
+	var caPath string
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			caPath = path
+			break
+		}
+	}
+	if caPath == "" {
+		return // no CA bundle found — skip silently
+	}
+
+	// Pipe through kubectl create --dry-run to generate the ConfigMap YAML,
+	// then kubectl replace to apply it without the annotation size limit.
+	if err := kubectl.PipeCommands(bin, kc,
+		[]string{"create", "configmap", "ca-certificates", "-n", x402Namespace,
+			"--from-file=ca-certificates.crt=" + caPath,
+			"--dry-run=client", "-o", "yaml"},
+		[]string{"replace", "-f", "-"}); err != nil {
+		return
+	}
+
+	// Restart the verifier so it picks up the newly populated CA bundle.
+	// The ConfigMap is mounted as a volume; Kubernetes may take 60-120s to
+	// propagate changes, and we need TLS to work immediately for the
+	// facilitator connection.
+	_ = kubectl.RunSilent(bin, kc,
+		"rollout", "restart", "deployment/x402-verifier", "-n", x402Namespace)
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {

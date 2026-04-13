@@ -246,6 +246,109 @@ func TestRegistrationRequestCRD_Parses(t *testing.T) {
 	}
 }
 
+// TestPurchaseRequestCRD_Parses guards the CRD schema shape against indentation
+// regressions. Every printer-column path must resolve, so this test exercises
+// the same fields k3s relies on at apply time. A broken indentation like the
+// one introduced in commit f57498e (status.properties siblinged instead of
+// nested) will fail here, before it can reach `obol stack up`.
+func TestPurchaseRequestCRD_Parses(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/purchaserequest-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	// Parse through the project-wide yaml.v3 unmarshaler first — catches any
+	// malformed YAML before the nested path lookups below silently return nil.
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no PurchaseRequest CRD found")
+	}
+
+	if name := nested(crd, "metadata", "name"); name != "purchaserequests.obol.org" {
+		t.Errorf("metadata.name = %v, want purchaserequests.obol.org", name)
+	}
+	if kind := nested(crd, "spec", "names", "kind"); kind != "PurchaseRequest" {
+		t.Errorf("spec.names.kind = %v, want PurchaseRequest", kind)
+	}
+
+	versions, ok := nested(crd, "spec", "versions").([]any)
+	if !ok || len(versions) == 0 {
+		t.Fatal("spec.versions is empty or wrong type")
+	}
+	v0, ok := versions[0].(map[string]any)
+	if !ok {
+		t.Fatal("versions[0] is not a map")
+	}
+
+	// spec.properties must carry the round-2 required fields.
+	specProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("spec.properties not a map")
+	}
+	for _, field := range []string{"endpoint", "model", "count", "preSignedAuths", "payment"} {
+		if _, exists := specProps[field]; !exists {
+			t.Errorf("spec.properties missing %q", field)
+		}
+	}
+
+	// status.properties is the path that f57498e broke. Every printer-column
+	// jsonPath below must land on a real property, otherwise the CRD applies
+	// with an empty status schema and all status fields get silently dropped.
+	statusProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "status", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("status.properties not a map — is the schema indentation broken?")
+	}
+	for _, field := range []string{"observedGeneration", "conditions", "publicModel", "remaining", "spent", "totalSigned", "totalSpent"} {
+		if _, exists := statusProps[field]; !exists {
+			t.Errorf("status.properties missing %q", field)
+		}
+	}
+
+	// status.conditions.items must be a map with a properties block.
+	condItems, ok := nested(statusProps, "conditions", "items").(map[string]any)
+	if !ok {
+		t.Fatal("status.conditions.items not a map")
+	}
+	condProps, ok := condItems["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("status.conditions.items.properties not a map")
+	}
+	for _, field := range []string{"type", "status", "reason", "message", "lastTransitionTime"} {
+		if _, exists := condProps[field]; !exists {
+			t.Errorf("status.conditions.items.properties missing %q", field)
+		}
+	}
+
+	// Printer columns must resolve — if status.properties is wrong, the
+	// .status.remaining / .status.spent columns would show empty in kubectl.
+	cols, ok := v0["additionalPrinterColumns"].([]any)
+	if !ok || len(cols) == 0 {
+		t.Fatal("additionalPrinterColumns missing")
+	}
+	for _, c := range cols {
+		col := c.(map[string]any)
+		path, _ := col["jsonPath"].(string)
+		if strings.HasPrefix(path, ".status.") {
+			field := strings.TrimPrefix(path, ".status.")
+			// Strip JSONPath filter expressions like conditions[?(@.type=="Ready")].status
+			if idx := strings.Index(field, "["); idx > 0 {
+				field = field[:idx]
+			}
+			if _, exists := statusProps[field]; !exists {
+				t.Errorf("printer column %q references .status.%s which is not in schema", col["name"], field)
+			}
+		}
+	}
+
+	_ = raw
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Monetize RBAC tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,6 +360,11 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	}
 
 	docs := multiDoc(data)
+
+	ns := findDocByName(docs, "Namespace", "openclaw-obol-agent")
+	if ns == nil {
+		t.Fatal("no Namespace 'openclaw-obol-agent' found")
+	}
 
 	// ── Read ClusterRole ────────────────────────────────────────────────
 	readCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-read")
@@ -296,21 +404,27 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("read ClusterRole missing core API group")
 	}
 
-	// ── Write ClusterRole ───────────────────────────────────────────────
-	writeCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-write")
-	if writeCR == nil {
-		t.Fatal("no ClusterRole 'openclaw-monetize-write' found")
+	// ── Write Role ──────────────────────────────────────────────────────
+	writeRole := findDocByName(docs, "Role", "openclaw-monetize-write")
+	if writeRole == nil {
+		t.Fatal("no Role 'openclaw-monetize-write' found")
 	}
-	writeRules, ok := writeCR["rules"].([]interface{})
+	if ns := nested(writeRole, "metadata", "namespace"); ns != "openclaw-obol-agent" {
+		t.Errorf("write Role namespace = %v, want openclaw-obol-agent", ns)
+	}
+	writeRules, ok := writeRole["rules"].([]interface{})
 	if !ok || len(writeRules) == 0 {
-		t.Fatal("write ClusterRole has no rules")
+		t.Fatal("write Role has no rules")
 	}
 
 	if !hasVerbOnResource(writeRules, "obol.org", "serviceoffers", "create") {
-		t.Error("write ClusterRole missing 'create' on obol.org/serviceoffers")
+		t.Error("write Role missing 'create' on obol.org/serviceoffers")
 	}
 	if hasVerbOnResource(writeRules, "traefik.io", "middlewares", "create") {
-		t.Error("write ClusterRole should not grant child-resource access")
+		t.Error("write Role should not grant child-resource access")
+	}
+	if hasVerbOnResource(writeRules, "", "secrets", "create") {
+		t.Error("write Role should not grant Secret writes")
 	}
 
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
@@ -323,12 +437,15 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
 	}
 
-	writeCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-write-binding")
-	if writeCRB == nil {
-		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-write-binding' found")
+	writeRB := findDocByName(docs, "RoleBinding", "openclaw-monetize-write-binding")
+	if writeRB == nil {
+		t.Fatal("no RoleBinding 'openclaw-monetize-write-binding' found")
 	}
-	if ref := nested(writeCRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
+	if ref := nested(writeRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
 		t.Errorf("write binding roleRef.name = %v, want openclaw-monetize-write", ref)
+	}
+	if ref := nested(writeRB, "roleRef", "kind"); ref != "Role" {
+		t.Errorf("write binding roleRef.kind = %v, want Role", ref)
 	}
 }
 

@@ -79,10 +79,10 @@ All 4 paths use the same OpenClaw config pattern:
 
 ### Paid Routing Notes
 
-- The paid path uses **vanilla LiteLLM**. Do not fork LiteLLM for `paid/*`.
+- The paid path uses the **Obol LiteLLM fork** because paid-model lifecycle relies on the config-only model management API.
 - `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402`.
 - `x402-buyer` runs as a **sidecar in the LiteLLM pod**, not as a separate Service.
-- `buy.py buy` updates only buyer ConfigMaps; it must not patch LiteLLM `model_list` per purchase.
+- `buy.py buy` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer files and keeps LiteLLM model entries in sync.
 - The currently validated local OSS model is `qwen3.5:9b`. Prefer that exact model in live commerce tests.
 
 ## Essential Commands
@@ -187,6 +187,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 
 ### MUST DO
 - Always route through `obol` CLI verbs in tests (covers CLI + helmfile + helm chart)
+- Preserve failing exit codes when logging or filtering command output. Use `set -o pipefail` or capture `PIPESTATUS` for any pipeline such as `flow.sh | tee log`, `obol stack up 2>&1 | tail`, or `helmfile ... | tee`; otherwise Helm/obol failures can be masked by the final command in the pipe.
 - Use `obol openclaw token <id>` to get Bearer token before API calls
 - Set `Authorization: Bearer <token>` on all `/v1/chat/completions` requests
 - Use `obol model setup --provider <name> --api-key <key>` for cloud provider config
@@ -195,6 +196,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
 - Prefer `qwen3.5:9b` when validating the current local paid-inference route
 - Use unique buy-side names in reused-cluster commerce tests so the sidecar cannot inherit stale in-memory spend counters
+- Use narrow review/delegation scopes for x402 changes. Name the exact files and invariants to verify, such as "controller never signs or reads remote-signer", "agent write RBAC is namespace-scoped", "paid route uses real obol CLI/human flow", and "tests support x402 v2 amount fields".
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -203,6 +205,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Assume TCP connectivity means HTTP is ready (port-forward warmup race)
 - Use `app.kubernetes.io/instance=openclaw-<id>` for pod labels (Helm uses `openclaw`)
 - Run multiple integration tests without cleaning up between them (pod sandbox errors)
+- Delegate or accept broad "review the architecture" findings without converting them into concrete file-level checks and reproducible tests.
 
 ## Sell-Side Monetize Lifecycle
 
@@ -261,3 +264,4 @@ go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_
 - **ConfigMap propagation**: File watcher takes 60-120s. Force restart verifier for immediate effect.
 - **Projected ConfigMap refresh**: the LiteLLM pod can take ~60s to reflect updated buyer ConfigMaps in the sidecar.
 - **eRPC balance lag**: `buy.py balance` uses `eth_call` through eRPC, and the default unfinalized cache TTL is 10s. After a paid request, poll until the reported balance catches up with the on-chain delta.
+- **kubectl exec shell quoting**: NEVER use `sh -c` with `fmt.Sprintf` to embed JSON or secrets in shell commands passed via `kubectl exec`. JSON body or auth tokens containing single quotes will break the shell. Instead, pass args directly: `kubectl exec ... -- wget -qO- --post-data=<json> --header=Authorization:\ Bearer\ <key> <url>`. Each argument goes as a separate argv element, bypassing shell interpretation entirely.

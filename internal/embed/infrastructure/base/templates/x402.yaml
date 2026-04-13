@@ -19,12 +19,12 @@ data:
   pricing.yaml: |
     wallet: ""
     chain: "base-sepolia"
-    facilitatorURL: "https://facilitator.x402.rs"
+    facilitatorURL: "https://x402.gcp.obol.tech"
     verifyOnly: false
     routes: []
 
 ---
-# CA certificates for outbound TLS (e.g. facilitator.x402.rs).
+# CA certificates for outbound TLS (e.g. x402.gcp.obol.tech).
 # The verifier image is minimal and lacks a system CA bundle; this
 # ConfigMap is populated at deploy time from the host cert store.
 # Created by: kubectl create configmap ca-certificates -n x402 \
@@ -106,6 +106,15 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["registrationrequests/status"]
     verbs: ["get", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
   - apiGroups: ["traefik.io"]
     resources: ["middlewares"]
     verbs: ["get", "create", "update", "patch", "delete"]
@@ -118,6 +127,13 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Scoped to litellm-secrets only. Needed to read LITELLM_MASTER_KEY for
+  # hot-add/hot-delete via the LiteLLM HTTP API (no pod restart — preserves
+  # the x402-buyer sidecar's pod-local consumed-auth state).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["litellm-secrets"]
+    verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "create", "update", "patch", "delete"]

@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	x402lib "github.com/mark3labs/x402-go"
 )
 
 func TestLoadConfig_ValidYAML(t *testing.T) {
@@ -89,8 +87,8 @@ routes:
 		t.Errorf("default chain = %q, want base-sepolia", cfg.Chain)
 	}
 
-	if cfg.FacilitatorURL != "https://facilitator.x402.rs" {
-		t.Errorf("default facilitatorURL = %q, want https://facilitator.x402.rs", cfg.FacilitatorURL)
+	if cfg.FacilitatorURL != "https://x402.gcp.obol.tech" {
+		t.Errorf("default facilitatorURL = %q, want https://x402.gcp.obol.tech", cfg.FacilitatorURL)
 	}
 }
 
@@ -118,26 +116,26 @@ func TestLoadConfig_FileNotFound(t *testing.T) {
 func TestResolveChain_AllSupported(t *testing.T) {
 	tests := []struct {
 		name     string
-		expected x402lib.ChainConfig
+		expected ChainInfo
 	}{
-		{"base-sepolia", x402lib.BaseSepolia},
-		{"base", x402lib.BaseMainnet},
-		{"ethereum", EthereumMainnet},
-		{"polygon", x402lib.PolygonMainnet},
-		{"polygon-amoy", x402lib.PolygonAmoy},
-		{"avalanche", x402lib.AvalancheMainnet},
-		{"avalanche-fuji", x402lib.AvalancheFuji},
+		{"base-sepolia", ChainBaseSepolia},
+		{"base", ChainBaseMainnet},
+		{"ethereum", ChainEthereumMainnet},
+		{"polygon", ChainPolygonMainnet},
+		{"polygon-amoy", ChainPolygonAmoy},
+		{"avalanche", ChainAvalancheMainnet},
+		{"avalanche-fuji", ChainAvalancheFuji},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveChain(tt.name)
+			got, err := ResolveChainInfo(tt.name)
 			if err != nil {
-				t.Fatalf("ResolveChain(%q): %v", tt.name, err)
+				t.Fatalf("ResolveChainInfo(%q): %v", tt.name, err)
 			}
 
 			if got.NetworkID != tt.expected.NetworkID {
-				t.Errorf("ResolveChain(%q).NetworkID = %q, want %q", tt.name, got.NetworkID, tt.expected.NetworkID)
+				t.Errorf("ResolveChainInfo(%q).NetworkID = %q, want %q", tt.name, got.NetworkID, tt.expected.NetworkID)
 			}
 		})
 	}
@@ -157,14 +155,14 @@ func TestResolveChain_Aliases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.alias+"=="+tt.canonical, func(t *testing.T) {
-			aliasResult, err := ResolveChain(tt.alias)
+			aliasResult, err := ResolveChainInfo(tt.alias)
 			if err != nil {
-				t.Fatalf("ResolveChain(%q): %v", tt.alias, err)
+				t.Fatalf("ResolveChainInfo(%q): %v", tt.alias, err)
 			}
 
-			canonResult, err := ResolveChain(tt.canonical)
+			canonResult, err := ResolveChainInfo(tt.canonical)
 			if err != nil {
-				t.Fatalf("ResolveChain(%q): %v", tt.canonical, err)
+				t.Fatalf("ResolveChainInfo(%q): %v", tt.canonical, err)
 			}
 
 			if aliasResult.NetworkID != canonResult.NetworkID {
@@ -179,7 +177,7 @@ func TestResolveChain_Unsupported(t *testing.T) {
 	unsupported := []string{"solana", "unknown-chain", ""}
 	for _, name := range unsupported {
 		t.Run(name, func(t *testing.T) {
-			_, err := ResolveChain(name)
+			_, err := ResolveChainInfo(name)
 			if err == nil {
 				t.Errorf("expected error for unsupported chain %q", name)
 			}
@@ -194,7 +192,7 @@ func TestValidateFacilitatorURL(t *testing.T) {
 		wantErr bool
 	}{
 		// HTTPS always allowed.
-		{"https standard", "https://facilitator.x402.rs", false},
+		{"https standard", "https://x402.gcp.obol.tech", false},
 		{"https custom", "https://my-facilitator.example.com:8443/verify", false},
 
 		// Loopback/internal addresses allowed over HTTP.

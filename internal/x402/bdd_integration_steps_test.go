@@ -20,19 +20,29 @@ import (
 
 // parsed402Response maps the x402 PaymentRequired response body.
 type parsed402Response struct {
-	X402Version int    `json:"x402Version"`
-	Error       string `json:"error"`
-	Accepts     []struct {
-		Scheme            string `json:"scheme"`
-		Network           string `json:"network"`
-		Amount            string `json:"maxAmountRequired"`
-		Asset             string `json:"asset"`
-		PayTo             string `json:"payTo"`
-		Resource          string `json:"resource"`
-		Description       string `json:"description"`
-		MimeType          string `json:"mimeType"`
-		MaxTimeoutSeconds int    `json:"maxTimeoutSeconds"`
-	} `json:"accepts"`
+	X402Version int               `json:"x402Version"`
+	Error       string            `json:"error"`
+	Accepts     []parsed402Accept `json:"accepts"`
+}
+
+type parsed402Accept struct {
+	Scheme            string `json:"scheme"`
+	Network           string `json:"network"`
+	Amount            string `json:"amount"`
+	MaxAmountRequired string `json:"maxAmountRequired"`
+	Asset             string `json:"asset"`
+	PayTo             string `json:"payTo"`
+	Resource          string `json:"resource"`
+	Description       string `json:"description"`
+	MimeType          string `json:"mimeType"`
+	MaxTimeoutSeconds int    `json:"maxTimeoutSeconds"`
+}
+
+func (a parsed402Accept) price() string {
+	if a.Amount != "" {
+		return a.Amount
+	}
+	return a.MaxAmountRequired
 }
 
 // integrationWorld holds shared state for integration-tier BDD scenarios.
@@ -187,7 +197,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 
 		accept := w.parsed402.Accepts[0]
 		payTo := accept.PayTo
-		amount := accept.Amount
+		amount := accept.price()
 		if payTo == "" {
 			payTo = w.payTo
 		}
@@ -207,8 +217,12 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		}
 
 		accept := w.parsed402.Accepts[0]
+		amount := accept.price()
+		if amount == "" {
+			return fmt.Errorf("no amount in 402 accepts")
+		}
 		w.signedPaymentHeader = testutil.SignRealPaymentHeader(
-			w.t, w.buyerKeyHex, accept.PayTo, accept.Amount, 84532,
+			w.t, w.buyerKeyHex, accept.PayTo, amount, 84532,
 		)
 		return nil
 	})
@@ -265,7 +279,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			return fmt.Errorf("empty accepts array in 402")
 		}
 		a := w.parsed402.Accepts[0]
-		if a.PayTo == "" || a.Network == "" || a.Amount == "" {
+		if a.PayTo == "" || a.Network == "" || a.price() == "" {
 			return fmt.Errorf("incomplete accepts entry: %+v", a)
 		}
 		return nil
@@ -287,13 +301,13 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		if a.PayTo == "" {
 			return fmt.Errorf("payTo is empty")
 		}
-		if a.Amount == "" {
-			return fmt.Errorf("price (maxAmountRequired) is empty")
+		if a.price() == "" {
+			return fmt.Errorf("price (amount/maxAmountRequired) is empty")
 		}
 		if a.Network == "" {
 			return fmt.Errorf("network is empty")
 		}
-		w.t.Logf("integration: discovered payTo=%s price=%s network=%s", a.PayTo, a.Amount, a.Network)
+		w.t.Logf("integration: discovered payTo=%s price=%s network=%s", a.PayTo, a.price(), a.Network)
 		return nil
 	})
 
@@ -570,7 +584,7 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		}
 		a := w.parsed402.Accepts[0]
 		w.t.Logf("integration: ✓ probe 402: payTo=%s price=%s network=%s",
-			a.PayTo, a.Amount, a.Network)
+			a.PayTo, a.price(), a.Network)
 		return nil
 	})
 

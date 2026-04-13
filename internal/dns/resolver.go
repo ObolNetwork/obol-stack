@@ -219,6 +219,9 @@ func ensureSudoCached() error {
 	if exec.Command("sudo", "-n", "true").Run() == nil {
 		return nil
 	}
+	if os.Getenv("OBOL_NONINTERACTIVE") == "true" {
+		return fmt.Errorf("sudo credentials not cached")
+	}
 	// Credentials not cached — prompt the user interactively.
 	cmd := exec.Command("sudo", "-v")
 	cmd.Stdin = os.Stdin

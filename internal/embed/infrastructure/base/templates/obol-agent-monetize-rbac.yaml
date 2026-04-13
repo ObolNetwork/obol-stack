@@ -7,6 +7,17 @@
 
 ---
 #------------------------------------------------------------------------------
+# Namespace - pre-create the default obol-agent namespace so base-stack RBAC can
+# use namespace-scoped Role/RoleBinding resources without widening writes back
+# to a ClusterRole.
+#------------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openclaw-obol-agent
+
+---
+#------------------------------------------------------------------------------
 # ClusterRole - Read-only permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
@@ -29,16 +40,23 @@ rules:
 
 ---
 #------------------------------------------------------------------------------
-# ClusterRole - Minimal ServiceOffer write permissions
+# Role - Minimal write permissions in the agent namespace only
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: openclaw-monetize-write
+  namespace: openclaw-obol-agent
 rules:
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
     verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests/status"]
+    verbs: ["get"]
 
 ---
 #------------------------------------------------------------------------------
@@ -59,15 +77,16 @@ subjects:
 
 ---
 #------------------------------------------------------------------------------
-# ClusterRoleBinding - Minimal write permissions
+# RoleBinding - Minimal write permissions in the agent namespace
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: openclaw-monetize-write-binding
+  namespace: openclaw-obol-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: openclaw-monetize-write
 subjects:
   - kind: ServiceAccount

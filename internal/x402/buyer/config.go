@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // Config is the top-level sidecar configuration, loaded from a JSON file
@@ -93,6 +95,70 @@ func LoadAuths(path string) (AuthsFile, error) {
 
 	if auths == nil {
 		auths = make(AuthsFile)
+	}
+
+	return auths, nil
+}
+
+// LoadConfigDir reads per-upstream config files from a directory. Each *.json
+// file is one upstream, keyed by the filename stem (e.g. "42.json" → key "42").
+// This is the SSA-compatible format where the controller applies one key per
+// PurchaseRequest via Server-Side Apply.
+func LoadConfigDir(dir string) (*Config, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read config dir %s: %w", dir, err)
+	}
+
+	cfg := &Config{Upstreams: make(map[string]UpstreamConfig)}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+
+		name := strings.TrimSuffix(e.Name(), ".json")
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		var upstream UpstreamConfig
+		if err := json.Unmarshal(data, &upstream); err != nil {
+			continue
+		}
+
+		cfg.Upstreams[name] = upstream
+	}
+
+	return cfg, nil
+}
+
+// LoadAuthsDir reads per-upstream auth files from a directory. Each *.json
+// file contains an array of PreSignedAuth for one upstream.
+func LoadAuthsDir(dir string) (AuthsFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read auths dir %s: %w", dir, err)
+	}
+
+	auths := make(AuthsFile)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+
+		name := strings.TrimSuffix(e.Name(), ".json")
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		var pool []*PreSignedAuth
+		if err := json.Unmarshal(data, &pool); err != nil {
+			continue
+		}
+
+		auths[name] = pool
 	}
 
 	return auths, nil

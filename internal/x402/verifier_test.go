@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	x402lib "github.com/mark3labs/x402-go"
+	x402types "github.com/coinbase/x402/go/types"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 )
@@ -36,7 +36,7 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 
 	mux.HandleFunc("/supported", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"kinds":[{"x402Version":1,"scheme":"exact","network":"base-sepolia"}]}`)
+		fmt.Fprintf(w, `{"kinds":[{"x402Version":2,"scheme":"exact","network":"eip155:84532"}]}`)
 	})
 
 	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -62,17 +62,29 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 
 // testPaymentHeader returns a base64-encoded x402 PaymentPayload for BaseSepolia.
 func testPaymentHeader(t *testing.T) string {
+	return testPaymentHeaderFor(t,
+		"0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		"100",
+	)
+}
+
+func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
 	t.Helper()
-	p := x402lib.PaymentPayload{
-		X402Version: 1,
-		Scheme:      "exact",
-		Network:     x402lib.BaseSepolia.NetworkID,
+	p := x402types.PaymentPayload{
+		X402Version: 2,
+		Accepted: x402types.PaymentRequirements{
+			Scheme:  "exact",
+			Network: ChainBaseSepolia.CAIP2Network,
+			Amount:  amount,
+			Asset:   ChainBaseSepolia.USDCAddress,
+			PayTo:   payTo,
+		},
 		Payload: map[string]any{
 			"signature": "0xmocksignature",
 			"authorization": map[string]any{
 				"from":        "0x1234567890123456789012345678901234567890",
-				"to":          "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-				"value":       "1000",
+				"to":          payTo,
+				"value":       amount,
 				"validAfter":  "0",
 				"validBefore": "9999999999",
 				"nonce":       "0xabcdef",
@@ -371,10 +383,10 @@ func TestVerifier_ReadyzNotReady(t *testing.T) {
 
 // parse402Accepts is a test helper that decodes a 402 response body and returns
 // the first PaymentRequirement from the "accepts" array.
-func parse402Accepts(t *testing.T, body []byte) x402lib.PaymentRequirement {
+func parse402Accepts(t *testing.T, body []byte) x402types.PaymentRequirements {
 	t.Helper()
 	var resp struct {
-		Accepts []x402lib.PaymentRequirement `json:"accepts"`
+		Accepts []x402types.PaymentRequirements `json:"accepts"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("failed to decode 402 body: %v\nbody: %s", err, string(body))
@@ -457,10 +469,10 @@ func TestVerifier_PerRouteNetwork_ResolvesCorrectChain(t *testing.T) {
 	pr := parse402Accepts(t, body)
 
 	// BaseMainnet.NetworkID is "base"; BaseSepolia.NetworkID is "base-sepolia".
-	if pr.Network != x402lib.BaseMainnet.NetworkID {
-		t.Errorf("network = %q, want %q (base mainnet)", pr.Network, x402lib.BaseMainnet.NetworkID)
+	if pr.Network != ChainBaseMainnet.CAIP2Network {
+		t.Errorf("network = %q, want %q (base mainnet)", pr.Network, ChainBaseMainnet.CAIP2Network)
 	}
-	if pr.Network == x402lib.BaseSepolia.NetworkID {
+	if pr.Network == ChainBaseSepolia.CAIP2Network {
 		t.Error("network should NOT be base-sepolia — per-route override was ignored")
 	}
 }
@@ -487,7 +499,7 @@ func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-PAYMENT", testPaymentHeaderFor(t, routeWallet, "1000"))
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 

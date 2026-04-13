@@ -1,0 +1,150 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: purchaserequests.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: PurchaseRequest
+    listKind: PurchaseRequestList
+    plural: purchaserequests
+    singular: purchaserequest
+    shortNames:
+      - pr
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Endpoint
+          type: string
+          jsonPath: .spec.endpoint
+        - name: Model
+          type: string
+          jsonPath: .spec.model
+        - name: Price
+          type: string
+          jsonPath: .spec.payment.price
+        - name: Remaining
+          type: integer
+          jsonPath: .status.remaining
+        - name: Spent
+          type: integer
+          jsonPath: .status.spent
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [endpoint, model, count, payment]
+              properties:
+                endpoint:
+                  type: string
+                  description: "Full URL to the x402-gated inference endpoint"
+                model:
+                  type: string
+                  description: "Remote model ID (used as paid/<model> in LiteLLM)"
+                count:
+                  type: integer
+                  minimum: 1
+                  maximum: 2500
+                  description: "Number of pre-signed auths to create"
+                preSignedAuths:
+                  type: array
+                  description: "Pre-signed ERC-3009 auths (created by buy.py, consumed by controller)"
+                  items:
+                    type: object
+                    properties:
+                      signature: { type: string }
+                      from: { type: string }
+                      to: { type: string }
+                      value: { type: string }
+                      validAfter: { type: string }
+                      validBefore: { type: string }
+                      nonce: { type: string }
+                autoRefill:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    threshold:
+                      type: integer
+                      minimum: 0
+                      description: "Refill when remaining < threshold"
+                    count:
+                      type: integer
+                      minimum: 1
+                      description: "Number of auths to sign on refill"
+                    maxTotal:
+                      type: integer
+                      description: "Cap total auths ever signed"
+                    maxSpendPerDay:
+                      type: string
+                      description: "Max micro-USDC spend per day"
+                payment:
+                  type: object
+                  required: [network, payTo, price, asset]
+                  properties:
+                    network:
+                      type: string
+                    payTo:
+                      type: string
+                    price:
+                      type: string
+                      description: "Micro-USDC per request"
+                    asset:
+                      type: string
+                      description: "USDC contract address"
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                publicModel:
+                  type: string
+                  description: "LiteLLM model name (paid/<model>)"
+                remaining:
+                  type: integer
+                spent:
+                  type: integer
+                totalSigned:
+                  type: integer
+                totalSpent:
+                  type: string
+                probedAt:
+                  type: string
+                  format: date-time
+                probedPrice:
+                  type: string
+                walletBalance:
+                  type: string
+                signerAddress:
+                  type: string

@@ -1043,3 +1043,69 @@ func writeFile(t *testing.T, path, content string) error {
 	t.Helper()
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+func TestProxy_AdminReload(t *testing.T) {
+	cfg := &Config{Upstreams: map[string]UpstreamConfig{}}
+	auths := AuthsFile{}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/reload", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("admin/reload: got %d, want 200", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "reload triggered") {
+		t.Errorf("body = %q, want 'reload triggered'", body)
+	}
+
+	// Channel should have a signal.
+	select {
+	case <-proxy.ReloadCh():
+		// expected
+	default:
+		t.Error("expected reload signal on channel")
+	}
+}
+
+func TestProxy_AdminReloadIdempotent(t *testing.T) {
+	cfg := &Config{Upstreams: map[string]UpstreamConfig{}}
+	auths := AuthsFile{}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	// First request: should get "reload triggered".
+	rec1 := httptest.NewRecorder()
+	proxy.ServeHTTP(rec1, httptest.NewRequest(http.MethodPost, "/admin/reload", nil))
+	if rec1.Code != http.StatusOK {
+		t.Errorf("first admin/reload: got %d, want 200", rec1.Code)
+	}
+
+	// Second request without draining the channel: "already pending".
+	rec2 := httptest.NewRecorder()
+	proxy.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/admin/reload", nil))
+	if rec2.Code != http.StatusOK {
+		t.Errorf("second admin/reload: got %d, want 200", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "already pending") {
+		t.Errorf("body = %q, want 'already pending'", rec2.Body.String())
+	}
+
+	// Drain the channel.
+	<-proxy.ReloadCh()
+
+	// Third request: "reload triggered" again.
+	rec3 := httptest.NewRecorder()
+	proxy.ServeHTTP(rec3, httptest.NewRequest(http.MethodPost, "/admin/reload", nil))
+	if !strings.Contains(rec3.Body.String(), "reload triggered") {
+		t.Errorf("body = %q, want 'reload triggered'", rec3.Body.String())
+	}
+}

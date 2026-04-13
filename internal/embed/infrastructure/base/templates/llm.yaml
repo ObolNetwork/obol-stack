@@ -76,16 +76,15 @@ data:
       drop_params: true
 
 ---
+# Buyer ConfigMaps — the serviceoffer-controller writes one <upstreamKey>.json
+# entry per PurchaseRequest. This matches x402-buyer --config-dir/--auths-dir
+# loading and avoids the old single shared config.json/auths.json merge point.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: x402-buyer-config
   namespace: llm
-data:
-  config.json: |
-    {
-      "upstreams": {}
-    }
+data: {}
 
 ---
 apiVersion: v1
@@ -93,9 +92,7 @@ kind: ConfigMap
 metadata:
   name: x402-buyer-auths
   namespace: llm
-data:
-  auths.json: |
-    {}
+data: {}
 
 ---
 # Secret for LiteLLM master key and cloud provider API keys.
@@ -121,7 +118,15 @@ metadata:
   labels:
     app: litellm
 spec:
+  # Keep a single LiteLLM + x402-buyer pod while buyer auth consumption state
+  # is local to the sidecar pod. Scale this back out only after consumed auth
+  # state is shared or auth pools are sharded per replica.
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: litellm
@@ -129,13 +134,17 @@ spec:
     metadata:
       labels:
         app: litellm
+      annotations:
+        secret.reloader.stakater.com/reload: "litellm-secrets"
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: litellm
-          # Pinned to v1.82.3 — main-stable is a floating tag vulnerable to
-          # supply-chain attacks (see BerriAI/litellm#24512: PyPI 1.82.7-1.82.8
-          # contained credential-stealing malware). Always pin to a versioned tag.
-          image: ghcr.io/berriai/litellm:main-v1.82.3
+          # Obol fork of LiteLLM with config-only model management API.
+          # No Postgres required — /model/new and /model/delete work via
+          # in-memory router + config.yaml persistence.
+          # Source: https://github.com/ObolNetwork/litellm
+          image: ghcr.io/obolnetwork/litellm:sha-c16b156
           imagePullPolicy: IfNotPresent
           args:
             - --config
@@ -178,6 +187,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
           resources:
             requests:
               cpu: 100m
@@ -189,8 +202,8 @@ spec:
           image: ghcr.io/obolnetwork/x402-buyer:latest
           imagePullPolicy: IfNotPresent
           args:
-            - --config=/config/config.json
-            - --auths=/config/auths.json
+            - --config-dir=/config/buyer-config
+            - --auths-dir=/config/buyer-auths
             - --state=/state/consumed.json
             - --listen=:8402
           ports:
@@ -217,8 +230,11 @@ spec:
               cpu: 500m
               memory: 256Mi
           volumeMounts:
-            - name: x402-buyer-config
-              mountPath: /config
+            - name: buyer-config
+              mountPath: /config/buyer-config
+              readOnly: true
+            - name: buyer-auths
+              mountPath: /config/buyer-auths
               readOnly: true
             - name: x402-buyer-state
               mountPath: /state
@@ -229,15 +245,28 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
-        - name: x402-buyer-config
-          projected:
-            sources:
-              - configMap:
-                  name: x402-buyer-config
-              - configMap:
-                  name: x402-buyer-auths
+        - name: buyer-config
+          configMap:
+            name: x402-buyer-config
+            optional: true
+        - name: buyer-auths
+          configMap:
+            name: x402-buyer-auths
+            optional: true
         - name: x402-buyer-state
           emptyDir: {}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm
+  namespace: llm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: litellm
 
 ---
 apiVersion: v1

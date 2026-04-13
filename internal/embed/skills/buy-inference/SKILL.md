@@ -68,7 +68,7 @@ python3 scripts/buy.py remove remote-qwen
 | Command | Description |
 |---------|-------------|
 | `probe <endpoint-url> [--model <id>]` | Send request without payment, parse 402 response for pricing |
-| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, update buyer ConfigMaps, expose `paid/<model>` |
+| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>` |
 | `refill <name> [--count <N>]` | Sign more authorizations for an existing upstream |
 | `maintain` | Refill mappings at or below the low watermark, warn on low balance, remove exhausted mappings |
 | `list` | List purchased providers + remaining auth counts |
@@ -78,17 +78,19 @@ python3 scripts/buy.py remove remote-qwen
 
 ## How It Works
 
-1. **Probe**: Sends a request without payment. The x402 gate returns `402 Payment Required` with pricing info (`payTo`, `network`, `maxAmountRequired`).
+1. **Probe**: Sends a request without payment. The x402 gate returns `402 Payment Required` with pricing info (`payTo`, `network`, `amount`; legacy sellers may still use `maxAmountRequired`).
 
 2. **Pre-sign**: The agent signs N ERC-3009 `TransferWithAuthorization` vouchers via the remote-signer. Each voucher has a random nonce and is single-use (consumed on-chain when the facilitator settles).
 
-3. **Store**: Pre-signed authorizations are stored in the `x402-buyer-auths` ConfigMap. Upstream config is stored in `x402-buyer-config`. Both are in the `llm` namespace.
+3. **Declare**: `buy.py` creates or updates a `PurchaseRequest` in the agent namespace with the pre-signed authorizations embedded in `spec.preSignedAuths`.
 
-4. **Deploy**: A lean Go sidecar (`x402-buyer`) runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
+4. **Reconcile**: The controller validates pricing, writes per-upstream buyer config/auth files into the `x402-buyer-config` and `x402-buyer-auths` ConfigMaps in `llm`, and keeps the paid model route available in LiteLLM.
 
-5. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402`. LiteLLM expands the wildcard to the concrete requested model and the buyer sidecar routes that model to the purchased upstream. Buying a model updates only buyer ConfigMaps; the public model name is always `paid/<remote-model>`.
+5. **Deploy**: A lean Go sidecar (`x402-buyer`) runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
 
-6. **Runtime**: On each request through the sidecar:
+6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
+
+7. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller
    - If 402 → pops one pre-signed auth from pool → builds X-PAYMENT header → retries
    - Seller verifies payment via facilitator → returns 200 + inference result
@@ -102,7 +104,8 @@ Agent (buy.py)                       Runtime
   +-- probe seller → 402 pricing       OpenClaw → LiteLLM:8000
   +-- sign N auths via remote-signer         |
   +-- store in ConfigMaps                    v
-  +-- update buyer ConfigMaps          litellm pod
+  +-- create PurchaseRequest CR        litellm pod
+                                       |- controller writes buyer files
                                       |- LiteLLM paid/* route
                                       |- x402-buyer:8402
                                              +-- pop pre-signed auth
@@ -114,7 +117,7 @@ Agent (buy.py)                       Runtime
 
 ## Security Properties
 
-- **Zero signer access**: The sidecar reads pre-signed auths from a ConfigMap — no remote-signer access
+- **Zero signer access**: The sidecar reads pre-signed auths from ConfigMaps — no remote-signer access
 - **Bounded spending**: Max loss = N x price (where N = number of pre-signed auths)
 - **Risk isolation**: If sidecar crashes, LiteLLM routes to other providers (Ollama, etc.) — inference unaffected
 - **Single-use vouchers**: Each auth is consumed on-chain when settled — no replay

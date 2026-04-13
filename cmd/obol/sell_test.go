@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 )
 
@@ -186,7 +187,7 @@ func TestSellInference_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "chain", "base-sepolia")
 	assertStringDefault(t, flags, "listen", ":8402")
 	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
-	assertStringDefault(t, flags, "facilitator", "https://facilitator.x402.rs")
+	assertStringDefault(t, flags, "facilitator", "https://x402.gcp.obol.tech")
 	assertStringDefault(t, flags, "vm-image", "ollama/ollama:latest")
 	assertIntDefault(t, flags, "vm-cpus", 4)
 	assertIntDefault(t, flags, "vm-memory", 8192)
@@ -310,9 +311,9 @@ func TestResolveX402Chain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := resolveX402Chain(tt.name)
+			_, err := x402verifier.ResolveChainInfo(tt.name)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveX402Chain(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+				t.Errorf("ResolveChainInfo(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
 			}
 		})
 	}

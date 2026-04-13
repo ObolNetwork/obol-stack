@@ -28,8 +28,10 @@ import (
 
 func main() {
 	var (
-		configPath     = flag.String("config", "/config/config.json", "path to upstream config JSON")
-		authsPath      = flag.String("auths", "/config/auths.json", "path to pre-signed auths JSON")
+		configDir      = flag.String("config-dir", "", "directory of per-upstream config files (SSA mode)")
+		authsDir       = flag.String("auths-dir", "", "directory of per-upstream auth files (SSA mode)")
+		configPath     = flag.String("config", "/config/config.json", "single config JSON file (legacy)")
+		authsPath      = flag.String("auths", "/config/auths.json", "single auths JSON file (legacy)")
 		statePath      = flag.String("state", "/state/consumed.json", "path to persisted consumed-auth state")
 		listen         = flag.String("listen", ":8402", "listen address")
 		reloadInterval = flag.Duration("reload-interval", 5*time.Second, "config/auth reload interval")
@@ -42,14 +44,9 @@ func main() {
 		log.Fatalf("load state: %v", err)
 	}
 
-	cfg, err := buyer.LoadConfig(*configPath)
+	cfg, auths, err := loadConfigAndAuths(*configDir, *authsDir, *configPath, *authsPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
-
-	auths, err := buyer.LoadAuths(*authsPath)
-	if err != nil {
-		log.Fatalf("load auths: %v", err)
+		log.Fatalf("load config/auths: %v", err)
 	}
 
 	proxy, err := buyer.NewProxy(cfg, auths, state)
@@ -89,26 +86,25 @@ func main() {
 		defer ticker.Stop()
 
 		go func() {
+			reload := func(reason string) {
+				newCfg, newAuths, err := loadConfigAndAuths(*configDir, *authsDir, *configPath, *authsPath)
+				if err != nil {
+					log.Printf("reload (%s): %v", reason, err)
+					return
+				}
+				if err := proxy.Reload(newCfg, newAuths); err != nil {
+					log.Printf("reload proxy (%s): %v", reason, err)
+				}
+			}
+
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					cfg, err := buyer.LoadConfig(*configPath)
-					if err != nil {
-						log.Printf("reload config: %v", err)
-						continue
-					}
-
-					auths, err := buyer.LoadAuths(*authsPath)
-					if err != nil {
-						log.Printf("reload auths: %v", err)
-						continue
-					}
-
-					if err := proxy.Reload(cfg, auths); err != nil {
-						log.Printf("reload proxy: %v", err)
-					}
+					reload("ticker")
+				case <-proxy.ReloadCh():
+					reload("admin")
 				}
 			}
 		}()
@@ -123,4 +119,34 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "shutdown: %v\n", err)
 	}
+}
+
+// loadConfigAndAuths loads config and auths from either directory mode (SSA,
+// one file per upstream) or single-file mode (legacy, all upstreams in one JSON).
+func loadConfigAndAuths(configDir, authsDir, configPath, authsPath string) (*buyer.Config, buyer.AuthsFile, error) {
+	var (
+		cfg   *buyer.Config
+		auths buyer.AuthsFile
+		err   error
+	)
+
+	if configDir != "" {
+		cfg, err = buyer.LoadConfigDir(configDir)
+	} else {
+		cfg, err = buyer.LoadConfig(configPath)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("config: %w", err)
+	}
+
+	if authsDir != "" {
+		auths, err = buyer.LoadAuthsDir(authsDir)
+	} else {
+		auths, err = buyer.LoadAuths(authsPath)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("auths: %w", err)
+	}
+
+	return cfg, auths, nil
 }
