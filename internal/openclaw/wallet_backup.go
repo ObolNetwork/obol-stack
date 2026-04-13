@@ -213,6 +213,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 
 	// Write keystore file.
 	keystoreDir := KeystoreVolumePath(cfg, id)
+	ensureVolumeWritable(cfg, keystoreDir, u)
 	if err := os.MkdirAll(keystoreDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create keystore directory: %w", err)
 	}
