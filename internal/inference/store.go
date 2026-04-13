@@ -53,7 +53,7 @@ type Deployment struct {
 	// charged request price from PricePerMTok.
 	ApproxTokensPerRequest int `json:"approx_tokens_per_request,omitempty"`
 
-	// Chain is the x402 payment chain name (e.g. "base-sepolia").
+	// Chain is the x402 payment chain name (e.g. "base", "base-sepolia").
 	Chain string `json:"chain"`
 
 	// FacilitatorURL is the x402 facilitator URL.
@@ -179,7 +179,7 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	}
 
 	if d.Chain == "" {
-		d.Chain = "base-sepolia"
+		d.Chain = "base"
 	}
 
 	if d.FacilitatorURL == "" {

@@ -413,6 +413,19 @@ def _supports_erc20_permit(address, token_contract, chain=None):
         return False
 
 
+def _validate_contract_exists(contract_address, chain=None):
+    """Verify that a contract exists at the given address via eth_getCode.
+
+    Prevents signing pre-authorized payments against non-existent or EOA
+    addresses, which would waste signing time and fail at settlement.
+    """
+    try:
+        result = _rpc_call("eth_getCode", [contract_address, "latest"], chain)
+        return result is not None and result != "0x" and len(result) > 2
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # EIP-712 pre-signing
 # ---------------------------------------------------------------------------
@@ -795,8 +808,12 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     signer_address = keys[0]
     print(f"  Wallet: {signer_address}")
 
-    # 3. Check USDC balance.
+    # 3. Validate token contract and check balance.
     usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    if not _validate_contract_exists(usdc_addr, chain):
+        print(f"Error: no contract at {usdc_addr} on chain {chain}.", file=sys.stderr)
+        print(f"The token may not be deployed on this chain.", file=sys.stderr)
+        sys.exit(1)
     balance = _get_usdc_balance(signer_address, usdc_addr, chain)
     symbol, _, _ = _asset_display_meta(usdc_addr, extra)
     print(f"  {symbol} balance: {_format_amount(balance, usdc_addr, extra)}")

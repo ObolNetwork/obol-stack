@@ -10,6 +10,7 @@ Obol Stack: framework for AI agents to run decentralised infrastructure locally.
 
 - **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
 - **Branches**: `feat/`, `fix/`, `research/`, `codex/` prefixes
+- **GitHub branch policy**: never push `codex/`-prefixed branches to GitHub from this repository; use `feat/`, `fix/`, `research/`, or another non-codex branch name before pushing
 - **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 - **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
 
@@ -75,13 +76,13 @@ Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traef
 
 ## Monetize Subsystem
 
-Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC on Base/Base Sepolia, Traefik ForwardAuth).
+Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traefik ForwardAuth). Supports USDC (EIP-3009) and OBOL (Permit2) via `--token [USDC|OBOL]` flag; default is USDC on Base Mainnet. Token registry in `internal/x402/tokens.go`.
 
 **Sell-side flow**: `obol sell http` → creates ServiceOffer CR → serviceoffer-controller reconciles ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware) → RoutePublished (HTTPRoute) → Registered (RegistrationRequest + optional ERC-8004 side effects) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
+**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` validates token contract exists on-chain → pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
 **ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image,skills,domains,supportedTrust}`.
 

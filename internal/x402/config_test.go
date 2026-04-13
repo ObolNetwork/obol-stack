@@ -83,8 +83,8 @@ routes:
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if cfg.Chain != "base-sepolia" {
-		t.Errorf("default chain = %q, want base-sepolia", cfg.Chain)
+	if cfg.Chain != "base" {
+		t.Errorf("default chain = %q, want base", cfg.Chain)
 	}
 
 	if cfg.FacilitatorURL != "https://x402.gcp.obol.tech" {

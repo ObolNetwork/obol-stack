@@ -171,6 +171,26 @@ func TestGateway_Health(t *testing.T) {
 	}
 }
 
+func TestNewGateway_DefaultsToBaseMainnet(t *testing.T) {
+	gw, err := NewGateway(GatewayConfig{
+		UpstreamURL:   "http://localhost:11434",
+		WalletAddress: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	if gw.config.Chain.NetworkID != x402pkg.ChainBaseMainnet.NetworkID {
+		t.Fatalf("default chain network = %q, want %q", gw.config.Chain.NetworkID, x402pkg.ChainBaseMainnet.NetworkID)
+	}
+	if gw.config.Chain.CAIP2Network != x402pkg.ChainBaseMainnet.CAIP2Network {
+		t.Fatalf("default CAIP2 network = %q, want %q", gw.config.Chain.CAIP2Network, x402pkg.ChainBaseMainnet.CAIP2Network)
+	}
+	if gw.config.FacilitatorURL != x402pkg.DefaultFacilitatorURL {
+		t.Fatalf("default facilitator = %q, want %q", gw.config.FacilitatorURL, x402pkg.DefaultFacilitatorURL)
+	}
+}
+
 func TestGateway_NoPayment_Returns402(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	ollama := newMockOllama(t)

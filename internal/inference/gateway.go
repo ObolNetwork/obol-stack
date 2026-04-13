@@ -33,7 +33,7 @@ type GatewayConfig struct {
 	// PricePerRequest is the USDC amount charged per inference request (e.g., "0.001").
 	PricePerRequest string
 
-	// Chain is the x402 chain configuration (e.g., x402pkg.ChainBaseSepolia).
+	// Chain is the x402 chain configuration (e.g., x402pkg.ChainBaseMainnet).
 	Chain x402pkg.ChainInfo
 
 	// FacilitatorURL is the x402 facilitator service URL.
@@ -129,7 +129,7 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	}
 
 	if cfg.Chain.NetworkID == "" {
-		cfg.Chain = x402pkg.ChainBaseSepolia
+		cfg.Chain = x402pkg.ChainBaseMainnet
 	}
 
 	if cfg.PricePerRequest == "" {

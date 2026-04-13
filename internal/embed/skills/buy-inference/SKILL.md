@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["pytho
 
 # Buy Inference
 
-Purchase access to remote x402-gated inference endpoints using a risk-isolated sidecar architecture. The agent pre-signs a bounded batch of USDC payment authorizations and stores them in a ConfigMap. A lean Go proxy (x402-buyer) handles payments at runtime with zero signer access — max loss = N x price.
+Purchase access to remote x402-gated inference endpoints using a risk-isolated sidecar architecture. The agent pre-signs a bounded batch of payment authorizations (USDC via EIP-3009 or OBOL via Permit2, auto-detected from the seller's 402 response) and stores them in a ConfigMap. A lean Go proxy (x402-buyer) handles payments at runtime with zero signer access — max loss = N x price. The buyer validates the token contract exists on-chain before signing.
 
 ## When to Use
 
@@ -15,7 +15,7 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 - Refilling payment authorizations when running low
 - Running maintenance to refill low pools and remove exhausted mappings
 - Listing purchased providers and remaining auth counts
-- Checking USDC balance before buying
+- Checking token balance before buying
 - Removing purchased providers and cleaning up
 
 ## When NOT to Use
@@ -128,7 +128,7 @@ Agent (buy.py)                       Runtime
 |----------|---------|-------------|
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
-| `ERPC_NETWORK` | `base-sepolia` | Default chain for balance queries |
+| `ERPC_NETWORK` | `base` | Default chain for balance queries |
 
 ## Constraints
 
