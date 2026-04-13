@@ -784,6 +784,53 @@ func fixVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	}
 }
 
+// ensureVolumeWritable pre-creates a host-side PVC directory and makes it
+// writable by the current (host) user. On k3d, the local-path-provisioner
+// runs inside the k3d node container as root, so any directories it creates
+// under the data-dir volume mount are root-owned on the host. This function
+// uses docker exec to create the directory and chown it to the host user's
+// UID/GID, allowing subsequent host-side writes to succeed.
+//
+// This is a best-effort operation: failures are logged but do not block
+// provisioning (the write attempt will still surface the permission error).
+func ensureVolumeWritable(cfg *config.Config, hostPath string, u *ui.UI) {
+	backendName := "k3d"
+	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
+		backendName = strings.TrimSpace(string(data))
+	}
+
+	if backendName != "k3d" {
+		return
+	}
+
+	stackID := ""
+	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-id")); err == nil {
+		stackID = strings.TrimSpace(string(data))
+	}
+	if stackID == "" {
+		return
+	}
+
+	container := fmt.Sprintf("k3d-obol-stack-%s-server-0", stackID)
+
+	relPath, err := filepath.Rel(cfg.DataDir, hostPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		return
+	}
+	nodePath := filepath.Join("/data", relPath)
+
+	uid := os.Getuid()
+	gid := os.Getgid()
+
+	cmd := exec.Command("docker", "exec", container,
+		"sh", "-c", fmt.Sprintf("mkdir -p %s && chown -R %d:%d %s", nodePath, uid, gid, nodePath))
+	if err := cmd.Run(); err != nil {
+		if u != nil {
+			u.Warnf("Could not pre-create volume directory %s: %v", nodePath, err)
+		}
+	}
+}
+
 // copyDirRecursive copies a directory tree from src to dst, creating
 // directories and copying files with 0755/0644 permissions.
 func copyDirRecursive(src, dst string) error {

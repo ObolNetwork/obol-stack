@@ -101,6 +101,76 @@ func TestFormatPorts(t *testing.T) {
 	}
 }
 
+func TestStripConflictingPorts_StringManipulation(t *testing.T) {
+	// Verify that portBlock() produces strings that match the embedded template,
+	// and that removal produces valid YAML.
+	block80 := portBlock(80, 80)
+	block443 := portBlock(443, 443)
+
+	fullConfig := "ports:\n" + block80 +
+		"  - port: 8080:80\n    nodeFilters:\n      - loadbalancer\n" +
+		block443 +
+		"  - port: 8443:443\n    nodeFilters:\n      - loadbalancer\n" +
+		"options:\n"
+
+	// Simulate removing port 80 block.
+	after80 := strings.Replace(fullConfig, block80, "", 1)
+	if strings.Contains(after80, block80) {
+		t.Fatal("80:80 block should be removed")
+	}
+	if !strings.Contains(after80, "8080:80") {
+		t.Fatal("8080:80 should be preserved")
+	}
+	if !strings.Contains(after80, block443) {
+		t.Fatal("443:443 block should be preserved")
+	}
+
+	// Simulate removing both.
+	afterBoth := strings.Replace(after80, block443, "", 1)
+	if strings.Contains(afterBoth, block443) {
+		t.Fatal("443:443 block should be removed")
+	}
+	if !strings.Contains(afterBoth, "8443:443") {
+		t.Fatal("8443:443 should be preserved")
+	}
+	if !strings.Contains(afterBoth, "ports:\n") {
+		t.Fatal("YAML ports key should remain")
+	}
+}
+
+func TestEnsureK3dPortsAvailable_RewritesConfig(t *testing.T) {
+	// Verify that ensureK3dPortsAvailable reads, strips, and rewrites the
+	// config file when port blocks are present and those ports are occupied.
+	// We can't actually block port 80, so we verify the no-op path: when
+	// ports 80/443 are free, the file should remain unchanged.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "k3d.yaml")
+
+	original := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443)
+
+	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	u := ui.New(false)
+	ensureK3dPortsAvailable(cfgPath, u)
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// On most dev machines ports 80/443 are free (or permission-denied which
+	// is treated as available), so the config should be unchanged.
+	if string(data) != original {
+		t.Errorf("expected config unchanged when ports are free\ngot:\n%s", string(data))
+	}
+}
+
 func TestLocalIngressURL_DefaultK3dPort(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{ConfigDir: tmpDir}

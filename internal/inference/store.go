@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"time"
 
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -162,7 +163,11 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	}
 
 	// Apply defaults.
-	if d.EnclaveTag == "" {
+	// Auto-assign an enclave tag only on macOS where the Secure Enclave is
+	// available. On Linux, the gateway runs without transit encryption unless
+	// an explicit --tee flag is provided. The payment gate still protects the
+	// endpoint; encryption is an additional layer, not a requirement.
+	if d.EnclaveTag == "" && runtime.GOOS == "darwin" {
 		d.EnclaveTag = "com.obol.inference." + d.Name
 	}
 

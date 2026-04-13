@@ -1653,6 +1653,14 @@ configure_path() {
 		return 0
 	fi
 
+	# Check if already on the current PATH (e.g. set by a prior run or parent
+	# shell).  No point prompting if the binary is already reachable — and
+	# prompting crashes in non-interactive shells that lack /dev/tty.
+	if echo "$PATH" | grep -qF "$OBOL_BIN_DIR"; then
+		log_success "$OBOL_BIN_DIR is already on PATH"
+		return 0
+	fi
+
 	# Check if we can prompt the user via /dev/tty (works even with curl | bash)
 	if [[ -c /dev/tty ]]; then
 		echo ""
