@@ -268,12 +268,13 @@ func stripConflictingPorts(k3dConfig string, u *ui.UI) string {
 	type mapping struct {
 		hostPort      int
 		containerPort int
+		fallbackPort  int
 	}
 
 	// Only strip the identity mappings; the high-port fallbacks are kept.
 	candidates := []mapping{
-		{80, 80},
-		{443, 443},
+		{80, 80, 8080},
+		{443, 443, 8443},
 	}
 
 	for _, c := range candidates {
@@ -282,7 +283,7 @@ func stripConflictingPorts(k3dConfig string, u *ui.UI) string {
 			if strings.Contains(k3dConfig, block) {
 				k3dConfig = strings.Replace(k3dConfig, block, "", 1)
 				u.Warnf("Port %d is in use — removed %d:%d mapping (use port %d instead)",
-					c.hostPort, c.hostPort, c.containerPort, c.hostPort+8000)
+					c.hostPort, c.hostPort, c.containerPort, c.fallbackPort)
 			}
 		}
 	}
@@ -304,6 +305,8 @@ func ensureK3dPortsAvailable(configPath string, u *ui.UI) {
 	updated := stripConflictingPorts(original, u)
 
 	if updated != original {
-		_ = os.WriteFile(configPath, []byte(updated), 0o600)
+		if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+			u.Warnf("Could not update k3d config at %s: %v", configPath, err)
+		}
 	}
 }

@@ -101,9 +101,30 @@ func TestFormatPorts(t *testing.T) {
 	}
 }
 
+func TestPortBlock_MatchesEmbeddedTemplate(t *testing.T) {
+	// Guard: if someone reformats k3d-config.yaml, portBlock-based stripping
+	// silently stops working. Verify the embedded template contains every
+	// portBlock we might try to strip.
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Skip("project root not found")
+	}
+
+	tmpl, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/k3d-config.yaml"))
+	if err != nil {
+		t.Fatalf("read embedded template: %v", err)
+	}
+
+	for _, ports := range [][2]int{{80, 80}, {443, 443}, {8080, 80}, {8443, 443}} {
+		block := portBlock(ports[0], ports[1])
+		if !strings.Contains(string(tmpl), block) {
+			t.Errorf("portBlock(%d, %d) not found in k3d-config.yaml — template may have been reformatted", ports[0], ports[1])
+		}
+	}
+}
+
 func TestStripConflictingPorts_StringManipulation(t *testing.T) {
-	// Verify that portBlock() produces strings that match the embedded template,
-	// and that removal produces valid YAML.
+	// Verify that removal produces valid YAML structure.
 	block80 := portBlock(80, 80)
 	block443 := portBlock(443, 443)
 

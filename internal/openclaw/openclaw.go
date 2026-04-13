@@ -759,8 +759,9 @@ func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {
 	}
 	nodePath := filepath.Join("/data", relPath)
 
-	// Replace the placeholder with the resolved node path.
-	expanded := strings.ReplaceAll(shellCmd, "{}", nodePath)
+	// Replace the placeholder with the shell-quoted node path.
+	quoted := "'" + strings.ReplaceAll(nodePath, "'", "'\"'\"'") + "'"
+	expanded := strings.ReplaceAll(shellCmd, "{}", quoted)
 
 	cmd := exec.Command("docker", "exec", container, "sh", "-c", expanded)
 	return cmd.Run()
