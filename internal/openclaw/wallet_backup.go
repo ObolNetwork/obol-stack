@@ -213,6 +213,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 
 	// Write keystore file.
 	keystoreDir := KeystoreVolumePath(cfg, id)
+	ensureVolumeWritable(cfg, keystoreDir, u)
 	if err := os.MkdirAll(keystoreDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create keystore directory: %w", err)
 	}
@@ -381,17 +382,7 @@ func readKeystorePassword(deployDir string) (string, error) {
 
 // writeKeystorePassword writes the remote-signer values YAML with the given password.
 func writeKeystorePassword(deployDir, password string) error {
-	content := fmt.Sprintf(`# Remote-signer configuration
-# Managed by obol openclaw — do not edit manually.
-
-keystorePassword:
-  value: %q
-
-persistence:
-  enabled: true
-  size: 100Mi
-`, password)
-
+	content := generateRemoteSignerValues(&WalletInfo{Password: password})
 	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o600)
 }
 

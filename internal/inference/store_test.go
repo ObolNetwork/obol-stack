@@ -3,6 +3,7 @@ package inference_test
 import (
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/inference"
@@ -21,9 +22,17 @@ func TestStoreCreateAndGet(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Defaults should be applied.
-	if d.EnclaveTag == "" {
-		t.Error("EnclaveTag should have been set by Create")
+	// EnclaveTag is auto-assigned only on macOS (Secure Enclave).
+	// On Linux the field stays empty so the gateway runs without the
+	// enclave middleware (payment gating still works).
+	if runtime.GOOS == "darwin" {
+		if d.EnclaveTag == "" {
+			t.Error("EnclaveTag should have been set by Create on macOS")
+		}
+	} else {
+		if d.EnclaveTag != "" {
+			t.Errorf("EnclaveTag should be empty on %s, got %q", runtime.GOOS, d.EnclaveTag)
+		}
 	}
 
 	if d.Chain == "" {
@@ -50,8 +59,14 @@ func TestStoreCreateAndGet(t *testing.T) {
 		t.Errorf("WalletAddress mismatch: %s", got.WalletAddress)
 	}
 
-	if got.EnclaveTag != "com.obol.inference.test-deploy" {
-		t.Errorf("unexpected EnclaveTag: %s", got.EnclaveTag)
+	if runtime.GOOS == "darwin" {
+		if got.EnclaveTag != "com.obol.inference.test-deploy" {
+			t.Errorf("unexpected EnclaveTag: %s", got.EnclaveTag)
+		}
+	} else {
+		if got.EnclaveTag != "" {
+			t.Errorf("EnclaveTag should be empty on %s, got %q", runtime.GOOS, got.EnclaveTag)
+		}
 	}
 	if got.Chain != "base" {
 		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")

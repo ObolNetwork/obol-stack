@@ -67,6 +67,10 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
 
+	// Strip port mappings for occupied host ports so k3d cluster create won't
+	// fail.  The fallback mappings (8080→80, 8443→443) are always preserved.
+	k3dConfig = stripConflictingPorts(k3dConfig, u)
+
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
 	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0o600); err != nil {
 		return fmt.Errorf("failed to write k3d config: %w", err)
@@ -117,6 +121,10 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		if err := os.MkdirAll(absDataDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create data directory: %w", err)
 		}
+
+		// Re-check port availability — port state may have changed since
+		// 'obol stack init' wrote the k3d config.
+		ensureK3dPortsAvailable(k3dConfigPath, u)
 
 		if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 			setup, setupErr := ensureDevRegistries(cfg, u)
@@ -244,4 +252,61 @@ func (b *K3dBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error
 
 func (b *K3dBackend) DataDir(cfg *config.Config) string {
 	return "/data"
+}
+
+// portBlock returns the YAML block for a given host:container port mapping as
+// it appears in the embedded k3d-config.yaml template.
+func portBlock(host, container int) string {
+	return fmt.Sprintf("  - port: %d:%d\n    nodeFilters:\n      - loadbalancer\n", host, container)
+}
+
+// stripConflictingPorts removes the identity port mappings (80:80, 443:443)
+// from a k3d config string when those host ports are already in use. The
+// fallback mappings (8080→80, 8443→443) are always preserved so Traefik
+// remains reachable on an alternative port.
+func stripConflictingPorts(k3dConfig string, u *ui.UI) string {
+	type mapping struct {
+		hostPort      int
+		containerPort int
+		fallbackPort  int
+	}
+
+	// Only strip the identity mappings; the high-port fallbacks are kept.
+	candidates := []mapping{
+		{80, 80, 8080},
+		{443, 443, 8443},
+	}
+
+	for _, c := range candidates {
+		if checkPortsAvailable([]int{c.hostPort}) != nil {
+			block := portBlock(c.hostPort, c.containerPort)
+			if strings.Contains(k3dConfig, block) {
+				k3dConfig = strings.Replace(k3dConfig, block, "", 1)
+				u.Warnf("Port %d is in use — removed %d:%d mapping (use port %d instead)",
+					c.hostPort, c.hostPort, c.containerPort, c.fallbackPort)
+			}
+		}
+	}
+
+	return k3dConfig
+}
+
+// ensureK3dPortsAvailable re-reads the k3d config file, strips any port
+// mappings that have become conflicting since the config was written, and
+// persists the result. This handles the case where port state changed between
+// 'obol stack init' and 'obol stack up'.
+func ensureK3dPortsAvailable(configPath string, u *ui.UI) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	original := string(data)
+	updated := stripConflictingPorts(original, u)
+
+	if updated != original {
+		if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+			u.Warnf("Could not update k3d config at %s: %v", configPath, err)
+		}
+	}
 }
