@@ -91,7 +91,7 @@
 | Test | What it verifies | Priority |
 |------|-----------------|----------|
 | `TestLoadConfig_ValidYAML` | Parses complete YAML with wallet, chain, routes | HIGH |
-| `TestLoadConfig_Defaults` | Empty chain defaults to "base-sepolia", empty facilitatorURL defaults | HIGH |
+| `TestLoadConfig_Defaults` | Empty chain defaults to "base", empty facilitatorURL defaults | HIGH |
 | `TestLoadConfig_InvalidYAML` | Returns parse error on malformed YAML | MEDIUM |
 | `TestLoadConfig_FileNotFound` | Returns read error | MEDIUM |
 | `TestResolveChain_AllSupported` | All 6 chain names resolve (base, base-sepolia, polygon, polygon-amoy, avalanche, avalanche-fuji) | HIGH |
@@ -197,7 +197,7 @@ Pattern: Build the CLI app, run subcommands against mocked infrastructure.
 | `TestX402Register_RequiresPrivateKey` | Fails without --private-key or ERC8004_PRIVATE_KEY | HIGH |
 | `TestX402Register_TrimsHexPrefix` | 0x-prefixed key handled correctly | MEDIUM |
 | `TestX402Setup_RequiresWallet` | Fails without --wallet flag | HIGH |
-| `TestX402Setup_DefaultChain` | Default chain is "base-sepolia" | MEDIUM |
+| `TestX402Setup_DefaultChain` | Default chain is "base" | MEDIUM |
 | `TestX402Status_NoCluster` | Graceful output when no cluster running | MEDIUM |
 | `TestX402Status_NoRegistration` | Shows "not registered" message | MEDIUM |
 

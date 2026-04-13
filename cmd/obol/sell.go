@@ -98,8 +98,8 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
 			&cli.StringFlag{
 				Name:  "facilitator",
@@ -409,8 +409,8 @@ Example:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -580,10 +580,10 @@ Example:
 			ns := cmd.String("namespace")
 
 			if cmd.String("upstream") == "" {
-				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base --price 0.001", name)
 			}
 			if cmd.Int("port") == 0 {
-				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base --price 0.001", name)
 			}
 
 			priceTable, err := resolvePriceTable(cmd, true)
@@ -1208,8 +1208,8 @@ Reloads the payment verifier when configuration is changed.`,
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
 			&cli.StringFlag{
 				Name:    "facilitator-url",
@@ -1275,15 +1275,15 @@ Uses the remote-signer wallet by default. Supports sponsored (zero-gas)
 registration on networks that offer it (e.g. ethereum mainnet).
 
 Examples:
-  obol sell register                                    # interactive, defaults to base-sepolia
+  obol sell register                                    # interactive, defaults to base
   obol sell register --chain base-sepolia               # register on base-sepolia
   obol sell register --chain mainnet,base               # register on multiple chains
   obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Registration chain(s), comma-separated (base-sepolia, base, mainnet)",
-				Value: "base-sepolia",
+				Usage: "Registration chain(s), comma-separated (base, base-sepolia, mainnet)",
+				Value: "base",
 			},
 			&cli.BoolFlag{
 				Name:  "sponsored",

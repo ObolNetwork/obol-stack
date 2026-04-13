@@ -94,7 +94,7 @@ func LoadConfig(path string) (*PricingConfig, error) {
 	}
 
 	if cfg.Chain == "" {
-		cfg.Chain = "base-sepolia"
+		cfg.Chain = "base"
 	}
 
 	if err := ValidateFacilitatorURL(cfg.FacilitatorURL); err != nil {

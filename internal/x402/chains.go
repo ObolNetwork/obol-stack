@@ -159,6 +159,7 @@ func NormalizeNetworkID(network string) string {
 	}
 }
 
+
 // ResolveChainInfo maps a human-friendly chain name to its ChainInfo.
 // Phase 2 renames this to ResolveChain after deleting the old one in config.go.
 func ResolveChainInfo(name string) (ChainInfo, error) {
