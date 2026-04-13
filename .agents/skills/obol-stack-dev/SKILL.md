@@ -197,7 +197,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Prefer `qwen3.5:9b` when validating the current local paid-inference route
 - Use unique buy-side names in reused-cluster commerce tests so the sidecar cannot inherit stale in-memory spend counters
 - Use narrow review/delegation scopes for x402 changes. Name the exact files and invariants to verify, such as "controller never signs or reads remote-signer", "agent write RBAC is namespace-scoped", "paid route uses real obol CLI/human flow", and "tests support x402 v2 amount fields".
-- Before pushing, ensure the branch name is not `codex/*`. In this repo, never push `codex/`-prefixed branches to GitHub; rename or switch to a `feat/`, `fix/`, `research/`, or other non-codex branch first.
+- Before pushing, ensure the branch name is not `codex/*`. In this repo, never push `codex/`-prefixed branches to GitHub; rename or switch to a `<username>/`, `feat/`, `fix/`, `research/`, or other non-codex branch first.
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path

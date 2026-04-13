@@ -3,6 +3,7 @@ package x402
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
@@ -128,6 +129,37 @@ var (
 	}
 )
 
+// NormalizeNetworkID maps a human-friendly chain name to its CAIP-2 network
+// identifier. Already-normalized CAIP-2 values are returned as-is.
+func NormalizeNetworkID(network string) string {
+	lower := strings.ToLower(strings.TrimSpace(network))
+	switch lower {
+	case "base", "base-mainnet":
+		return ChainBaseMainnet.CAIP2Network
+	case "base-sepolia":
+		return ChainBaseSepolia.CAIP2Network
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return ChainEthereumMainnet.CAIP2Network
+	case "sepolia":
+		return "eip155:11155111"
+	case "polygon", "polygon-mainnet":
+		return ChainPolygonMainnet.CAIP2Network
+	case "polygon-amoy":
+		return ChainPolygonAmoy.CAIP2Network
+	case "avalanche", "avalanche-mainnet":
+		return ChainAvalancheMainnet.CAIP2Network
+	case "avalanche-fuji":
+		return ChainAvalancheFuji.CAIP2Network
+	case "arbitrum", "arbitrum-one":
+		return ChainArbitrumOne.CAIP2Network
+	case "arbitrum-sepolia":
+		return ChainArbitrumSepolia.CAIP2Network
+	default:
+		return network
+	}
+}
+
+
 // ResolveChainInfo maps a human-friendly chain name to its ChainInfo.
 // Phase 2 renames this to ResolveChain after deleting the old one in config.go.
 func ResolveChainInfo(name string) (ChainInfo, error) {
@@ -158,25 +190,28 @@ func ResolveChainInfo(name string) (ChainInfo, error) {
 	}
 }
 
-// BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
-// the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
-func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirementsV1 {
-	// Convert decimal USDC to atomic units (6 decimals) using big.Float with
-	// enough precision to avoid floating-point truncation (e.g., 0.001 * 1e6
-	// must produce 1000, not 999).
+// decimalToAtomic converts a decimal token amount (e.g. "0.001") to atomic
+// units using big.Float with 128-bit precision to avoid floating-point
+// truncation (e.g. 0.001 * 1e6 must produce 1000, not 999).
+func decimalToAtomic(amount string, decimals int) string {
 	amountFloat, _, _ := new(big.Float).SetPrec(128).Parse(amount, 10)
 	multiplier := new(big.Float).SetPrec(128).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(chain.Decimals)), nil),
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
 	)
 	atomicFloat := new(big.Float).SetPrec(128).Mul(amountFloat, multiplier)
 	// Add 0.5 before truncating to int so we round to nearest.
 	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
 	atomicInt, _ := atomicFloat.Int(nil)
+	return atomicInt.String()
+}
 
+// BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
+// the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
+func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirementsV1 {
 	return x402types.PaymentRequirementsV1{
 		Scheme:            "exact",
 		Network:           chain.NetworkID,
-		MaxAmountRequired: atomicInt.String(),
+		MaxAmountRequired: decimalToAtomic(amount, chain.Decimals),
 		Asset:             chain.USDCAddress,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: 60,
@@ -186,18 +221,10 @@ func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402ty
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the
 // given chain. amount is the decimal USDC amount (e.g. "0.001" = $0.001).
 func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirements {
-	amountFloat, _, _ := new(big.Float).SetPrec(128).Parse(amount, 10)
-	multiplier := new(big.Float).SetPrec(128).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(chain.Decimals)), nil),
-	)
-	atomicFloat := new(big.Float).SetPrec(128).Mul(amountFloat, multiplier)
-	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
-	atomicInt, _ := atomicFloat.Int(nil)
-
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
-		Amount:            atomicInt.String(),
+		Amount:            decimalToAtomic(amount, chain.Decimals),
 		Asset:             chain.USDCAddress,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: 60,
