@@ -130,7 +130,7 @@ Results are appended to `$DATA_DIR/autoresearch/results.jsonl` (one JSON object 
 | `SCAN_API_URL` | `https://www.8004scan.io/api/v1/public` | Public 8004scan API base URL for worker discovery |
 | `REMOTE_SIGNER_URL` | `http://remote-signer:9000` | Remote-signer REST API for payment signing |
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
-| `ERPC_NETWORK` | `base-sepolia` | Default chain for payment |
+| `ERPC_NETWORK` | `base` | Default chain for payment |
 | `DATA_DIR` | `/data` | Base directory for result storage |
 
 ## Architecture

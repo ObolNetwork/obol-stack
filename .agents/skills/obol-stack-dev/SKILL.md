@@ -197,6 +197,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Prefer `qwen3.5:9b` when validating the current local paid-inference route
 - Use unique buy-side names in reused-cluster commerce tests so the sidecar cannot inherit stale in-memory spend counters
 - Use narrow review/delegation scopes for x402 changes. Name the exact files and invariants to verify, such as "controller never signs or reads remote-signer", "agent write RBAC is namespace-scoped", "paid route uses real obol CLI/human flow", and "tests support x402 v2 amount fields".
+- Before pushing, ensure the branch name is not `codex/*`. In this repo, never push `codex/`-prefixed branches to GitHub; rename or switch to a `<username>/`, `feat/`, `fix/`, `research/`, or other non-codex branch first.
 
 ### MUST NOT DO
 - Call internal Go functions directly when testing the deployment path
@@ -206,6 +207,36 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Use `app.kubernetes.io/instance=openclaw-<id>` for pod labels (Helm uses `openclaw`)
 - Run multiple integration tests without cleaning up between them (pod sandbox errors)
 - Delegate or accept broad "review the architecture" findings without converting them into concrete file-level checks and reproducible tests.
+- Push `codex/`-prefixed branches to GitHub from this repository.
+
+## Adding a New Payment Token
+
+The `--token` flag (`obol sell inference`, `obol sell http`) selects the payment token from a whitelist registry in `internal/x402/tokens.go`. To add support for a new ERC-20 token:
+
+1. **Add registry entry** in `internal/x402/tokens.go` — one entry per (token, chain) pair:
+   ```go
+   "WETH": {
+       "base": {Address: "0x4200000000000000000000000000000000000006", Symbol: "WETH", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Wrapped Ether", EIP712Version: "1"},
+   },
+   ```
+
+2. **Determine the transfer method**:
+   - `eip3009` — token natively implements `transferWithAuthorization` (USDC, EURC)
+   - `permit2` — uses Uniswap Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) for authorization; works with any ERC-20
+
+3. **Per-chain considerations**:
+   - Verify the token contract is deployed on each target chain (the buy-side validates this via `eth_getCode` before signing)
+   - Verify the EIP-712 domain name/version match the on-chain contract — wrong values produce invalid signatures
+   - The x402 facilitator must have the target chain configured (check `obol-infrastructure/helm-charts/x402-facilitator/templates/configmap.yaml` for `eip155:<chainId>` entries)
+   - The x402 ExactPermit2Proxy (`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`) must be deployed on the chain for Permit2 tokens
+
+4. **Add tests** in `internal/x402/tokens_test.go`:
+   - Verify `ResolveToken("WETH", "base")` returns the correct entry
+   - Verify `ResolveToken("WETH", "ethereum")` returns false if not registered there
+
+5. **No CLI changes needed** — `--token WETH` resolves automatically from the registry.
+
+6. **buy.py handles both paths** — it reads `extra.assetTransferMethod` from the 402 response and auto-selects the ERC-3009 or Permit2 signing flow. Contract existence is validated before signing.
 
 ## Sell-Side Monetize Lifecycle
 

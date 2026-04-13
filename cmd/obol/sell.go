@@ -98,12 +98,13 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
-			&cli.BoolFlag{
-				Name:  "obol-token",
-				Usage: "Use Ethereum mainnet OBOL via Permit2 instead of the default chain asset",
+			&cli.StringFlag{
+				Name:  "token",
+				Usage: "Payment token (USDC, OBOL)",
+				Value: "USDC",
 			},
 			&cli.StringFlag{
 				Name:  "facilitator",
@@ -419,12 +420,13 @@ Example:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
-			&cli.BoolFlag{
-				Name:  "obol-token",
-				Usage: "Use Ethereum mainnet OBOL via Permit2 instead of the default chain asset",
+			&cli.StringFlag{
+				Name:  "token",
+				Usage: "Payment token (USDC, OBOL)",
+				Value: "USDC",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -724,7 +726,7 @@ Example:
 			}
 			u.Successf("ServiceOffer %s/%s %s (type: http)", ns, name, action)
 			if priceTable.PerMTok != "" {
-				u.Infof("Requests will be charged at %s", formatPriceTableSummary(priceTable))
+				u.Infof("Requests will be charged at %s", formatPriceTableSummary(priceTable, assetTerms.Symbol))
 			}
 			u.Infof("The agent will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
@@ -863,7 +865,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				u.Printf("Local Inference Gateways:")
 				for _, d := range deployments {
 					u.Printf("  %-20s %s → %s  %s  chain=%s",
-						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d), d.Chain)
+						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d, ""), d.Chain)
 				}
 			}
 
@@ -949,7 +951,7 @@ func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
 			Name:        d.Name,
 			ListenAddr:  d.ListenAddr,
 			UpstreamURL: d.UpstreamURL,
-			Price:       formatInferencePriceSummary(d),
+			Price:       formatInferencePriceSummary(d, ""),
 			Chain:       d.Chain,
 		})
 	}
@@ -1231,8 +1233,8 @@ Reloads the payment verifier when configuration is changed.`,
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base-sepolia, base, ethereum)",
-				Value: "base-sepolia",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
 			},
 			&cli.StringFlag{
 				Name:    "facilitator-url",
@@ -1298,15 +1300,15 @@ Uses the remote-signer wallet by default. Supports sponsored (zero-gas)
 registration on networks that offer it (e.g. ethereum mainnet).
 
 Examples:
-  obol sell register                                    # interactive, defaults to base-sepolia
-  obol sell register --chain base-sepolia               # register on base-sepolia
+  obol sell register                                    # interactive, defaults to base
+  obol sell register --chain base                       # register on base
   obol sell register --chain mainnet,base               # register on multiple chains
   obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Registration chain(s), comma-separated (base-sepolia, base, mainnet)",
-				Value: "base-sepolia",
+				Usage: "Registration chain(s), comma-separated (base, base-sepolia, mainnet)",
+				Value: "base",
 			},
 			&cli.BoolFlag{
 				Name:  "sponsored",
@@ -1783,7 +1785,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 			u.Printf("Listen:       %s", d.ListenAddr)
 			u.Printf("Upstream:     %s", d.UpstreamURL)
 			u.Printf("Wallet:       %s", d.WalletAddress)
-			u.Printf("Price:        %s", formatInferencePriceSummary(d))
+			u.Printf("Price:        %s", formatInferencePriceSummary(d, ""))
 			u.Printf("Chain:        %s", d.Chain)
 			u.Printf("Facilitator:  %s", d.FacilitatorURL)
 			u.Printf("Created:      %s", d.CreatedAt)
@@ -1902,7 +1904,10 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 }
 
 func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms, error) {
-	if !cmd.Bool("obol-token") {
+	tokenName := strings.ToUpper(strings.TrimSpace(cmd.String("token")))
+
+	// USDC = chain default — no asset override needed.
+	if tokenName == "USDC" {
 		return schemas.AssetTerms{}, nil
 	}
 
@@ -1910,6 +1915,7 @@ func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms,
 		return schemas.AssetTerms{}, fmt.Errorf("internal error: chain name pointer is nil")
 	}
 
+	// For non-default tokens, default to ethereum when --chain is not explicit.
 	if !cmd.IsSet("chain") {
 		if envChain := strings.TrimSpace(os.Getenv("OBOL_TOKEN_CHAIN")); envChain != "" {
 			*chainName = envChain
@@ -1918,84 +1924,97 @@ func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms,
 		}
 	}
 
-	address := strings.TrimSpace(os.Getenv("OBOL_TOKEN_ADDRESS"))
-	if address == "" {
-		address = "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7"
-	}
-	symbol := strings.TrimSpace(os.Getenv("OBOL_TOKEN_SYMBOL"))
-	if symbol == "" {
-		symbol = "OBOL"
-	}
-	eip712Name := strings.TrimSpace(os.Getenv("OBOL_TOKEN_NAME"))
-	if eip712Name == "" {
-		eip712Name = "Obol Network"
-	}
-	eip712Version := strings.TrimSpace(os.Getenv("OBOL_TOKEN_VERSION"))
-	if eip712Version == "" {
-		eip712Version = "1"
+	// Env var overrides bypass the registry — used for test deployments on
+	// chains where the token isn't officially deployed (e.g., fork-local OBOL
+	// on Base Sepolia via OBOL_TOKEN_ADDRESS).
+	if addr := strings.TrimSpace(os.Getenv("OBOL_TOKEN_ADDRESS")); addr != "" {
+		return schemas.AssetTerms{
+			Address:        addr,
+			Symbol:         envOrDefault("OBOL_TOKEN_SYMBOL", "OBOL"),
+			Decimals:       18,
+			TransferMethod: schemas.AssetTransferMethodPermit2,
+			EIP712Name:     envOrDefault("OBOL_TOKEN_NAME", "Obol Network"),
+			EIP712Version:  envOrDefault("OBOL_TOKEN_VERSION", "1"),
+		}, nil
 	}
 
-	switch strings.ToLower(strings.TrimSpace(*chainName)) {
-	case "ethereum", "ethereum-mainnet", "mainnet":
-	case "base-sepolia", "base", "base-mainnet":
-		if os.Getenv("OBOL_TOKEN_ADDRESS") == "" {
-			return schemas.AssetTerms{}, fmt.Errorf("--obol-token on %s requires OBOL_TOKEN_ADDRESS to point at the test deployment", *chainName)
-		}
-	default:
-		return schemas.AssetTerms{}, fmt.Errorf("--obol-token requires an Ethereum-family chain")
+	// Registry lookup.
+	entry, ok := x402verifier.ResolveToken(tokenName, *chainName)
+	if !ok {
+		return schemas.AssetTerms{}, fmt.Errorf(
+			"--token %s is not available on chain %s (supported tokens: %s)",
+			tokenName, *chainName, strings.Join(x402verifier.SupportedTokens(), ", "),
+		)
 	}
 
 	return schemas.AssetTerms{
-		Address:        address,
-		Symbol:         symbol,
-		Decimals:       18,
-		TransferMethod: schemas.AssetTransferMethodPermit2,
-		EIP712Name:     eip712Name,
-		EIP712Version:  eip712Version,
+		Address:        entry.Address,
+		Symbol:         entry.Symbol,
+		Decimals:       entry.Decimals,
+		TransferMethod: entry.TransferMethod,
+		EIP712Name:     entry.EIP712Name,
+		EIP712Version:  entry.EIP712Version,
 	}, nil
 }
 
-func formatPriceTableSummary(priceTable schemas.PriceTable) string {
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func formatPriceTableSummary(priceTable schemas.PriceTable, symbol string) string {
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	switch {
 	case priceTable.PerRequest != "":
-		return priceTable.PerRequest + " USDC/request"
+		return fmt.Sprintf("%s %s/request", priceTable.PerRequest, symbol)
 	case priceTable.PerMTok != "":
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			priceTable.EffectiveRequestPrice(),
-			priceTable.PerMTok,
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			priceTable.EffectiveRequestPrice(), symbol,
+			priceTable.PerMTok, symbol,
 			schemas.ApproxTokensPerRequest,
 		)
 	case priceTable.PerHour != "":
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/hour @ %d min/request)",
-			priceTable.EffectiveRequestPrice(),
-			priceTable.PerHour,
+		return fmt.Sprintf("%s %s/request (approx from %s %s/hour @ %d min/request)",
+			priceTable.EffectiveRequestPrice(), symbol,
+			priceTable.PerHour, symbol,
 			schemas.ApproxMinutesPerRequest,
 		)
 	default:
-		return "0 USDC/request"
+		return fmt.Sprintf("0 %s/request", symbol)
 	}
 }
 
 func formatRoutePriceSummary(route x402verifier.RouteRule) string {
+	symbol := route.AssetSymbol
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	if route.PriceModel == "perMTok" && route.PerMTok != "" && route.ApproxTokensPerRequest > 0 {
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			route.Price, route.PerMTok, route.ApproxTokensPerRequest)
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			route.Price, symbol, route.PerMTok, symbol, route.ApproxTokensPerRequest)
 	}
 
 	if route.Price != "" {
-		return route.Price + " USDC/request"
+		return fmt.Sprintf("%s %s/request", route.Price, symbol)
 	}
 
-	return "0 USDC/request"
+	return fmt.Sprintf("0 %s/request", symbol)
 }
 
-func formatInferencePriceSummary(d *inference.Deployment) string {
+func formatInferencePriceSummary(d *inference.Deployment, symbol string) string {
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	if d.PricePerMTok != "" && d.ApproxTokensPerRequest > 0 {
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			d.PricePerRequest, symbol, d.PricePerMTok, symbol, d.ApproxTokensPerRequest)
 	}
 
-	return d.PricePerRequest + " USDC/request"
+	return fmt.Sprintf("%s %s/request", d.PricePerRequest, symbol)
 }
 
 // loadProvenance reads a provenance JSON file and returns the parsed struct.

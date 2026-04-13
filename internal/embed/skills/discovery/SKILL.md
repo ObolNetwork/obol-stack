@@ -26,7 +26,7 @@ Discover AI agents registered on the ERC-8004 Identity Registry. Query on-chain 
 ## Quick Start
 
 ```bash
-# Search for recently registered agents on Base Sepolia (default)
+# Search for recently registered agents on Base mainnet (default)
 python3 scripts/discovery.py search
 
 # Search on mainnet with a limit
@@ -60,7 +60,8 @@ The ERC-8004 Identity Registry is deployed at the same address on 20+ chains via
 
 | Chain | Network Name | Registry Address |
 |-------|-------------|-----------------|
-| Base Sepolia (default) | `base-sepolia` | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| Base (default) | `base` | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
+| Base Sepolia | `base-sepolia` | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Sepolia | `sepolia` | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Mainnet | `mainnet` | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 | Base | `base` | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
@@ -74,7 +75,7 @@ Use `--chain <network>` to query a specific chain. The network name is passed to
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ERPC_URL` | `http://erpc.erpc.svc.cluster.local:4000/rpc` | eRPC gateway base URL |
-| `ERPC_NETWORK` | `base-sepolia` | Default chain for queries |
+| `ERPC_NETWORK` | `base` | Default chain for queries |
 
 ## Architecture
 
