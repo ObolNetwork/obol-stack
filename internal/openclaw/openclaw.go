@@ -619,6 +619,7 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 	u.Blank()
 	u.Infof("Importing workspace from %s...", workspaceDir)
 
+	ensureVolumeWritable(cfg, targetDir, u)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		u.Warnf("could not create workspace directory: %v", err)
 		return
@@ -710,6 +711,7 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 	}
 
 	targetDir := skillsVolumePath(cfg, id)
+	ensureVolumeWritable(cfg, targetDir, u)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		u.Warnf("could not create skills volume directory: %v", err)
 		return
@@ -736,16 +738,48 @@ func injectSkillsToVolume(cfg *config.Config, id string, deploymentDir string, u
 	fixVolumeOwnership(cfg, targetDir, u)
 }
 
+// k3dNodeExec runs a shell command inside the k3d node container, translating
+// the host-side path to the in-node path (/data/…).  Returns an error when
+// the command fails or the path is outside the data directory.  This is the
+// shared core for fixVolumeOwnership and ensureVolumeWritable.
+func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {
+	stackID := ""
+	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-id")); err == nil {
+		stackID = strings.TrimSpace(string(data))
+	}
+	if stackID == "" {
+		return fmt.Errorf("stack ID not found")
+	}
+
+	container := fmt.Sprintf("k3d-obol-stack-%s-server-0", stackID)
+
+	// Convert host path to the in-node path.  k3d mounts $DATA_DIR → /data.
+	relPath, err := filepath.Rel(cfg.DataDir, hostPath)
+	if err != nil {
+		return fmt.Errorf("cannot compute relative path from %s to %s: %w", cfg.DataDir, hostPath, err)
+	}
+	if strings.HasPrefix(relPath, "..") {
+		return fmt.Errorf("path %s is not under DataDir %s", hostPath, cfg.DataDir)
+	}
+	nodePath := filepath.Join("/data", relPath)
+
+	// Replace the placeholder with the shell-quoted node path.
+	quoted := "'" + strings.ReplaceAll(nodePath, "'", "'\"'\"'") + "'"
+	expanded := strings.ReplaceAll(shellCmd, "{}", quoted)
+
+	cmd := exec.Command("docker", "exec", container, "sh", "-c", expanded)
+	return cmd.Run()
+}
+
 // fixVolumeOwnership normalises file ownership on a host-side PVC path so the
-// container (UID 1000 / node) can read and write. On k3d the host path is
+// container (UID 1000 / node) can read and write.  On k3d the host path is
 // inside a Docker container (the k3d node), so we exec into it as root and
-// chown recursively. On k3s the host IS the node, so we attempt a direct
+// chown recursively.  On k3s the host IS the node, so we attempt a direct
 // chown (works when the CLI runs as root, harmless no-op otherwise).
 //
 // The optional ui parameter enables user-visible warnings when chown fails.
 // Pass nil when no UI context is available (e.g. GenerateWallet).
 func fixVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
-	// Determine backend (default: k3d for backward compat).
 	backendName := "k3d"
 	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
 		backendName = strings.TrimSpace(string(data))
@@ -753,37 +787,44 @@ func fixVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 
 	switch backendName {
 	case "k3d":
-		stackID := ""
-		if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-id")); err == nil {
-			stackID = strings.TrimSpace(string(data))
-		}
-		if stackID == "" {
-			return
-		}
-		container := fmt.Sprintf("k3d-obol-stack-%s-server-0", stackID)
-
-		// Convert host path to the in-node path. k3d mounts $DATA_DIR → /data.
-		relPath, err := filepath.Rel(cfg.DataDir, hostPath)
-		if err != nil {
-			u.Warnf("fixVolumeOwnership: cannot compute relative path from %s to %s: %v", cfg.DataDir, hostPath, err)
-			return
-		}
-		if strings.HasPrefix(relPath, "..") {
-			u.Warnf("fixVolumeOwnership: path %s is not under DataDir %s, skipping", hostPath, cfg.DataDir)
-			return
-		}
-		nodePath := filepath.Join("/data", relPath)
-
-		cmd := exec.Command("docker", "exec", container,
-			"chown", "-R", "1000:1000", nodePath)
-		if err := cmd.Run(); err != nil {
-			u.Warnf("Failed to fix volume ownership for %s: %v", nodePath, err)
+		if err := k3dNodeExec(cfg, hostPath, "chown -R 1000:1000 {}"); err != nil {
+			if u != nil {
+				u.Warnf("Failed to fix volume ownership for %s: %v", hostPath, err)
+			}
 		}
 	default:
 		// k3s — direct host, try chown (succeeds if root).
 		cmd := exec.Command("chown", "-R", "1000:1000", hostPath)
 		if err := cmd.Run(); err != nil {
-			u.Warnf("Failed to fix volume ownership for %s: %v (expected if not root)", hostPath, err)
+			if u != nil {
+				u.Warnf("Failed to fix volume ownership for %s: %v (expected if not root)", hostPath, err)
+			}
+		}
+	}
+}
+
+// ensureVolumeWritable pre-creates a host-side PVC directory and chowns it to
+// the current (host) user so subsequent host-side writes succeed.  On k3d, the
+// local-path-provisioner creates directories as root inside the node container,
+// making them root-owned on the host.  Best-effort: failures are logged but do
+// not block provisioning.
+func ensureVolumeWritable(cfg *config.Config, hostPath string, u *ui.UI) {
+	backendName := "k3d"
+	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
+		backendName = strings.TrimSpace(string(data))
+	}
+
+	if backendName != "k3d" {
+		return
+	}
+
+	uid := os.Getuid()
+	gid := os.Getgid()
+	shellCmd := fmt.Sprintf("mkdir -p {} && chown -R %d:%d {}", uid, gid)
+
+	if err := k3dNodeExec(cfg, hostPath, shellCmd); err != nil {
+		if u != nil {
+			u.Warnf("Could not pre-create volume directory %s: %v", hostPath, err)
 		}
 	}
 }
@@ -1425,6 +1466,7 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 
 	u.Infof("Syncing skills from %s to volume...", skillsDir)
 
+	ensureVolumeWritable(cfg, targetDir, u)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create skills volume directory: %w", err)
 	}

@@ -188,19 +188,19 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 			g.config.TEEType, seKey.Tag(), seKey.PublicKeyBytes()[:8])
 
 	case g.config.EnclaveTag != "":
-		// macOS Secure Enclave path (existing).
+		// macOS Secure Enclave path.  If the hardware isn't available (older
+		// Intel Macs without T2, or SIP is disabled), fall back to running
+		// without transit encryption rather than failing the entire gateway.
+		// The x402 payment gate still protects the endpoint.
 		if err := enclave.CheckSIP(); err != nil {
-			return nil, fmt.Errorf("enclave SIP check failed: %w", err)
+			log.Printf("  enclave:   unavailable (SIP check: %v) — continuing without transit encryption", err)
+		} else if em, err = newEnclaveMiddleware(g.config.EnclaveTag); err != nil {
+			log.Printf("  enclave:   unavailable (%v) — continuing without transit encryption", err)
+		} else {
+			g.seKey = em.key
+			log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
+				em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
 		}
-
-		em, err = newEnclaveMiddleware(g.config.EnclaveTag)
-		if err != nil {
-			return nil, fmt.Errorf("enclave middleware: %w", err)
-		}
-
-		g.seKey = em.key
-		log.Printf("  enclave:   tag=%q persistent=%v pubkey=%x...",
-			em.key.Tag(), em.key.Persistent(), em.key.PublicKeyBytes()[:8])
 	}
 
 	// protect wraps a handler with the payment gate and (when enabled) the SE

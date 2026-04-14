@@ -300,6 +300,14 @@ func TestGenerateRemoteSignerValues(t *testing.T) {
 	if !strings.Contains(values, "persistence:") {
 		t.Error("values should contain persistence section")
 	}
+
+	if !strings.Contains(values, "podSecurityContext:") {
+		t.Error("values should contain podSecurityContext section")
+	}
+
+	if !strings.Contains(values, "fsGroup: 1000") {
+		t.Error("values should set fsGroup to 1000 for remote-signer PVC write access")
+	}
 }
 
 func TestWalletMetadataRoundTrip(t *testing.T) {

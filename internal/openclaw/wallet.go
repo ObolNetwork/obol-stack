@@ -341,6 +341,12 @@ func KeystoreVolumePath(cfg *config.Config, id string) string {
 // written keystore file.
 func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte, u *ui.UI) (string, error) {
 	dir := KeystoreVolumePath(cfg, id)
+
+	// On k3d, the local-path-provisioner inside the container may have already
+	// created parent directories as root, making them root-owned on the host.
+	// Pre-create and chown inside the k3d node so the host-side CLI can write.
+	ensureVolumeWritable(cfg, dir, u)
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create keystore directory: %w", err)
 	}
@@ -352,6 +358,7 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
+	// Re-chown to UID 1000 so the remote-signer pod can read the keystore.
 	fixVolumeOwnership(cfg, dir, u)
 	return path, nil
 }
@@ -368,6 +375,11 @@ keystorePassword:
 persistence:
   enabled: true
   size: 100Mi
+
+# Ensure the pod's volumes are group-owned by GID 1000 so the remote-signer
+# process (UID 1000) can read and write the keystore PVC.
+podSecurityContext:
+  fsGroup: 1000
 `, wallet.Password)
 }
 
