@@ -577,6 +577,10 @@ Example:
 				return err
 			}
 
+			// Ensure the x402-verifier CA bundle is populated so TLS verification of
+			// the facilitator works. This is a no-op if already populated. Non-fatal.
+			x402verifier.PopulateCABundle(cfg)
+
 			ns := cmd.String("namespace")
 
 			if cmd.String("upstream") == "" {

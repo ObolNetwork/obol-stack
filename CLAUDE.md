@@ -82,9 +82,30 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
+**buy.py** lives at `/data/.openclaw/skills/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
+```
+probe <endpoint-url> [--model <id>]          Probe x402 pricing from a 402 endpoint
+buy <name> --endpoint <url> --model <id>     Pre-sign ERC-3009 auths + create PurchaseRequest
+     [--budget <micro-units>] [--count <N>]
+list                                         List purchased providers
+status <name>                                Check sidecar auth pool + spent count
+balance [--chain <network>]                  Print agent wallet address + USDC balance
+```
+To get the agent wallet address: `buy.py balance` prints `Wallet: 0x...` as its first line.
+There is no `wallet` subcommand.
+
+**Endpoint URL inside pods vs host**: `obol.stack:8080` only resolves on the Mac host (via the DNS resolver). From inside any pod (buy.py, kubectl exec, etc.) always use the Traefik cluster-internal address instead:
+- Host:   `http://obol.stack:8080/services/<name>/...`
+- In-pod: `http://traefik.traefik.svc.cluster.local/services/<name>/...`
+
+**Direct HTTP buy (no LiteLLM / no x402-buyer)**: POST or GET to the **Traefik** URL above with header `X-PAYMENT: <base64(JSON PaymentPayload)>`. Build the payload by probing once (expect `402`), then copy the chosen `accepts[]` entry **verbatim** into `PaymentPayload.accepted` (network must be CAIP-2 e.g. `eip155:84532`, field name `amount`, not `maxAmountRequired`). The base64 string must be a **single line** with no debug prints or newlines. If you `kubectl port-forward` to `x402-verifier` and call `/verify` **directly**, you must set `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) the same way Traefik does; otherwise the verifier returns **403** `forbidden: missing forwarded URI` (Traefik may surface that as an empty body to the client).
+For endpoints backed by host Ollama (`sell http --upstream ollama`), requests with `Host: obol.stack` can be rejected upstream with **403**. Direct manual buy tests are most reliable either from inside the cluster (`traefik.traefik.svc.cluster.local`) or by overriding Host on local curl (`-H 'Host: traefik.traefik.svc.cluster.local'`).
+
+**Standalone inference gateway (`obol sell inference`)**: separate from the LiteLLM+buyer path. With a live cluster + kubeconfig, `obol sell inference` disables the gateway’s built-in x402 (`NoPaymentGate`) and publishes a `ServiceOffer` so **Traefik + x402-verifier** gate traffic to the host listener; run the gateway on the host (`127.0.0.1:<port>`) so the in-cluster Service+Endpoints can reach it. For a fully standalone host (no cluster), the gateway uses its **own** x402 middleware (`verifyOnly` / settle behavior per config).
+
 Quick full-cycle smoke test (sell + buy):
 1. Unpaid gate check: POST seller route without `X-PAYMENT`, expect `402` + accepts requirements.
-2. Buy auths: run `buy.py buy ... --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
+2. Buy auths: run `buy.py buy <name> --endpoint <url> --model <id> --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
 3. Paid call: send LiteLLM request with model `paid/<remote-model>`, expect `200`.
 4. Spend proof: sidecar `/status` should move `remaining -1`, `spent +1` after one successful paid call.
 
@@ -93,6 +114,32 @@ PurchaseRequest status caveat:
 - For real-time auth pool state, always check `x402-buyer` `GET /status` in the litellm pod.
 
 **CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+
+**`obol sell http` flag reference** (common mistakes: `--model`, `--pay-to`, `--network` do NOT exist on this command):
+```
+--wallet      0x...          USDC recipient address (NOT --pay-to)
+--chain       base-sepolia   Payment chain         (NOT --network)
+--per-request 0.001          Price per request     (or --price, --per-mtok, --per-hour)
+--upstream    ollama         Upstream k8s service name
+--port        11434          Upstream service port
+--namespace   llm            Controls TWO things with the same value (default: "default"):
+                               1. The namespace where the ServiceOffer CR is created
+                               2. The namespace where the upstream k8s service lives
+--health-path /api/tags      Health check path on the upstream
+```
+**Critical**: `--namespace` sets BOTH the ServiceOffer namespace and the upstream service namespace to the same value. Always pass the same `-n <namespace>` to every follow-up command (`sell status`, `sell stop`, `sell delete`). The CLI itself prints the correct namespace after creation.
+
+Example — expose Ollama (lives in `llm` ns) as a paid endpoint:
+```bash
+obol sell http ollama-gated \
+  --upstream ollama --port 11434 --namespace llm --health-path /api/tags \
+  --per-request "0.001" --chain "base-sepolia" --wallet "0x<wallet>"
+# CLI prints: "Check status: obol sell status ollama-gated -n llm"
+
+obol sell status ollama-gated -n llm
+obol sell stop   ollama-gated -n llm
+obol sell delete ollama-gated -n llm
+```
 
 **ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image,skills,domains,supportedTrust}`.
 
@@ -122,6 +169,8 @@ Two-stage templating: `values.yaml.gotmpl` with `@enum/@default/@description` an
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs |
 
 k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-k3s1`.
+
+**Local access**: On macOS, port 80 is privileged and may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`) for local browser and curl access. Port 8080 maps to the same Traefik load balancer as port 80.
 
 ## LLM Routing
 
@@ -180,6 +229,8 @@ Three places pin the OpenClaw version — all must agree:
 4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
 6. **`/v1` paid route base** — LiteLLM `openai/*` paid routes must target `http://127.0.0.1:8402/v1` (not bare `:8402`) or paid model calls can fail with upstream 404s
+7. **LiteLLM hot-add permanently broken with subPath mount** (TODO: fix) — `addLiteLLMModelEntry` calls `/model/new` to hot-add paid model entries in-memory, but the Obol LiteLLM fork's `/model/new` tries to write to `/etc/litellm/config.yaml` on disk. That file is mounted as a read-only `subPath` from the `litellm-config` ConfigMap, so the write always fails with `[Errno 30] Read-only file system`. The controller logs "relying on ConfigMap reload" but a subPath mount is never updated by Kubernetes after pod start — so the model is never visible to LiteLLM's router without a pod restart. **Workaround**: after any new PurchaseRequest is reconciled, restart LiteLLM: `obol kubectl rollout restart deployment/litellm -n llm`. The fix is to either (a) remove the `subPath:` from the litellm volume mount so Kubernetes updates the file automatically, or (b) patch the Obol LiteLLM fork's `/model/new` to skip the disk write when the file is read-only.
+8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless and ships with no CA store. The `ca-certificates` ConfigMap in the `x402` namespace must be populated from the host's CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing all payments to fail with `x509: certificate signed by unknown authority`. **Fixed**: `obol stack up` now calls `x402verifier.PopulateCABundle` after infrastructure deployment, and `obol sell http` calls it before creating the ServiceOffer. If you encounter `Payment verification failed` errors, check the verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
 
 ### Security: Tunnel Exposure
 

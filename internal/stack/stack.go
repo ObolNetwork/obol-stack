@@ -20,6 +20,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -470,6 +471,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	u.Success("Default infrastructure deployed")
+
+	// Populate the x402-verifier CA bundle from the host so TLS verification of
+	// the facilitator works without needing to run `obol sell pricing` first.
+	// Non-fatal: best-effort, the user can repopulate by running `obol sell pricing`.
+	x402verifier.PopulateCABundle(cfg)
 
 	// Auto-configure LiteLLM with Ollama models and any cloud providers
 	// whose API keys are found in the environment. This ensures the

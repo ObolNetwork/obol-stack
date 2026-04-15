@@ -512,3 +512,116 @@ func TestGateway_NoTEE_NoAttestationEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// TestGateway_NoPaymentGate_AllowsWithoutPayment verifies that when
+// NoPaymentGate is true the payment middleware is bypassed — requests reach
+// the upstream without an X-PAYMENT header and get 200, not 402.
+func TestGateway_NoPaymentGate_AllowsWithoutPayment(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+
+	gw, err := NewGateway(GatewayConfig{
+		UpstreamURL:     ollama.URL,
+		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		PricePerRequest: "0.001",
+		Chain:           x402pkg.ChainBaseSepolia,
+		FacilitatorURL:  fac.URL,
+		NoPaymentGate:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	handler, err := gw.buildHandler(ollama.URL)
+	if err != nil {
+		t.Fatalf("buildHandler: %v", err)
+	}
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	// No X-PAYMENT header — should pass straight through to upstream.
+	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("NoPaymentGate=true: expected 200 without payment, got %d", resp.StatusCode)
+	}
+
+	if fac.verifyCalls.Load() != 0 {
+		t.Errorf("NoPaymentGate=true: facilitator verify should not be called, got %d calls", fac.verifyCalls.Load())
+	}
+}
+
+// TestGateway_ValidateFacilitatorURL_RejectsHTTP verifies that NewGateway
+// rejects a plain http:// facilitator URL (non-localhost) at construction
+// time so bad configs are caught before any requests are served.
+func TestGateway_ValidateFacilitatorURL_RejectsHTTP(t *testing.T) {
+	_, err := NewGateway(GatewayConfig{
+		UpstreamURL:    "http://localhost:11434",
+		WalletAddress:  "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		FacilitatorURL: "http://some-remote-facilitator.example.com",
+	})
+	if err == nil {
+		t.Error("expected error for non-https facilitator URL, got nil")
+	}
+}
+
+// TestNormalizeServicePrefixedPath covers the path rewriting used when the
+// cluster's Traefik gateway preserves the /services/<name>/ storefront prefix
+// on requests forwarded to the inference gateway.
+func TestNormalizeServicePrefixedPath(t *testing.T) {
+	cases := []struct {
+		input    string
+		wantPath string
+		wantOK   bool
+	}{
+		{"/services/my-offer/v1/chat/completions", "/v1/chat/completions", true},
+		{"/services/my-offer/v1/models", "/v1/models", true},
+		{"/services/my-offer/", "/", true},
+		{"/services/my-offer", "/", true},
+		{"/v1/chat/completions", "", false},
+		{"/health", "", false},
+		{"", "", false},
+	}
+
+	for _, tc := range cases {
+		got, ok := normalizeServicePrefixedPath(tc.input)
+		if ok != tc.wantOK {
+			t.Errorf("normalizeServicePrefixedPath(%q): ok=%v, want %v", tc.input, ok, tc.wantOK)
+			continue
+		}
+		if ok && got != tc.wantPath {
+			t.Errorf("normalizeServicePrefixedPath(%q): path=%q, want %q", tc.input, got, tc.wantPath)
+		}
+	}
+}
+
+// TestGateway_ServicePrefixedPath_RoutesCorrectly verifies that a request
+// arriving with the /services/<name>/... prefix is rewritten and still hits
+// the protected inference route (returns 402 without payment).
+func TestGateway_ServicePrefixedPath_RoutesCorrectly(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGateway(t, fac.URL, ollama.URL, false)
+
+	// Send without payment — expect 402, proving the path was normalised and
+	// hit the protected route rather than falling through to the catch-all proxy.
+	resp, err := http.Post(
+		gw.URL+"/services/my-offer/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("expected 402 after prefix normalisation, got %d", resp.StatusCode)
+	}
+}

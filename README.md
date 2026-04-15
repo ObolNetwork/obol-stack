@@ -268,6 +268,48 @@ obol stack down && obol stack up
 
 Access at http://obol.stack:8080 instead.
 
+#### Direct Manual `X-PAYMENT` Tests (What Works)
+
+When testing paid routes without LiteLLM/x402-buyer (manual `X-PAYMENT` header):
+
+- Works reliably from inside the cluster:
+  - `http://traefik.traefik.svc.cluster.local/services/<name>/...`
+- Works from host when Traefik forwards with a cluster-style host header:
+  - e.g. `curl -H 'Host: traefik.traefik.svc.cluster.local' ...`
+- Can fail from host with default `Host: obol.stack` as `403` on Ollama-backed paths.
+
+Why: this path goes through `Traefik -> x402-verifier -> upstream`, and upstream host-header expectations can differ between local hostnames (`obol.stack`) and cluster-internal service hostnames.
+
+Also note: if you call `x402-verifier /verify` directly (for debugging), you must send `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) like Traefik does, or verifier correctly returns `403 forbidden: missing forwarded URI`.
+
+#### Monetize Flow Preflight (Recommended)
+
+Before running sell/buy tests on a machine, verify:
+
+```bash
+# 1) Kubeconfig matches the currently running k3d cluster (ports can drift).
+k3d kubeconfig write <cluster-name> -o ~/.config/obol/kubeconfig.yaml --overwrite
+
+# 2) Stack components are healthy.
+obol kubectl get pods -A
+
+# 3) Seller route exists and is Ready.
+obol sell list
+obol sell status <offer-name> -n <namespace>
+
+# 4) Buyer wallet and balances are available.
+obol kubectl exec -n openclaw-obol-agent <openclaw-pod> -- \
+  python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
+```
+
+Run the paid tests only after all four checks pass.
+
+#### Known Limitations
+
+- `PurchaseRequest.status` (`remaining`/`spent` and `conditions[].message`) is a reconciled snapshot, not a live per-request counter.
+- For real-time auth pool state, use `x402-buyer` `GET /status` from the litellm pod.
+- Direct manual host tests (`obol.stack:8080` + custom `X-PAYMENT`) can fail on some Ollama-backed routes due to Host-header behavior; in-cluster tests via `traefik.traefik.svc.cluster.local` are the most reliable baseline.
+
 ## File Locations
 
 Follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) specification:
