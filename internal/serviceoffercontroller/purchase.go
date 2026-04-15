@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	x402pkg "github.com/ObolNetwork/obol-stack/internal/x402"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -222,6 +223,7 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 		"payTo":       pr.Spec.Payment.PayTo,
 		"price":       pr.Spec.Payment.Price,
 		"asset":       pr.Spec.Payment.Asset,
+		"facilitatorURL": x402pkg.DefaultFacilitatorURL,
 		"remoteModel": pr.Spec.Model,
 	}
 

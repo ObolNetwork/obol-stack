@@ -82,11 +82,21 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
 
+Quick full-cycle smoke test (sell + buy):
+1. Unpaid gate check: POST seller route without `X-PAYMENT`, expect `402` + accepts requirements.
+2. Buy auths: run `buy.py buy ... --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
+3. Paid call: send LiteLLM request with model `paid/<remote-model>`, expect `200`.
+4. Spend proof: sidecar `/status` should move `remaining -1`, `spent +1` after one successful paid call.
+
+PurchaseRequest status caveat:
+- `PurchaseRequest.status` (including `conditions[].message`, `remaining`, `spent`) is the controller's last reconciled snapshot, not a live per-request counter.
+- For real-time auth pool state, always check `x402-buyer` `GET /status` in the litellm pod.
+
 **CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
 **ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image,skills,domains,supportedTrust}`.
 
-**x402-verifier** (`x402` ns): ForwardAuth middleware only. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Static defaults still come from `x402-pricing`, but live per-offer routes are derived in-memory from published ServiceOffers.
+**x402-verifier** (`x402` ns): ForwardAuth middleware only. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Keep `verifyOnly: true` for this path so settlement is not attempted at ForwardAuth time. Static defaults still come from `x402-pricing`, but live per-offer routes are derived in-memory from published ServiceOffers.
 
 **serviceoffer-controller** (`internal/serviceoffercontroller/`): Watches ServiceOffers and RegistrationRequests, adds finalizers, creates Middleware + HTTPRoute, publishes registration resources, and drives tombstone cleanup on delete.
 
@@ -135,7 +145,14 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer config/auth files into the buyer ConfigMaps and keeps LiteLLM routes in sync. The sidecar exposes `/status`, `/healthz`, `/metrics`, and `/admin/reload`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price). Key code: `cmd/x402-buyer/` and `internal/x402/buyer/`.
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer config/auth files into the buyer ConfigMaps and keeps LiteLLM routes in sync. The sidecar exposes `/status`, `/healthz`, `/metrics`, and `/admin/reload`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
+
+Settlement lifecycle (cluster-routed paid flow):
+- Traefik/x402-verifier verifies only (`verifyOnly: true`).
+- `x402-buyer` retries with `X-PAYMENT`, waits for successful upstream response (`<400`), then calls facilitator `/settle`.
+- Pre-signed auth is persisted as consumed only after settlement succeeds. Settlement failure returns `503` and releases the held auth back to the pool.
+
+Key code: `cmd/x402-buyer/`, `internal/x402/buyer/`, and `internal/x402/forwardauth.go`.
 
 ## Development Constraints
 
@@ -162,6 +179,7 @@ Three places pin the OpenClaw version — all must agree:
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
+6. **`/v1` paid route base** — LiteLLM `openai/*` paid routes must target `http://127.0.0.1:8402/v1` (not bare `:8402`) or paid model calls can fail with upstream 404s
 
 ### Security: Tunnel Exposure
 

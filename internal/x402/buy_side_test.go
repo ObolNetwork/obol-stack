@@ -420,7 +420,10 @@ func startMockX402Seller(t *testing.T) *mockX402Seller {
 		ms.mu.Unlock()
 		ms.paidRequests.Add(1)
 
-		// Return mock OpenAI-compatible response.
+		// Return mock OpenAI-compatible response with settlement header so the
+		// buyer proxy does not attempt to call the real facilitator in tests.
+		settleResp := base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`))
+		w.Header().Set("X-PAYMENT-RESPONSE", settleResp)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
 			"id": "mock-buy-test",

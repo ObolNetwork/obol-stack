@@ -20,7 +20,9 @@ data:
     wallet: ""
     chain: "base"
     facilitatorURL: "https://x402.gcp.obol.tech"
-    verifyOnly: false
+    # ForwardAuth must not settle on the auth hop; settlement belongs to the
+    # paid request path that holds the X-PAYMENT header through to success.
+    verifyOnly: true
     routes: []
 
 ---

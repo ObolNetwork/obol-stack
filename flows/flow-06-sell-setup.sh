@@ -125,14 +125,15 @@ run_step "sell pricing" "$OBOL" sell pricing \
 
 run_step_grep "x402-pricing ConfigMap has wallet" "$SELLER_WALLET" \
     "$OBOL" kubectl get cm x402-pricing -n x402 -o yaml
-# Verify x402-pricing verifyOnly=false (actual payment processing enabled, not test-only)
-step "x402-pricing verifyOnly=false (payment processing enabled)"
+# ForwardAuth verifier must use verifyOnly=true (settle on the auth hop breaks Traefik;
+# facilitator verify uses JSON paymentPayload, not base64).
+step "x402-pricing verifyOnly=true (ForwardAuth-safe)"
 pricing_yaml2=$("$OBOL" kubectl get cm x402-pricing -n x402 \
     -o jsonpath='{.data.pricing\.yaml}' 2>&1) || true
-if echo "$pricing_yaml2" | grep -q "verifyOnly: false"; then
-    pass "x402-pricing verifyOnly=false (payments are actually settled)"
+if echo "$pricing_yaml2" | grep -q "verifyOnly: true"; then
+    pass "x402-pricing verifyOnly=true"
 else
-    fail "x402-pricing verifyOnly not false — ${pricing_yaml2:0:100}"
+    fail "x402-pricing verifyOnly not true — ${pricing_yaml2:0:100}"
 fi
 
 # Verify x402-pricing has the correct chain (base-sepolia for USDC payments)

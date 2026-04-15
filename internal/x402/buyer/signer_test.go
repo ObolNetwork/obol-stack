@@ -227,6 +227,63 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 	}
 }
 
+func TestPreSignedSigner_HoldConfirmRelease(t *testing.T) {
+	var consumed int
+	signer := NewPreSignedSigner(
+		"base-sepolia",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"1000",
+		[]*PreSignedAuth{makeAuth("0xhold")},
+		0,
+		func(*PreSignedAuth) error {
+			consumed++
+			return nil
+		},
+	)
+
+	req := &x402types.PaymentRequirements{
+		Network: "eip155:84532",
+		PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Amount:  "1000",
+	}
+
+	p, held, err := signer.HoldSign(req)
+	if err != nil {
+		t.Fatalf("HoldSign: %v", err)
+	}
+	if p == nil || held == nil {
+		t.Fatal("expected payload and held auth")
+	}
+	if consumed != 0 {
+		t.Fatalf("consume before confirm: %d", consumed)
+	}
+	if signer.Remaining() != 0 {
+		t.Fatalf("remaining = %d, want 0", signer.Remaining())
+	}
+
+	signer.ReleaseSpend(held)
+	if consumed != 0 {
+		t.Fatalf("release should not consume: %d", consumed)
+	}
+	if signer.Remaining() != 1 {
+		t.Fatalf("remaining after release = %d, want 1", signer.Remaining())
+	}
+
+	p2, held2, err := signer.HoldSign(req)
+	if err != nil {
+		t.Fatalf("second HoldSign: %v", err)
+	}
+	if err := signer.ConfirmSpend(held2); err != nil {
+		t.Fatalf("ConfirmSpend: %v", err)
+	}
+	if consumed != 1 {
+		t.Fatalf("consumed = %d, want 1", consumed)
+	}
+	_ = p2
+}
+
 func TestPreSignedSigner_Interface(t *testing.T) {
 	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", nil, 0, nil)
 

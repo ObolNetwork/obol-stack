@@ -27,6 +27,10 @@ type ForwardAuthConfig struct {
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
+// PaymentPayload is the decoded v1/v2 payment JSON (same bytes as inside the
+// base64 X-PAYMENT header). Facilitators including https://x402.gcp.obol.tech
+// expect a JSON object here; sending a base64 string makes them return
+// unsupported_scheme.
 type facilitatorVerifyRequest struct {
 	X402Version         int                           `json:"x402Version"`
 	PaymentPayload      json.RawMessage               `json:"paymentPayload"`
@@ -176,10 +180,16 @@ func findMatchingRequirementV1(payment x402types.PaymentPayload, requirements []
 }
 
 // facilitatorVerify calls POST /verify on the facilitator.
-func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL string, payloadBytes []byte, requirement x402types.PaymentRequirements) (*facilitatorVerifyResponse, error) {
+// paymentPayloadJSON is the decoded payment object (bytes of JSON), not the
+// base64 X-PAYMENT wrapper.
+func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL string, paymentPayloadJSON []byte, requirement x402types.PaymentRequirements) (*facilitatorVerifyResponse, error) {
+	if len(paymentPayloadJSON) == 0 || !json.Valid(paymentPayloadJSON) {
+		return nil, fmt.Errorf("payment payload is empty or not valid JSON")
+	}
+
 	body := facilitatorVerifyRequest{
 		X402Version:         2,
-		PaymentPayload:      json.RawMessage(payloadBytes),
+		PaymentPayload:      json.RawMessage(paymentPayloadJSON),
 		PaymentRequirements: requirement,
 	}
 
@@ -218,10 +228,16 @@ func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL 
 }
 
 // facilitatorSettle calls POST /settle on the facilitator.
-func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL string, payloadBytes []byte, requirement x402types.PaymentRequirements) (*facilitatorSettleResponse, error) {
+// paymentPayloadJSON is the decoded payment object (bytes of JSON), not the
+// base64 X-PAYMENT wrapper.
+func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL string, paymentPayloadJSON []byte, requirement x402types.PaymentRequirements) (*facilitatorSettleResponse, error) {
+	if len(paymentPayloadJSON) == 0 || !json.Valid(paymentPayloadJSON) {
+		return nil, fmt.Errorf("payment payload is empty or not valid JSON")
+	}
+
 	body := facilitatorVerifyRequest{
 		X402Version:         2,
-		PaymentPayload:      json.RawMessage(payloadBytes),
+		PaymentPayload:      json.RawMessage(paymentPayloadJSON),
 		PaymentRequirements: requirement,
 	}
 

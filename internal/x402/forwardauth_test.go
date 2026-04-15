@@ -305,3 +305,59 @@ func TestForwardAuth_NoUpstreamAuth(t *testing.T) {
 		t.Errorf("Authorization header = %q, want empty", got)
 	}
 }
+
+// Obol's facilitator (and the Coinbase HTTP client) expect POST /verify JSON
+// with paymentPayload as a JSON object. Sending the X-PAYMENT base64 string
+// there produced invalidReason=unsupported_scheme.
+func TestForwardAuth_FacilitatorVerifyBodyUsesJSONObjectPaymentPayload(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/verify" {
+			http.NotFound(w, r)
+			return
+		}
+		verifyCalled.Add(1)
+
+		var envelope map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		raw, ok := envelope["paymentPayload"]
+		if !ok || len(raw) == 0 {
+			http.Error(w, "missing paymentPayload", http.StatusBadRequest)
+			return
+		}
+		if raw[0] != '{' {
+			t.Errorf("facilitator /verify paymentPayload should be a JSON object, got first byte %q", raw[0])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"isValid":true,"payer":"0xPayer"}`))
+	}))
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if verifyCalled.Load() != 1 {
+		t.Fatalf("verify called %d times, want 1", verifyCalled.Load())
+	}
+	if settleCalled.Load() != 0 {
+		t.Fatalf("settle called %d times, want 0", settleCalled.Load())
+	}
+}

@@ -89,32 +89,38 @@ func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirements) bool {
 }
 
 // Sign pops one pre-signed authorization from the pool and returns it as a
-// PaymentPayload. Returns an error when the pool is exhausted.
+// PaymentPayload, persisting consume immediately (HoldSign + ConfirmSpend).
+// Returns an error when the pool is exhausted.
 func (s *PreSignedSigner) Sign(req *x402types.PaymentRequirements) (*x402types.PaymentPayload, error) {
+	payload, auth, err := s.HoldSign(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ConfirmSpend(auth); err != nil {
+		s.ReleaseSpend(auth)
+		return nil, err
+	}
+	return payload, nil
+}
+
+// HoldSign removes one auth from the pool and builds a payment payload without
+// persisting consume (no onConsume). The caller must invoke exactly one of
+// ConfirmSpend or ReleaseSpend with the returned auth.
+func (s *PreSignedSigner) HoldSign(req *x402types.PaymentRequirements) (*x402types.PaymentPayload, *PreSignedAuth, error) {
 	if req == nil {
-		return nil, fmt.Errorf("payment requirements are nil")
+		return nil, nil, fmt.Errorf("payment requirements are nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.auths) == 0 {
-		return nil, fmt.Errorf("pre-signed auth pool exhausted (spent %d): %w",
+		return nil, nil, fmt.Errorf("pre-signed auth pool exhausted (spent %d): %w",
 			s.spent, ErrNoValidSigner)
 	}
 
-	// Pop from the front.
 	auth := s.auths[0]
 	s.auths = s.auths[1:]
-
 	s.spent++
-	if s.onConsume != nil {
-		if err := s.onConsume(auth); err != nil {
-			s.auths = append([]*PreSignedAuth{auth}, s.auths...)
-			s.spent--
-
-			return nil, err
-		}
-	}
 
 	accepted := *req
 	if accepted.Scheme == "" {
@@ -129,7 +135,7 @@ func (s *PreSignedSigner) Sign(req *x402types.PaymentRequirements) (*x402types.P
 		accepted.Amount = s.price
 	}
 
-	return &x402types.PaymentPayload{
+	payload := &x402types.PaymentPayload{
 		X402Version: 2,
 		Accepted:    accepted,
 		Payload: map[string]interface{}{
@@ -143,7 +149,36 @@ func (s *PreSignedSigner) Sign(req *x402types.PaymentRequirements) (*x402types.P
 				"nonce":       auth.Nonce,
 			},
 		},
-	}, nil
+	}
+	return payload, auth, nil
+}
+
+// ConfirmSpend persists a nonce as consumed after a successful paid upstream
+// response. The auth must be the pointer returned from HoldSign for this hold.
+func (s *PreSignedSigner) ConfirmSpend(auth *PreSignedAuth) error {
+	if auth == nil {
+		return nil
+	}
+	if s.onConsume == nil {
+		return nil
+	}
+	return s.onConsume(auth)
+}
+
+// ReleaseSpend returns a held auth to the pool after a failed payment attempt
+// (network error or upstream HTTP error). It reverses HoldSign's in-memory
+// reservation so the voucher can be retried.
+func (s *PreSignedSigner) ReleaseSpend(auth *PreSignedAuth) {
+	if auth == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.auths = append([]*PreSignedAuth{auth}, s.auths...)
+	if s.spent > 0 {
+		s.spent--
+	}
 }
 
 // GetPriority returns 0 (highest priority).

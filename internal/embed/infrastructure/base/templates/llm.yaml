@@ -67,7 +67,7 @@ data:
       - model_name: "paid/*"
         litellm_params:
           model: "openai/*"
-          api_base: "http://127.0.0.1:8402"
+          api_base: "http://127.0.0.1:8402/v1"
           api_key: "unused"
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
