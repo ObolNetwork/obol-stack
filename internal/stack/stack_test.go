@@ -421,7 +421,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	for _, want := range []string{
 		`model_name: "paid/*"`,
 		`model: "openai/*"`,
-		`api_base: "http://127.0.0.1:8402"`,
+		`api_base: "http://127.0.0.1:8402/v1"`,
 		`name: x402-buyer`,
 		`containerPort: 8402`,
 		`name: buyer-http`,
