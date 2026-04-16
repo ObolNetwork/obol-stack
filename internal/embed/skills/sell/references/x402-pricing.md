@@ -12,6 +12,13 @@ x402 enables HTTP-native micropayments using the `402 Payment Required` status c
 4. **Payment**: Client sends on-chain payment (USDC) via the facilitator
 5. **Verification**: Client retries with payment proof; verifier validates and forwards to upstream
 
+## Configuration Model
+
+- Cluster-wide defaults such as wallet, chain, and facilitator settings still
+  live in the `x402-pricing` ConfigMap.
+- Published request-matching rules are derived from reconciled `ServiceOffer`
+  resources rather than being maintained manually as static ConfigMap routes.
+
 ## Pricing Fields
 
 | Field | Description | Example |

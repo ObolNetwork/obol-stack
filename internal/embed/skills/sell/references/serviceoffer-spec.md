@@ -2,6 +2,10 @@
 
 Group: `obol.org`, Version: `v1alpha1`, Kind: `ServiceOffer`
 
+`ServiceOffer` is the source-of-truth CRD for exposing a service publicly with
+x402 payment gating. The `serviceoffer-controller` reconciles each offer into
+Traefik resources and optional ERC-8004 registration side effects.
+
 ## Example
 
 ```yaml
@@ -13,7 +17,7 @@ metadata:
 spec:
   type: inference
   model:
-    name: qwen3:8b
+    name: qwen3.5:9b
     runtime: ollama
   upstream:
     service: ollama
@@ -21,75 +25,169 @@ spec:
     port: 11434
     healthPath: /health
   payment:
+    scheme: exact
     network: base-sepolia
     payTo: "0x1234567890abcdef1234567890abcdef12345678"
-    scheme: exact
     maxTimeoutSeconds: 300
     price:
       perRequest: "0.001"
       perMTok: "0.50"
   path: /services/qwen-inference
+  provenance:
+    framework: autoresearch
+    experimentId: exp-42
   registration:
-    enabled: false
-    name: "My Inference Agent"
-    description: "LLM inference on qwen3:8b"
+    enabled: true
+    name: "Qwen Inference Agent"
+    description: "Paid qwen3.5:9b inference"
+    image: "https://example.com/agent.png"
+    services:
+      - name: web
+        endpoint: https://seller.example.com/services/qwen-inference
+        version: v1
+    skills:
+      - natural_language_processing/text_generation
+    domains:
+      - technology/artificial_intelligence
+    supportedTrust:
+      - crypto-economic
+    metadata:
+      gpu: a100
+      best_val_bpb: "0.9973"
 ```
 
 ## Spec Fields
 
+### Top-Level Fields
+
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `spec.type` | string | No | `inference` | Workload type: `inference` or `fine-tuning` |
-| `spec.model.name` | string | Yes (if model set) | — | Model identifier (e.g., `qwen3:8b`) |
-| `spec.model.runtime` | string | Yes (if model set) | — | Runtime: `ollama`, `vllm`, or `tgi` |
-| `spec.upstream.service` | string | Yes | — | Kubernetes Service name for the upstream |
+| `spec.type` | string | No | `http` | Workload type: `inference`, `fine-tuning`, or `http` |
+| `spec.model` | object | No | — | Model metadata for LLM-backed offers |
+| `spec.upstream` | object | Yes | — | In-cluster Service that handles the workload |
+| `spec.payment` | object | Yes | — | x402-aligned payment terms |
+| `spec.path` | string | No | `/services/<name>` | Public HTTPRoute path prefix |
+| `spec.provenance` | object | No | — | Optional experiment or training provenance metadata |
+| `spec.registration` | object | No | — | ERC-8004 publication metadata |
+
+### `spec.model`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.model.name` | string | Yes when `model` is present | Model identifier, for example `qwen3.5:9b` |
+| `spec.model.runtime` | string | Yes when `model` is present | Serving runtime: `ollama`, `vllm`, or `tgi` |
+
+### `spec.upstream`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `spec.upstream.service` | string | Yes | — | Kubernetes Service name |
 | `spec.upstream.namespace` | string | Yes | — | Namespace of the upstream Service |
-| `spec.upstream.port` | integer | No | `11434` | Port on the upstream Service |
-| `spec.upstream.healthPath` | string | No | `/health` | HTTP path for health checks |
-| `spec.payment.network` | string | Yes | — | Chain for payments (e.g., `base-sepolia`, `base`) |
-| `spec.payment.payTo` | string | Yes | — | USDC recipient wallet (must match `^0x[0-9a-fA-F]{40}$`) |
+| `spec.upstream.port` | integer | Yes | `11434` | Port on the upstream Service |
+| `spec.upstream.healthPath` | string | No | `/health` | HTTP path used for health probes |
+
+### `spec.payment`
+
+Field names align with x402 `PaymentRequirements`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
 | `spec.payment.scheme` | string | No | `exact` | x402 payment scheme |
+| `spec.payment.network` | string | Yes | — | Human-friendly chain name, for example `base-sepolia` or `base` |
+| `spec.payment.payTo` | string | Yes | — | USDC recipient wallet address |
 | `spec.payment.maxTimeoutSeconds` | integer | No | `300` | Payment validity window in seconds |
 | `spec.payment.price.perRequest` | string | No | — | Flat per-request price in USDC |
-| `spec.payment.price.perMTok` | string | No | — | Per-million-tokens price in USDC (inference) |
-| `spec.payment.price.perHour` | string | No | — | Per-compute-hour price in USDC (fine-tuning) |
-| `spec.payment.price.perEpoch` | string | No | — | Per-training-epoch price in USDC (fine-tuning) |
-| `spec.path` | string | No | `/services/<name>` | URL path prefix for the HTTPRoute |
-| `spec.registration.enabled` | boolean | No | `false` | Register on ERC-8004 after routing is live |
-| `spec.registration.name` | string | No | — | Agent name (ERC-8004: AgentRegistration.name) |
-| `spec.registration.description` | string | No | — | Agent description |
+| `spec.payment.price.perMTok` | string | No | — | Per-million-tokens price in USDC |
+| `spec.payment.price.perHour` | string | No | — | Per-compute-hour price in USDC |
+| `spec.payment.price.perEpoch` | string | No | — | Per-training-epoch price in USDC |
+
+Notes:
+
+- `perRequest` is the direct request-level charge used by the verifier.
+- `perMTok` and `perHour` are accepted by the CRD, but current gating still
+  approximates them to a per-request charge.
+- `payTo` must match `^0x[0-9a-fA-F]{40}$`.
+
+### `spec.provenance`
+
+`provenance` is free-form string metadata, but these keys are explicitly
+recognized by the CRD schema:
+
+| Key | Description |
+|-----|-------------|
+| `framework` | Optimization or training framework, for example `autoresearch` |
+| `metricName` | Name of the primary quality metric |
+| `metricValue` | Primary quality metric value |
+| `experimentId` | Experiment, run, or commit identifier |
+| `trainHash` | SHA-256 hash of the training code or artifact set |
+| `paramCount` | Parameter count such as `50M` or `1.3B` |
+
+### `spec.registration`
+
+Field names align with the ERC-8004 `AgentRegistration` document.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `spec.registration.enabled` | boolean | No | `false` | Publish registration resources and perform on-chain side effects |
+| `spec.registration.name` | string | No | — | Agent name |
+| `spec.registration.description` | string | No | — | Human-readable description |
 | `spec.registration.image` | string | No | — | Agent icon URL |
-| `spec.registration.services` | array | No | — | Service endpoints (ERC-8004: services[]) |
-| `spec.registration.supportedTrust` | array | No | — | Trust methods: `reputation`, `crypto-economic`, `tee-attestation` |
+| `spec.registration.services` | array | No | — | Explicit service endpoint definitions |
+| `spec.registration.skills` | array | No | — | OASF skill identifiers for discovery |
+| `spec.registration.domains` | array | No | — | OASF domain identifiers for discovery |
+| `spec.registration.supportedTrust` | array | No | — | Trust methods such as `reputation`, `crypto-economic`, `tee-attestation` |
+| `spec.registration.metadata` | object | No | — | Additional string metadata published into registration output |
+
+Service entry fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Service type, for example `web`, `A2A`, `MCP`, `OASF`, `ENS`, `DID`, `email` |
+| `endpoint` | string | Yes | Service URL |
+| `version` | string | No | Protocol version |
 
 ## Status
 
 ### Conditions
 
-| Type | Description |
-|------|-------------|
-| `ModelReady` | Model has been pulled and is available |
-| `UpstreamHealthy` | Upstream service responded to health check |
-| `PaymentGateReady` | ForwardAuth Middleware created |
-| `RoutePublished` | HTTPRoute created and attached to gateway |
-| `Registered` | Registered on ERC-8004 (if requested) |
-| `Ready` | All conditions met, service is live |
+`status.conditions[]` contains Kubernetes-style conditions. Current controller
+condition types are:
 
-Each condition has:
+| Type | Meaning |
+|------|---------|
+| `ModelReady` | Model is available or not required |
+| `UpstreamHealthy` | Upstream service passed readiness checks |
+| `PaymentGateReady` | Traefik ForwardAuth middleware exists |
+| `RoutePublished` | HTTPRoute exists and is attached |
+| `Registered` | Registration side effects completed when requested |
+| `Ready` | Offer is fully live |
+
+Each condition contains:
+
 - `status`: `True`, `False`, or `Unknown`
-- `reason`: Machine-readable reason code
-- `message`: Human-readable description
-- `lastTransitionTime`: When status last changed
+- `reason`: machine-readable reason code
+- `message`: human-readable description
+- `lastTransitionTime`: transition timestamp
 
 ### Other Status Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status.endpoint` | string | Public URL path once route is published |
-| `status.agentId` | string | ERC-8004 agent NFT token ID after registration |
-| `status.registrationTxHash` | string | Transaction hash of the ERC-8004 registration |
-| `status.observedGeneration` | integer | Last observed generation |
+| `status.endpoint` | string | Published public endpoint |
+| `status.agentId` | string | ERC-8004 token ID after registration |
+| `status.registrationTxHash` | string | Registration transaction hash |
+| `status.observedGeneration` | integer | Last observed spec generation |
 
-## Ownership Cascade
+## Lifecycle Notes
 
-The reconciler sets OwnerReferences on created Middleware and HTTPRoute resources pointing back to the ServiceOffer. When a ServiceOffer is deleted, Kubernetes garbage collection automatically deletes the owned Middleware and HTTPRoute.
+- Pausing is represented via the `obol.org/paused: "true"` annotation.
+- Deleting a `ServiceOffer` cascades owned `Middleware` and `HTTPRoute`
+  resources via `ownerReferences`.
+- Registration side effects are isolated in a child `RegistrationRequest`
+  resource rather than being written directly into the offer.
+
+## Related Resources
+
+- `RegistrationRequest` — child CRD for publication and ERC-8004 side effects
+- `x402-verifier` — derives payment rules from published `ServiceOffer` objects
+- `serviceoffer-controller` — reconciles the CR into owned cluster resources

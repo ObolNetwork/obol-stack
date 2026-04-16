@@ -10,28 +10,27 @@ This guide walks you through exposing a local LLM as a paid API endpoint using t
 > [!NOTE]
 > `--per-mtok` is supported for inference pricing, but phase 1 still charges an
 > approximate flat request price derived as `perMTok / 1000` using a fixed
-> `1000 tok/request` assumption. Exact token metering is deferred to the
-> follow-up `x402-meter` design described in
-> [`docs/plans/per-token-metering.md`](../plans/per-token-metering.md).
+> `1000 tok/request` assumption. Exact token metering is not implemented yet.
 
 > [!IMPORTANT]
-> The monetize subsystem is alpha software on the `feat/secure-enclave-inference` branch.
+> The monetize subsystem is alpha software.
 > If you encounter an issue, please open a
 > [GitHub issue](https://github.com/ObolNetwork/obol-stack/issues).
 
 > [!IMPORTANT]
-> The current implementation is event-driven. `ServiceOffer` is the source of truth, `serviceoffer-controller` owns reconciliation, `RegistrationRequest` isolates registration side effects, and `x402-verifier` derives live routes directly from published ServiceOffers.
-> Older references below to the obol-agent reconcile loop, heartbeat polling, or direct `x402-pricing` route mutation are historical.
+> `ServiceOffer` is the source of truth. `serviceoffer-controller` owns
+> reconciliation, `RegistrationRequest` isolates registration side effects, and
+> `x402-verifier` derives live routes directly from published ServiceOffers.
 
 ## System Overview
 
 ```
 SELLER (obol stack cluster)
 
-  obol sell http --> ServiceOffer CR --> Agent reconciles:
+  obol sell http --> ServiceOffer CR --> serviceoffer-controller reconciles:
     1. ModelReady        (pull model in Ollama)
     2. UpstreamHealthy   (health-check Ollama)
-    3. PaymentGateReady  (create x402 Middleware + pricing route)
+    3. PaymentGateReady  (create x402 Middleware)
     4. RoutePublished    (create HTTPRoute -> Traefik gateway)
     5. Registered        (ERC-8004 on-chain, optional)
     6. Ready             (all conditions True)
@@ -177,12 +176,12 @@ That stores both values in the pricing config:
 - enforced phase-1 charge: `price = 0.00125 USDC / request`
 - approximation input: `approxTokensPerRequest = 1000`
 
-The agent automatically reconciles the offer through six stages:
+The controller automatically reconciles the offer through six stages:
 
 ```
-ModelReady       [check]  Agent checks /api/tags, model already cached
-UpstreamHealthy  [check]  Agent health-checks ollama:11434
-PaymentGateReady [check]  Creates Middleware x402-my-qwen + adds pricing route
+ModelReady       [check]  Controller verifies the model is available
+UpstreamHealthy  [check]  Controller health-checks ollama:11434
+PaymentGateReady [check]  Creates Middleware x402-my-qwen
 RoutePublished   [check]  Creates HTTPRoute so-my-qwen -> ollama backend
 Registered         --     Skipped (--register not set)
 Ready            [check]  All required conditions True
@@ -191,7 +190,7 @@ Ready            [check]  All required conditions True
 Watch the progress:
 
 ```bash
-# Check conditions (wait ~60s for agent heartbeat)
+# Check conditions
 obol sell status my-qwen --namespace llm
 
 # Verify Kubernetes resources
@@ -534,7 +533,7 @@ obol sell status
 
 ### Pausing
 
-Stop serving an offer without deleting it. This removes the pricing route so requests pass through without payment:
+Pause an offer without deleting it:
 
 ```bash
 obol sell stop my-qwen --namespace llm
@@ -556,7 +555,6 @@ Deletion:
 
 - Removes the ServiceOffer CR
 - Cascades Middleware and HTTPRoute via OwnerReferences
-- Removes the pricing route from the x402 verifier
 - Deactivates the ERC-8004 registration (sets `active=false`)
 
 Verify cleanup:
@@ -585,7 +583,7 @@ Traefik Gateway
   |
   --> ForwardAuth to x402-verifier.x402.svc:8080
   |       |
-  |       +-- Match request path against pricing routes
+  |       +-- Match request path against published ServiceOffers
   |       +-- No match? Return 200 (allow, free route)
   |       +-- Match + no payment header? Return 402 + requirements
   |       +-- Match + payment header? Verify with facilitator
@@ -612,7 +610,7 @@ Traefik Gateway
                  +--------+---------+
                           |
                +----------v-----------+
-               | PaymentGateReady     |  (create Middleware + pricing route)
+               | PaymentGateReady     |  (create Middleware)
                +----------+-----------+
                           |
                 +---------v----------+
@@ -630,66 +628,56 @@ Traefik Gateway
 
 ### Kubernetes Resources per ServiceOffer
 
-When the agent reconciles a ServiceOffer named `my-qwen` in namespace `llm`:
+When `serviceoffer-controller` reconciles a ServiceOffer named `my-qwen` in namespace `llm`:
 
 | Resource | Kind | Namespace | Name |
 |----------|------|-----------|------|
 | ServiceOffer | `obol.org/v1alpha1` | `llm` | `my-qwen` |
 | Middleware | `traefik.io/v1alpha1` | `llm` | `x402-my-qwen` |
 | HTTPRoute | `gateway.networking.k8s.io/v1` | `llm` | `so-my-qwen` |
-| ConfigMap patch | `v1` | `x402` | `x402-pricing` (route added) |
 
 The Middleware and HTTPRoute have `ownerReferences` pointing at the ServiceOffer, so they are garbage-collected on deletion.
 
 ### Pricing Configuration
 
-The x402 verifier reads its config from the `x402-pricing` ConfigMap:
+The x402 verifier reads cluster-wide payment defaults from the
+`x402-pricing` ConfigMap:
 
 ```yaml
 wallet: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 chain: "base-sepolia"
 facilitatorURL: "https://facilitator.x402.rs"
 verifyOnly: false
-routes:
-  - pattern: "/services/my-qwen/*"
-    price: "0.001"
-    description: "my-qwen inference"
-    payTo: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-    network: "base-sepolia"
 ```
 
-This configuration is used by the `litellm-config` ConfigMap in the `llm` namespace, which LiteLLM reads for model_list configuration.
-
-Per-route `payTo` and `network` override the global values, enabling multiple ServiceOffers with different wallets or chains.
+Published offer routes are derived from `ServiceOffer` resources rather than
+being maintained manually in this ConfigMap. Per-offer `payTo` and `network`
+can still override the cluster defaults.
 
 ---
 
 ## Troubleshooting
 
-### Agent not reconciling
+### Offer not reconciling
 
-The agent reconciles on a heartbeat (~60 seconds). Check agent logs:
+Check ServiceOffer conditions and controller logs:
 
 ```bash
-obol kubectl logs -n openclaw-* -l app=openclaw --tail=50
+obol sell status my-qwen --namespace llm
+obol kubectl logs -n x402 -l app=serviceoffer-controller --tail=50
 ```
 
 ### x402 verifier returning 200 instead of 402
 
-The pricing route may not have been added, or was overwritten. Check the ConfigMap:
+The ServiceOffer may not be `Ready`, or the request path may not match the
+published offer. Check the offer and the resources it owns:
 
 ```bash
-obol kubectl get cm x402-pricing -n x402 -o jsonpath='{.data.pricing\.yaml}'
-```
-
-Ensure a route matching your path exists in the `routes` list. The verifier logs its route count at startup:
-
-```bash
+obol sell status my-qwen --namespace llm
+obol kubectl get middleware x402-my-qwen -n llm
+obol kubectl get httproute so-my-qwen -n llm
 obol kubectl logs -n x402 -l app=x402-verifier --tail=10
-# Look for: "routes: 1" (or however many you expect)
 ```
-
-If routes are missing, the agent may not have reconciled yet (heartbeat is ~60s). You can also re-trigger reconciliation by deleting and re-creating the ServiceOffer.
 
 ### Facilitator unreachable from cluster
 
@@ -788,7 +776,7 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 | `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer |
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
-| `obol sell stop <name> -n <ns>` | Pause an offer (remove pricing route) |
+| `obol sell stop <name> -n <ns>` | Pause an offer without deleting it |
 | `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
 | `obol sell status` | Show cluster pricing and registration |
 | `obol sell register --private-key-file ...` | Register on ERC-8004 |
@@ -797,9 +785,10 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
-| `x402-pricing` ConfigMap | `x402` | Pricing routes and wallet config |
+| `x402-pricing` ConfigMap | `x402` | Cluster-wide wallet, chain, and facilitator settings |
 | `x402-secrets` Secret | `x402` | Wallet address |
 | `x402-verifier` Deployment | `x402` | ForwardAuth payment verifier |
+| `serviceoffer-controller` Deployment | `x402` | Reconciles ServiceOffers into published resources |
 | `serviceoffers.obol.org` CRD | (cluster) | ServiceOffer custom resource definition |
 | `traefik-gateway` Gateway | `traefik` | Main ingress gateway |
 

@@ -93,7 +93,18 @@ func TestCopySkills(t *testing.T) {
 	for _, sub := range []string{
 		"sell/scripts/monetize.py",
 		"sell/references/serviceoffer-spec.md",
+		"sell/references/registrationrequest-spec.md",
 		"sell/references/x402-pricing.md",
+	} {
+		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
+			t.Errorf("missing %s: %v", sub, err)
+		}
+	}
+
+	// buy-inference must have references/
+	for _, sub := range []string{
+		"buy-inference/references/purchase-request-spec.md",
+		"buy-inference/references/x402-buyer-api.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)
