@@ -176,6 +176,19 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ## LLM Routing
 
+**Service access from the Mac host** — not every cluster service is reachable via `obol.stack:8080`. Only routes published through Traefik are externally accessible. Everything else is ClusterIP-only and requires `kubectl port-forward`:
+
+| Service | How to reach from Mac host |
+|---------|---------------------------|
+| Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
+| LiteLLM (`llm` ns, port 4000) | `kubectl port-forward svc/litellm 14000:4000 -n llm` then `http://127.0.0.1:14000` |
+| x402-buyer sidecar (port 8402, no Service — pod only) | `kubectl port-forward -n llm <litellm-pod> 18402:8402` then `http://127.0.0.1:18402` |
+| OpenClaw instance | `kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
+
+**Never call `http://obol.stack:8080/v1/...` expecting to hit LiteLLM** — that path hits Traefik which has no `/v1` route and returns the frontend 404 page.
+
+**x402-buyer sidecar is distroless** — no `wget`, `curl`, or shell inside the container. Use port-forward from the host, not `kubectl exec`.
+
 **LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via the LiteLLM model API. Paid remote inference uses the Obol LiteLLM fork plus the `x402-buyer` sidecar, with a static `paid/* -> openai/* -> http://127.0.0.1:8402` route and explicit paid-model entries when needed. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
 **Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
