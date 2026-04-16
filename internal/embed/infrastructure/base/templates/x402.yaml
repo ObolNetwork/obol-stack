@@ -20,8 +20,9 @@ data:
     wallet: ""
     chain: "base"
     facilitatorURL: "https://x402.gcp.obol.tech"
-    # ForwardAuth must not settle on the auth hop; settlement belongs to the
-    # paid request path that holds the X-PAYMENT header through to success.
+    # ForwardAuth is a pre-upstream gate only. Keep it permanently verify-only;
+    # final settlement belongs in a component that can observe the upstream
+    # response, such as x402-buyer or the standalone inference gateway.
     verifyOnly: true
     routes: []
 

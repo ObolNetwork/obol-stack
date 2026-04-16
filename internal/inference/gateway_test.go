@@ -625,3 +625,31 @@ func TestGateway_ServicePrefixedPath_RoutesCorrectly(t *testing.T) {
 		t.Errorf("expected 402 after prefix normalisation, got %d", resp.StatusCode)
 	}
 }
+
+// TestGateway_ServicePrefixedPath_PreservesQuery verifies the storefront path
+// rewrite does not drop the original query string when rebuilding RequestURI.
+func TestGateway_ServicePrefixedPath_PreservesQuery(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGateway(t, fac.URL, ollama.URL, false)
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		gw.URL+"/services/my-offer/v1/chat/completions?verbose=true",
+		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("expected 402 after prefix normalisation with query, got %d", resp.StatusCode)
+	}
+}

@@ -1348,9 +1348,9 @@ func setupMockFacilitator(t *testing.T, cfg *config.Config) *testutil.MockFacili
 		t.Fatalf("read original pricing config: %v", err)
 	}
 
-	// Patch facilitator URL to host-side mock.
+	// Patch facilitator URL to host-side mock, but keep ForwardAuth verify-only.
 	// The mock listens on 127.0.0.1 but k3d pods reach the host via host.k3d.internal.
-	patchYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: false\nroutes: []\n"}}`,
+	patchYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: true\nroutes: []\n"}}`,
 		origCfg.Wallet, origCfg.Chain, mf.ClusterURL)
 
 	obolRun(t, cfg, "kubectl", "patch", "configmap", "x402-pricing",

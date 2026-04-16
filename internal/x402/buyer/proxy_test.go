@@ -1,7 +1,6 @@
 package buyer
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"sync/atomic"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -241,19 +239,12 @@ func TestProxy_Handles402WithPayment(t *testing.T) {
 	}
 }
 
-func TestProxy_SettlesAfterSuccessfulPaidRequest(t *testing.T) {
-	var settleCalled atomic.Int32
-
-	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/settle" {
-			http.NotFound(w, r)
-			return
-		}
-		settleCalled.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"success":true,"transaction":"0xabc","network":"base-sepolia","payer":"0xpayer"}`)
-	}))
-	defer facilitator.Close()
+func TestProxy_SuccessfulPaidRequestPersistsConsumeWithoutSettlementHeader(t *testing.T) {
+	dir := t.TempDir()
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Payment") == "" {
@@ -276,21 +267,21 @@ func TestProxy_SettlesAfterSuccessfulPaidRequest(t *testing.T) {
 	}))
 	defer upstream.Close()
 
+	auth := makeAuth("0xsettle-ok")
 	cfg := &Config{
 		Upstreams: map[string]UpstreamConfig{
 			"paid": {
-				URL:            upstream.URL,
-				Network:        "base-sepolia",
-				PayTo:          "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-				Asset:          "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-				Price:          "1000",
-				FacilitatorURL: facilitator.URL,
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
 			},
 		},
 	}
-	auths := AuthsFile{"paid": {makeAuth("0xsettle-ok")}}
+	auths := AuthsFile{"paid": {auth}}
 
-	proxy, err := NewProxy(cfg, auths, nil)
+	proxy, err := NewProxy(cfg, auths, st)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -311,12 +302,24 @@ func TestProxy_SettlesAfterSuccessfulPaidRequest(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
 	}
-	if settleCalled.Load() != 1 {
-		t.Fatalf("settle called %d times, want 1", settleCalled.Load())
+	statusRec := httptest.NewRecorder()
+	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["paid"]; got.Remaining != 0 || got.Spent != 1 {
+		t.Fatalf("remaining/spent = %d/%d, want 0/1", got.Remaining, got.Spent)
+	}
+	if !st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should be persisted as consumed after successful upstream response", auth.Nonce)
 	}
 }
 
-func TestProxy_SettlementFailureReturns503AndReleasesAuth(t *testing.T) {
+func TestProxy_SettlementFailureHeaderIsIgnoredAndSuccessfulResponsePassesThrough(t *testing.T) {
 	dir := t.TempDir()
 	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
 	if err != nil {
@@ -363,8 +366,7 @@ func TestProxy_SettlementFailureReturns503AndReleasesAuth(t *testing.T) {
 				Network:        "base-sepolia",
 				PayTo:          "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 				Asset:          "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-				Price:          "1000",
-				FacilitatorURL: facilitator.URL,
+				Price: "1000",
 			},
 		},
 	}
@@ -387,12 +389,105 @@ func TestProxy_SettlementFailureReturns503AndReleasesAuth(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusServiceUnavailable {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 503, got %d: %s", resp.StatusCode, string(body))
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Auth should be released on settlement failure.
+	// With main-style behavior, upstream success controls the client-visible
+	// result and local consume is persisted even if settlement metadata is absent
+	// or would have failed on a separate path.
+	statusRec := httptest.NewRecorder()
+	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["paid"]; got.Remaining != 0 || got.Spent != 1 {
+		t.Fatalf("remaining/spent = %d/%d, want 0/1", got.Remaining, got.Spent)
+	}
+	if !st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should be persisted as consumed after successful upstream response", auth.Nonce)
+	}
+}
+
+func TestProxy_VerifyFailureReleasesAuth(t *testing.T) {
+	dir := t.TempDir()
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	auth := makeAuth("0xverify-fail")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("X-Payment") == "" {
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		fmt.Fprint(w, `{
+			"x402Version": 1,
+			"error": "already_used",
+			"accepts": [{
+				"scheme": "exact",
+				"network": "base-sepolia",
+				"maxAmountRequired": "1000",
+				"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+			}]
+		}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 402, got %d: %s", resp.StatusCode, string(body))
+	}
+
 	statusRec := httptest.NewRecorder()
 	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
 	var status map[string]struct {
@@ -406,13 +501,8 @@ func TestProxy_SettlementFailureReturns503AndReleasesAuth(t *testing.T) {
 		t.Fatalf("remaining/spent = %d/%d, want 1/0", got.Remaining, got.Spent)
 	}
 	if st.IsConsumed("paid", auth.Nonce) {
-		t.Fatalf("nonce %s should not be persisted as consumed on settlement failure", auth.Nonce)
+		t.Fatalf("nonce %s should not be persisted as consumed on verify failure", auth.Nonce)
 	}
-
-	// A follow-up request should still be payable (auth released).
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/upstream/paid/v1/chat/completions", strings.NewReader(`{"model":"test"}`))
-	req.Header.Set("Content-Type", "application/json")
-	_, _ = http.DefaultClient.Do(req)
 }
 
 func TestProxy_UpstreamErrorAfterPaymentDoesNotPersistConsume(t *testing.T) {

@@ -68,8 +68,10 @@ func (s *RemoteSigner) GetAddress(ctx context.Context) (common.Address, error) {
 }
 
 // SignTxRequest contains the fields for signing an EIP-1559 transaction.
+// chain_id is sent as a JSON integer (u64) to match the Rust remote-signer's
+// expected type — sending it as a string causes HTTP 422.
 type SignTxRequest struct {
-	ChainID              string `json:"chain_id"`
+	ChainID              int64  `json:"chain_id"`
 	To                   string `json:"to"`
 	Nonce                string `json:"nonce"`
 	GasLimit             string `json:"gas_limit"`
@@ -190,7 +192,7 @@ func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Addre
 				toAddr = tx.To().Hex()
 			}
 			req := SignTxRequest{
-				ChainID:              chainID.String(),
+				ChainID:              chainID.Int64(),
 				To:                   toAddr,
 				Nonce:                fmt.Sprintf("%d", tx.Nonce()),
 				GasLimit:             fmt.Sprintf("%d", tx.Gas()),

@@ -282,7 +282,7 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 		ModelName: modelName,
 		LiteLLMParams: model.LiteLLMParams{
 			Model:   "openai/" + modelName,
-			APIBase: "http://127.0.0.1:8402/v1",
+			APIBase: "http://127.0.0.1:8402",
 			APIKey:  "unused",
 		},
 	}

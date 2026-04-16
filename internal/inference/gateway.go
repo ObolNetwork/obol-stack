@@ -277,7 +277,11 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if normalized, ok := normalizeServicePrefixedPath(r.URL.Path); ok {
 			r.URL.Path = normalized
-			r.RequestURI = normalized
+			if r.URL.RawQuery != "" {
+				r.RequestURI = normalized + "?" + r.URL.RawQuery
+			} else {
+				r.RequestURI = normalized
+			}
 		}
 		mux.ServeHTTP(w, r)
 	})

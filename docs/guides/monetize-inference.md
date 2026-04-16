@@ -395,15 +395,14 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 
-# Paid request through tunnel (with X-PAYMENT header)
-curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
-# -> 200 OK + inference response
+# Paid request through tunnel (supported production path: x402-buyer)
+# The buyer talks to LiteLLM, which routes paid models through the in-pod
+# x402-buyer sidecar. The sidecar performs the paid retry and settlement after
+# upstream success. Do not treat raw direct X-PAYMENT through Traefik
+# ForwardAuth as the supported production buyer flow.
 ```
 
-This proves the full public path: **Internet → Cloudflare → Traefik → x402 ForwardAuth → Facilitator settles USDC → 200 + inference**.
+This proves the supported public paid path: **Buyer → LiteLLM → x402-buyer → Cloudflare/Traefik → x402 ForwardAuth verify gate → upstream → x402-buyer settles after success → 200 + inference**.
 
 ---
 
@@ -649,7 +648,7 @@ The x402 verifier reads its config from the `x402-pricing` ConfigMap:
 wallet: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 chain: "base-sepolia"
 facilitatorURL: "https://facilitator.x402.rs"
-verifyOnly: false
+verifyOnly: true
 routes:
   - pattern: "/services/my-qwen/*"
     price: "0.001"

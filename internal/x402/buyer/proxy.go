@@ -2,7 +2,6 @@ package buyer
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -231,7 +230,6 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 			Base:     http.DefaultTransport,
 			Signers:  []Signer{signer},
 			Selector: NewDefaultPaymentSelector(),
-			FacilitatorURL: cfg.FacilitatorURL,
 			OnPaymentAttempt: func(event PaymentEvent) {
 				p.metrics.paymentAttempts.With(labels).Inc()
 			},
@@ -386,7 +384,6 @@ type replayableX402Transport struct {
 	Base             http.RoundTripper
 	Signers          []Signer
 	Selector         PaymentSelector
-	FacilitatorURL   string
 	OnPaymentAttempt PaymentCallback
 	OnPaymentSuccess PaymentCallback
 	OnPaymentFailure PaymentCallback
@@ -514,23 +511,6 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		return respRetry, nil
 	}
 
-	settlement, settleErr := t.ensureSettlement(req, respRetry, payment, selectedRequirement)
-	if settleErr != nil {
-		releaseHeldPreSignedSpend(t.Signers, heldAuth)
-		if t.OnPaymentFailure != nil {
-			t.OnPaymentFailure(PaymentEvent{
-				Type:      PaymentEventFailure,
-				Timestamp: time.Now(),
-				Method:    "HTTP",
-				URL:       req.URL.String(),
-				Error:     settleErr,
-				Duration:  duration,
-			})
-		}
-		respRetry.Body.Close()
-		return newErrorResponse(req, http.StatusServiceUnavailable, "Payment settlement failed"), nil
-	}
-
 	if len(t.Signers) == 1 {
 		if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {
 			if confirmErr := ps.ConfirmSpend(heldAuth); confirmErr != nil {
@@ -539,6 +519,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		}
 	}
 
+	settlement, _ := DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
 	if settlement.Success && t.OnPaymentSuccess != nil {
 		event := PaymentEvent{
 			Type:        PaymentEventSuccess,
@@ -560,40 +541,6 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 
 	return respRetry, nil
-}
-
-func (t *replayableX402Transport) ensureSettlement(req *http.Request, resp *http.Response, payment *x402types.PaymentPayload, requirement *x402types.PaymentRequirements) (SettlementResponse, error) {
-	header := resp.Header.Get("X-PAYMENT-RESPONSE")
-	if header != "" {
-		return DecodeSettlement(header)
-	}
-	if requirement == nil {
-		return SettlementResponse{}, fmt.Errorf("missing payment requirement for settlement")
-	}
-
-	settlement, err := facilitatorSettle(req.Context(), t.FacilitatorURL, payment, *requirement)
-	if err != nil {
-		return SettlementResponse{}, err
-	}
-
-	settleJSON, err := json.Marshal(settlement)
-	if err != nil {
-		return SettlementResponse{}, fmt.Errorf("marshal settlement response: %w", err)
-	}
-	resp.Header.Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(settleJSON))
-	return settlement, nil
-}
-
-func newErrorResponse(req *http.Request, status int, msg string) *http.Response {
-	body := io.NopCloser(strings.NewReader(msg + "\n"))
-	return &http.Response{
-		StatusCode:    status,
-		Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
-		Header:        http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
-		Body:          body,
-		ContentLength: int64(len(msg) + 1),
-		Request:       req,
-	}
 }
 
 func ensureReplayableBody(req *http.Request) error {

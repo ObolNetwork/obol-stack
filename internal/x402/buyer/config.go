@@ -43,10 +43,6 @@ type UpstreamConfig struct {
 
 	// Price is the amount in atomic units per request (e.g. "1000" for 0.001 USDC).
 	Price string `json:"price"`
-
-	// FacilitatorURL is the x402 facilitator endpoint used for settlement.
-	// If omitted, the Obol default facilitator URL is used.
-	FacilitatorURL string `json:"facilitatorURL,omitempty"`
 }
 
 // PreSignedAuth is a single pre-signed ERC-3009 TransferWithAuthorization voucher.

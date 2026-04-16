@@ -89,7 +89,7 @@ func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirements) bool {
 }
 
 // Sign pops one pre-signed authorization from the pool and returns it as a
-// PaymentPayload, persisting consume immediately (HoldSign + ConfirmSpend).
+// PaymentPayload, then persists local consume only after ConfirmSpend succeeds.
 // Returns an error when the pool is exhausted.
 func (s *PreSignedSigner) Sign(req *x402types.PaymentRequirements) (*x402types.PaymentPayload, error) {
 	payload, auth, err := s.HoldSign(req)

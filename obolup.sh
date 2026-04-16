@@ -1784,8 +1784,13 @@ print_instructions() {
 	# Check if the agent's primary model requires a cloud API key.
 	check_agent_model_api_key
 
-	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty)
-	if [[ -c /dev/tty ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty).
+	# [[ -c /dev/tty ]] only tests that the file is a char device — it does not test
+	# whether /dev/tty can actually be opened.  In some environments (Docker containers,
+	# certain CI setups) /dev/tty exists but is inaccessible, causing the subsequent
+	# `read </dev/tty` to crash.  The redirect test `{ true </dev/tty; } 2>/dev/null`
+	# confirms the fd can actually be opened before we attempt any interactive prompt.
+	if [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
 		echo ""
 		log_info "Would you like to start the cluster now?"
 		echo ""

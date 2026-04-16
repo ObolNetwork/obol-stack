@@ -268,19 +268,16 @@ obol stack down && obol stack up
 
 Access at http://obol.stack:8080 instead.
 
-#### Direct Manual `X-PAYMENT` Tests (What Works)
+#### Direct `X-PAYMENT` Buyers
 
-When testing paid routes without LiteLLM/x402-buyer (manual `X-PAYMENT` header):
+Raw direct `X-PAYMENT` requests through the Traefik `ForwardAuth` route are not a supported production payment path. The verifier is intentionally `verifyOnly: true`, so Traefik can gate requests but is not the final settlement point.
 
-- Works reliably from inside the cluster:
-  - `http://traefik.traefik.svc.cluster.local/services/<name>/...`
-- Works from host when Traefik forwards with a cluster-style host header:
-  - e.g. `curl -H 'Host: traefik.traefik.svc.cluster.local' ...`
-- Can fail from host with default `Host: obol.stack` as `403` on Ollama-backed paths.
+Use:
 
-Why: this path goes through `Traefik -> x402-verifier -> upstream`, and upstream host-header expectations can differ between local hostnames (`obol.stack`) and cluster-internal service hostnames.
+- `x402-buyer` for cluster-routed paid traffic
+- `obol sell inference` for direct buyers that need to send raw `X-PAYMENT`
 
-Also note: if you call `x402-verifier /verify` directly (for debugging), you must send `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) like Traefik does, or verifier correctly returns `403 forbidden: missing forwarded URI`.
+If you call `x402-verifier /verify` directly for debugging, you must send `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) like Traefik does, or verifier correctly returns `403 forbidden: missing forwarded URI`.
 
 #### Monetize Flow Preflight (Recommended)
 
@@ -308,7 +305,7 @@ Run the paid tests only after all four checks pass.
 
 - `PurchaseRequest.status` (`remaining`/`spent` and `conditions[].message`) is a reconciled snapshot, not a live per-request counter.
 - For real-time auth pool state, use `x402-buyer` `GET /status` from the litellm pod.
-- Direct manual host tests (`obol.stack:8080` + custom `X-PAYMENT`) can fail on some Ollama-backed routes due to Host-header behavior; in-cluster tests via `traefik.traefik.svc.cluster.local` are the most reliable baseline.
+- Raw direct `X-PAYMENT` through Traefik is not a supported production path; use `obol sell inference` if you need a direct buyer flow.
 
 ## File Locations
 

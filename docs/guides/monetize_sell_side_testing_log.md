@@ -240,7 +240,7 @@ cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
 #     Linux: host.k3d.internal
 obol kubectl patch configmap x402-pricing -n x402 --type merge -p '{
   "data": {
-    "pricing.yaml": "wallet: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8\nchain: base-sepolia\nfacilitatorURL: http://host.docker.internal:4040\nverifyOnly: false\nroutes:\n- pattern: \"/services/my-qwen/*\"\n  price: \"0.001\"\n  description: \"ServiceOffer my-qwen\"\n  payTo: \"0x70997970C51812dc3A010C7d01b50e0d17dc79C8\"\n  network: \"base-sepolia\"\n"
+    "pricing.yaml": "wallet: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8\nchain: base-sepolia\nfacilitatorURL: http://host.docker.internal:4040\nverifyOnly: true\nroutes:\n- pattern: \"/services/my-qwen/*\"\n  price: \"0.001\"\n  description: \"ServiceOffer my-qwen\"\n  payTo: \"0x70997970C51812dc3A010C7d01b50e0d17dc79C8\"\n  network: \"base-sepolia\"\n"
   }
 }'
 
