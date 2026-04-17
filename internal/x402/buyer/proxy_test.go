@@ -1622,6 +1622,77 @@ func TestProxy_UpstreamSuccessWithSettlementHeader_DoesNotIncrementUnsettledMetr
 	})
 }
 
+func TestProxy_ConfirmSpendFailure_IncrementsMetric(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o500); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	statePath := filepath.Join(stateDir, "consumed.json")
+
+	st, err := LoadStateStore(statePath)
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{"x402Version":1,"accepts":[{"scheme":"exact","network":"base-sepolia","maxAmountRequired":"1000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}]}`)
+			return
+		}
+
+		settleJSON := `{"success":true,"transaction":"0xabc","network":"base-sepolia","payer":"0xdef"}`
+		w.Header().Set("X-Payment-Response", base64.StdEncoding.EncodeToString([]byte(settleJSON)))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xconfirmfail")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	metrics := scrapeMetricFamilies(t, proxy)
+	assertMetricValue(t, metrics["obol_x402_buyer_confirm_spend_failure_total"], map[string]string{
+		"upstream":     "paid",
+		"remote_model": "paid",
+	}, 1)
+}
+
 // TestProxy_OpenAIMuxSymmetry_BothV1AndBarePathsRouteIdentically pins down the
 // invariant that the buyer sidecar serves /chat/completions AND
 // /v1/chat/completions. The LiteLLM templates hardcode api_base with /v1

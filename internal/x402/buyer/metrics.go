@@ -14,6 +14,7 @@ type metrics struct {
 	paymentAttempts               *prometheus.CounterVec
 	paymentSuccessTotal           *prometheus.CounterVec
 	paymentFailureTotal           *prometheus.CounterVec
+	confirmSpendFailureTotal      *prometheus.CounterVec
 	paymentUnsettledConfirmations *prometheus.CounterVec
 	authRemaining                 *prometheus.GaugeVec
 	authSpent                     *prometheus.GaugeVec
@@ -48,6 +49,13 @@ func newMetrics() *metrics {
 			prometheus.CounterOpts{
 				Name: "obol_x402_buyer_payment_failure_total",
 				Help: "Total failed x402 payments attempted by the buyer sidecar.",
+			},
+			[]string{"upstream", "remote_model"},
+		),
+		confirmSpendFailureTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_buyer_confirm_spend_failure_total",
+				Help: "Successful upstream responses whose consumed-auth state could not be persisted.",
 			},
 			[]string{"upstream", "remote_model"},
 		),
@@ -91,6 +99,7 @@ func newMetrics() *metrics {
 		m.paymentAttempts,
 		m.paymentSuccessTotal,
 		m.paymentFailureTotal,
+		m.confirmSpendFailureTotal,
 		m.paymentUnsettledConfirmations,
 		m.authRemaining,
 		m.authSpent,

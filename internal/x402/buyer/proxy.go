@@ -239,6 +239,12 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 				log.Printf("[%s] payment failed: %v", name, event.Error)
 			},
+			OnConfirmSpendFailure: func(event PaymentEvent) {
+				p.metrics.confirmSpendFailureTotal.With(labels).Inc()
+				p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
+				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
+				log.Printf("[%s] confirm spend persistence failed: %v", name, event.Error)
+			},
 			OnPaymentUnsettled: func(event PaymentEvent) {
 				p.metrics.paymentUnsettledConfirmations.With(labels).Inc()
 			},
@@ -390,6 +396,7 @@ type replayableX402Transport struct {
 	OnPaymentAttempt PaymentCallback
 	OnPaymentSuccess PaymentCallback
 	OnPaymentFailure PaymentCallback
+	OnConfirmSpendFailure PaymentCallback
 	// OnPaymentUnsettled fires when the upstream returned 2xx without a
 	// successful X-PAYMENT-RESPONSE. The auth has been consumed locally via
 	// ConfirmSpend, but there is no observed on-chain settlement. Sellers
@@ -524,6 +531,24 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {
 			if confirmErr := ps.ConfirmSpend(heldAuth); confirmErr != nil {
 				log.Printf("x402-buyer: confirm spend: %v", confirmErr)
+				if t.OnConfirmSpendFailure != nil {
+					event := PaymentEvent{
+						Type:      PaymentEventFailure,
+						Timestamp: time.Now(),
+						Method:    "HTTP",
+						URL:       req.URL.String(),
+						Error:     confirmErr,
+						Duration:  duration,
+					}
+					if selectedRequirement != nil {
+						event.Network = selectedRequirement.Network
+						event.Scheme = selectedRequirement.Scheme
+						event.Amount = selectedRequirement.Amount
+						event.Asset = selectedRequirement.Asset
+						event.Recipient = selectedRequirement.PayTo
+					}
+					t.OnConfirmSpendFailure(event)
+				}
 			}
 		}
 	}
