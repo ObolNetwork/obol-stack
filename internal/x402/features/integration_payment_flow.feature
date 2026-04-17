@@ -28,8 +28,8 @@ Feature: x402 Payment Flow — Real User Journey
     When the operator runs "obol sell http" to create a ServiceOffer
     And the controller reconciles the ServiceOffer
     Then the ServiceOffer status is "Ready"
-    And a Middleware "x402-bdd-test" exists in the offer namespace
     And an HTTPRoute "so-bdd-test" exists in the offer namespace
+    And the HTTPRoute "so-bdd-test" targets the shared x402 gateway
 
   # ─── Buy-side: unpaid request gets 402 ──────────────────────────────
 
@@ -95,5 +95,4 @@ Feature: x402 Payment Flow — Real User Journey
   Scenario: Operator deletes ServiceOffer and resources are cleaned up
     When the operator deletes the ServiceOffer via CLI
     Then the ServiceOffer no longer exists
-    And no Middleware exists for the offer
     And no HTTPRoute exists for the offer

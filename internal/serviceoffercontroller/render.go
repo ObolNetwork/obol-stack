@@ -408,30 +408,11 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 								},
 							},
 						},
-						"filters": []any{
-							map[string]any{
-								"type": "ExtensionRef",
-								"extensionRef": map[string]any{
-									"group": "traefik.io",
-									"kind":  "Middleware",
-									"name":  "x402-" + offer.Name,
-								},
-							},
-							map[string]any{
-								"type": "URLRewrite",
-								"urlRewrite": map[string]any{
-									"path": map[string]any{
-										"type":               "ReplacePrefixMatch",
-										"replacePrefixMatch": "/",
-									},
-								},
-							},
-						},
 						"backendRefs": []any{
 							map[string]any{
-								"name":      offer.Spec.Upstream.Service,
-								"namespace": offer.EffectiveNamespace(),
-								"port":      offer.EffectivePort(),
+								"name":      "x402-verifier",
+								"namespace": "x402",
+								"port":      int64(8080),
 							},
 						},
 					},
@@ -440,6 +421,40 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 		},
 	}
 	return obj
+}
+
+func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1beta1",
+			"kind":       "ReferenceGrant",
+			"metadata": map[string]any{
+				"name":      backendReferenceGrantName(offer.Name),
+				"namespace": "x402",
+				"labels": map[string]any{
+					"obol.org/serviceoffer-namespace": offer.Namespace,
+					"obol.org/serviceoffer-name":      offer.Name,
+					"obol.org/managed-by":             "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"from": []any{
+					map[string]any{
+						"group":     "gateway.networking.k8s.io",
+						"kind":      "HTTPRoute",
+						"namespace": offer.Namespace,
+					},
+				},
+				"to": []any{
+					map[string]any{
+						"group": "",
+						"kind":  "Service",
+						"name":  "x402-verifier",
+					},
+				},
+			},
+		},
+	}
 }
 
 // maxK8sNameLen is the maximum length for a Kubernetes resource name (DNS subdomain).
@@ -463,6 +478,10 @@ func safeName(prefix, name, suffix string) string {
 
 func childName(name string) string {
 	return safeName("so-", name, "")
+}
+
+func backendReferenceGrantName(name string) string {
+	return safeName("so-", name, "-backend-grant")
 }
 
 func registrationRequestName(name string) string {

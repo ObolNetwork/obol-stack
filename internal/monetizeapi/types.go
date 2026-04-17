@@ -27,12 +27,13 @@ var (
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
 	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
 
-	ServiceGVR    = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
-	SecretGVR     = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
-	ConfigMapGVR  = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
-	DeploymentGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	MiddlewareGVR = schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "middlewares"}
-	HTTPRouteGVR  = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	ServiceGVR        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+	SecretGVR         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	ConfigMapGVR      = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	DeploymentGVR     = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	MiddlewareGVR     = schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "middlewares"}
+	HTTPRouteGVR      = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	ReferenceGrantGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1beta1", Resource: "referencegrants"}
 )
 
 type ServiceOffer struct {
@@ -184,12 +185,12 @@ type PurchaseRequest struct {
 }
 
 type PurchaseRequestSpec struct {
-	Endpoint        string                   `json:"endpoint"`
-	Model           string                   `json:"model"`
-	Count           int                      `json:"count"`
-	PreSignedAuths  []PreSignedAuth          `json:"preSignedAuths,omitempty"`
-	AutoRefill      PurchaseAutoRefill       `json:"autoRefill,omitempty"`
-	Payment         PurchasePayment          `json:"payment"`
+	Endpoint       string             `json:"endpoint"`
+	Model          string             `json:"model"`
+	Count          int                `json:"count"`
+	PreSignedAuths []PreSignedAuth    `json:"preSignedAuths,omitempty"`
+	AutoRefill     PurchaseAutoRefill `json:"autoRefill,omitempty"`
+	Payment        PurchasePayment    `json:"payment"`
 }
 
 type PreSignedAuth struct {

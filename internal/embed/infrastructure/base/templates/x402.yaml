@@ -1,6 +1,6 @@
 ---
 # x402 runtime components:
-# - x402-verifier: live ForwardAuth request path
+# - x402-verifier: shared seller-owned x402 gateway (and legacy /verify endpoint)
 # - serviceoffer-controller: control-plane reconciler for ServiceOffer child resources
 apiVersion: v1
 kind: Namespace
@@ -8,8 +8,8 @@ metadata:
   name: x402
 
 ---
-# Static verifier settings plus optional manual routes. In cluster mode the
-# verifier merges these with dynamic routes derived from ready ServiceOffers.
+# Static gateway settings plus optional manual routes. In cluster mode the
+# gateway merges these with dynamic routes derived from ready ServiceOffers.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,9 +20,8 @@ data:
     wallet: ""
     chain: "base"
     facilitatorURL: "https://x402.gcp.obol.tech"
-    # ForwardAuth is a pre-upstream gate only. Keep it permanently verify-only;
-    # final settlement belongs in a component that can observe the upstream
-    # response, such as x402-buyer or the standalone inference gateway.
+    # verifyOnly applies to the legacy /verify endpoint only. The shared seller
+    # gateway path always settles after upstream success.
     verifyOnly: true
     routes: []
 
@@ -124,6 +123,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["referencegrants"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

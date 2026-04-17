@@ -205,9 +205,16 @@ else
     fail "Ollama service port unexpected: $ollama_port (expected 11434)"
 fi
 
-run_step_grep "Middleware exists" "x402-flow-qwen" \
-    "$OBOL" kubectl get middleware -n llm
 run_step_grep "HTTPRoute exists" "so-flow-qwen" \
     "$OBOL" kubectl get httproute -n llm
+
+step "HTTPRoute backend is shared x402 gateway"
+route_backend=$("$OBOL" kubectl get httproute so-flow-qwen -n llm \
+    -o jsonpath='{.spec.rules[0].backendRefs[0].namespace}/{.spec.rules[0].backendRefs[0].name}:{.spec.rules[0].backendRefs[0].port}' 2>&1) || true
+if [ "$route_backend" = "x402/x402-verifier:8080" ]; then
+    pass "HTTPRoute backend: $route_backend"
+else
+    fail "HTTPRoute backend unexpected — ${route_backend:0:100}"
+fi
 
 emit_metrics

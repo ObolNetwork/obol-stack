@@ -342,8 +342,10 @@ The SDK handles the full x402 flow:
 2. Receives 402 with payment requirements
 3. Signs an EIP-712 `TransferWithAuthorization` message (ERC-3009)
 4. Retries with the `X-PAYMENT` header (base64-encoded x402 envelope)
-5. Facilitator verifies the signature and settles USDC on-chain
-6. Returns the inference response
+5. The seller-owned x402 gateway verifies the payment with the facilitator
+6. The seller gateway forwards the request to the protected upstream
+7. After upstream success, the seller gateway settles USDC on-chain
+8. Returns the inference response
 
 **Manual flow with curl** -- for debugging or custom integrations:
 
@@ -395,14 +397,14 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 
-# Paid request through tunnel (supported production path: x402-buyer)
+# Paid request through tunnel (supported production path)
 # The buyer talks to LiteLLM, which routes paid models through the in-pod
-# x402-buyer sidecar. The sidecar performs the paid retry and settlement after
-# upstream success. Do not treat raw direct X-PAYMENT through Traefik
-# ForwardAuth as the supported production buyer flow.
+# x402-buyer sidecar. The sidecar performs the paid retry. The seller-owned
+# shared x402 gateway verifies the payment, forwards to the upstream, and
+# settles only after upstream success.
 ```
 
-This proves the supported public paid path: **Buyer → LiteLLM → x402-buyer → Cloudflare/Traefik → x402 ForwardAuth verify gate → upstream → x402-buyer settles after success → 200 + inference**.
+This proves the supported public paid path: **Buyer → LiteLLM → x402-buyer → Cloudflare/Traefik → shared x402 gateway → upstream → seller-side settle → 200 + inference**.
 
 ---
 
@@ -562,7 +564,6 @@ Verify cleanup:
 
 ```bash
 obol kubectl get so my-qwen -n llm              # NotFound
-obol kubectl get middleware x402-my-qwen -n llm  # NotFound
 obol kubectl get httproute so-my-qwen -n llm     # NotFound
 ```
 
@@ -570,9 +571,10 @@ obol kubectl get httproute so-my-qwen -n llm     # NotFound
 
 ## Architecture Deep-Dive
 
-### x402 ForwardAuth Pattern
+### Shared x402 Seller Gateway
 
-The x402 verifier sits in the request path as a Traefik ForwardAuth middleware:
+The x402 gateway now acts as the seller-owned resource server in front of the
+real upstream:
 
 ```
 Client
@@ -582,21 +584,16 @@ Client
   v
 Traefik Gateway
   |
-  --> ForwardAuth to x402-verifier.x402.svc:8080
-  |       |
-  |       +-- Match request path against pricing routes
-  |       +-- No match? Return 200 (allow, free route)
-  |       +-- Match + no payment header? Return 402 + requirements
-  |       +-- Match + payment header? Verify with facilitator
-  |       |       |
-  |       |       +-- POST facilitator/verify
-  |       |       +-- Valid? Return 200 (allow)
-  |       |       +-- Invalid? Return 402
-  |       |
-  |       <-- 200 or 402
-  |
-  +-- 200? Proxy to upstream (Ollama)
-  +-- 402? Return to client with payment requirements
+  --> Route match /services/my-qwen/*
+          |
+          v
+      x402-verifier.x402.svc:8080
+          |
+          +-- No payment header? Return 402 + requirements
+          +-- Payment header? POST facilitator/verify
+          +-- Valid? Proxy to upstream
+          +-- Upstream success? POST facilitator/settle
+          +-- Return 200 + X-PAYMENT-RESPONSE
 ```
 
 ### ServiceOffer Condition State Machine
@@ -798,7 +795,7 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 |----------|-----------|---------|
 | `x402-pricing` ConfigMap | `x402` | Pricing routes and wallet config |
 | `x402-secrets` Secret | `x402` | Wallet address |
-| `x402-verifier` Deployment | `x402` | ForwardAuth payment verifier |
+| `x402-verifier` Deployment | `x402` | Shared seller-owned x402 gateway and legacy `/verify` endpoint |
 | `serviceoffers.obol.org` CRD | (cluster) | ServiceOffer custom resource definition |
 | `traefik-gateway` Gateway | `traefik` | Main ingress gateway |
 
