@@ -410,8 +410,10 @@ install_dev_wrapper() {
 		SCRIPT_DIR="$(pwd)"
 	fi
 
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
 	# Create wrapper script that uses 'go run'
-	cat >"$OBOL_BIN_DIR/obol" <<'EOF'
+	cat >"$tmp_obol" <<'EOF'
 #!/usr/bin/env bash
 # Obol CLI Development Wrapper
 # This script runs the obol CLI using 'go run' for rapid development
@@ -423,7 +425,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR" && exec go run -a ./cmd/obol "$@"
 EOF
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Installed development wrapper at $OBOL_BIN_DIR/obol"
 }
 
@@ -458,15 +461,19 @@ download_release() {
 
 	log_info "Downloading from: $download_url"
 
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
 	# Download binary
 	if command_exists curl; then
-		if ! curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/obol"; then
+		if ! curl -fsSL "$download_url" -o "$tmp_obol"; then
 			log_warn "Failed to download release $release_tag"
+			rm -f "$tmp_obol"
 			return 1
 		fi
 	elif command_exists wget; then
-		if ! wget -q "$download_url" -O "$OBOL_BIN_DIR/obol"; then
+		if ! wget -q "$download_url" -O "$tmp_obol"; then
 			log_warn "Failed to download release $release_tag"
+			rm -f "$tmp_obol"
 			return 1
 		fi
 	else
@@ -474,7 +481,8 @@ download_release() {
 		return 1
 	fi
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Downloaded and installed release $release_tag"
 	return 0
 }
@@ -517,12 +525,16 @@ build_from_source() {
 	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=$build_time"
 	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=$git_dirty"
 
-	if ! go build -ldflags "$ldflags" -o "$OBOL_BIN_DIR/obol" ./cmd/obol; then
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
+	if ! go build -ldflags "$ldflags" -o "$tmp_obol" ./cmd/obol; then
 		log_error "Failed to build binary"
+		rm -f "$tmp_obol"
 		return 1
 	fi
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Built and installed from source"
 	return 0
 }
@@ -1321,7 +1333,7 @@ install_ollama() {
 			log_warn "Ollama v$version is older than pinned v$target_version"
 
 			# Prompt for upgrade if interactive
-			if [[ -c /dev/tty ]]; then
+			if [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
 				local choice
 				read -p "  Upgrade Ollama to v$target_version? [Y/n]: " choice </dev/tty
 
@@ -1368,7 +1380,7 @@ install_ollama() {
 	echo ""
 
 	# Check if we can prompt the user
-	if [[ -c /dev/tty ]]; then
+	if [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
 		local choice
 		read -p "  Install Ollama now? [Y/n]: " choice </dev/tty
 
