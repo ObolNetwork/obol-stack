@@ -239,6 +239,9 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 				log.Printf("[%s] payment failed: %v", name, event.Error)
 			},
+			OnPaymentUnsettled: func(event PaymentEvent) {
+				p.metrics.paymentUnsettledConfirmations.With(labels).Inc()
+			},
 		},
 	}
 
@@ -387,6 +390,12 @@ type replayableX402Transport struct {
 	OnPaymentAttempt PaymentCallback
 	OnPaymentSuccess PaymentCallback
 	OnPaymentFailure PaymentCallback
+	// OnPaymentUnsettled fires when the upstream returned 2xx without a
+	// successful X-PAYMENT-RESPONSE. The auth has been consumed locally via
+	// ConfirmSpend, but there is no observed on-chain settlement. Sellers
+	// are expected to drive settlement in this flow; a non-zero count means
+	// a seller is accepting payment without settling.
+	OnPaymentUnsettled PaymentCallback
 }
 
 func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -520,24 +529,57 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 
 	settlement, _ := DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
-	if settlement.Success && t.OnPaymentSuccess != nil {
-		event := PaymentEvent{
-			Type:        PaymentEventSuccess,
-			Timestamp:   time.Now(),
-			Method:      "HTTP",
-			URL:         req.URL.String(),
-			Transaction: settlement.Transaction,
-			Payer:       settlement.Payer,
-			Duration:    duration,
+	switch {
+	case settlement.Success:
+		if t.OnPaymentSuccess != nil {
+			event := PaymentEvent{
+				Type:        PaymentEventSuccess,
+				Timestamp:   time.Now(),
+				Method:      "HTTP",
+				URL:         req.URL.String(),
+				Transaction: settlement.Transaction,
+				Payer:       settlement.Payer,
+				Duration:    duration,
+			}
+			if selectedRequirement != nil {
+				event.Network = selectedRequirement.Network
+				event.Scheme = selectedRequirement.Scheme
+				event.Amount = selectedRequirement.Amount
+				event.Asset = selectedRequirement.Asset
+				event.Recipient = selectedRequirement.PayTo
+			}
+
+			t.OnPaymentSuccess(event)
 		}
-		if selectedRequirement != nil {
-			event.Network = selectedRequirement.Network
-			event.Scheme = selectedRequirement.Scheme
-			event.Amount = selectedRequirement.Amount
-			event.Asset = selectedRequirement.Asset
-			event.Recipient = selectedRequirement.PayTo
+	case heldAuth != nil:
+		// Upstream returned 2xx but no successful X-PAYMENT-RESPONSE. The
+		// auth was just consumed locally via ConfirmSpend, but no on-chain
+		// settlement has been observed. Surface this so operators can alert
+		// on sellers that accept payment without settling.
+		// %q escapes control characters in the URL (embedded newlines etc.)
+		// which is what gosec G706 cares about — the format verb mitigates
+		// log injection here, so the linter flag is a false positive.
+		log.Printf("x402-buyer: WARN upstream %q returned %d without X-PAYMENT-RESPONSE — auth consumed without observed settlement", //nolint:gosec // %q escapes control chars
+			req.URL.String(), respRetry.StatusCode)
+
+		if t.OnPaymentUnsettled != nil {
+			event := PaymentEvent{
+				Type:      PaymentEventUnsettled,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Duration:  duration,
+			}
+			if selectedRequirement != nil {
+				event.Network = selectedRequirement.Network
+				event.Scheme = selectedRequirement.Scheme
+				event.Amount = selectedRequirement.Amount
+				event.Asset = selectedRequirement.Asset
+				event.Recipient = selectedRequirement.PayTo
+			}
+
+			t.OnPaymentUnsettled(event)
 		}
-		t.OnPaymentSuccess(event)
 	}
 
 	return respRetry, nil
