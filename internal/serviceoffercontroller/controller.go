@@ -49,8 +49,8 @@ const (
 )
 
 type Controller struct {
-	kubeClient kubernetes.Interface
-	dynClient  dynamic.Interface
+	kubeClient           kubernetes.Interface
+	dynClient            dynamic.Interface
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
@@ -59,6 +59,7 @@ type Controller struct {
 	deployments          dynamic.NamespaceableResourceInterface
 	middlewares          dynamic.NamespaceableResourceInterface
 	httpRoutes           dynamic.NamespaceableResourceInterface
+	referenceGrants      dynamic.NamespaceableResourceInterface
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
@@ -130,6 +131,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		deployments:              client.Resource(monetizeapi.DeploymentGVR),
 		middlewares:              client.Resource(monetizeapi.MiddlewareGVR),
 		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:          client.Resource(monetizeapi.ReferenceGrantGVR),
 		offerInformer:            offerInformer,
 		registrationInformer:     registrationInformer,
 		purchaseInformer:         purchaseInformer,
@@ -493,11 +495,37 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 }
 
 func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
-	if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildMiddleware(offer)); err != nil {
+	if err := c.applyObject(ctx, c.referenceGrants.Namespace("x402"), buildReferenceGrant(offer)); err != nil {
 		setCondition(status, "PaymentGateReady", "False", "ApplyFailed", err.Error())
 		return err
 	}
-	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Middleware is present")
+
+	if _, err := c.services.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Service does not exist")
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	deployment, err := c.deployments.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment does not exist")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	availableReplicas, _, err := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
+	if err != nil {
+		return err
+	}
+	if availableReplicas < 1 {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment is not yet available")
+		return nil
+	}
+
+	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Shared x402 gateway is available")
 	return nil
 }
 
@@ -979,7 +1007,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		resource dynamic.ResourceInterface
 		name     string
 	}{
-		{resource: c.middlewares.Namespace(offer.Namespace), name: "x402-" + offer.Name},
+		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})

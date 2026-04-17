@@ -10,27 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func TestBuildMiddleware(t *testing.T) {
-	offer := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm", UID: types.UID("demo-uid")},
-	}
-
-	middleware := buildMiddleware(offer)
-
-	if middleware.GetName() != "x402-demo" {
-		t.Fatalf("middleware name = %q, want x402-demo", middleware.GetName())
-	}
-	if middleware.GetNamespace() != "llm" {
-		t.Fatalf("middleware namespace = %q, want llm", middleware.GetNamespace())
-	}
-	spec := middleware.Object["spec"].(map[string]any)
-	forwardAuth := spec["forwardAuth"].(map[string]any)
-	address := forwardAuth["address"].(string)
-	if address != "http://x402-verifier.x402.svc.cluster.local:8080/verify" {
-		t.Fatalf("forwardAuth address = %q", address)
-	}
-}
-
 func TestBuildHTTPRoute(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm", UID: types.UID("demo-uid")},
@@ -57,13 +36,39 @@ func TestBuildHTTPRoute(t *testing.T) {
 	if path["value"] != "/services/demo" {
 		t.Fatalf("match path = %v, want /services/demo", path["value"])
 	}
+	if _, found := firstRule["filters"]; found {
+		t.Fatalf("sell http route should not use Traefik ForwardAuth middleware anymore: %+v", firstRule["filters"])
+	}
 	backends := firstRule["backendRefs"].([]any)
 	backend := backends[0].(map[string]any)
-	if backend["name"] != "litellm" {
-		t.Fatalf("backend name = %v, want litellm", backend["name"])
+	if backend["name"] != "x402-verifier" {
+		t.Fatalf("backend name = %v, want x402-verifier", backend["name"])
 	}
-	if backend["port"] != int64(4000) {
-		t.Fatalf("backend port = %v, want 4000", backend["port"])
+	if backend["namespace"] != "x402" {
+		t.Fatalf("backend namespace = %v, want x402", backend["namespace"])
+	}
+	if backend["port"] != int64(8080) {
+		t.Fatalf("backend port = %v, want 8080", backend["port"])
+	}
+}
+
+func TestBuildReferenceGrant(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
+	}
+
+	grant := buildReferenceGrant(offer)
+	if grant.GetNamespace() != "x402" {
+		t.Fatalf("grant namespace = %q, want x402", grant.GetNamespace())
+	}
+	spec := grant.Object["spec"].(map[string]any)
+	from := spec["from"].([]any)[0].(map[string]any)
+	to := spec["to"].([]any)[0].(map[string]any)
+	if from["namespace"] != "llm" {
+		t.Fatalf("grant from.namespace = %v, want llm", from["namespace"])
+	}
+	if to["name"] != "x402-verifier" {
+		t.Fatalf("grant to.name = %v, want x402-verifier", to["name"])
 	}
 }
 

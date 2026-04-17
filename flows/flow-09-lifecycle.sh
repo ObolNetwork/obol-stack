@@ -58,14 +58,6 @@ else
     fail "ServiceOffer still exists — $so_out"
 fi
 
-step "Middleware NotFound after delete"
-mw_out=$("$OBOL" kubectl get middleware x402-flow-qwen -n llm 2>&1) || true
-if echo "$mw_out" | grep -qi "NotFound\|not found"; then
-    pass "Middleware deleted"
-else
-    fail "Middleware still exists — $mw_out"
-fi
-
 step "HTTPRoute NotFound after delete"
 hr_out=$("$OBOL" kubectl get httproute so-flow-qwen -n llm 2>&1) || true
 if echo "$hr_out" | grep -qi "NotFound\|not found"; then

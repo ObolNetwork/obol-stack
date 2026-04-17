@@ -427,16 +427,6 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 		return nil
 	})
 
-	ctx.Then(`^a Middleware "([^"]*)" exists in the offer namespace$`, func(name string) error {
-		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
-			"get", "middleware", name, "-n", serviceOfferNamespace)
-		if err != nil {
-			return fmt.Errorf("Middleware %s not found in %s: %v", name, serviceOfferNamespace, err)
-		}
-		w.t.Logf("integration: ✓ Middleware %s exists", name)
-		return nil
-	})
-
 	ctx.Then(`^an HTTPRoute "([^"]*)" exists in the offer namespace$`, func(name string) error {
 		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
 			"get", "httproute", name, "-n", serviceOfferNamespace)
@@ -444,6 +434,20 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			return fmt.Errorf("HTTPRoute %s not found in %s: %v", name, serviceOfferNamespace, err)
 		}
 		w.t.Logf("integration: ✓ HTTPRoute %s exists", name)
+		return nil
+	})
+
+	ctx.Then(`^the HTTPRoute "([^"]*)" targets the shared x402 gateway$`, func(name string) error {
+		out, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
+			"get", "httproute", name, "-n", serviceOfferNamespace,
+			"-o", "jsonpath={.spec.rules[0].backendRefs[0].namespace}/{.spec.rules[0].backendRefs[0].name}:{.spec.rules[0].backendRefs[0].port}")
+		if err != nil {
+			return fmt.Errorf("read HTTPRoute backend: %w", err)
+		}
+		if strings.TrimSpace(out) != "x402/x402-verifier:8080" {
+			return fmt.Errorf("HTTPRoute backend = %q, want x402/x402-verifier:8080", out)
+		}
+		w.t.Logf("integration: ✓ HTTPRoute %s targets shared x402 gateway", name)
 		return nil
 	})
 
@@ -612,17 +616,6 @@ func registerIntegrationSteps(ctx *godog.ScenarioContext, w *integrationWorld) {
 			return fmt.Errorf("ServiceOffer still exists after delete")
 		}
 		w.t.Log("integration: ✓ ServiceOffer deleted")
-		return nil
-	})
-
-	ctx.Then(`^no Middleware exists for the offer$`, func() error {
-		_, err := kubectl.Output(w.kubectlBin, w.kubeconfig,
-			"get", "middleware", "x402-"+serviceOfferName,
-			"-n", serviceOfferNamespace)
-		if err == nil {
-			return fmt.Errorf("Middleware still exists after delete")
-		}
-		w.t.Log("integration: ✓ Middleware removed")
 		return nil
 	})
 
