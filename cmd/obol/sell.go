@@ -721,9 +721,28 @@ Example:
 				u.Successf("Tunnel active: %s", tunnelURL)
 			}
 
+			if reg, ok := spec["registration"].(map[string]any); ok {
+				if enabled, _ := reg["enabled"].(bool); enabled {
+					u.Blank()
+					u.Warn("`obol sell http --register` publishes the off-chain registration document only.")
+					u.Dim("  To mint an on-chain ERC-8004 identity, run:")
+					u.Dim(fmt.Sprintf("    obol sell register --chain %s --name %q", cmd.String("chain"), registrationNameForPrompt(name, reg)))
+				}
+			}
+
 			return nil
 		},
 	}
+}
+
+func registrationNameForPrompt(fallback string, reg map[string]any) string {
+	if reg == nil {
+		return fallback
+	}
+	if name, ok := reg["name"].(string); ok && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return fallback
 }
 
 // ---------------------------------------------------------------------------
