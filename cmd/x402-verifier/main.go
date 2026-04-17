@@ -112,6 +112,17 @@ func main() {
 	log.Printf("  verifyOnly:  %v", cfg.VerifyOnly)
 	log.Printf("  routeSource: %s", *routeSource)
 
+	// The Traefik ForwardAuth path cannot observe the upstream response, so
+	// settling there debits the payer before the upstream serves the request.
+	// Keep verifyOnly=true for this deployment and settle on a component that
+	// can observe the upstream status (x402-buyer or obol sell inference).
+	if !cfg.VerifyOnly {
+		log.Printf("x402 verifier: WARNING verifyOnly=false loaded from %s. "+
+			"This is unsafe for Traefik ForwardAuth — the hop runs before the upstream "+
+			"is contacted, so settlement debits the payer before the upstream serves the "+
+			"request. Set verifyOnly=true in x402-pricing.yaml.", *configPath)
+	}
+
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
