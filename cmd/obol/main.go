@@ -13,6 +13,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -660,7 +661,12 @@ Find charts at https://artifacthub.io`,
 			u = ui.New(false)
 		}
 
-		u.Error(err.Error())
+		// Contextual cluster-down message based on the command the user ran.
+		if msg := kubectl.FormatClusterDownError(err, os.Args); msg != "" {
+			u.Error(msg)
+		} else {
+			u.Error(err.Error())
+		}
 		os.Exit(1)
 	}
 }
