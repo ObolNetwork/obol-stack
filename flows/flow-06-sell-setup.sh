@@ -155,6 +155,7 @@ run_step_grep "sell http flow-qwen" \
     "$OBOL" sell http flow-qwen \
     --wallet "$SELLER_WALLET" \
     --chain "$CHAIN" \
+    --no-register \
     --per-request 0.001 \
     --namespace llm \
     --upstream ollama \
@@ -164,6 +165,7 @@ run_step_grep "sell http flow-qwen" \
 step "sell http idempotent: re-run shows 'updated' not 'created'"
 rerun_out=$("$OBOL" sell http flow-qwen \
     --wallet "$SELLER_WALLET" --chain "$CHAIN" \
+    --no-register \
     --per-request 0.001 --namespace llm \
     --upstream ollama --port 11434 2>&1) || true
 if echo "$rerun_out" | grep -q "ServiceOffer.*updated"; then

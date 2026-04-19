@@ -344,7 +344,16 @@ else
     fail "CA bundle empty or too small: $ca_size bytes"
 fi
 
+step "Alice: add Base Sepolia RPC to eRPC (for registration + metadata sync)"
+alice network add base-sepolia --endpoint https://sepolia.base.org --allow-writes 2>&1 | tail -2
+# eRPC needs a restart to pick up the new chain config
+alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
+alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
+pass "Base Sepolia RPC added to eRPC (with write access)"
+
 step "Alice: create ServiceOffer"
+KEY_FILE=$(mktemp)
+echo "$SIGNER_KEY" > "$KEY_FILE"
 alice sell http alice-inference \
     --wallet "$ALICE_WALLET" \
     --chain base-sepolia \
@@ -353,11 +362,12 @@ alice sell http alice-inference \
     --upstream litellm \
     --port 4000 \
     --health-path /health/readiness \
-    --register \
     --register-name "Dual-Stack Test Inference" \
     --register-description "Integration test: local model inference via x402" \
     --register-skills natural_language_processing/text_generation \
-    --register-domains technology/artificial_intelligence 2>&1 | tail -3
+    --register-domains technology/artificial_intelligence \
+    --private-key-file "$KEY_FILE" 2>&1 | tail -8
+rm -f "$KEY_FILE"
 pass "ServiceOffer created"
 
 poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
@@ -377,33 +387,14 @@ poll_step_grep "Alice: 402 gate works" "402" 12 5 \
         "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
-
-step "Alice: add Base Sepolia RPC to eRPC (for on-chain registration)"
-alice network add base-sepolia --endpoint https://sepolia.base.org --allow-writes 2>&1 | tail -2
-# eRPC needs a restart to pick up the new chain config
-alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
-alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-pass "Base Sepolia RPC added to eRPC (with write access)"
-
-step "Alice: register on ERC-8004 (Base Sepolia)"
-# Use the .env private key for on-chain registration (has ETH for gas)
-KEY_FILE=$(mktemp)
-echo "$SIGNER_KEY" > "$KEY_FILE"
-set +e
-register_out=$(alice sell register \
-    --chain base-sepolia \
-    --name "Dual-Stack Test Inference" \
-    --description "Integration test: local model inference via x402" \
-    --private-key-file "$KEY_FILE" 2>&1)
-register_rc=$?
-set -e
-rm -f "$KEY_FILE"
-echo "$register_out" | tail -5
-if [ "$register_rc" -eq 0 ] && echo "$register_out" | grep -q "Agent ID:\|registered"; then
-    AGENT_ID=$(echo "$register_out" | grep -o 'Agent ID: [0-9]*' | grep -o '[0-9]*' | head -1)
+step "Alice: ERC-8004 registration reflected in ServiceOffer"
+reg_out=$(alice sell status alice-inference -n llm 2>&1) || true
+echo "$reg_out" | tail -12
+if echo "$reg_out" | grep -q "Agent ID:"; then
+    AGENT_ID=$(echo "$reg_out" | grep 'Agent ID:' | awk '{print $3}' | head -1)
     pass "ERC-8004 registered: Agent ID $AGENT_ID"
 else
-    fail "Registration failed: ${register_out:0:200}"
+    fail "Registration not reflected in sell status: ${reg_out:0:200}"
 fi
 
 # ═════════════════════════════════════════════════════════════════
