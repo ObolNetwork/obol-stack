@@ -23,10 +23,33 @@ func modelCommand(cfg *config.Config) *cli.Command {
 		Commands: []*cli.Command{
 			modelSetupCommand(cfg),
 			modelStatusCommand(cfg),
+			modelTokenCommand(cfg),
 			modelSyncCommand(cfg),
 			modelPullCommand(),
 			modelListCommand(cfg),
 			modelRemoveCommand(cfg),
+		},
+	}
+}
+
+func modelTokenCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "token",
+		Usage: "Print the LiteLLM master token for API access",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			token, err := model.GetMasterKey(cfg)
+			if err != nil {
+				return err
+			}
+
+			if u.IsJSON() {
+				return u.JSON(map[string]string{"token": token})
+			}
+
+			u.Print(token)
+			return nil
 		},
 	}
 }
