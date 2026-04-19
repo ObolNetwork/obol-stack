@@ -50,6 +50,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellStatusCommand(cfg),
 			sellTestCommand(cfg),
 			sellStopCommand(cfg),
+			sellUpdateCommand(cfg),
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
@@ -1329,6 +1330,137 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 			}
 
 			u.Successf("Service offering %s/%s stopped.", ns, name)
+			return nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sell update
+// ---------------------------------------------------------------------------
+
+func sellUpdateCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "update",
+		Usage:     "Update pricing or wallet on an existing ServiceOffer in place",
+		ArgsUsage: "<name>",
+		Description: `Patches a live ServiceOffer without deleting it. Only the fields you pass
+are changed; everything else is preserved. The serviceoffer-controller will
+reconcile the new payment config automatically.
+
+Switching price models (e.g. per-request → per-mtok) nulls the previous keys
+so the controller picks up the new model.
+
+Examples:
+  obol sell update my-api -n llm --per-request 0.002
+  obol sell update my-api -n llm --per-mtok 5.0
+  obol sell update my-api -n llm --wallet 0xNew... --chain base`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "namespace",
+				Aliases:  []string{"n"},
+				Usage:    "Namespace of the ServiceOffer",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:    "wallet",
+				Aliases: []string{"w"},
+				Usage:   "New USDC recipient wallet address",
+			},
+			&cli.StringFlag{
+				Name:  "chain",
+				Usage: "New payment chain (base, base-sepolia, ethereum)",
+			},
+			&cli.StringFlag{
+				Name:  "price",
+				Usage: "New per-request price in USDC (alias for --per-request)",
+			},
+			&cli.StringFlag{
+				Name:  "per-request",
+				Usage: "New per-request price in USDC",
+			},
+			&cli.StringFlag{
+				Name:  "per-mtok",
+				Usage: "New per-million-tokens price in USDC",
+			},
+			&cli.StringFlag{
+				Name:  "per-hour",
+				Usage: "New per-compute-hour price in USDC",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+			if cmd.NArg() == 0 {
+				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N] [--wallet 0x...] [--chain base]")
+			}
+
+			name := cmd.Args().First()
+			if err := validate.Name(name); err != nil {
+				return err
+			}
+			ns := cmd.String("namespace")
+
+			if _, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "name"); err != nil {
+				return fmt.Errorf("ServiceOffer %s/%s not found: %w", ns, name, err)
+			}
+
+			payment := map[string]any{}
+
+			if wallet := strings.TrimSpace(cmd.String("wallet")); wallet != "" {
+				if err := x402verifier.ValidateWallet(wallet); err != nil {
+					return err
+				}
+				payment["payTo"] = wallet
+			}
+
+			if chain := strings.TrimSpace(cmd.String("chain")); chain != "" {
+				payment["network"] = chain
+			}
+
+			priceSet := cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != ""
+			if priceSet {
+				priceTable, err := resolvePriceTable(cmd, true)
+				if err != nil {
+					return err
+				}
+
+				price := map[string]any{
+					"perRequest": nil,
+					"perMTok":    nil,
+					"perHour":    nil,
+				}
+				switch {
+				case priceTable.PerRequest != "":
+					price["perRequest"] = priceTable.PerRequest
+				case priceTable.PerMTok != "":
+					price["perMTok"] = priceTable.PerMTok
+				case priceTable.PerHour != "":
+					price["perHour"] = priceTable.PerHour
+				}
+				payment["price"] = price
+			}
+
+			if len(payment) == 0 {
+				return errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --wallet / --chain")
+			}
+
+			patch := map[string]any{
+				"spec": map[string]any{
+					"payment": payment,
+				},
+			}
+			patchBytes, err := json.Marshal(patch)
+			if err != nil {
+				return fmt.Errorf("marshal patch: %w", err)
+			}
+
+			if err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns, "--type=merge", "-p", string(patchBytes)); err != nil {
+				return fmt.Errorf("failed to patch serviceoffer: %w", err)
+			}
+
+			u.Successf("ServiceOffer %s/%s updated", ns, name)
+			u.Info("The controller will reconcile the new payment config.")
+			u.Infof("Check status: obol sell status %s -n %s", name, ns)
 			return nil
 		},
 	}

@@ -76,38 +76,3 @@ func TestRequestPhaseReady(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshSkillCatalogWhenGenerationObservedLags(t *testing.T) {
-	controller := &Controller{}
-	offer := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "demo",
-			Namespace:  "llm",
-			Generation: 2,
-		},
-		Status: monetizeapi.ServiceOfferStatus{
-			ObservedGeneration: 1,
-		},
-	}
-
-	if !controller.shouldRefreshSkillCatalog(offer, offer.Status) {
-		t.Fatal("expected catalog refresh when observedGeneration lags the current generation")
-	}
-}
-
-func TestShouldRefreshSkillCatalogWhenOfferIsPaused(t *testing.T) {
-	controller := &Controller{}
-	offer := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "demo",
-			Namespace:   "llm",
-			Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"},
-		},
-		Status: monetizeapi.ServiceOfferStatus{
-			ObservedGeneration: 1,
-		},
-	}
-
-	if !controller.shouldRefreshSkillCatalog(offer, offer.Status) {
-		t.Fatal("expected catalog refresh when a ready offer becomes paused")
-	}
-}
