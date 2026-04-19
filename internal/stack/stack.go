@@ -524,6 +524,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
+	} else if walletAddr, walletErr := openclaw.ResolveWalletAddress(cfg); walletErr == nil {
+		u.Blank()
+		u.Successf("Default agent wallet: %s", walletAddr)
+		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
+		u.Dim("  Retrieve later with: obol openclaw wallet address obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
