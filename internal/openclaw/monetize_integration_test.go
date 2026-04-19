@@ -83,9 +83,6 @@ func resourceExists(t *testing.T, cfg *config.Config, kind, name, namespace stri
 
 func assertOfferRouteResourcesPresent(t *testing.T, cfg *config.Config, name, namespace string) {
 	t.Helper()
-	if !resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
-		t.Fatalf("middleware x402-%s not found in %s", name, namespace)
-	}
 	if !resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
 		t.Fatalf("httproute so-%s not found in %s", name, namespace)
 	}
@@ -93,9 +90,6 @@ func assertOfferRouteResourcesPresent(t *testing.T, cfg *config.Config, name, na
 
 func assertOfferRouteResourcesAbsent(t *testing.T, cfg *config.Config, name, namespace string) {
 	t.Helper()
-	if resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
-		t.Fatalf("middleware x402-%s still exists in %s", name, namespace)
-	}
 	if resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
 		t.Fatalf("httproute so-%s still exists in %s", name, namespace)
 	}
@@ -1169,7 +1163,7 @@ func TestIntegration_Route_FullReconcile(t *testing.T) {
 	}
 }
 
-func TestIntegration_Route_MiddlewareCreated(t *testing.T) {
+func TestIntegration_Route_SharedGatewayBacked(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
 	requireAgent(t, cfg)
@@ -1189,13 +1183,13 @@ func TestIntegration_Route_MiddlewareCreated(t *testing.T) {
 		"/data/.openclaw/skills/monetize/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
-	// Check for ForwardAuth Middleware
-	out, err := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "json")
+	// Check the shared x402 gateway Service exists.
+	out, err := obolRunErr(cfg, "kubectl", "get", "svc", "x402-verifier", "-n", "x402", "-o", "json")
 	if err != nil {
-		t.Skipf("no middlewares found: %v", err)
+		t.Skipf("shared gateway service not found: %v", err)
 	}
-	if !strings.Contains(out, "forwardAuth") && !strings.Contains(out, "ForwardAuth") {
-		t.Logf("middleware output: %s", out)
+	if !strings.Contains(out, "\"name\":\"x402-verifier\"") {
+		t.Logf("gateway output: %s", out)
 	}
 }
 
@@ -1319,12 +1313,7 @@ func TestIntegration_Route_DeleteCascades(t *testing.T) {
 	// Wait for garbage collection
 	time.Sleep(3 * time.Second)
 
-	// Middleware and HTTPRoute should be gone (owner reference cascade)
-	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
-	if strings.Contains(mwOut, name) {
-		t.Errorf("middleware still exists after ServiceOffer deletion:\n%s", mwOut)
-	}
-
+	// HTTPRoute should be gone (owner reference cascade).
 	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
 	if strings.Contains(hrOut, name) {
 		t.Errorf("httproute still exists after ServiceOffer deletion:\n%s", hrOut)
@@ -2040,11 +2029,7 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 
 	// Delete happened via kubectl, so only Kubernetes-owned resources are expected
 	// to disappear automatically here.
-	// Let's verify the K8s resources are gone (cascade via OwnerRef).
-	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
-	if strings.Contains(mwOut, name) {
-		t.Errorf("middleware still exists after deletion")
-	}
+	// Let's verify the K8s route resource is gone (cascade via OwnerRef).
 	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
 	if strings.Contains(hrOut, name) {
 		t.Errorf("httproute still exists after deletion")
@@ -2688,12 +2673,11 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 //
 //	Step 1: ModelReady        → model checked in Ollama /api/tags
 //	Step 2: UpstreamHealthy   → upstream service health-checked
-//	Step 3: PaymentGateReady  → Middleware x402-<name> created
+//	Step 3: PaymentGateReady  → shared x402 gateway is available
 //	                          → verifier derives route from published ServiceOffer
 //	Step 4: RoutePublished    → HTTPRoute so-<name> created
 //	                          → parentRef = traefik-gateway
-//	                          → filter = ExtensionRef to Middleware
-//	                          → backend = upstream service
+//	                          → backend = shared x402 gateway service
 //	Step 5: Registered        → skipped (registration.enabled=false)
 //	Step 6: Ready             → all conditions True
 //
@@ -2736,11 +2720,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	}
 	t.Log("Step 0: CR created — no conditions, no derived resources")
 
-	// Verify no derived resources exist yet.
-	_, mwErr := obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
-	if mwErr == nil {
-		t.Error("Step 0: Middleware should not exist before reconciliation")
-	}
+	// Verify no route resources exist yet.
 	_, hrErr := obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
 	if hrErr == nil {
 		t.Error("Step 0: HTTPRoute should not exist before reconciliation")
@@ -2793,32 +2773,20 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	}
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 3: Verify Middleware — ForwardAuth to x402-verifier
+	// Step 3: Verify shared x402 gateway is available
 	// ────────────────────────────────────────────────────────────────────
-	t.Log("Step 3: Verifying Middleware x402-" + name)
-	mwJSON := obolRun(t, cfg, "kubectl", "get", "middleware",
-		fmt.Sprintf("x402-%s", name), "-n", ns, "-o", "json")
+	t.Log("Step 3: Verifying shared gateway x402/x402-verifier")
+	gatewayJSON := obolRun(t, cfg, "kubectl", "get", "svc",
+		"x402-verifier", "-n", "x402", "-o", "json")
 
-	var mw map[string]interface{}
-	if err := json.Unmarshal([]byte(mwJSON), &mw); err != nil {
-		t.Fatalf("parse middleware JSON: %v", err)
+	var gateway map[string]interface{}
+	if err := json.Unmarshal([]byte(gatewayJSON), &gateway); err != nil {
+		t.Fatalf("parse gateway service JSON: %v", err)
 	}
-
-	// Verify ForwardAuth address points at x402-verifier.
-	spec := mw["spec"].(map[string]interface{})
-	forwardAuth, ok := spec["forwardAuth"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Middleware missing spec.forwardAuth")
+	if metadata, ok := gateway["metadata"].(map[string]interface{}); !ok || metadata["name"] != "x402-verifier" {
+		t.Fatalf("shared gateway service metadata = %+v, want name=x402-verifier", gateway["metadata"])
 	}
-	address, _ := forwardAuth["address"].(string)
-	if !strings.Contains(address, "x402-verifier") {
-		t.Errorf("Middleware forwardAuth address = %q, want x402-verifier URL", address)
-	} else {
-		t.Logf("  ✓ Middleware ForwardAuth → %s", address)
-	}
-
-	// Verify ownerReference back to ServiceOffer.
-	verifyOwnerRef(t, mw, name, "ServiceOffer")
+	t.Log("  ✓ Shared x402 gateway service exists")
 
 	// ────────────────────────────────────────────────────────────────────
 	// Step 4: Verify route resources
@@ -2827,7 +2795,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 5: Verify HTTPRoute — gateway parent + middleware filter + backend
+	// Step 5: Verify HTTPRoute — gateway parent + shared gateway backend
 	// ────────────────────────────────────────────────────────────────────
 	t.Log("Step 5: Verifying HTTPRoute so-" + name)
 	hrJSON := obolRun(t, cfg, "kubectl", "get", "httproute",
@@ -2872,34 +2840,20 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 		}
 	}
 
-	// 5c: filters include ExtensionRef to Middleware x402-<name>.
-	filters, _ := rule0["filters"].([]interface{})
-	foundMiddlewareFilter := false
-	for _, f := range filters {
-		fm := f.(map[string]interface{})
-		if fm["type"] == "ExtensionRef" {
-			ref, _ := fm["extensionRef"].(map[string]interface{})
-			refName, _ := ref["name"].(string)
-			if refName == fmt.Sprintf("x402-%s", name) {
-				foundMiddlewareFilter = true
-				t.Logf("  ✓ HTTPRoute filter: ExtensionRef → x402-%s", name)
-			}
-		}
-	}
-	if !foundMiddlewareFilter {
-		t.Errorf("HTTPRoute missing ExtensionRef filter to x402-%s", name)
-	}
-
-	// 5d: backendRefs point at the upstream service.
+	// 5c: backendRefs point at the shared x402 gateway service.
 	backendRefs, _ := rule0["backendRefs"].([]interface{})
 	if len(backendRefs) > 0 {
 		backend := backendRefs[0].(map[string]interface{})
 		backendName, _ := backend["name"].(string)
 		backendNS, _ := backend["namespace"].(string)
-		t.Logf("  ✓ HTTPRoute backend: %s/%s", backendNS, backendName)
+		if backendName != "x402-verifier" || backendNS != "x402" {
+			t.Errorf("HTTPRoute backend = %s/%s, want x402/x402-verifier", backendNS, backendName)
+		} else {
+			t.Logf("  ✓ HTTPRoute backend: %s/%s", backendNS, backendName)
+		}
 	}
 
-	// 5e: ownerReference.
+	// 5d: ownerReference.
 	verifyOwnerRef(t, hr, name, "ServiceOffer")
 
 	// ────────────────────────────────────────────────────────────────────
@@ -2971,15 +2925,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 		t.Logf("  ✓ ServiceOffer CR deleted")
 	}
 
-	// 8c: Middleware gone (ownerRef cascade).
-	_, err = obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
-	if err == nil {
-		t.Error("Middleware still exists after ServiceOffer delete (ownerRef cascade failed)")
-	} else {
-		t.Logf("  ✓ Middleware x402-%s cascaded", name)
-	}
-
-	// 8d: HTTPRoute gone (ownerRef cascade).
+	// 8c: HTTPRoute gone (ownerRef cascade).
 	_, err = obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
 	if err == nil {
 		t.Error("HTTPRoute still exists after ServiceOffer delete (ownerRef cascade failed)")
@@ -3139,20 +3085,7 @@ spec:
 	regStatus := getConditionStatus(so, "Registered")
 	t.Logf("  Registered: %s", regStatus)
 
-	// Patch the HTTPRoute with LiteLLM auth header (monetize.py doesn't add it yet).
-	// Without this, paid requests that pass x402 verification get 401 from LiteLLM.
-	masterKey := obolRun(t, cfg, "kubectl", "get", "secret", "litellm-secrets",
-		"-n", "llm", "-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
-	// Decode base64
-	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(masterKey)); err == nil {
-		masterKey = string(decoded)
-	}
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
-	obolRun(t, cfg, "kubectl", "patch", "httproute", fmt.Sprintf("so-%s", name),
-		"-n", ns, "--type=json", "-p", patchJSON)
-	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
-
-	// Wait for Traefik to pick up the HTTPRoute + Reloader to restart x402-verifier
+	// Wait for Traefik to pick up the HTTPRoute and the shared gateway to reload routes.
 	t.Log("  Waiting 15s for route propagation...")
 	time.Sleep(15 * time.Second)
 

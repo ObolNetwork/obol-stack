@@ -93,6 +93,10 @@ const (
 	PaymentEventAttempt PaymentEventType = "attempt"
 	PaymentEventSuccess PaymentEventType = "success"
 	PaymentEventFailure PaymentEventType = "failure"
+	// PaymentEventUnsettled indicates the upstream returned 2xx without a
+	// successful X-PAYMENT-RESPONSE. The auth was consumed locally but no
+	// on-chain settlement has been observed.
+	PaymentEventUnsettled PaymentEventType = "unsettled"
 )
 
 // PaymentEvent is emitted by the buyer transport for Prometheus instrumentation.

@@ -128,7 +128,6 @@ Only proceed after the user has confirmed the price.
 obol sell inference <name> \
   --model <model_name> \
   --price <confirmed_price> \
-  --register \
   --register-name "<descriptive name>" \
   --register-description "<what the model does>" \
   --register-skills natural_language_processing/natural_language_generation/text_completion \
@@ -156,7 +155,6 @@ obol sell http <name> \
   --wallet <wallet_address> \
   --chain base-sepolia \
   --health-path /health/liveliness \
-  --register \
   --register-name "<descriptive name>" \
   --register-description "<what the service does>" \
   --register-skills natural_language_processing/natural_language_generation/text_completion \
@@ -177,7 +175,6 @@ obol sell http <name> \
   --per-request <confirmed_price> \
   --chain base-sepolia \
   --health-path <health_endpoint> \
-  --register \
   --register-name "<descriptive name>" \
   --register-description "<what the service does>" \
   --register-skills <oasf_skill_path> \
@@ -185,6 +182,9 @@ obol sell http <name> \
 ```
 
 ### Phase 5: Wait for Reconciliation
+
+`obol sell http` now registers by default. Use `--no-register` only for local
+or private-only flows where on-chain discovery is intentionally skipped.
 
 The agent reconciler automatically processes the ServiceOffer through 6 stages.
 

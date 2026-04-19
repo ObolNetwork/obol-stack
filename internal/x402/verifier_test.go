@@ -328,6 +328,116 @@ func TestVerifier_ConfigReload(t *testing.T) {
 	}
 }
 
+func TestVerifier_HandleProxy_NoPayment_Returns402(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called without payment")
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+	if fac.verifyCalls.Load() != 0 {
+		t.Fatalf("verify should not be called without payment, got %d", fac.verifyCalls.Load())
+	}
+}
+
+func TestVerifier_HandleProxy_ValidPayment_SettlesAndStripsPrefix(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	var seenPath, seenAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:      "/services/demo/*",
+		Price:        "0.0001",
+		UpstreamURL:  upstream.URL,
+		StripPrefix:  "/services/demo",
+		UpstreamAuth: "Bearer sk-upstream",
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/chat/completions", strings.NewReader(`{"model":"qwen3.5:9b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if body := strings.TrimSpace(w.Body.String()); body != `{"ok":true}` {
+		t.Fatalf("body = %q, want %q", body, `{"ok":true}`)
+	}
+	if seenPath != "/v1/chat/completions" {
+		t.Fatalf("upstream path = %q, want /v1/chat/completions", seenPath)
+	}
+	if seenAuth != "Bearer sk-upstream" {
+		t.Fatalf("upstream auth = %q, want Bearer sk-upstream", seenAuth)
+	}
+	if fac.verifyCalls.Load() != 1 {
+		t.Fatalf("verify calls = %d, want 1", fac.verifyCalls.Load())
+	}
+	if fac.settleCalls.Load() != 1 {
+		t.Fatalf("settle calls = %d, want 1", fac.settleCalls.Load())
+	}
+	if w.Header().Get("X-PAYMENT-RESPONSE") == "" {
+		t.Fatal("expected X-PAYMENT-RESPONSE header on successful settlement")
+	}
+}
+
+func TestVerifier_HandleProxy_UpstreamFailure_DoesNotSettle(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.0001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
+	}
+	if fac.verifyCalls.Load() != 1 {
+		t.Fatalf("verify calls = %d, want 1", fac.verifyCalls.Load())
+	}
+	if fac.settleCalls.Load() != 0 {
+		t.Fatalf("settle calls = %d, want 0", fac.settleCalls.Load())
+	}
+	if w.Header().Get("X-PAYMENT-RESPONSE") != "" {
+		t.Fatal("did not expect X-PAYMENT-RESPONSE header on upstream failure")
+	}
+}
+
 func TestVerifier_Healthz(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	v := newTestVerifier(t, fac.URL, nil)

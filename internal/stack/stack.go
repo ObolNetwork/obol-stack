@@ -524,6 +524,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
+	} else if walletAddr, walletErr := openclaw.ResolveWalletAddress(cfg); walletErr == nil {
+		u.Blank()
+		u.Successf("Default agent wallet: %s", walletAddr)
+		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
+		u.Dim("  Retrieve later with: obol openclaw wallet address obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
@@ -691,6 +696,14 @@ var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 
+func devPreloadImages() []string {
+	var images []string
+	if ref := openclaw.ImageRef(); ref != "" {
+		images = append(images, ref)
+	}
+	return images
+}
+
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
@@ -734,6 +747,20 @@ func buildAndImportLocalImages(cfg *config.Config) {
 
 		if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+		}
+	}
+
+	for _, ref := range devPreloadImages() {
+		fmt.Printf("Preloading %s into cluster %s...\n", ref, clusterName)
+		pullCmd := exec.Command("docker", "pull", ref)
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if err := pullCmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to pull %s: %v\n", ref, err)
+			continue
+		}
+		if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
+			fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)
 		}
 	}
 }

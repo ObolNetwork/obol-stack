@@ -48,6 +48,7 @@ func main() {
 	mux.HandleFunc("/healthz", v.HandleHealthz)
 	mux.HandleFunc("/readyz", v.HandleReadyz)
 	mux.Handle("GET /metrics", v.MetricsHandler())
+	mux.Handle("/", http.HandlerFunc(v.HandleProxy))
 
 	server := &http.Server{
 		Addr:              *listen,
@@ -103,7 +104,7 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
-	log.Printf("x402 verifier listening on %s", *listen)
+	log.Printf("x402 gateway listening on %s", *listen)
 	log.Printf("  config:      %s", *configPath)
 	log.Printf("  wallet:      %s", cfg.Wallet)
 	log.Printf("  chain:       %s", cfg.Chain)
@@ -111,6 +112,15 @@ func main() {
 	log.Printf("  routes:      %d", len(cfg.Routes))
 	log.Printf("  verifyOnly:  %v", cfg.VerifyOnly)
 	log.Printf("  routeSource: %s", *routeSource)
+
+	// verifyOnly only affects the legacy /verify endpoint. The shared seller
+	// gateway path served on all other routes always settles after upstream
+	// success, which is the correct x402 resource-server semantic.
+	if !cfg.VerifyOnly {
+		log.Printf("x402 gateway: WARNING verifyOnly=false loaded from %s. "+
+			"This only impacts the legacy /verify endpoint and is unsafe for Traefik "+
+			"ForwardAuth. Keep verifyOnly=true in x402-pricing.yaml if /verify is used.", *configPath)
+	}
 
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

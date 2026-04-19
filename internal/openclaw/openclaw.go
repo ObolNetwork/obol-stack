@@ -75,6 +75,15 @@ func openclawImageTag() string {
 	return ""
 }
 
+// ImageRef returns the pinned OpenClaw image reference used by the local
+// binary when it writes overlay values. Empty string means no explicit ref.
+func ImageRef() string {
+	if tag := openclawImageTag(); tag != "" {
+		return "ghcr.io/obolnetwork/openclaw:" + tag
+	}
+	return ""
+}
+
 // OnboardOptions contains options for the onboard command
 type OnboardOptions struct {
 	ID           string   // Deployment ID (empty = generate petname)

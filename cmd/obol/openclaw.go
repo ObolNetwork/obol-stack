@@ -276,6 +276,36 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
+				Name:      "address",
+				Usage:     "Show the wallet address for an OpenClaw instance",
+				ArgsUsage: "[instance-name]",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					args := cmd.Args().Slice()
+
+					if len(args) == 0 {
+						addr, err := openclaw.ResolveWalletAddress(cfg)
+						if err != nil {
+							return err
+						}
+						getUI(cmd).Print(addr)
+						return nil
+					}
+
+					id, _, err := openclaw.ResolveInstance(cfg, args)
+					if err != nil {
+						return err
+					}
+
+					walletsUI := getUI(cmd)
+					walletInfo, err := openclaw.ReadWalletMetadata(openclaw.DeploymentPath(cfg, id))
+					if err != nil {
+						return err
+					}
+					walletsUI.Print(walletInfo.Address)
+					return nil
+				},
+			},
+			{
 				Name:      "list",
 				Usage:     "List wallets for OpenClaw instances",
 				ArgsUsage: "[instance-name]",

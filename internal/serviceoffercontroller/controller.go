@@ -41,16 +41,17 @@ const (
 	registrationDesiredActive     = "Active"
 	registrationDesiredTombstoned = "Tombstoned"
 
-	registrationPhasePublishing   = "Publishing"
-	registrationPhaseRegistering  = "Registering"
-	registrationPhaseRegistered   = "Registered"
-	registrationPhaseOffChainOnly = "OffChainOnly"
-	registrationPhaseTombstoned   = "Tombstoned"
+	registrationPhasePublishing       = "Publishing"
+	registrationPhaseRegistering      = "Registering"
+	registrationPhaseAwaitingExternal = "AwaitingExternalRegistration"
+	registrationPhaseRegistered       = "Registered"
+	registrationPhaseOffChainOnly     = "OffChainOnly"
+	registrationPhaseTombstoned       = "Tombstoned"
 )
 
 type Controller struct {
-	kubeClient kubernetes.Interface
-	dynClient  dynamic.Interface
+	kubeClient           kubernetes.Interface
+	dynClient            dynamic.Interface
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
@@ -59,6 +60,7 @@ type Controller struct {
 	deployments          dynamic.NamespaceableResourceInterface
 	middlewares          dynamic.NamespaceableResourceInterface
 	httpRoutes           dynamic.NamespaceableResourceInterface
+	referenceGrants      dynamic.NamespaceableResourceInterface
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
@@ -130,6 +132,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		deployments:              client.Resource(monetizeapi.DeploymentGVR),
 		middlewares:              client.Resource(monetizeapi.MiddlewareGVR),
 		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:          client.Resource(monetizeapi.ReferenceGrantGVR),
 		offerInformer:            offerInformer,
 		registrationInformer:     registrationInformer,
 		purchaseInformer:         purchaseInformer,
@@ -493,11 +496,37 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 }
 
 func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
-	if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildMiddleware(offer)); err != nil {
+	if err := c.applyObject(ctx, c.referenceGrants.Namespace("x402"), buildReferenceGrant(offer)); err != nil {
 		setCondition(status, "PaymentGateReady", "False", "ApplyFailed", err.Error())
 		return err
 	}
-	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Middleware is present")
+
+	if _, err := c.services.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Service does not exist")
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	deployment, err := c.deployments.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment does not exist")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	availableReplicas, _, err := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
+	if err != nil {
+		return err
+	}
+	if availableReplicas < 1 {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment is not yet available")
+		return nil
+	}
+
+	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Shared x402 gateway is available")
 	return nil
 }
 
@@ -668,10 +697,14 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	}
 
 	var client *erc8004.Client
-	if c.registrationKey != nil {
+	if agentID == "" || c.registrationKey != nil {
 		client, err = erc8004.NewClient(ctx, c.registrationRPCURL)
 		if err != nil {
-			status.Phase = registrationPhaseRegistering
+			waitPhase := registrationPhaseRegistering
+			if c.registrationKey == nil {
+				waitPhase = registrationPhaseAwaitingExternal
+			}
+			status.Phase = waitPhase
 			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity: %v", err))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
@@ -736,6 +769,47 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 			status.Message = fmt.Sprintf("Waiting for on-chain registration transaction %s", status.RegistrationTxHash)
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
+	} else if agentID == "" {
+		if status.RegistrationURI != status.PublishedURL ||
+			!strings.EqualFold(status.RegistrationOwner, offer.Spec.Payment.PayTo) ||
+			status.RegistrationSearchFromBlock == 0 {
+			height, err := client.CurrentBlockNumber(ctx)
+			if err != nil {
+				status.Phase = registrationPhaseAwaitingExternal
+				status.Message = truncateMessage(fmt.Sprintf("Preparing external registration recovery: %v", err))
+				return c.updateRegistrationStatus(ctx, raw, status)
+			}
+
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = "Waiting for external ERC-8004 registration"
+			status.RegistrationOwner = offer.Spec.Payment.PayTo
+			status.RegistrationURI = status.PublishedURL
+			fromBlock := int64(height) - 1024
+			if fromBlock < 0 {
+				fromBlock = 0
+			}
+			status.RegistrationSearchFromBlock = fromBlock
+			status.RegistrationTxHash = ""
+			return c.updateRegistrationStatus(ctx, raw, status)
+		}
+
+		recoveredAgentID, recoveredTxHash, found, err := c.recoverRegistration(ctx, client, status)
+		if err != nil {
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = truncateMessage(fmt.Sprintf("Recovering external registration state: %v", err))
+			if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
+				return updateErr
+			}
+			return err
+		}
+		if !found {
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = fmt.Sprintf("Waiting for external ERC-8004 registration for owner %s", status.RegistrationOwner)
+			return c.updateRegistrationStatus(ctx, raw, status)
+		}
+
+		agentID = recoveredAgentID
+		txHash = recoveredTxHash
 	}
 
 	status.AgentID = agentID
@@ -761,9 +835,6 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		} else {
 			status.Message = fmt.Sprintf("Published registration document and recorded agent %s; metadata sync will retry on the next reconcile", agentID)
 		}
-	} else {
-		status.Phase = registrationPhaseOffChainOnly
-		status.Message = "Published registration document; controller has no ERC-8004 signing key"
 	}
 
 	return c.updateRegistrationStatus(ctx, raw, status)
@@ -979,7 +1050,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		resource dynamic.ResourceInterface
 		name     string
 	}{
-		{resource: c.middlewares.Namespace(offer.Namespace), name: "x402-" + offer.Name},
+		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
@@ -1198,7 +1269,7 @@ func statusFor(status *monetizeapi.ServiceOfferStatus) *monetizeapi.ServiceOffer
 }
 
 func requestPhaseReady(phase string) bool {
-	return phase == registrationPhaseRegistered || phase == registrationPhaseOffChainOnly
+	return phase == registrationPhaseRegistered
 }
 
 func requestCleanupComplete(phase string) bool {

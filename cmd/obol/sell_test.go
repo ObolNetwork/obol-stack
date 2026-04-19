@@ -1,11 +1,16 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/urfave/cli/v3"
 )
 
@@ -204,7 +209,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"wallet", "chain", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
-		"register", "register-name", "register-description", "register-image",
+		"register", "no-register", "register-name", "register-description", "register-image", "private-key-file",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
@@ -212,6 +217,103 @@ func TestSellHTTP_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)
 	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestBuildSellHTTPRegistrationConfig_DefaultEnabled(t *testing.T) {
+	reg, enabled, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !enabled {
+		t.Fatal("registration should be enabled by default")
+	}
+	if reg["enabled"] != true {
+		t.Fatalf("registration.enabled = %v, want true", reg["enabled"])
+	}
+	if reg["name"] != "demo" {
+		t.Fatalf("registration.name = %v, want demo", reg["name"])
+	}
+}
+
+func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
+	_, _, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{
+		NoRegister: true,
+		Name:       "custom",
+	})
+	if err == nil {
+		t.Fatal("expected error for --no-register with registration-specific flags")
+	}
+}
+
+func TestReadPrivateKeyMaterial_RawKey(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
+	gotKey, gotAddr, err := readPrivateKeyMaterial(raw)
+	if err != nil {
+		t.Fatalf("readPrivateKeyMaterial: %v", err)
+	}
+	if gotKey != raw {
+		t.Fatalf("got key = %q, want %q", gotKey, raw)
+	}
+	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
+		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
+	}
+}
+
+func TestReadPrivateKeyMaterial_File(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
+	path := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gotKey, gotAddr, err := readPrivateKeyMaterial(path)
+	if err != nil {
+		t.Fatalf("readPrivateKeyMaterial: %v", err)
+	}
+	if gotKey != raw {
+		t.Fatalf("got key = %q, want %q", gotKey, raw)
+	}
+	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
+		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
+	}
+}
+
+func TestReadPrivateKeyMaterial_Invalid(t *testing.T) {
+	if _, _, err := readPrivateKeyMaterial("0xdeadbeef"); err == nil {
+		t.Fatal("expected error for invalid private key")
+	}
+}
+
+func TestServiceOfferStatusLines(t *testing.T) {
+	offer := monetizeapi.ServiceOffer{
+		Status: monetizeapi.ServiceOfferStatus{
+			Endpoint:           "/services/demo",
+			AgentID:            "5008",
+			RegistrationTxHash: "0xabc",
+			Conditions: []monetizeapi.Condition{
+				{Type: "Registered", Status: "True", Reason: "Registered", Message: "Published registration document and recorded agent 5008"},
+			},
+		},
+	}
+	lines := serviceOfferStatusLines("llm", "demo", offer)
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"ServiceOffer:    llm/demo",
+		"Agent ID:        5008",
+		"Registration Tx: 0xabc",
+		"type: Registered",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("status lines missing %q\n%s", want, joined)
+		}
+	}
 }
 
 func TestSellStop_Structure(t *testing.T) {

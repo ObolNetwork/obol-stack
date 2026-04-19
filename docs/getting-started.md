@@ -69,7 +69,7 @@ All pods should show `Running` or `Completed` within ~2 minutes:
 | **Frontend** | `obol-frontend` | Web interface at http://obol.stack/ |
 | **Monitoring** | `monitoring` | Prometheus + kube-prometheus-stack |
 | **Reloader** | `reloader` | Auto-restarts workloads on config changes |
-| **x402 Verifier** | `x402` | Payment gate (ForwardAuth middleware) |
+| **x402 Gateway** | `x402` | Shared seller-owned payment gateway for priced HTTP routes |
 | **OpenClaw** | `openclaw-default` | AI agent with Ethereum wallet |
 | **Remote Signer** | `openclaw-default` | Ethereum transaction signing service |
 

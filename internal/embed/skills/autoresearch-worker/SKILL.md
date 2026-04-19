@@ -73,7 +73,6 @@ obol sell http autoresearch-worker \
   --chain base-sepolia \
   --per-hour 0.50 \
   --path /services/autoresearch-worker \
-  --register \
   --register-name "GPU Worker Alpha" \
   --register-description "A GPU worker for paid autoresearch experiments" \
   --register-skills devops_mlops/model_versioning \
@@ -83,7 +82,7 @@ obol sell http autoresearch-worker \
 This creates a `ServiceOffer` that:
 - health-checks the worker
 - creates a payment-gated public route
-- optionally registers the worker on ERC-8004 for discovery
+- registers the worker on ERC-8004 for discovery by default
 
 ## Request Format
 

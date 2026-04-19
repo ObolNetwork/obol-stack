@@ -115,6 +115,13 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		return RouteRule{}, err
 	}
 
+	upstreamURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d",
+		offer.Spec.Upstream.Service,
+		offer.EffectiveNamespace(),
+		offer.EffectivePort(),
+	)
+	stripPrefix := offer.EffectivePath()
+
 	return RouteRule{
 		Pattern:                strings.TrimSuffix(offer.EffectivePath(), "/") + "/*",
 		Price:                  price,
@@ -122,6 +129,8 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		PayTo:                  offer.Spec.Payment.PayTo,
 		Network:                offer.Spec.Payment.Network,
 		UpstreamAuth:           effectiveUpstreamAuth(offer, upstreamAuth),
+		UpstreamURL:            upstreamURL,
+		StripPrefix:            stripPrefix,
 		PriceModel:             priceModel,
 		PerMTok:                perMTok,
 		ApproxTokensPerRequest: approx,

@@ -35,8 +35,9 @@ var (
 const (
 	serviceOfferName      = "bdd-test"
 	serviceOfferNamespace = "llm"
-	serviceOfferPayTo     = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 )
+
+var serviceOfferPayTo string
 
 // TestMain bootstraps the full obol stack following the real user journey:
 //
@@ -58,7 +59,6 @@ func TestMain(m *testing.M) {
 			integrationKubeconfig = filepath.Join(configDir, "kubeconfig.yaml")
 			integrationObolBin = filepath.Join(binDir, "obol")
 			integrationRoutePath = "/services/" + serviceOfferName + "/v1/chat/completions"
-			integrationPayTo = serviceOfferPayTo
 			integrationModel = os.Getenv("OBOL_TEST_MODEL")
 			if integrationModel == "" {
 				integrationModel = "qwen3.5:9b"
@@ -103,6 +103,13 @@ func TestMain(m *testing.M) {
 	if err := runObol(obolBin, "stack", "up"); err != nil {
 		log.Fatalf("obol stack up: %v", err)
 	}
+
+	payTo, err := runObolOutput(obolBin, "openclaw", "wallet", "address", "obol-agent")
+	if err != nil {
+		teardown(obolBin)
+		log.Fatalf("resolve seller wallet: %v", err)
+	}
+	serviceOfferPayTo = strings.TrimSpace(payTo)
 
 	integrationKubectlBin = kubectlBin
 	integrationKubeconfig = kubeconfigPath
@@ -302,6 +309,15 @@ func ensureExistingClusterBootstrap(obolBin, kubectlBin, kubeconfig string) erro
 	if err := waitForServiceOfferReady(kubectlBin, kubeconfig, serviceOfferName, serviceOfferNamespace, 300*time.Second); err != nil {
 		return fmt.Errorf("existing-cluster ServiceOffer not Ready: %w", err)
 	}
+
+	payTo, err := kubectl.Output(kubectlBin, kubeconfig,
+		"get", "serviceoffers.obol.org", serviceOfferName, "-n", serviceOfferNamespace,
+		"-o", "jsonpath={.spec.payment.payTo}")
+	if err != nil {
+		return fmt.Errorf("read ServiceOffer payTo: %w", err)
+	}
+	serviceOfferPayTo = strings.TrimSpace(payTo)
+	integrationPayTo = serviceOfferPayTo
 
 	return nil
 }
