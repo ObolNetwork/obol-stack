@@ -48,6 +48,15 @@ nodeExporter:
   enabled: true
 
 prometheus-node-exporter:
+  # Pin to v1.11.0 — upstream v1.10.2 ships a multi-arch manifest that fails the
+  # containerd image-integrity check on Apple Silicon (digest mismatch →
+  # ImagePullBackOff). v1.11.0 pulls cleanly on both arm64 and amd64. Digest
+  # pin defends against a re-tag landing a bad arm64 layer again.
+  image:
+    registry: quay.io
+    repository: prometheus/node-exporter
+    tag: v1.11.0
+    digest: sha256:2f0cc335ef9ea15d6c96e1c0d693d8b57c0b794d0244b22313a6c162bd1cb1b8
   resources:
     requests:
       cpu: 10m

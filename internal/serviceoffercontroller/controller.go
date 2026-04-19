@@ -349,7 +349,15 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if err := c.reconcileDeletingOffer(ctx, offer); err != nil {
 			return err
 		}
-		if err := c.reconcileSkillCatalog(ctx); err != nil {
+		// Deletion in progress: omit the offer from the catalog. The informer
+		// store may still have it (deletion event is async), so pass a tombstone
+		// override to suppress it explicitly rather than rely on cache eviction.
+		tombstone := *offer
+		if tombstone.DeletionTimestamp == nil {
+			now := metav1.Now()
+			tombstone.DeletionTimestamp = &now
+		}
+		if err := c.reconcileSkillCatalog(ctx, &tombstone); err != nil {
 			return err
 		}
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
@@ -417,10 +425,15 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
 	}
-	if !c.shouldRefreshSkillCatalog(offer, status) {
-		return nil
-	}
-	return c.reconcileSkillCatalog(ctx)
+	// Rebuild the skill catalog on every reconcile so the just-updated status
+	// (not yet reflected in the informer store) and tunnel URL changes both
+	// propagate immediately. The catalog's ConfigMap/Deployment only rotate
+	// when the rendered markdown actually differs, so idle reconciles are
+	// no-ops at the API-server level. Pass `offer`+`status` as an override so
+	// the just-committed status is used instead of the stale informer copy.
+	freshOffer := *offer
+	freshOffer.Status = status
+	return c.reconcileSkillCatalog(ctx, &freshOffer)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -953,7 +966,13 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 	return nil
 }
 
-func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
+// reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
+// HTTPRoute from the current set of Ready ServiceOffers. If `override` is
+// non-nil, that offer replaces (or is appended to) the informer-cached copy
+// with the same namespace/name — this is how reconcileOffer feeds its
+// just-committed status into the catalog without waiting for the informer's
+// watch event to update the local store.
+func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
 	c.catalogMu.Lock()
 	defer c.catalogMu.Unlock()
 
@@ -963,7 +982,8 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 	}
 
 	items := c.offerInformer.GetStore().List()
-	offers := make([]*monetizeapi.ServiceOffer, 0, len(items))
+	offers := make([]*monetizeapi.ServiceOffer, 0, len(items)+1)
+	overrideUsed := false
 	for _, item := range items {
 		raw := asUnstructured(item)
 		if raw == nil {
@@ -973,7 +993,17 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if override != nil && offer.Namespace == override.Namespace && offer.Name == override.Name {
+			offer = override
+			overrideUsed = true
+		}
 		offers = append(offers, offer)
+	}
+	if override != nil && !overrideUsed {
+		// Override refers to an offer the informer hasn't yet observed (e.g.
+		// a just-created ServiceOffer whose Add event hasn't fired). Include
+		// it so the catalog reflects reality.
+		offers = append(offers, override)
 	}
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
@@ -1128,21 +1158,6 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 		}
 	})
 	return offers[0]
-}
-
-func (c *Controller) shouldRefreshSkillCatalog(offer *monetizeapi.ServiceOffer, nextStatus monetizeapi.ServiceOfferStatus) bool {
-	if offer == nil {
-		return false
-	}
-	if offer.Status.ObservedGeneration != offer.Generation || offer.IsPaused() {
-		return true
-	}
-	wasReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(offer.Status, "Ready")
-	nowReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(nextStatus, "Ready")
-	if wasReady != nowReady {
-		return true
-	}
-	return wasReady && offer.Status.Endpoint != nextStatus.Endpoint
 }
 
 func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
