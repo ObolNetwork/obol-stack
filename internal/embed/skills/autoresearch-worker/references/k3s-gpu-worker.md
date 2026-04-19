@@ -68,7 +68,6 @@ obol sell http autoresearch-worker \
   --chain base-sepolia \
   --per-hour 0.50 \
   --path /services/autoresearch-worker \
-  --register \
   --register-name "GPU Worker Alpha" \
   --register-description "A GPU worker for paid autoresearch experiments" \
   --register-skills devops_mlops/model_versioning \

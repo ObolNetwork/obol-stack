@@ -660,47 +660,21 @@ Examples:
 					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
-			registerEnabled := !cmd.Bool("no-register")
-			if !registerEnabled && (cmd.Bool("register") || cmd.String("register-name") != "" || cmd.String("register-description") != "" ||
-				cmd.String("register-image") != "" || len(cmd.StringSlice("register-skills")) > 0 || len(cmd.StringSlice("register-domains")) > 0 ||
-				len(cmd.StringSlice("register-metadata")) > 0 || cmd.String("private-key-file") != "") {
-				return errors.New("--no-register cannot be combined with registration-specific flags")
+			reg, registerEnabled, err := buildSellHTTPRegistrationConfig(name, sellHTTPRegistrationInput{
+				NoRegister:     cmd.Bool("no-register"),
+				Register:       cmd.Bool("register"),
+				Name:           cmd.String("register-name"),
+				Description:    cmd.String("register-description"),
+				Image:          cmd.String("register-image"),
+				PrivateKeyFile: cmd.String("private-key-file"),
+				Skills:         cmd.StringSlice("register-skills"),
+				Domains:        cmd.StringSlice("register-domains"),
+				MetadataPairs:  cmd.StringSlice("register-metadata"),
+			})
+			if err != nil {
+				return err
 			}
 			if registerEnabled {
-				reg := map[string]any{
-					"enabled":     true,
-					"name":        registrationNameForPrompt(name, nil),
-					"description": registrationDescriptionForPrompt(name, nil),
-				}
-				if n := cmd.String("register-name"); n != "" {
-					reg["name"] = n
-				}
-
-				if d := cmd.String("register-description"); d != "" {
-					reg["description"] = d
-				}
-
-				if img := cmd.String("register-image"); img != "" {
-					reg["image"] = img
-				}
-
-				if skills := cmd.StringSlice("register-skills"); len(skills) > 0 {
-					reg["skills"] = skills
-				}
-
-				if domains := cmd.StringSlice("register-domains"); len(domains) > 0 {
-					reg["domains"] = domains
-				}
-
-				if metaPairs := cmd.StringSlice("register-metadata"); len(metaPairs) > 0 {
-					meta, err := parseMetadataPairs(metaPairs)
-					if err != nil {
-						return err
-					}
-
-					reg["metadata"] = meta
-				}
-
 				spec["registration"] = reg
 			}
 
@@ -791,6 +765,18 @@ type autoRegisterOptions struct {
 	ExpectedOwner   string
 }
 
+type sellHTTPRegistrationInput struct {
+	NoRegister     bool
+	Register       bool
+	Name           string
+	Description    string
+	Image          string
+	PrivateKeyFile string
+	Skills         []string
+	Domains        []string
+	MetadataPairs  []string
+}
+
 func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI, opts autoRegisterOptions) error {
 	if opts.Endpoint == "" {
 		return errors.New("endpoint is required for automatic registration")
@@ -878,6 +864,46 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	return nil
 }
 
+func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistrationInput) (map[string]any, bool, error) {
+	registerEnabled := !in.NoRegister
+	if !registerEnabled && (in.Register || in.Name != "" || in.Description != "" || in.Image != "" ||
+		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0 || in.PrivateKeyFile != "") {
+		return nil, false, errors.New("--no-register cannot be combined with registration-specific flags")
+	}
+	if !registerEnabled {
+		return nil, false, nil
+	}
+
+	reg := map[string]any{
+		"enabled":     true,
+		"name":        registrationNameForPrompt(serviceName, nil),
+		"description": registrationDescriptionForPrompt(serviceName, nil),
+	}
+	if in.Name != "" {
+		reg["name"] = in.Name
+	}
+	if in.Description != "" {
+		reg["description"] = in.Description
+	}
+	if in.Image != "" {
+		reg["image"] = in.Image
+	}
+	if len(in.Skills) > 0 {
+		reg["skills"] = in.Skills
+	}
+	if len(in.Domains) > 0 {
+		reg["domains"] = in.Domains
+	}
+	if len(in.MetadataPairs) > 0 {
+		meta, err := parseMetadataPairs(in.MetadataPairs)
+		if err != nil {
+			return nil, false, err
+		}
+		reg["metadata"] = meta
+	}
+	return reg, true, nil
+}
+
 func readPrivateKeyMaterial(input string) (keyHex string, address string, err error) {
 	raw := strings.TrimSpace(input)
 	if raw == "" {
@@ -902,6 +928,28 @@ func readPrivateKeyMaterial(input string) (keyHex string, address string, err er
 
 	addr := crypto.PubkeyToAddress(key.PublicKey)
 	return "0x" + keyHex, addr.Hex(), nil
+}
+
+func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOffer) []string {
+	lines := []string{
+		fmt.Sprintf("ServiceOffer:    %s/%s", namespace, name),
+		fmt.Sprintf("Endpoint:        %s", valueOrNone(offer.Status.Endpoint)),
+		fmt.Sprintf("Agent ID:        %s", valueOrNone(offer.Status.AgentID)),
+		fmt.Sprintf("Registration Tx: %s", valueOrNone(offer.Status.RegistrationTxHash)),
+		"",
+		"Conditions:",
+	}
+	for _, cond := range offer.Status.Conditions {
+		lines = append(lines, fmt.Sprintf("  - type: %s", cond.Type))
+		lines = append(lines, fmt.Sprintf("    status: %q", cond.Status))
+		if cond.Reason != "" {
+			lines = append(lines, fmt.Sprintf("    reason: %s", cond.Reason))
+		}
+		if cond.Message != "" {
+			lines = append(lines, fmt.Sprintf("    message: %s", cond.Message))
+		}
+	}
+	return lines
 }
 
 // ---------------------------------------------------------------------------
@@ -984,21 +1032,12 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 					return fmt.Errorf("parse ServiceOffer: %w", err)
 				}
 
-				u.Printf("ServiceOffer:    %s/%s", ns, name)
-				u.Printf("Endpoint:        %s", valueOrNone(offer.Status.Endpoint))
-				u.Printf("Agent ID:        %s", valueOrNone(offer.Status.AgentID))
-				u.Printf("Registration Tx: %s", valueOrNone(offer.Status.RegistrationTxHash))
-				u.Blank()
-				u.Print("Conditions:")
-				for _, cond := range offer.Status.Conditions {
-					u.Printf("  - type: %s", cond.Type)
-					u.Printf("    status: %q", cond.Status)
-					if cond.Reason != "" {
-						u.Printf("    reason: %s", cond.Reason)
+				for _, line := range serviceOfferStatusLines(ns, name, offer) {
+					if line == "" {
+						u.Blank()
+						continue
 					}
-					if cond.Message != "" {
-						u.Printf("    message: %s", cond.Message)
-					}
+					u.Print(line)
 				}
 				return nil
 			}
