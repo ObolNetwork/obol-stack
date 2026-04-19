@@ -395,11 +395,13 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Publishes a payment gated HTTP API to any service within the stack, along with a SKILL.md detailing how to use it.
-Include --register to have the service listed on EIP8004 onchain agent registry.
+		Description: `Publishes a payment gated HTTP API to any service within the stack.
+By default it also registers the seller agent on ERC-8004 after the route is live.
+Use --no-register to skip the on-chain registration step.
 
-Example:
-  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base --register`,
+Examples:
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base
+  obol sell http my-cool-api --upstream my-svc --port 8080 --wallet 0x... --price 0.01 --chain base --no-register`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "wallet",
@@ -460,7 +462,11 @@ Example:
 			// Registration flags
 			&cli.BoolFlag{
 				Name:  "register",
-				Usage: "Register on ERC-8004 after routing is live",
+				Usage: "Deprecated: registration is enabled by default",
+			},
+			&cli.BoolFlag{
+				Name:  "no-register",
+				Usage: "Skip the automatic ERC-8004 registration step",
 			},
 			&cli.StringFlag{
 				Name:  "register-name",
@@ -473,6 +479,10 @@ Example:
 			&cli.StringFlag{
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
+			},
+			&cli.StringFlag{
+				Name:  "private-key-file",
+				Usage: "Path to the ERC-8004 signing key file (defaults to the OpenClaw remote-signer wallet)",
 			},
 			&cli.StringSliceFlag{
 				Name:  "register-skills",
@@ -649,9 +659,17 @@ Example:
 					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
-			if cmd.Bool("register") || cmd.String("register-name") != "" {
+			registerEnabled := !cmd.Bool("no-register")
+			if !registerEnabled && (cmd.Bool("register") || cmd.String("register-name") != "" || cmd.String("register-description") != "" ||
+				cmd.String("register-image") != "" || len(cmd.StringSlice("register-skills")) > 0 || len(cmd.StringSlice("register-domains")) > 0 ||
+				len(cmd.StringSlice("register-metadata")) > 0 || cmd.String("private-key-file") != "") {
+				return errors.New("--no-register cannot be combined with registration-specific flags")
+			}
+			if registerEnabled {
 				reg := map[string]any{
-					"enabled": cmd.Bool("register"),
+					"enabled":     true,
+					"name":        registrationNameForPrompt(name, nil),
+					"description": registrationDescriptionForPrompt(name, nil),
 				}
 				if n := cmd.String("register-name"); n != "" {
 					reg["name"] = n
@@ -719,14 +737,22 @@ Example:
 				u.Dim("  Start manually with: obol tunnel restart")
 			} else {
 				u.Successf("Tunnel active: %s", tunnelURL)
-			}
 
-			if reg, ok := spec["registration"].(map[string]any); ok {
-				if enabled, _ := reg["enabled"].(bool); enabled {
-					u.Blank()
-					u.Warn("`obol sell http --register` publishes the off-chain registration document only.")
-					u.Dim("  To mint an on-chain ERC-8004 identity, run:")
-					u.Dim(fmt.Sprintf("    obol sell register --chain %s --name %q", cmd.String("chain"), registrationNameForPrompt(name, reg)))
+				if reg, ok := spec["registration"].(map[string]any); ok {
+					if enabled, _ := reg["enabled"].(bool); enabled {
+						u.Blank()
+						u.Info("Registering seller agent on ERC-8004...")
+						if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
+							ChainCSV:        cmd.String("chain"),
+							Endpoint:        tunnelURL,
+							AgentName:       registrationNameForPrompt(name, reg),
+							AgentDesc:       registrationDescriptionForPrompt(name, reg),
+							PrivateKeyInput: cmd.String("private-key-file"),
+							ExpectedOwner:   wallet,
+						}); err != nil {
+							return fmt.Errorf("automatic sell registration failed: %w", err)
+						}
+					}
 				}
 			}
 
@@ -743,6 +769,138 @@ func registrationNameForPrompt(fallback string, reg map[string]any) string {
 		return name
 	}
 	return fallback
+}
+
+func registrationDescriptionForPrompt(fallback string, reg map[string]any) string {
+	if reg == nil {
+		return fmt.Sprintf("Obol Stack service %s", fallback)
+	}
+	if desc, ok := reg["description"].(string); ok && strings.TrimSpace(desc) != "" {
+		return desc
+	}
+	return fmt.Sprintf("Obol Stack service %s", fallback)
+}
+
+type autoRegisterOptions struct {
+	ChainCSV        string
+	Endpoint        string
+	AgentName       string
+	AgentDesc       string
+	PrivateKeyInput string
+	ExpectedOwner   string
+}
+
+func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI, opts autoRegisterOptions) error {
+	if opts.Endpoint == "" {
+		return errors.New("endpoint is required for automatic registration")
+	}
+
+	networks, err := erc8004.ResolveNetworks(opts.ChainCSV)
+	if err != nil {
+		return err
+	}
+
+	useRemoteSigner := false
+	var (
+		signerNS    string
+		fallbackKey string
+		signerAddr  string
+	)
+
+	if strings.TrimSpace(opts.PrivateKeyInput) == "" {
+		if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+			ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+			if nsErr == nil {
+				pf, pfErr := startSignerPortForward(cfg, ns)
+				if pfErr != nil {
+					return fmt.Errorf("port-forward to remote-signer: %w", pfErr)
+				}
+				defer pf.Stop()
+
+				signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
+				addr, addrErr := signer.GetAddress(ctx)
+				if addrErr != nil {
+					return addrErr
+				}
+
+				signerAddr = addr.Hex()
+				useRemoteSigner = true
+				signerNS = ns
+			}
+		}
+	}
+
+	if !useRemoteSigner {
+		fallbackKey, signerAddr, err = readPrivateKeyMaterial(opts.PrivateKeyInput)
+		if err != nil {
+			return err
+		}
+	}
+
+	if opts.ExpectedOwner != "" && !strings.EqualFold(strings.TrimSpace(opts.ExpectedOwner), strings.TrimSpace(signerAddr)) {
+		return fmt.Errorf("registration signer %s does not match the payment wallet %s.\nUse a matching signer, omit --wallet so the remote-signer wallet is used, or pass --no-register", signerAddr, opts.ExpectedOwner)
+	}
+
+	agentURI := strings.TrimRight(opts.Endpoint, "/") + "/.well-known/agent-registration.json"
+	u.Printf("  Agent URI: %s", agentURI)
+
+	var successes int
+	for _, net := range networks {
+		u.Blank()
+		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
+		u.Printf("    Registry: %s", net.RegistryAddress)
+
+		if useRemoteSigner {
+			if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+				u.Warnf("direct registration failed: %v", err)
+				continue
+			}
+		} else {
+			if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
+				u.Warnf("registration failed: %v", err)
+				continue
+			}
+		}
+
+		u.Printf("    Name:     %s", opts.AgentName)
+		u.Printf("    Summary:  %s", opts.AgentDesc)
+		u.Printf("    CAIP-10:  %s", net.CAIP10Registry())
+		successes++
+	}
+
+	if successes == 0 {
+		return fmt.Errorf("registration failed on all networks")
+	}
+
+	u.Blank()
+	u.Successf("Seller agent registered on %d/%d networks.", successes, len(networks))
+	return nil
+}
+
+func readPrivateKeyMaterial(input string) (keyHex string, address string, err error) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return "", "", nil
+	}
+
+	if strings.HasPrefix(raw, "0x") && len(raw) >= 64 {
+		keyHex = raw
+	} else {
+		data, readErr := os.ReadFile(raw)
+		if readErr != nil {
+			return "", "", fmt.Errorf("read private key file: %w", readErr)
+		}
+		keyHex = strings.TrimSpace(string(data))
+	}
+
+	keyHex = strings.TrimPrefix(keyHex, "0x")
+	key, parseErr := crypto.HexToECDSA(keyHex)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("invalid private key: %w", parseErr)
+	}
+
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	return "0x" + keyHex, addr.Hex(), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,17 +1574,12 @@ Examples:
 			// Fallback to private key file if no remote-signer.
 			var fallbackKey string
 			if !useRemoteSigner {
-				keyFile := cmd.String("private-key-file")
-				if keyFile != "" {
-					data, err := os.ReadFile(keyFile)
-					if err != nil {
-						return fmt.Errorf("read private key file: %w", err)
-					}
-					fallbackKey = strings.TrimSpace(string(data))
-				}
+				var signerAddr string
+				fallbackKey, signerAddr, err = readPrivateKeyMaterial(cmd.String("private-key-file"))
 				if fallbackKey == "" {
 					return fmt.Errorf("no remote-signer wallet found and no --private-key-file provided.\nRun 'obol agent init' first, or use --private-key-file")
 				}
+				u.Printf("  Wallet:    %s", signerAddr)
 			}
 
 			// Register on each network (best-effort).

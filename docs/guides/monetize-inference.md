@@ -157,6 +157,10 @@ obol sell http my-qwen \
     --port 11434
 ```
 
+By default this also registers the seller agent on ERC-8004. Use
+`--no-register` only for local or private-only testing where on-chain
+discovery is intentionally skipped.
+
 If you want to price by million tokens instead of explicitly setting a flat
 request price, use `--per-mtok`. In phase 1, the verifier still enforces a
 derived per-request price:
@@ -177,14 +181,14 @@ That stores both values in the pricing config:
 - enforced phase-1 charge: `price = 0.00125 USDC / request`
 - approximation input: `approxTokensPerRequest = 1000`
 
-The agent automatically reconciles the offer through six stages:
+The stack now treats on-chain registration as part of the default selling flow:
 
 ```
 ModelReady       [check]  Agent checks /api/tags, model already cached
 UpstreamHealthy  [check]  Agent health-checks ollama:11434
-PaymentGateReady [check]  Creates Middleware x402-my-qwen + adds pricing route
-RoutePublished   [check]  Creates HTTPRoute so-my-qwen -> ollama backend
-Registered         --     Skipped (--register not set)
+PaymentGateReady [check]  Shared x402 seller gateway available
+RoutePublished   [check]  Creates HTTPRoute so-my-qwen -> x402-verifier backend
+Registered      [check]  ERC-8004 registration completes on-chain
 Ready            [check]  All required conditions True
 ```
 
@@ -196,7 +200,6 @@ obol sell status my-qwen --namespace llm
 
 # Verify Kubernetes resources
 obol kubectl get serviceoffer my-qwen -n llm
-obol kubectl get middleware -n llm           # x402-my-qwen
 obol kubectl get httproute -n llm            # so-my-qwen
 ```
 
@@ -616,7 +619,7 @@ Traefik Gateway
                 +---------+----------+
                           |
                 +---------v----------+
-                | Registered         |  (ERC-8004, optional)
+                | Registered         |  (ERC-8004, default unless --no-register)
                 +---------+----------+
                           |
                     +-----v-----+
@@ -781,13 +784,13 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 | Command | Description |
 |---------|-------------|
 | `obol sell pricing --wallet ... --chain ...` | Configure x402 payment settings |
-| `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer |
+| `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer and register by default |
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
 | `obol sell stop <name> -n <ns>` | Pause an offer (remove pricing route) |
 | `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
 | `obol sell status` | Show cluster pricing and registration |
-| `obol sell register --private-key-file ...` | Register on ERC-8004 |
+| `obol sell register --private-key-file ...` | Advanced/manual registration or repair path |
 
 ### Key Kubernetes Resources
 

@@ -204,7 +204,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"wallet", "chain", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
-		"register", "register-name", "register-description", "register-image",
+		"register", "no-register", "register-name", "register-description", "register-image", "private-key-file",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
