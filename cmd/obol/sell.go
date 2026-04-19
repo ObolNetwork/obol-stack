@@ -26,6 +26,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
@@ -969,12 +970,37 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				if ns == "" {
 					return errors.New("namespace required: obol sell status <name> -n <ns>")
 				}
-				outputFmt := "-o"
-				outputVal := "yaml"
 				if u.IsJSON() {
-					outputVal = "json"
+					return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "json")
 				}
-				return kubectlRun(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, outputFmt, outputVal)
+
+				raw, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "json")
+				if err != nil {
+					return err
+				}
+
+				var offer monetizeapi.ServiceOffer
+				if err := json.Unmarshal([]byte(raw), &offer); err != nil {
+					return fmt.Errorf("parse ServiceOffer: %w", err)
+				}
+
+				u.Printf("ServiceOffer:    %s/%s", ns, name)
+				u.Printf("Endpoint:        %s", valueOrNone(offer.Status.Endpoint))
+				u.Printf("Agent ID:        %s", valueOrNone(offer.Status.AgentID))
+				u.Printf("Registration Tx: %s", valueOrNone(offer.Status.RegistrationTxHash))
+				u.Blank()
+				u.Print("Conditions:")
+				for _, cond := range offer.Status.Conditions {
+					u.Printf("  - type: %s", cond.Type)
+					u.Printf("    status: %q", cond.Status)
+					if cond.Reason != "" {
+						u.Printf("    reason: %s", cond.Reason)
+					}
+					if cond.Message != "" {
+						u.Printf("    message: %s", cond.Message)
+					}
+				}
+				return nil
 			}
 
 			// No name: show global pricing config + registrations.
