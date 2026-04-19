@@ -205,5 +205,6 @@ python3 scripts/buy.py maintain
 
 ## References
 
+- `references/purchase-request-spec.md` — Full `PurchaseRequest` CRD field reference
 - `references/x402-buyer-api.md` — Wire formats for 402 responses, X-PAYMENT headers, and sidecar config
 - See also: `discovery` skill for finding sellers on the ERC-8004 registry
