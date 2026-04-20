@@ -13,6 +13,7 @@ Obol Stack: framework for AI agents to run decentralised infrastructure locally.
 - **GitHub branch policy**: never push `codex/`-prefixed branches to GitHub from this repository; rename to `feat/`, `fix/`, `research/`, `docs/`, `chore/`, or another non-codex branch name before pushing
 - **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 - **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
+- **Planning / report docs**: Do not commit plan, roadmap, install-report, or PR-review writeups to the repo (`plans/*.md`, `docs/plans/*.md`, `docs/pr-review-*.md`, `docs/*-testing-log.md`, `docs/*-test-plan.md`, etc.). PR bodies, GitHub issues/discussions, and issue comments are the right home for ephemeral planning artifacts. Only durable, user-facing documentation belongs in `docs/`.
 
 ## Build, Test, Run
 
