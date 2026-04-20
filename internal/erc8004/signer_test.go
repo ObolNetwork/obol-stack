@@ -58,8 +58,8 @@ func TestRemoteSigner_SignTransaction(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if tx.ChainID != "84532" {
-			t.Errorf("chain_id = %q, want 84532", tx.ChainID)
+		if tx.ChainID != 84532 {
+			t.Errorf("chain_id = %d, want 84532", tx.ChainID)
 		}
 
 		json.NewEncoder(w).Encode(signResponse{
@@ -71,7 +71,7 @@ func TestRemoteSigner_SignTransaction(t *testing.T) {
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
 	signed, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{
-		ChainID:              "84532",
+		ChainID:              84532,
 		To:                   "0x8004A818BFB912233c491871b3d84c89A494BD9e",
 		Nonce:                "0",
 		GasLimit:             "100000",
@@ -134,7 +134,7 @@ func TestRemoteSigner_SignTransaction_Error(t *testing.T) {
 
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
-	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
+	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: 1})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -149,7 +149,7 @@ func TestRemoteSigner_SignTransaction_HTTPError(t *testing.T) {
 
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
-	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
+	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: 1})
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}

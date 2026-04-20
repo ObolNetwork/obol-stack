@@ -239,6 +239,15 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 				log.Printf("[%s] payment failed: %v", name, event.Error)
 			},
+			OnConfirmSpendFailure: func(event PaymentEvent) {
+				p.metrics.confirmSpendFailureTotal.With(labels).Inc()
+				p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
+				p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
+				log.Printf("[%s] confirm spend persistence failed: %v", name, event.Error)
+			},
+			OnPaymentUnsettled: func(event PaymentEvent) {
+				p.metrics.paymentUnsettledConfirmations.With(labels).Inc()
+			},
 		},
 	}
 
@@ -354,6 +363,29 @@ func bodyBufferMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func selectAndHoldPayment(requirements []x402types.PaymentRequirements, ps *PreSignedSigner) (*x402types.PaymentPayload, *PreSignedAuth, error) {
+	for i := range requirements {
+		if ps.CanSign(&requirements[i]) {
+			return ps.HoldSign(&requirements[i])
+		}
+	}
+
+	return nil, nil, ErrNoValidSigner
+}
+
+func releaseHeldPreSignedSpend(signers []Signer, held *PreSignedAuth) {
+	if held == nil || len(signers) != 1 {
+		return
+	}
+
+	ps, ok := signers[0].(*PreSignedSigner)
+	if !ok {
+		return
+	}
+
+	ps.ReleaseSpend(held)
+}
+
 // replayableX402Transport mirrors the x402-go retry flow, but rebuilds the
 // request body from GetBody for each attempt so retries stay valid under
 // httputil.ReverseProxy on newer Go versions.
@@ -364,6 +396,13 @@ type replayableX402Transport struct {
 	OnPaymentAttempt PaymentCallback
 	OnPaymentSuccess PaymentCallback
 	OnPaymentFailure PaymentCallback
+	OnConfirmSpendFailure PaymentCallback
+	// OnPaymentUnsettled fires when the upstream returned 2xx without a
+	// successful X-PAYMENT-RESPONSE. The auth has been consumed locally via
+	// ConfirmSpend, but there is no observed on-chain settlement. Sellers
+	// are expected to drive settlement in this flow; a non-zero count means
+	// a seller is accepting payment without settling.
+	OnPaymentUnsettled PaymentCallback
 }
 
 func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -393,9 +432,26 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	resp.Body.Close()
 
-	payment, err := t.Selector.SelectAndSign(requirements, t.Signers)
-	if err != nil {
-		return nil, err
+	var payment *x402types.PaymentPayload
+	var heldAuth *PreSignedAuth
+
+	usedPreSignedHold := false
+	if len(t.Signers) == 1 {
+		if ps, ok := t.Signers[0].(*PreSignedSigner); ok {
+			var holdErr error
+			payment, heldAuth, holdErr = selectAndHoldPayment(requirements, ps)
+			if holdErr != nil {
+				return nil, holdErr
+			}
+			usedPreSignedHold = true
+		}
+	}
+	if !usedPreSignedHold {
+		var selErr error
+		payment, selErr = t.Selector.SelectAndSign(requirements, t.Signers)
+		if selErr != nil {
+			return nil, selErr
+		}
 	}
 
 	var selectedRequirement *x402types.PaymentRequirements
@@ -425,30 +481,34 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		})
 	}
 
-	paymentHeader, err := EncodePayment(*payment)
-	if err != nil {
+	paymentHeader, encErr := EncodePayment(*payment)
+	if encErr != nil {
+		releaseHeldPreSignedSpend(t.Signers, heldAuth)
 		if t.OnPaymentFailure != nil {
 			t.OnPaymentFailure(PaymentEvent{
 				Type:      PaymentEventFailure,
 				Timestamp: time.Now(),
 				Method:    "HTTP",
 				URL:       req.URL.String(),
-				Error:     err,
+				Error:     encErr,
 				Duration:  time.Since(startTime),
 			})
 		}
-		return nil, NewPaymentError(ErrCodeSigningFailed, "failed to build payment header", err)
+		return nil, NewPaymentError(ErrCodeSigningFailed, "failed to build payment header", encErr)
 	}
 
-	retryReq, err := cloneRequestWithFreshBody(req)
-	if err != nil {
-		return nil, err
+	retryReq, cloneErr := cloneRequestWithFreshBody(req)
+	if cloneErr != nil {
+		releaseHeldPreSignedSpend(t.Signers, heldAuth)
+		return nil, cloneErr
 	}
 	retryReq.Header.Set("X-PAYMENT", paymentHeader)
 
 	respRetry, err := t.Base.RoundTrip(retryReq)
 	duration := time.Since(startTime)
+
 	if err != nil {
+		releaseHeldPreSignedSpend(t.Signers, heldAuth)
 		if t.OnPaymentFailure != nil {
 			t.OnPaymentFailure(PaymentEvent{
 				Type:      PaymentEventFailure,
@@ -462,25 +522,89 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		return nil, err
 	}
 
+	if respRetry.StatusCode >= http.StatusBadRequest {
+		releaseHeldPreSignedSpend(t.Signers, heldAuth)
+		return respRetry, nil
+	}
+
+	if len(t.Signers) == 1 {
+		if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {
+			if confirmErr := ps.ConfirmSpend(heldAuth); confirmErr != nil {
+				log.Printf("x402-buyer: confirm spend: %v", confirmErr)
+				if t.OnConfirmSpendFailure != nil {
+					event := PaymentEvent{
+						Type:      PaymentEventFailure,
+						Timestamp: time.Now(),
+						Method:    "HTTP",
+						URL:       req.URL.String(),
+						Error:     confirmErr,
+						Duration:  duration,
+					}
+					if selectedRequirement != nil {
+						event.Network = selectedRequirement.Network
+						event.Scheme = selectedRequirement.Scheme
+						event.Amount = selectedRequirement.Amount
+						event.Asset = selectedRequirement.Asset
+						event.Recipient = selectedRequirement.PayTo
+					}
+					t.OnConfirmSpendFailure(event)
+				}
+			}
+		}
+	}
+
 	settlement, _ := DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
-	if settlement.Success && t.OnPaymentSuccess != nil {
-		event := PaymentEvent{
-			Type:        PaymentEventSuccess,
-			Timestamp:   time.Now(),
-			Method:      "HTTP",
-			URL:         req.URL.String(),
-			Transaction: settlement.Transaction,
-			Payer:       settlement.Payer,
-			Duration:    duration,
+	switch {
+	case settlement.Success:
+		if t.OnPaymentSuccess != nil {
+			event := PaymentEvent{
+				Type:        PaymentEventSuccess,
+				Timestamp:   time.Now(),
+				Method:      "HTTP",
+				URL:         req.URL.String(),
+				Transaction: settlement.Transaction,
+				Payer:       settlement.Payer,
+				Duration:    duration,
+			}
+			if selectedRequirement != nil {
+				event.Network = selectedRequirement.Network
+				event.Scheme = selectedRequirement.Scheme
+				event.Amount = selectedRequirement.Amount
+				event.Asset = selectedRequirement.Asset
+				event.Recipient = selectedRequirement.PayTo
+			}
+
+			t.OnPaymentSuccess(event)
 		}
-		if selectedRequirement != nil {
-			event.Network = selectedRequirement.Network
-			event.Scheme = selectedRequirement.Scheme
-			event.Amount = selectedRequirement.Amount
-			event.Asset = selectedRequirement.Asset
-			event.Recipient = selectedRequirement.PayTo
+	case heldAuth != nil:
+		// Upstream returned 2xx but no successful X-PAYMENT-RESPONSE. The
+		// auth was just consumed locally via ConfirmSpend, but no on-chain
+		// settlement has been observed. Surface this so operators can alert
+		// on sellers that accept payment without settling.
+		// %q escapes control characters in the URL (embedded newlines etc.)
+		// which is what gosec G706 cares about — the format verb mitigates
+		// log injection here, so the linter flag is a false positive.
+		log.Printf("x402-buyer: WARN upstream %q returned %d without X-PAYMENT-RESPONSE — auth consumed without observed settlement", //nolint:gosec // %q escapes control chars
+			req.URL.String(), respRetry.StatusCode)
+
+		if t.OnPaymentUnsettled != nil {
+			event := PaymentEvent{
+				Type:      PaymentEventUnsettled,
+				Timestamp: time.Now(),
+				Method:    "HTTP",
+				URL:       req.URL.String(),
+				Duration:  duration,
+			}
+			if selectedRequirement != nil {
+				event.Network = selectedRequirement.Network
+				event.Scheme = selectedRequirement.Scheme
+				event.Amount = selectedRequirement.Amount
+				event.Asset = selectedRequirement.Asset
+				event.Recipient = selectedRequirement.PayTo
+			}
+
+			t.OnPaymentUnsettled(event)
 		}
-		t.OnPaymentSuccess(event)
 	}
 
 	return respRetry, nil

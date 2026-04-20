@@ -23,10 +23,24 @@ type ForwardAuthConfig struct {
 
 	// VerifyOnly skips blockchain settlement when true. Used by the Traefik
 	// ForwardAuth verifier where only payment verification is needed.
+	//
+	// INVARIANT: VerifyOnly MUST be true whenever this middleware is used
+	// behind Traefik ForwardAuth. The auth hop runs before the upstream is
+	// contacted and cannot observe the upstream's status; settling there
+	// debits the payer before the upstream has proven it served the request.
+	// VerifyOnly=false is only safe for in-process middleware (e.g. the
+	// standalone inference gateway) that sees the real upstream status.
+	//
+	// NewForwardAuthMiddleware logs a loud warning when VerifyOnly is false
+	// so operators who flip this in x402-pricing.yaml notice in logs.
 	VerifyOnly bool
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
+// PaymentPayload is the decoded v1/v2 payment JSON (same bytes as inside the
+// base64 X-PAYMENT header). Facilitators including https://x402.gcp.obol.tech
+// expect a JSON object here; sending a base64 string makes them return
+// unsupported_scheme.
 type facilitatorVerifyRequest struct {
 	X402Version         int                           `json:"x402Version"`
 	PaymentPayload      json.RawMessage               `json:"paymentPayload"`
@@ -60,7 +74,19 @@ type facilitatorSettleResponse struct {
 // When VerifyOnly is false (standalone gateway path), settlement runs only
 // after the inner handler returns a success status (< 400).
 func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.PaymentRequirements) func(http.Handler) http.Handler {
-	client := &http.Client{Timeout: 30 * time.Second}
+	// 5s timeout (not 30s) so a slow facilitator does not block every paid
+	// request for half a minute. The facilitator does a cheap signature
+	// check; anything taking longer is a network issue the client should
+	// see quickly.
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	if !cfg.VerifyOnly {
+		log.Printf("x402: WARNING verifyOnly=false — settlement will run after upstream success. " +
+			"This is ONLY safe for in-process middleware (e.g. obol sell inference) that sees " +
+			"the real upstream status. Behind Traefik ForwardAuth this debits the payer before " +
+			"the upstream serves the request. Set verifyOnly=true in x402-pricing.yaml for the " +
+			"cluster verifier.")
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,10 +202,16 @@ func findMatchingRequirementV1(payment x402types.PaymentPayload, requirements []
 }
 
 // facilitatorVerify calls POST /verify on the facilitator.
-func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL string, payloadBytes []byte, requirement x402types.PaymentRequirements) (*facilitatorVerifyResponse, error) {
+// paymentPayloadJSON is the decoded payment object (bytes of JSON), not the
+// base64 X-PAYMENT wrapper.
+func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL string, paymentPayloadJSON []byte, requirement x402types.PaymentRequirements) (*facilitatorVerifyResponse, error) {
+	if len(paymentPayloadJSON) == 0 || !json.Valid(paymentPayloadJSON) {
+		return nil, fmt.Errorf("payment payload is empty or not valid JSON")
+	}
+
 	body := facilitatorVerifyRequest{
 		X402Version:         2,
-		PaymentPayload:      json.RawMessage(payloadBytes),
+		PaymentPayload:      json.RawMessage(paymentPayloadJSON),
 		PaymentRequirements: requirement,
 	}
 
@@ -218,10 +250,16 @@ func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL 
 }
 
 // facilitatorSettle calls POST /settle on the facilitator.
-func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL string, payloadBytes []byte, requirement x402types.PaymentRequirements) (*facilitatorSettleResponse, error) {
+// paymentPayloadJSON is the decoded payment object (bytes of JSON), not the
+// base64 X-PAYMENT wrapper.
+func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL string, paymentPayloadJSON []byte, requirement x402types.PaymentRequirements) (*facilitatorSettleResponse, error) {
+	if len(paymentPayloadJSON) == 0 || !json.Valid(paymentPayloadJSON) {
+		return nil, fmt.Errorf("payment payload is empty or not valid JSON")
+	}
+
 	body := facilitatorVerifyRequest{
 		X402Version:         2,
-		PaymentPayload:      json.RawMessage(payloadBytes),
+		PaymentPayload:      json.RawMessage(paymentPayloadJSON),
 		PaymentRequirements: requirement,
 	}
 

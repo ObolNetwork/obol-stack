@@ -10,13 +10,15 @@ import (
 type metrics struct {
 	registry *prometheus.Registry
 
-	requestsTotal       *prometheus.CounterVec
-	paymentAttempts     *prometheus.CounterVec
-	paymentSuccessTotal *prometheus.CounterVec
-	paymentFailureTotal *prometheus.CounterVec
-	authRemaining       *prometheus.GaugeVec
-	authSpent           *prometheus.GaugeVec
-	activeModelMappings *prometheus.GaugeVec
+	requestsTotal                 *prometheus.CounterVec
+	paymentAttempts               *prometheus.CounterVec
+	paymentSuccessTotal           *prometheus.CounterVec
+	paymentFailureTotal           *prometheus.CounterVec
+	confirmSpendFailureTotal      *prometheus.CounterVec
+	paymentUnsettledConfirmations *prometheus.CounterVec
+	authRemaining                 *prometheus.GaugeVec
+	authSpent                     *prometheus.GaugeVec
+	activeModelMappings           *prometheus.GaugeVec
 }
 
 func newMetrics() *metrics {
@@ -50,6 +52,25 @@ func newMetrics() *metrics {
 			},
 			[]string{"upstream", "remote_model"},
 		),
+		confirmSpendFailureTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_buyer_confirm_spend_failure_total",
+				Help: "Successful upstream responses whose consumed-auth state could not be persisted.",
+			},
+			[]string{"upstream", "remote_model"},
+		),
+		// paymentUnsettledConfirmations counts the occurrences of an upstream
+		// returning 2xx without X-PAYMENT-RESPONSE. The buyer still marks the
+		// auth consumed (ConfirmSpend), but no on-chain settlement has been
+		// observed. A non-zero value means the seller owns settlement and may
+		// be misconfigured — operators should alert on this counter.
+		paymentUnsettledConfirmations: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_buyer_payment_unsettled_confirmations_total",
+				Help: "Upstream 2xx responses with no X-PAYMENT-RESPONSE header — auth consumed locally without observed on-chain settlement.",
+			},
+			[]string{"upstream", "remote_model"},
+		),
 		authRemaining: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "obol_x402_buyer_auth_remaining",
@@ -78,6 +99,8 @@ func newMetrics() *metrics {
 		m.paymentAttempts,
 		m.paymentSuccessTotal,
 		m.paymentFailureTotal,
+		m.confirmSpendFailureTotal,
+		m.paymentUnsettledConfirmations,
 		m.authRemaining,
 		m.authSpent,
 		m.activeModelMappings,

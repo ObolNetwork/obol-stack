@@ -67,7 +67,7 @@ data:
       - model_name: "paid/*"
         litellm_params:
           model: "openai/*"
-          api_base: "http://127.0.0.1:8402"
+          api_base: "http://127.0.0.1:8402/v1"
           api_key: "unused"
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
@@ -199,6 +199,12 @@ spec:
               cpu: "1"
               memory: 1Gi
         - name: x402-buyer
+          # TODO(image-pin): replace :latest with a digest (ghcr.io/obolnetwork/x402-buyer@sha256:…)
+          # or the short-SHA tag pattern used for litellm above (sha-<short>).
+          # :latest drift between the deployed sidecar and the main branch is what
+          # produced the /v1 vs bare-path 404 debacle in PR #343: the mux was
+          # updated to register both paths, but the deployed image still served
+          # only /v1/*. See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-buyer:latest
           imagePullPolicy: IfNotPresent
           args:

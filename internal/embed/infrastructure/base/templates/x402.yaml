@@ -1,6 +1,6 @@
 ---
 # x402 runtime components:
-# - x402-verifier: live ForwardAuth request path
+# - x402-verifier: shared seller-owned x402 gateway (and legacy /verify endpoint)
 # - serviceoffer-controller: control-plane reconciler for ServiceOffer child resources
 apiVersion: v1
 kind: Namespace
@@ -8,8 +8,8 @@ metadata:
   name: x402
 
 ---
-# Static verifier settings plus optional manual routes. In cluster mode the
-# verifier merges these with dynamic routes derived from ready ServiceOffers.
+# Static gateway settings plus optional manual routes. In cluster mode the
+# gateway merges these with dynamic routes derived from ready ServiceOffers.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,7 +20,9 @@ data:
     wallet: ""
     chain: "base"
     facilitatorURL: "https://x402.gcp.obol.tech"
-    verifyOnly: false
+    # verifyOnly applies to the legacy /verify endpoint only. The shared seller
+    # gateway path always settles after upstream success.
+    verifyOnly: true
     routes: []
 
 ---
@@ -121,6 +123,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["referencegrants"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -176,6 +181,10 @@ spec:
       serviceAccountName: x402-verifier
       containers:
         - name: verifier
+          # TODO(image-pin): replace :latest with a digest (ghcr.io/obolnetwork/x402-verifier@sha256:…)
+          # or a short-SHA tag. :latest drift between deployed verifier and main
+          # masks protocol regressions (e.g. facilitator payload format, verifyOnly
+          # handling). See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-verifier:latest
           imagePullPolicy: IfNotPresent
           ports:
@@ -247,6 +256,10 @@ spec:
       serviceAccountName: serviceoffer-controller
       containers:
         - name: controller
+          # TODO(image-pin): replace :latest with a digest or short-SHA tag.
+          # The controller writes LiteLLM config and buyer ConfigMaps — a stale
+          # image here silently breaks the paid/* routing without a clear error.
+          # See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/serviceoffer-controller:latest
           imagePullPolicy: IfNotPresent
           env:

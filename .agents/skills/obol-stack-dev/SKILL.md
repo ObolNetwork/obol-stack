@@ -237,9 +237,10 @@ Client request ──► Traefik ──► x402-verifier (ForwardAuth) ──►
 # Prerequisites
 obol stack up && obol agent init
 
-# Create offer
-obol sell http qwen35 --model "qwen3.5:35b" --per-request "0.001" \
-  --network "base-sepolia" --pay-to "0x<wallet>"
+# Create offer (--wallet not --pay-to; --chain not --network; no --model flag)
+obol sell http qwen35 \
+  --upstream ollama --port 11434 --namespace llm --health-path /api/tags \
+  --per-request "0.001" --chain "base-sepolia" --wallet "0x<wallet>"
 
 # Trigger reconciliation (or wait for heartbeat)
 obol kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \

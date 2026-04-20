@@ -224,6 +224,9 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 		"asset":       pr.Spec.Payment.Asset,
 		"remoteModel": pr.Spec.Model,
 	}
+	// Leave facilitatorURL unset so the buyer sidecar uses its built-in
+	// default, matching main-branch behavior. Proper seller-specific facilitator
+	// propagation should be implemented as a separate follow-up.
 
 	if err := c.mergeBuyerConfig(ctx, buyerNS, pr.Name, upstream); err != nil {
 		setPurchaseCondition(&status.Conditions, "Configured", "False", "ConfigWriteError", err.Error())

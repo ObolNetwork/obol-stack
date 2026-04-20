@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"sync/atomic"
 
 	x402types "github.com/coinbase/x402/go/types"
@@ -85,36 +88,12 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	cfg := v.config.Load()
 
-	rule := matchRoute(cfg.Routes, uri)
-	if rule == nil {
+	rule, requirement, _, ok := v.matchPaidRoute(cfg, uri)
+	if !ok {
 		// No pricing rule matches — route is free.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-
-	// Per-route payTo and network override global config.
-	wallet := cfg.Wallet
-	if rule.PayTo != "" {
-		wallet = rule.PayTo
-	}
-
-	chainName := cfg.Chain
-	if rule.Network != "" {
-		chainName = rule.Network
-	}
-
-	// Look up pre-resolved chain (populated during config load).
-	chains := v.chains.Load()
-
-	chain, ok := (*chains)[chainName]
-	if !ok {
-		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-
-		return
-	}
-
-	requirement := BuildV2Requirement(chain, rule.Price, wallet)
 
 	// Reconstruct the original request context so the middleware generates
 	// correct payment requirements (resource URL, host, etc.).
@@ -164,6 +143,49 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleProxy serves the seller-owned paid route directly. It matches the
+// incoming path to a ServiceOffer-derived route rule, verifies the payment,
+// proxies to the real upstream, and settles only after the upstream succeeds.
+func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
+	cfg := v.config.Load()
+
+	rule, requirement, labels, ok := v.matchPaidRoute(cfg, r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	v.metrics.requestsTotal.With(labels).Inc()
+
+	proxy, err := buildUpstreamProxy(rule)
+	if err != nil {
+		log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: cfg.FacilitatorURL,
+		VerifyOnly:     false,
+	}, []x402types.PaymentRequirements{requirement})
+
+	hadPayment := r.Header.Get("X-PAYMENT") != ""
+	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	middleware(proxy).ServeHTTP(tracker, r)
+
+	switch {
+	case tracker.status == http.StatusPaymentRequired && !hadPayment:
+		v.metrics.paymentRequired.With(labels).Inc()
+	case tracker.status == http.StatusPaymentRequired:
+		v.metrics.paymentFailed.With(labels).Inc()
+	case tracker.status < http.StatusBadRequest && hadPayment:
+		v.metrics.paymentVerified.With(labels).Inc()
+		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
+			v.metrics.chargedRequests.With(labels).Inc()
+		}
+	}
+}
+
 // HandleHealthz returns 200 OK for liveness probes.
 func (v *Verifier) HandleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
@@ -184,6 +206,90 @@ func (v *Verifier) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 // MetricsHandler exposes Prometheus metrics for the verifier.
 func (v *Verifier) MetricsHandler() http.Handler {
 	return v.metrics.handler()
+}
+
+func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, prometheus.Labels, bool) {
+	rule := matchRoute(cfg.Routes, uri)
+	if rule == nil {
+		return nil, x402types.PaymentRequirements{}, nil, false
+	}
+
+	wallet := cfg.Wallet
+	if rule.PayTo != "" {
+		wallet = rule.PayTo
+	}
+
+	chainName := cfg.Chain
+	if rule.Network != "" {
+		chainName = rule.Network
+	}
+
+	chains := v.chains.Load()
+	chain, ok := (*chains)[chainName]
+	if !ok {
+		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
+		return nil, x402types.PaymentRequirements{}, nil, false
+	}
+
+	requirement := BuildV2Requirement(chain, rule.Price, wallet)
+	return rule, requirement, prometheusLabels(rule), true
+}
+
+func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
+	target, err := url.Parse(rule.UpstreamURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse upstream URL %q: %w", rule.UpstreamURL, err)
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			strippedPath := stripRoutePrefix(rule.StripPrefix, pr.In.URL.Path)
+			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
+			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			pr.Out.Host = target.Host
+			if rule.UpstreamAuth != "" {
+				pr.Out.Header.Set("Authorization", rule.UpstreamAuth)
+			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("x402-verifier: upstream proxy error for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		},
+	}
+	return proxy, nil
+}
+
+func stripRoutePrefix(prefix, requestPath string) string {
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" || prefix == "/" {
+		if requestPath == "" {
+			return "/"
+		}
+		return requestPath
+	}
+
+	switch {
+	case requestPath == prefix:
+		return "/"
+	case strings.HasPrefix(requestPath, prefix+"/"):
+		return strings.TrimPrefix(requestPath, prefix)
+	default:
+		return requestPath
+	}
+}
+
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	default:
+		return a + b
+	}
 }
 
 type statusRecorder struct {

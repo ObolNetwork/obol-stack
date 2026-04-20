@@ -94,6 +94,7 @@ python3 scripts/buy.py remove remote-qwen
    - Sidecar forwards to upstream seller
    - If 402 → pops one pre-signed auth from pool → builds X-PAYMENT header → retries
    - Seller verifies payment via facilitator → returns 200 + inference result
+   - Sidecar confirms local nonce consumption after a successful paid upstream response; if the paid retry still fails, the held auth is released back to the local pool
    - Sidecar has zero signer access — it only uses pre-signed vouchers
 
 ## Architecture

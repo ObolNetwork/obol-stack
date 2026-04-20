@@ -52,10 +52,19 @@ type RouteRule struct {
 	Network string `yaml:"network,omitempty"`
 
 	// UpstreamAuth is injected as the Authorization header on approved requests.
-	// The x402-verifier sets this header in its 200 response; Traefik copies it
-	// to the forwarded request via authResponseHeaders. This lets the upstream
-	// (e.g., LiteLLM) authenticate the request without exposing the key to buyers.
+	// The shared seller gateway injects this header on approved upstream
+	// requests. This lets the upstream (e.g., LiteLLM) authenticate the request
+	// without exposing the key to buyers.
 	UpstreamAuth string `yaml:"upstreamAuth,omitempty"`
+
+	// UpstreamURL is the in-cluster HTTP base URL for the protected upstream.
+	// The shared seller gateway proxies matched paid routes to this target after
+	// successful payment verification.
+	UpstreamURL string `yaml:"upstreamURL,omitempty"`
+
+	// StripPrefix is removed from the incoming request path before proxying to
+	// the upstream. For ServiceOffers this is usually /services/<offer-name>.
+	StripPrefix string `yaml:"stripPrefix,omitempty"`
 
 	// PriceModel records which price field produced the enforced request price.
 	// It is metadata only; the verifier always enforces Price.

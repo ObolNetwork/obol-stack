@@ -41,7 +41,25 @@ func EnsureVerifier(cfg *config.Config) error {
 	bin, kc := kubectl.Paths(cfg)
 
 	fmt.Println("Applying x402 payment components...")
-	return kubectl.Apply(bin, kc, x402Manifest)
+	if err := kubectl.Apply(bin, kc, x402Manifest); err != nil {
+		return err
+	}
+	// Populate the CA bundle after deploying the verifier so TLS verification
+	// of the facilitator works immediately. Idempotent — safe to call multiple times.
+	populateCABundle(bin, kc)
+	return nil
+}
+
+// PopulateCABundle reads the host's CA certificate bundle and replaces the
+// ca-certificates ConfigMap in the x402 namespace. Call this whenever the
+// x402 verifier is deployed or updated without going through EnsureVerifier.
+// Silently skips if no CA bundle is found on the host.
+func PopulateCABundle(cfg *config.Config) {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return
+	}
+	bin, kc := kubectl.Paths(cfg)
+	populateCABundle(bin, kc)
 }
 
 // Setup configures x402 pricing in the cluster by patching the ConfigMap
@@ -55,10 +73,6 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("deploy x402 verifier: %w", err)
 	}
 	bin, kc := kubectl.Paths(cfg)
-
-	// Populate the CA certificates bundle from the host so the distroless
-	// verifier image can TLS-verify the facilitator.
-	populateCABundle(bin, kc)
 
 	// 1. Patch the Secret with the wallet address.
 	fmt.Printf("Configuring x402: setting wallet address...\n")
@@ -88,7 +102,9 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		Wallet:         wallet,
 		Chain:          chain,
 		FacilitatorURL: facilitatorURL,
-		VerifyOnly:     false,
+		// ForwardAuth should verify only; settlement is performed downstream
+		// after a successful paid upstream response.
+		VerifyOnly:     true,
 		Routes:         existingRoutes,
 	}
 	if err := patchPricingConfig(bin, kc, pricingCfg); err != nil {

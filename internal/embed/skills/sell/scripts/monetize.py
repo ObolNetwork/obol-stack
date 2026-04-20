@@ -576,7 +576,7 @@ def main():
     create_parser.add_argument("--pay-to", required=True, help="USDC recipient wallet")
     create_parser.add_argument("--path", help="Public route path")
     create_parser.add_argument("--max-timeout", type=int, default=300, help="Payment timeout seconds")
-    create_parser.add_argument("--register", action="store_true", help="Publish registration document")
+    create_parser.add_argument("--register", action="store_true", help="Legacy flag: publish registration metadata")
     create_parser.add_argument("--register-name", help="Registration name")
     create_parser.add_argument("--register-description", help="Registration description")
     create_parser.add_argument("--register-image", help="Registration image URL")

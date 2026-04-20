@@ -70,7 +70,7 @@ readonly HELM_DIFF_VERSION="3.15.4"
 readonly OLLAMA_VERSION="0.20.2"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
-readonly OPENCLAW_VERSION="2026.3.24"
+readonly OPENCLAW_VERSION="2026.4.15"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -97,6 +97,20 @@ log_error() {
 log_dim() {
 	echo -e "${OBOL_MUTED}$1${NC}"
 }
+
+# Non-interactive install mode — set OBOL_ASSUME_YES=1 (or pass --yes/-y) to
+# accept every prompt. Useful for CI, remote installs, and `curl | sh` runs
+# where /dev/tty is unavailable.
+ASSUME_YES=false
+if [[ "${OBOL_ASSUME_YES:-}" == "1" || "${OBOL_ASSUME_YES:-}" == "true" ]]; then
+	ASSUME_YES=true
+fi
+for arg in "$@"; do
+	case "$arg" in
+	--yes | -y) ASSUME_YES=true ;;
+	esac
+done
+readonly ASSUME_YES
 
 
 # Check if command exists
@@ -410,8 +424,10 @@ install_dev_wrapper() {
 		SCRIPT_DIR="$(pwd)"
 	fi
 
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
 	# Create wrapper script that uses 'go run'
-	cat >"$OBOL_BIN_DIR/obol" <<'EOF'
+	cat >"$tmp_obol" <<'EOF'
 #!/usr/bin/env bash
 # Obol CLI Development Wrapper
 # This script runs the obol CLI using 'go run' for rapid development
@@ -423,7 +439,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$SCRIPT_DIR" && exec go run -a ./cmd/obol "$@"
 EOF
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Installed development wrapper at $OBOL_BIN_DIR/obol"
 }
 
@@ -458,15 +475,19 @@ download_release() {
 
 	log_info "Downloading from: $download_url"
 
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
 	# Download binary
 	if command_exists curl; then
-		if ! curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/obol"; then
+		if ! curl -fsSL "$download_url" -o "$tmp_obol"; then
 			log_warn "Failed to download release $release_tag"
+			rm -f "$tmp_obol"
 			return 1
 		fi
 	elif command_exists wget; then
-		if ! wget -q "$download_url" -O "$OBOL_BIN_DIR/obol"; then
+		if ! wget -q "$download_url" -O "$tmp_obol"; then
 			log_warn "Failed to download release $release_tag"
+			rm -f "$tmp_obol"
 			return 1
 		fi
 	else
@@ -474,7 +495,8 @@ download_release() {
 		return 1
 	fi
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Downloaded and installed release $release_tag"
 	return 0
 }
@@ -517,12 +539,16 @@ build_from_source() {
 	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=$build_time"
 	ldflags="$ldflags -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=$git_dirty"
 
-	if ! go build -ldflags "$ldflags" -o "$OBOL_BIN_DIR/obol" ./cmd/obol; then
+	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
+
+	if ! go build -ldflags "$ldflags" -o "$tmp_obol" ./cmd/obol; then
 		log_error "Failed to build binary"
+		rm -f "$tmp_obol"
 		return 1
 	fi
 
-	chmod +x "$OBOL_BIN_DIR/obol"
+	chmod +x "$tmp_obol"
+	mv "$tmp_obol" "$OBOL_BIN_DIR/obol"
 	log_success "Built and installed from source"
 	return 0
 }
@@ -1150,23 +1176,43 @@ install_openclaw() {
 		if command_exists docker; then
 			log_info "npm/Node.js not available — extracting openclaw from Docker image..."
 			local image="ghcr.io/obolnetwork/openclaw:$target_version"
-			if docker pull "$image" 2>&1 | tail -1; then
-				local cid
-				cid=$(docker create "$image" 2>/dev/null)
-				if [[ -n "$cid" ]]; then
-					docker cp "$cid:/usr/local/bin/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null \
-						|| docker cp "$cid:/app/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null \
-						|| docker cp "$cid:/openclaw" "$OBOL_BIN_DIR/openclaw" 2>/dev/null
-					docker rm "$cid" >/dev/null 2>&1
-					if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
-						chmod +x "$OBOL_BIN_DIR/openclaw"
-						log_success "openclaw v$target_version installed (from Docker image)"
-						return 0
-					fi
-				fi
+			local pull_err
+			if ! pull_err=$(docker pull "$image" 2>&1); then
+				log_warn "docker pull $image failed:"
+				printf '  %s\n' "$pull_err" | sed 's/^  $//'
+				echo "  Pull the Docker image manually: docker pull $image"
+				echo ""
+				return 1
 			fi
-			log_warn "Docker extraction failed"
-			echo "  Pull the Docker image: docker pull $image"
+
+			local cid create_err
+			if ! cid=$(docker create "$image" 2>&1); then
+				create_err="$cid"
+				cid=""
+				log_warn "docker create $image failed:"
+				printf '  %s\n' "$create_err"
+				echo ""
+				return 1
+			fi
+
+			local cp_err="" cp_ok=false
+			for src in /usr/local/bin/openclaw /app/openclaw /openclaw; do
+				if cp_out=$(docker cp "$cid:$src" "$OBOL_BIN_DIR/openclaw" 2>&1); then
+					cp_ok=true
+					break
+				fi
+				cp_err+="  $src: $cp_out"$'\n'
+			done
+			docker rm "$cid" >/dev/null 2>&1
+
+			if [[ "$cp_ok" == "true" ]] && [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
+				chmod +x "$OBOL_BIN_DIR/openclaw"
+				log_success "openclaw v$target_version installed (from Docker image)"
+				return 0
+			fi
+
+			log_warn "docker cp could not locate openclaw binary in $image (tried /usr/local/bin, /app, /):"
+			printf '%s' "$cp_err"
 			echo ""
 			return 1
 		fi
@@ -1321,7 +1367,9 @@ install_ollama() {
 			log_warn "Ollama v$version is older than pinned v$target_version"
 
 			# Prompt for upgrade if interactive
-			if [[ -c /dev/tty ]]; then
+			if [[ "$ASSUME_YES" == "true" ]]; then
+				log_info "--yes set — upgrading Ollama to v$target_version"
+			elif [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
 				local choice
 				read -p "  Upgrade Ollama to v$target_version? [Y/n]: " choice </dev/tty
 
@@ -1367,11 +1415,17 @@ install_ollama() {
 	echo "  via 'obol model setup'."
 	echo ""
 
-	# Check if we can prompt the user
-	if [[ -c /dev/tty ]]; then
-		local choice
+	# Check if we can prompt the user (tty available or --yes given)
+	local can_install=false choice=""
+	if [[ "$ASSUME_YES" == "true" ]]; then
+		log_info "--yes set — installing Ollama"
+		can_install=true
+		choice="y"
+	elif [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
+		can_install=true
 		read -p "  Install Ollama now? [Y/n]: " choice </dev/tty
-
+	fi
+	if [[ "$can_install" == "true" ]]; then
 		case "$choice" in
 		[Nn]*)
 			log_warn "Skipping Ollama — local AI inference will be unavailable"
@@ -1661,8 +1715,9 @@ configure_path() {
 		return 0
 	fi
 
-	# Check if we can prompt the user via /dev/tty (works even with curl | bash)
-	if [[ -c /dev/tty ]]; then
+	# Check if we can prompt the user via /dev/tty (works even with curl | bash).
+	# --yes auto-picks option 1 (add to profile).
+	if [[ "$ASSUME_YES" == "true" || -c /dev/tty ]]; then
 		echo ""
 		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
 		echo ""
@@ -1674,7 +1729,12 @@ configure_path() {
 		echo ""
 
 		local choice
-		read -p "Choose [1/2]: " choice </dev/tty
+		if [[ "$ASSUME_YES" == "true" ]]; then
+			choice="1"
+			log_info "--yes set — adding $OBOL_BIN_DIR to $profile"
+		else
+			read -p "Choose [1/2]: " choice </dev/tty
+		fi
 
 		case "$choice" in
 		1)
@@ -1784,8 +1844,17 @@ print_instructions() {
 	# Check if the agent's primary model requires a cloud API key.
 	check_agent_model_api_key
 
-	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty)
-	if [[ -c /dev/tty ]] && [[ -f "$OBOL_BIN_DIR/obol" ]]; then
+	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty).
+	# [[ -c /dev/tty ]] only tests that the file is a char device — it does not test
+	# whether /dev/tty can actually be opened.  In some environments (Docker containers,
+	# certain CI setups) /dev/tty exists but is inaccessible, causing the subsequent
+	# `read </dev/tty` to crash.  The redirect test `{ true </dev/tty; } 2>/dev/null`
+	# confirms the fd can actually be opened before we attempt any interactive prompt.
+	local can_prompt=false
+	if [[ "$ASSUME_YES" == "true" || ( -c /dev/tty && "$({ true </dev/tty; } 2>/dev/null; echo $?)" == "0" ) ]]; then
+		can_prompt=true
+	fi
+	if [[ "$can_prompt" == "true" && -f "$OBOL_BIN_DIR/obol" ]]; then
 		echo ""
 		log_info "Would you like to start the cluster now?"
 		echo ""
@@ -1796,7 +1865,12 @@ print_instructions() {
 		echo ""
 
 		local choice
-		read -p "Start cluster now? [y/N]: " choice </dev/tty
+		if [[ "$ASSUME_YES" == "true" ]]; then
+			choice="y"
+			log_info "--yes set — starting cluster"
+		else
+			read -p "Start cluster now? [y/N]: " choice </dev/tty
+		fi
 
 		case "$choice" in
 		[Yy]*)

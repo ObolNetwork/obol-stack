@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -176,6 +177,7 @@ func TestProxy_Handles402WithPayment(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{
 			"id": "test-paid",
 			"object": "chat.completion",
@@ -234,6 +236,349 @@ func TestProxy_Handles402WithPayment(t *testing.T) {
 
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content != "paid" {
 		t.Errorf("unexpected response: %s", string(body))
+	}
+}
+
+func TestProxy_SuccessfulPaidRequestPersistsConsumeWithoutSettlementHeader(t *testing.T) {
+	dir := t.TempDir()
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xsettle-ok")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+	statusRec := httptest.NewRecorder()
+	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["paid"]; got.Remaining != 0 || got.Spent != 1 {
+		t.Fatalf("remaining/spent = %d/%d, want 0/1", got.Remaining, got.Spent)
+	}
+	if !st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should be persisted as consumed after successful upstream response", auth.Nonce)
+	}
+}
+
+func TestProxy_SettlementFailureHeaderIsIgnoredAndSuccessfulResponsePassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/settle" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"success":false,"errorReason":"settle_failed"}`)
+	}))
+	defer facilitator.Close()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xsettle-fail")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	// With main-style behavior, upstream success controls the client-visible
+	// result and local consume is persisted even if settlement metadata is absent
+	// or would have failed on a separate path.
+	statusRec := httptest.NewRecorder()
+	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["paid"]; got.Remaining != 0 || got.Spent != 1 {
+		t.Fatalf("remaining/spent = %d/%d, want 0/1", got.Remaining, got.Spent)
+	}
+	if !st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should be persisted as consumed after successful upstream response", auth.Nonce)
+	}
+}
+
+func TestProxy_VerifyFailureReleasesAuth(t *testing.T) {
+	dir := t.TempDir()
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	auth := makeAuth("0xverify-fail")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("X-Payment") == "" {
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		fmt.Fprint(w, `{
+			"x402Version": 1,
+			"error": "already_used",
+			"accepts": [{
+				"scheme": "exact",
+				"network": "base-sepolia",
+				"maxAmountRequired": "1000",
+				"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+			}]
+		}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 402, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	statusRec := httptest.NewRecorder()
+	proxy.ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var status map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(statusRec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got := status["paid"]; got.Remaining != 1 || got.Spent != 0 {
+		t.Fatalf("remaining/spent = %d/%d, want 1/0", got.Remaining, got.Spent)
+	}
+	if st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should not be persisted as consumed on verify failure", auth.Nonce)
+	}
+}
+
+func TestProxy_UpstreamErrorAfterPaymentDoesNotPersistConsume(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "consumed.json")
+
+	st, err := LoadStateStore(statePath)
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	auth := makeAuth("0xupstream500")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+
+			return
+		}
+
+		http.Error(w, "upstream failed", http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 from upstream, got %d", resp.StatusCode)
+	}
+
+	raw, rerr := os.ReadFile(statePath)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		t.Fatalf("read state: %v", rerr)
+	}
+	if strings.Contains(string(raw), auth.Nonce) {
+		t.Fatalf("nonce should not be persisted after failed upstream; state=%q", string(raw))
 	}
 }
 
@@ -343,6 +688,7 @@ func TestProxy_AuthPoolExhaustion(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
 	}))
 	defer upstream.Close()
@@ -526,6 +872,7 @@ func TestProxy_StatusAfterPayments(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{"ok":true}`)
 	}))
 	defer upstream.Close()
@@ -620,6 +967,7 @@ func TestProxy_ModelRoutingAndMetrics(t *testing.T) {
 		seenModel = payload.Model
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
 	}))
 	defer upstream.Close()
@@ -743,6 +1091,7 @@ func TestProxy_ModelRoutingSupportsChatCompletionsAlias(t *testing.T) {
 		seenModel = payload.Model
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
 	}))
 	defer upstream.Close()
@@ -818,6 +1167,7 @@ func TestProxy_ReloadSkipsConsumedAuthsAndReplacesModelMapping(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
 		fmt.Fprint(w, `{"ok":true}`)
 	}))
 	defer oldUpstream.Close()
@@ -1107,5 +1457,332 @@ func TestProxy_AdminReloadIdempotent(t *testing.T) {
 	proxy.ServeHTTP(rec3, httptest.NewRequest(http.MethodPost, "/admin/reload", nil))
 	if !strings.Contains(rec3.Body.String(), "reload triggered") {
 		t.Errorf("body = %q, want 'reload triggered'", rec3.Body.String())
+	}
+}
+
+// TestProxy_UpstreamSuccessNoSettlementHeader_IncrementsUnsettledMetric verifies
+// that a seller returning 2xx without X-PAYMENT-RESPONSE surfaces the condition
+// via the paymentUnsettledConfirmations counter. Current post-#343 semantics
+// consume the auth locally regardless of settlement, so the metric is the only
+// operator-visible signal that no on-chain settlement was observed.
+//
+// This is the signal that was missing in the initial PR review (W2/W9): a
+// misconfigured or malicious seller could otherwise collect payment without
+// settling, with no alarm bell for the buyer.
+func TestProxy_UpstreamSuccessNoSettlementHeader_IncrementsUnsettledMetric(t *testing.T) {
+	dir := t.TempDir()
+
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{"x402Version":1,"accepts":[{"scheme":"exact","network":"base-sepolia","maxAmountRequired":"1000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}]}`)
+
+			return
+		}
+		// No X-PAYMENT-RESPONSE set — simulates a seller that forgot to
+		// emit the header or runs a VerifyOnly ForwardAuth gate (Traefik).
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xunsettled")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	// The auth should have been consumed (payment went through).
+	if !st.IsConsumed("paid", auth.Nonce) {
+		t.Fatalf("nonce %s should be persisted as consumed after successful upstream response", auth.Nonce)
+	}
+
+	// The unsettled metric should have incremented exactly once.
+	metrics := scrapeMetricFamilies(t, proxy)
+
+	family := metrics["obol_x402_buyer_payment_unsettled_confirmations_total"]
+	if family == nil {
+		t.Fatalf("metric obol_x402_buyer_payment_unsettled_confirmations_total not registered")
+	}
+
+	assertMetricValue(t, family, map[string]string{
+		"upstream":     "paid",
+		"remote_model": "paid",
+	}, 1)
+}
+
+// TestProxy_UpstreamSuccessWithSettlementHeader_DoesNotIncrementUnsettledMetric
+// is the negative control: when the seller does emit a successful
+// X-PAYMENT-RESPONSE, the unsettled counter must remain zero. Paired with the
+// previous test, this pins down the invariant that unsettled is fired exclusively
+// when the buyer consumes an auth without observing on-chain settlement.
+func TestProxy_UpstreamSuccessWithSettlementHeader_DoesNotIncrementUnsettledMetric(t *testing.T) {
+	dir := t.TempDir()
+
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{"x402Version":1,"accepts":[{"scheme":"exact","network":"base-sepolia","maxAmountRequired":"1000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}]}`)
+
+			return
+		}
+		// Seller emits X-PAYMENT-RESPONSE encoding Success=true — the happy
+		// settle-aware path.
+		settleJSON := `{"success":true,"transaction":"0xabc","network":"base-sepolia","payer":"0xdef"}`
+		w.Header().Set("X-Payment-Response", base64.StdEncoding.EncodeToString([]byte(settleJSON)))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xsettled")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Unsettled counter must NOT have incremented.
+	metrics := scrapeMetricFamilies(t, proxy)
+	assertMetricMissing(t, metrics["obol_x402_buyer_payment_unsettled_confirmations_total"], map[string]string{
+		"upstream":     "paid",
+		"remote_model": "paid",
+	})
+}
+
+func TestProxy_ConfirmSpendFailure_IncrementsMetric(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(stateDir, 0o500); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	statePath := filepath.Join(stateDir, "consumed.json")
+
+	st, err := LoadStateStore(statePath)
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{"x402Version":1,"accepts":[{"scheme":"exact","network":"base-sepolia","maxAmountRequired":"1000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}]}`)
+			return
+		}
+
+		settleJSON := `{"success":true,"transaction":"0xabc","network":"base-sepolia","payer":"0xdef"}`
+		w.Header().Set("X-Payment-Response", base64.StdEncoding.EncodeToString([]byte(settleJSON)))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	auth := makeAuth("0xconfirmfail")
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test"}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	metrics := scrapeMetricFamilies(t, proxy)
+	assertMetricValue(t, metrics["obol_x402_buyer_confirm_spend_failure_total"], map[string]string{
+		"upstream":     "paid",
+		"remote_model": "paid",
+	}, 1)
+}
+
+// TestProxy_OpenAIMuxSymmetry_BothV1AndBarePathsRouteIdentically pins down the
+// invariant that the buyer sidecar serves /chat/completions AND
+// /v1/chat/completions. The LiteLLM templates hardcode api_base with /v1
+// (internal/embed/infrastructure/base/templates/llm.yaml) as a defence against
+// stale :latest buyer images, but if either path is ever dropped from the
+// mux the template hardcode becomes load-bearing on a technicality — this
+// test catches that regression early.
+//
+// Corresponds to W4 / "Buyer mux symmetry" in the PR #343 review.
+func TestProxy_OpenAIMuxSymmetry_BothV1AndBarePathsRouteIdentically(t *testing.T) {
+	dir := t.TempDir()
+
+	st, err := LoadStateStore(filepath.Join(dir, "consumed.json"))
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	upstreamCalls := 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{"x402Version":1,"accepts":[{"scheme":"exact","network":"base-sepolia","maxAmountRequired":"1000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}]}`)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid-upstream": {
+				URL:         upstream.URL,
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+				RemoteModel: "qwen3.5:4b",
+			},
+		},
+	}
+	auths := AuthsFile{
+		"paid-upstream": {makeAuth("0xbare"), makeAuth("0xv1")},
+	}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	// Hit the bare path (no /v1 prefix) — simulates LiteLLM configured with
+	// api_base="http://127.0.0.1:8402".
+	bareResp, err := http.Post(
+		srv.URL+"/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/qwen3.5:4b"}`),
+	)
+	if err != nil {
+		t.Fatalf("bare request: %v", err)
+	}
+
+	bareResp.Body.Close()
+
+	if bareResp.StatusCode != http.StatusOK {
+		t.Fatalf("bare /chat/completions: got %d, want 200", bareResp.StatusCode)
+	}
+
+	// Hit the /v1 path — simulates LiteLLM configured with
+	// api_base="http://127.0.0.1:8402/v1".
+	v1Resp, err := http.Post(
+		srv.URL+"/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid/qwen3.5:4b"}`),
+	)
+	if err != nil {
+		t.Fatalf("v1 request: %v", err)
+	}
+
+	v1Resp.Body.Close()
+
+	if v1Resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/chat/completions: got %d, want 200", v1Resp.StatusCode)
 	}
 }

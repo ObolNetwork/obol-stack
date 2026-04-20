@@ -41,16 +41,17 @@ const (
 	registrationDesiredActive     = "Active"
 	registrationDesiredTombstoned = "Tombstoned"
 
-	registrationPhasePublishing   = "Publishing"
-	registrationPhaseRegistering  = "Registering"
-	registrationPhaseRegistered   = "Registered"
-	registrationPhaseOffChainOnly = "OffChainOnly"
-	registrationPhaseTombstoned   = "Tombstoned"
+	registrationPhasePublishing       = "Publishing"
+	registrationPhaseRegistering      = "Registering"
+	registrationPhaseAwaitingExternal = "AwaitingExternalRegistration"
+	registrationPhaseRegistered       = "Registered"
+	registrationPhaseOffChainOnly     = "OffChainOnly"
+	registrationPhaseTombstoned       = "Tombstoned"
 )
 
 type Controller struct {
-	kubeClient kubernetes.Interface
-	dynClient  dynamic.Interface
+	kubeClient           kubernetes.Interface
+	dynClient            dynamic.Interface
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
@@ -59,6 +60,7 @@ type Controller struct {
 	deployments          dynamic.NamespaceableResourceInterface
 	middlewares          dynamic.NamespaceableResourceInterface
 	httpRoutes           dynamic.NamespaceableResourceInterface
+	referenceGrants      dynamic.NamespaceableResourceInterface
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
@@ -130,6 +132,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		deployments:              client.Resource(monetizeapi.DeploymentGVR),
 		middlewares:              client.Resource(monetizeapi.MiddlewareGVR),
 		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:          client.Resource(monetizeapi.ReferenceGrantGVR),
 		offerInformer:            offerInformer,
 		registrationInformer:     registrationInformer,
 		purchaseInformer:         purchaseInformer,
@@ -346,7 +349,15 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if err := c.reconcileDeletingOffer(ctx, offer); err != nil {
 			return err
 		}
-		if err := c.reconcileSkillCatalog(ctx); err != nil {
+		// Deletion in progress: omit the offer from the catalog. The informer
+		// store may still have it (deletion event is async), so pass a tombstone
+		// override to suppress it explicitly rather than rely on cache eviction.
+		tombstone := *offer
+		if tombstone.DeletionTimestamp == nil {
+			now := metav1.Now()
+			tombstone.DeletionTimestamp = &now
+		}
+		if err := c.reconcileSkillCatalog(ctx, &tombstone); err != nil {
 			return err
 		}
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
@@ -414,10 +425,15 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
 	}
-	if !c.shouldRefreshSkillCatalog(offer, status) {
-		return nil
-	}
-	return c.reconcileSkillCatalog(ctx)
+	// Rebuild the skill catalog on every reconcile so the just-updated status
+	// (not yet reflected in the informer store) and tunnel URL changes both
+	// propagate immediately. The catalog's ConfigMap/Deployment only rotate
+	// when the rendered markdown actually differs, so idle reconciles are
+	// no-ops at the API-server level. Pass `offer`+`status` as an override so
+	// the just-committed status is used instead of the stale informer copy.
+	freshOffer := *offer
+	freshOffer.Status = status
+	return c.reconcileSkillCatalog(ctx, &freshOffer)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -493,11 +509,37 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 }
 
 func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
-	if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildMiddleware(offer)); err != nil {
+	if err := c.applyObject(ctx, c.referenceGrants.Namespace("x402"), buildReferenceGrant(offer)); err != nil {
 		setCondition(status, "PaymentGateReady", "False", "ApplyFailed", err.Error())
 		return err
 	}
-	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Middleware is present")
+
+	if _, err := c.services.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Service does not exist")
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	deployment, err := c.deployments.Namespace("x402").Get(ctx, "x402-verifier", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment does not exist")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	availableReplicas, _, err := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
+	if err != nil {
+		return err
+	}
+	if availableReplicas < 1 {
+		setCondition(status, "PaymentGateReady", "False", "WaitingForGateway", "Shared x402 gateway Deployment is not yet available")
+		return nil
+	}
+
+	setCondition(status, "PaymentGateReady", "True", "Reconciled", "Shared x402 gateway is available")
 	return nil
 }
 
@@ -668,10 +710,14 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	}
 
 	var client *erc8004.Client
-	if c.registrationKey != nil {
+	if agentID == "" || c.registrationKey != nil {
 		client, err = erc8004.NewClient(ctx, c.registrationRPCURL)
 		if err != nil {
-			status.Phase = registrationPhaseRegistering
+			waitPhase := registrationPhaseRegistering
+			if c.registrationKey == nil {
+				waitPhase = registrationPhaseAwaitingExternal
+			}
+			status.Phase = waitPhase
 			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity: %v", err))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
@@ -736,6 +782,47 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 			status.Message = fmt.Sprintf("Waiting for on-chain registration transaction %s", status.RegistrationTxHash)
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
+	} else if agentID == "" {
+		if status.RegistrationURI != status.PublishedURL ||
+			!strings.EqualFold(status.RegistrationOwner, offer.Spec.Payment.PayTo) ||
+			status.RegistrationSearchFromBlock == 0 {
+			height, err := client.CurrentBlockNumber(ctx)
+			if err != nil {
+				status.Phase = registrationPhaseAwaitingExternal
+				status.Message = truncateMessage(fmt.Sprintf("Preparing external registration recovery: %v", err))
+				return c.updateRegistrationStatus(ctx, raw, status)
+			}
+
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = "Waiting for external ERC-8004 registration"
+			status.RegistrationOwner = offer.Spec.Payment.PayTo
+			status.RegistrationURI = status.PublishedURL
+			fromBlock := int64(height) - 1024
+			if fromBlock < 0 {
+				fromBlock = 0
+			}
+			status.RegistrationSearchFromBlock = fromBlock
+			status.RegistrationTxHash = ""
+			return c.updateRegistrationStatus(ctx, raw, status)
+		}
+
+		recoveredAgentID, recoveredTxHash, found, err := c.recoverRegistration(ctx, client, status)
+		if err != nil {
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = truncateMessage(fmt.Sprintf("Recovering external registration state: %v", err))
+			if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
+				return updateErr
+			}
+			return err
+		}
+		if !found {
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = fmt.Sprintf("Waiting for external ERC-8004 registration for owner %s", status.RegistrationOwner)
+			return c.updateRegistrationStatus(ctx, raw, status)
+		}
+
+		agentID = recoveredAgentID
+		txHash = recoveredTxHash
 	}
 
 	status.AgentID = agentID
@@ -761,9 +848,6 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		} else {
 			status.Message = fmt.Sprintf("Published registration document and recorded agent %s; metadata sync will retry on the next reconcile", agentID)
 		}
-	} else {
-		status.Phase = registrationPhaseOffChainOnly
-		status.Message = "Published registration document; controller has no ERC-8004 signing key"
 	}
 
 	return c.updateRegistrationStatus(ctx, raw, status)
@@ -882,7 +966,13 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 	return nil
 }
 
-func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
+// reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
+// HTTPRoute from the current set of Ready ServiceOffers. If `override` is
+// non-nil, that offer replaces (or is appended to) the informer-cached copy
+// with the same namespace/name — this is how reconcileOffer feeds its
+// just-committed status into the catalog without waiting for the informer's
+// watch event to update the local store.
+func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
 	c.catalogMu.Lock()
 	defer c.catalogMu.Unlock()
 
@@ -892,7 +982,8 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 	}
 
 	items := c.offerInformer.GetStore().List()
-	offers := make([]*monetizeapi.ServiceOffer, 0, len(items))
+	offers := make([]*monetizeapi.ServiceOffer, 0, len(items)+1)
+	overrideUsed := false
 	for _, item := range items {
 		raw := asUnstructured(item)
 		if raw == nil {
@@ -902,7 +993,17 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if override != nil && offer.Namespace == override.Namespace && offer.Name == override.Name {
+			offer = override
+			overrideUsed = true
+		}
 		offers = append(offers, offer)
+	}
+	if override != nil && !overrideUsed {
+		// Override refers to an offer the informer hasn't yet observed (e.g.
+		// a just-created ServiceOffer whose Add event hasn't fired). Include
+		// it so the catalog reflects reality.
+		offers = append(offers, override)
 	}
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
@@ -979,7 +1080,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		resource dynamic.ResourceInterface
 		name     string
 	}{
-		{resource: c.middlewares.Namespace(offer.Namespace), name: "x402-" + offer.Name},
+		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
@@ -1057,21 +1158,6 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 		}
 	})
 	return offers[0]
-}
-
-func (c *Controller) shouldRefreshSkillCatalog(offer *monetizeapi.ServiceOffer, nextStatus monetizeapi.ServiceOfferStatus) bool {
-	if offer == nil {
-		return false
-	}
-	if offer.Status.ObservedGeneration != offer.Generation || offer.IsPaused() {
-		return true
-	}
-	wasReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(offer.Status, "Ready")
-	nowReady := offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(nextStatus, "Ready")
-	if wasReady != nowReady {
-		return true
-	}
-	return wasReady && offer.Status.Endpoint != nextStatus.Endpoint
 }
 
 func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
@@ -1198,7 +1284,7 @@ func statusFor(status *monetizeapi.ServiceOfferStatus) *monetizeapi.ServiceOffer
 }
 
 func requestPhaseReady(phase string) bool {
-	return phase == registrationPhaseRegistered || phase == registrationPhaseOffChainOnly
+	return phase == registrationPhaseRegistered
 }
 
 func requestCleanupComplete(phase string) bool {

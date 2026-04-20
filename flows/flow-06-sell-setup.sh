@@ -125,14 +125,15 @@ run_step "sell pricing" "$OBOL" sell pricing \
 
 run_step_grep "x402-pricing ConfigMap has wallet" "$SELLER_WALLET" \
     "$OBOL" kubectl get cm x402-pricing -n x402 -o yaml
-# Verify x402-pricing verifyOnly=false (actual payment processing enabled, not test-only)
-step "x402-pricing verifyOnly=false (payment processing enabled)"
+# ForwardAuth verifier must use verifyOnly=true (settle on the auth hop breaks Traefik;
+# facilitator verify uses JSON paymentPayload, not base64).
+step "x402-pricing verifyOnly=true (ForwardAuth-safe)"
 pricing_yaml2=$("$OBOL" kubectl get cm x402-pricing -n x402 \
     -o jsonpath='{.data.pricing\.yaml}' 2>&1) || true
-if echo "$pricing_yaml2" | grep -q "verifyOnly: false"; then
-    pass "x402-pricing verifyOnly=false (payments are actually settled)"
+if echo "$pricing_yaml2" | grep -q "verifyOnly: true"; then
+    pass "x402-pricing verifyOnly=true"
 else
-    fail "x402-pricing verifyOnly not false — ${pricing_yaml2:0:100}"
+    fail "x402-pricing verifyOnly not true — ${pricing_yaml2:0:100}"
 fi
 
 # Verify x402-pricing has the correct chain (base-sepolia for USDC payments)
@@ -154,6 +155,7 @@ run_step_grep "sell http flow-qwen" \
     "$OBOL" sell http flow-qwen \
     --wallet "$SELLER_WALLET" \
     --chain "$CHAIN" \
+    --no-register \
     --per-request 0.001 \
     --namespace llm \
     --upstream ollama \
@@ -163,6 +165,7 @@ run_step_grep "sell http flow-qwen" \
 step "sell http idempotent: re-run shows 'updated' not 'created'"
 rerun_out=$("$OBOL" sell http flow-qwen \
     --wallet "$SELLER_WALLET" --chain "$CHAIN" \
+    --no-register \
     --per-request 0.001 --namespace llm \
     --upstream ollama --port 11434 2>&1) || true
 if echo "$rerun_out" | grep -q "ServiceOffer.*updated"; then
@@ -204,9 +207,16 @@ else
     fail "Ollama service port unexpected: $ollama_port (expected 11434)"
 fi
 
-run_step_grep "Middleware exists" "x402-flow-qwen" \
-    "$OBOL" kubectl get middleware -n llm
 run_step_grep "HTTPRoute exists" "so-flow-qwen" \
     "$OBOL" kubectl get httproute -n llm
+
+step "HTTPRoute backend is shared x402 gateway"
+route_backend=$("$OBOL" kubectl get httproute so-flow-qwen -n llm \
+    -o jsonpath='{.spec.rules[0].backendRefs[0].namespace}/{.spec.rules[0].backendRefs[0].name}:{.spec.rules[0].backendRefs[0].port}' 2>&1) || true
+if [ "$route_backend" = "x402/x402-verifier:8080" ]; then
+    pass "HTTPRoute backend: $route_backend"
+else
+    fail "HTTPRoute backend unexpected — ${route_backend:0:100}"
+fi
 
 emit_metrics

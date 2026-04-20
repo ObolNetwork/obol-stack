@@ -268,6 +268,45 @@ obol stack down && obol stack up
 
 Access at http://obol.stack:8080 instead.
 
+#### Direct `X-PAYMENT` Buyers
+
+Raw direct `X-PAYMENT` requests through the Traefik `ForwardAuth` route are not a supported production payment path. The verifier is intentionally `verifyOnly: true`, so Traefik can gate requests but is not the final settlement point.
+
+Use:
+
+- `x402-buyer` for cluster-routed paid traffic
+- `obol sell inference` for direct buyers that need to send raw `X-PAYMENT`
+
+If you call `x402-verifier /verify` directly for debugging, you must send `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) like Traefik does, or verifier correctly returns `403 forbidden: missing forwarded URI`.
+
+#### Monetize Flow Preflight (Recommended)
+
+Before running sell/buy tests on a machine, verify:
+
+```bash
+# 1) Kubeconfig matches the currently running k3d cluster (ports can drift).
+k3d kubeconfig write <cluster-name> -o ~/.config/obol/kubeconfig.yaml --overwrite
+
+# 2) Stack components are healthy.
+obol kubectl get pods -A
+
+# 3) Seller route exists and is Ready.
+obol sell list
+obol sell status <offer-name> -n <namespace>
+
+# 4) Buyer wallet and balances are available.
+obol kubectl exec -n openclaw-obol-agent <openclaw-pod> -- \
+  python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
+```
+
+Run the paid tests only after all four checks pass.
+
+#### Known Limitations
+
+- `PurchaseRequest.status` (`remaining`/`spent` and `conditions[].message`) is a reconciled snapshot, not a live per-request counter.
+- For real-time auth pool state, use `x402-buyer` `GET /status` from the litellm pod.
+- Raw direct `X-PAYMENT` through Traefik is not a supported production path; use `obol sell inference` if you need a direct buyer flow.
+
 ## File Locations
 
 Follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) specification:

@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -242,20 +244,49 @@ func dockerDesktopGatewayIP() string {
 	return "192.168.65.254"
 }
 
-// dockerBridgeGatewayIP returns the IPv4 address of the docker0 network interface.
-// On Linux, docker0 is the default Docker bridge (typically 172.17.0.1). This IP
-// is reachable from any Docker container regardless of the container's network,
-// because the host has this address on its network stack and Docker enables
-// IP forwarding between bridge networks and the host.
+// dockerBridgeGatewayIP returns the IPv4 address of an active Docker bridge
+// interface. It prefers docker0 (the default bridge, typically 172.17.0.1).
+// If docker0 is present but DOWN (e.g. when only k3d's custom bridge network
+// is active), it falls back to the first UP interface whose name starts with
+// "br-" — which is how Docker names per-network bridge interfaces.
 func dockerBridgeGatewayIP() (string, error) {
-	iface, err := net.InterfaceByName("docker0")
+	if ip, err := bridgeInterfaceIP("docker0"); err == nil {
+		return ip, nil
+	}
+
+	// docker0 missing or DOWN — scan for an active br-<network-id> bridge.
+	ifaces, err := net.Interfaces()
 	if err != nil {
-		return "", fmt.Errorf("docker0 interface not found: %w", err)
+		return "", fmt.Errorf("cannot list network interfaces: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		if !strings.HasPrefix(iface.Name, "br-") {
+			continue
+		}
+		if ip, err := bridgeInterfaceIP(iface.Name); err == nil {
+			return ip, nil
+		}
+	}
+
+	return "", errors.New("no active Docker bridge interface found (docker0 or br-*)")
+}
+
+// bridgeInterfaceIP returns the IPv4 address of a named network interface,
+// or an error if the interface does not exist, is DOWN, or has no IPv4 address.
+func bridgeInterfaceIP(name string) (string, error) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return "", fmt.Errorf("interface %s not found: %w", name, err)
+	}
+
+	if iface.Flags&net.FlagUp == 0 {
+		return "", fmt.Errorf("interface %s is down", name)
 	}
 
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return "", fmt.Errorf("cannot get docker0 addresses: %w", err)
+		return "", fmt.Errorf("cannot get addresses for %s: %w", name, err)
 	}
 
 	for _, addr := range addrs {
@@ -264,7 +295,7 @@ func dockerBridgeGatewayIP() (string, error) {
 		}
 	}
 
-	return "", errors.New("no IPv4 address found on docker0 interface")
+	return "", fmt.Errorf("no IPv4 address found on interface %s", name)
 }
 
 // Up starts the cluster using the configured backend
@@ -471,6 +502,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
+	// Populate the x402-verifier CA bundle from the host so TLS verification of
+	// the facilitator works without needing to run `obol sell pricing` first.
+	// Non-fatal: best-effort, the user can repopulate by running `obol sell pricing`.
+	x402verifier.PopulateCABundle(cfg)
+
 	// Auto-configure LiteLLM with Ollama models and any cloud providers
 	// whose API keys are found in the environment. This ensures the
 	// inference path works out of the box — no separate `obol model setup`
@@ -488,6 +524,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := openclaw.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default OpenClaw: %v", err)
 		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
+	} else if walletAddr, walletErr := openclaw.ResolveWalletAddress(cfg); walletErr == nil {
+		u.Blank()
+		u.Successf("Default agent wallet: %s", walletAddr)
+		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
+		u.Dim("  Retrieve later with: obol openclaw wallet address obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
@@ -655,6 +696,14 @@ var localImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
 }
 
+func devPreloadImages() []string {
+	var images []string
+	if ref := openclaw.ImageRef(); ref != "" {
+		images = append(images, ref)
+	}
+	return images
+}
+
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
@@ -698,6 +747,20 @@ func buildAndImportLocalImages(cfg *config.Config) {
 
 		if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+		}
+	}
+
+	for _, ref := range devPreloadImages() {
+		fmt.Printf("Preloading %s into cluster %s...\n", ref, clusterName)
+		pullCmd := exec.Command("docker", "pull", ref)
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if err := pullCmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to pull %s: %v\n", ref, err)
+			continue
+		}
+		if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
+			fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)
 		}
 	}
 }
@@ -771,17 +834,23 @@ func checkPortsAvailable(ports []int) error {
 
 	for _, port := range ports {
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err != nil {
-			if strings.Contains(err.Error(), "permission denied") {
-				continue
-			}
-
-			blocked = append(blocked, port)
-
+		if err == nil {
+			ln.Close()
 			continue
 		}
 
-		ln.Close()
+		if strings.Contains(err.Error(), "permission denied") {
+			// On Linux, binding privileged ports (< 1024) without root always
+			// returns "permission denied" — even when the port is free. We
+			// can't tell "free but needs root" from "occupied" via bind alone.
+			// Fall back to /proc/net/tcp{,6} which is readable without root.
+			if runtime.GOOS == "linux" && isPortOccupiedProc(port) {
+				blocked = append(blocked, port)
+			}
+			continue
+		}
+
+		blocked = append(blocked, port)
 	}
 
 	if len(blocked) > 0 {
@@ -795,6 +864,43 @@ func checkPortsAvailable(ports []int) error {
 	}
 
 	return nil
+}
+
+// isPortOccupiedProc checks whether a TCP port has a listener by scanning
+// /proc/net/tcp and /proc/net/tcp6. This works without root and is the only
+// reliable way to detect occupancy of privileged ports on Linux where
+// net.Listen returns "permission denied" regardless of whether the port is free.
+func isPortOccupiedProc(port int) bool {
+	hexPort := fmt.Sprintf("%04X", port)
+	for _, path := range []string{"/proc/net/tcp6", "/proc/net/tcp"} {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+
+		found := false
+		scanner := bufio.NewScanner(f)
+		scanner.Scan() // skip header line
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			// /proc/net/tcp fields: sl local_address rem_address st ...
+			// state 0A = TCP_LISTEN; local_address = hexIP:hexPort
+			if len(fields) < 4 || fields[3] != "0A" {
+				continue
+			}
+			parts := strings.SplitN(fields[1], ":", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[1], hexPort) {
+				found = true
+				break
+			}
+		}
+		f.Close()
+
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func formatPorts(ports []int) string {

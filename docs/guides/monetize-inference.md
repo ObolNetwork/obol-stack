@@ -156,6 +156,10 @@ obol sell http my-qwen \
     --port 11434
 ```
 
+By default this also registers the seller agent on ERC-8004. Use
+`--no-register` only for local or private-only testing where on-chain
+discovery is intentionally skipped.
+
 If you want to price by million tokens instead of explicitly setting a flat
 request price, use `--per-mtok`. In phase 1, the verifier still enforces a
 derived per-request price:
@@ -176,14 +180,14 @@ That stores both values in the pricing config:
 - enforced phase-1 charge: `price = 0.00125 USDC / request`
 - approximation input: `approxTokensPerRequest = 1000`
 
-The controller automatically reconciles the offer through six stages:
+The stack now treats on-chain registration as part of the default selling flow:
 
 ```
-ModelReady       [check]  Controller verifies the model is available
-UpstreamHealthy  [check]  Controller health-checks ollama:11434
-PaymentGateReady [check]  Creates Middleware x402-my-qwen
-RoutePublished   [check]  Creates HTTPRoute so-my-qwen -> ollama backend
-Registered         --     Skipped (--register not set)
+ModelReady       [check]  Agent checks /api/tags, model already cached
+UpstreamHealthy  [check]  Agent health-checks ollama:11434
+PaymentGateReady [check]  Shared x402 seller gateway available
+RoutePublished   [check]  Creates HTTPRoute so-my-qwen -> x402-verifier backend
+Registered      [check]  ERC-8004 registration completes on-chain
 Ready            [check]  All required conditions True
 ```
 
@@ -195,7 +199,6 @@ obol sell status my-qwen --namespace llm
 
 # Verify Kubernetes resources
 obol kubectl get serviceoffer my-qwen -n llm
-obol kubectl get middleware -n llm           # x402-my-qwen
 obol kubectl get httproute -n llm            # so-my-qwen
 ```
 
@@ -341,8 +344,10 @@ The SDK handles the full x402 flow:
 2. Receives 402 with payment requirements
 3. Signs an EIP-712 `TransferWithAuthorization` message (ERC-3009)
 4. Retries with the `X-PAYMENT` header (base64-encoded x402 envelope)
-5. Facilitator verifies the signature and settles USDC on-chain
-6. Returns the inference response
+5. The seller-owned x402 gateway verifies the payment with the facilitator
+6. The seller gateway forwards the request to the protected upstream
+7. After upstream success, the seller gateway settles USDC on-chain
+8. Returns the inference response
 
 **Manual flow with curl** -- for debugging or custom integrations:
 
@@ -394,15 +399,14 @@ curl -s -w "\nHTTP %{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
 
-# Paid request through tunnel (with X-PAYMENT header)
-curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
-# -> 200 OK + inference response
+# Paid request through tunnel (supported production path)
+# The buyer talks to LiteLLM, which routes paid models through the in-pod
+# x402-buyer sidecar. The sidecar performs the paid retry. The seller-owned
+# shared x402 gateway verifies the payment, forwards to the upstream, and
+# settles only after upstream success.
 ```
 
-This proves the full public path: **Internet → Cloudflare → Traefik → x402 ForwardAuth → Facilitator settles USDC → 200 + inference**.
+This proves the supported public paid path: **Buyer → LiteLLM → x402-buyer → Cloudflare/Traefik → shared x402 gateway → upstream → seller-side settle → 200 + inference**.
 
 ---
 
@@ -561,7 +565,6 @@ Verify cleanup:
 
 ```bash
 obol kubectl get so my-qwen -n llm              # NotFound
-obol kubectl get middleware x402-my-qwen -n llm  # NotFound
 obol kubectl get httproute so-my-qwen -n llm     # NotFound
 ```
 
@@ -569,9 +572,10 @@ obol kubectl get httproute so-my-qwen -n llm     # NotFound
 
 ## Architecture Deep-Dive
 
-### x402 ForwardAuth Pattern
+### Shared x402 Seller Gateway
 
-The x402 verifier sits in the request path as a Traefik ForwardAuth middleware:
+The x402 gateway now acts as the seller-owned resource server in front of the
+real upstream:
 
 ```
 Client
@@ -581,21 +585,16 @@ Client
   v
 Traefik Gateway
   |
-  --> ForwardAuth to x402-verifier.x402.svc:8080
-  |       |
-  |       +-- Match request path against published ServiceOffers
-  |       +-- No match? Return 200 (allow, free route)
-  |       +-- Match + no payment header? Return 402 + requirements
-  |       +-- Match + payment header? Verify with facilitator
-  |       |       |
-  |       |       +-- POST facilitator/verify
-  |       |       +-- Valid? Return 200 (allow)
-  |       |       +-- Invalid? Return 402
-  |       |
-  |       <-- 200 or 402
-  |
-  +-- 200? Proxy to upstream (Ollama)
-  +-- 402? Return to client with payment requirements
+  --> Route match /services/my-qwen/*
+          |
+          v
+      x402-verifier.x402.svc:8080
+          |
+          +-- No payment header? Return 402 + requirements
+          +-- Payment header? POST facilitator/verify
+          +-- Valid? Proxy to upstream
+          +-- Upstream success? POST facilitator/settle
+          +-- Return 200 + X-PAYMENT-RESPONSE
 ```
 
 ### ServiceOffer Condition State Machine
@@ -618,7 +617,7 @@ Traefik Gateway
                 +---------+----------+
                           |
                 +---------v----------+
-                | Registered         |  (ERC-8004, optional)
+                | Registered         |  (ERC-8004, default unless --no-register)
                 +---------+----------+
                           |
                     +-----v-----+
@@ -647,7 +646,13 @@ The x402 verifier reads cluster-wide payment defaults from the
 wallet: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 chain: "base-sepolia"
 facilitatorURL: "https://facilitator.x402.rs"
-verifyOnly: false
+verifyOnly: true
+routes:
+  - pattern: "/services/my-qwen/*"
+    price: "0.001"
+    description: "my-qwen inference"
+    payTo: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+    network: "base-sepolia"
 ```
 
 Published offer routes are derived from `ServiceOffer` resources rather than
@@ -773,13 +778,13 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 | Command | Description |
 |---------|-------------|
 | `obol sell pricing --wallet ... --chain ...` | Configure x402 payment settings |
-| `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer |
+| `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer and register by default |
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
 | `obol sell stop <name> -n <ns>` | Pause an offer without deleting it |
 | `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
 | `obol sell status` | Show cluster pricing and registration |
-| `obol sell register --private-key-file ...` | Register on ERC-8004 |
+| `obol sell register --private-key-file ...` | Advanced/manual registration or repair path |
 
 ### Key Kubernetes Resources
 
@@ -787,7 +792,7 @@ Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
 |----------|-----------|---------|
 | `x402-pricing` ConfigMap | `x402` | Cluster-wide wallet, chain, and facilitator settings |
 | `x402-secrets` Secret | `x402` | Wallet address |
-| `x402-verifier` Deployment | `x402` | ForwardAuth payment verifier |
+| `x402-verifier` Deployment | `x402` | Shared seller-owned x402 gateway and legacy `/verify` endpoint |
 | `serviceoffer-controller` Deployment | `x402` | Reconciles ServiceOffers into published resources |
 | `serviceoffers.obol.org` CRD | (cluster) | ServiceOffer custom resource definition |
 | `traefik-gateway` Gateway | `traefik` | Main ingress gateway |

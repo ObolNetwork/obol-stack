@@ -77,8 +77,17 @@ func TestRoutesFromStore(t *testing.T) {
 	if routes[0].UpstreamAuth != "Bearer sk-test" {
 		t.Fatalf("routes[0].UpstreamAuth = %q, want Bearer sk-test", routes[0].UpstreamAuth)
 	}
+	if routes[0].UpstreamURL != "http://litellm.alpha.svc.cluster.local:11434" {
+		t.Fatalf("routes[0].UpstreamURL = %q, want litellm upstream URL", routes[0].UpstreamURL)
+	}
+	if routes[0].StripPrefix != "/services/a" {
+		t.Fatalf("routes[0].StripPrefix = %q, want /services/a", routes[0].StripPrefix)
+	}
 	if routes[1].UpstreamAuth != "" {
 		t.Fatalf("routes[1].UpstreamAuth = %q, want empty", routes[1].UpstreamAuth)
+	}
+	if routes[1].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
+		t.Fatalf("routes[1].UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)
 	}
 }
 

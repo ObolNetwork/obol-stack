@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/secure-enclave-inference
     tags:
       - 'v*'
     paths:

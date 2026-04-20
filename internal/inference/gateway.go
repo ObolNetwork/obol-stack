@@ -269,7 +269,43 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	// Unprotected OpenAI-compat metadata passthrough.
 	mux.Handle("/", proxy)
 
-	return mux, nil
+	// Some gateway stacks preserve the original storefront prefix
+	// (/services/<offer-name>/...) even when URLRewrite is configured.
+	// Normalize that prefix so requests still hit the intended protected
+	// OpenAI routes instead of falling through to the catch-all upstream
+	// proxy path (which would return 404 from Ollama).
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if normalized, ok := normalizeServicePrefixedPath(r.URL.Path); ok {
+			r.URL.Path = normalized
+			if r.URL.RawQuery != "" {
+				r.RequestURI = normalized + "?" + r.URL.RawQuery
+			} else {
+				r.RequestURI = normalized
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+
+	return handler, nil
+}
+
+func normalizeServicePrefixedPath(path string) (string, bool) {
+	if !strings.HasPrefix(path, "/services/") {
+		return "", false
+	}
+
+	rest := strings.TrimPrefix(path, "/services/")
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return "/", true
+	}
+
+	normalized := rest[slash:]
+	if normalized == "" {
+		return "/", true
+	}
+
+	return normalized, true
 }
 
 // Start begins serving the gateway. Blocks until the server is shut down.

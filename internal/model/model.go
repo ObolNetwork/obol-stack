@@ -3,14 +3,19 @@ package model
 import (
 	"bufio"
 	"bytes"
+	"context"
 	encoding_base64 "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -264,12 +269,15 @@ func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 	return nil
 }
 
-// litellmAPIViaExec calls a LiteLLM HTTP endpoint on every running litellm
-// pod via kubectl exec. With replicas>1, this fans out to all pods so every
-// router is updated immediately. The CLI runs on the host and cannot reach
-// in-cluster services directly; kubectl exec is the bridge.
-func litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, path string, body []byte) error {
-	// List running litellm pod names.
+// litellmAPICall calls a LiteLLM HTTP endpoint on every running litellm pod
+// using a short-lived per-pod `kubectl port-forward`. With replicas>1, this
+// fans out to each pod so every router is updated immediately.
+//
+// We use port-forward instead of `kubectl exec <pod> -- wget` because the
+// LiteLLM container is distroless and ships without wget, curl, or a shell,
+// so the exec-based path fails with "executable file not found" on current
+// images. Port-forward has no such dependency.
+func litellmAPICall(kubectlBinary, kubeconfigPath, masterKey, path string, body []byte) error {
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "pods", "-n", namespace, "-l", "app=litellm",
 		"--field-selector=status.phase=Running",
@@ -285,26 +293,180 @@ func litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, path string, bo
 
 	var firstErr error
 	for _, pod := range podNames {
-		// Pass arguments directly to wget without sh -c to avoid
-		// shell-quoting issues with JSON body or auth tokens.
-		args := []string{
-			"exec", "-n", namespace, pod, "-c", "litellm",
-			"--", "wget", "-qO-",
-			"--header=Content-Type: application/json",
-			"--header=Authorization: Bearer " + masterKey,
-		}
-		if len(body) > 0 {
-			args = append(args, "--post-data="+string(body))
-		}
-		args = append(args, "http://localhost:4000"+path)
-
-		_, err := kubectl.Output(kubectlBinary, kubeconfigPath, args...)
-		if err != nil && firstErr == nil {
+		if err := litellmPodAPICall(kubectlBinary, kubeconfigPath, pod, masterKey, path, body); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("pod %s: %w", pod, err)
 		}
 	}
 
 	return firstErr
+}
+
+// litellmPodAPICall opens a per-pod port-forward on an OS-chosen local port
+// and POSTs the payload to the LiteLLM admin API on that pod.
+func litellmPodAPICall(kubectlBinary, kubeconfigPath, pod, masterKey, path string, body []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",
+		"-n", namespace, "pod/"+pod, ":4000")
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start port-forward: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
+	// Parse "Forwarding from 127.0.0.1:<port> -> 4000" from stdout.
+	localPort, err := parseForwardedPort(stdout, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("port-forward: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+
+	reqURL := fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+masterKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("http post: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("litellm %s %d: %s", path, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	return nil
+}
+
+// litellmGETViaPortForward GETs a LiteLLM admin endpoint on one Running
+// litellm pod via a short-lived kubectl port-forward. Used for endpoints
+// that are pod-agnostic (e.g. /model/info) where one pod is enough.
+func litellmGETViaPortForward(kubectlBinary, kubeconfigPath, masterKey, path string) ([]byte, error) {
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "pods", "-n", namespace, "-l", "app=litellm",
+		"--field-selector=status.phase=Running",
+		"-o", "jsonpath={.items[0].metadata.name}")
+	if err != nil {
+		return nil, fmt.Errorf("list litellm pods: %w", err)
+	}
+	pod := strings.TrimSpace(raw)
+	if pod == "" {
+		return nil, fmt.Errorf("no running litellm pods in %s namespace", namespace)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",
+		"-n", namespace, "pod/"+pod, ":4000")
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start port-forward: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+
+	localPort, err := parseForwardedPort(stdout, 15*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("port-forward: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+masterKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http get: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("litellm GET %s %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	return body, nil
+}
+
+// parseForwardedPort reads lines from r until it finds kubectl's
+// "Forwarding from 127.0.0.1:<port> -> 4000" and returns <port>.
+func parseForwardedPort(r io.Reader, timeout time.Duration) (int, error) {
+	type result struct {
+		port int
+		err  error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.Contains(line, "Forwarding from") {
+				continue
+			}
+			// "Forwarding from 127.0.0.1:54321 -> 4000"
+			colonIdx := strings.LastIndex(line, ":")
+			arrowIdx := strings.Index(line, " -> ")
+			if colonIdx < 0 || arrowIdx < 0 || colonIdx >= arrowIdx {
+				continue
+			}
+			portStr := line[colonIdx+1 : arrowIdx]
+			port, err := strconv.Atoi(strings.TrimSpace(portStr))
+			if err != nil {
+				continue
+			}
+			ch <- result{port: port}
+			return
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- result{err: err}
+			return
+		}
+		ch <- result{err: errors.New("port-forward exited before reporting local port")}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.port, res.err
+	case <-time.After(timeout):
+		return 0, errors.New("timed out waiting for kubectl port-forward to bind")
+	}
 }
 
 // hotAddModels uses the LiteLLM /model/new API to add models to the running
@@ -333,7 +495,7 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 			continue
 		}
 
-		if err := litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, "/model/new", bodyJSON); err != nil {
+		if err := litellmAPICall(kubectlBinary, kubeconfigPath, masterKey, "/model/new", bodyJSON); err != nil {
 			u.Warnf("Hot-add %s failed: %v", entry.ModelName, err)
 			return fmt.Errorf("hot-add %s: %w", entry.ModelName, err)
 		}
@@ -353,12 +515,9 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	// Query /model/info on one pod to get model IDs.
-	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"exec", "-n", namespace, "deployment/"+deployName, "-c", "litellm",
-		"--", "wget", "-qO-",
-		"--header=Authorization: Bearer "+masterKey,
-		"http://localhost:4000/model/info")
+	// Query /model/info on one pod to get model IDs (via port-forward; the
+	// LiteLLM container is distroless and has no wget/curl).
+	raw, err := litellmGETViaPortForward(kubectlBinary, kubeconfigPath, masterKey, "/model/info")
 	if err != nil {
 		return fmt.Errorf("query /model/info: %w", err)
 	}
@@ -371,7 +530,7 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 			} `json:"model_info"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(raw), &infoResp); err != nil {
+	if err := json.Unmarshal(raw, &infoResp); err != nil {
 		return fmt.Errorf("parse /model/info: %w", err)
 	}
 
@@ -382,7 +541,7 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 		}
 
 		deleteBody, _ := json.Marshal(map[string]any{"id": m.ModelInfo.ID})
-		if err := litellmAPIViaExec(kubectlBinary, kubeconfigPath, masterKey, "/model/delete", deleteBody); err != nil {
+		if err := litellmAPICall(kubectlBinary, kubeconfigPath, masterKey, "/model/delete", deleteBody); err != nil {
 			u.Warnf("Hot-delete model %s (id=%s) failed: %v", modelName, m.ModelInfo.ID, err)
 		} else {
 			deleted++
@@ -1147,9 +1306,34 @@ func ListOllamaModels() ([]OllamaModel, error) {
 	return result.Models, nil
 }
 
+// preventSleep asks the OS to keep the Mac awake while we run a long download.
+// On macOS, spawns `caffeinate -i -w <pid>` which auto-exits when our process does.
+// No-op on other platforms. Returns a cleanup func that stops caffeinate early
+// (best-effort) — safe to call even if no helper was started.
+func preventSleep() func() {
+	if runtime.GOOS != "darwin" {
+		return func() {}
+	}
+
+	cmd := exec.Command("caffeinate", "-i", "-w", strconv.Itoa(os.Getpid()))
+	if err := cmd.Start(); err != nil {
+		return func() {}
+	}
+
+	return func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}
+}
+
 // PullOllamaModel pulls a model from the Ollama registry.
 // It streams progress to stdout, matching the UX of `ollama pull`.
 func PullOllamaModel(name string) error {
+	stopCaffeinate := preventSleep()
+	defer stopCaffeinate()
+
 	endpoint := ollamaEndpoint()
 
 	pullURL, err := url.JoinPath(endpoint, "api", "pull")
