@@ -73,11 +73,11 @@ func TestRemoteSigner_SignTransaction(t *testing.T) {
 	signed, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{
 		ChainID:              84532,
 		To:                   "0x8004A818BFB912233c491871b3d84c89A494BD9e",
-		Nonce:                "0",
-		GasLimit:             "100000",
-		MaxFeePerGas:         "1000000000",
-		MaxPriorityFeePerGas: "1000000",
-		Value:                "0",
+		Nonce:                0,
+		GasLimit:             100000,
+		MaxFeePerGas:         1000000000,
+		MaxPriorityFeePerGas: 1000000,
+		Value:                0,
 		Data:                 "0x",
 	})
 	if err != nil {

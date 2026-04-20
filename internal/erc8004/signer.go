@@ -68,16 +68,16 @@ func (s *RemoteSigner) GetAddress(ctx context.Context) (common.Address, error) {
 }
 
 // SignTxRequest contains the fields for signing an EIP-1559 transaction.
-// chain_id is sent as a JSON integer (u64) to match the Rust remote-signer's
-// expected type — sending it as a string causes HTTP 422.
+// All numeric fields are sent as JSON integers (u64) to match the Rust
+// remote-signer's expected types — sending any of them as strings causes HTTP 422.
 type SignTxRequest struct {
 	ChainID              int64  `json:"chain_id"`
 	To                   string `json:"to"`
-	Nonce                string `json:"nonce"`
-	GasLimit             string `json:"gas_limit"`
-	MaxFeePerGas         string `json:"max_fee_per_gas"`
-	MaxPriorityFeePerGas string `json:"max_priority_fee_per_gas"`
-	Value                string `json:"value"`
+	Nonce                uint64 `json:"nonce"`
+	GasLimit             uint64 `json:"gas_limit"`
+	MaxFeePerGas         uint64 `json:"max_fee_per_gas"`
+	MaxPriorityFeePerGas uint64 `json:"max_priority_fee_per_gas"`
+	Value                uint64 `json:"value"`
 	Data                 string `json:"data"`
 }
 
@@ -192,20 +192,20 @@ func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Addre
 				toAddr = tx.To().Hex()
 			}
 			req := SignTxRequest{
-				ChainID:              chainID.Int64(),
-				To:                   toAddr,
-				Nonce:                fmt.Sprintf("%d", tx.Nonce()),
-				GasLimit:             fmt.Sprintf("%d", tx.Gas()),
-				Value:                tx.Value().String(),
-				Data:                 "0x" + hex.EncodeToString(tx.Data()),
+				ChainID:  chainID.Int64(),
+				To:       toAddr,
+				Nonce:    tx.Nonce(),
+				GasLimit: tx.Gas(),
+				Value:    tx.Value().Uint64(),
+				Data:     "0x" + hex.EncodeToString(tx.Data()),
 			}
 			// Use EIP-1559 fields if available, otherwise legacy gas price.
 			if tx.GasFeeCap() != nil && tx.GasFeeCap().Sign() > 0 {
-				req.MaxFeePerGas = tx.GasFeeCap().String()
-				req.MaxPriorityFeePerGas = tx.GasTipCap().String()
+				req.MaxFeePerGas = tx.GasFeeCap().Uint64()
+				req.MaxPriorityFeePerGas = tx.GasTipCap().Uint64()
 			} else if tx.GasPrice() != nil {
-				req.MaxFeePerGas = tx.GasPrice().String()
-				req.MaxPriorityFeePerGas = tx.GasPrice().String()
+				req.MaxFeePerGas = tx.GasPrice().Uint64()
+				req.MaxPriorityFeePerGas = tx.GasPrice().Uint64()
 			}
 
 			signedHex, err := s.SignTransaction(ctx, fromAddr, req)
