@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 func TestRemoteSigner_GetAddress(t *testing.T) {
@@ -213,16 +214,19 @@ func TestRemoteSigner_GetAddress_HTTPError(t *testing.T) {
 
 func TestRemoteTransactOpts(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+	to := common.HexToAddress("0x8004A818BFB912233c491871b3d84c89A494BD9e")
 	chainID := big.NewInt(84532)
+	var body map[string]json.RawMessage
+	var path string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// This verifies the signer receives proper requests.
-		if r.URL.Path == "/api/v1/keys" {
-			json.NewEncoder(w).Encode(keysResponse{Keys: []string{addr.Hex()}})
-			return
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
 		}
-		// For transaction signing, return the error since we can't easily
-		// produce a valid signed tx in a unit test.
+		path = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
 		json.NewEncoder(w).Encode(signResponse{Error: "test: not implemented"})
 	}))
 	defer srv.Close()
@@ -235,6 +239,86 @@ func TestRemoteTransactOpts(t *testing.T) {
 	}
 	if opts.Signer == nil {
 		t.Fatal("Signer should not be nil")
+	}
+
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   chainID,
+		Nonce:     7,
+		To:        &to,
+		Gas:       100000,
+		GasFeeCap: big.NewInt(1000000000),
+		GasTipCap: big.NewInt(1000000),
+		Value:     big.NewInt(12345),
+		Data:      []byte{0xde, 0xad, 0xbe, 0xef},
+	})
+
+	_, err := opts.Signer(addr, tx)
+	if err == nil {
+		t.Fatal("expected signer error")
+	}
+	if !strings.Contains(err.Error(), "test: not implemented") {
+		t.Fatalf("unexpected signer error: %v", err)
+	}
+
+	if path != "/api/v1/sign/"+addr.Hex()+"/transaction" {
+		t.Fatalf("unexpected request path: %s", path)
+	}
+
+	assertJSONInt64(t, body, "chain_id", 84532)
+	assertJSONUint64(t, body, "nonce", 7)
+	assertJSONUint64(t, body, "gas_limit", 100000)
+	assertJSONUint64(t, body, "max_fee_per_gas", 1000000000)
+	assertJSONUint64(t, body, "max_priority_fee_per_gas", 1000000)
+	assertJSONUint64(t, body, "value", 12345)
+	assertJSONString(t, body, "to", to.Hex())
+	assertJSONString(t, body, "data", "0xdeadbeef")
+}
+
+func assertJSONInt64(t *testing.T, body map[string]json.RawMessage, field string, want int64) {
+	t.Helper()
+	raw, ok := body[field]
+	if !ok {
+		t.Fatalf("missing field %q", field)
+	}
+
+	var got int64
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("field %q should be a JSON integer, got %s: %v", field, string(raw), err)
+	}
+	if got != want {
+		t.Fatalf("field %q = %d, want %d", field, got, want)
+	}
+}
+
+func assertJSONUint64(t *testing.T, body map[string]json.RawMessage, field string, want uint64) {
+	t.Helper()
+	raw, ok := body[field]
+	if !ok {
+		t.Fatalf("missing field %q", field)
+	}
+
+	var got uint64
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("field %q should be a JSON integer, got %s: %v", field, string(raw), err)
+	}
+	if got != want {
+		t.Fatalf("field %q = %d, want %d", field, got, want)
+	}
+}
+
+func assertJSONString(t *testing.T, body map[string]json.RawMessage, field, want string) {
+	t.Helper()
+	raw, ok := body[field]
+	if !ok {
+		t.Fatalf("missing field %q", field)
+	}
+
+	var got string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("field %q should be a JSON string, got %s: %v", field, string(raw), err)
+	}
+	if got != want {
+		t.Fatalf("field %q = %q, want %q", field, got, want)
 	}
 }
 
