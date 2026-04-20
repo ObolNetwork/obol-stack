@@ -114,4 +114,5 @@ ServiceOffer CR (obol.org/v1alpha1)
 ## References
 
 - `references/serviceoffer-spec.md` — Full CRD field reference
+- `references/registrationrequest-spec.md` — Child CRD used for publication and ERC-8004 side effects
 - `references/x402-pricing.md` — x402 pricing model details

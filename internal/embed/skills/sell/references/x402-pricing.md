@@ -31,6 +31,13 @@ Obol Stack supports two correct paid request models:
 - Use `obol sell inference` for direct buyers that need raw `X-PAYMENT`.
 - Keep the legacy `/verify` endpoint on `verifyOnly: true`.
 
+## Configuration Model
+
+- Cluster-wide defaults such as wallet, chain, and facilitator settings still
+  live in the `x402-pricing` ConfigMap.
+- Published request-matching rules are derived from reconciled `ServiceOffer`
+  resources rather than being maintained manually as static ConfigMap routes.
+
 ## Pricing Fields
 
 | Field | Description | Example |
