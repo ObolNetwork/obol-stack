@@ -9,8 +9,8 @@ Obol Stack: framework for AI agents to run decentralised infrastructure locally.
 ## Conventions
 
 - **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
-- **Branches**: `feat/`, `fix/`, `research/`, `codex/` prefixes
-- **GitHub branch policy**: never push `codex/`-prefixed branches to GitHub from this repository; use `feat/`, `fix/`, `research/`, or another non-codex branch name before pushing
+- **Branches**: `feat/`, `fix/`, `research/`, `docs/`, `chore/` prefixes
+- **GitHub branch policy**: never push `codex/`-prefixed branches to GitHub from this repository; rename to `feat/`, `fix/`, `research/`, `docs/`, `chore/`, or another non-codex branch name before pushing
 - **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 - **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
 
