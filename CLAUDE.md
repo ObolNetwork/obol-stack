@@ -206,7 +206,7 @@ Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`int
 
 **Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, and `/skill.md` publication.
 
-**Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore, remote-signer REST API at port 9000 in same ns.
+**Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore, remote-signer REST API at port 9000 in same ns. Canonical EIP-1559 sign-tx contract lives in `ObolNetwork/remote-signer` at `schema/sign-transaction-request.canonical.schema.json`; all stack consumers should match that schema exactly.
 
 ## Buyer Sidecar
 
