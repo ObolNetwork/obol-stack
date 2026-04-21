@@ -179,9 +179,8 @@ def cmd_sign_tx(args):
     else:
         gas_limit = int(gas_limit)
 
-    # The canonical remote-signer contract uses decimal strings for all numeric
-    # transaction fields, even though the server accepts numbers and hex for
-    # backward compatibility.
+    # The remote-signer contract uses canonical decimal strings for all numeric
+    # transaction fields.
     if isinstance(value, str) and value.startswith("0x"):
         value_wei = str(int(value, 16))
     else:

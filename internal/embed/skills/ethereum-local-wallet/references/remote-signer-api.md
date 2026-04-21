@@ -40,7 +40,7 @@ Content-Type: application/json
 → 200: {"signed_transaction": "0x02f8..."}
 ```
 
-Canonical transaction requests use decimal strings for all numeric fields. For compatibility, the server also accepts JSON numbers and `0x...` hex strings. The machine-readable contract lives in `ObolNetwork/remote-signer` at `schema/sign-transaction-request.canonical.schema.json`.
+Canonical transaction requests use decimal strings for all numeric fields. The machine-readable contract lives in `ObolNetwork/remote-signer` at `schema/sign-transaction-request.canonical.schema.json`.
 
 ### Sign Message (EIP-191)
 
