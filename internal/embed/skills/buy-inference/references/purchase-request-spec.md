@@ -5,7 +5,8 @@ Group: `obol.org`, Version: `v1alpha1`, Kind: `PurchaseRequest`
 `PurchaseRequest` declares a remote x402-gated model that the buyer side of the
 stack should fund and expose locally as `paid/<remote-model>`. The controller
 turns the declared request into buyer config/auth material for the `x402-buyer`
-sidecar in the `llm` namespace.
+sidecar in the `llm` namespace. The CR itself is authored in the agent
+namespace; the controller decides the effective buyer namespace separately.
 
 ## Example
 
@@ -14,7 +15,7 @@ apiVersion: obol.org/v1alpha1
 kind: PurchaseRequest
 metadata:
   name: remote-qwen
-  namespace: llm
+  namespace: openclaw-obol-agent
 spec:
   endpoint: https://seller.example.com/services/qwen/v1/chat/completions
   model: qwen3.5:32b
@@ -53,7 +54,7 @@ status:
 | `spec.model` | string | Yes | Remote model identifier exposed locally as `paid/<model>` |
 | `spec.count` | integer | Yes | Number of pre-signed auths to prepare |
 | `spec.preSignedAuths` | array | No | ERC-3009 authorizations embedded by `buy.py` |
-| `spec.autoRefill` | object | No | Future refill policy configuration |
+| `spec.autoRefill` | object | No | Agent-owned refill policy reconciled by `buy.py process --all` |
 | `spec.payment` | object | Yes | Seller payment requirements used for validation and routing |
 
 ### `spec.preSignedAuths[]`
@@ -72,11 +73,11 @@ status:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | boolean | No | `false` | Enables automatic refill behavior when implemented |
-| `threshold` | integer | No | — | Refill when `remaining < threshold` |
+| `enabled` | boolean | No | `false` | Enables automatic refill when the agent runs `process --all` |
+| `threshold` | integer | No | — | Refill when live `remaining <= threshold` |
 | `count` | integer | No | — | Number of new auths to sign on refill |
-| `maxTotal` | integer | No | — | Hard cap on total signed auths |
-| `maxSpendPerDay` | string | No | — | Daily spend ceiling |
+| `maxTotal` | integer | No | — | Hard cap on the active auth pool size after refill |
+| `maxSpendPerDay` | string | No | — | Reserved daily spend ceiling; not enforced yet |
 
 ### `spec.payment`
 
@@ -106,8 +107,16 @@ status:
 ## Lifecycle Notes
 
 - `buy.py buy` is the expected authoring path for this CRD.
+- `buy.py process --all` is the expected heartbeat / cron entrypoint for
+  reconciling `autoRefill`.
+- `buy.py` creates the CR in the agent namespace; the controller currently
+  publishes buyer-side runtime state into the fixed `llm` namespace.
 - The controller validates the declared payment fields against the probed seller
   endpoint before publishing the local paid route.
 - Runtime spending is bounded by the number of embedded pre-signed auths.
 - The controller writes the resulting buyer config/auth material for the
   `x402-buyer` sidecar; the sidecar itself never gets signer access.
+- `autoRefill` is agent-owned, not controller-owned: the controller only
+  reconciles the CR contents into `llm`.
+- `maxSpendPerDay` is not implemented yet, and manual `refill` / `remove`
+  commands are still not first-class flows.

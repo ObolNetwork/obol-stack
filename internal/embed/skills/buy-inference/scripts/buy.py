@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """buy.py — Buy remote inference via the x402 buyer sidecar.
 
-Pre-signs a batch of ERC-3009 TransferWithAuthorization vouchers and stores
-them in ConfigMaps consumed by the buyer sidecar running inside the LiteLLM pod.
+Pre-signs a batch of ERC-3009 TransferWithAuthorization vouchers via the local
+remote-signer, embeds them in a PurchaseRequest authored in the agent
+namespace, and waits for the serviceoffer-controller to publish the purchase
+into the shared LiteLLM + x402-buyer runtime.
 
 LiteLLM exposes a static `paid/<remote-model>` namespace. The buyer sidecar
 resolves the concrete purchased upstream at runtime based on the requested
@@ -13,14 +15,17 @@ Usage:
 
 Commands:
     probe <endpoint-url> [--model <id>]          Parse 402 pricing info
-    buy <name> --endpoint <url> --model <id>      Pre-sign + configure mapping
+    buy <name> --endpoint <url> --model <id>      Pre-sign + author PurchaseRequest
         [--budget <micro-units>] [--count <N>]
-    refill <name> [--count <N>]                   Sign more auths for existing upstream
-    maintain                                      Refill low pools and remove exhausted mappings
+        [--auto-refill[=true|false]] [--refill-threshold <N>]
+        [--refill-count <N>] [--max-total <N>]
     list                                          List purchased providers + remaining auths
     status <name>                                 Check sidecar health + remaining auths
+    process <name>|--all                          Reconcile auto-refill policies
     balance [--chain <network>]                   Check USDC balance
-    remove <name>                                 Remove purchased upstream + cleanup
+    refill <name> [--count <N>]                   Not yet available in controller mode
+    maintain                                      Alias for process --all
+    remove <name>                                 Not yet available in controller mode
 """
 
 import json
@@ -51,8 +56,6 @@ from signer import _signer_get, _signer_post, _rpc_call  # noqa: E402
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
 
 BUYER_NS = "llm"
-BUYER_CM_CONFIG = "x402-buyer-config"
-BUYER_CM_AUTHS = "x402-buyer-auths"
 LITELLM_DEPLOY = "litellm"
 BUYER_PORT = 8402
 
@@ -86,8 +89,7 @@ SEL_BALANCE_OF = "70a08231"
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
 MAX_AUTH_COUNT = 1000         # Cap to prevent excessive signing time
-LOW_WATERMARK = 10
-REFILL_BATCH = 100
+DEFAULT_REFILL_THRESHOLD_DIVISOR = 5
 
 
 # ---------------------------------------------------------------------------
@@ -156,79 +158,8 @@ def _buyer_status():
 
 
 # ---------------------------------------------------------------------------
-# x402-buyer ConfigMap helpers
+# Kubernetes API helpers
 # ---------------------------------------------------------------------------
-
-def _read_buyer_config(token, ssl_ctx):
-    """Read x402-buyer-config ConfigMap. Returns dict or empty structure."""
-    try:
-        cm = _kube_json(
-            "GET",
-            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_CONFIG}",
-            token,
-            ssl_ctx,
-        )
-        raw = cm.get("data", {}).get("config.json", '{"upstreams":{}}')
-        return json.loads(raw)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {"upstreams": {}}
-        raise
-
-
-def _read_buyer_auths(token, ssl_ctx):
-    """Read x402-buyer-auths ConfigMap. Returns dict or empty."""
-    try:
-        cm = _kube_json(
-            "GET",
-            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{BUYER_CM_AUTHS}",
-            token,
-            ssl_ctx,
-        )
-        raw = cm.get("data", {}).get("auths.json", "{}")
-        return json.loads(raw)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {}
-        raise
-
-
-def _write_buyer_configmap(name, data_key, data_value, token, ssl_ctx):
-    """Create or update a ConfigMap in the buyer namespace."""
-    body = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {"name": name, "namespace": BUYER_NS},
-        "data": {data_key: json.dumps(data_value, indent=2)},
-    }
-    try:
-        _kube_json(
-            "GET",
-            f"/api/v1/namespaces/{BUYER_NS}/configmaps/{name}",
-            token,
-            ssl_ctx,
-        )
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-        _kube_json(
-            "POST",
-            f"/api/v1/namespaces/{BUYER_NS}/configmaps",
-            token,
-            ssl_ctx,
-            body,
-        )
-        return
-
-    _kube_json(
-        "PATCH",
-        f"/api/v1/namespaces/{BUYER_NS}/configmaps/{name}",
-        token,
-        ssl_ctx,
-        {"data": {data_key: json.dumps(data_value, indent=2)}},
-        content_type="application/merge-patch+json",
-    )
-
 
 def _kube_json(method, path, token, ssl_ctx, body=None, content_type="application/json"):
     """Issue a Kubernetes API request and return parsed JSON.
@@ -265,7 +196,140 @@ def _get_agent_namespace():
         return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
 
 
-def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None):
+def _purchase_collection_path(ns=None):
+    ns = ns or _get_agent_namespace()
+    return f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}"
+
+
+def _purchase_item_path(name, ns=None):
+    return f"{_purchase_collection_path(ns)}/{name}"
+
+
+def _get_purchase_request(name, token=None, ssl_ctx=None, ns=None):
+    token = token or load_sa()[0]
+    ssl_ctx = ssl_ctx or make_ssl_context()
+    return _kube_json("GET", _purchase_item_path(name, ns), token, ssl_ctx)
+
+
+def _list_purchase_requests(token=None, ssl_ctx=None, ns=None):
+    token = token or load_sa()[0]
+    ssl_ctx = ssl_ctx or make_ssl_context()
+    result = _kube_json("GET", _purchase_collection_path(ns), token, ssl_ctx)
+    return result.get("items", [])
+
+
+def _parse_boolish(value, flag_name):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{flag_name} expects true/false, got {value!r}")
+
+
+def _parse_positive_int(value, flag_name, minimum=0):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{flag_name} expects an integer, got {value!r}") from exc
+    if parsed < minimum:
+        raise ValueError(f"{flag_name} must be >= {minimum}, got {parsed}")
+    return parsed
+
+
+def _default_refill_threshold(count):
+    if count <= 1:
+        return 0
+    return max(1, count // DEFAULT_REFILL_THRESHOLD_DIVISOR)
+
+
+def _resolve_auto_refill(opts, desired_count, existing_policy=None):
+    existing_policy = existing_policy or {}
+    auto_refill = _parse_boolish(opts.get("auto_refill"), "--auto-refill")
+    threshold = _parse_positive_int(opts.get("refill_threshold"), "--refill-threshold", minimum=0)
+    refill_count = _parse_positive_int(opts.get("refill_count"), "--refill-count", minimum=1)
+    max_total = _parse_positive_int(opts.get("max_total"), "--max-total", minimum=1)
+
+    has_policy_override = any(
+        value is not None
+        for value in (auto_refill, threshold, refill_count, max_total)
+    )
+    if not has_policy_override:
+        return existing_policy or None
+
+    enabled = auto_refill
+    if enabled is None:
+        enabled = bool(existing_policy.get("enabled")) or any(
+            value is not None for value in (threshold, refill_count, max_total)
+        )
+    if not enabled:
+        return {"enabled": False}
+
+    resolved_count = refill_count
+    if resolved_count is None:
+        resolved_count = int(existing_policy.get("count") or desired_count or DEFAULT_AUTH_COUNT)
+    resolved_threshold = threshold
+    if resolved_threshold is None:
+        resolved_threshold = int(
+            existing_policy.get("threshold")
+            or _default_refill_threshold(desired_count or resolved_count)
+        )
+    if resolved_threshold < 0:
+        raise ValueError("--refill-threshold must be >= 0")
+    if resolved_count < 1:
+        raise ValueError("--refill-count must be >= 1")
+    if resolved_count > MAX_AUTH_COUNT:
+        raise ValueError(f"--refill-count must be <= {MAX_AUTH_COUNT}")
+
+    policy = {
+        "enabled": True,
+        "threshold": resolved_threshold,
+        "count": resolved_count,
+    }
+    resolved_max_total = max_total
+    if resolved_max_total is None:
+        resolved_max_total = int(existing_policy.get("maxTotal") or 0)
+    if resolved_max_total > 0:
+        policy["maxTotal"] = resolved_max_total
+    max_spend = existing_policy.get("maxSpendPerDay")
+    if max_spend:
+        policy["maxSpendPerDay"] = max_spend
+    return policy
+
+
+def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None, existing_spec=None):
+    existing_spec = existing_spec or {}
+    spec = {
+        "endpoint": endpoint + "/v1/chat/completions",
+        "model": model,
+        "count": count,
+        "payment": {
+            "network": network,
+            "payTo": pay_to,
+            "price": price,
+            "asset": asset,
+        },
+    }
+    if auths is not None:
+        spec["preSignedAuths"] = auths
+    elif existing_spec.get("preSignedAuths"):
+        spec["preSignedAuths"] = existing_spec.get("preSignedAuths")
+
+    if auto_refill is not None:
+        spec["autoRefill"] = auto_refill
+    elif existing_spec.get("autoRefill"):
+        spec["autoRefill"] = existing_spec.get("autoRefill")
+
+    return spec
+
+
+def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None):
     """Create or update a PurchaseRequest CR in the agent's namespace.
 
     When auths are provided, they are embedded in spec.preSignedAuths so the
@@ -276,35 +340,37 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
     ssl_ctx = make_ssl_context()
     ns = _get_agent_namespace()
 
-    pr = {
-        "apiVersion": f"{PR_GROUP}/{PR_VERSION}",
-        "kind": "PurchaseRequest",
-        "metadata": {"name": name, "namespace": ns},
-        "spec": {
-            "endpoint": endpoint + "/v1/chat/completions",
-            "model": model,
-            "count": count,
-            "payment": {
-                "network": network,
-                "payTo": pay_to,
-                "price": price,
-                "asset": asset,
-            },
-        },
-    }
-    if auths:
-        pr["spec"]["preSignedAuths"] = auths
+    path = _purchase_collection_path(ns)
+    item_path = _purchase_item_path(name, ns)
+    spec = _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=auths, auto_refill=auto_refill)
 
-    path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}"
     try:
+        pr = {
+            "apiVersion": f"{PR_GROUP}/{PR_VERSION}",
+            "kind": "PurchaseRequest",
+            "metadata": {"name": name, "namespace": ns},
+            "spec": spec,
+        }
         result = _kube_json("POST", path, token, ssl_ctx, pr)
         print(f"  Created PurchaseRequest {ns}/{name}")
     except urllib.error.HTTPError as e:
         if e.code == 409:
-            # Already exists — read current to get resourceVersion, then replace.
-            existing = _kube_json("GET", f"{path}/{name}", token, ssl_ctx)
-            pr["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
-            result = _kube_json("PUT", f"{path}/{name}", token, ssl_ctx, pr)
+            # Already exists — preserve metadata/finalizers and replace only spec.
+            existing = _kube_json("GET", item_path, token, ssl_ctx)
+            existing.pop("status", None)
+            existing["spec"] = _build_purchase_spec(
+                endpoint,
+                model,
+                count,
+                network,
+                pay_to,
+                price,
+                asset,
+                auths=auths,
+                auto_refill=auto_refill,
+                existing_spec=existing.get("spec"),
+            )
+            result = _kube_json("PUT", item_path, token, ssl_ctx, existing)
             print(f"  Updated PurchaseRequest {ns}/{name}")
         else:
             raise
@@ -438,22 +504,126 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count):
     return auths
 
 
-# ---------------------------------------------------------------------------
-# Model mapping helpers
-# ---------------------------------------------------------------------------
+def _normalize_auto_refill(policy):
+    policy = policy or {}
+    return {
+        "enabled": bool(policy.get("enabled")),
+        "threshold": int(policy.get("threshold") or 0),
+        "count": int(policy.get("count") or 0),
+        "maxTotal": int(policy.get("maxTotal") or 0),
+        "maxSpendPerDay": str(policy.get("maxSpendPerDay") or ""),
+    }
 
-def _remove_conflicting_model_mappings(buyer_config, existing_auths, model_id, keep_name):
-    """Ensure one active upstream mapping per remote model ID."""
-    removed = []
-    upstreams = buyer_config.get("upstreams", {})
-    for name, upstream in list(upstreams.items()):
-        if name == keep_name:
-            continue
-        if upstream.get("remoteModel") == model_id:
-            del upstreams[name]
-            existing_auths.pop(name, None)
-            removed.append(name)
-    return removed
+
+def _compact_active_auths(auths, spent):
+    """Drop the spent prefix from the CR copy of the auth pool.
+
+    x402-buyer consumes vouchers FIFO and only persists successful spends, so
+    the spent count maps to the leading slice of historical auths. Trimming
+    that prefix keeps PurchaseRequest size bounded across refills.
+    """
+    auths = list(auths or [])
+    spent = max(int(spent or 0), 0)
+    if spent <= 0:
+        return auths
+    if spent >= len(auths):
+        return []
+    return auths[spent:]
+
+
+def _plan_autorefill(remaining, policy):
+    policy = _normalize_auto_refill(policy)
+    if not policy["enabled"]:
+        return 0, "auto-refill disabled"
+    if policy["maxSpendPerDay"]:
+        return 0, "maxSpendPerDay is not implemented yet"
+    if policy["count"] <= 0:
+        return 0, "auto-refill count is not configured"
+    if remaining > policy["threshold"]:
+        return 0, f"remaining {remaining} above threshold {policy['threshold']}"
+
+    refill_count = policy["count"]
+    if policy["maxTotal"] > 0:
+        allowed = policy["maxTotal"] - remaining
+        if allowed <= 0:
+            return 0, f"active pool cap reached ({remaining}/{policy['maxTotal']})"
+        refill_count = min(refill_count, allowed)
+
+    return refill_count, f"remaining {remaining} at or below threshold {policy['threshold']}"
+
+
+def _get_signer_address():
+    keys_data = _signer_get("/api/v1/keys")
+    keys = keys_data.get("keys", [])
+    if not keys:
+        print("Error: no signing keys in remote-signer.", file=sys.stderr)
+        sys.exit(1)
+    return keys[0]
+
+
+def _reconcile_purchase_autorefill(pr, live_status, signer_address):
+    metadata = pr.get("metadata") or {}
+    spec = pr.get("spec") or {}
+    name = metadata.get("name", "<unknown>")
+    policy = spec.get("autoRefill") or {}
+    refill_count, reason = _plan_autorefill(int(live_status.get("remaining", 0)), policy)
+    if refill_count <= 0:
+        print(f"{name}: {reason}")
+        return False
+
+    existing_auths = spec.get("preSignedAuths") or []
+    expected_signer = ""
+    if existing_auths:
+        expected_signer = existing_auths[0].get("from", "")
+    if expected_signer and expected_signer.lower() != signer_address.lower():
+        print(f"{name}: signer mismatch ({expected_signer} in CR, {signer_address} locally); skipping")
+        return False
+
+    payment = spec.get("payment") or {}
+    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    pay_to = payment.get("payTo", "")
+    price = str(payment.get("price", "0"))
+    asset = payment.get("asset") or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    if not pay_to or not price:
+        print(f"{name}: incomplete payment config; skipping")
+        return False
+
+    balance = int(_get_usdc_balance(signer_address, asset, chain))
+    total_cost = refill_count * int(price)
+    if balance < total_cost:
+        print(
+            f"{name}: wallet balance {balance} below refill cost {total_cost}; skipping"
+        )
+        return False
+
+    active_auths = _compact_active_auths(existing_auths, int(live_status.get("spent", 0)))
+    if len(active_auths) != int(live_status.get("remaining", 0)):
+        print(
+            f"{name}: warning: active auth history ({len(active_auths)}) does not match live remaining "
+            f"({live_status.get('remaining', 0)}); preserving live-triggered refill anyway"
+        )
+
+    print(f"{name}: {reason}; signing {refill_count} new authorizations")
+    new_auths = _presign_auths(signer_address, pay_to, price, chain, asset, refill_count)
+    updated_auths = active_auths + new_auths
+
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    current = _get_purchase_request(name, token=token, ssl_ctx=ssl_ctx, ns=metadata.get("namespace"))
+    current.pop("status", None)
+    current_spec = current.get("spec") or {}
+    current_spec["preSignedAuths"] = updated_auths
+    current_spec["count"] = len(updated_auths)
+    current["spec"] = current_spec
+    _kube_json(
+        "PUT",
+        _purchase_item_path(name, metadata.get("namespace")),
+        token,
+        ssl_ctx,
+        current,
+    )
+    print(f"{name}: updated PurchaseRequest with {len(updated_auths)} active auths")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +704,9 @@ def cmd_probe(endpoint_url, model_id=None):
 # Buy
 # ---------------------------------------------------------------------------
 
-def cmd_buy(name, endpoint, model_id, budget=None, count=None):
+def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     """Buy access to a remote x402 endpoint via the sidecar."""
+    opts = opts or {}
     # 1. Probe for pricing.
     print(f"Probing {endpoint} ...")
     pricing = _probe_endpoint(endpoint, model_id)
@@ -560,12 +731,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
 
     # 2. Get agent wallet address.
     print("Getting agent wallet ...")
-    keys_data = _signer_get("/api/v1/keys")
-    keys = keys_data.get("keys", [])
-    if not keys:
-        print("Error: no signing keys in remote-signer.", file=sys.stderr)
-        sys.exit(1)
-    signer_address = keys[0]
+    signer_address = _get_signer_address()
     print(f"  Wallet: {signer_address}")
 
     # 3. Check USDC balance.
@@ -604,7 +770,20 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     # 6. Create PurchaseRequest CR with auths embedded in spec.
     #    Controller reads auths from the CR itself — no cross-NS Secret read.
     ep = _normalize_endpoint(endpoint)
-    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths)
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    existing = None
+    try:
+        existing = _get_purchase_request(name, token=token, ssl_ctx=ssl_ctx)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    try:
+        auto_refill = _resolve_auto_refill(opts, n, (existing or {}).get("spec", {}).get("autoRefill"))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths, auto_refill=auto_refill)
 
     # 6. Wait for controller to reconcile.
     print("Waiting for controller to reconcile PurchaseRequest ...")
@@ -622,9 +801,13 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None):
     print(f"  Price:      {price} micro-units per request")
     print(f"  Chain:      {chain}")
     print(f"  Count:      {n} auths requested")
+    if auto_refill and auto_refill.get("enabled"):
+        print(f"  Auto-refill: enabled (threshold={auto_refill['threshold']}, count={auto_refill['count']})")
+        if auto_refill.get("maxTotal"):
+            print(f"  Active pool cap: {auto_refill['maxTotal']} auths")
     print()
     print(f"The model is now available as: paid/{model_id}")
-    print(f"Use 'buy {name} --endpoint ... --model ... --count N' again to replace the purchase with a fresh auth pool.")
+    print("Use 'process --all' from a heartbeat/cron loop to reconcile auto-refill policies.")
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +819,53 @@ def cmd_refill(name, count=None):
     print("refill is not available in the controller-based buy path.", file=sys.stderr)
     print("Run the buy command again with a new --count to replace the PurchaseRequest auth pool.", file=sys.stderr)
     sys.exit(1)
+
+
+def cmd_process(name=None, process_all=False):
+    """Reconcile agent-owned auto-refill policies against live sidecar state."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+
+    live_status = _buyer_status()
+    if live_status is None:
+        print("x402-buyer status is unavailable; cannot make safe refill decisions.", file=sys.stderr)
+        sys.exit(1)
+
+    if process_all:
+        purchases = _list_purchase_requests(token=token, ssl_ctx=ssl_ctx)
+    else:
+        if not name:
+            print("Usage: process <name> | process --all", file=sys.stderr)
+            sys.exit(1)
+        purchases = [_get_purchase_request(name, token=token, ssl_ctx=ssl_ctx)]
+
+    if not purchases:
+        print("No PurchaseRequests found.")
+        return
+
+    signer_address = _get_signer_address()
+    changed = 0
+    errors = 0
+    for pr in purchases:
+        metadata = pr.get("metadata") or {}
+        pr_name = metadata.get("name", "<unknown>")
+        live = live_status.get(pr_name)
+        if live is None:
+            print(f"{pr_name}: not live in x402-buyer status yet; skipping")
+            continue
+        try:
+            if _reconcile_purchase_autorefill(pr, live, signer_address):
+                changed += 1
+        except Exception as e:
+            errors += 1
+            print(f"{pr_name}: reconcile failed: {e}", file=sys.stderr)
+
+    if changed == 0:
+        print("No auto-refill changes applied.")
+    else:
+        print(f"Applied {changed} auto-refill update(s).")
+    if errors:
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -720,15 +950,14 @@ def cmd_balance(chain=None):
 def cmd_remove(name):
     """Remove is disabled until it is implemented via PurchaseRequest deletion."""
     print("remove is not available in the controller-based buy path.", file=sys.stderr)
-    print("Delete the PurchaseRequest through the controller-owned API instead.", file=sys.stderr)
+    print("Delete the PurchaseRequest object directly until a first-class remove flow lands.", file=sys.stderr)
     sys.exit(1)
 
 
 def cmd_maintain():
-    """Maintain is disabled until it is implemented via PurchaseRequest reconciliation."""
-    print("maintain is not available in the controller-based buy path.", file=sys.stderr)
-    print("Use status/list to inspect purchases and rerun buy with a new --count when needed.", file=sys.stderr)
-    sys.exit(1)
+    """Compatibility alias for process --all."""
+    print("maintain is deprecated; running process --all")
+    cmd_process(process_all=True)
 
 
 # ---------------------------------------------------------------------------
@@ -768,10 +997,14 @@ def usage():
     print("  probe <endpoint-url> [--model <id>]          Probe x402 pricing")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
+    print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
+    print("       [--refill-count <N>] [--max-total <N>]")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
+    print("  process <name> | --all                       Reconcile auto-refill policies")
     print("  balance [--chain <network>]                  Check USDC balance")
-    print("  refill|maintain|remove                       Not available in controller mode")
+    print("  refill|remove                                Present for compatibility; not available in controller mode")
+    print("  maintain                                     Deprecated alias for process --all")
 
 
 if __name__ == "__main__":
@@ -804,7 +1037,7 @@ if __name__ == "__main__":
         if not endpoint or not model:
             print("Error: --endpoint and --model are required.", file=sys.stderr)
             sys.exit(1)
-        cmd_buy(name, endpoint, model, budget, count)
+        cmd_buy(name, endpoint, model, budget, count, opts)
 
     elif cmd == "refill":
         positional, opts = parse_flags(rest)
@@ -815,6 +1048,16 @@ if __name__ == "__main__":
 
     elif cmd == "list":
         cmd_list()
+
+    elif cmd == "process":
+        positional, opts = parse_flags(rest)
+        if opts.get("all"):
+            cmd_process(process_all=True)
+        elif positional:
+            cmd_process(name=positional[0])
+        else:
+            print("Usage: process <name> | process --all", file=sys.stderr)
+            sys.exit(1)
 
     elif cmd == "maintain":
         cmd_maintain()

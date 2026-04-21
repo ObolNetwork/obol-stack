@@ -81,16 +81,19 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Sell-side flow**: `obol sell http` → creates ServiceOffer CR → serviceoffer-controller reconciles ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware) → RoutePublished (HTTPRoute) → Registered (RegistrationRequest + optional ERC-8004 side effects) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into ConfigMaps → LiteLLM serves static `paid/<remote-model>` aliases through the in-pod `x402-buyer` sidecar → each paid request spends one auth and forwards to the remote seller.
+**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
 
 **buy.py** lives at `/data/.openclaw/skills/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
 ```
 probe <endpoint-url> [--model <id>]          Probe x402 pricing from a 402 endpoint
 buy <name> --endpoint <url> --model <id>     Pre-sign ERC-3009 auths + create PurchaseRequest
      [--budget <micro-units>] [--count <N>]
+     [--auto-refill] [--refill-threshold <N>] [--refill-count <N>] [--max-total <N>]
+process <name> | --all                       Reconcile auto-refill policies against live sidecar state
 list                                         List purchased providers
 status <name>                                Check sidecar auth pool + spent count
 balance [--chain <network>]                  Print agent wallet address + USDC balance
+maintain                                     Compatibility alias for process --all
 ```
 To get the agent wallet address: `buy.py balance` prints `Wallet: 0x...` as its first line.
 There is no `wallet` subcommand.
@@ -111,10 +114,11 @@ Quick full-cycle smoke test (sell + buy):
 2. Buy auths: run `buy.py buy <name> --endpoint <url> --model <id> --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
 3. Paid call: send LiteLLM request with model `paid/<remote-model>`, expect `200`.
 4. Spend proof: sidecar `/status` should move `remaining -1`, `spent +1` after one successful paid call.
+5. Auto-refill smoke test: create the purchase with `--auto-refill ...`, then run `buy.py process --all` and confirm the loop only signs when live `/status` is at or below threshold.
 
 PurchaseRequest status caveat:
 - `PurchaseRequest.status` (including `conditions[].message`, `remaining`, `spent`) is the controller's last reconciled snapshot, not a live per-request counter.
-- For real-time auth pool state, always check `x402-buyer` `GET /status` in the litellm pod.
+- For real-time auth pool state, and for any refill decision, always check `x402-buyer` `GET /status` in the litellm pod.
 
 **CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 

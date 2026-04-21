@@ -63,15 +63,15 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		}
 	}
 
-	// Stage 2: Sign auths
-	if purchaseConditionIsTrue(status.Conditions, "Probed") && !purchaseConditionIsTrue(status.Conditions, "AuthsSigned") {
-		if err := c.reconcilePurchaseSign(ctx, &status, &pr); err != nil {
-			log.Printf("purchase %s/%s: sign failed: %v", ns, name, err)
+	// Stage 2: Load auths
+	if purchaseConditionIsTrue(status.Conditions, "Probed") && !purchaseConditionIsTrue(status.Conditions, "AuthsLoaded") {
+		if err := c.reconcilePurchaseLoadAuths(ctx, &status, &pr); err != nil {
+			log.Printf("purchase %s/%s: load auths failed: %v", ns, name, err)
 		}
 	}
 
 	// Stage 3: Configure sidecar
-	if purchaseConditionIsTrue(status.Conditions, "AuthsSigned") && !purchaseConditionIsTrue(status.Conditions, "Configured") {
+	if purchaseConditionIsTrue(status.Conditions, "AuthsLoaded") && !purchaseConditionIsTrue(status.Conditions, "Configured") {
 		if err := c.reconcilePurchaseConfigure(ctx, &status, &pr); err != nil {
 			log.Printf("purchase %s/%s: configure failed: %v", ns, name, err)
 		}
@@ -170,16 +170,16 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 	return nil
 }
 
-// ── Stage 2: Read pre-signed auths from spec ────────────────────────────────
+// ── Stage 2: Load pre-signed auths from spec ────────────────────────────────
 //
 // buy.py signs the auths locally (it has remote-signer access in the same
 // namespace) and embeds them in spec.preSignedAuths. The controller reads
 // them directly from the CR — no cross-namespace Secret read needed.
 
-func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
+func (c *Controller) reconcilePurchaseLoadAuths(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
 	auths, err := preSignedAuthMaps(pr)
 	if err != nil {
-		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "NoAuths",
+		setPurchaseCondition(&status.Conditions, "AuthsLoaded", "False", "NoAuths",
 			"spec.preSignedAuths is empty — buy.py should embed auths in the CR")
 		return err
 	}
@@ -190,7 +190,7 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 
 	c.pendingAuths.Store(pr.Namespace+"/"+pr.Name, auths)
 	status.TotalSigned = len(auths)
-	setPurchaseCondition(&status.Conditions, "AuthsSigned", "True", "Loaded",
+	setPurchaseCondition(&status.Conditions, "AuthsLoaded", "True", "Loaded",
 		fmt.Sprintf("Loaded %d pre-signed auths from spec", len(auths)))
 	return nil
 }
