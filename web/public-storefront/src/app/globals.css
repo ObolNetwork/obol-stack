@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-obol-bg: #091011;
+  --color-obol-bg-card: #0f1c1e;
+  --color-obol-bg-hover: #162a2e;
+  --color-obol-border: #1e3a3f;
+  --color-obol-green: #2fe4ab;
+  --color-obol-green-dim: #1a7a5c;
+  --color-obol-blue: #162a40;
+  --color-obol-text: #e0e8ea;
+  --color-obol-muted: #7a9a9f;
+  --color-obol-amber: #e89e30;
+  --color-obol-red: #dd603c;
+
+  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+}
+
+body {
+  background-color: var(--color-obol-bg);
+  color: var(--color-obol-text);
+}

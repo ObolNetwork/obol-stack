@@ -912,9 +912,10 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	}
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
-	contentHash := fmt.Sprintf("%x", md5Sum(content))[:8]
+	servicesJSON := buildServiceCatalogJSON(offers, baseURL)
+	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON))[:8]
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
@@ -924,6 +925,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
 		return err
 	}
 	readyOffers := 0
