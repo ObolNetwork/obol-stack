@@ -76,3 +76,43 @@ func TestRequestPhaseReady(t *testing.T) {
 	}
 }
 
+func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{
+		Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+	}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"}}
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			Phase:              registrationPhaseRegistered,
+			AgentID:            "42",
+			RegistrationTxHash: "0xtx",
+		},
+	}
+
+	applySharedRegistrationStatus(status, offer, owner, request)
+
+	if status.AgentID != "42" || status.RegistrationTxHash != "0xtx" {
+		t.Fatalf("shared registration identifiers not copied: %+v", status)
+	}
+	if !isConditionTrue(*status, "Registered") {
+		t.Fatalf("registered condition not set true: %+v", status.Conditions)
+	}
+}
+
+func TestApplySharedRegistrationStatus_WaitsForRoute(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			Phase:   registrationPhaseRegistered,
+			AgentID: "7",
+		},
+	}
+
+	applySharedRegistrationStatus(status, owner, owner, request)
+
+	if isConditionTrue(*status, "Registered") {
+		t.Fatalf("registered should remain false until route is published: %+v", status.Conditions)
+	}
+}
