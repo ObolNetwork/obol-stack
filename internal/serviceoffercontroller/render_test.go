@@ -1,6 +1,7 @@
 package serviceoffercontroller
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -132,7 +133,7 @@ func TestBuildRegistrationHTTPRoute(t *testing.T) {
 }
 
 func TestBuildActiveRegistrationDocument(t *testing.T) {
-	offer := &monetizeapi.ServiceOffer{
+	owner := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "inference",
@@ -156,8 +157,28 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 			},
 		},
 	}
+	secondary := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "blocks", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Path: "/services/blocks",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Skills:  []string{"blockchain/data"},
+				Domains: []string{"technology/blockchain"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
 
-	document := buildActiveRegistrationDocument(offer, "https://example.com", "7")
+	document := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner, secondary}, "https://example.com", "7")
 
 	if document.Type != erc8004.RegistrationType {
 		t.Fatalf("type = %q", document.Type)
@@ -171,14 +192,149 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 	if len(document.Registrations) != 1 || document.Registrations[0].AgentID != 7 {
 		t.Fatalf("registrations = %+v, want agentId 7", document.Registrations)
 	}
-	if len(document.Services) < 2 {
-		t.Fatalf("services = %+v, want web + OASF", document.Services)
+	if len(document.Services) < 4 {
+		t.Fatalf("services = %+v, want aggregated web + OASF entries", document.Services)
 	}
 	if document.Metadata["gpu"] != "A100-80GB" {
 		t.Fatalf("metadata = %+v, want gpu entry", document.Metadata)
 	}
 	if document.Provenance["framework"] != "autoresearch" {
 		t.Fatalf("provenance = %+v, want framework entry", document.Provenance)
+	}
+
+	var seenBlocks bool
+	for _, svc := range document.Services {
+		if svc.Endpoint == "https://example.com/services/blocks" {
+			seenBlocks = true
+			break
+		}
+	}
+	if !seenBlocks {
+		t.Fatalf("aggregated document missing secondary service endpoint: %+v", document.Services)
+	}
+}
+
+func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *testing.T) {
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path: "/services/owner",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+			},
+		},
+	}
+	other := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path: "/services/other",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	services := buildRegistrationServices(owner, []*monetizeapi.ServiceOffer{owner, other}, "https://example.com")
+	if len(services) != 2 {
+		t.Fatalf("services = %+v, want 2 web entries", services)
+	}
+	if services[0].Endpoint != "https://example.com/services/owner" {
+		t.Fatalf("owner service endpoint = %q", services[0].Endpoint)
+	}
+	if services[1].Endpoint != "https://example.com/services/other" {
+		t.Fatalf("other service endpoint = %q", services[1].Endpoint)
+	}
+}
+
+func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *testing.T) {
+	readyConditions := []monetizeapi.Condition{
+		{Type: "ModelReady", Status: "True"},
+		{Type: "UpstreamHealthy", Status: "True"},
+		{Type: "PaymentGateReady", Status: "True"},
+		{Type: "RoutePublished", Status: "True"},
+	}
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "demo", UID: types.UID("owner-uid")},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path: "/services/hello",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Name:    "Demo Agent",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
+	}
+	offers := []*monetizeapi.ServiceOffer{
+		owner,
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "blocks", Namespace: "demo"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Path: "/services/blocks",
+				Registration: monetizeapi.ServiceOfferRegistration{
+					Enabled: true,
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "oracle", Namespace: "demo"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Path: "/services/oracle",
+				Registration: monetizeapi.ServiceOfferRegistration{
+					Enabled: true,
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
+		},
+	}
+
+	document := buildActiveRegistrationDocument(owner, offers, "https://example.com", "42")
+	documentJSON, _, err := marshalRegistrationDocument(document)
+	if err != nil {
+		t.Fatalf("marshalRegistrationDocument: %v", err)
+	}
+	request := &monetizeapi.RegistrationRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: registrationRequestName(owner.Name), Namespace: owner.Namespace, UID: types.UID("req-uid")},
+		Spec: monetizeapi.RegistrationRequestSpec{
+			ServiceOfferName:      owner.Name,
+			ServiceOfferNamespace: owner.Namespace,
+		},
+	}
+
+	cm := buildRegistrationConfigMap(request, documentJSON)
+	data := cm.Object["data"].(map[string]any)
+	rawDoc, ok := data["agent-registration.json"].(string)
+	if !ok || rawDoc == "" {
+		t.Fatalf("agent-registration.json missing from configmap: %+v", data)
+	}
+
+	var published erc8004.AgentRegistration
+	if err := json.Unmarshal([]byte(rawDoc), &published); err != nil {
+		t.Fatalf("unmarshal published registration document: %v", err)
+	}
+
+	wantEndpoints := map[string]bool{
+		"https://example.com/services/hello":  false,
+		"https://example.com/services/blocks": false,
+		"https://example.com/services/oracle": false,
+	}
+	for _, svc := range published.Services {
+		if _, ok := wantEndpoints[svc.Endpoint]; ok {
+			wantEndpoints[svc.Endpoint] = true
+		}
+	}
+	for endpoint, seen := range wantEndpoints {
+		if !seen {
+			t.Fatalf("published registration document missing endpoint %s: %+v", endpoint, published.Services)
+		}
 	}
 }
 
