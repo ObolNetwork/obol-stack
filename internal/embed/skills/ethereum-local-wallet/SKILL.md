@@ -103,6 +103,7 @@ Supported networks: `mainnet`, `hoodi`, `sepolia`, `base-sepolia` (depends on eR
 - Values are in **wei** (1 ETH = 1000000000000000000 wei)
 - Use `ethereum-networks` skill (`rpc.sh balance <address>`) to check balances before sending
 - The `send-tx` command will broadcast the transaction immediately after signing
+- Transaction signing requests must follow the canonical remote-signer schema in `ObolNetwork/remote-signer/schema/sign-transaction-request.canonical.schema.json`; all numeric tx fields are decimal strings
 
 ## See Also
 
