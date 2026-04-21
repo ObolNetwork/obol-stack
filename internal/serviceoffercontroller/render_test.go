@@ -424,6 +424,86 @@ func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 	}
 }
 
+func TestBuildServiceCatalogJSON(t *testing.T) {
+	readyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hello", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Upstream: monetizeapi.ServiceOfferUpstream{
+				Service: "demo-hello",
+				Port:    8080,
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0xabc",
+				Price: monetizeapi.ServiceOfferPriceTable{
+					PerRequest: "0.00001",
+				},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Description: "Proof-of-payment echo service",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+	notReadyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "demo"},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+
+	if len(services) != 1 {
+		t.Fatalf("expected 1 ready service, got %d", len(services))
+	}
+	svc := services[0]
+	if svc.Name != "demo-hello" {
+		t.Errorf("name = %q, want demo-hello", svc.Name)
+	}
+	if svc.Price != "0.00001 USDC/request" {
+		t.Errorf("price = %q, want '0.00001 USDC/request'", svc.Price)
+	}
+	if !svc.IsDemo {
+		t.Error("expected isDemo=true for namespace=demo")
+	}
+	if svc.Endpoint != "https://example.com/services/demo-hello" {
+		t.Errorf("endpoint = %q, want https://example.com/services/demo-hello", svc.Endpoint)
+	}
+	if svc.Description != "Proof-of-payment echo service" {
+		t.Errorf("description = %q, want 'Proof-of-payment echo service'", svc.Description)
+	}
+}
+
+func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
+	jsonStr := buildServiceCatalogJSON(nil, "https://example.com")
+	if jsonStr != "[]" {
+		t.Errorf("expected empty array, got %q", jsonStr)
+	}
+}
+
+func TestBuildServicesJSONHTTPRoute(t *testing.T) {
+	route := buildServicesJSONHTTPRoute()
+	if route.GetName() != servicesJSONRouteName {
+		t.Fatalf("route name = %q, want %q", route.GetName(), servicesJSONRouteName)
+	}
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	match := rules[0].(map[string]any)["matches"].([]any)[0].(map[string]any)
+	path := match["path"].(map[string]any)
+	if path["value"] != "/api/services.json" {
+		t.Errorf("path = %q, want /api/services.json", path["value"])
+	}
+}
+
 func TestSafeName_Short(t *testing.T) {
 	// Short names should pass through unchanged.
 	if got := childName("demo"); got != "so-demo" {

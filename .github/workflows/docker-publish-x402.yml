@@ -10,12 +10,15 @@ on:
       - 'internal/x402/**'
       - 'internal/serviceoffercontroller/**'
       - 'internal/monetizeapi/**'
+      - 'internal/demo/**'
       - 'cmd/x402-verifier/**'
       - 'cmd/x402-buyer/**'
       - 'cmd/serviceoffer-controller/**'
+      - 'cmd/demo-server/**'
       - 'Dockerfile.x402-verifier'
       - 'Dockerfile.x402-buyer'
       - 'Dockerfile.serviceoffer-controller'
+      - 'Dockerfile.demo-server'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/docker-publish-x402.yml'
@@ -53,6 +56,10 @@ jobs:
             image: obolnetwork/serviceoffer-controller
             dockerfile: Dockerfile.serviceoffer-controller
             description: ServiceOffer reconciler for Obol Stack monetization
+          - component: demo-server
+            image: obolnetwork/demo-server
+            dockerfile: Dockerfile.demo-server
+            description: Demo HTTP services for Obol Stack sell demo
 
     steps:
       - name: Checkout
@@ -124,6 +131,8 @@ jobs:
             image: obolnetwork/x402-buyer
           - component: serviceoffer-controller
             image: obolnetwork/serviceoffer-controller
+          - component: demo-server
+            image: obolnetwork/demo-server
 
     steps:
       - name: Run Trivy vulnerability scanner

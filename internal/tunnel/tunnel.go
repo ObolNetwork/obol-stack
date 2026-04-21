@@ -471,47 +471,11 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Obol Stack</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-    a { color: #0066cc; }
-    code { background: #f0f0f0; padding: 0.2em 0.4em; border-radius: 3px; }
-    .services { margin-top: 1.5rem; }
-  </style>
-</head>
-<body>
-  <h1>Obol Stack</h1>
-  <p>This node sells services via <a href="https://www.x402.org">x402</a> micropayments.</p>
-  <div class="services">
-    <h2>Available Services</h2>
-    <p>See the machine-readable catalog: <a href="%s/skill.md">/skill.md</a></p>
-    <p>Agent registration: <a href="%s/.well-known/agent-registration.json">/.well-known/agent-registration.json</a></p>
-  </div>
-</body>
-</html>`, tunnelURL, tunnelURL)
+	labels := map[string]string{"app": "tunnel-storefront"}
 
-	// Build the resources as a multi-document YAML manifest.
+	// Build the resources for the public storefront.
 	resources := []map[string]any{
-		// ConfigMap with HTML content + httpd mime config.
-		{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]any{
-				"name":      "tunnel-storefront",
-				"namespace": storefrontNamespace,
-			},
-			"data": map[string]string{
-				"index.html": html,
-				"httpd.conf": "",
-				"mime.types": "text/html\thtml htm\n",
-			},
-		},
-		// Deployment: busybox httpd serving the ConfigMap.
+		// Deployment: Next.js public storefront image.
 		{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
@@ -522,35 +486,35 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 			"spec": map[string]any{
 				"replicas": 1,
 				"selector": map[string]any{
-					"matchLabels": map[string]string{"app": "tunnel-storefront"},
+					"matchLabels": labels,
 				},
 				"template": map[string]any{
 					"metadata": map[string]any{
-						"labels": map[string]string{"app": "tunnel-storefront"},
+						"labels": labels,
 					},
 					"spec": map[string]any{
 						"containers": []map[string]any{
-							{
-								"name":    "httpd",
-								"image":   "busybox:1.37",
-								"command": []string{"httpd", "-f", "-p", "8080", "-h", "/www"},
-								"ports": []map[string]any{
-									{"containerPort": 8080},
+								{
+									"name":            "storefront",
+									"image":           "ghcr.io/obolnetwork/obol-stack-public-storefront:latest",
+									"imagePullPolicy": "IfNotPresent",
+									"ports": []map[string]any{
+										{"containerPort": 3000, "name": "http"},
+									},
+								"env": []map[string]string{
+									{"name": "SERVICES_URL", "value": "http://obol-skill-md.x402.svc:8080"},
 								},
-								"volumeMounts": []map[string]any{
-									{"name": "html", "mountPath": "/www"},
+								"livenessProbe": map[string]any{
+									"httpGet": map[string]any{
+										"path": "/",
+										"port": "http",
+									},
+									"initialDelaySeconds": 5,
+									"periodSeconds":       30,
 								},
 								"resources": map[string]any{
-									"requests": map[string]string{"cpu": "5m", "memory": "8Mi"},
-									"limits":   map[string]string{"cpu": "20m", "memory": "16Mi"},
-								},
-							},
-						},
-						"volumes": []map[string]any{
-							{
-								"name": "html",
-								"configMap": map[string]any{
-									"name": "tunnel-storefront",
+									"requests": map[string]string{"cpu": "10m", "memory": "32Mi"},
+									"limits":   map[string]string{"cpu": "100m", "memory": "128Mi"},
 								},
 							},
 						},
@@ -567,9 +531,9 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 				"namespace": storefrontNamespace,
 			},
 			"spec": map[string]any{
-				"selector": map[string]string{"app": "tunnel-storefront"},
+				"selector": labels,
 				"ports": []map[string]any{
-					{"port": 8080, "targetPort": 8080},
+					{"port": 3000, "targetPort": 3000, "name": "http"},
 				},
 			},
 		},
@@ -598,7 +562,7 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 						"backendRefs": []map[string]any{
 							{
 								"name": "tunnel-storefront",
-								"port": 8080,
+								"port": 3000,
 							},
 						},
 					},

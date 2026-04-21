@@ -27,11 +27,15 @@ build/
 .workspace/
 .workspace-*/
 
-# Go binary
+# Go binaries
 /obol
+/demo-server
+/serviceoffer-controller
+/x402-verifier
+/x402-buyer
 
 # Dependencies
-/node_modules/
+node_modules/
 /vendor/
 
 # Environment variables

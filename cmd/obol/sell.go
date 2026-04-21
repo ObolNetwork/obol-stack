@@ -47,6 +47,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 		Commands: []*cli.Command{
 			sellInferenceCommand(cfg),
 			sellHTTPCommand(cfg),
+			sellDemoCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
 			sellTestCommand(cfg),
@@ -952,6 +953,417 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 }
 
 // ---------------------------------------------------------------------------
+// sell demo — deploy a demo service behind x402 payment gate
+// ---------------------------------------------------------------------------
+
+// demoSpec describes a built-in demo type with default pricing and config.
+type demoSpec struct {
+	Type        string // DEMO_TYPE env value
+	Price       string // default per-request USDC price
+	Description string // human-readable one-liner
+	NeedsERPC   bool   // whether the demo queries eRPC
+}
+
+var demoTypes = map[string]demoSpec{
+	"hello": {
+		Type:        "hello",
+		Price:       "0.00001",
+		Description: "Proof-of-payment echo service — confirms you got through the x402 gate",
+	},
+	"blocks": {
+		Type:        "blocks",
+		Price:       "0.0001",
+		Description: "Live blockchain data from a local full node (block, gas, chain ID)",
+		NeedsERPC:   true,
+	},
+	"oracle": {
+		Type:        "oracle",
+		Price:       "0.001",
+		Description: "Chain analysis — gas statistics, tx volume, and utilization across recent blocks",
+		NeedsERPC:   true,
+	},
+}
+
+const demoNamespace = "demo"
+
+func sellDemoCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "demo",
+		Usage:     "Deploy a demo service behind x402 payment gate",
+		ArgsUsage: "<type>",
+		Description: `Deploys a demo HTTP server and creates a ServiceOffer to payment-gate it.
+The demo proves the full sell→discover→pay→receive flow works end-to-end.
+
+Types:
+  hello    Proof-of-payment echo ($0.00001/req)   — simplest, no dependencies
+  blocks   Live blockchain data   ($0.0001/req)    — queries local full node via eRPC
+  oracle   Chain analysis report  ($0.001/req)     — gas stats, tx volume, utilization
+
+Example:
+  obol sell demo hello
+  obol sell demo blocks --chain base
+  obol sell demo oracle --price 0.01`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "wallet",
+				Aliases: []string{"w"},
+				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
+				Sources: cli.EnvVars("X402_WALLET"),
+			},
+			&cli.StringFlag{
+				Name:  "chain",
+				Usage: "Payment chain (base, base-sepolia, ethereum)",
+				Value: "base",
+			},
+			&cli.StringFlag{
+				Name:  "price",
+				Usage: "Override default per-request price in USDC",
+			},
+			&cli.StringFlag{
+				Name:  "name",
+				Usage: "Override service name (default: demo-<type>)",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if cmd.NArg() < 1 {
+				return fmt.Errorf("demo type required: obol sell demo <hello|blocks|oracle>")
+			}
+			typeName := cmd.Args().First()
+			spec, ok := demoTypes[typeName]
+			if !ok {
+				return fmt.Errorf("unknown demo type %q — choose: hello, blocks, oracle", typeName)
+			}
+
+			name := cmd.String("name")
+			if name == "" {
+				name = "demo-" + typeName
+			}
+
+			// Resolve wallet.
+			wallet := cmd.String("wallet")
+			if wallet == "" {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
+					wallet = resolved
+					u.Infof("Using wallet from remote-signer: %s", wallet)
+				} else if u.IsTTY() {
+					var inputErr error
+					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					if inputErr != nil || wallet == "" {
+						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					}
+				} else {
+					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+				}
+			}
+			if err := x402verifier.ValidateWallet(wallet); err != nil {
+				return err
+			}
+
+			price := cmd.String("price")
+			if price == "" {
+				price = spec.Price
+			}
+
+			chain := cmd.String("chain")
+
+			u.Infof("Deploying demo %q (%s)", typeName, spec.Description)
+
+			// 1. Deploy demo backend (namespace + Deployment + Service).
+			if err := deployDemoBackend(cfg, u, name, spec, chain); err != nil {
+				return fmt.Errorf("deploy demo backend: %w", err)
+			}
+
+			// 2. Create ServiceOffer.
+			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, spec)
+			applyOut, err := kubectlApplyOutput(cfg, soManifest)
+			if err != nil {
+				return fmt.Errorf("apply ServiceOffer: %w", err)
+			}
+			action := "created"
+			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
+				action = "updated"
+			}
+			u.Successf("ServiceOffer %s/%s %s (type: http, price: %s USDC/req)", demoNamespace, name, action, price)
+			u.Infof("The controller will reconcile: health-check → payment gate → route")
+			u.Infof("Check status: obol sell status %s -n %s", name, demoNamespace)
+
+			// 3. Ensure tunnel is active.
+			u.Blank()
+			u.Info("Ensuring tunnel is active for public access...")
+
+			tunnelURL := ""
+			if tURL, err := tunnel.EnsureTunnelForSell(cfg, u); err != nil {
+				u.Warnf("Tunnel not started: %v", err)
+				u.Dim("  Start manually with: obol tunnel restart")
+			} else {
+				tunnelURL = tURL
+				u.Successf("Tunnel active: %s", tunnelURL)
+			}
+
+			// 4. Print try-it instructions.
+			u.Blank()
+			printDemoTryIt(u, name, typeName, price, chain, tunnelURL)
+
+			return nil
+		},
+	}
+}
+
+// deployDemoBackend creates the demo namespace, Deployment, and Service.
+func deployDemoBackend(cfg *config.Config, u *ui.UI, name string, spec demoSpec, paymentChain string) error {
+	resources := buildDemoResources(name, spec, paymentChain)
+
+	for _, res := range resources {
+		data, err := json.Marshal(res)
+		if err != nil {
+			return fmt.Errorf("marshal resource: %w", err)
+		}
+
+		bin, kc := kubectl.Paths(cfg)
+		if _, err := kubectl.ApplyOutput(bin, kc, data); err != nil {
+			return fmt.Errorf("apply %s/%s: %w", res["kind"], name, err)
+		}
+	}
+
+	u.Successf("Demo backend %s deployed in namespace %s", name, demoNamespace)
+
+	// Wait for rollout.
+	return u.RunWithSpinner("Waiting for demo pod to be ready", func() error {
+		bin, kc := kubectl.Paths(cfg)
+		return kubectl.RunSilent(bin, kc,
+			"rollout", "status", "deployment/"+name, "-n", demoNamespace, "--timeout=60s")
+	})
+}
+
+// buildDemoResources returns the K8s manifests for a demo backend.
+func buildDemoResources(name string, spec demoSpec, paymentChain string) []map[string]any {
+	env := []map[string]string{
+		{"name": "DEMO_TYPE", "value": spec.Type},
+		{"name": "PORT", "value": "8080"},
+	}
+	if spec.NeedsERPC {
+		env = append(env, map[string]string{
+			"name": "ERPC_URL", "value": demoERPCURL(paymentChain),
+		})
+	}
+
+	labels := map[string]string{
+		"app":                    name,
+		"app.kubernetes.io/name": name,
+		"obol.org/demo":          "true",
+	}
+
+	return []map[string]any{
+		// Namespace
+		{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]any{
+				"name": demoNamespace,
+			},
+		},
+		// Deployment
+		{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": demoNamespace,
+				"labels":    labels,
+			},
+			"spec": map[string]any{
+				"replicas": 1,
+				"selector": map[string]any{
+					"matchLabels": map[string]string{"app": name},
+				},
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": labels,
+					},
+					"spec": map[string]any{
+						"containers": []map[string]any{
+							{
+								"name":            "demo",
+								"image":           "ghcr.io/obolnetwork/demo-server:latest",
+								"imagePullPolicy": "IfNotPresent",
+								"env":             env,
+								"ports": []map[string]any{
+									{"containerPort": 8080, "name": "http"},
+								},
+								"livenessProbe": map[string]any{
+									"httpGet": map[string]any{
+										"path": "/health",
+										"port": "http",
+									},
+									"initialDelaySeconds": 2,
+									"periodSeconds":       10,
+								},
+								"readinessProbe": map[string]any{
+									"httpGet": map[string]any{
+										"path": "/health",
+										"port": "http",
+									},
+									"initialDelaySeconds": 1,
+									"periodSeconds":       5,
+								},
+								"resources": map[string]any{
+									"requests": map[string]string{"cpu": "10m", "memory": "16Mi"},
+									"limits":   map[string]string{"cpu": "100m", "memory": "64Mi"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		// Service
+		{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": demoNamespace,
+				"labels":    labels,
+			},
+			"spec": map[string]any{
+				"selector": map[string]string{"app": name},
+				"ports": []map[string]any{
+					{"port": 8080, "targetPort": 8080, "name": "http"},
+				},
+			},
+		},
+	}
+}
+
+func demoERPCURL(paymentChain string) string {
+	return fmt.Sprintf("http://erpc.erpc.svc.cluster.local/rpc/%s", demoRPCNetwork(paymentChain))
+}
+
+func demoRPCNetwork(paymentChain string) string {
+	switch paymentChain {
+	case "base", "base-mainnet":
+		return "base"
+	case "base-sepolia":
+		return "base-sepolia"
+	case "ethereum", "ethereum-mainnet", "mainnet":
+		return "mainnet"
+	default:
+		if chain, err := x402verifier.ResolveChainInfo(paymentChain); err == nil {
+			switch chain.Name {
+			case "ethereum":
+				return "mainnet"
+			default:
+				return chain.Name
+			}
+		}
+		return paymentChain
+	}
+}
+
+// buildDemoServiceOffer returns a ServiceOffer manifest for a demo service.
+func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec) map[string]any {
+	return map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"type": "http",
+			"upstream": map[string]any{
+				"service":    name,
+				"namespace":  ns,
+				"port":       8080,
+				"healthPath": "/health",
+			},
+			"payment": map[string]any{
+				"scheme":            "exact",
+				"network":           chain,
+				"payTo":             wallet,
+				"maxTimeoutSeconds": 300,
+				"price": map[string]any{
+					"perRequest": price,
+				},
+			},
+			"path": "/services/" + name,
+			"registration": map[string]any{
+				"enabled":     true,
+				"name":        name,
+				"description": spec.Description,
+				"skills":      []string{"x402-demo", spec.Type},
+			},
+		},
+	}
+}
+
+// printDemoTryIt prints copy-paste instructions for calling the demo service.
+func printDemoTryIt(u *ui.UI, name, typeName, price, chain, tunnelURL string) {
+	endpoint := "<tunnel-url>/services/" + name
+	if tunnelURL != "" {
+		endpoint = tunnelURL + "/services/" + name
+	}
+
+	u.Bold("── Try it ──────────────────────────────────────────────")
+	u.Blank()
+
+	u.Printf("  Demo %q is live at: %s", typeName, endpoint)
+	u.Blank()
+
+	u.Printf("  1. Probe for pricing (see the 402 response):")
+	u.Blank()
+	u.Dim(fmt.Sprintf("     curl -s %s | jq .", endpoint))
+	u.Blank()
+
+	u.Printf("  2. Make a paid request (Python — pip install x402 httpx):")
+	u.Blank()
+	u.Dim("     import httpx")
+	u.Dim("     from x402.client import x402_client")
+	u.Dim("")
+	u.Dim("     client = x402_client(")
+	u.Dim("         httpx.Client(),")
+	u.Dim(`         private_key="<your-private-key>",  # USDC holder on ` + chain)
+	u.Dim("     )")
+	u.Dim(fmt.Sprintf(`     resp = client.get("%s")`, endpoint))
+	u.Dim("     print(resp.json())")
+	u.Blank()
+
+	u.Printf("  3. How x402 payment works:")
+	u.Blank()
+	u.Dim("     • A request without payment returns HTTP 402 with pricing details")
+	u.Dim("     • The 402 body contains an 'accepts' array with payment requirements:")
+	u.Dim("       scheme, network (CAIP-2), amount (atomic USDC), asset, payTo address")
+	u.Dim("     • The buyer signs an ERC-3009 TransferWithAuthorization off-chain")
+	u.Dim("     • The signed authorization is base64-encoded and sent as X-PAYMENT header")
+	u.Dim("     • The x402 facilitator verifies the signature and settles on-chain")
+	u.Dim("     • See https://www.x402.org for the full protocol specification")
+	u.Blank()
+
+	u.Printf("  4. Ask your AI agent:")
+	u.Blank()
+	u.Dim(fmt.Sprintf(`     "Call the paid service at %s`, endpoint))
+	u.Dim(fmt.Sprintf(`      using x402 payment. It costs %s USDC per request on %s.`, price, chain))
+	u.Dim(`      Report what it returns."`)
+	u.Blank()
+
+	u.Bold("─────────────────────────────────────────────────────────")
+}
+
+// cleanupDemoBackend removes the Deployment and Service for a demo backend.
+// Best-effort: logs warnings but does not fail the overall delete.
+func cleanupDemoBackend(cfg *config.Config, u *ui.UI, name string) {
+	bin, kc := kubectl.Paths(cfg)
+	for _, kind := range []string{"deployment", "service"} {
+		if err := kubectl.RunSilent(bin, kc, "delete", kind, name, "-n", demoNamespace, "--ignore-not-found"); err != nil {
+			u.Warnf("Failed to delete %s/%s: %v", kind, name, err)
+		}
+	}
+	u.Successf("Demo backend resources cleaned up")
+}
+
+// ---------------------------------------------------------------------------
 // sell list
 // ---------------------------------------------------------------------------
 
@@ -1546,6 +1958,11 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
+			}
+
+			// Clean up demo backend resources if this is a demo service.
+			if ns == demoNamespace {
+				cleanupDemoBackend(cfg, u, name)
 			}
 
 			// Auto-stop quick tunnel when no ServiceOffers remain.

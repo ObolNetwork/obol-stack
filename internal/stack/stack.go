@@ -607,6 +607,8 @@ var baseLocalImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
 	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
+	{tag: "ghcr.io/obolnetwork/demo-server:latest", dockerfile: "Dockerfile.demo-server"},
+	{tag: "ghcr.io/obolnetwork/obol-stack-public-storefront:latest", dockerfile: "Dockerfile.public-storefront"},
 }
 
 func devPreloadImages() []string {
