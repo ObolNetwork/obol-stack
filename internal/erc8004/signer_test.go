@@ -59,8 +59,8 @@ func TestRemoteSigner_SignTransaction(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if tx.ChainID != 84532 {
-			t.Errorf("chain_id = %d, want 84532", tx.ChainID)
+		if tx.ChainID != "84532" {
+			t.Errorf("chain_id = %q, want 84532", tx.ChainID)
 		}
 
 		json.NewEncoder(w).Encode(signResponse{
@@ -72,7 +72,7 @@ func TestRemoteSigner_SignTransaction(t *testing.T) {
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
 	signed, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{
-		ChainID:              84532,
+		ChainID:              "84532",
 		To:                   "0x8004A818BFB912233c491871b3d84c89A494BD9e",
 		Nonce:                "0",
 		GasLimit:             "100000",
@@ -135,7 +135,7 @@ func TestRemoteSigner_SignTransaction_Error(t *testing.T) {
 
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
-	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: 1})
+	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -150,7 +150,7 @@ func TestRemoteSigner_SignTransaction_HTTPError(t *testing.T) {
 
 	signer := NewRemoteSigner(srv.URL)
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
-	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: 1})
+	_, err := signer.SignTransaction(context.Background(), addr, SignTxRequest{ChainID: "1"})
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
@@ -216,6 +216,10 @@ func TestRemoteTransactOpts(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
 	to := common.HexToAddress("0x8004A818BFB912233c491871b3d84c89A494BD9e")
 	chainID := big.NewInt(84532)
+	maxUint64 := new(big.Int).SetUint64(^uint64(0))
+	feeCap := new(big.Int).Add(new(big.Int).Set(maxUint64), big.NewInt(25))
+	tipCap := new(big.Int).Add(new(big.Int).Set(maxUint64), big.NewInt(7))
+	value := new(big.Int).Add(new(big.Int).Set(maxUint64), big.NewInt(12345))
 	var body map[string]json.RawMessage
 	var path string
 
@@ -246,9 +250,9 @@ func TestRemoteTransactOpts(t *testing.T) {
 		Nonce:     7,
 		To:        &to,
 		Gas:       100000,
-		GasFeeCap: big.NewInt(1000000000),
-		GasTipCap: big.NewInt(1000000),
-		Value:     big.NewInt(12345),
+		GasFeeCap: feeCap,
+		GasTipCap: tipCap,
+		Value:     value,
 		Data:      []byte{0xde, 0xad, 0xbe, 0xef},
 	})
 
@@ -264,46 +268,14 @@ func TestRemoteTransactOpts(t *testing.T) {
 		t.Fatalf("unexpected request path: %s", path)
 	}
 
-	assertJSONInt64(t, body, "chain_id", 84532)
-	assertJSONUint64(t, body, "nonce", 7)
-	assertJSONUint64(t, body, "gas_limit", 100000)
-	assertJSONUint64(t, body, "max_fee_per_gas", 1000000000)
-	assertJSONUint64(t, body, "max_priority_fee_per_gas", 1000000)
-	assertJSONUint64(t, body, "value", 12345)
+	assertJSONString(t, body, "chain_id", "84532")
+	assertJSONString(t, body, "nonce", "7")
+	assertJSONString(t, body, "gas_limit", "100000")
+	assertJSONString(t, body, "max_fee_per_gas", feeCap.String())
+	assertJSONString(t, body, "max_priority_fee_per_gas", tipCap.String())
+	assertJSONString(t, body, "value", value.String())
 	assertJSONString(t, body, "to", to.Hex())
 	assertJSONString(t, body, "data", "0xdeadbeef")
-}
-
-func assertJSONInt64(t *testing.T, body map[string]json.RawMessage, field string, want int64) {
-	t.Helper()
-	raw, ok := body[field]
-	if !ok {
-		t.Fatalf("missing field %q", field)
-	}
-
-	var got int64
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("field %q should be a JSON integer, got %s: %v", field, string(raw), err)
-	}
-	if got != want {
-		t.Fatalf("field %q = %d, want %d", field, got, want)
-	}
-}
-
-func assertJSONUint64(t *testing.T, body map[string]json.RawMessage, field string, want uint64) {
-	t.Helper()
-	raw, ok := body[field]
-	if !ok {
-		t.Fatalf("missing field %q", field)
-	}
-
-	var got uint64
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("field %q should be a JSON integer, got %s: %v", field, string(raw), err)
-	}
-	if got != want {
-		t.Fatalf("field %q = %d, want %d", field, got, want)
-	}
 }
 
 func assertJSONString(t *testing.T, body map[string]json.RawMessage, field, want string) {
