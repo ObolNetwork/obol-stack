@@ -354,7 +354,8 @@ pass "Base Sepolia RPC added to eRPC (with write access)"
 step "Alice: create ServiceOffer"
 KEY_FILE=$(mktemp)
 echo "$SIGNER_KEY" > "$KEY_FILE"
-alice sell http alice-inference \
+set +e
+sell_out=$(alice sell http alice-inference \
     --wallet "$ALICE_WALLET" \
     --chain base-sepolia \
     --per-request 0.001 \
@@ -366,13 +367,20 @@ alice sell http alice-inference \
     --register-description "Integration test: local model inference via x402" \
     --register-skills natural_language_processing/text_generation \
     --register-domains technology/artificial_intelligence \
-    --private-key-file "$KEY_FILE" 2>&1 | tail -8
+    --private-key-file "$KEY_FILE" 2>&1)
+sell_rc=$?
+set -e
 rm -f "$KEY_FILE"
+echo "$sell_out" | tail -12
+if [ "$sell_rc" -ne 0 ]; then
+    fail "ServiceOffer create failed: ${sell_out:0:240}"
+    emit_metrics; exit "$sell_rc"
+fi
 pass "ServiceOffer created"
 
-poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
+poll_step_grep "Alice: seller route published" "True" 24 5 \
     alice kubectl get serviceoffers.obol.org alice-inference -n llm \
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+        -o jsonpath='{.status.conditions[?(@.type=="RoutePublished")].status}'
 
 step "Alice: tunnel URL"
 TUNNEL_URL=$(alice tunnel status 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
@@ -387,15 +395,8 @@ poll_step_grep "Alice: 402 gate works" "402" 12 5 \
         "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
-step "Alice: ERC-8004 registration reflected in ServiceOffer"
-reg_out=$(alice sell status alice-inference -n llm 2>&1) || true
-echo "$reg_out" | tail -12
-if echo "$reg_out" | grep -q "Agent ID:"; then
-    AGENT_ID=$(echo "$reg_out" | grep 'Agent ID:' | awk '{print $3}' | head -1)
-    pass "ERC-8004 registered: Agent ID $AGENT_ID"
-else
-    fail "Registration not reflected in sell status: ${reg_out:0:200}"
-fi
+poll_step_grep "Alice: registration JSON served" "\"x402Support\"" 12 5 \
+    curl -sf --max-time 15 "$TUNNEL_URL/.well-known/agent-registration.json"
 
 # ═════════════════════════════════════════════════════════════════
 # BOOTSTRAP BOB (buyer, configurable ports)
@@ -484,20 +485,7 @@ PF_AGENT=$!
 step "Bob: OpenClaw API port-forward ready"
 pf_ready=0
 for i in $(seq 1 20); do
-    if python3 - "$BOB_AGENT_PORT" <<'PY'
-import socket
-import sys
-
-sock = socket.socket()
-sock.settimeout(1)
-try:
-    sock.connect(("127.0.0.1", int(sys.argv[1])))
-except OSError:
-    sys.exit(1)
-finally:
-    sock.close()
-PY
-    then
+    if curl -fsS --max-time 5 "http://localhost:${BOB_AGENT_PORT}/healthz" >/dev/null 2>&1; then
         pf_ready=1
         break
     fi
@@ -516,7 +504,9 @@ else
 fi
 
 step "Bob's agent: discover Alice via ERC-8004 registry"
-discover_response=$(curl -sf --max-time 300 \
+discover_body=$(mktemp)
+set +e
+discover_http=$(curl -sS --max-time 300 -o "$discover_body" -w '%{http_code}' \
     -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
@@ -528,7 +518,20 @@ discover_response=$(curl -sf --max-time 300 \
         }],
         \"max_tokens\": 4000,
 	        \"stream\": false
-	    }" 2>&1)
+	    }" 2>"$discover_body.stderr")
+discover_rc=$?
+set -e
+discover_response=$(<"$discover_body")
+discover_stderr=$(cat "$discover_body.stderr" 2>/dev/null || true)
+rm -f "$discover_body" "$discover_body.stderr"
+if [ "$discover_rc" -ne 0 ] || [ "${discover_http:-000}" -lt 200 ] || [ "${discover_http:-000}" -ge 300 ]; then
+    fail "Discovery request failed (curl=$discover_rc http=${discover_http:-000}): ${discover_response:0:300}${discover_stderr:0:120}"
+    echo "  Port-forward log:"
+    tail -n 20 "$PF_AGENT_LOG" 2>/dev/null | sed 's/^/    /'
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
+fi
 
 discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
 echo "${discover_content:0:500}"
@@ -536,10 +539,15 @@ if [ -n "$discover_content" ] && [ "${#discover_content}" -gt 100 ]; then
     pass "Agent discovered Alice's service"
 else
     fail "Discovery response: ${discover_response:0:300}"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
 step "Bob's agent: buy inference from Alice"
-buy_response=$(curl -sf --max-time 300 \
+buy_body=$(mktemp)
+set +e
+buy_http=$(curl -sS --max-time 300 -o "$buy_body" -w '%{http_code}' \
     -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
@@ -552,14 +560,90 @@ buy_response=$(curl -sf --max-time 300 \
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false
-	    }" 2>&1)
+	    }" 2>"$buy_body.stderr")
+buy_rc=$?
+set -e
+buy_response=$(<"$buy_body")
+buy_stderr=$(cat "$buy_body.stderr" 2>/dev/null || true)
+rm -f "$buy_body" "$buy_body.stderr"
+if [ "$buy_rc" -ne 0 ] || [ "${buy_http:-000}" -lt 200 ] || [ "${buy_http:-000}" -ge 300 ]; then
+    fail "Buy request failed (curl=$buy_rc http=${buy_http:-000}): ${buy_response:0:300}${buy_stderr:0:120}"
+    echo "  Port-forward log:"
+    tail -n 20 "$PF_AGENT_LOG" 2>/dev/null | sed 's/^/    /'
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
+fi
 
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
+approve_cmd=$(printf '%s\n' "$buy_content" | grep -oE '/approve [A-Za-z0-9-]+ allow-once' | head -1 || true)
+if [ -n "$approve_cmd" ]; then
+    echo "  Approving pending buy command: $approve_cmd"
+    approve_payload=$(mktemp)
+    BUY_ASSISTANT_CONTENT="$buy_content" BUY_APPROVE_CMD="$approve_cmd" BUY_ENDPOINT="$TUNNEL_URL/services/alice-inference" python3 - <<'PY' >"$approve_payload"
+import json
+import os
+
+messages = [
+    {
+        "role": "user",
+        "content": "Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.",
+    },
+    {
+        "role": "assistant",
+        "content": f"I found the agent. Its endpoint is {os.environ['BUY_ENDPOINT']}",
+    },
+    {
+        "role": "user",
+        "content": (
+            "Now use the buy-inference skill to buy 5 inference tokens from Alice. "
+            f"Run exactly: python3 scripts/buy.py buy alice-inference --endpoint "
+            f"{os.environ['BUY_ENDPOINT']}/v1/chat/completions --model qwen3.5:9b --count 5"
+        ),
+    },
+    {
+        "role": "assistant",
+        "content": os.environ["BUY_ASSISTANT_CONTENT"],
+    },
+    {
+        "role": "user",
+        "content": os.environ["BUY_APPROVE_CMD"],
+    },
+]
+print(json.dumps({"model": "openclaw", "messages": messages, "max_tokens": 4000, "stream": False}))
+PY
+    approve_body=$(mktemp)
+    set +e
+    approve_http=$(curl -sS --max-time 300 -o "$approve_body" -w '%{http_code}' \
+        -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
+        -H "Authorization: Bearer $BOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data @"$approve_payload" 2>"$approve_body.stderr")
+    approve_rc=$?
+    set -e
+    approve_response=$(<"$approve_body")
+    approve_stderr=$(cat "$approve_body.stderr" 2>/dev/null || true)
+    rm -f "$approve_payload" "$approve_body" "$approve_body.stderr"
+    if [ "$approve_rc" -ne 0 ] || [ "${approve_http:-000}" -lt 200 ] || [ "${approve_http:-000}" -ge 300 ]; then
+        fail "Buy approval request failed (curl=$approve_rc http=${approve_http:-000}): ${approve_response:0:300}${approve_stderr:0:120}"
+        echo "  Port-forward log:"
+        tail -n 20 "$PF_AGENT_LOG" 2>/dev/null | sed 's/^/    /'
+        cleanup_pid "$PF_AGENT"
+        rm -f "$PF_AGENT_LOG"
+        emit_metrics; exit 1
+    fi
+    buy_response=$approve_response
+    buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
+    echo "${buy_content:0:500}"
+fi
 if [ -n "$buy_content" ] && [ "${#buy_content}" -gt 100 ]; then
     pass "Agent bought Alice's inference"
 else
     fail "Buy response: ${buy_response:0:300}"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status

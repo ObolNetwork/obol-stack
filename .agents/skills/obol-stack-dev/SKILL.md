@@ -2,7 +2,7 @@
 name: obol-stack-dev
 description: Obol Stack development, testing, and validation. Covers LLM routing through LiteLLM, x402 payment flow (sell/buy), BDD integration tests (Gherkin/godog), ERC-8004 registration, and obol CLI wrappers.
 metadata:
-  version: "2.0.0"
+  version: "2.0.1"
   domain: infrastructure
   triggers: obol, litellm, openclaw, inference, integration test, model routing, smart routing, LLM proxy, provider setup, x402, sell, buy, BDD, gherkin, payment, monetize
   role: specialist
@@ -115,6 +115,7 @@ obol openclaw dashboard <id>            # Open web UI
 obol kubectl get pods -n openclaw-<id>
 obol kubectl logs -n openclaw-<id> -l app.kubernetes.io/instance=openclaw
 obol kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789
+curl -fsS http://127.0.0.1:18789/healthz
 
 # --- Testing ---
 go test ./internal/openclaw/                                    # Unit tests
@@ -192,6 +193,7 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Set `Authorization: Bearer <token>` on all `/v1/chat/completions` requests
 - Use `obol model setup --provider <name> --api-key <key>` for cloud provider config
 - Wait for pod readiness AND HTTP readiness before sending inference requests
+- When validating live seller/buyer commerce flows, capture the registration, funding, and settlement transaction hashes and archive the receipts with the test log
 - Clean up test instances with `obol openclaw delete --force <id>` (flag BEFORE arg)
 - Set env vars for dev mode: `OBOL_DEVELOPMENT=true`, `OBOL_CONFIG_DIR`, `OBOL_BIN_DIR`, `OBOL_DATA_DIR`
 - Prefer `qwen3.5:9b` when validating the current local paid-inference route
@@ -204,6 +206,8 @@ obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - <
 - Skip the gateway token (causes 401 Unauthorized)
 - Put `--force` flag after the argument in `obol openclaw delete` (urfave/cli v2 quirk)
 - Assume TCP connectivity means HTTP is ready (port-forward warmup race)
+- Assume `obol sell http ... --register-*` is a pure route-publish step on latest main; it now auto-registers by default when registration metadata is present
+- Combine `--no-register` with any `--register-*` flags; latest main rejects that combination
 - Use `app.kubernetes.io/instance=openclaw-<id>` for pod labels (Helm uses `openclaw`)
 - Run multiple integration tests without cleaning up between them (pod sandbox errors)
 - Delegate or accept broad "review the architecture" findings without converting them into concrete file-level checks and reproducible tests.
@@ -259,6 +263,13 @@ go test -tags integration -v -run TestIntegration_PaymentGate_FullLifecycle -tim
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
+### Flow-11 Notes
+
+- `./flows/flow-11-dual-stack.sh` is the most human-like Alice/Bob validation path. On latest main, treat `RoutePublished=True`, a live external `402`, and a resolvable `/.well-known/agent-registration.json` as the seller-readiness checks that matter.
+- If you pass `--wallet` together with registration metadata to `obol sell http`, the registration signer must match that wallet. Using a mismatched private key causes automatic registration to fail.
+- For Bob's OpenClaw API, a local TCP connect is not enough; wait for `GET /healthz` over the forwarded port before sending `/v1/chat/completions`.
+- Natural-language buy flows can surface an approval challenge such as `/approve <id> allow-once` before `buy.py buy` actually runs. Unattended harnesses must either execute the buy tool directly or send the approval turn back through the same conversation.
+
 ### Known Gotchas
 
 - **ExternalName services**: Traefik Gateway API rejects ExternalName as HTTPRoute backends → 500 after valid payment. Use ClusterIP+Endpoints.
@@ -268,3 +279,5 @@ go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_
 - **Projected ConfigMap refresh**: the LiteLLM pod can take ~60s to reflect updated buyer ConfigMaps in the sidecar.
 - **eRPC balance lag**: `buy.py balance` uses `eth_call` through eRPC, and the default unfinalized cache TTL is 10s. After a paid request, poll until the reported balance catches up with the on-chain delta.
 - **kubectl exec shell quoting**: NEVER use `sh -c` with `fmt.Sprintf` to embed JSON or secrets in shell commands passed via `kubectl exec`. JSON body or auth tokens containing single quotes will break the shell. Instead, pass args directly: `kubectl exec ... -- wget -qO- --post-data=<json> --header=Authorization:\ Bearer\ <key> <url>`. Each argument goes as a separate argv element, bypassing shell interpretation entirely.
+- **OpenClaw exec preflight**: prompting the agent to run `cd ... && python3 scripts/foo.py` or shell loops can be rejected by the exec preflight guard. Prefer direct interpreter invocations with absolute script paths when you need the agent to run a skill script.
+- **Quick Tunnel flakiness**: fresh `trycloudflare.com` hostnames can briefly fail DNS resolution or return Cloudflare 530/1033 pages. Before asking Bob to discover Alice, verify the tunnel hostname resolves and `/.well-known/agent-registration.json` returns JSON from outside the cluster.
