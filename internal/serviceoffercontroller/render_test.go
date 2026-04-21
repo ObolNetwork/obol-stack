@@ -132,7 +132,7 @@ func TestBuildRegistrationHTTPRoute(t *testing.T) {
 }
 
 func TestBuildActiveRegistrationDocument(t *testing.T) {
-	offer := &monetizeapi.ServiceOffer{
+	owner := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "inference",
@@ -156,8 +156,28 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 			},
 		},
 	}
+	secondary := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "blocks", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Path: "/services/blocks",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Skills:  []string{"blockchain/data"},
+				Domains: []string{"technology/blockchain"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
 
-	document := buildActiveRegistrationDocument(offer, "https://example.com", "7")
+	document := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner, secondary}, "https://example.com", "7")
 
 	if document.Type != erc8004.RegistrationType {
 		t.Fatalf("type = %q", document.Type)
@@ -171,14 +191,65 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 	if len(document.Registrations) != 1 || document.Registrations[0].AgentID != 7 {
 		t.Fatalf("registrations = %+v, want agentId 7", document.Registrations)
 	}
-	if len(document.Services) < 2 {
-		t.Fatalf("services = %+v, want web + OASF", document.Services)
+	if len(document.Services) < 4 {
+		t.Fatalf("services = %+v, want aggregated web + OASF entries", document.Services)
 	}
 	if document.Metadata["gpu"] != "A100-80GB" {
 		t.Fatalf("metadata = %+v, want gpu entry", document.Metadata)
 	}
 	if document.Provenance["framework"] != "autoresearch" {
 		t.Fatalf("provenance = %+v, want framework entry", document.Provenance)
+	}
+
+	var seenBlocks bool
+	for _, svc := range document.Services {
+		if svc.Endpoint == "https://example.com/services/blocks" {
+			seenBlocks = true
+			break
+		}
+	}
+	if !seenBlocks {
+		t.Fatalf("aggregated document missing secondary service endpoint: %+v", document.Services)
+	}
+}
+
+func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *testing.T) {
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path: "/services/owner",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+			},
+		},
+	}
+	other := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path: "/services/other",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	services := buildRegistrationServices(owner, []*monetizeapi.ServiceOffer{owner, other}, "https://example.com")
+	if len(services) != 2 {
+		t.Fatalf("services = %+v, want 2 web entries", services)
+	}
+	if services[0].Endpoint != "https://example.com/services/owner" {
+		t.Fatalf("owner service endpoint = %q", services[0].Endpoint)
+	}
+	if services[1].Endpoint != "https://example.com/services/other" {
+		t.Fatalf("other service endpoint = %q", services[1].Endpoint)
 	}
 }
 
