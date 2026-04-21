@@ -27,20 +27,20 @@ POST /api/v1/sign/0x{ADDRESS}/transaction
 Content-Type: application/json
 
 {
-  "chain_id": 1,
+  "chain_id": "1",
   "to": "0x...",
-  "nonce": 42,
-  "gas_limit": 21000,
-  "max_fee_per_gas": 30000000000,
-  "max_priority_fee_per_gas": 1000000000,
-  "value": "0x0",
+  "nonce": "42",
+  "gas_limit": "21000",
+  "max_fee_per_gas": "30000000000",
+  "max_priority_fee_per_gas": "1000000000",
+  "value": "0",
   "data": "0x"
 }
 
 → 200: {"signed_transaction": "0x02f8..."}
 ```
 
-Gas fields accept JSON numbers or hex strings.
+Canonical transaction requests use decimal strings for all numeric fields. For compatibility, the server also accepts JSON numbers and `0x...` hex strings. The machine-readable contract lives in `ObolNetwork/remote-signer` at `schema/sign-transaction-request.canonical.schema.json`.
 
 ### Sign Message (EIP-191)
 

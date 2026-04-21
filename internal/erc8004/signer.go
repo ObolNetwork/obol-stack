@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -67,11 +68,11 @@ func (s *RemoteSigner) GetAddress(ctx context.Context) (common.Address, error) {
 	return common.HexToAddress(kr.Keys[0]), nil
 }
 
-// SignTxRequest contains the fields for signing an EIP-1559 transaction.
-// chain_id is sent as a JSON integer (u64) to match the Rust remote-signer's
-// expected type — sending it as a string causes HTTP 422.
+// SignTxRequest contains the canonical request body for remote-signer EIP-1559
+// transaction signing. The canonical wire contract is published in
+// ObolNetwork/remote-signer at schema/sign-transaction-request.canonical.schema.json.
 type SignTxRequest struct {
-	ChainID              int64  `json:"chain_id"`
+	ChainID              string `json:"chain_id"`
 	To                   string `json:"to"`
 	Nonce                string `json:"nonce"`
 	GasLimit             string `json:"gas_limit"`
@@ -186,26 +187,44 @@ func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Addre
 		From:    addr,
 		Context: ctx,
 		Signer: func(fromAddr common.Address, tx *types.Transaction) (*types.Transaction, error) {
+			chainIDText, err := decimalString("chain_id", chainID)
+			if err != nil {
+				return nil, err
+			}
+			valueText, err := decimalString("value", tx.Value())
+			if err != nil {
+				return nil, err
+			}
+
 			// Convert the unsigned transaction to a SignTxRequest.
 			var toAddr string
 			if tx.To() != nil {
 				toAddr = tx.To().Hex()
 			}
 			req := SignTxRequest{
-				ChainID:              chainID.Int64(),
-				To:                   toAddr,
-				Nonce:                fmt.Sprintf("%d", tx.Nonce()),
-				GasLimit:             fmt.Sprintf("%d", tx.Gas()),
-				Value:                tx.Value().String(),
-				Data:                 "0x" + hex.EncodeToString(tx.Data()),
+				ChainID:  chainIDText,
+				To:       toAddr,
+				Nonce:    strconv.FormatUint(tx.Nonce(), 10),
+				GasLimit: strconv.FormatUint(tx.Gas(), 10),
+				Value:    valueText,
+				Data:     "0x" + hex.EncodeToString(tx.Data()),
 			}
 			// Use EIP-1559 fields if available, otherwise legacy gas price.
 			if tx.GasFeeCap() != nil && tx.GasFeeCap().Sign() > 0 {
-				req.MaxFeePerGas = tx.GasFeeCap().String()
-				req.MaxPriorityFeePerGas = tx.GasTipCap().String()
+				req.MaxFeePerGas, err = decimalString("max_fee_per_gas", tx.GasFeeCap())
+				if err != nil {
+					return nil, err
+				}
+				req.MaxPriorityFeePerGas, err = decimalString("max_priority_fee_per_gas", tx.GasTipCap())
+				if err != nil {
+					return nil, err
+				}
 			} else if tx.GasPrice() != nil {
-				req.MaxFeePerGas = tx.GasPrice().String()
-				req.MaxPriorityFeePerGas = tx.GasPrice().String()
+				req.MaxFeePerGas, err = decimalString("gas_price", tx.GasPrice())
+				if err != nil {
+					return nil, err
+				}
+				req.MaxPriorityFeePerGas = req.MaxFeePerGas
 			}
 
 			signedHex, err := s.SignTransaction(ctx, fromAddr, req)
@@ -229,6 +248,17 @@ func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Addre
 			return &signedTx, nil
 		},
 	}
+}
+
+func decimalString(field string, value *big.Int) (string, error) {
+	if value == nil {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	if value.Sign() < 0 {
+		return "", fmt.Errorf("%s must be non-negative", field)
+	}
+
+	return value.String(), nil
 }
 
 // hexToBytes decodes a hex string (with optional 0x prefix) to bytes.
