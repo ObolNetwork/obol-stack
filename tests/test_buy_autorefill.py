@@ -155,6 +155,50 @@ class BuyAutorefillHelpersTest(unittest.TestCase):
 
 
 class BuyLifecycleCommandTest(unittest.TestCase):
+    def test_cmd_buy_new_purchase_happy_path(self):
+        mod = load_buy_module()
+        new_auths = make_auths("new", 3)
+
+        with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
+             mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
+             mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_list_purchase_requests", return_value=[]), \
+             mock.patch.object(mod, "_get_purchase_request", side_effect=http_error(404)), \
+             mock.patch.object(mod, "_presign_auths", return_value=new_auths) as presign, \
+             mock.patch.object(mod, "_create_purchase_request") as create_purchase, \
+             mock.patch.object(mod, "_wait_for_purchase_ready", return_value=True), \
+             mock.patch.object(sys, "argv", ["buy.py", "buy", "solo"]):
+            mod.cmd_buy("solo", "http://seller/v1/chat/completions", "qwen3.5:9b", count="3", opts={})
+
+        presign.assert_called_once_with("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 3)
+        args = create_purchase.call_args.args
+        self.assertEqual(args[0], "solo")
+        self.assertEqual(args[1], "http://seller")
+        self.assertEqual(args[2], "qwen3.5:9b")
+        self.assertEqual(args[3], 3)
+        self.assertEqual(args[8], new_auths)
+
+    def test_cmd_buy_budget_based_count(self):
+        mod = load_buy_module()
+        new_auths = make_auths("new", 4)
+
+        with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing(amount="1000")), \
+             mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
+             mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_list_purchase_requests", return_value=[]), \
+             mock.patch.object(mod, "_get_purchase_request", side_effect=http_error(404)), \
+             mock.patch.object(mod, "_presign_auths", return_value=new_auths) as presign, \
+             mock.patch.object(mod, "_create_purchase_request"), \
+             mock.patch.object(mod, "_wait_for_purchase_ready", return_value=True), \
+             mock.patch.object(sys, "argv", ["buy.py", "buy", "solo"]):
+            mod.cmd_buy("solo", "http://seller", "qwen3.5:9b", budget="4000", opts={})
+
+        presign.assert_called_once_with("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 4)
+
     def test_cmd_buy_rejects_duplicate_model_before_signing(self):
         mod = load_buy_module()
         purchases = [make_purchase(name="alpha")]
@@ -271,6 +315,36 @@ class BuyLifecycleCommandTest(unittest.TestCase):
         )
         self.assertEqual(kwargs["auto_refill"], existing["spec"]["autoRefill"])
 
+    def test_cmd_buy_same_name_overrides_auto_refill_policy(self):
+        mod = load_buy_module()
+        existing = make_purchase(name="solo")
+        new_auths = make_auths("new", 2)
+
+        with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
+             mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
+             mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_list_purchase_requests", return_value=[existing]), \
+             mock.patch.object(mod, "_get_purchase_request", return_value=existing), \
+             mock.patch.object(mod, "_buyer_status", return_value={"solo": {"remaining": 1, "spent": 2}}), \
+             mock.patch.object(mod, "_presign_auths", return_value=new_auths), \
+             mock.patch.object(mod, "_create_purchase_request") as create_purchase, \
+             mock.patch.object(mod, "_wait_for_purchase_ready", return_value=True), \
+             mock.patch.object(sys, "argv", ["buy.py", "buy", "solo"]):
+            mod.cmd_buy(
+                "solo",
+                "http://seller/v1/chat/completions",
+                "qwen3.5:9b",
+                count="2",
+                opts={"auto_refill": "true", "refill_threshold": "3", "refill_count": "7"},
+            )
+
+        self.assertEqual(
+            create_purchase.call_args.kwargs["auto_refill"],
+            {"enabled": True, "threshold": 3, "count": 7},
+        )
+
     def test_cmd_buy_requires_force_when_balance_is_insufficient(self):
         mod = load_buy_module()
 
@@ -302,6 +376,32 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         reconcile.assert_called_once()
         self.assertEqual(reconcile.call_args.args[0]["metadata"]["name"], "alpha")
+
+    def test_cmd_process_all_mixes_success_skip_and_error(self):
+        mod = load_buy_module()
+        alpha = make_purchase(name="alpha")
+        beta = make_purchase(name="beta")
+        gamma = make_purchase(name="gamma")
+
+        def reconcile(pr, *_args):
+            name = pr["metadata"]["name"]
+            if name == "alpha":
+                return True
+            if name == "beta":
+                return False
+            raise RuntimeError("boom")
+
+        with mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_buyer_status", return_value={
+                 "alpha": {"remaining": 1, "spent": 2},
+                 "gamma": {"remaining": 1, "spent": 2},
+             }), \
+             mock.patch.object(mod, "_list_purchase_requests", return_value=[alpha, beta, gamma]), \
+             mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_reconcile_purchase_autorefill", side_effect=reconcile), \
+             self.assertRaises(SystemExit):
+            mod.cmd_process(process_all=True)
 
     def test_cmd_process_all_exits_when_sidecar_status_is_unavailable(self):
         mod = load_buy_module()
@@ -339,6 +439,73 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         get_purchase.assert_called_once()
 
+    def test_reconcile_purchase_autorefill_refills_at_threshold(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+        live = {"remaining": 1, "spent": 2}
+        new_auths = make_auths("new", 2)
+        updated = make_purchase(name="solo")
+        updated["spec"] = dict(purchase["spec"])
+
+        with mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
+             mock.patch.object(mod, "_presign_auths", return_value=new_auths), \
+             mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_get_purchase_request", return_value=updated), \
+             mock.patch.object(mod, "_kube_json") as kube_json:
+            changed = mod._reconcile_purchase_autorefill(purchase, live, "0xsigner")
+
+        self.assertTrue(changed)
+        body = kube_json.call_args.args[4]
+        self.assertEqual(body["spec"]["count"], 3)
+        self.assertEqual(
+            body["spec"]["preSignedAuths"],
+            [purchase["spec"]["preSignedAuths"][2], new_auths[0], new_auths[1]],
+        )
+
+    def test_reconcile_purchase_autorefill_noop_above_threshold(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+
+        with mock.patch.object(mod, "_presign_auths") as presign:
+            changed = mod._reconcile_purchase_autorefill(
+                purchase,
+                {"remaining": 5, "spent": 0},
+                "0xsigner",
+            )
+
+        self.assertFalse(changed)
+        presign.assert_not_called()
+
+    def test_reconcile_purchase_autorefill_skips_on_signer_mismatch(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+
+        with mock.patch.object(mod, "_presign_auths") as presign:
+            changed = mod._reconcile_purchase_autorefill(
+                purchase,
+                {"remaining": 1, "spent": 2},
+                "0xother",
+            )
+
+        self.assertFalse(changed)
+        presign.assert_not_called()
+
+    def test_reconcile_purchase_autorefill_skips_on_insufficient_balance(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+
+        with mock.patch.object(mod, "_get_usdc_balance", return_value="0"), \
+             mock.patch.object(mod, "_presign_auths") as presign:
+            changed = mod._reconcile_purchase_autorefill(
+                purchase,
+                {"remaining": 1, "spent": 2},
+                "0xsigner",
+            )
+
+        self.assertFalse(changed)
+        presign.assert_not_called()
+
     def test_cmd_list_filters_sidecar_ghosts_against_purchase_requests(self):
         mod = load_buy_module()
         purchase = make_purchase(name="solo")
@@ -358,6 +525,24 @@ class BuyLifecycleCommandTest(unittest.TestCase):
         self.assertIn("solo", rendered)
         self.assertNotIn("ghost", rendered)
 
+    def test_cmd_list_uses_live_alias_and_remaining(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+        out = io.StringIO()
+
+        with mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_list_purchase_requests", return_value=[purchase]), \
+             mock.patch.object(mod, "_buyer_status", return_value={
+                 "solo": {"remaining": 7, "network": "base-sepolia", "public_model": "paid/custom-model"},
+             }), \
+             mock.patch.object(sys, "stdout", out):
+            mod.cmd_list()
+
+        rendered = out.getvalue()
+        self.assertIn("paid/custom-model", rendered)
+        self.assertIn("7", rendered)
+
     def test_cmd_status_requires_purchase_request_even_if_sidecar_has_ghost(self):
         mod = load_buy_module()
 
@@ -367,6 +552,32 @@ class BuyLifecycleCommandTest(unittest.TestCase):
              mock.patch.object(mod, "_buyer_status", return_value={"ghost": {"remaining": 1, "spent": 0}}), \
              self.assertRaises(SystemExit):
             mod.cmd_status("ghost")
+
+    def test_cmd_status_reflects_live_remaining_and_spent(self):
+        mod = load_buy_module()
+        purchase = make_purchase(name="solo")
+        out = io.StringIO()
+
+        with mock.patch.object(mod, "load_sa", return_value=("token", None)), \
+             mock.patch.object(mod, "make_ssl_context", return_value=object()), \
+             mock.patch.object(mod, "_get_purchase_request", return_value=purchase), \
+             mock.patch.object(mod, "_buyer_status", return_value={
+                 "solo": {
+                     "remaining": 4,
+                     "spent": 9,
+                     "public_model": "paid/qwen3.5:9b",
+                     "url": "http://seller",
+                     "remote_model": "qwen3.5:9b",
+                     "network": "base-sepolia",
+                 },
+             }), \
+             mock.patch.object(mod, "_get_litellm_pod", return_value={"status": {"phase": "Running"}}), \
+             mock.patch.object(sys, "stdout", out):
+            mod.cmd_status("solo")
+
+        rendered = out.getvalue()
+        self.assertIn("Auths remaining: 4", rendered)
+        self.assertIn("Auths spent:     9", rendered)
 
 
 if __name__ == "__main__":

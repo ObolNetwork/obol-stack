@@ -343,6 +343,125 @@ func TestReconcilePurchaseHappyPath(t *testing.T) {
 	}
 }
 
+func TestReconcilePurchaseAddsFinalizerOnFirstPass(t *testing.T) {
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "solo",
+			Namespace:  "agent-ns",
+			Generation: 1,
+		},
+		Spec: monetizeapi.PurchaseRequestSpec{
+			Model: "qwen3.5:9b",
+		},
+	}
+
+	c, litellm, _ := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase add finalizer: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "solo")
+	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+		t.Fatal("purchase finalizer missing after first reconcile")
+	}
+	if len(got.Status.Conditions) != 0 {
+		t.Fatalf("expected no status progression on first reconcile, got %#v", got.Status.Conditions)
+	}
+}
+
+func TestReconcilePurchaseProbePricingMismatchBlocksProgress(t *testing.T) {
+	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"accepts":[{"network":"base-sepolia","amount":"2000","asset":"0xasset","payTo":"0xpayto"}]}`)
+	}))
+	defer probeServer.Close()
+
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "agent-ns", Generation: 1},
+		Spec: monetizeapi.PurchaseRequestSpec{
+			Endpoint: probeServer.URL + "/v1/chat/completions",
+			Model:    "qwen3.5:9b",
+			Count:    1,
+			Payment: monetizeapi.PurchasePayment{
+				Network: "base-sepolia",
+				PayTo:   "0xpayto",
+				Price:   "1000",
+				Asset:   "0xasset",
+			},
+		},
+	}
+
+	c, litellm, _ := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase add finalizer: %v", err)
+	}
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase pricing mismatch: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "solo")
+	probed := purchaseCondition(t, got, "Probed")
+	if probed.Status != "False" || probed.Reason != "PricingMismatch" {
+		t.Fatalf("probed condition = %s/%s, want False/PricingMismatch", probed.Status, probed.Reason)
+	}
+
+	configCM, err := c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), buyerConfigCM, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get buyer config: %v", err)
+	}
+	if len(configCM.Data) != 0 {
+		t.Fatalf("buyer config mutated on pricing mismatch: %#v", configCM.Data)
+	}
+}
+
+func TestReconcilePurchaseNoAuthsBlocksLoadStage(t *testing.T) {
+	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"accepts":[{"network":"base-sepolia","amount":"1000","asset":"0xasset","payTo":"0xpayto"}]}`)
+	}))
+	defer probeServer.Close()
+
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "agent-ns", Generation: 1},
+		Spec: monetizeapi.PurchaseRequestSpec{
+			Endpoint: probeServer.URL + "/v1/chat/completions",
+			Model:    "qwen3.5:9b",
+			Count:    0,
+			Payment: monetizeapi.PurchasePayment{
+				Network: "base-sepolia",
+				PayTo:   "0xpayto",
+				Price:   "1000",
+				Asset:   "0xasset",
+			},
+		},
+	}
+
+	c, litellm, _ := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase add finalizer: %v", err)
+	}
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase no auths: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "solo")
+	authsLoaded := purchaseCondition(t, got, "AuthsLoaded")
+	if authsLoaded.Status != "False" || authsLoaded.Reason != "NoAuths" {
+		t.Fatalf("authsLoaded = %s/%s, want False/NoAuths", authsLoaded.Status, authsLoaded.Reason)
+	}
+	if purchaseConditionIsTrue(got.Status.Conditions, "Configured") {
+		t.Fatal("purchase should not configure when auth pool is empty")
+	}
+}
+
 func TestReconcilePurchaseReadyCatchesUpAfterRuntimeSync(t *testing.T) {
 	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -493,6 +612,165 @@ func TestReconcilePurchaseConfigureRejectsDuplicateModel(t *testing.T) {
 	}
 	if len(configCM.Data) != 0 {
 		t.Fatalf("buyer config mutated on duplicate model: %#v", configCM.Data)
+	}
+}
+
+func TestReconcilePurchaseConfigureRebuildsPendingAuthsFromSpecAfterRestart(t *testing.T) {
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "solo",
+			Namespace:  "agent-ns",
+			Generation: 1,
+			Finalizers: []string{purchaseRequestFinalizer},
+		},
+		Spec: monetizeapi.PurchaseRequestSpec{
+			Endpoint:       "http://seller/v1/chat/completions",
+			Model:          "qwen3.5:9b",
+			Count:          2,
+			PreSignedAuths: makePreSignedAuths("solo-", 2),
+			Payment: monetizeapi.PurchasePayment{
+				Network: "base-sepolia",
+				PayTo:   "0xpayto",
+				Price:   "1000",
+				Asset:   "0xasset",
+			},
+		},
+		Status: monetizeapi.PurchaseRequestStatus{
+			ObservedGeneration: 1,
+			Conditions: []monetizeapi.Condition{
+				{Type: "Probed", Status: "True", Reason: "Validated"},
+				{Type: "AuthsLoaded", Status: "True", Reason: "Loaded"},
+			},
+		},
+	}
+
+	c, litellm, buyerTransport := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+	buyerTransport.setPayloads(map[string]fakeBuyerStatus{
+		"solo": {Remaining: 2, Spent: 0},
+	})
+
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase rebuild pending auths: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "solo")
+	if purchaseCondition(t, got, "Configured").Status != "True" {
+		t.Fatal("purchase should configure from spec auths after restart")
+	}
+	if got.Status.Remaining != 2 || got.Status.Spent != 0 {
+		t.Fatalf("status remaining/spent = %d/%d, want 2/0", got.Status.Remaining, got.Status.Spent)
+	}
+}
+
+func TestReconcilePurchaseTopUpWritesMergedAuthPool(t *testing.T) {
+	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"accepts":[{"network":"base-sepolia","amount":"1000","asset":"0xasset","payTo":"0xpayto"}]}`)
+	}))
+	defer probeServer.Close()
+
+	auths := []monetizeapi.PreSignedAuth{
+		{Nonce: "old-1", Signature: "0xsignature", From: "0xsigner", To: "0xpayto", Value: "1000", ValidAfter: "0", ValidBefore: "4294967295"},
+		{Nonce: "old-2", Signature: "0xsignature", From: "0xsigner", To: "0xpayto", Value: "1000", ValidAfter: "0", ValidBefore: "4294967295"},
+		{Nonce: "old-3", Signature: "0xsignature", From: "0xsigner", To: "0xpayto", Value: "1000", ValidAfter: "0", ValidBefore: "4294967295"},
+		{Nonce: "new-1", Signature: "0xsignature", From: "0xsigner", To: "0xpayto", Value: "1000", ValidAfter: "0", ValidBefore: "4294967295"},
+		{Nonce: "new-2", Signature: "0xsignature", From: "0xsigner", To: "0xpayto", Value: "1000", ValidAfter: "0", ValidBefore: "4294967295"},
+	}
+
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "solo",
+			Namespace:  "agent-ns",
+			Generation: 3,
+			Finalizers: []string{purchaseRequestFinalizer},
+		},
+		Spec: monetizeapi.PurchaseRequestSpec{
+			Endpoint:       probeServer.URL + "/v1/chat/completions",
+			Model:          "qwen3.5:9b",
+			Count:          5,
+			PreSignedAuths: auths,
+			Payment: monetizeapi.PurchasePayment{
+				Network: "base-sepolia",
+				PayTo:   "0xpayto",
+				Price:   "1000",
+				Asset:   "0xasset",
+			},
+		},
+	}
+
+	c, litellm, buyerTransport := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+	buyerTransport.setPayloads(
+		map[string]fakeBuyerStatus{"solo": {Remaining: 3, Spent: 2}},
+		map[string]fakeBuyerStatus{"solo": {Remaining: 5, Spent: 2}},
+	)
+
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase top-up write: %v", err)
+	}
+	if err := c.reconcilePurchase(context.Background(), "agent-ns/solo"); err != nil {
+		t.Fatalf("reconcilePurchase top-up catch-up: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "solo")
+	if got.Status.Remaining != 5 || got.Status.Spent != 2 {
+		t.Fatalf("status remaining/spent = %d/%d, want 5/2", got.Status.Remaining, got.Status.Spent)
+	}
+
+	authsCM, err := c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), buyerAuthsCM, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get buyer auths: %v", err)
+	}
+	var rendered []map[string]string
+	if err := json.Unmarshal([]byte(authsCM.Data["solo.json"]), &rendered); err != nil {
+		t.Fatalf("decode buyer auths: %v", err)
+	}
+	if len(rendered) != 5 {
+		t.Fatalf("rendered auth count = %d, want 5", len(rendered))
+	}
+	if rendered[0]["nonce"] != "old-1" || rendered[4]["nonce"] != "new-2" {
+		t.Fatalf("unexpected rendered auth order: %#v", rendered)
+	}
+}
+
+func TestUpdatePurchaseStatusNoOpWhenUnchanged(t *testing.T) {
+	purchase := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "solo",
+			Namespace:  "agent-ns",
+			Generation: 1,
+		},
+		Status: monetizeapi.PurchaseRequestStatus{
+			ObservedGeneration: 1,
+			Remaining:          3,
+			Conditions: []monetizeapi.Condition{
+				{Type: "Ready", Status: "True", Reason: "Reconciled", Message: "ok"},
+			},
+		},
+	}
+
+	c, litellm, _ := newPurchaseLifecycleController(t, purchase)
+	defer litellm.close()
+
+	raw, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace("agent-ns").Get(context.Background(), "solo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get purchase: %v", err)
+	}
+
+	fakeClient, ok := c.dynClient.(*fake.FakeDynamicClient)
+	if !ok {
+		t.Fatal("expected fake dynamic client")
+	}
+	before := len(fakeClient.Actions())
+	status := purchase.Status
+	if err := c.updatePurchaseStatus(context.Background(), raw, &status); err != nil {
+		t.Fatalf("updatePurchaseStatus no-op: %v", err)
+	}
+	after := len(fakeClient.Actions())
+	if after != before {
+		t.Fatalf("unexpected extra status update action: before=%d after=%d", before, after)
 	}
 }
 
