@@ -1,8 +1,10 @@
 package kubectl
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -56,5 +58,78 @@ func TestRunSilent_BinaryNotFound(t *testing.T) {
 	err := RunSilent("/nonexistent/kubectl", "/tmp/kc.yaml", "version")
 	if err == nil {
 		t.Fatal("expected error for missing binary")
+	}
+}
+
+func TestWrapClusterDown(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		stderr  string
+		wrapped bool
+	}{
+		{
+			name:    "connection refused",
+			err:     errors.New("exit status 1"),
+			stderr:  `dial tcp 127.0.0.1:50839: connect: connection refused`,
+			wrapped: true,
+		},
+		{
+			name:    "unable to connect",
+			err:     errors.New("exit status 1"),
+			stderr:  `Unable to connect to the server: dial tcp 127.0.0.1:6443`,
+			wrapped: true,
+		},
+		{
+			name:    "normal error",
+			err:     errors.New("resource not found"),
+			stderr:  "Error from server (NotFound)",
+			wrapped: false,
+		},
+		{
+			name:    "nil error",
+			err:     nil,
+			stderr:  "",
+			wrapped: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := wrapClusterDown(tt.err, tt.stderr)
+			if tt.wrapped {
+				if got == nil || !strings.Contains(got.Error(), "cluster appears to be stopped") {
+					t.Errorf("expected cluster-down wrapper, got: %v", got)
+				}
+			} else if tt.err == nil {
+				if got != nil {
+					t.Errorf("expected nil, got: %v", got)
+				}
+			} else {
+				if got == nil || strings.Contains(got.Error(), "cluster appears to be stopped") {
+					t.Errorf("should not wrap normal errors, got: %v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatClusterDownError(t *testing.T) {
+	// Contextual message for a known command.
+	msg := FormatClusterDownError(ErrClusterDown, []string{"obol", "sell", "list"})
+	if !strings.Contains(msg, "before listing services for sale") {
+		t.Errorf("expected contextual hint, got: %s", msg)
+	}
+
+	// Fallback for an unknown subcommand.
+	msg = FormatClusterDownError(ErrClusterDown, []string{"obol", "frobnicate"})
+	if msg != ErrClusterDown.Error() {
+		t.Errorf("expected fallback message, got: %s", msg)
+	}
+
+	// Non-cluster-down error returns empty.
+	msg = FormatClusterDownError(errors.New("something else"), []string{"obol", "sell", "list"})
+	if msg != "" {
+		t.Errorf("expected empty for non-cluster-down error, got: %s", msg)
 	}
 }
