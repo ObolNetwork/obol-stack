@@ -135,6 +135,8 @@ def _get_litellm_pod(token, ssl_ctx):
         token, ssl_ctx,
     )
     for item in pods.get("items", []):
+        if (item.get("metadata") or {}).get("deletionTimestamp"):
+            continue
         if item.get("status", {}).get("phase") == "Running" and item.get("status", {}).get("podIP"):
             return item
     return None

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -434,9 +435,35 @@ func (c *Controller) triggerBuyerReload(ctx context.Context, ns string) {
 		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
 			continue
 		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
 		reloadURL := fmt.Sprintf("http://%s:8402/admin/reload", pod.Status.PodIP)
 		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		req, _ := http.NewRequestWithContext(reqCtx, "POST", reloadURL, nil)
+		c.httpClient.Do(req) //nolint:bodyclose // best-effort, response ignored
+		cancel()
+	}
+}
+
+func (c *Controller) triggerBuyerRemove(ctx context.Context, ns, name string) {
+	pods, err := c.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=litellm",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return
+	}
+
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		removeURL := fmt.Sprintf("http://%s:8402/admin/remove?name=%s", pod.Status.PodIP, url.QueryEscape(name))
+		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		req, _ := http.NewRequestWithContext(reqCtx, "POST", removeURL, nil)
 		c.httpClient.Do(req) //nolint:bodyclose // best-effort, response ignored
 		cancel()
 	}
@@ -455,6 +482,9 @@ func (c *Controller) checkBuyerStatus(ctx context.Context, ns, name string) (rem
 
 	for _, pod := range pods.Items {
 		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
 			continue
 		}
 

@@ -961,3 +961,59 @@ func TestReconcileDeletingPurchaseRemovesAliasForLastOwner(t *testing.T) {
 		t.Fatalf("hot-delete calls = %d, want 1", got)
 	}
 }
+
+func TestReconcileDeletingPurchaseWaitsForRuntimeStatusToDisappear(t *testing.T) {
+	now := metav1.Now()
+	alpha := monetizeapi.PurchaseRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "alpha",
+			Namespace:         "agent-ns",
+			Finalizers:        []string{purchaseRequestFinalizer},
+			DeletionTimestamp: &now,
+			Generation:        2,
+		},
+		Spec: monetizeapi.PurchaseRequestSpec{Model: "qwen3.5:9b"},
+		Status: monetizeapi.PurchaseRequestStatus{
+			ObservedGeneration: 2,
+			Remaining:          0,
+			Spent:              7,
+			Conditions: []monetizeapi.Condition{
+				{Type: "Configured", Status: "True", Reason: "Written"},
+				{Type: "Ready", Status: "True", Reason: "Reconciled"},
+			},
+		},
+	}
+
+	c, litellm, buyerTransport := newPurchaseLifecycleController(t, alpha)
+	defer litellm.close()
+	seedBuyerConfigMaps(t, c, map[string]string{
+		"alpha": `{"remoteModel":"qwen3.5:9b"}`,
+	})
+	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
+	litellm.infoResp = []map[string]any{
+		{
+			"model_name": "paid/qwen3.5:9b",
+			"model_info": map[string]any{"id": "route-1"},
+		},
+	}
+	buyerTransport.setPayloads(map[string]fakeBuyerStatus{
+		"alpha": {Remaining: 0, Spent: 7},
+	})
+
+	raw := mustPurchaseObject(t, alpha)
+	if err := c.reconcileDeletingPurchase(context.Background(), &alpha, raw); err != nil {
+		t.Fatalf("reconcileDeletingPurchase runtime cleanup pending: %v", err)
+	}
+
+	got := getPurchaseRequest(t, c, "agent-ns", "alpha")
+	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+		t.Fatal("finalizer removed before runtime status disappeared")
+	}
+	deleting := purchaseCondition(t, got, "Deleting")
+	if deleting.Status != "True" || deleting.Reason != "RuntimeCleanupPending" {
+		t.Fatalf("deleting condition = %s/%s, want True/RuntimeCleanupPending", deleting.Status, deleting.Reason)
+	}
+	if got := litellm.delCalls.Load(); got != 1 {
+		t.Fatalf("hot-delete calls = %d, want 1", got)
+	}
+}

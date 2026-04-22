@@ -1454,6 +1454,60 @@ func TestProxy_ReloadRemovingUpstreamDropsStatusEntry(t *testing.T) {
 	}
 }
 
+func TestProxy_AdminRemoveDropsStatusEntry(t *testing.T) {
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"solo": {
+				URL:         "http://seller.example.com",
+				RemoteModel: "qwen3.5:9b",
+				Network:     "base-sepolia",
+				PayTo:       "0xpayto",
+				Asset:       "0xasset",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"solo": {makeAuth("0xone"), makeAuth("0xtwo")}}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var before map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&before); err != nil {
+		t.Fatalf("decode status before admin remove: %v", err)
+	}
+	if _, ok := before["solo"]; !ok {
+		t.Fatal("status missing solo before admin remove")
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/remove?name=solo", nil)
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin remove status = %d, want 200", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var after map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&after); err != nil {
+		t.Fatalf("decode status after admin remove: %v", err)
+	}
+	if _, ok := after["solo"]; ok {
+		t.Fatalf("status still contains solo after admin remove: %#v", after["solo"])
+	}
+}
+
 func scrapeMetricFamilies(t *testing.T, proxy *Proxy) map[string]*dto.MetricFamily {
 	t.Helper()
 

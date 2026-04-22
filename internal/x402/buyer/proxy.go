@@ -76,6 +76,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
 	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
+	p.mux.HandleFunc("POST /admin/remove", p.handleAdminRemove)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
 
@@ -164,6 +165,7 @@ func (p *Proxy) syncCompatibilityRoutesLocked() {
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
 	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
+	p.mux.HandleFunc("POST /admin/remove", p.handleAdminRemove)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
 
@@ -390,12 +392,12 @@ func releaseHeldPreSignedSpend(signers []Signer, held *PreSignedAuth) {
 // request body from GetBody for each attempt so retries stay valid under
 // httputil.ReverseProxy on newer Go versions.
 type replayableX402Transport struct {
-	Base             http.RoundTripper
-	Signers          []Signer
-	Selector         PaymentSelector
-	OnPaymentAttempt PaymentCallback
-	OnPaymentSuccess PaymentCallback
-	OnPaymentFailure PaymentCallback
+	Base                  http.RoundTripper
+	Signers               []Signer
+	Selector              PaymentSelector
+	OnPaymentAttempt      PaymentCallback
+	OnPaymentSuccess      PaymentCallback
+	OnPaymentFailure      PaymentCallback
 	OnConfirmSpendFailure PaymentCallback
 	// OnPaymentUnsettled fires when the upstream returned 2xx without a
 	// successful X-PAYMENT-RESPONSE. The auth has been consumed locally via
@@ -728,8 +730,34 @@ func (p *Proxy) handleAdminReload(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+func (p *Proxy) handleAdminRemove(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(w, "missing name", http.StatusBadRequest)
+		return
+	}
+
+	p.mu.Lock()
+	p.removeUpstreamLocked(name)
+	p.syncCompatibilityRoutesLocked()
+	p.syncMetricsLocked()
+	p.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status":"removed","name":%q}`, name)
+}
+
 func (p *Proxy) ReloadCh() <-chan struct{} {
 	return p.reloadCh
+}
+
+func (p *Proxy) removeUpstreamLocked(name string) {
+	entry := p.upstreams[name]
+	delete(p.signers, name)
+	delete(p.upstreams, name)
+	if entry != nil && p.modelRoutes[entry.remoteModel] == name {
+		delete(p.modelRoutes, entry.remoteModel)
+	}
 }
 
 // singleJoiningSlash joins a base and suffix path with exactly one slash.

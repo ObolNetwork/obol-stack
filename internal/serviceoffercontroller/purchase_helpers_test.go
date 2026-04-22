@@ -290,3 +290,56 @@ func TestOtherActivePurchaseUsesModel(t *testing.T) {
 		t.Fatalf("conflict = %#v, want draining", drainingConflict)
 	}
 }
+
+type staticTransport struct {
+	hostToBody map[string]string
+}
+
+func (s *staticTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(s.hostToBody[req.URL.Host])),
+	}, nil
+}
+
+func TestCheckBuyerStatusSkipsDeletingPods(t *testing.T) {
+	now := metav1.Now()
+	kubeClient := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "litellm-old",
+				Namespace:         "llm",
+				Labels:            map[string]string{"app": "litellm"},
+				DeletionTimestamp: &now,
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "litellm-new",
+				Namespace: "llm",
+				Labels:    map[string]string{"app": "litellm"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
+		},
+	)
+
+	c := &Controller{
+		kubeClient: kubeClient,
+		httpClient: &http.Client{Transport: &staticTransport{
+			hostToBody: map[string]string{
+				"10.0.0.1:8402": `{"solo":{"remaining":99,"spent":1}}`,
+				"10.0.0.2:8402": `{"solo":{"remaining":3,"spent":2}}`,
+			},
+		}},
+	}
+
+	remaining, spent, err := c.checkBuyerStatus(context.Background(), "llm", "solo")
+	if err != nil {
+		t.Fatalf("checkBuyerStatus: %v", err)
+	}
+	if remaining != 3 || spent != 2 {
+		t.Fatalf("remaining/spent = %d/%d, want 3/2", remaining, spent)
+	}
+}

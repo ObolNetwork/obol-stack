@@ -10,8 +10,10 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -759,6 +761,204 @@ print(json.dumps(buy._buyer_status() or {}))
 	t.Fatalf("timed out waiting for buyer live status to drop %q\nlast output:\n%s", name, last)
 }
 
+func resourceNamesWithPrefix(t *testing.T, cfg *config.Config, resource, namespace, prefix string) []string {
+	t.Helper()
+
+	out, err := obolRunErr(cfg, "kubectl", "get", resource, "-n", namespace, "-o", "json")
+	if err != nil {
+		return nil
+	}
+
+	var payload struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		return nil
+	}
+
+	var names []string
+	for _, item := range payload.Items {
+		if strings.HasPrefix(item.Metadata.Name, prefix) {
+			names = append(names, item.Metadata.Name)
+		}
+	}
+	return names
+}
+
+func pruneBuyerConfigMapPrefix(t *testing.T, cfg *config.Config, configMapName, prefix string) bool {
+	t.Helper()
+
+	out, err := obolRunErr(cfg, "kubectl", "get", "configmap", configMapName, "-n", "llm", "-o", "json")
+	if err != nil {
+		return false
+	}
+
+	var payload struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		return false
+	}
+
+	changed := false
+	for key := range payload.Data {
+		if strings.HasPrefix(key, prefix) && strings.HasSuffix(key, ".json") {
+			patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, key)
+			if _, err := obolRunErr(cfg, "kubectl", "patch", "configmap", configMapName, "-n", "llm", "--type=json", "-p", patch); err == nil {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func waitForNoBuySideArtifacts(t *testing.T, cfg *config.Config, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastPurchases []string
+	var lastOffers []string
+	var lastRaw string
+
+	for time.Now().Before(deadline) {
+		lastPurchases = resourceNamesWithPrefix(t, cfg, "purchaserequests.obol.org", agentNamespace(cfg), "buy-side-")
+		lastOffers = resourceNamesWithPrefix(t, cfg, "serviceoffers.obol.org", "llm", "buy-lifecycle-")
+
+		out, err := execInAgentErr(cfg, "python3", "-c", `
+import json
+import sys
+sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+import buy
+print(json.dumps(buy._buyer_status() or {}))
+`)
+		lastRaw = out
+		if err == nil {
+			var status map[string]buyerLiveUpstream
+			if json.Unmarshal([]byte(out), &status) == nil {
+				hasStaleRuntime := false
+				for name := range status {
+					if strings.HasPrefix(name, "buy-side-") {
+						hasStaleRuntime = true
+						break
+					}
+				}
+				if len(lastPurchases) == 0 && len(lastOffers) == 0 && !hasStaleRuntime {
+					return
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("stale buy-side artifacts remain after cleanup\npurchases=%v\noffers=%v\nraw=%s", lastPurchases, lastOffers, lastRaw)
+}
+
+func syncAgentSkillsForBuySideTests(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed for monetize integration test")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	sourcePath := filepath.Join(repoRoot, "internal", "embed", "skills", "buy-inference", "scripts", "buy.py")
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read current buy.py: %v", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	_, err = execInAgentErr(cfg, "python3", "-c", fmt.Sprintf(`
+import base64
+import pathlib
+
+target = pathlib.Path("/data/.openclaw/skills/buy-inference/scripts/buy.py")
+target.write_bytes(base64.b64decode(%q))
+`, encoded))
+	if err != nil {
+		t.Fatalf("write current buy.py into agent skills failed: %v", err)
+	}
+}
+
+func cleanupStaleBuySideLifecycleArtifacts(t *testing.T, cfg *config.Config) {
+	t.Helper()
+
+	stalePurchases := resourceNamesWithPrefix(t, cfg, "purchaserequests.obol.org", agentNamespace(cfg), "buy-side-")
+	for _, name := range stalePurchases {
+		_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org", name, "-n", agentNamespace(cfg), "--ignore-not-found", "--wait=false")
+		_, _ = obolRunErr(cfg, "kubectl", "patch", "purchaserequests.obol.org", name, "-n", agentNamespace(cfg), "--type=json", "-p", `[{"op":"remove","path":"/metadata/finalizers"}]`)
+	}
+	for _, name := range resourceNamesWithPrefix(t, cfg, "serviceoffers.obol.org", "llm", "buy-lifecycle-") {
+		_, _ = obolRunErr(cfg, "kubectl", "delete", "serviceoffers.obol.org", name, "-n", "llm", "--ignore-not-found", "--wait=false")
+	}
+
+	changed := len(stalePurchases) > 0
+	changed = pruneBuyerConfigMapPrefix(t, cfg, "x402-buyer-config", "buy-side-") || changed
+	changed = pruneBuyerConfigMapPrefix(t, cfg, "x402-buyer-auths", "buy-side-") || changed
+
+	if changed {
+		_, _ = obolRunErr(cfg, "kubectl", "rollout", "restart", "deployment/litellm", "-n", "llm")
+		_, _ = obolRunErr(cfg, "kubectl", "rollout", "status", "deployment/litellm", "-n", "llm", "--timeout=180s")
+	}
+
+	waitForNoBuySideArtifacts(t, cfg, 2*time.Minute)
+}
+
+func bestEffortDrainDeletingPurchase(t *testing.T, cfg *config.Config, buyerName, model string, timeout time.Duration) {
+	t.Helper()
+
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := obolRunErr(cfg, "kubectl", "get", "purchaserequests.obol.org", buyerName, "-n", agentNamespace(cfg)); err != nil {
+			return
+		}
+
+		out, err := execInAgentErr(cfg, "python3", "-c", `
+import json
+import sys
+sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+import buy
+print(json.dumps(buy._buyer_status() or {}))
+`)
+		if err == nil {
+			var status map[string]buyerLiveUpstream
+			if json.Unmarshal([]byte(out), &status) == nil {
+				if upstream, ok := status[buyerName]; ok && upstream.Remaining > 0 {
+					_, _ = callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "cleanup drain")
+				}
+			}
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func pruneBuyerRuntimeEntry(t *testing.T, cfg *config.Config, buyerName string) {
+	t.Helper()
+
+	for _, cm := range []string{"x402-buyer-config", "x402-buyer-auths"} {
+		patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s.json"}]`, buyerName)
+		_, _ = obolRunErr(cfg, "kubectl", "patch", "configmap", cm, "-n", "llm", "--type=json", "-p", patch)
+	}
+
+	_, _ = obolRunErr(cfg, "kubectl", "rollout", "restart", "deployment/litellm", "-n", "llm")
+	_, _ = obolRunErr(cfg, "kubectl", "rollout", "status", "deployment/litellm", "-n", "llm", "--timeout=180s")
+}
+
+func cleanupBuySideLifecycle(t *testing.T, cfg *config.Config, buyerName, offerName, offerNamespace, model string) {
+	t.Helper()
+
+	_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org", buyerName, "-n", agentNamespace(cfg), "--ignore-not-found", "--wait=false")
+	bestEffortDrainDeletingPurchase(t, cfg, buyerName, model, 2*time.Minute)
+	pruneBuyerRuntimeEntry(t, cfg, buyerName)
+	deleteServiceOffer(t, cfg, offerName, offerNamespace)
+}
+
 func consumePaidAuth(t *testing.T, cfg *config.Config, masterKey, model, buyerName string, wantRemaining, wantSpent int, timeout time.Duration) []byte {
 	t.Helper()
 
@@ -839,6 +1039,9 @@ except urllib.error.HTTPError as err:
 `, model, prompt, "http://litellm.llm.svc.cluster.local:4000/v1/chat/completions", "Bearer "+masterKey)
 
 	out, err := execInAgentErr(cfg, "python3", "-c", script)
+	if idx := strings.Index(out, "command terminated with exit code"); idx >= 0 {
+		out = strings.TrimSpace(out[:idx])
+	}
 	var result struct {
 		Status int    `json:"status"`
 		Body   string `json:"body"`
@@ -3510,6 +3713,8 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	requireCRD(t, cfg)
 	requireAgent(t, cfg)
 	model := requireExactOllamaModel(t, "qwen3.5:9b")
+	cleanupStaleBuySideLifecycleArtifacts(t, cfg)
+	syncAgentSkillsForBuySideTests(t, cfg)
 	anvil := requireAnvil(t)
 
 	facilitator := testutil.StartRealFacilitator(t, anvil)
@@ -3543,10 +3748,6 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	ns := "llm"
 	offerYAML := litellmServiceOfferYAML(name, ns, sellerAddr)
 	applyServiceOffer(t, cfg, offerYAML)
-	t.Cleanup(func() {
-		_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org", buyerName, "-n", agentNamespace(cfg), "--ignore-not-found")
-		deleteServiceOffer(t, cfg, name, ns)
-	})
 
 	processOut, processErr := execInAgentErr(cfg, "python3",
 		monetizePy,
@@ -3583,6 +3784,9 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	waitForPurchaseRequestState(t, cfg, buyerName, 3, 3, 0, 90*time.Second)
 
 	masterKey := getLiteLLMMasterKey(t, cfg)
+	t.Cleanup(func() {
+		cleanupBuySideLifecycle(t, cfg, buyerName, name, ns, model)
+	})
 	firstBody := consumePaidAuth(t, cfg, masterKey, model, buyerName, 2, 1, 2*time.Minute)
 	t.Logf("first paid response: %s", string(firstBody)[:min(200, len(firstBody))])
 	secondBody := consumePaidAuth(t, cfg, masterKey, model, buyerName, 1, 2, 2*time.Minute)

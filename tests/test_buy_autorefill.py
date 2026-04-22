@@ -125,6 +125,24 @@ class BuyAutorefillHelpersTest(unittest.TestCase):
         self.assertIsNone(mod._find_purchase_by_model(purchases, "qwen3.6:9b", exclude_name="gamma"))
         self.assertEqual(mod._find_purchase_by_model(purchases, "qwen3.7:9b"), "draining")
 
+    def test_get_litellm_pod_skips_terminating_pods(self):
+        mod = load_buy_module()
+        pods = {
+            "items": [
+                {
+                    "metadata": {"name": "litellm-old", "deletionTimestamp": "2026-04-23T00:00:00Z"},
+                    "status": {"phase": "Running", "podIP": "10.0.0.1"},
+                },
+                {
+                    "metadata": {"name": "litellm-new"},
+                    "status": {"phase": "Running", "podIP": "10.0.0.2"},
+                },
+            ],
+        }
+        with mock.patch.object(mod, "api_get", return_value=pods):
+            pod = mod._get_litellm_pod("token", object())
+        self.assertEqual(pod["metadata"]["name"], "litellm-new")
+
     def test_purchase_ready_requires_current_generation_and_pool_sync(self):
         mod = load_buy_module()
         pr = {

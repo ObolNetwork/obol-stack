@@ -129,7 +129,36 @@ func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetize
 		c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
 	}
 	c.removeBuyerUpstream(ctx, buyerNS, pr.Name)
+	c.triggerBuyerRemove(ctx, buyerNS, pr.Name)
 	c.triggerBuyerReload(ctx, buyerNS)
+
+	if _, _, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name); err == nil {
+		setPurchaseCondition(
+			&status.Conditions,
+			"Deleting",
+			"True",
+			"RuntimeCleanupPending",
+			fmt.Sprintf("Delete requested; waiting for x402-buyer to drop %s from live status", pr.Name),
+		)
+		if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
+			return err
+		}
+		c.purchaseQueue.AddAfter(pr.Namespace+"/"+pr.Name, 5*time.Second)
+		return nil
+	} else if !strings.Contains(err.Error(), "not found in sidecar status") {
+		setPurchaseCondition(
+			&status.Conditions,
+			"Deleting",
+			"True",
+			"RuntimeCleanupPending",
+			fmt.Sprintf("Delete requested; waiting for x402-buyer cleanup: %v", err),
+		)
+		if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
+			return err
+		}
+		c.purchaseQueue.AddAfter(pr.Namespace+"/"+pr.Name, 5*time.Second)
+		return nil
+	}
 
 	patched := raw.DeepCopy()
 	fins := patched.GetFinalizers()
