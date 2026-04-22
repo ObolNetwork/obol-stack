@@ -449,18 +449,43 @@ except: pass
 " 2>&1)
 if [ -n "$BOB_SIGNER_ADDR" ]; then
     echo "  Remote-signer wallet: $BOB_SIGNER_ADDR"
-    # Send USDC (0.05 USDC = 50000 micro-units) from .env key
-    env -u CHAIN cast send --private-key "$SIGNER_KEY" \
+    # Send USDC (0.05 USDC = 50000 micro-units) from .env key.
+    # `cast send` (no --async) waits for inclusion; capture the receipt so we
+    # can verify status=1 instead of relying on grep||true to mask failures.
+    send_out=$(env -u CHAIN cast send --private-key "$SIGNER_KEY" \
         0x036CbD53842c5426634e7929541eC2318f3dCF7e \
         "transfer(address,uint256)" "$BOB_SIGNER_ADDR" 50000 \
-        --rpc-url https://sepolia.base.org 2>&1 | grep -E "status" || true
+        --rpc-url https://sepolia.base.org 2>&1 || true)
+    if ! echo "$send_out" | grep -qE "^status\s+1 \(success\)"; then
+        fail "Funding tx did not confirm status=1 — ${send_out:0:300}"
+        emit_metrics; exit 1
+    fi
+    # Poll the direct Base Sepolia RPC until the balance reflects the transfer.
+    # This avoids a race where step 32's agent sees 0 USDC because eRPC's
+    # eth_call cache (10s TTL) still holds the pre-funding result.
+    POST_FUND_BOB_SIGNER_USDC=0
+    for _ in $(seq 1 12); do
+        POST_FUND_BOB_SIGNER_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
+        [ -n "$POST_FUND_BOB_SIGNER_USDC" ] && [ "$POST_FUND_BOB_SIGNER_USDC" -ge 50000 ] 2>/dev/null && break
+        sleep 2
+    done
+    if [ -z "$POST_FUND_BOB_SIGNER_USDC" ] || [ "$POST_FUND_BOB_SIGNER_USDC" -lt 50000 ]; then
+        fail "Bob's on-chain USDC did not reach 50000 — got ${POST_FUND_BOB_SIGNER_USDC:-0}"
+        emit_metrics; exit 1
+    fi
     POST_FUND_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
         "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-    POST_FUND_BOB_SIGNER_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
-        "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url https://sepolia.base.org 2>/dev/null | grep -oE '^[0-9]+' | head -1)
-    pass "Funded $BOB_SIGNER_ADDR with 0.05 USDC"
+    pass "Funded $BOB_SIGNER_ADDR with 0.05 USDC (on-chain: $POST_FUND_BOB_SIGNER_USDC)"
+
+    # Wait for Bob's in-pod buy.py (via eRPC with 10s cache) to catch up so
+    # the AI agent in step 32 sees the funded balance, not a stale zero.
+    poll_step_grep "Bob: eRPC reflects funding" "0.05" 18 5 bob kubectl exec \
+        -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
+        python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
 else
     fail "Could not determine Bob's remote-signer address"
+    emit_metrics; exit 1
 fi
 
 # ═════════════════════════════════════════════════════════════════
