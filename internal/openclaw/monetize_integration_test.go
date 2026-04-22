@@ -692,6 +692,103 @@ func parseBuyerLiveUpstream(t *testing.T, output, name string) buyerLiveUpstream
 	return upstream
 }
 
+func getPurchaseRequest(t *testing.T, cfg *config.Config, name string) map[string]interface{} {
+	t.Helper()
+
+	out := obolRun(t, cfg, "kubectl", "get", "purchaserequests.obol.org", name, "-n", agentNamespace(cfg), "-o", "json")
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("parse PurchaseRequest JSON: %v\nraw: %s", err, out)
+	}
+	return result
+}
+
+func waitForPurchaseRequestState(t *testing.T, cfg *config.Config, name string, wantSpecAuths, wantRemaining, wantSpent int, timeout time.Duration) map[string]interface{} {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var last map[string]interface{}
+	for time.Now().Before(deadline) {
+		last = getPurchaseRequest(t, cfg, name)
+		spec, _ := last["spec"].(map[string]interface{})
+		status, _ := last["status"].(map[string]interface{})
+		auths, _ := spec["preSignedAuths"].([]interface{})
+		remaining, _ := status["remaining"].(float64)
+		spent, _ := status["spent"].(float64)
+		if len(auths) == wantSpecAuths && int(remaining) == wantRemaining && int(spent) == wantSpent {
+			return last
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	raw, _ := json.MarshalIndent(last, "", "  ")
+	t.Fatalf(
+		"timed out waiting for PurchaseRequest %s spec/status auths=%d remaining=%d spent=%d\nlast: %s",
+		name, wantSpecAuths, wantRemaining, wantSpent, raw,
+	)
+	return nil
+}
+
+func waitForBuyerUpstreamMissing(t *testing.T, cfg *config.Config, name string, timeout time.Duration) {
+	t.Helper()
+
+	script := `
+import json
+import sys
+sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+import buy
+print(json.dumps(buy._buyer_status() or {}))
+`
+
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := execInAgentErr(cfg, "python3", "-c", script)
+		last = out
+		if err == nil {
+			var status map[string]buyerLiveUpstream
+			if json.Unmarshal([]byte(out), &status) == nil {
+				if _, ok := status[name]; !ok {
+					return
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("timed out waiting for buyer live status to drop %q\nlast output:\n%s", name, last)
+}
+
+func consumePaidAuth(t *testing.T, cfg *config.Config, masterKey, model, buyerName string, wantRemaining, wantSpent int, timeout time.Duration) []byte {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastStatus int
+	var lastBody []byte
+	for time.Now().Before(deadline) {
+		statusCode, body := callLiteLLMPaidModelFromAgent(
+			t,
+			cfg,
+			masterKey,
+			"paid/"+model,
+			fmt.Sprintf("buyer lifecycle request %d", time.Now().UnixNano()),
+		)
+		lastStatus = statusCode
+		lastBody = body
+		if statusCode == http.StatusOK {
+			live := waitForBuyerLiveAuthCount(t, cfg, buyerName, wantRemaining, 60*time.Second)
+			status := parseBuyerLiveUpstream(t, live, buyerName)
+			if status.Spent == wantSpent {
+				return body
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("timed out consuming paid auth for %s: last status=%d body=%s", buyerName, lastStatus, string(lastBody))
+	return nil
+}
+
 func getStatusFieldString(so map[string]interface{}, field string) string {
 	status, ok := so["status"].(map[string]interface{})
 	if !ok {
@@ -3406,6 +3503,214 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	}
 
 	t.Logf("tunnel sidecar flow complete: registered agent %s, discovered endpoint, bought paid/%s, auths 3->2, spent 0->1", agentID, model)
+}
+
+func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testing.T) {
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireExactOllamaModel(t, "qwen3.5:9b")
+	anvil := requireAnvil(t)
+
+	facilitator := testutil.StartRealFacilitator(t, anvil)
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	agentWallet := getAgentWalletAddress(t, cfg)
+	sellerAddr := anvil.Accounts[1].Address
+	for _, addr := range []string{
+		anvil.Accounts[0].Address, // facilitator signer
+		agentWallet,               // buyer
+		sellerAddr,                // seller payTo
+	} {
+		anvil.ClearCode(t, addr)
+	}
+	anvil.MintUSDC(t, agentWallet, testutil.USDCMicroUnits(10))
+
+	originalERPCConfig := getERPCConfigYAML(t, cfg)
+	t.Cleanup(func() {
+		setERPCConfigYAML(t, cfg, originalERPCConfig)
+	})
+	anvilClusterURL := fmt.Sprintf("http://%s:%d", testutil.ClusterHostAddress(), anvil.Port)
+	obolRun(t, cfg, "network", "add", "base-sepolia", "--endpoint", anvilClusterURL, "--allow-writes")
+	pinERPCChainToSingleUpstream(t, cfg, 84532, "custom-84532-0")
+
+	runID := petname.Generate(2, "-")
+	name := "buy-lifecycle-" + runID
+	buyerName := "buy-side-" + runID
+	conflictName := "buy-side-conflict-" + runID
+	ns := "llm"
+	offerYAML := litellmServiceOfferYAML(name, ns, sellerAddr)
+	applyServiceOffer(t, cfg, offerYAML)
+	t.Cleanup(func() {
+		_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org", buyerName, "-n", agentNamespace(cfg), "--ignore-not-found")
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	processOut, processErr := execInAgentErr(cfg, "python3",
+		monetizePy,
+		"process", name, "--namespace", ns)
+	t.Logf("sell reconcile output:\n%s", processOut)
+	if processErr != nil {
+		t.Fatalf("reconcile ServiceOffer: %v", processErr)
+	}
+
+	for _, cond := range []string{"UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		waitForCondition(t, cfg, name, ns, cond, "True", 2*time.Minute)
+	}
+
+	localBaseURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
+	probeOut := waitForBuyerProbePricing(t, cfg, 90*time.Second, localBaseURL+"/v1/chat/completions", model)
+	t.Logf("probe output:\n%s", probeOut)
+
+	buyOut, buyErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", buyerName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "3",
+		"--auto-refill",
+		"--refill-threshold", "1",
+		"--refill-count", "2")
+	t.Logf("buy output:\n%s", buyOut)
+	if buyErr != nil {
+		t.Fatalf("initial buy failed: %v", buyErr)
+	}
+
+	liveReady := waitForBuyerLiveAuthCount(t, cfg, buyerName, 3, 90*time.Second)
+	t.Logf("buyer live status after buy:\n%s", liveReady)
+	waitForPurchaseRequestState(t, cfg, buyerName, 3, 3, 0, 90*time.Second)
+
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	firstBody := consumePaidAuth(t, cfg, masterKey, model, buyerName, 2, 1, 2*time.Minute)
+	t.Logf("first paid response: %s", string(firstBody)[:min(200, len(firstBody))])
+	secondBody := consumePaidAuth(t, cfg, masterKey, model, buyerName, 1, 2, 2*time.Minute)
+	t.Logf("second paid response: %s", string(secondBody)[:min(200, len(secondBody))])
+
+	waitForPurchaseRequestState(t, cfg, buyerName, 3, 1, 2, 90*time.Second)
+
+	processBuyOut, processBuyErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"process", "--all")
+	t.Logf("buy-side process --all output:\n%s", processBuyOut)
+	if processBuyErr != nil {
+		t.Fatalf("process --all failed: %v", processBuyErr)
+	}
+
+	liveAfterRefill := waitForBuyerLiveAuthCount(t, cfg, buyerName, 3, 90*time.Second)
+	t.Logf("buyer live status after autorefill:\n%s", liveAfterRefill)
+	refilled := parseBuyerLiveUpstream(t, liveAfterRefill, buyerName)
+	if refilled.Spent != 2 {
+		t.Fatalf("buyer spent after autorefill = %d, want 2", refilled.Spent)
+	}
+	waitForPurchaseRequestState(t, cfg, buyerName, 3, 3, 2, 90*time.Second)
+
+	topUpOut, topUpErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", buyerName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "2")
+	t.Logf("manual top-up output:\n%s", topUpOut)
+	if topUpErr != nil {
+		t.Fatalf("manual top-up failed: %v", topUpErr)
+	}
+
+	liveAfterTopUp := waitForBuyerLiveAuthCount(t, cfg, buyerName, 5, 90*time.Second)
+	t.Logf("buyer live status after top-up:\n%s", liveAfterTopUp)
+	toppedUp := parseBuyerLiveUpstream(t, liveAfterTopUp, buyerName)
+	if toppedUp.Spent != 2 {
+		t.Fatalf("buyer spent after top-up = %d, want 2", toppedUp.Spent)
+	}
+	waitForPurchaseRequestState(t, cfg, buyerName, 5, 5, 2, 90*time.Second)
+
+	conflictOut, conflictErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", conflictName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "1")
+	t.Logf("duplicate-model rejection output:\n%s", conflictOut)
+	if conflictErr == nil {
+		t.Fatal("duplicate model buy unexpectedly succeeded")
+	}
+	if !strings.Contains(conflictOut, "already owned by PurchaseRequest "+buyerName) {
+		t.Fatalf("duplicate-model rejection output missing owning purchase name:\n%s", conflictOut)
+	}
+
+	obolRun(t, cfg, "kubectl", "delete", "purchaserequests.obol.org", buyerName, "-n", agentNamespace(cfg), "--wait=false")
+
+	liveWhileDeleting := waitForBuyerLiveAuthCount(t, cfg, buyerName, 5, 90*time.Second)
+	t.Logf("buyer live status after delete request:\n%s", liveWhileDeleting)
+	listDuringDrain := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"list")
+	t.Logf("buyer list while draining:\n%s", listDuringDrain)
+	if !strings.Contains(listDuringDrain, buyerName) {
+		t.Fatalf("draining purchase disappeared from user-facing list too early:\n%s", listDuringDrain)
+	}
+	statusDuringDrain := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"status", buyerName)
+	t.Logf("buyer status while draining:\n%s", statusDuringDrain)
+	if !strings.Contains(statusDuringDrain, "Auths remaining: 5") {
+		t.Fatalf("draining status did not preserve the live auth pool:\n%s", statusDuringDrain)
+	}
+
+	drainingConflictOut, drainingConflictErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", conflictName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "1")
+	t.Logf("duplicate-model rejection while draining output:\n%s", drainingConflictOut)
+	if drainingConflictErr == nil {
+		t.Fatal("duplicate model buy unexpectedly succeeded while the original purchase was draining")
+	}
+	if !strings.Contains(drainingConflictOut, "already owned by PurchaseRequest "+buyerName) {
+		t.Fatalf("draining duplicate-model rejection output missing owning purchase name:\n%s", drainingConflictOut)
+	}
+
+	for _, step := range []struct {
+		remaining int
+		spent     int
+	}{
+		{remaining: 4, spent: 3},
+		{remaining: 3, spent: 4},
+		{remaining: 2, spent: 5},
+		{remaining: 1, spent: 6},
+	} {
+		body := consumePaidAuth(t, cfg, masterKey, model, buyerName, step.remaining, step.spent, 2*time.Minute)
+		t.Logf("drain paid response remaining=%d spent=%d: %s", step.remaining, step.spent, string(body)[:min(200, len(body))])
+	}
+
+	statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "final draining request")
+	if statusCode != http.StatusOK {
+		t.Fatalf("final draining request returned %d: %s", statusCode, string(body))
+	}
+
+	waitForBuyerUpstreamMissing(t, cfg, buyerName, 90*time.Second)
+	listAfterDrain := execInAgent(t, cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"list")
+	t.Logf("buyer list after drain:\n%s", listAfterDrain)
+	if strings.Contains(listAfterDrain, buyerName) {
+		t.Fatalf("drained purchase still present in user-facing list:\n%s", listAfterDrain)
+	}
+	statusAfterDrain, statusAfterDrainErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"status", buyerName)
+	t.Logf("buyer status after drain:\n%s", statusAfterDrain)
+	if statusAfterDrainErr == nil {
+		t.Fatalf("status still succeeded after drained purchase cleanup:\n%s", statusAfterDrain)
+	}
+
+	statusCode, body = callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, "after delete")
+	t.Logf("paid alias after delete: status=%d body=%s", statusCode, string(body))
+	if statusCode == http.StatusOK {
+		t.Fatalf("paid alias still served requests after purchase delete: %s", body)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

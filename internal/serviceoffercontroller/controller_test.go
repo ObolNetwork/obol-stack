@@ -76,3 +76,28 @@ func TestRequestPhaseReady(t *testing.T) {
 	}
 }
 
+func TestPurchaseReadyRequiresRuntimePoolToMatchSpec(t *testing.T) {
+	status := &monetizeapi.PurchaseRequestStatus{}
+	pr := &monetizeapi.PurchaseRequest{
+		Spec: monetizeapi.PurchaseRequestSpec{
+			PreSignedAuths: []monetizeapi.PreSignedAuth{
+				{Nonce: "a"},
+				{Nonce: "b"},
+				{Nonce: "c"},
+			},
+		},
+	}
+
+	status.Remaining = 1
+	status.Spent = 2
+	setPurchaseCondition(&status.Conditions, "Ready", "False", "RuntimeSyncing", "waiting")
+	if purchaseConditionIsTrue(status.Conditions, "Ready") {
+		t.Fatal("purchase should not be ready while runtime pool is still syncing")
+	}
+
+	status.Remaining = len(pr.Spec.PreSignedAuths)
+	setPurchaseCondition(&status.Conditions, "Ready", "True", "Reconciled", "synced")
+	if !purchaseConditionIsTrue(status.Conditions, "Ready") {
+		t.Fatal("purchase should be ready once runtime pool matches spec")
+	}
+}

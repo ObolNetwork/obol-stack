@@ -1301,6 +1301,159 @@ func TestProxy_ReloadSkipsConsumedAuthsAndReplacesModelMapping(t *testing.T) {
 	assertMetricMissing(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-old", "remote_model": "old-model"})
 }
 
+func TestProxy_ReloadSamePurchasePreservesSpentAndAppendsAuthPool(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`)))
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	state, err := LoadStateStore(t.TempDir() + "/consumed.json")
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"solo": {
+				URL:         upstream.URL,
+				RemoteModel: "qwen3.5:9b",
+				Network:     "base-sepolia",
+				PayTo:       "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:       "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"solo": {makeAuth("0xold1"), makeAuth("0xold2"), makeAuth("0xold3")}}
+
+	proxy, err := NewProxy(cfg, auths, state)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	for i := 0; i < 2; i++ {
+		resp, err := http.Post(
+			srv.URL+"/v1/chat/completions",
+			"application/json",
+			strings.NewReader(`{"model":"paid/qwen3.5:9b","messages":[{"role":"user","content":"hi"}]}`),
+		)
+		if err != nil {
+			t.Fatalf("paid request %d: %v", i+1, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("paid request %d expected 200, got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	var before map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&before); err != nil {
+		t.Fatalf("decode status before reload: %v", err)
+	}
+	if before["solo"].Remaining != 1 || before["solo"].Spent != 2 {
+		t.Fatalf("status before reload = %d/%d, want 1/2", before["solo"].Remaining, before["solo"].Spent)
+	}
+
+	topUpAuths := AuthsFile{"solo": {makeAuth("0xold3"), makeAuth("0xnew1"), makeAuth("0xnew2")}}
+	if err := proxy.Reload(cfg, topUpAuths); err != nil {
+		t.Fatalf("Reload same purchase top-up: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	var after map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&after); err != nil {
+		t.Fatalf("decode status after reload: %v", err)
+	}
+	if after["solo"].Remaining != 3 || after["solo"].Spent != 2 {
+		t.Fatalf("status after reload = %d/%d, want 3/2", after["solo"].Remaining, after["solo"].Spent)
+	}
+}
+
+func TestProxy_ReloadRemovingUpstreamDropsStatusEntry(t *testing.T) {
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"solo": {
+				URL:         "http://seller.example.com",
+				RemoteModel: "qwen3.5:9b",
+				Network:     "base-sepolia",
+				PayTo:       "0xpayto",
+				Asset:       "0xasset",
+				Price:       "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"solo": {makeAuth("0xone"), makeAuth("0xtwo")}}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	var before map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&before); err != nil {
+		t.Fatalf("decode status before removal: %v", err)
+	}
+	if _, ok := before["solo"]; !ok {
+		t.Fatal("status missing solo upstream before removal")
+	}
+
+	if err := proxy.Reload(&Config{Upstreams: map[string]UpstreamConfig{}}, AuthsFile{}); err != nil {
+		t.Fatalf("Reload empty config: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+
+	var after map[string]struct {
+		Remaining int `json:"remaining"`
+		Spent     int `json:"spent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&after); err != nil {
+		t.Fatalf("decode status after removal: %v", err)
+	}
+	if _, ok := after["solo"]; ok {
+		t.Fatalf("status still contains solo after removal: %#v", after["solo"])
+	}
+}
+
 func scrapeMetricFamilies(t *testing.T, proxy *Proxy) map[string]*dto.MetricFamily {
 	t.Helper()
 

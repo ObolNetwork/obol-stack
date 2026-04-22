@@ -12,6 +12,7 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 
 - Probing an endpoint to check pricing before buying
 - Purchasing access to a remote model (pre-signs auths, creates a `PurchaseRequest`, exposes `paid/<remote-model>`)
+- Manually topping up an existing purchase by re-running `buy <same-name>`
 - Listing purchased providers and remaining auth counts
 - Checking USDC balance before buying
 - Inspecting the live sidecar status for remaining/spent auths
@@ -27,45 +28,45 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 
 ```bash
 # Probe an endpoint to see its pricing
-python3 scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
 # Probe with the concrete remote model when the seller validates model IDs
-python3 scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
 
 # Buy access (probes, pre-signs auths, creates/updates a PurchaseRequest)
-python3 scripts/buy.py buy remote-qwen \
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
 
 # Buy with agent-managed auto-refill intent
-python3 scripts/buy.py buy remote-qwen \
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 100 \
   --auto-refill \
   --refill-threshold 20 \
-  --refill-count 50 \
-  --max-total 150
+  --refill-count 50
 
-# Buy with custom auth count
-python3 scripts/buy.py buy remote-qwen \
+# Manual top-up on the same purchase name
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
-  --model qwen3.5:35b --count 500
+  --model qwen3.5:35b \
+  --count 25
 
 # List purchased providers + remaining auths
-python3 scripts/buy.py list
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py list
 
 # Check sidecar health + remaining auths
-python3 scripts/buy.py status remote-qwen
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py status remote-qwen
 
 # Reconcile auto-refill policies (heartbeat / cron entrypoint)
-python3 scripts/buy.py process --all
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
 
 # Check your USDC balance
-python3 scripts/buy.py balance
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
 
 # Compatibility alias for the same reconcile loop
-python3 scripts/buy.py maintain
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py maintain
 ```
 
 ## Commands
@@ -79,17 +80,139 @@ python3 scripts/buy.py maintain
 | `status <name>` | Check sidecar pod status + remaining auths |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
 
+## Surfaces
+
+### Human / foreground surface
+
+Use these when a human operator or foreground agent is actively deciding what
+to buy:
+
+- `probe` — inspect seller pricing
+- `buy <new-name>` — acquire a new purchase
+- `buy <same-name>` — manual top-up for that purchase
+- `status`, `list`, `balance` — inspect live runtime state
+
+### Agent / automation surface
+
+Use this when Hermes or OpenClaw is maintaining existing purchases in the
+background:
+
+- `process --all` — maintenance reconcile loop for `autoRefill`
+
 Current controller-mode limitation:
-- Automatic refill is driven by `process --all`, which is the intended
-  heartbeat / cron entrypoint for Hermes or OpenClaw.
-- Manual `refill` and `remove` flows are still not first-class commands.
-- `maxSpendPerDay` is reserved in the CRD but not enforced yet.
+- `process --all` is the intended heartbeat / cron entrypoint for Hermes or OpenClaw.
+- Re-running `buy <same-name>` is the manual top-up path.
+- Only one active purchase may own a given `paid/<remote-model>` alias at a time.
+- Manual `refill` is still not a first-class command.
+- `remove` is still not a first-class command; deleting the `PurchaseRequest`
+  directly now enters a drain-first lifecycle instead of tearing the route down
+  immediately.
+
+## Automation Recipes
+
+### OpenClaw heartbeat recipe
+
+Use the absolute script path inside the pod. Do not rely on `cd ... && ...`
+shell wrapping.
+
+```bash
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
+```
+
+Tell the agent to schedule that as its maintenance loop only when at least one
+`PurchaseRequest.spec.autoRefill.enabled=true` purchase exists.
+
+### Hermes cron recipe
+
+Hermes already has a cron scheduler. The maintenance job should load the
+buy-inference skill and run the same reconcile primitive on a schedule.
+
+CLI example:
+
+```bash
+hermes cron create "every 5m" \
+  "Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all. Report only errors or state changes." \
+  --name "x402 buy reconcile" \
+  --skill buy-inference
+```
+
+Python API example:
+
+```python
+from cron.jobs import create_job
+
+create_job(
+    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all. Report only errors or state changes.",
+    schedule="every 5m",
+    name="x402 buy reconcile",
+    skills=["buy-inference"],
+)
+```
+
+### Surface map
+
+```mermaid
+flowchart LR
+  subgraph Human["Human / Foreground"]
+    H1["probe"]
+    H2["buy <new-name>"]
+    H3["buy <same-name>"]
+    H4["status / list / balance"]
+  end
+
+  subgraph Agent["Agent / Background"]
+    A1["Hermes cron or OpenClaw heartbeat"]
+    A2["process --all"]
+  end
+
+  subgraph Control["Control Plane"]
+    PR["PurchaseRequest"]
+    RS["remote-signer"]
+  end
+
+  subgraph Runtime["Runtime Plane"]
+    C["serviceoffer-controller"]
+    X["x402-buyer /status"]
+    L["LiteLLM paid/<model>"]
+  end
+
+  S["Seller"]
+
+  H1 --> S
+  H2 --> RS
+  H2 --> PR
+  H3 --> RS
+  H3 --> PR
+  H4 --> X
+  A1 --> A2
+  A2 --> X
+  A2 --> RS
+  A2 --> PR
+  PR --> C
+  C --> X
+  C --> L
+  L --> X
+  X --> S
+```
 
 ## How It Works
 
 1. **Probe**: Sends a request without payment. The x402 gate returns `402 Payment Required` with pricing info (`payTo`, `network`, `amount`; legacy sellers may still use `maxAmountRequired`).
 
 2. **Pre-sign**: The agent signs N ERC-3009 `TransferWithAuthorization` vouchers via the remote-signer. Each voucher has a random nonce and is single-use (consumed on-chain when the facilitator settles).
+
+3. **Delete / drain behavior**: deleting a `PurchaseRequest` does not
+   immediately remove the paid route if there are still auths remaining. The
+   controller marks the purchase as draining, keeps `paid/<model>` live, and
+   only tears the route down after the remaining auth pool reaches zero. While
+   draining:
+   - `buy.py list` and `buy.py status <name>` still show the purchase
+   - the purchase still owns `paid/<model>`
+   - a second `buy <other-name> --model <same-model>` is still rejected
+
+4. **Final cleanup**: once `remaining == 0`, the controller removes the buyer
+   config/auth material, removes `paid/<model>` if there is no other owner,
+   reloads the buyer sidecar, and clears the finalizer so the CR can disappear.
 
 3. **Declare**: `buy.py` creates or updates a `PurchaseRequest` in the agent namespace with the pre-signed authorizations embedded in `spec.preSignedAuths`. When requested, it also stores `spec.autoRefill` intent on the CR.
 
@@ -186,7 +309,7 @@ Look for agents with `"x402Support": true` and a `"web"` service endpoint.
 
 ```bash
 # Send an unauthenticated request to get 402 pricing
-python3 scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
 ```
 
 This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USDC contract).
@@ -195,10 +318,10 @@ This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USD
 
 ```bash
 # Check USDC balance
-python3 scripts/buy.py balance --chain base-sepolia
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance --chain base-sepolia
 
 # Buy access (pre-sign auths, create PurchaseRequest, wait for controller reconciliation)
-python3 scripts/buy.py buy <friendly-name> \
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy <friendly-name> \
   --endpoint <service-endpoint> \
   --model <model-name> \
   --count 20
@@ -221,13 +344,13 @@ The `paid/` prefix routes through the x402-buyer sidecar, which transparently at
 
 ```bash
 # Check remaining auths
-python3 scripts/buy.py list
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py list
 
 # Check one purchased upstream in detail
-python3 scripts/buy.py status <friendly-name>
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py status <friendly-name>
 
 # Reconcile auto-refill intent (what the heartbeat should run)
-python3 scripts/buy.py process --all
+python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
 ```
 
 Manual `refill` and `remove` commands are still not available in the current
