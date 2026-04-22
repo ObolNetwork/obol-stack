@@ -82,13 +82,13 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		c.reconcilePurchaseReady(ctx, &status, &pr)
 	}
 
-	ready := purchaseConditionIsTrue(status.Conditions, "Ready")
 	if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
 		return err
 	}
-	if !ready {
-		// ConfigMap projection and sidecar reload are asynchronous; requeue so
-		// readiness can advance without requiring a CR spec/status mutation.
+
+	if purchaseConditionIsTrue(status.Conditions, "Configured") {
+		// Poll configured purchases continuously so status tracks live sidecar
+		// counters after spend, and so new auth pools can converge after reloads.
 		c.purchaseQueue.AddAfter(key, 5*time.Second)
 	}
 	return nil
@@ -96,8 +96,40 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 
 func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetizeapi.PurchaseRequest, raw *unstructured.Unstructured) error {
 	buyerNS := pr.EffectiveBuyerNamespace()
-	c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
+	status := pr.Status
+	status.ObservedGeneration = pr.Generation
+
+	remaining, spent, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name)
+	switch {
+	case err == nil:
+		status.Remaining = remaining
+		status.Spent = spent
+	case purchaseConditionIsTrue(status.Conditions, "Configured") && status.Remaining > 0:
+		log.Printf("purchase %s/%s: delete drain waiting for sidecar status: %v", pr.Namespace, pr.Name, err)
+	default:
+		status.Remaining = 0
+	}
+
+	if status.Remaining > 0 {
+		setPurchaseCondition(
+			&status.Conditions,
+			"Deleting",
+			"True",
+			"Draining",
+			fmt.Sprintf("Delete requested; keeping paid/%s active until %d remaining auths are consumed", pr.Spec.Model, status.Remaining),
+		)
+		if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
+			return err
+		}
+		c.purchaseQueue.AddAfter(pr.Namespace+"/"+pr.Name, 5*time.Second)
+		return nil
+	}
+
+	if c.findOtherActivePurchaseForModel(pr.Namespace, pr.Name, pr.Spec.Model) == nil {
+		c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
+	}
 	c.removeBuyerUpstream(ctx, buyerNS, pr.Name)
+	c.triggerBuyerReload(ctx, buyerNS)
 
 	patched := raw.DeepCopy()
 	fins := patched.GetFinalizers()
@@ -108,7 +140,7 @@ func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetize
 		}
 	}
 	patched.SetFinalizers(filtered)
-	_, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(pr.Namespace).Update(ctx, patched, metav1.UpdateOptions{})
+	_, err = c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(pr.Namespace).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 
@@ -198,6 +230,12 @@ func (c *Controller) reconcilePurchaseLoadAuths(ctx context.Context, status *mon
 // ── Stage 3: Configure sidecar ──────────────────────────────────────────────
 
 func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
+	if other := c.findOtherActivePurchaseForModel(pr.Namespace, pr.Name, pr.Spec.Model); other != nil {
+		setPurchaseCondition(&status.Conditions, "Configured", "False", "DuplicateModel",
+			fmt.Sprintf("model %s is already owned by %s/%s", pr.Spec.Model, other.Namespace, other.Name))
+		return nil
+	}
+
 	key := pr.Namespace + "/" + pr.Name
 	authsRaw, ok := c.pendingAuths.Load(key)
 	var auths []map[string]string
@@ -257,15 +295,24 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 
 func (c *Controller) reconcilePurchaseReady(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) {
 	buyerNS := pr.EffectiveBuyerNamespace()
+	syncedBefore := purchaseConditionIsTrue(status.Conditions, "Ready")
 
 	remaining, spent, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name)
 	if err != nil {
-		setPurchaseCondition(&status.Conditions, "Ready", "False", "SidecarNotReady", err.Error())
+		if !syncedBefore {
+			setPurchaseCondition(&status.Conditions, "Ready", "False", "SidecarNotReady", err.Error())
+		}
 		return
 	}
 
 	status.Remaining = remaining
 	status.Spent = spent
+	expectedRemaining := len(pr.Spec.PreSignedAuths)
+	if !syncedBefore && remaining != expectedRemaining {
+		setPurchaseCondition(&status.Conditions, "Ready", "False", "RuntimeSyncing",
+			fmt.Sprintf("Sidecar: %d remaining, %d spent (waiting for %d active auths)", remaining, spent, expectedRemaining))
+		return
+	}
 	setPurchaseCondition(&status.Conditions, "Ready", "True", "Reconciled",
 		fmt.Sprintf("Sidecar: %d remaining, %d spent", remaining, spent))
 }

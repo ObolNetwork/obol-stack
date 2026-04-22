@@ -18,7 +18,7 @@ Commands:
     buy <name> --endpoint <url> --model <id>      Pre-sign + author PurchaseRequest
         [--budget <micro-units>] [--count <N>]
         [--auto-refill[=true|false]] [--refill-threshold <N>]
-        [--refill-count <N>] [--max-total <N>]
+        [--refill-count <N>]
     list                                          List purchased providers + remaining auths
     status <name>                                 Check sidecar health + remaining auths
     process <name>|--all                          Reconcile auto-refill policies
@@ -254,11 +254,10 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
     auto_refill = _parse_boolish(opts.get("auto_refill"), "--auto-refill")
     threshold = _parse_positive_int(opts.get("refill_threshold"), "--refill-threshold", minimum=0)
     refill_count = _parse_positive_int(opts.get("refill_count"), "--refill-count", minimum=1)
-    max_total = _parse_positive_int(opts.get("max_total"), "--max-total", minimum=1)
 
     has_policy_override = any(
         value is not None
-        for value in (auto_refill, threshold, refill_count, max_total)
+        for value in (auto_refill, threshold, refill_count)
     )
     if not has_policy_override:
         return existing_policy or None
@@ -266,7 +265,7 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
     enabled = auto_refill
     if enabled is None:
         enabled = bool(existing_policy.get("enabled")) or any(
-            value is not None for value in (threshold, refill_count, max_total)
+            value is not None for value in (threshold, refill_count)
         )
     if not enabled:
         return {"enabled": False}
@@ -292,15 +291,42 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
         "threshold": resolved_threshold,
         "count": resolved_count,
     }
-    resolved_max_total = max_total
-    if resolved_max_total is None:
-        resolved_max_total = int(existing_policy.get("maxTotal") or 0)
-    if resolved_max_total > 0:
-        policy["maxTotal"] = resolved_max_total
-    max_spend = existing_policy.get("maxSpendPerDay")
-    if max_spend:
-        policy["maxSpendPerDay"] = max_spend
     return policy
+
+
+def _find_purchase_by_model(purchases, model_id, exclude_name=None):
+    for pr in purchases or []:
+        metadata = pr.get("metadata") or {}
+        spec = pr.get("spec") or {}
+        if spec.get("model") != model_id:
+            continue
+        if exclude_name and metadata.get("name") == exclude_name:
+            continue
+        return metadata.get("name")
+    return None
+
+
+def _purchase_condition(pr, cond_type):
+    status = (pr or {}).get("status") or {}
+    for cond in status.get("conditions", []):
+        if cond.get("type") == cond_type:
+            return cond
+    return None
+
+
+def _purchase_has_pending_runtime_sync(pr):
+    metadata = pr.get("metadata") or {}
+    status = pr.get("status") or {}
+    generation = int(metadata.get("generation") or 0)
+    observed = int(status.get("observedGeneration") or 0)
+    if observed and generation and observed != generation:
+        return True, f"waiting for observedGeneration {generation} (have {observed})"
+
+    ready = _purchase_condition(pr, "Ready")
+    if ready and ready.get("status") != "True":
+        return True, ready.get("message", "waiting for runtime sync")
+
+    return False, ""
 
 
 def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None, existing_spec=None):
@@ -327,6 +353,25 @@ def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, 
         spec["autoRefill"] = existing_spec.get("autoRefill")
 
     return spec
+
+
+def _active_auth_pool(existing_auths, live_status):
+    live_status = live_status or {}
+    auths = list(existing_auths or [])
+    remaining = max(int(live_status.get("remaining", 0) or 0), 0)
+    if remaining > len(auths):
+        raise ValueError(
+            f"live remaining {remaining} exceeds PurchaseRequest auth pool size {len(auths)}"
+        )
+    if remaining == len(auths):
+        return auths
+    if remaining == 0:
+        return []
+    return auths[-remaining:]
+
+
+def _build_active_auth_pool(existing_auths, live_status, new_auths):
+    return _active_auth_pool(existing_auths, live_status) + list(new_auths or [])
 
 
 def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None):
@@ -388,16 +433,14 @@ def _wait_for_purchase_ready(name, timeout=180):
     while time.time() < deadline:
         try:
             pr = _kube_json("GET", path, token, ssl_ctx)
-            conditions = pr.get("status", {}).get("conditions", [])
-            for cond in conditions:
-                if cond.get("type") == "Ready" and cond.get("status") == "True":
-                    remaining = pr.get("status", {}).get("remaining", 0)
-                    public_model = pr.get("status", {}).get("publicModel", "")
-                    print(f"  Ready: {remaining} auths, model={public_model}")
-                    return True
-                if cond.get("type") == "Ready" and cond.get("status") == "False":
-                    print(f"  Not ready: {cond.get('message', '?')}")
+            ready, remaining, public_model, message = _purchase_ready(pr)
+            if ready:
+                print(f"  Ready: {remaining} auths, model={public_model}")
+                return True
+            if message:
+                print(f"  Not ready: {message}")
             # Print latest condition for progress feedback.
+            conditions = pr.get("status", {}).get("conditions", [])
             if conditions:
                 latest = conditions[-1]
                 print(f"  [{latest.get('type')}] {latest.get('message', '')}")
@@ -406,6 +449,35 @@ def _wait_for_purchase_ready(name, timeout=180):
         time.sleep(5)
 
     return False
+
+
+def _purchase_ready(pr):
+    metadata = pr.get("metadata") or {}
+    status = pr.get("status") or {}
+    spec = pr.get("spec") or {}
+    generation = int(metadata.get("generation") or 0)
+    observed = int(status.get("observedGeneration") or 0)
+    if observed != generation:
+        return False, 0, "", f"waiting for observedGeneration {generation} (have {observed})"
+    expected_remaining = len(spec.get("preSignedAuths") or [])
+    remaining = int(status.get("remaining") or 0)
+    if remaining != expected_remaining:
+        return False, remaining, status.get("publicModel", ""), f"waiting for runtime auth pool to reach {expected_remaining} active auths"
+    for cond in status.get("conditions", []):
+        if cond.get("type") == "Ready":
+            if cond.get("status") == "True":
+                return True, remaining, status.get("publicModel", ""), cond.get("message", "")
+            return False, remaining, status.get("publicModel", ""), cond.get("message", "")
+    return False, remaining, status.get("publicModel", ""), ""
+
+
+def _purchase_exists(name, token, ssl_ctx, ns=None):
+    try:
+        return _get_purchase_request(name, token=token, ssl_ctx=ssl_ctx, ns=ns)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +582,6 @@ def _normalize_auto_refill(policy):
         "enabled": bool(policy.get("enabled")),
         "threshold": int(policy.get("threshold") or 0),
         "count": int(policy.get("count") or 0),
-        "maxTotal": int(policy.get("maxTotal") or 0),
-        "maxSpendPerDay": str(policy.get("maxSpendPerDay") or ""),
     }
 
 
@@ -535,21 +605,12 @@ def _plan_autorefill(remaining, policy):
     policy = _normalize_auto_refill(policy)
     if not policy["enabled"]:
         return 0, "auto-refill disabled"
-    if policy["maxSpendPerDay"]:
-        return 0, "maxSpendPerDay is not implemented yet"
     if policy["count"] <= 0:
         return 0, "auto-refill count is not configured"
     if remaining > policy["threshold"]:
         return 0, f"remaining {remaining} above threshold {policy['threshold']}"
 
-    refill_count = policy["count"]
-    if policy["maxTotal"] > 0:
-        allowed = policy["maxTotal"] - remaining
-        if allowed <= 0:
-            return 0, f"active pool cap reached ({remaining}/{policy['maxTotal']})"
-        refill_count = min(refill_count, allowed)
-
-    return refill_count, f"remaining {remaining} at or below threshold {policy['threshold']}"
+    return policy["count"], f"remaining {remaining} at or below threshold {policy['threshold']}"
 
 
 def _get_signer_address():
@@ -569,6 +630,11 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
     refill_count, reason = _plan_autorefill(int(live_status.get("remaining", 0)), policy)
     if refill_count <= 0:
         print(f"{name}: {reason}")
+        return False
+
+    pending_sync, pending_message = _purchase_has_pending_runtime_sync(pr)
+    if pending_sync:
+        print(f"{name}: {pending_message}; skipping")
         return False
 
     existing_auths = spec.get("preSignedAuths") or []
@@ -596,16 +662,13 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
         )
         return False
 
-    active_auths = _compact_active_auths(existing_auths, int(live_status.get("spent", 0)))
-    if len(active_auths) != int(live_status.get("remaining", 0)):
-        print(
-            f"{name}: warning: active auth history ({len(active_auths)}) does not match live remaining "
-            f"({live_status.get('remaining', 0)}); preserving live-triggered refill anyway"
-        )
-
     print(f"{name}: {reason}; signing {refill_count} new authorizations")
     new_auths = _presign_auths(signer_address, pay_to, price, chain, asset, refill_count)
-    updated_auths = active_auths + new_auths
+    try:
+        updated_auths = _build_active_auth_pool(existing_auths, live_status, new_auths)
+    except ValueError as e:
+        print(f"{name}: {e}; skipping")
+        return False
 
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
@@ -750,6 +813,44 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         n = DEFAULT_AUTH_COUNT
     n = max(n, 1)
 
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    purchases = _list_purchase_requests(token=token, ssl_ctx=ssl_ctx)
+    existing = _purchase_exists(name, token=token, ssl_ctx=ssl_ctx)
+    conflict_name = _find_purchase_by_model(purchases, model_id, exclude_name=name)
+    if conflict_name:
+        print(
+            f"Error: model {model_id} is already owned by PurchaseRequest {conflict_name}. "
+            "Top up the existing purchase name instead of creating a second pool.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    live_status = None
+    if existing is not None:
+        if (existing.get("metadata") or {}).get("deletionTimestamp"):
+            print(
+                f"Error: existing purchase {name} is draining for deletion. Wait for it to disappear "
+                "before buying the model again.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        pending_sync, pending_message = _purchase_has_pending_runtime_sync(existing)
+        if pending_sync:
+            print(
+                f"Error: existing purchase {name} is still converging. {pending_message}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        live_status = (_buyer_status() or {}).get(name)
+        if live_status is None:
+            print(
+                f"Error: existing purchase {name} is not live in x402-buyer status yet. "
+                "Wait for it to become ready before topping it up.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     total_cost = n * price_int
     print(f"  Signing {n} authorizations (total cost: {total_cost} micro-units = "
           f"{total_cost / 1_000_000:.6f} USDC)")
@@ -770,14 +871,17 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     # 6. Create PurchaseRequest CR with auths embedded in spec.
     #    Controller reads auths from the CR itself — no cross-NS Secret read.
     ep = _normalize_endpoint(endpoint)
-    token, _ = load_sa()
-    ssl_ctx = make_ssl_context()
-    existing = None
-    try:
-        existing = _get_purchase_request(name, token=token, ssl_ctx=ssl_ctx)
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
+    if existing is not None:
+        try:
+            auths = _build_active_auth_pool(
+                (existing.get("spec") or {}).get("preSignedAuths") or [],
+                live_status,
+                auths,
+            )
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        n = len(auths)
     try:
         auto_refill = _resolve_auto_refill(opts, n, (existing or {}).get("spec", {}).get("autoRefill"))
     except ValueError as e:
@@ -803,8 +907,6 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     print(f"  Count:      {n} auths requested")
     if auto_refill and auto_refill.get("enabled"):
         print(f"  Auto-refill: enabled (threshold={auto_refill['threshold']}, count={auto_refill['count']})")
-        if auto_refill.get("maxTotal"):
-            print(f"  Active pool cap: {auto_refill['maxTotal']} auths")
     print()
     print(f"The model is now available as: paid/{model_id}")
     print("Use 'process --all' from a heartbeat/cron loop to reconcile auto-refill policies.")
@@ -817,7 +919,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
 def cmd_refill(name, count=None):
     """Refill is disabled until it is implemented via PurchaseRequest reconciliation."""
     print("refill is not available in the controller-based buy path.", file=sys.stderr)
-    print("Run the buy command again with a new --count to replace the PurchaseRequest auth pool.", file=sys.stderr)
+    print("Run the buy command again with the same purchase name to top up the active auth pool.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -873,19 +975,29 @@ def cmd_process(name=None, process_all=False):
 # ---------------------------------------------------------------------------
 
 def cmd_list():
-    """List purchased providers from live sidecar status."""
-    live_status = _buyer_status() or {}
-    if not live_status:
+    """List purchased providers, keyed by live PurchaseRequests."""
+    token, _ = load_sa()
+    ssl_ctx = make_ssl_context()
+    purchases = _list_purchase_requests(token=token, ssl_ctx=ssl_ctx)
+    if not purchases:
         print("No purchased x402 providers.")
         return
+    live_status = _buyer_status() or {}
 
     print(f"{'NAME':<20} {'ALIAS':<32} {'PRICE':<12} {'CHAIN':<15} {'REMAINING'}")
     print("-" * 120)
-    for name, status in live_status.items():
-        remaining = status.get("remaining", 0)
-        alias = status.get("public_model", f"paid/{status.get('remote_model', name)}")
+    for pr in purchases:
+        metadata = pr.get("metadata") or {}
+        spec = pr.get("spec") or {}
+        status = pr.get("status") or {}
+        name = metadata.get("name", "<unknown>")
+        live = live_status.get(name) or {}
+        remaining = live.get("remaining", status.get("remaining", "?"))
+        alias = live.get("public_model") or status.get("publicModel") or f"paid/{spec.get('model', name)}"
+        price = (spec.get("payment") or {}).get("price", "?")
+        chain = live.get("network") or (spec.get("payment") or {}).get("network", "?")
         print(f"{name:<20} {alias:<32} "
-              f"{'?':<12} {status.get('network', '?'):<15} "
+              f"{str(price):<12} {chain:<15} "
               f"{remaining}")
 
 
@@ -898,18 +1010,21 @@ def cmd_status(name):
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
 
-    live_status = (_buyer_status() or {}).get(name, {})
-    if not live_status:
+    pr = _purchase_exists(name, token=token, ssl_ctx=ssl_ctx)
+    if pr is None:
         print(f"Upstream '{name}' not found.", file=sys.stderr)
         sys.exit(1)
+    spec = pr.get("spec") or {}
+    status = pr.get("status") or {}
+    live_status = (_buyer_status() or {}).get(name, {})
 
     print(f"Upstream: {name}")
-    print(f"Alias:    {live_status.get('public_model', '?')}")
-    print(f"Endpoint: {live_status.get('url', '?')}")
-    print(f"Model:    {live_status.get('remote_model', '?')}")
-    print(f"Chain:    {live_status.get('network', '?')}")
-    print(f"Auths remaining: {live_status.get('remaining', 0)}")
-    print(f"Auths spent:     {live_status.get('spent', 0)}")
+    print(f"Alias:    {live_status.get('public_model') or status.get('publicModel', '?')}")
+    print(f"Endpoint: {live_status.get('url') or _normalize_endpoint(spec.get('endpoint', '?'))}")
+    print(f"Model:    {live_status.get('remote_model') or spec.get('model', '?')}")
+    print(f"Chain:    {live_status.get('network') or (spec.get('payment') or {}).get('network', '?')}")
+    print(f"Auths remaining: {live_status.get('remaining', status.get('remaining', 0))}")
+    print(f"Auths spent:     {live_status.get('spent', status.get('spent', 0))}")
     print()
 
     pod = _get_litellm_pod(token, ssl_ctx)
@@ -998,7 +1113,7 @@ def usage():
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>] [--max-total <N>]")
+    print("       [--refill-count <N>]")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
     print("  process <name> | --all                       Reconcile auto-refill policies")

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -251,4 +252,41 @@ func TestTriggerBuyerReload(t *testing.T) {
 
 	// Should not panic with no pods.
 	c.triggerBuyerReload(context.Background(), "llm")
+}
+
+func TestOtherActivePurchaseUsesModel(t *testing.T) {
+	now := metav1.Now()
+	purchases := []*monetizeapi.PurchaseRequest{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "agent-a"},
+			Spec:       monetizeapi.PurchaseRequestSpec{Model: "qwen3.5:9b"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "agent-a"},
+			Spec:       monetizeapi.PurchaseRequestSpec{Model: "qwen3.5:9b"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "gamma", Namespace: "agent-a"},
+			Spec:       monetizeapi.PurchaseRequestSpec{Model: "qwen3.6:9b"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "draining", Namespace: "agent-a", DeletionTimestamp: &now},
+			Spec:       monetizeapi.PurchaseRequestSpec{Model: "qwen3.7:9b"},
+		},
+	}
+
+	conflict := otherActivePurchaseUsesModel(purchases, "agent-a", "alpha", "qwen3.5:9b")
+	if conflict == nil || conflict.Name != "beta" {
+		t.Fatalf("conflict = %#v, want beta", conflict)
+	}
+
+	noConflict := otherActivePurchaseUsesModel(purchases, "agent-a", "gamma", "qwen3.6:9b")
+	if noConflict != nil {
+		t.Fatalf("conflict = %#v, want nil", noConflict)
+	}
+
+	drainingConflict := otherActivePurchaseUsesModel(purchases, "agent-a", "nobody", "qwen3.7:9b")
+	if drainingConflict == nil || drainingConflict.Name != "draining" {
+		t.Fatalf("conflict = %#v, want draining", drainingConflict)
+	}
 }
