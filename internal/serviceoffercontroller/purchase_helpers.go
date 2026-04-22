@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -206,6 +207,39 @@ func (c *Controller) mergeBuyerConfig(ctx context.Context, ns, name string, upst
 
 	_, err = c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
 	return err
+}
+
+func otherActivePurchaseUsesModel(purchases []*monetizeapi.PurchaseRequest, namespace, name, modelName string) *monetizeapi.PurchaseRequest {
+	for _, pr := range purchases {
+		if pr == nil {
+			continue
+		}
+		if pr.Namespace == namespace && pr.Name == name {
+			continue
+		}
+		if pr.Spec.Model != modelName {
+			continue
+		}
+		return pr
+	}
+	return nil
+}
+
+func (c *Controller) findOtherActivePurchaseForModel(namespace, name, modelName string) *monetizeapi.PurchaseRequest {
+	var purchases []*monetizeapi.PurchaseRequest
+	for _, item := range c.purchaseInformer.GetStore().List() {
+		u := asUnstructured(item)
+		if u == nil {
+			continue
+		}
+		var pr monetizeapi.PurchaseRequest
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &pr); err != nil {
+			log.Printf("purchase: decode purchase for model conflict scan: %v", err)
+			continue
+		}
+		purchases = append(purchases, &pr)
+	}
+	return otherActivePurchaseUsesModel(purchases, namespace, name, modelName)
 }
 
 func (c *Controller) mergeBuyerAuths(ctx context.Context, ns, name string, auths []map[string]string) error {
@@ -473,4 +507,3 @@ func normalizePurchasedUpstreamURL(endpoint string) string {
 
 	return trimmed
 }
-

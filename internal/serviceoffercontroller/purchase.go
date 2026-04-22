@@ -63,15 +63,15 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		}
 	}
 
-	// Stage 2: Sign auths
-	if purchaseConditionIsTrue(status.Conditions, "Probed") && !purchaseConditionIsTrue(status.Conditions, "AuthsSigned") {
-		if err := c.reconcilePurchaseSign(ctx, &status, &pr); err != nil {
-			log.Printf("purchase %s/%s: sign failed: %v", ns, name, err)
+	// Stage 2: Load auths
+	if purchaseConditionIsTrue(status.Conditions, "Probed") && !purchaseConditionIsTrue(status.Conditions, "AuthsLoaded") {
+		if err := c.reconcilePurchaseLoadAuths(ctx, &status, &pr); err != nil {
+			log.Printf("purchase %s/%s: load auths failed: %v", ns, name, err)
 		}
 	}
 
 	// Stage 3: Configure sidecar
-	if purchaseConditionIsTrue(status.Conditions, "AuthsSigned") && !purchaseConditionIsTrue(status.Conditions, "Configured") {
+	if purchaseConditionIsTrue(status.Conditions, "AuthsLoaded") && !purchaseConditionIsTrue(status.Conditions, "Configured") {
 		if err := c.reconcilePurchaseConfigure(ctx, &status, &pr); err != nil {
 			log.Printf("purchase %s/%s: configure failed: %v", ns, name, err)
 		}
@@ -82,13 +82,13 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		c.reconcilePurchaseReady(ctx, &status, &pr)
 	}
 
-	ready := purchaseConditionIsTrue(status.Conditions, "Ready")
 	if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
 		return err
 	}
-	if !ready {
-		// ConfigMap projection and sidecar reload are asynchronous; requeue so
-		// readiness can advance without requiring a CR spec/status mutation.
+
+	if purchaseConditionIsTrue(status.Conditions, "Configured") {
+		// Poll configured purchases continuously so status tracks live sidecar
+		// counters after spend, and so new auth pools can converge after reloads.
 		c.purchaseQueue.AddAfter(key, 5*time.Second)
 	}
 	return nil
@@ -96,8 +96,40 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 
 func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetizeapi.PurchaseRequest, raw *unstructured.Unstructured) error {
 	buyerNS := pr.EffectiveBuyerNamespace()
-	c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
+	status := pr.Status
+	status.ObservedGeneration = pr.Generation
+
+	remaining, spent, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name)
+	switch {
+	case err == nil:
+		status.Remaining = remaining
+		status.Spent = spent
+	case purchaseConditionIsTrue(status.Conditions, "Configured") && status.Remaining > 0:
+		log.Printf("purchase %s/%s: delete drain waiting for sidecar status: %v", pr.Namespace, pr.Name, err)
+	default:
+		status.Remaining = 0
+	}
+
+	if status.Remaining > 0 {
+		setPurchaseCondition(
+			&status.Conditions,
+			"Deleting",
+			"True",
+			"Draining",
+			fmt.Sprintf("Delete requested; keeping paid/%s active until %d remaining auths are consumed", pr.Spec.Model, status.Remaining),
+		)
+		if err := c.updatePurchaseStatus(ctx, raw, &status); err != nil {
+			return err
+		}
+		c.purchaseQueue.AddAfter(pr.Namespace+"/"+pr.Name, 5*time.Second)
+		return nil
+	}
+
+	if c.findOtherActivePurchaseForModel(pr.Namespace, pr.Name, pr.Spec.Model) == nil {
+		c.removeLiteLLMModelEntry(ctx, buyerNS, "paid/"+pr.Spec.Model)
+	}
 	c.removeBuyerUpstream(ctx, buyerNS, pr.Name)
+	c.triggerBuyerReload(ctx, buyerNS)
 
 	patched := raw.DeepCopy()
 	fins := patched.GetFinalizers()
@@ -108,7 +140,7 @@ func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetize
 		}
 	}
 	patched.SetFinalizers(filtered)
-	_, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(pr.Namespace).Update(ctx, patched, metav1.UpdateOptions{})
+	_, err = c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(pr.Namespace).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
 
@@ -170,16 +202,16 @@ func (c *Controller) reconcilePurchaseProbe(ctx context.Context, status *monetiz
 	return nil
 }
 
-// ── Stage 2: Read pre-signed auths from spec ────────────────────────────────
+// ── Stage 2: Load pre-signed auths from spec ────────────────────────────────
 //
 // buy.py signs the auths locally (it has remote-signer access in the same
 // namespace) and embeds them in spec.preSignedAuths. The controller reads
 // them directly from the CR — no cross-namespace Secret read needed.
 
-func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
+func (c *Controller) reconcilePurchaseLoadAuths(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
 	auths, err := preSignedAuthMaps(pr)
 	if err != nil {
-		setPurchaseCondition(&status.Conditions, "AuthsSigned", "False", "NoAuths",
+		setPurchaseCondition(&status.Conditions, "AuthsLoaded", "False", "NoAuths",
 			"spec.preSignedAuths is empty — buy.py should embed auths in the CR")
 		return err
 	}
@@ -190,7 +222,7 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 
 	c.pendingAuths.Store(pr.Namespace+"/"+pr.Name, auths)
 	status.TotalSigned = len(auths)
-	setPurchaseCondition(&status.Conditions, "AuthsSigned", "True", "Loaded",
+	setPurchaseCondition(&status.Conditions, "AuthsLoaded", "True", "Loaded",
 		fmt.Sprintf("Loaded %d pre-signed auths from spec", len(auths)))
 	return nil
 }
@@ -198,6 +230,12 @@ func (c *Controller) reconcilePurchaseSign(ctx context.Context, status *monetize
 // ── Stage 3: Configure sidecar ──────────────────────────────────────────────
 
 func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) error {
+	if other := c.findOtherActivePurchaseForModel(pr.Namespace, pr.Name, pr.Spec.Model); other != nil {
+		setPurchaseCondition(&status.Conditions, "Configured", "False", "DuplicateModel",
+			fmt.Sprintf("model %s is already owned by %s/%s", pr.Spec.Model, other.Namespace, other.Name))
+		return nil
+	}
+
 	key := pr.Namespace + "/" + pr.Name
 	authsRaw, ok := c.pendingAuths.Load(key)
 	var auths []map[string]string
@@ -257,15 +295,24 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 
 func (c *Controller) reconcilePurchaseReady(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) {
 	buyerNS := pr.EffectiveBuyerNamespace()
+	syncedBefore := purchaseConditionIsTrue(status.Conditions, "Ready")
 
 	remaining, spent, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name)
 	if err != nil {
-		setPurchaseCondition(&status.Conditions, "Ready", "False", "SidecarNotReady", err.Error())
+		if !syncedBefore {
+			setPurchaseCondition(&status.Conditions, "Ready", "False", "SidecarNotReady", err.Error())
+		}
 		return
 	}
 
 	status.Remaining = remaining
 	status.Spent = spent
+	expectedRemaining := len(pr.Spec.PreSignedAuths)
+	if !syncedBefore && remaining != expectedRemaining {
+		setPurchaseCondition(&status.Conditions, "Ready", "False", "RuntimeSyncing",
+			fmt.Sprintf("Sidecar: %d remaining, %d spent (waiting for %d active auths)", remaining, spent, expectedRemaining))
+		return
+	}
 	setPurchaseCondition(&status.Conditions, "Ready", "True", "Reconciled",
 		fmt.Sprintf("Sidecar: %d remaining, %d spent", remaining, spent))
 }

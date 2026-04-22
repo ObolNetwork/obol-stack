@@ -5,7 +5,16 @@ Group: `obol.org`, Version: `v1alpha1`, Kind: `PurchaseRequest`
 `PurchaseRequest` declares a remote x402-gated model that the buyer side of the
 stack should fund and expose locally as `paid/<remote-model>`. The controller
 turns the declared request into buyer config/auth material for the `x402-buyer`
-sidecar in the `llm` namespace.
+sidecar in the `llm` namespace. The CR itself is authored in the agent
+namespace; the controller decides the effective buyer namespace separately.
+
+Foreground surface:
+- `buy.py buy <new-name>` creates a new purchase
+- `buy.py buy <same-name>` manually tops up that purchase
+
+Background surface:
+- `buy.py process --all` is the maintenance reconcile loop intended for Hermes
+  cron jobs or OpenClaw heartbeat automation
 
 ## Example
 
@@ -14,7 +23,7 @@ apiVersion: obol.org/v1alpha1
 kind: PurchaseRequest
 metadata:
   name: remote-qwen
-  namespace: llm
+  namespace: openclaw-obol-agent
 spec:
   endpoint: https://seller.example.com/services/qwen/v1/chat/completions
   model: qwen3.5:32b
@@ -53,7 +62,7 @@ status:
 | `spec.model` | string | Yes | Remote model identifier exposed locally as `paid/<model>` |
 | `spec.count` | integer | Yes | Number of pre-signed auths to prepare |
 | `spec.preSignedAuths` | array | No | ERC-3009 authorizations embedded by `buy.py` |
-| `spec.autoRefill` | object | No | Future refill policy configuration |
+| `spec.autoRefill` | object | No | Agent-owned refill policy reconciled by `buy.py process --all` |
 | `spec.payment` | object | Yes | Seller payment requirements used for validation and routing |
 
 ### `spec.preSignedAuths[]`
@@ -72,12 +81,9 @@ status:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | boolean | No | `false` | Enables automatic refill behavior when implemented |
-| `threshold` | integer | No | — | Refill when `remaining < threshold` |
+| `enabled` | boolean | No | `false` | Enables automatic refill when the agent runs `process --all` |
+| `threshold` | integer | No | — | Refill when live `remaining <= threshold` |
 | `count` | integer | No | — | Number of new auths to sign on refill |
-| `maxTotal` | integer | No | — | Hard cap on total signed auths |
-| `maxSpendPerDay` | string | No | — | Daily spend ceiling |
-
 ### `spec.payment`
 
 | Field | Type | Required | Description |
@@ -93,6 +99,7 @@ status:
 |-------|------|-------------|
 | `status.observedGeneration` | integer | Last observed spec generation |
 | `status.conditions` | array | Kubernetes-style conditions, including `Ready` |
+| `status.conditions[].type=Deleting` | condition | Present while a delete request is draining remaining auths |
 | `status.publicModel` | string | LiteLLM model alias, usually `paid/<model>` |
 | `status.remaining` | integer | Remaining unused auths |
 | `status.spent` | integer | Number of auths already consumed |
@@ -106,8 +113,28 @@ status:
 ## Lifecycle Notes
 
 - `buy.py buy` is the expected authoring path for this CRD.
+- `buy.py process --all` is the expected heartbeat / cron entrypoint for
+  reconciling `autoRefill`.
+- `buy.py` creates the CR in the agent namespace; the controller currently
+  publishes buyer-side runtime state into the fixed `llm` namespace.
 - The controller validates the declared payment fields against the probed seller
   endpoint before publishing the local paid route.
 - Runtime spending is bounded by the number of embedded pre-signed auths.
 - The controller writes the resulting buyer config/auth material for the
   `x402-buyer` sidecar; the sidecar itself never gets signer access.
+- `autoRefill` is agent-owned, not controller-owned: the controller only
+  reconciles the CR contents into `llm`.
+- Re-running `buy <same-name>` is the manual top-up path; it appends to the
+  active pool by trimming spent auths first.
+- A second PurchaseRequest for the same remote model under a different name is
+  rejected; one active purchase owns `paid/<model>`.
+- Deleting the CR is asynchronous when auths remain:
+  - the controller sets `Deleting=True/Draining`
+  - the purchase continues serving `paid/<model>` while `status.remaining > 0`
+  - once the pool drains to zero, the controller removes the buyer config,
+    removes the paid alias if there is no other owner, and clears the finalizer
+- A draining purchase still owns `paid/<model>`; a second purchase for that
+  model remains rejected until the original CR is fully gone.
+- Manual `refill` / `remove` commands are still not first-class flows.
+- For Hermes/OpenClaw integration, schedule `process --all`; do not model that
+  maintenance loop as a foreground user action.

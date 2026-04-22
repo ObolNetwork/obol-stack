@@ -179,22 +179,21 @@ def cmd_sign_tx(args):
     else:
         gas_limit = int(gas_limit)
 
-    # The remote-signer contract uses canonical decimal strings for all numeric
-    # transaction fields.
+    # Format value.
     if isinstance(value, str) and value.startswith("0x"):
-        value_wei = str(int(value, 16))
+        value_hex = value
     else:
-        value_wei = str(int(value))
+        value_hex = hex(int(value))
 
     # Build and sign transaction.
     tx_req = {
-        "chain_id": str(chain_id),
+        "chain_id": chain_id,
         "to": to_addr,
-        "nonce": str(nonce),
-        "gas_limit": str(gas_limit),
-        "max_fee_per_gas": str(max_fee),
-        "max_priority_fee_per_gas": str(max_priority),
-        "value": value_wei,
+        "nonce": nonce,
+        "gas_limit": gas_limit,
+        "max_fee_per_gas": max_fee,
+        "max_priority_fee_per_gas": max_priority,
+        "value": value_hex,
         "data": call_data,
     }
 
@@ -204,7 +203,7 @@ def cmd_sign_tx(args):
     print(f"Chain:     {network} (chain_id={chain_id})")
     print(f"From:      {from_addr}")
     print(f"To:        {to_addr}")
-    print(f"Value:     {value_wei} wei")
+    print(f"Value:     {int(value_hex, 16)} wei")
     print(f"Gas:       {gas_limit}")
     print(f"Max fee:   {max_fee} wei")
     print(f"Priority:  {max_priority} wei")
