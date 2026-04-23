@@ -25,7 +25,9 @@
 # Override if needed:
 #   FLOW11_FACILITATOR_URL=https://...
 #
-# Optional port overrides for isolated worktrees:
+# Host ingress ports auto-pick (OS-assigned ephemeral) so two stacks on the
+# same machine never collide. Override any of them via shell env or repo-root
+# .env (auto-loaded by lib.sh):
 #   FLOW11_ALICE_HTTP_PORT FLOW11_ALICE_HTTP_ALT_PORT
 #   FLOW11_ALICE_HTTPS_PORT FLOW11_ALICE_HTTPS_ALT_PORT
 #   FLOW11_BOB_HTTP_PORT   FLOW11_BOB_HTTP_ALT_PORT
@@ -39,45 +41,20 @@ source "$(dirname "$0")/lib.sh"
 ALICE_DIR="$OBOL_ROOT/.workspace-alice"
 BOB_DIR="$OBOL_ROOT/.workspace-bob"
 
-# Host port overrides for running multiple isolated worktrees at once.
-ALICE_HTTP_PORT="${FLOW11_ALICE_HTTP_PORT:-80}"
-ALICE_HTTP_ALT_PORT="${FLOW11_ALICE_HTTP_ALT_PORT:-8080}"
-ALICE_HTTPS_PORT="${FLOW11_ALICE_HTTPS_PORT:-443}"
-ALICE_HTTPS_ALT_PORT="${FLOW11_ALICE_HTTPS_ALT_PORT:-8443}"
+# Host ingress ports: default to OS-assigned ephemeral ports so two stacks on
+# the same box never collide. Explicit FLOW11_*_PORT env vars (optionally in
+# .env at repo root, auto-loaded by lib.sh) always win.
+# is_port_listening / require_ports_free / pick_free_port come from lib.sh.
+ALICE_HTTP_PORT="${FLOW11_ALICE_HTTP_PORT:-$(pick_free_port)}"
+ALICE_HTTP_ALT_PORT="${FLOW11_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
+ALICE_HTTPS_PORT="${FLOW11_ALICE_HTTPS_PORT:-$(pick_free_port)}"
+ALICE_HTTPS_ALT_PORT="${FLOW11_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
 
-BOB_HTTP_PORT="${FLOW11_BOB_HTTP_PORT:-9080}"
-BOB_HTTP_ALT_PORT="${FLOW11_BOB_HTTP_ALT_PORT:-9180}"
-BOB_HTTPS_PORT="${FLOW11_BOB_HTTPS_PORT:-9443}"
-BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-9543}"
+BOB_HTTP_PORT="${FLOW11_BOB_HTTP_PORT:-$(pick_free_port)}"
+BOB_HTTP_ALT_PORT="${FLOW11_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
+BOB_HTTPS_PORT="${FLOW11_BOB_HTTPS_PORT:-$(pick_free_port)}"
+BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 FACILITATOR_URL="${FLOW11_FACILITATOR_URL:-https://x402.gcp.obol.tech}"
-
-is_port_listening() {
-    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
-}
-
-require_ports_free() {
-    local busy=()
-    local port
-    for port in "$@"; do
-        if is_port_listening "$port"; then
-            busy+=("$port")
-        fi
-    done
-    if [ "${#busy[@]}" -gt 0 ]; then
-        echo "${busy[*]}"
-        return 1
-    fi
-}
-
-pick_free_port() {
-    python3 - <<'PY'
-import socket
-
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-}
 
 rewrite_k3d_ports() {
     local config_path="$1"
@@ -282,13 +259,15 @@ else
 fi
 
 step "Preflight: Alice/Bob ingress ports free"
+# Defensive TOCTOU re-check. Under the auto-pick default this should always
+# pass; if the user pinned FLOW11_*_PORT to a busy port we fail loudly.
 busy_ports=$(require_ports_free \
     "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT" \
     "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT") || {
-    fail "Ports in use (LISTEN): $busy_ports — set FLOW11_*_PORT overrides or cleanup existing clusters first"
+    fail "Ports in use (LISTEN): $busy_ports — unset the matching FLOW11_*_PORT to auto-pick, or free the port"
     emit_metrics; exit 1
 }
-pass "Ports free: Alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT Bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
+pass "Ports: Alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT Bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
 # Record pre-test balances (strip cast's scientific notation suffix)
 PRE_ALICE_USDC=$(env -u CHAIN cast call 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
