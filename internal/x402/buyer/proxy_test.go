@@ -1831,15 +1831,19 @@ func TestProxy_UpstreamSuccessWithSettlementHeader_DoesNotIncrementUnsettledMetr
 
 func TestProxy_ConfirmSpendFailure_IncrementsMetric(t *testing.T) {
 	dir := t.TempDir()
-	stateDir := filepath.Join(dir, "state")
-	if err := os.MkdirAll(stateDir, 0o500); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
-	statePath := filepath.Join(stateDir, "consumed.json")
+	statePath := filepath.Join(dir, "consumed.json")
 
 	st, err := LoadStateStore(statePath)
 	if err != nil {
 		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	// Force StateStore.writeLocked to fail deterministically by pre-creating
+	// the target state path as a directory: os.Rename(tmpfile, dir) returns
+	// EISDIR, which root cannot bypass. The previous 0o500-dir approach was
+	// silently skipped under CAP_DAC_OVERRIDE when tests run as uid 0.
+	if err := os.Mkdir(statePath, 0o755); err != nil {
+		t.Fatalf("block state path: %v", err)
 	}
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
