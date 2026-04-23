@@ -50,7 +50,7 @@ const (
 
 	// remoteSignerChartVersion pins the remote-signer Helm chart version.
 	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.3.0"
+	remoteSignerChartVersion = "0.3.1"
 )
 
 // openclawVersionRaw is the single source of truth for the upstream OpenClaw
