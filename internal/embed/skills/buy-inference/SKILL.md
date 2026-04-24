@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["pytho
 
 # Buy Inference
 
-Purchase access to remote x402-gated inference endpoints using a risk-isolated sidecar architecture. The agent pre-signs a bounded batch of USDC payment authorizations, embeds them in a `PurchaseRequest` CR in its own namespace, and lets the controller publish buyer config/auth files into `llm`. A lean Go proxy (`x402-buyer`) handles payments at runtime with zero signer access — max loss = N x price.
+Purchase access to remote x402-gated inference endpoints using a risk-isolated sidecar architecture. The agent pre-signs a bounded batch of payment authorizations (USDC via EIP-3009 or OBOL via Permit2, auto-detected from the seller's 402 response), embeds them in a `PurchaseRequest` CR in its own namespace, and lets the controller publish buyer config/auth files into `llm`. A lean Go proxy (`x402-buyer`) handles payments at runtime with zero signer access — max loss = N x price. The buyer validates the token contract exists on-chain before signing.
 
 ## When to Use
 
@@ -14,7 +14,7 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 - Purchasing access to a remote model (pre-signs auths, creates a `PurchaseRequest`, exposes `paid/<remote-model>`)
 - Manually topping up an existing purchase by re-running `buy <same-name>`
 - Listing purchased providers and remaining auth counts
-- Checking USDC balance before buying
+- Checking token balance before buying
 - Inspecting the live sidecar status for remaining/spent auths
 
 ## When NOT to Use

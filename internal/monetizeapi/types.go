@@ -70,7 +70,17 @@ type ServiceOfferPayment struct {
 	Network           string                 `json:"network,omitempty"`
 	PayTo             string                 `json:"payTo,omitempty"`
 	MaxTimeoutSeconds int64                  `json:"maxTimeoutSeconds,omitempty"`
+	Asset             ServiceOfferAsset      `json:"asset,omitempty"`
 	Price             ServiceOfferPriceTable `json:"price,omitempty"`
+}
+
+type ServiceOfferAsset struct {
+	Address        string `json:"address,omitempty"`
+	Symbol         string `json:"symbol,omitempty"`
+	Decimals       int64  `json:"decimals,omitempty"`
+	TransferMethod string `json:"transferMethod,omitempty"`
+	EIP712Name     string `json:"eip712Name,omitempty"`
+	EIP712Version  string `json:"eip712Version,omitempty"`
 }
 
 type ServiceOfferPriceTable struct {
@@ -194,13 +204,15 @@ type PurchaseRequestSpec struct {
 }
 
 type PreSignedAuth struct {
-	Signature   string `json:"signature"`
-	From        string `json:"from"`
-	To          string `json:"to"`
-	Value       string `json:"value"`
-	ValidAfter  string `json:"validAfter"`
-	ValidBefore string `json:"validBefore"`
-	Nonce       string `json:"nonce"`
+	ID          string                 `json:"id,omitempty"`
+	Payment     map[string]interface{} `json:"payment,omitempty"`
+	Signature   string                 `json:"signature"`
+	From        string                 `json:"from"`
+	To          string                 `json:"to"`
+	Value       string                 `json:"value"`
+	ValidAfter  string                 `json:"validAfter"`
+	ValidBefore string                 `json:"validBefore"`
+	Nonce       string                 `json:"nonce"`
 }
 
 type PurchaseAutoRefill struct {
@@ -210,10 +222,15 @@ type PurchaseAutoRefill struct {
 }
 
 type PurchasePayment struct {
-	Network string `json:"network"`
-	PayTo   string `json:"payTo"`
-	Price   string `json:"price"`
-	Asset   string `json:"asset"`
+	Network             string `json:"network"`
+	PayTo               string `json:"payTo"`
+	Price               string `json:"price"`
+	Asset               string `json:"asset"`
+	AssetSymbol         string `json:"assetSymbol,omitempty"`
+	AssetDecimals       int64  `json:"assetDecimals,omitempty"`
+	AssetTransferMethod string `json:"assetTransferMethod,omitempty"`
+	EIP712Name          string `json:"eip712Name,omitempty"`
+	EIP712Version       string `json:"eip712Version,omitempty"`
 }
 
 type PurchaseRequestStatus struct {

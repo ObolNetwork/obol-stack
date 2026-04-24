@@ -77,11 +77,11 @@ Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traef
 
 ## Monetize Subsystem
 
-Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC on Base/Base Sepolia, Traefik ForwardAuth).
+Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traefik ForwardAuth). Supports USDC (EIP-3009) and OBOL (Permit2) via `--token [USDC|OBOL]` flag; default is USDC on Base Mainnet. Token registry in `internal/x402/tokens.go`.
 
 **Sell-side flow**: `obol sell http` → creates ServiceOffer CR → serviceoffer-controller reconciles ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware) → RoutePublished (HTTPRoute) → Registered (RegistrationRequest + optional ERC-8004 side effects) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
+**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` validates the token contract exists on-chain → pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
 
 **buy.py** lives at `/data/.openclaw/skills/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
 ```
@@ -120,7 +120,7 @@ PurchaseRequest status caveat:
 - `PurchaseRequest.status` (including `conditions[].message`, `remaining`, `spent`) is the controller's last reconciled snapshot, not a live per-request counter.
 - For real-time auth pool state, and for any refill decision, always check `x402-buyer` `GET /status` in the litellm pod.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
 
 **`obol sell http` flag reference** (common mistakes: `--model`, `--pay-to`, `--network` do NOT exist on this command):
 ```

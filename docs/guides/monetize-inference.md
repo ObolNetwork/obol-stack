@@ -3,7 +3,7 @@
 This guide walks you through exposing a local LLM as a paid API endpoint using the Obol Stack. By the end, you'll have:
 
 - A local Ollama model serving inference
-- An x402 payment gate requiring USDC per request
+- An x402 payment gate requiring USDC (default) or OBOL per request
 - A public URL via Cloudflare tunnel
 - An ERC-8004 agent registration document for discoverability
 
@@ -173,6 +173,20 @@ obol sell http my-qwen \
     --upstream ollama \
     --port 11434
 ```
+
+Both examples default to USDC payments. To accept OBOL token (Ethereum mainnet, Permit2) instead:
+
+```bash
+obol sell http my-qwen \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --token OBOL \
+    --per-request 0.001 \
+    --namespace llm \
+    --upstream ollama \
+    --port 11434
+```
+
+When `--token OBOL` is used without `--chain`, the chain defaults to `ethereum`.
 
 That stores both values in the pricing config:
 

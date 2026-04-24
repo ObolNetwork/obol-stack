@@ -175,34 +175,38 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	// Idempotent re-run for default deployment: just re-sync
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
-			u.Info("Default OpenClaw instance already configured, re-syncing...")
-			// Always regenerate helmfile.yaml to pick up chart version bumps.
-			// values-obol.yaml (user config) is intentionally left unchanged.
-			namespace := fmt.Sprintf("%s-%s", appName, id)
+			if _, err := os.Stat(filepath.Join(deploymentDir, "values-obol.yaml")); os.IsNotExist(err) {
+				u.Warn("Default OpenClaw scaffold is incomplete; rebuilding missing values-obol.yaml")
+			} else {
+				u.Info("Default OpenClaw instance already configured, re-syncing...")
+				// Always regenerate helmfile.yaml to pick up chart version bumps.
+				// values-obol.yaml (user config) is intentionally left unchanged.
+				namespace := fmt.Sprintf("%s-%s", appName, id)
 
-			helmfileContent := generateHelmfile(id, namespace)
-			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
-				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
-			}
-
-			if opts.Sync {
-				if err := doSync(cfg, id, u); err != nil {
-					return err
-				}
-				// Import workspace on re-sync too
-				imported, importErr := DetectExistingConfig()
-				if importErr != nil {
-					u.Warnf("could not read existing config: %v", importErr)
+				helmfileContent := generateHelmfile(id, namespace)
+				if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
+					return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 				}
 
-				if imported != nil && imported.WorkspaceDir != "" {
-					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
+				if opts.Sync {
+					if err := doSync(cfg, id, u); err != nil {
+						return err
+					}
+					// Import workspace on re-sync too
+					imported, importErr := DetectExistingConfig()
+					if importErr != nil {
+						u.Warnf("could not read existing config: %v", importErr)
+					}
+
+					if imported != nil && imported.WorkspaceDir != "" {
+						copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
+					}
+
+					return nil
 				}
 
 				return nil
 			}
-
-			return nil
 		}
 	}
 
