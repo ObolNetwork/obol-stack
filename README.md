@@ -49,14 +49,15 @@ obol version
 obol stack init
 obol stack up
 
-# Set up your AI agent (interactive — choose a model provider)
+# Apply agent capabilities to the default stack-managed agent
 obol agent init
 
-# Open the agent dashboard
-obol openclaw dashboard default
+# Inspect the default Hermes agent
+obol hermes list
+obol hermes token obol-agent
 ```
 
-The agent init flow will configure [OpenClaw](https://openclaw.ai) with your chosen model provider (Ollama, Anthropic, or OpenAI) and deploy it to the cluster.
+`obol stack up` provisions the default [Hermes Agent](https://github.com/NousResearch/hermes-agent) runtime behind LiteLLM. `obol agent init` applies the controller-based agent capabilities used for monetization and reconciliation.
 
 ## Blockchain Networks
 
@@ -142,39 +143,36 @@ obol model setup --provider openai --api-key sk-proj-...
 obol model status
 ```
 
-`model setup` patches the LiteLLM config and Secret with your API key, adds the model to the gateway, restarts LiteLLM, and syncs all deployed OpenClaw instances.
+`model setup` patches the LiteLLM config and Secret with your API key, adds the model to the gateway, restarts LiteLLM, and syncs the stack-managed Hermes default agent.
 
-## OpenClaw AI Agent
+## AI Agent Runtimes
 
-[OpenClaw](https://openclaw.ai) is the AI agent deployed by the stack. Multiple instances can run side-by-side, each with its own model provider configuration.
+Hermes is the default AI agent runtime deployed by the stack as `obol-agent`. OpenClaw remains available as an optional manual runtime. Multiple Hermes and OpenClaw instances can run side-by-side.
 
 ```bash
-# Create and deploy an instance (interactive provider setup)
+# Default stack-managed Hermes agent
+obol hermes list
+obol hermes token obol-agent
+obol hermes skills list
+
+# Create and deploy an additional Hermes instance
+obol hermes onboard --id research
+
+# Create and deploy an optional OpenClaw instance
 obol openclaw onboard
 
-# Reconfigure model provider for an existing instance
-obol openclaw setup
-
-# List instances
+# List optional OpenClaw instances
 obol openclaw list
 
-# Open the web dashboard
+# Open the OpenClaw web dashboard
 obol openclaw dashboard
-
-# Manage skills (add, remove, list)
-obol openclaw skills list
-obol openclaw skills add <package>
-obol openclaw skills remove <name>
-
-# Remove an instance
-obol openclaw delete --force
 ```
 
-When only one OpenClaw instance is installed, the instance ID is optional — it is auto-selected. With multiple instances, specify the name: `obol openclaw setup prod`.
+When only one runtime-specific instance is installed, the instance ID is optional. With multiple instances, specify the name: `obol hermes sync research` or `obol openclaw setup prod`.
 
 ### Skills
 
-OpenClaw ships with 21 embedded skills that are installed automatically on first deploy. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.
+The stack ships with embedded Obol skills that are installed automatically for the default Hermes agent and for OpenClaw instances. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.
 
 #### Infrastructure
 
@@ -295,8 +293,8 @@ obol sell list
 obol sell status <offer-name> -n <namespace>
 
 # 4) Buyer wallet and balances are available.
-obol kubectl exec -n openclaw-obol-agent <openclaw-pod> -- \
-  python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
+obol kubectl exec -n hermes-obol-agent deploy/hermes -c hermes -- \
+  python3 /data/.hermes/obol-skills/buy-inference/scripts/buy.py balance
 ```
 
 Run the paid tests only after all four checks pass.

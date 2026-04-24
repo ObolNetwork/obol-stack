@@ -113,3 +113,39 @@ skills:
 		t.Errorf("expected exactly 1 AGENT_BASE_URL entry:\n%s", content)
 	}
 }
+
+func TestPatchAgentBaseURL_InsertHermesManifestIndentation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "values-hermes.yaml")
+
+	original := `resources:
+  - apiVersion: apps/v1
+    kind: Deployment
+    spec:
+      template:
+        spec:
+          containers:
+            - name: openclaw
+              env:
+                - name: REMOTE_SIGNER_URL
+                  value: http://remote-signer:9000
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := patchAgentBaseURL(path, "https://mystack.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if !strings.Contains(content, "                - name: AGENT_BASE_URL") {
+		t.Fatalf("patched Hermes manifest missing preserved indent for name:\n%s", content)
+	}
+
+	if !strings.Contains(content, "                  value: https://mystack.example.com") {
+		t.Fatalf("patched Hermes manifest missing preserved indent for value:\n%s", content)
+	}
+}

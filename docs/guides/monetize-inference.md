@@ -82,7 +82,7 @@ Verify the key components:
 | Check | Command | Expected |
 |-------|---------|----------|
 | Cluster nodes | `obol kubectl get nodes` | 1 node Ready |
-| Agent running | `obol kubectl get pods -n openclaw-obol-agent` | Running |
+| Agent running | `obol kubectl get pods -n hermes-obol-agent` | Running |
 | CRD installed | `obol kubectl get crd serviceoffers.obol.org` | Found |
 | x402 verifier | `obol kubectl get pods -n x402` | 2 replicas Running |
 | Traefik gateway | `obol kubectl get gateway -n traefik` | traefik-gateway |
@@ -751,23 +751,23 @@ Missing any of these fields causes the facilitator to reject the payment before 
 
 ### RBAC: forbidden
 
-If the OpenClaw agent cannot create or patch Kubernetes resources (ServiceOffers, Middlewares, HTTPRoutes), the ClusterRoleBindings may have empty `subjects` lists. Patch them manually:
+If the default Hermes agent cannot create or patch Obol resources, the RBAC bindings may have empty `subjects` lists. Patch them manually:
 
 ```bash
-# Patch both ClusterRoleBindings
-for BINDING in openclaw-monetize-read-binding openclaw-monetize-workload-binding; do
+# Patch the read ClusterRoleBinding
+for BINDING in openclaw-monetize-read-binding; do
   kubectl patch clusterrolebinding "$BINDING" \
       --type=json \
-      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
+      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
 done
 
-# Patch x402 namespace RoleBinding
-kubectl patch rolebinding openclaw-x402-pricing-binding -n x402 \
+# Patch the default-agent write RoleBinding
+kubectl patch rolebinding openclaw-monetize-write-binding -n hermes-obol-agent \
     --type=json \
-    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
+    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
 ```
 
-Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
+Replace `hermes-obol-agent` with your actual Hermes namespace if different.
 
 ---
 

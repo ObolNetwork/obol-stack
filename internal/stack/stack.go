@@ -16,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -307,8 +308,6 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
-	portsBlocked := checkPortsAvailable([]int{80, 443}) != nil
-
 	kubeconfigData, err := backend.Up(cfg, u, stackID)
 	if err != nil {
 		return err
@@ -345,12 +344,11 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Blank()
 	u.Bold("Stack started successfully.")
-	if portsBlocked {
-		u.Warnf("Ports 80/443 are in use by another process — use http://obol.stack:8080 instead")
-		u.Print("Visit http://obol.stack:8080 in your browser to get started.")
-	} else {
-		u.Print("Visit http://obol.stack in your browser to get started.")
+	ingressURL := LocalIngressURL(cfg)
+	if ingressURL != "http://obol.stack" {
+		u.Warnf("Default ingress ports are in use by another process — use %s instead", ingressURL)
 	}
+	u.Printf("Visit %s in your browser to get started.", ingressURL)
 	update.HintIfStale(cfg)
 
 	return nil
@@ -506,22 +504,22 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// step required. Non-fatal: the user can always run `obol model setup` later.
 	autoConfigureLLM(cfg, u)
 
-	// Deploy default OpenClaw instance (non-fatal on failure).
+	// Deploy default Hermes instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
 	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
 	// An outer spinner would fight with that output and block any sudo password
 	// prompt (e.g. EnsureHostsEntries writing /etc/hosts).
 	u.Blank()
-	u.Info("Setting up default OpenClaw instance")
+	u.Info("Setting up default Hermes instance")
 
-	if err := openclaw.SetupDefault(cfg, u); err != nil {
-		u.Warnf("Failed to set up default OpenClaw: %v", err)
-		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
-	} else if walletAddr, walletErr := openclaw.ResolveWalletAddress(cfg); walletErr == nil {
+	if err := hermes.SetupDefault(cfg, u); err != nil {
+		u.Warnf("Failed to set up default Hermes: %v", err)
+		u.Dim("  You can manually set up Hermes later with: obol hermes onboard")
+	} else if walletAddr, walletErr := hermes.ResolveWalletAddress(cfg); walletErr == nil {
 		u.Blank()
 		u.Successf("Default agent wallet: %s", walletAddr)
 		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
-		u.Dim("  Retrieve later with: obol openclaw wallet address obol-agent")
+		u.Dim("  Retrieve later with: obol hermes wallet list obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
@@ -679,11 +677,12 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
 	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
-	dockerfile string // relative to project root, e.g. "Dockerfile.x402-verifier"
+	dockerfile string // relative to project root or absolute path
+	contextDir string // relative to project root or absolute path (empty = project root)
 }
 
 // localImages lists images that should be built locally and imported into k3d.
-var localImages = []localImage{
+var baseLocalImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
 	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
@@ -694,6 +693,41 @@ func devPreloadImages() []string {
 	if ref := openclaw.ImageRef(); ref != "" {
 		images = append(images, ref)
 	}
+	return images
+}
+
+func hermesSourceDir(projectRoot string) string {
+	if override := strings.TrimSpace(os.Getenv("OBOL_HERMES_SOURCE_DIR")); override != "" {
+		return override
+	}
+
+	candidates := []string{
+		filepath.Join(filepath.Dir(projectRoot), "hermes-agent"),
+		filepath.Join(os.Getenv("HOME"), "Development", "R&D", "hermes-agent"),
+	}
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(candidate, "Dockerfile")); err == nil {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func devLocalImages(projectRoot string) []localImage {
+	images := append([]localImage(nil), baseLocalImages...)
+	if hermesDir := hermesSourceDir(projectRoot); hermesDir != "" {
+		images = append(images, localImage{
+			tag:        "nousresearch/hermes-agent:latest",
+			dockerfile: filepath.Join(hermesDir, "Dockerfile"),
+			contextDir: hermesDir,
+		})
+	}
+
 	return images
 }
 
@@ -716,10 +750,20 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 
-	for _, img := range localImages {
+	for _, img := range devLocalImages(projectRoot) {
 		contextDir := projectRoot
+		if img.contextDir != "" {
+			if filepath.IsAbs(img.contextDir) {
+				contextDir = img.contextDir
+			} else {
+				contextDir = filepath.Join(projectRoot, img.contextDir)
+			}
+		}
 
-		dockerfilePath := filepath.Join(projectRoot, img.dockerfile)
+		dockerfilePath := img.dockerfile
+		if !filepath.IsAbs(dockerfilePath) {
+			dockerfilePath = filepath.Join(projectRoot, img.dockerfile)
+		}
 		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			continue // Dockerfile not present (production install without source)
 		}

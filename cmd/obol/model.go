@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -174,7 +174,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 
 	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncOpenClawModels(cfg, u)
+	return syncAgentModels(cfg, u)
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
@@ -213,32 +213,24 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncOpenClawModels(cfg, u)
+	return syncAgentModels(cfg, u)
 }
 
-// syncOpenClawModels reads the full LiteLLM model list and updates all
-// deployed OpenClaw instances so their "openai" provider (LiteLLM gateway)
-// model list stays in sync. This prevents OpenClaw from trying to use
-// native provider routing for models it discovers but doesn't recognise.
-func syncOpenClawModels(cfg *config.Config, u *ui.UI) error {
-	allModels, err := model.GetConfiguredModels(cfg)
-	if err != nil {
-		u.Warnf("Could not read LiteLLM model list: %v", err)
-		return nil // non-fatal
-	}
-
-	return openclaw.SyncOverlayModels(cfg, allModels, u)
+// syncAgentModels re-renders the stack-managed Hermes default agent from the
+// current LiteLLM model inventory.
+func syncAgentModels(cfg *config.Config, u *ui.UI) error {
+	return hermes.SyncDefaultModels(cfg, u)
 }
 
 func modelSyncCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "sync",
-		Usage: "Sync LiteLLM model list to all OpenClaw instances",
+		Usage: "Sync LiteLLM model list to the stack-managed Hermes agent",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			u.Info("Reading model list from LiteLLM...")
 
-			return syncOpenClawModels(cfg, u)
+			return syncAgentModels(cfg, u)
 		},
 	}
 }
@@ -264,7 +256,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			return syncOpenClawModels(cfg, u)
+			return syncAgentModels(cfg, u)
 		},
 	}
 }
@@ -514,7 +506,7 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			return syncOpenClawModels(cfg, u)
+			return syncAgentModels(cfg, u)
 		},
 	}
 }

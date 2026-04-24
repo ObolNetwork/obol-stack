@@ -50,7 +50,7 @@ func ResolveInstance(cfg *config.Config, args []string) (id string, remaining []
 
 	switch len(instances) {
 	case 0:
-		return "", nil, errors.New("no OpenClaw instances found — run 'obol agent init' to create one")
+		return "", nil, errors.New("no OpenClaw instances found — run 'obol openclaw onboard' to create one")
 	case 1:
 		return instances[0], args, nil
 	default:

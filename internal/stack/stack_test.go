@@ -159,19 +159,77 @@ func TestStripConflictingPorts_StringManipulation(t *testing.T) {
 	}
 }
 
-func TestEnsureK3dPortsAvailable_RewritesConfig(t *testing.T) {
-	// Verify that ensureK3dPortsAvailable reads, strips, and rewrites the
-	// config file when port blocks are present and those ports are occupied.
-	// We can't actually block port 80, so we verify the no-op path: when
-	// ports 80/443 are free, the file should remain unchanged.
+func TestRewriteConflictingPorts_PreservesAvailableFallbacks(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(port int) bool {
+		return port == 8080 || port == 8443
+	}, func() (int, error) {
+		t.Fatal("should not pick an ephemeral port when fallbacks are available")
+		return 0, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected %s mapping to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 8080:80", "- port: 8443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be preserved:\n%s", expected, got)
+		}
+	}
+}
+
+func TestRewriteConflictingPorts_PicksEphemeralWhenAllDefaultsBusy(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+	picks := []int{18080, 18443}
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(int) bool {
+		return false
+	}, func() (int, error) {
+		if len(picks) == 0 {
+			t.Fatal("unexpected extra port pick")
+		}
+		port := picks[0]
+		picks = picks[1:]
+		return port, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 8080:80", "- port: 443:443", "- port: 8443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected default mapping %s to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 18080:80", "- port: 18443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be inserted:\n%s", expected, got)
+		}
+	}
+	if !strings.Contains(got, "options:\n") {
+		t.Fatal("YAML options key should remain")
+	}
+}
+
+func TestEnsureK3dPortsAvailable_NoDefaultMappings(t *testing.T) {
+	// Verify the file read/write path stays a no-op for configs that do not
+	// contain the default ingress mappings.
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "k3d.yaml")
 
 	original := "ports:\n" +
-		portBlock(80, 80) +
-		portBlock(8080, 80) +
-		portBlock(443, 443) +
-		portBlock(8443, 443)
+		portBlock(18080, 80) +
+		portBlock(18443, 443)
 
 	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -185,10 +243,8 @@ func TestEnsureK3dPortsAvailable_RewritesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// On most dev machines ports 80/443 are free (or permission-denied which
-	// is treated as available), so the config should be unchanged.
 	if string(data) != original {
-		t.Errorf("expected config unchanged when ports are free\ngot:\n%s", string(data))
+		t.Errorf("expected config unchanged when no default mappings are present\ngot:\n%s", string(data))
 	}
 }
 

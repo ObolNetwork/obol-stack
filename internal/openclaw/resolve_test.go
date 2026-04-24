@@ -74,7 +74,7 @@ func TestResolveInstance(t *testing.T) {
 			t.Fatal("expected error for zero instances")
 		}
 
-		if got := err.Error(); got != "no OpenClaw instances found — run 'obol agent init' to create one" {
+		if got := err.Error(); got != "no OpenClaw instances found — run 'obol openclaw onboard' to create one" {
 			t.Fatalf("unexpected error: %s", got)
 		}
 	})
