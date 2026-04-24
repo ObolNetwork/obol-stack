@@ -27,6 +27,90 @@ func EnsureCluster(cfg *config.Config) error {
 	return nil
 }
 
+// ErrClusterDown indicates the Kubernetes API server is unreachable,
+// typically because the k3d cluster is stopped.
+var ErrClusterDown = errors.New("cluster appears to be stopped — run 'obol stack up' to start it")
+
+// wrapClusterDown checks whether an error (or the accompanying stderr text)
+// indicates the Kubernetes API server is unreachable and, if so, returns
+// ErrClusterDown.  This catches the common case where the kubeconfig file
+// still exists from a prior session but the k3d cluster has been stopped.
+func wrapClusterDown(err error, stderr string) error {
+	if err == nil {
+		return nil
+	}
+
+	combined := err.Error() + " " + stderr
+	if strings.Contains(combined, "connection refused") ||
+		strings.Contains(combined, "connect: no route to host") ||
+		strings.Contains(combined, "Unable to connect to the server") {
+		return ErrClusterDown
+	}
+
+	return err
+}
+
+// clusterDownHints maps CLI subcommand paths to human-friendly descriptions
+// of what the command was trying to do.  Used by FormatClusterDownError to
+// produce contextual messages like "run 'obol stack up' before listing
+// services for sale".
+var clusterDownHints = map[string]string{
+	"sell list":          "listing services for sale",
+	"sell status":        "checking service status",
+	"sell stop":          "stopping a service",
+	"sell delete":        "deleting a service",
+	"sell test":          "testing a service endpoint",
+	"sell pricing":       "configuring pricing",
+	"sell register":      "registering on the agent registry",
+	"sell inference":     "starting the inference gateway",
+	"sell http":          "creating an HTTP service offer",
+	"network sync":       "syncing a network deployment",
+	"network delete":     "deleting a network deployment",
+	"network status":     "checking network status",
+	"openclaw onboard":   "onboarding an OpenClaw instance",
+	"openclaw sync":      "syncing an OpenClaw instance",
+	"openclaw setup":     "configuring OpenClaw",
+	"openclaw token":     "retrieving the gateway token",
+	"openclaw delete":    "deleting an OpenClaw instance",
+	"openclaw list":      "listing OpenClaw instances",
+	"openclaw dashboard": "opening the dashboard",
+	"model status":       "checking model status",
+	"model list":         "listing models",
+	"model setup":        "configuring a model",
+	"model remove":       "removing a model",
+	"app sync":           "syncing an app deployment",
+	"app delete":         "deleting an app deployment",
+	"tunnel status":      "checking tunnel status",
+	"tunnel restart":     "restarting the tunnel",
+	"tunnel logs":        "fetching tunnel logs",
+	"tunnel login":       "configuring the tunnel",
+	"tunnel provision":   "provisioning the tunnel",
+	"agent init":         "initializing the agent",
+}
+
+// FormatClusterDownError returns a contextual message for a cluster-down
+// error based on the CLI arguments.  Returns empty string if err is not
+// ErrClusterDown.
+func FormatClusterDownError(err error, args []string) string {
+	if !errors.Is(err, ErrClusterDown) {
+		return ""
+	}
+
+	// Try "subcmd subsubcmd" then "subcmd" to find a matching hint.
+	if len(args) >= 3 {
+		if hint, ok := clusterDownHints[args[1]+" "+args[2]]; ok {
+			return fmt.Sprintf("cluster appears to be stopped — run 'obol stack up' before %s", hint)
+		}
+	}
+	if len(args) >= 2 {
+		if hint, ok := clusterDownHints[args[1]]; ok {
+			return fmt.Sprintf("cluster appears to be stopped — run 'obol stack up' before %s", hint)
+		}
+	}
+
+	return ErrClusterDown.Error()
+}
+
 // Paths returns the absolute paths to the kubectl binary and kubeconfig.
 func Paths(cfg *config.Config) (binary, kubeconfig string) {
 	return filepath.Join(cfg.BinDir, "kubectl"),
@@ -48,10 +132,10 @@ func Run(binary, kubeconfig string, args ...string) error {
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
+			return wrapClusterDown(fmt.Errorf("%w: %s", err, errMsg), errMsg)
 		}
 
-		return err
+		return wrapClusterDown(err, "")
 	}
 
 	return nil
@@ -70,10 +154,10 @@ func RunSilent(binary, kubeconfig string, args ...string) error {
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return fmt.Errorf("%w: %s", err, errMsg)
+			return wrapClusterDown(fmt.Errorf("%w: %s", err, errMsg), errMsg)
 		}
 
-		return err
+		return wrapClusterDown(err, "")
 	}
 
 	return nil
@@ -94,10 +178,10 @@ func Output(binary, kubeconfig string, args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return "", fmt.Errorf("%w: %s", err, errMsg)
+			return "", wrapClusterDown(fmt.Errorf("%w: %s", err, errMsg), errMsg)
 		}
 
-		return "", err
+		return "", wrapClusterDown(err, "")
 	}
 
 	return stdout.String(), nil
@@ -123,10 +207,10 @@ func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg != "" {
-			return "", fmt.Errorf("kubectl apply: %w: %s", err, errMsg)
+			return "", wrapClusterDown(fmt.Errorf("kubectl apply: %w: %s", err, errMsg), errMsg)
 		}
 
-		return "", fmt.Errorf("kubectl apply: %w", err)
+		return "", wrapClusterDown(fmt.Errorf("kubectl apply: %w", err), "")
 	}
 
 	out := strings.TrimSpace(stdout.String())
@@ -172,10 +256,12 @@ func PipeCommands(binary, kubeconfig string, args1, args2 []string) error {
 	err2 := cmd2.Wait()
 
 	if err1 != nil {
-		return fmt.Errorf("cmd1: %w: %s", err1, strings.TrimSpace(stderr1.String()))
+		s := strings.TrimSpace(stderr1.String())
+		return wrapClusterDown(fmt.Errorf("cmd1: %w: %s", err1, s), s)
 	}
 	if err2 != nil {
-		return fmt.Errorf("cmd2: %w: %s", err2, strings.TrimSpace(stderr2.String()))
+		s := strings.TrimSpace(stderr2.String())
+		return wrapClusterDown(fmt.Errorf("cmd2: %w: %s", err2, s), s)
 	}
 
 	return nil

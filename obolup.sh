@@ -70,7 +70,7 @@ readonly HELM_DIFF_VERSION="3.15.4"
 readonly OLLAMA_VERSION="0.20.2"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
-readonly OPENCLAW_VERSION="2026.4.15"
+readonly OPENCLAW_VERSION="2026.4.21"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"

@@ -305,6 +305,7 @@ Run the paid tests only after all four checks pass.
 
 - `PurchaseRequest.status` (`remaining`/`spent` and `conditions[].message`) is a reconciled snapshot, not a live per-request counter.
 - For real-time auth pool state, use `x402-buyer` `GET /status` from the litellm pod.
+- Agent-managed refill is driven by `buy.py process --all`; use live sidecar status as the source of truth for refill decisions.
 - Raw direct `X-PAYMENT` through Traefik is not a supported production path; use `obol sell inference` if you need a direct buyer flow.
 
 ## File Locations

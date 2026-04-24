@@ -5,6 +5,19 @@
 set -euo pipefail
 
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+# Auto-load .env so flow scripts can read REMOTE_SIGNER_PRIVATE_KEY and any
+# FLOW*_PORT / FLOW*_URL overrides without re-exporting them every run.
+# Existing exported vars in the shell take precedence (set -a only exports
+# newly assigned names; it does not overwrite values already in the env).
+if [ -f "$OBOL_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    # shellcheck source=/dev/null
+    source "$OBOL_ROOT/.env" || true
+    set +a
+fi
+
 export OBOL_DEVELOPMENT="${OBOL_DEVELOPMENT:-true}"
 export OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$OBOL_ROOT/.workspace/config}"
 export OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_ROOT/.workspace/bin}"
@@ -13,6 +26,16 @@ OBOL="${OBOL:-$OBOL_BIN_DIR/obol}"
 
 STEP_COUNT=0
 PASS_COUNT=0
+FAIL_COUNT=0
+
+_flow_exit_status() {
+    local rc=$?
+    if [ "$rc" -eq 0 ] && [ "${FAIL_COUNT:-0}" -gt 0 ]; then
+        exit 1
+    fi
+    exit "$rc"
+}
+trap _flow_exit_status EXIT
 
 # Well-known Hardhat/Anvil test mnemonic (deterministic, same on every install).
 # NEVER commit real private keys -- derive at runtime from this public mnemonic.
@@ -52,7 +75,9 @@ pass() {
 }
 
 fail() {
+    FAIL_COUNT=$((FAIL_COUNT + 1))
     echo "FAIL: [$STEP_COUNT] $1"
+    return 0
 }
 
 # Run a command; pass if exit 0, fail otherwise. Captures output.
@@ -121,5 +146,65 @@ cleanup_pid() {
 
 emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
+    echo "METRIC steps_failed=$FAIL_COUNT"
     echo "METRIC total_steps=$STEP_COUNT"
+}
+
+ensure_payment_python_deps() {
+    if python3 -c "import eth_account, httpx" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local venv_dir="${FLOW_PYTHON_VENV:-$OBOL_ROOT/.workspace/venv}"
+    python3 -m venv "$venv_dir" || return 1
+    "$venv_dir/bin/python" -m pip install -q --upgrade pip || return 1
+    "$venv_dir/bin/python" -m pip install -q eth-account httpx || return 1
+    export PATH="$venv_dir/bin:$PATH"
+
+    python3 -c "import eth_account, httpx" >/dev/null 2>&1
+}
+
+remote_signer_chart_version() {
+    awk -F'"' '/remoteSignerChartVersion =/ {print $2; exit}' \
+        "$OBOL_ROOT/internal/openclaw/openclaw.go"
+}
+
+remote_signer_chart_available() {
+    local version="$1"
+    helm search repo obol/remote-signer --versions 2>/dev/null | awk -v v="$version" '$2 == v {found=1} END {exit found ? 0 : 1}'
+}
+
+# Port helpers — shared so any flow can auto-pick ingress ports and do a
+# pre-bind sanity check instead of hardcoding 80/8080/443/8443.
+
+is_port_listening() {
+    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+# Usage: busy=$(require_ports_free 80 8080 443 8443) || echo "busy: $busy"
+# Returns 1 and prints the space-separated busy ports if any are in use.
+require_ports_free() {
+    local busy=()
+    local port
+    for port in "$@"; do
+        if is_port_listening "$port"; then
+            busy+=("$port")
+        fi
+    done
+    if [ "${#busy[@]}" -gt 0 ]; then
+        echo "${busy[*]}"
+        return 1
+    fi
+}
+
+# Ask the kernel for an unused ephemeral port on 127.0.0.1.
+# There is a small TOCTOU window between this call and the caller binding the
+# port; k3d/traefik claim ports fast enough that this is safe in practice.
+pick_free_port() {
+    python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
 }

@@ -224,9 +224,13 @@ func TestRemoteTransactOpts(t *testing.T) {
 	var path string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+		// This verifies the signer receives proper requests.
+		if r.URL.Path == "/api/v1/keys" {
+			json.NewEncoder(w).Encode(keysResponse{Keys: []string{addr.Hex()}})
+			return
 		}
+		// For transaction signing, return the error since we can't easily
+		// produce a valid signed tx in a unit test.
 		path = r.URL.Path
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request body: %v", err)

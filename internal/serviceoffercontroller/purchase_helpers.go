@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -192,59 +194,79 @@ func (c *Controller) litellmModelIDsByName(ctx context.Context, ns, masterKey, m
 
 // ── ConfigMap merge (optimistic concurrency) ────────────────────────────────
 
-func (c *Controller) mergeBuyerConfig(ctx context.Context, ns, name string, upstream map[string]any) error {
-	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerConfigCM, metav1.GetOptions{})
+// mergeBuyerCM writes payload as JSON under "<name>.json" in the given ConfigMap,
+// removing legacyKey on the way so callers migrate off the old shared-key shape.
+func (c *Controller) mergeBuyerCM(ctx context.Context, ns, cmName, legacyKey, name string, payload any) error {
+	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, cmName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("get %s/%s: %w", ns, buyerConfigCM, err)
+		return fmt.Errorf("get %s/%s: %w", ns, cmName, err)
 	}
 	if cm.Data == nil {
 		cm.Data = make(map[string]string)
 	}
-	delete(cm.Data, "config.json")
-	configJSON, _ := json.MarshalIndent(upstream, "", "  ")
-	cm.Data[name+".json"] = string(configJSON)
-
+	delete(cm.Data, legacyKey)
+	data, _ := json.Marshal(payload)
+	cm.Data[name+".json"] = string(data)
 	_, err = c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
 	return err
+}
+
+func (c *Controller) mergeBuyerConfig(ctx context.Context, ns, name string, upstream map[string]any) error {
+	return c.mergeBuyerCM(ctx, ns, buyerConfigCM, "config.json", name, upstream)
+}
+
+func otherActivePurchaseUsesModel(purchases []*monetizeapi.PurchaseRequest, namespace, name, modelName string) *monetizeapi.PurchaseRequest {
+	for _, pr := range purchases {
+		if pr == nil {
+			continue
+		}
+		if pr.Namespace == namespace && pr.Name == name {
+			continue
+		}
+		if pr.Spec.Model != modelName {
+			continue
+		}
+		return pr
+	}
+	return nil
+}
+
+func (c *Controller) findOtherActivePurchaseForModel(namespace, name, modelName string) *monetizeapi.PurchaseRequest {
+	var purchases []*monetizeapi.PurchaseRequest
+	for _, item := range c.purchaseInformer.GetStore().List() {
+		u := asUnstructured(item)
+		if u == nil {
+			continue
+		}
+		var pr monetizeapi.PurchaseRequest
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &pr); err != nil {
+			log.Printf("purchase: decode purchase for model conflict scan: %v", err)
+			continue
+		}
+		purchases = append(purchases, &pr)
+	}
+	return otherActivePurchaseUsesModel(purchases, namespace, name, modelName)
 }
 
 func (c *Controller) mergeBuyerAuths(ctx context.Context, ns, name string, auths []map[string]string) error {
-	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerAuthsCM, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get %s/%s: %w", ns, buyerAuthsCM, err)
-	}
-	if cm.Data == nil {
-		cm.Data = make(map[string]string)
-	}
-	delete(cm.Data, "auths.json")
-	authsJSON, _ := json.MarshalIndent(auths, "", "  ")
-	cm.Data[name+".json"] = string(authsJSON)
-
-	_, err = c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
-	return err
+	return c.mergeBuyerCM(ctx, ns, buyerAuthsCM, "auths.json", name, auths)
 }
 
 func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
-	// Remove from config.
-	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerConfigCM, metav1.GetOptions{})
-	if err == nil {
+	for _, spec := range []struct{ cm, legacy string }{
+		{buyerConfigCM, "config.json"},
+		{buyerAuthsCM, "auths.json"},
+	} {
+		cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, spec.cm, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
 		if cm.Data == nil {
 			cm.Data = make(map[string]string)
 		}
-		delete(cm.Data, "config.json")
+		delete(cm.Data, spec.legacy)
 		delete(cm.Data, name+".json")
 		c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
-	}
-
-	// Remove from auths.
-	authsCM, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, buyerAuthsCM, metav1.GetOptions{})
-	if err == nil {
-		if authsCM.Data == nil {
-			authsCM.Data = make(map[string]string)
-		}
-		delete(authsCM.Data, "auths.json")
-		delete(authsCM.Data, name+".json")
-		c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, authsCM, metav1.UpdateOptions{})
 	}
 }
 
@@ -400,9 +422,35 @@ func (c *Controller) triggerBuyerReload(ctx context.Context, ns string) {
 		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
 			continue
 		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
 		reloadURL := fmt.Sprintf("http://%s:8402/admin/reload", pod.Status.PodIP)
 		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		req, _ := http.NewRequestWithContext(reqCtx, "POST", reloadURL, nil)
+		c.httpClient.Do(req) //nolint:bodyclose // best-effort, response ignored
+		cancel()
+	}
+}
+
+func (c *Controller) triggerBuyerRemove(ctx context.Context, ns, name string) {
+	pods, err := c.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=litellm",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return
+	}
+
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		removeURL := fmt.Sprintf("http://%s:8402/admin/remove?name=%s", pod.Status.PodIP, url.QueryEscape(name))
+		reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		req, _ := http.NewRequestWithContext(reqCtx, "POST", removeURL, nil)
 		c.httpClient.Do(req) //nolint:bodyclose // best-effort, response ignored
 		cancel()
 	}
@@ -421,6 +469,9 @@ func (c *Controller) checkBuyerStatus(ctx context.Context, ns, name string) (rem
 
 	for _, pod := range pods.Items {
 		if pod.Status.Phase != "Running" || pod.Status.PodIP == "" {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
 			continue
 		}
 
@@ -473,4 +524,3 @@ func normalizePurchasedUpstreamURL(endpoint string) string {
 
 	return trimmed
 }
-
