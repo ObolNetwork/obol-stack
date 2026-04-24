@@ -105,21 +105,24 @@ fi
 
 # §4: Hermes gateway health via HTTPRoute URL (getting-started §4 output shows URL)
 step "Hermes gateway health via HTTPRoute hostname"
-ingress_port=$(awk '
-  /- port:/ {
-    split($3, p, ":")
-    if (p[2] == "80") { print p[1]; exit }
-  }
-' "$OBOL_CONFIG_DIR/k3d.yaml" 2>/dev/null || true)
+ingress_port=$(k3d_live_ingress_port || true)
+if [ -z "$ingress_port" ]; then
+    ingress_port=$(awk '
+      /- port:/ {
+        split($3, p, ":")
+        if (p[2] == "80") { print p[1]; exit }
+      }
+    ' "$OBOL_CONFIG_DIR/k3d.yaml" 2>/dev/null || true)
+fi
 [ -n "$ingress_port" ] || ingress_port=80
 if [ "$ingress_port" = "80" ]; then
-    OPENCLAW_URL="http://hermes-obol-agent.obol.stack"
+    HERMES_URL="http://hermes-obol-agent.obol.stack"
 else
-    OPENCLAW_URL="http://hermes-obol-agent.obol.stack:${ingress_port}"
+    HERMES_URL="http://hermes-obol-agent.obol.stack:${ingress_port}"
 fi
 # Use --resolve to bypass DNS (obol.stack not always in /etc/hosts for subdomains)
 oc_health=$(curl --resolve "hermes-obol-agent.obol.stack:${ingress_port}:127.0.0.1" \
-    -sf --max-time 10 "$OPENCLAW_URL/health" 2>&1) || true
+    -sf --max-time 10 "$HERMES_URL/health" 2>&1) || true
 if echo "$oc_health" | grep -q "ok\\|status"; then
     pass "Hermes gateway health: $oc_health"
 else

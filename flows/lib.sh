@@ -78,6 +78,17 @@ obol_ingress_url() {
         return 0
     fi
 
+    local live_host_port
+    live_host_port="$(k3d_live_ingress_port || true)"
+    if [ -n "$live_host_port" ]; then
+        if [ "$live_host_port" = "80" ]; then
+            echo "http://obol.stack"
+        else
+            echo "http://obol.stack:$live_host_port"
+        fi
+        return 0
+    fi
+
     local k3d_config="$OBOL_CONFIG_DIR/k3d.yaml"
     if [ -f "$k3d_config" ]; then
         local host_port
@@ -106,6 +117,29 @@ obol_ingress_url() {
     else
         echo "http://obol.stack:8080"
     fi
+}
+
+k3d_live_ingress_port() {
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local stack_id_file="$OBOL_CONFIG_DIR/.stack-id"
+    [ -f "$stack_id_file" ] || return 0
+
+    local stack_id
+    stack_id="$(tr -d '[:space:]' < "$stack_id_file")"
+    [ -n "$stack_id" ] || return 0
+
+    local container="k3d-obol-stack-${stack_id}-serverlb"
+    if ! docker ps --format '{{.Names}}' | grep -qx "$container"; then
+        return 0
+    fi
+
+    docker port "$container" 80/tcp 2>/dev/null | awk -F: '
+        /^[0-9.:]+:[0-9]+$/ {
+            print $NF
+            exit
+        }
+    '
 }
 
 obol_curl_command_for_url() {
