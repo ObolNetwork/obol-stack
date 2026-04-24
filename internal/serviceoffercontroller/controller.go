@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -349,7 +350,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	}
 
 	if offer.DeletionTimestamp != nil {
-		if !containsFinalizer(raw, serviceOfferFinalizer) {
+		if !slices.Contains(raw.GetFinalizers(), serviceOfferFinalizer) {
 			return nil
 		}
 		if err := c.reconcileDeletingOffer(ctx, offer); err != nil {
@@ -369,7 +370,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
-	if !containsFinalizer(raw, serviceOfferFinalizer) {
+	if !slices.Contains(raw.GetFinalizers(), serviceOfferFinalizer) {
 		return c.addFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
@@ -377,11 +378,11 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	status.ObservedGeneration = offer.Generation
 	status.Endpoint = offer.EffectivePath()
 
-	if err := c.reconcileModel(statusFor(&status), offer); err != nil {
+	if err := c.reconcileModel(&status, offer); err != nil {
 		return err
 	}
 
-	upstreamHealthy, err := c.reconcileUpstream(ctx, statusFor(&status), offer)
+	upstreamHealthy, err := c.reconcileUpstream(ctx, &status, offer)
 	if err != nil {
 		return err
 	}
@@ -393,11 +394,11 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "PaymentGateReady", "False", "Paused", "Offer is paused")
 		setCondition(&status, "RoutePublished", "False", "Paused", "Offer is paused")
 	} else if upstreamHealthy && isConditionTrue(status, "ModelReady") {
-		if err := c.reconcilePaymentGate(ctx, statusFor(&status), offer); err != nil {
+		if err := c.reconcilePaymentGate(ctx, &status, offer); err != nil {
 			return err
 		}
 		if isConditionTrue(status, "PaymentGateReady") {
-			if err := c.reconcileRoute(ctx, statusFor(&status), offer); err != nil {
+			if err := c.reconcileRoute(ctx, &status, offer); err != nil {
 				return err
 			}
 		}
@@ -406,7 +407,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
 	}
 
-	if err := c.reconcileRegistrationStatus(ctx, statusFor(&status), offer); err != nil {
+	if err := c.reconcileRegistrationStatus(ctx, &status, offer); err != nil {
 		return err
 	}
 
@@ -880,7 +881,7 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	status.RegistrationOwner = firstNonEmpty(status.RegistrationOwner, c.registrationOwnerAddress)
 	status.RegistrationURI = firstNonEmpty(status.RegistrationURI, status.PublishedURL)
 	if agentID != "" && c.registrationKey != nil && client != nil && !status.MetadataSynced {
-		agentIDBig, ok := newBigInt(agentID)
+		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
 		if !ok {
 			return fmt.Errorf("invalid agent id %q", agentID)
 		}
@@ -964,7 +965,7 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 		}
 		defer client.Close()
 
-		agentIDBig, ok := newBigInt(agentID)
+		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
 		if !ok {
 			return fmt.Errorf("invalid agent id %q", agentID)
 		}
@@ -1302,14 +1303,7 @@ func (c *Controller) addFinalizer(ctx context.Context, raw *unstructured.Unstruc
 
 func (c *Controller) removeFinalizer(ctx context.Context, raw *unstructured.Unstructured, finalizer string) error {
 	patched := raw.DeepCopy()
-	finalizers := patched.GetFinalizers()
-	filtered := finalizers[:0]
-	for _, item := range finalizers {
-		if item != finalizer {
-			filtered = append(filtered, item)
-		}
-	}
-	patched.SetFinalizers(filtered)
+	patched.SetFinalizers(slices.DeleteFunc(patched.GetFinalizers(), func(s string) bool { return s == finalizer }))
 	_, err := c.offers.Namespace(patched.GetNamespace()).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
@@ -1328,15 +1322,6 @@ func (c *Controller) registrationBaseURL(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return c.defaultBaseURL, nil
-}
-
-func containsFinalizer(raw *unstructured.Unstructured, finalizer string) bool {
-	for _, item := range raw.GetFinalizers() {
-		if item == finalizer {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeServiceOffer(raw *unstructured.Unstructured) (*monetizeapi.ServiceOffer, error) {
@@ -1370,10 +1355,6 @@ func asUnstructured(obj any) *unstructured.Unstructured {
 	return nil
 }
 
-func statusFor(status *monetizeapi.ServiceOfferStatus) *monetizeapi.ServiceOfferStatus {
-	return status
-}
-
 func requestPhaseReady(phase string) bool {
 	return phase == registrationPhaseRegistered
 }
@@ -1397,11 +1378,6 @@ func truncateMessage(message string) string {
 		return message
 	}
 	return message[:200]
-}
-
-func newBigInt(value string) (*big.Int, bool) {
-	parsed, ok := new(big.Int).SetString(strings.TrimSpace(value), 10)
-	return parsed, ok
 }
 
 func loadRegistrationSigningKey() (*ecdsa.PrivateKey, error) {

@@ -325,178 +325,12 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			// ============================================================
 			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
 			// ============================================================
-			{
-				Name:            "kubectl",
-				Usage:           "Run kubectl with stack kubeconfig (passthrough)",
-				SkipFlagParsing: true,
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-					// Check if kubeconfig exists
-					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return errors.New("stack not running, use 'obol stack up' first")
-					}
-
-					kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
-
-					// Check if kubectl exists
-					if _, err := os.Stat(kubectlPath); os.IsNotExist(err) {
-						return fmt.Errorf("kubectl not found at %s", cfg.BinDir)
-					}
-
-					// Execute kubectl directly with KUBECONFIG set
-					proc := exec.Command(kubectlPath, cmd.Args().Slice()...)
-
-					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-					proc.Stdin = os.Stdin
-					proc.Stdout = os.Stdout
-					proc.Stderr = os.Stderr
-
-					if err := proc.Run(); err != nil {
-						// Preserve the exit code from kubectl
-						exitErr := &exec.ExitError{}
-						if errors.As(err, &exitErr) {
-							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-								os.Exit(status.ExitStatus())
-							}
-						}
-
-						return err
-					}
-
-					return nil
-				},
-			},
-			{
-				Name:            "helm",
-				Usage:           "Run helm with stack kubeconfig (passthrough)",
-				SkipFlagParsing: true,
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-					// Check if kubeconfig exists
-					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return errors.New("stack not running, use 'obol stack up' first")
-					}
-
-					helmPath := filepath.Join(cfg.BinDir, "helm")
-
-					// Check if helm exists
-					if _, err := os.Stat(helmPath); os.IsNotExist(err) {
-						return fmt.Errorf("helm not found at %s", cfg.BinDir)
-					}
-
-					// Execute helm directly with KUBECONFIG set
-					proc := exec.Command(helmPath, cmd.Args().Slice()...)
-
-					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-					proc.Stdin = os.Stdin
-					proc.Stdout = os.Stdout
-					proc.Stderr = os.Stderr
-
-					if err := proc.Run(); err != nil {
-						// Preserve the exit code from helm
-						exitErr := &exec.ExitError{}
-						if errors.As(err, &exitErr) {
-							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-								os.Exit(status.ExitStatus())
-							}
-						}
-
-						return err
-					}
-
-					return nil
-				},
-			},
-			{
-				Name:            "helmfile",
-				Usage:           "Run helmfile with stack kubeconfig (passthrough)",
-				SkipFlagParsing: true,
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-					// Check if kubeconfig exists
-					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return errors.New("stack not running, use 'obol stack up' first")
-					}
-
-					helmfilePath := filepath.Join(cfg.BinDir, "helmfile")
-
-					// Check if helmfile exists
-					if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
-						return fmt.Errorf("helmfile not found at %s", cfg.BinDir)
-					}
-
-					// Execute helmfile directly with KUBECONFIG and HELMFILE_FILE_PATH set
-					helmfileConfigPath := filepath.Join(cfg.ConfigDir, "helmfile.yaml")
-					proc := exec.Command(helmfilePath, cmd.Args().Slice()...)
-
-					proc.Env = append(os.Environ(),
-						"KUBECONFIG="+kubeconfigPath,
-						"HELMFILE_FILE_PATH="+helmfileConfigPath,
-					)
-					proc.Stdin = os.Stdin
-					proc.Stdout = os.Stdout
-					proc.Stderr = os.Stderr
-
-					if err := proc.Run(); err != nil {
-						// Preserve the exit code from helmfile
-						exitErr := &exec.ExitError{}
-						if errors.As(err, &exitErr) {
-							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-								os.Exit(status.ExitStatus())
-							}
-						}
-
-						return err
-					}
-
-					return nil
-				},
-			},
-			{
-				Name:            "k9s",
-				Usage:           "Run k9s with stack kubeconfig (passthrough)",
-				SkipFlagParsing: true,
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-					// Check if kubeconfig exists
-					if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-						return errors.New("stack not running, use 'obol stack up' first")
-					}
-
-					k9sPath := filepath.Join(cfg.BinDir, "k9s")
-
-					// Check if k9s exists
-					if _, err := os.Stat(k9sPath); os.IsNotExist(err) {
-						return fmt.Errorf("k9s not found at %s", cfg.BinDir)
-					}
-
-					// Execute k9s directly with KUBECONFIG set
-					proc := exec.Command(k9sPath, cmd.Args().Slice()...)
-
-					proc.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-					proc.Stdin = os.Stdin
-					proc.Stdout = os.Stdout
-					proc.Stderr = os.Stderr
-
-					if err := proc.Run(); err != nil {
-						// Preserve the exit code from k9s
-						exitErr := &exec.ExitError{}
-						if errors.As(err, &exitErr) {
-							if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-								os.Exit(status.ExitStatus())
-							}
-						}
-
-						return err
-					}
-
-					return nil
-				},
-			},
+			passthroughCommand(cfg, "kubectl", nil),
+			passthroughCommand(cfg, "helm", nil),
+			passthroughCommand(cfg, "helmfile", func(cfg *config.Config) []string {
+				return []string{"HELMFILE_FILE_PATH=" + filepath.Join(cfg.ConfigDir, "helmfile.yaml")}
+			}),
+			passthroughCommand(cfg, "k9s", nil),
 			// ============================================================
 			// Utility Commands
 			// ============================================================
@@ -690,4 +524,43 @@ func debugReadBuildInfo() (string, bool) {
 		return "", false
 	}
 	return bi.GoVersion, true
+}
+
+// passthroughCommand builds a CLI command that execs a bundled tool with
+// KUBECONFIG pre-set. extraEnv, if non-nil, yields additional env vars at run time.
+func passthroughCommand(cfg *config.Config, tool string, extraEnv func(*config.Config) []string) *cli.Command {
+	return &cli.Command{
+		Name:            tool,
+		Usage:           "Run " + tool + " with stack kubeconfig (passthrough)",
+		SkipFlagParsing: true,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+				return errors.New("stack not running, use 'obol stack up' first")
+			}
+			toolPath := filepath.Join(cfg.BinDir, tool)
+			if _, err := os.Stat(toolPath); os.IsNotExist(err) {
+				return fmt.Errorf("%s not found at %s", tool, cfg.BinDir)
+			}
+
+			proc := exec.Command(toolPath, cmd.Args().Slice()...)
+			env := append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+			if extraEnv != nil {
+				env = append(env, extraEnv(cfg)...)
+			}
+			proc.Env = env
+			proc.Stdin, proc.Stdout, proc.Stderr = os.Stdin, os.Stdout, os.Stderr
+
+			if err := proc.Run(); err != nil {
+				exitErr := &exec.ExitError{}
+				if errors.As(err, &exitErr) {
+					if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+						os.Exit(status.ExitStatus())
+					}
+				}
+				return err
+			}
+			return nil
+		},
+	}
 }

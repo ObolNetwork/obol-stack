@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -297,7 +298,7 @@ func TestReconcilePurchaseHappyPath(t *testing.T) {
 	}
 
 	got := getPurchaseRequest(t, c, "agent-ns", "solo")
-	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+	if !slices.Contains(mustPurchaseObject(t, *got).GetFinalizers(), purchaseRequestFinalizer) {
 		t.Fatal("purchase finalizer missing after reconcile")
 	}
 	if purchaseCondition(t, got, "Probed").Status != "True" {
@@ -363,7 +364,7 @@ func TestReconcilePurchaseAddsFinalizerOnFirstPass(t *testing.T) {
 	}
 
 	got := getPurchaseRequest(t, c, "agent-ns", "solo")
-	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+	if !slices.Contains(mustPurchaseObject(t, *got).GetFinalizers(), purchaseRequestFinalizer) {
 		t.Fatal("purchase finalizer missing after first reconcile")
 	}
 	if len(got.Status.Conditions) != 0 {
@@ -880,7 +881,7 @@ func TestReconcileDeletingPurchaseDrainsUntilRemainingZero(t *testing.T) {
 	}
 
 	got := getPurchaseRequest(t, c, "agent-ns", "alpha")
-	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+	if !slices.Contains(mustPurchaseObject(t, *got).GetFinalizers(), purchaseRequestFinalizer) {
 		t.Fatal("finalizer removed before auth pool drained")
 	}
 	deleting := purchaseCondition(t, got, "Deleting")
@@ -1006,7 +1007,7 @@ func TestReconcileDeletingPurchaseWaitsForRuntimeStatusToDisappear(t *testing.T)
 	}
 
 	got := getPurchaseRequest(t, c, "agent-ns", "alpha")
-	if !containsFinalizer(mustPurchaseObject(t, *got), purchaseRequestFinalizer) {
+	if !slices.Contains(mustPurchaseObject(t, *got).GetFinalizers(), purchaseRequestFinalizer) {
 		t.Fatal("finalizer removed before runtime status disappeared")
 	}
 	deleting := purchaseCondition(t, got, "Deleting")

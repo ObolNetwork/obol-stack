@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 	}
 
 	// Add finalizer if missing.
-	if !hasStringInSlice(raw.GetFinalizers(), purchaseRequestFinalizer) {
+	if !slices.Contains(raw.GetFinalizers(), purchaseRequestFinalizer) {
 		patched := raw.DeepCopy()
 		patched.SetFinalizers(append(patched.GetFinalizers(), purchaseRequestFinalizer))
 		if _, err := c.dynClient.Resource(monetizeapi.PurchaseRequestGVR).Namespace(ns).Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
@@ -362,15 +363,6 @@ func (c *Controller) updatePurchaseStatus(ctx context.Context, raw *unstructured
 		Namespace(patched.GetNamespace()).
 		UpdateStatus(ctx, patched, metav1.UpdateOptions{})
 	return err
-}
-
-func hasStringInSlice(slice []string, target string) bool {
-	for _, s := range slice {
-		if s == target {
-			return true
-		}
-	}
-	return false
 }
 
 func purchaseConditionIsTrue(conditions []monetizeapi.Condition, condType string) bool {

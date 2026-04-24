@@ -70,15 +70,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 		reloadCh:    make(chan struct{}, 1),
 	}
 
-	p.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
-	})
-	p.mux.HandleFunc("GET /status", p.handleStatus)
-	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
-	p.mux.HandleFunc("POST /admin/remove", p.handleAdminRemove)
-	p.mux.Handle("GET /metrics", p.metrics.handler())
-	registerOpenAIRoutes(p.mux, p.handleModelRequest)
+	p.registerCoreRoutes()
 
 	if err := p.Reload(cfg, auths); err != nil {
 		return nil, err
@@ -159,6 +151,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (p *Proxy) syncCompatibilityRoutesLocked() {
 	p.mux = http.NewServeMux()
+	p.registerCoreRoutes()
+	for name, upstream := range p.upstreams {
+		prefix := fmt.Sprintf("/upstream/%s/", name)
+		p.mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), upstream.handler))
+	}
+}
+
+// registerCoreRoutes wires the built-in /healthz, /status, /admin/*, /metrics,
+// and OpenAI-compatible routes onto p.mux. Called both at construction and on
+// every reload (since reload rebuilds the mux to drop stale upstream routes).
+func (p *Proxy) registerCoreRoutes() {
 	p.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
@@ -168,11 +171,6 @@ func (p *Proxy) syncCompatibilityRoutesLocked() {
 	p.mux.HandleFunc("POST /admin/remove", p.handleAdminRemove)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
-
-	for name, upstream := range p.upstreams {
-		prefix := fmt.Sprintf("/upstream/%s/", name)
-		p.mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), upstream.handler))
-	}
 }
 
 func (p *Proxy) syncMetricsLocked() {
@@ -327,14 +325,11 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 
 func normalizeRemoteModel(model string) string {
 	normalized := strings.TrimSpace(model)
-
 	for {
-		switch {
-		case strings.HasPrefix(normalized, "paid/"):
-			normalized = strings.TrimPrefix(normalized, "paid/")
-		case strings.HasPrefix(normalized, "openai/"):
-			normalized = strings.TrimPrefix(normalized, "openai/")
-		default:
+		before := normalized
+		normalized = strings.TrimPrefix(normalized, "paid/")
+		normalized = strings.TrimPrefix(normalized, "openai/")
+		if normalized == before {
 			return normalized
 		}
 	}
