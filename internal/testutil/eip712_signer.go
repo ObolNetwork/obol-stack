@@ -285,19 +285,6 @@ func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) 
 	return base64.StdEncoding.EncodeToString(data)
 }
 
-func chainName(chainID int64) string {
-	switch chainID {
-	case 84532:
-		return "base-sepolia"
-	case 8453:
-		return "base"
-	case 1:
-		return "ethereum"
-	default:
-		return fmt.Sprintf("eip155:%d", chainID)
-	}
-}
-
 func chainCAIP2(chainID int64) string {
 	switch chainID {
 	case 84532:

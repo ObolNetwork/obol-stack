@@ -23,27 +23,6 @@ const (
 	skillCatalogRouteName     = "obol-skill-md-route"
 )
 
-func buildMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "traefik.io/v1alpha1",
-			"kind":       "Middleware",
-			"metadata": map[string]any{
-				"name":            "x402-" + offer.Name,
-				"namespace":       offer.Namespace,
-				"ownerReferences": []any{ownerRefMap(offer)},
-			},
-			"spec": map[string]any{
-				"forwardAuth": map[string]any{
-					"address":             "http://x402-verifier.x402.svc.cluster.local:8080/verify",
-					"authResponseHeaders": []any{"X-Payment-Status", "X-Payment-Tx", "Authorization"},
-				},
-			},
-		},
-	}
-	return obj
-}
-
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -496,28 +475,12 @@ func registrationRouteName(name string) string {
 	return safeName("so-", name, "-wellknown")
 }
 
-func ownerRef(offer *monetizeapi.ServiceOffer) metav1.OwnerReference {
-	return ownerRefFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.ServiceOfferKind, offer.Name, offer.UID)
-}
-
 func ownerRefMap(offer *monetizeapi.ServiceOffer) map[string]any {
 	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.ServiceOfferKind, offer.Name, offer.UID)
 }
 
 func registrationRequestOwnerRefMap(request *monetizeapi.RegistrationRequest) map[string]any {
 	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.RegistrationRequestKind, request.Name, request.UID)
-}
-
-func ownerRefFor(apiVersion, kind, name string, uid types.UID) metav1.OwnerReference {
-	trueValue := true
-	return metav1.OwnerReference{
-		APIVersion:         apiVersion,
-		Kind:               kind,
-		Name:               name,
-		UID:                uid,
-		Controller:         &trueValue,
-		BlockOwnerDeletion: &trueValue,
-	}
 }
 
 func ownerRefMapFor(apiVersion, kind, name string, uid types.UID) map[string]any {
