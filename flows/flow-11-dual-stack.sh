@@ -10,7 +10,8 @@
 # Bob is through natural language prompts to his OpenClaw agent.
 #
 # Requires:
-#   - .env with REMOTE_SIGNER_PRIVATE_KEY (funded on Base Sepolia with ETH + USDC)
+#   - .env with REMOTE_SIGNER_PRIVATE_KEY funded with Base Sepolia ETH for Alice
+#   - second deterministic derived key funded with Base Sepolia USDC for Bob
 #   - Docker running, with the configured Alice/Bob ingress ports free
 #   - Ollama running (Alice serves local model inference)
 #   - cast (Foundry) for balance checks
@@ -59,7 +60,14 @@ FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m
 BASE_SEPOLIA_RPC="${FLOW11_BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
+FLOW11_BUY_COUNT="${FLOW11_BUY_COUNT:-5}"
+FLOW11_PRICE_MICRO_USDC=1000
+FLOW11_REQUIRED_BOB_USDC=$((FLOW11_BUY_COUNT * FLOW11_PRICE_MICRO_USDC))
 mkdir -p "$FLOW11_ARTIFACT_DIR"
+
+lower_addr() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
 
 rewrite_k3d_ports() {
     local config_path="$1"
@@ -128,7 +136,7 @@ curl_tunnel_402_code() {
     local host="$2"
     local ip="$3"
 
-    if [ -n "$host" ] && [ -n "$ip" ] && ! system_resolves_host "$host"; then
+    if [ -n "$host" ] && [ -n "$ip" ]; then
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             --resolve "$host:443:$ip" \
             -X POST "$url" \
@@ -252,6 +260,56 @@ bob_buy_skill_balance() {
     bob kubectl exec \
         -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
         python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance 2>&1 || true
+}
+
+wait_erpc_chain_id() {
+    local label="$1"
+    local runner="$2"
+    local network="$3"
+    local want="$4"
+    local port pf_log pf_pid
+
+    port=$(pick_free_port)
+    pf_log=$(mktemp)
+    "$runner" kubectl port-forward -n erpc svc/erpc "${port}:80" >"$pf_log" 2>&1 &
+    pf_pid=$!
+
+    for attempt in $(seq 1 24); do
+        if python3 - "$port" "$network" "$want" <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+port, network, want = sys.argv[1:4]
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/rpc/{network}",
+    data=json.dumps({"jsonrpc": "2.0", "method": "eth_chainId", "params": [], "id": 1}).encode(),
+    headers={"Content-Type": "application/json"},
+)
+try:
+    resp = urllib.request.urlopen(req, timeout=5)
+    data = json.loads(resp.read())
+except Exception:
+    sys.exit(1)
+sys.exit(0 if data.get("result") == want else 1)
+PY
+        then
+            cleanup_pid "$pf_pid"
+            rm -f "$pf_log"
+            echo "  $label eRPC $network ready (attempt $attempt)"
+            return 0
+        fi
+        sleep 3
+    done
+
+    echo "  eRPC port-forward log:"
+    tail -20 "$pf_log" 2>/dev/null | sed 's/^/  /'
+    cleanup_pid "$pf_pid"
+    rm -f "$pf_log"
+    fail "$label eRPC $network did not return chainId $want"
+    emit_metrics
+    exit 1
 }
 
 run_tail_or_fail() {
@@ -528,9 +586,11 @@ if [ -z "$SIGNER_KEY" ]; then
     fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
     emit_metrics; exit 1
 fi
-# Derive Alice (index 1) and Bob (index 2)
-ALICE_WALLET=$(env -u CHAIN cast wallet address --private-key "$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 1)")" 2>/dev/null)
-BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")" 2>/dev/null)
+# Bob is the second deterministic derived key. The flow imports this key into
+# Bob's remote-signer so x402 purchases spend from the already-funded wallet,
+# not a generated throwaway wallet.
+BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
+BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
 # Use the .env key directly as Alice's seller wallet (it has ETH for registration gas)
 ALICE_WALLET=$(env -u CHAIN cast wallet address --private-key "$SIGNER_KEY" 2>/dev/null)
 pass "Alice=$ALICE_WALLET, Bob=$BOB_WALLET"
@@ -552,8 +612,8 @@ step "Preflight: Bob has USDC"
 bob_usdc_raw=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
     "balanceOf(address)(uint256)" "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
 bob_usdc=$(echo "$bob_usdc_raw" | grep -oE '^[0-9]+' | head -1 || true)
-if [ -z "$bob_usdc" ] || [ "$bob_usdc" = "0" ]; then
-    fail "Bob ($BOB_WALLET) has 0 USDC on Base Sepolia — fund first"
+if [ -z "$bob_usdc" ] || [ "$bob_usdc" -lt "$FLOW11_REQUIRED_BOB_USDC" ] 2>/dev/null; then
+    fail "Bob ($BOB_WALLET) has ${bob_usdc:-0} micro-USDC on Base Sepolia — need at least $FLOW11_REQUIRED_BOB_USDC"
     emit_metrics; exit 1
 fi
 pass "Bob has $bob_usdc micro-USDC"
@@ -682,6 +742,7 @@ alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&
 # eRPC needs a restart to pick up the new chain config
 alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
+wait_erpc_chain_id "Alice" alice base-sepolia 0x14a34
 pass "Base Sepolia RPC added to eRPC (with write access)"
 
 step "Alice: create ServiceOffer"
@@ -692,6 +753,7 @@ if [ -z "$REG_START_BLOCK" ]; then
 fi
 KEY_FILE=$(mktemp)
 echo "$SIGNER_KEY" > "$KEY_FILE"
+set +e
 sell_http_out=$(alice sell http alice-inference \
     --wallet "$ALICE_WALLET" \
     --chain base-sepolia \
@@ -705,8 +767,14 @@ sell_http_out=$(alice sell http alice-inference \
     --register-skills natural_language_processing/text_generation \
     --register-domains technology/artificial_intelligence \
     --private-key-file "$KEY_FILE" 2>&1)
+sell_http_rc=$?
+set -e
 printf '%s\n' "$sell_http_out" | tail -8
 rm -f "$KEY_FILE"
+if [ "$sell_http_rc" -ne 0 ]; then
+    fail "ServiceOffer create/register failed (exit $sell_http_rc): ${sell_http_out:0:300}"
+    emit_metrics; exit "$sell_http_rc"
+fi
 pass "ServiceOffer created"
 
 poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
@@ -735,6 +803,7 @@ for attempt in $(seq 1 24); do
 done
 if [ "$gate_code" != "402" ]; then
     fail "Alice: 402 gate returned ${gate_code:-no HTTP response} after 120s"
+    emit_metrics; exit 1
 fi
 step "Alice: ERC-8004 registration reflected in ServiceOffer"
 reg_out=$(alice sell status alice-inference -n llm 2>&1) || true
@@ -744,6 +813,7 @@ if echo "$reg_out" | grep -q "Agent ID:"; then
     pass "ERC-8004 registered: Agent ID $AGENT_ID"
 else
     fail "Registration not reflected in sell status: ${reg_out:0:200}"
+    emit_metrics; exit 1
 fi
 
 registry_logs=$(env -u CHAIN cast logs --json --rpc-url "$BASE_SEPOLIA_RPC" \
@@ -790,6 +860,7 @@ if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
     pass "Registration receipt archived: $REGISTRATION_TX"
 else
     fail "Could not archive registration receipt for Agent ID $AGENT_ID"
+    emit_metrics; exit 1
 fi
 if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
     write_receipt metadata "$METADATA_TX"
@@ -819,6 +890,7 @@ step "Bob: add Base Sepolia RPC to eRPC"
 bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" 2>&1 | tail -2
 bob kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 bob kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
+wait_erpc_chain_id "Bob" bob base-sepolia 0x14a34
 pass "Bob eRPC configured for Base Sepolia"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
@@ -839,90 +911,72 @@ for attempt in $(seq 1 24); do
 done
 if [ "$bob_tunnel_code" != "402" ]; then
     fail "Bob: tunnel did not return 402 from agent pod — ${bob_tunnel_code:-no response}"
+    emit_metrics; exit 1
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# BOB: FUND REMOTE-SIGNER WALLET (shortcut — see #331 for obol wallet import)
+# BOB: INJECT FUNDED BUYER WALLET INTO REMOTE-SIGNER
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: fund remote-signer wallet with USDC"
-# The remote-signer auto-generates a wallet during stack up.
-# We need to fund it from the .env key so buy.py can sign auths.
-# Read wallet address from wallet.json (most reliable source)
-BOB_SIGNER_ADDR=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json'))
-    print(d.get('address',''))
-except: pass
-" 2>&1)
-if [ -n "$BOB_SIGNER_ADDR" ]; then
-    echo "  Remote-signer wallet: $BOB_SIGNER_ADDR"
-    # Send USDC (0.05 USDC = 50000 micro-units) from .env key.
-    # `cast send` (no --async) waits for inclusion; capture the receipt so we
-    # can verify status=1 instead of relying on grep||true to mask failures.
-    FUNDING_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
-    if [ -z "$FUNDING_START_BLOCK" ]; then
-        fail "Could not read Base Sepolia block number before funding"
-        emit_metrics; exit 1
-    fi
-    send_out=$(env -u CHAIN cast send --private-key "$SIGNER_KEY" \
-        "$USDC_ADDRESS_BASE_SEPOLIA" \
-        "transfer(address,uint256)" "$BOB_SIGNER_ADDR" 50000 \
-        --rpc-url "$BASE_SEPOLIA_RPC" 2>&1 || true)
-    if ! echo "$send_out" | grep -qE "^status\s+1 \(success\)"; then
-        fail "Funding tx did not confirm status=1 — ${send_out:0:300}"
-        emit_metrics; exit 1
-    fi
-    FUNDING_TX=$(echo "$send_out" | extract_tx_hash || true)
-    if [ -n "$FUNDING_TX" ] && archive_receipt funding "$FUNDING_TX"; then
-        pass "Funding receipt archived: $FUNDING_TX"
-    else
-        funding_match=$(wait_usdc_transfer_receipt funding "$ALICE_WALLET" "$BOB_SIGNER_ADDR" 50000 "$FUNDING_START_BLOCK" 30 2 || true)
-        FUNDING_TX=$(echo "$funding_match" | awk '{print $1; exit}')
-        if [ -n "$FUNDING_TX" ]; then
-            pass "Funding receipt archived from USDC Transfer log: $FUNDING_TX"
-        else
-            fail "Could not archive funding receipt"
-        fi
-    fi
-    # Poll the direct Base Sepolia RPC until the balance reflects the transfer.
-    # This avoids a race where step 32's agent sees 0 USDC because eRPC's
-    # eth_call cache (10s TTL) still holds the pre-funding result.
-    POST_FUND_BOB_SIGNER_USDC=0
-    for _ in $(seq 1 12); do
-        POST_FUND_BOB_SIGNER_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
-            "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-        [ -n "$POST_FUND_BOB_SIGNER_USDC" ] && [ "$POST_FUND_BOB_SIGNER_USDC" -ge 50000 ] 2>/dev/null && break
-        sleep 2
-    done
-    if [ -z "$POST_FUND_BOB_SIGNER_USDC" ] || [ "$POST_FUND_BOB_SIGNER_USDC" -lt 50000 ]; then
-        fail "Bob's on-chain USDC did not reach 50000 — got ${POST_FUND_BOB_SIGNER_USDC:-0}"
-        emit_metrics; exit 1
-    fi
-    POST_FUND_ALICE_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
-        "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-    pass "Funded $BOB_SIGNER_ADDR with 0.05 USDC (on-chain: $POST_FUND_BOB_SIGNER_USDC)"
+step "Bob: import derived buyer wallet into remote-signer"
+BOB_KEY_FILE=$(mktemp)
+chmod 600 "$BOB_KEY_FILE"
+printf '%s\n' "$BOB_PRIVATE_KEY" > "$BOB_KEY_FILE"
+import_out=$(bob openclaw wallet import-private-key obol-agent \
+    --private-key-file "$BOB_KEY_FILE" \
+    --force 2>&1 || true)
+rm -f "$BOB_KEY_FILE"
+echo "$import_out" | tail -8
+if ! echo "$import_out" | grep -q "Wallet imported"; then
+    fail "Could not import Bob buyer wallet: ${import_out:0:300}"
+    emit_metrics; exit 1
+fi
 
-    # Wait for Bob's in-pod buy.py (via eRPC with 10s cache) to catch up so
-    # the AI agent in step 32 sees a usable funded balance, not a stale zero.
-    step "Bob: eRPC reflects funding"
-    erpc_balance_output=""
-    erpc_balance_micro=""
-    for attempt in $(seq 1 18); do
-        erpc_balance_output=$(bob_buy_skill_balance)
-        erpc_balance_micro=$(echo "$erpc_balance_output" | sed -n 's/.*(\([0-9][0-9]*\) micro-units).*/\1/p' | head -1)
-        if [ -n "$erpc_balance_micro" ] && [ "$erpc_balance_micro" -ge 50000 ] 2>/dev/null; then
-            pass "Bob: eRPC reflects funding (attempt $attempt, balance ${erpc_balance_micro} micro-USDC)"
-            break
-        fi
-        sleep 5
-    done
-    if [ -z "$erpc_balance_micro" ] || [ "$erpc_balance_micro" -lt 50000 ] 2>/dev/null; then
-        fail "Bob: eRPC balance did not reach 50000 micro-USDC — ${erpc_balance_output:0:200}"
-    fi
-else
+BOB_SIGNER_ADDR=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
+if [ -z "$BOB_SIGNER_ADDR" ]; then
     fail "Could not determine Bob's remote-signer address"
+    emit_metrics; exit 1
+fi
+if [ "$(lower_addr "$BOB_SIGNER_ADDR")" != "$(lower_addr "$BOB_WALLET")" ]; then
+    fail "Bob remote-signer wallet mismatch — signer=$BOB_SIGNER_ADDR expected=$BOB_WALLET"
+    emit_metrics; exit 1
+fi
+pass "Bob remote-signer uses funded derived wallet: $BOB_SIGNER_ADDR"
+
+step "Bob: remote-signer rollout after wallet import"
+bob kubectl rollout status deployment/remote-signer -n openclaw-obol-agent --timeout=120s 2>&1 | tail -2
+pass "Bob remote-signer restarted with injected wallet"
+
+step "Bob: buyer wallet balance available"
+PRE_BUY_BOB_SIGNER_USDC=0
+for _ in $(seq 1 12); do
+    PRE_BUY_BOB_SIGNER_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
+        "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+    [ -n "$PRE_BUY_BOB_SIGNER_USDC" ] && [ "$PRE_BUY_BOB_SIGNER_USDC" -ge "$FLOW11_REQUIRED_BOB_USDC" ] 2>/dev/null && break
+    sleep 2
+done
+if [ -z "$PRE_BUY_BOB_SIGNER_USDC" ] || [ "$PRE_BUY_BOB_SIGNER_USDC" -lt "$FLOW11_REQUIRED_BOB_USDC" ] 2>/dev/null; then
+    fail "Bob buyer wallet has ${PRE_BUY_BOB_SIGNER_USDC:-0} micro-USDC — need $FLOW11_REQUIRED_BOB_USDC"
+    emit_metrics; exit 1
+fi
+pass "Bob buyer wallet has $PRE_BUY_BOB_SIGNER_USDC micro-USDC"
+
+# Wait for Bob's in-pod buy.py (via eRPC with 10s cache) to observe the
+# imported buyer wallet and funded balance before the agent signs auths.
+step "Bob: eRPC reflects buyer balance"
+erpc_balance_output=""
+erpc_balance_micro=""
+for attempt in $(seq 1 18); do
+    erpc_balance_output=$(bob_buy_skill_balance)
+    erpc_balance_micro=$(echo "$erpc_balance_output" | sed -n 's/.*(\([0-9][0-9]*\) micro-units).*/\1/p' | head -1)
+    if [ -n "$erpc_balance_micro" ] && [ "$erpc_balance_micro" -ge "$FLOW11_REQUIRED_BOB_USDC" ] 2>/dev/null; then
+        pass "Bob: eRPC reflects buyer balance (attempt $attempt, balance ${erpc_balance_micro} micro-USDC)"
+        break
+    fi
+    sleep 5
+done
+if [ -z "$erpc_balance_micro" ] || [ "$erpc_balance_micro" -lt "$FLOW11_REQUIRED_BOB_USDC" ] 2>/dev/null; then
+    fail "Bob: eRPC balance did not reach $FLOW11_REQUIRED_BOB_USDC micro-USDC — ${erpc_balance_output:0:200}"
     emit_metrics; exit 1
 fi
 
@@ -999,6 +1053,9 @@ if [ -n "$discover_content" ] && [ "${#discover_content}" -gt 100 ]; then
     pass "Agent discovered Alice's service"
 else
     fail "Discovery response: ${discover_response:0:300}"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
 step "Bob's agent: buy inference from Alice"
@@ -1011,7 +1068,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy 5 inference tokens from Alice. Run exactly: python3 scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count $FLOW11_BUY_COUNT\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false
@@ -1023,6 +1080,9 @@ if echo "$buy_content" | grep -qiE "purchase complete|PurchaseRequest created|pr
     pass "Agent bought Alice's inference"
 else
     fail "Buy response: ${buy_response:0:300}"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
 fi
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
@@ -1086,18 +1146,18 @@ rm -f "$PF_AGENT_LOG"
 # ═════════════════════════════════════════════════════════════════
 
 step "On-chain: settlement tx receipt"
-settlement_match=$(wait_usdc_transfer_receipt settlement "$BOB_SIGNER_ADDR" "$ALICE_WALLET" 1000 "$BUY_START_BLOCK" 30 2 || true)
+settlement_match=$(wait_usdc_transfer_receipt settlement "$BOB_SIGNER_ADDR" "$ALICE_WALLET" "$FLOW11_PRICE_MICRO_USDC" "$BUY_START_BLOCK" 30 2 || true)
 SETTLEMENT_TX=$(echo "$settlement_match" | awk '{print $1; exit}')
 SETTLEMENT_AMOUNT=$(echo "$settlement_match" | awk '{print $2; exit}')
-if [ -n "$SETTLEMENT_TX" ] && [ "$SETTLEMENT_AMOUNT" = "1000" ]; then
+if [ -n "$SETTLEMENT_TX" ] && [ "$SETTLEMENT_AMOUNT" = "$FLOW11_PRICE_MICRO_USDC" ]; then
     echo "  tx=$SETTLEMENT_TX amount=$SETTLEMENT_AMOUNT"
     pass "Settlement receipt archived and transfer amount verified"
 else
     fail "No successful Bob-signer -> Alice USDC settlement receipt found after block $BUY_START_BLOCK"
+    emit_metrics; exit 1
 fi
 
 step "On-chain: balance changes"
-ALICE_AFTER_FUND_ONLY=$((PRE_ALICE_USDC - 50000))
 POST_ALICE_USDC=""
 POST_BOB_SIGNER_USDC=""
 for _ in $(seq 1 30); do
@@ -1105,26 +1165,27 @@ for _ in $(seq 1 30); do
         "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
     POST_BOB_SIGNER_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
         "balanceOf(address)(uint256)" "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-    if [ -n "$POST_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$ALICE_AFTER_FUND_ONLY" ] 2>/dev/null && \
-       [ -n "$POST_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$POST_FUND_BOB_SIGNER_USDC" ] 2>/dev/null; then
+    if [ -n "$POST_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$PRE_ALICE_USDC" ] 2>/dev/null && \
+       [ -n "$POST_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$PRE_BUY_BOB_SIGNER_USDC" ] 2>/dev/null; then
         break
     fi
     sleep 2
 done
 echo "  Alice (pre-run):      $PRE_ALICE_USDC"
-echo "  Alice (expected after funding only): $ALICE_AFTER_FUND_ONLY"
 echo "  Alice (final):        ${POST_ALICE_USDC:-unknown}"
-echo "  Bob signer (after funding): $POST_FUND_BOB_SIGNER_USDC"
+echo "  Bob signer (pre-buy): $PRE_BUY_BOB_SIGNER_USDC"
 echo "  Bob signer (final):   ${POST_BOB_SIGNER_USDC:-unknown}"
-if [ -n "$POST_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$ALICE_AFTER_FUND_ONLY" ] 2>/dev/null; then
+if [ -n "$POST_ALICE_USDC" ] && [ "$POST_ALICE_USDC" -gt "$PRE_ALICE_USDC" ] 2>/dev/null; then
     pass "Alice received USDC settlement"
 else
-    fail "Alice balance did not recover above funding-only expectation after polling (expected > $ALICE_AFTER_FUND_ONLY, got ${POST_ALICE_USDC:-unknown})"
+    fail "Alice balance did not increase after polling (expected > $PRE_ALICE_USDC, got ${POST_ALICE_USDC:-unknown})"
+    emit_metrics; exit 1
 fi
-if [ -n "$POST_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$POST_FUND_BOB_SIGNER_USDC" ] 2>/dev/null; then
+if [ -n "$POST_BOB_SIGNER_USDC" ] && [ "$POST_BOB_SIGNER_USDC" -lt "$PRE_BUY_BOB_SIGNER_USDC" ] 2>/dev/null; then
     pass "Bob remote-signer spent USDC"
 else
-    fail "Bob remote-signer balance did not drop after polling (expected < $POST_FUND_BOB_SIGNER_USDC, got ${POST_BOB_SIGNER_USDC:-unknown})"
+    fail "Bob remote-signer balance did not drop after polling (expected < $PRE_BUY_BOB_SIGNER_USDC, got ${POST_BOB_SIGNER_USDC:-unknown})"
+    emit_metrics; exit 1
 fi
 
 # ═════════════════════════════════════════════════════════════════

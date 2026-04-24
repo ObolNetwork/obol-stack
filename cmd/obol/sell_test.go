@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -416,6 +417,27 @@ func TestResolveX402Chain(t *testing.T) {
 			_, err := x402verifier.ResolveChainInfo(tt.name)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveChainInfo(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsTransientRegistrationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "rpc 500", err: errors.New("erc8004: register tx: 500 Internal Server Error"), want: true},
+		{name: "timeout", err: errors.New("context deadline exceeded while waiting for headers"), want: true},
+		{name: "revert", err: errors.New("erc8004: register tx: execution reverted"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientRegistrationError(tt.err); got != tt.want {
+				t.Fatalf("isTransientRegistrationError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

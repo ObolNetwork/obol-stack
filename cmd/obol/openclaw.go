@@ -276,6 +276,33 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
+				Name:      "import-private-key",
+				Usage:     "Import a private key as an OpenClaw remote-signer wallet",
+				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "private-key-file",
+						Usage:    "Path to a file containing the 0x-prefixed private key",
+						Required: true,
+					},
+					&cli.BoolFlag{
+						Name:  "force",
+						Usage: "Overwrite existing wallet",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					id, _, err := openclaw.ResolveInstance(cfg, cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+
+					return openclaw.ImportPrivateKeyWalletCmd(cfg, id, openclaw.ImportPrivateKeyWalletOptions{
+						PrivateKeyFile: cmd.String("private-key-file"),
+						Force:          cmd.Bool("force"),
+					}, getUI(cmd))
+				},
+			},
+			{
 				Name:      "address",
 				Usage:     "Show the wallet address for an OpenClaw instance",
 				ArgsUsage: "[instance-name]",

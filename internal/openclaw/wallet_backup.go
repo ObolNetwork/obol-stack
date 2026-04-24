@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -8,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -52,6 +55,12 @@ type RestoreWalletOptions struct {
 	Passphrase  string // Decryption passphrase
 	HasPassFlag bool   // Whether --passphrase was explicitly set
 	Force       bool   // Overwrite existing wallet
+}
+
+// ImportPrivateKeyWalletOptions holds options for importing a raw private key.
+type ImportPrivateKeyWalletOptions struct {
+	PrivateKeyFile string // File containing a 0x-prefixed private key
+	Force          bool   // Overwrite existing wallet
 }
 
 // BackupWallet creates a backup of the wallet for the given instance.
@@ -151,6 +160,57 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 	return nil
 }
 
+// ImportPrivateKeyWalletCmd imports an existing private key as an OpenClaw
+// remote-signer wallet.
+func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivateKeyWalletOptions, u *ui.UI) error {
+	raw, err := os.ReadFile(opts.PrivateKeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to read private key file: %w", err)
+	}
+
+	privateKeyHex := strings.TrimSpace(string(raw))
+	if privateKeyHex == "" {
+		return errors.New("private key file is empty")
+	}
+
+	deployDir := DeploymentPath(cfg, id)
+	if _, err := os.Stat(deployDir); os.IsNotExist(err) {
+		return fmt.Errorf("instance %q not found — run 'obol openclaw onboard --id %s' first", id, id)
+	}
+
+	existingWallet, _ := ReadWalletMetadata(deployDir)
+	if existingWallet != nil && !opts.Force {
+		return fmt.Errorf("instance %q already has a wallet (address: %s)\nUse --force to overwrite", id, existingWallet.Address)
+	}
+
+	wallet, err := ImportWalletFromPrivateKey(cfg, id, privateKeyHex, u)
+	if err != nil {
+		return err
+	}
+
+	if err := pruneOtherKeystores(cfg, id, wallet.KeystoreUUID); err != nil {
+		return fmt.Errorf("failed to prune old keystores: %w", err)
+	}
+
+	if err := writeKeystorePassword(deployDir, wallet.Password); err != nil {
+		return fmt.Errorf("failed to write keystore password: %w", err)
+	}
+
+	if err := WriteWalletMetadata(deployDir, wallet); err != nil {
+		return fmt.Errorf("failed to write wallet metadata: %w", err)
+	}
+	applyWalletMetadataConfigMap(cfg, id, deployDir)
+	applyKeystorePasswordSecret(cfg, id, wallet.Password, u)
+
+	u.Success("Wallet imported")
+	u.Detail("Address", wallet.Address)
+	u.Detail("Instance", id)
+
+	restartRemoteSigner(cfg, id, u)
+
+	return nil
+}
+
 // RestoreWalletCmd restores a wallet from a backup file.
 func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, u *ui.UI) error {
 	// Read backup file.
@@ -223,6 +283,9 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 		return fmt.Errorf("failed to write keystore: %w", err)
 	}
 	fixVolumeOwnership(cfg, keystoreDir, u)
+	if err := pruneOtherKeystores(cfg, id, w.KeystoreUUID); err != nil {
+		return fmt.Errorf("failed to prune old keystores: %w", err)
+	}
 
 	// Update values-remote-signer.yaml with restored password.
 	if err := writeKeystorePassword(deployDir, w.KeystorePassword); err != nil {
@@ -240,25 +303,14 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	if err := WriteWalletMetadata(deployDir, walletInfo); err != nil {
 		return fmt.Errorf("failed to write wallet metadata: %w", err)
 	}
+	applyWalletMetadataConfigMap(cfg, id, deployDir)
+	applyKeystorePasswordSecret(cfg, id, w.KeystorePassword, u)
 
 	u.Success("Wallet restored")
 	u.Detail("Address", w.Address)
 	u.Detail("Instance", id)
 
-	// Restart the remote-signer so it picks up the new keystore.
-	// Best-effort: cluster may not be running.
-	namespace := fmt.Sprintf("%s-%s", appName, id)
-
-	kubectlBin, kubeconfig := kubectl.Paths(cfg)
-	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
-		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
-	); err != nil {
-		u.Blank()
-		u.Warnf("Could not restart remote-signer (cluster may not be running)")
-		u.Printf("Run 'obol openclaw sync %s' to apply changes to the cluster.", id)
-	} else {
-		u.Success("Remote-signer restarted")
-	}
+	restartRemoteSigner(cfg, id, u)
 
 	return nil
 }
@@ -330,6 +382,92 @@ func FindInstancesWithWallets(cfg *config.Config) []string {
 	}
 
 	return result
+}
+
+func pruneOtherKeystores(cfg *config.Config, id, keepUUID string) error {
+	dir := KeystoreVolumePath(cfg, id)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	keep := keepUUID + ".json"
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == keep || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func restartRemoteSigner(cfg *config.Config, id string, u *ui.UI) {
+	// Best-effort: the cluster may not be running when a wallet is pre-seeded.
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+
+	kubectlBin, kubeconfig := kubectl.Paths(cfg)
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
+	); err != nil {
+		u.Blank()
+		u.Warnf("Could not restart remote-signer (cluster may not be running)")
+		u.Printf("Run 'obol openclaw sync %s' to apply changes to the cluster.", id)
+	} else {
+		u.Success("Remote-signer restarted")
+	}
+}
+
+func applyKeystorePasswordSecret(cfg *config.Config, id, password string, u *ui.UI) {
+	if password == "" {
+		return
+	}
+
+	raw, err := keystorePasswordSecretManifest(id, password)
+	if err != nil {
+		u.Warnf("Could not marshal remote-signer password Secret: %v", err)
+		return
+	}
+
+	kubectlBin, kubeconfig := kubectl.Paths(cfg)
+	cmd := exec.Command(kubectlBin, "apply", "-f", "-")
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+	cmd.Stdin = bytes.NewReader(raw)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		u.Blank()
+		u.Warnf("Could not update remote-signer password Secret (cluster may not be running)")
+		u.Printf("Run 'obol openclaw sync %s' to apply changes to the cluster.", id)
+	}
+}
+
+func keystorePasswordSecretManifest(id, password string) ([]byte, error) {
+	namespace := fmt.Sprintf("%s-%s", appName, id)
+	manifest := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name":      "remote-signer-keystore-password",
+			"namespace": namespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/component":  "remote-signer",
+				"app.kubernetes.io/managed-by": "obol",
+			},
+		},
+		"type": "Opaque",
+		"stringData": map[string]string{
+			"password": password,
+		},
+	}
+
+	return json.Marshal(manifest)
 }
 
 // resolvePassphrase determines the passphrase via flag or interactive prompt.

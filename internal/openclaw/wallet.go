@@ -19,6 +19,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/scrypt"
 	"golang.org/x/crypto/sha3"
@@ -102,6 +103,53 @@ func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error
 	return &WalletInfo{
 		Address:      address,
 		PublicKey:    pubKeyHex,
+		KeystoreUUID: keystoreID,
+		KeystorePath: keystorePath,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		Password:     password,
+	}, nil
+}
+
+// ImportWalletFromPrivateKey provisions an existing Ethereum private key as the
+// remote-signer wallet for an OpenClaw instance.
+func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u *ui.UI) (*WalletInfo, error) {
+	privateKeyHex = strings.TrimSpace(strings.TrimPrefix(privateKeyHex, "0x"))
+	if privateKeyHex == "" {
+		return nil, errors.New("private key is empty")
+	}
+
+	key, err := ethcrypto.HexToECDSA(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+
+	privKey := ethcrypto.FromECDSA(key)
+	defer zeroBytes(privKey)
+
+	pubKeyWithPrefix := ethcrypto.FromECDSAPub(&key.PublicKey)
+	if len(privKey) != 32 || len(pubKeyWithPrefix) != 65 || pubKeyWithPrefix[0] != 0x04 {
+		return nil, errors.New("invalid private key material")
+	}
+
+	password, err := generateRandomPassword(32)
+	if err != nil {
+		return nil, fmt.Errorf("password generation failed: %w", err)
+	}
+
+	pubKey := pubKeyWithPrefix[1:]
+	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	if err != nil {
+		return nil, fmt.Errorf("keystore encryption failed: %w", err)
+	}
+
+	keystorePath, err := provisionKeystoreToVolume(cfg, id, keystoreID, keystoreJSON, u)
+	if err != nil {
+		return nil, fmt.Errorf("keystore provisioning failed: %w", err)
+	}
+
+	return &WalletInfo{
+		Address:      ethcrypto.PubkeyToAddress(key.PublicKey).Hex(),
+		PublicKey:    "0x" + hex.EncodeToString(pubKeyWithPrefix),
 		KeystoreUUID: keystoreID,
 		KeystorePath: keystorePath,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -306,6 +354,12 @@ func hmacEqual(a, b []byte) bool {
 	}
 
 	return result == 0
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // generateRandomPassword creates a cryptographically random password using

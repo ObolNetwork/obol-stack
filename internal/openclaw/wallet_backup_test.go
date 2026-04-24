@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -196,6 +197,104 @@ func TestBackupRestoreEncryptedRoundTrip(t *testing.T) {
 
 	if restored.Address != origWallet.Address {
 		t.Errorf("address = %q, want %q", restored.Address, origWallet.Address)
+	}
+}
+
+func TestImportPrivateKeyWalletCmd_ReplacesExistingWallet(t *testing.T) {
+	cfg, id, origWallet := setupTestInstance(t)
+	deployDir := DeploymentPath(cfg, id)
+	keyFile := filepath.Join(t.TempDir(), "buyer.key")
+	keyHex := "0x0000000000000000000000000000000000000000000000000000000000000001"
+	if err := os.WriteFile(keyFile, []byte(keyHex+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ImportPrivateKeyWalletCmd(cfg, id, ImportPrivateKeyWalletOptions{
+		PrivateKeyFile: keyFile,
+		Force:          false,
+	}, testUI())
+	if err == nil {
+		t.Fatal("expected import over existing wallet without force to fail")
+	}
+
+	err = ImportPrivateKeyWalletCmd(cfg, id, ImportPrivateKeyWalletOptions{
+		PrivateKeyFile: keyFile,
+		Force:          true,
+	}, testUI())
+	if err != nil {
+		t.Fatalf("import private key: %v", err)
+	}
+
+	wallet, err := ReadWalletMetadata(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantAddr := "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+	if wallet.Address != wantAddr {
+		t.Errorf("address = %q, want %q", wallet.Address, wantAddr)
+	}
+	if wallet.Address == origWallet.Address {
+		t.Fatal("wallet address did not change after forced import")
+	}
+
+	password, err := readKeystorePassword(deployDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keystoreJSON, err := os.ReadFile(filepath.Join(KeystoreVolumePath(cfg, id), wallet.KeystoreUUID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := decryptV3Keystore(keystoreJSON, password)
+	if err != nil {
+		t.Fatalf("decrypt imported keystore: %v", err)
+	}
+	if got := "0x" + hex.EncodeToString(recovered); got != keyHex {
+		t.Errorf("recovered key = %q, want %q", got, keyHex)
+	}
+
+	entries, err := os.ReadDir(KeystoreVolumePath(cfg, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonKeystores := 0
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			jsonKeystores++
+		}
+	}
+	if jsonKeystores != 1 {
+		t.Fatalf("keystore dir has %d JSON keystores, want 1", jsonKeystores)
+	}
+}
+
+func TestKeystorePasswordSecretManifest(t *testing.T) {
+	raw, err := keystorePasswordSecretManifest("obol-agent", "secret-pass")
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+
+	if manifest["kind"] != "Secret" {
+		t.Fatalf("kind = %v, want Secret", manifest["kind"])
+	}
+	meta := manifest["metadata"].(map[string]any)
+	if meta["name"] != "remote-signer-keystore-password" {
+		t.Fatalf("secret name = %v", meta["name"])
+	}
+	if meta["namespace"] != "openclaw-obol-agent" {
+		t.Fatalf("namespace = %v, want openclaw-obol-agent", meta["namespace"])
+	}
+	stringData := manifest["stringData"].(map[string]any)
+	if stringData["password"] != "secret-pass" {
+		t.Fatalf("password = %v, want secret-pass", stringData["password"])
 	}
 }
 

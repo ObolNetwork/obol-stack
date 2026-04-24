@@ -8,10 +8,11 @@ func TestOpenClawWalletCommand_Structure(t *testing.T) {
 	wallet := findSubcommand(t, cmd, "wallet")
 
 	expected := map[string]bool{
-		"backup":  false,
-		"restore": false,
-		"address": false,
-		"list":    false,
+		"backup":             false,
+		"restore":            false,
+		"import-private-key": false,
+		"address":            false,
+		"list":               false,
 	}
 
 	for _, sub := range wallet.Commands {
