@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuildModelEntries(t *testing.T) {
@@ -259,6 +261,149 @@ general_settings:
 		_, err := buildProviderStatus([]byte(`model_list: []`), []byte(`not json`))
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
+		}
+	})
+}
+
+func TestPreferModelInConfig(t *testing.T) {
+	t.Run("moves local model to front", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: ollama_chat/qwen3.5:9b
+      api_base: http://ollama.llm.svc.cluster.local:11434
+  - model_name: llama3.2:3b
+    litellm_params:
+      model: ollama_chat/llama3.2:3b
+      api_base: http://ollama.llm.svc.cluster.local:11434
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+`)
+
+		updated, changed, err := preferModelInConfig(configYAML, "llama3.2:3b")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !changed {
+			t.Fatal("expected config change")
+		}
+
+		var got LiteLLMConfig
+		if err := yaml.Unmarshal(updated, &got); err != nil {
+			t.Fatalf("parse updated config: %v", err)
+		}
+
+		if got.ModelList[0].ModelName != "llama3.2:3b" {
+			t.Fatalf("first model = %q, want llama3.2:3b", got.ModelList[0].ModelName)
+		}
+
+		if got.ModelList[1].ModelName != "qwen3.5:9b" {
+			t.Fatalf("second model = %q, want qwen3.5:9b", got.ModelList[1].ModelName)
+		}
+	})
+
+	t.Run("matches routed model aliases", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: ollama_chat/qwen3.5:9b
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+`)
+
+		updated, changed, err := preferModelInConfig(configYAML, "openai/gpt-4.1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !changed {
+			t.Fatal("expected config change")
+		}
+
+		var got LiteLLMConfig
+		if err := yaml.Unmarshal(updated, &got); err != nil {
+			t.Fatalf("parse updated config: %v", err)
+		}
+
+		if got.ModelList[0].ModelName != "gpt-4.1" {
+			t.Fatalf("first model = %q, want gpt-4.1", got.ModelList[0].ModelName)
+		}
+	})
+
+	t.Run("moves explicit cloud model before wildcard", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+`)
+
+		updated, changed, err := preferModelInConfig(configYAML, "claude-sonnet-4-6")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !changed {
+			t.Fatal("expected config change")
+		}
+
+		var got LiteLLMConfig
+		if err := yaml.Unmarshal(updated, &got); err != nil {
+			t.Fatalf("parse updated config: %v", err)
+		}
+
+		if got.ModelList[0].ModelName != "claude-sonnet-4-6" {
+			t.Fatalf("first model = %q, want claude-sonnet-4-6", got.ModelList[0].ModelName)
+		}
+
+		if got.ModelList[1].ModelName != "anthropic/*" {
+			t.Fatalf("second model = %q, want anthropic/*", got.ModelList[1].ModelName)
+		}
+	})
+
+	t.Run("already preferred model is unchanged", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: ollama_chat/qwen3.5:9b
+`)
+
+		_, changed, err := preferModelInConfig(configYAML, "qwen3.5:9b")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if changed {
+			t.Fatal("expected no config change")
+		}
+	})
+
+	t.Run("unknown model errors", func(t *testing.T) {
+		configYAML := []byte(`
+model_list:
+  - model_name: qwen3.5:9b
+    litellm_params:
+      model: ollama_chat/qwen3.5:9b
+`)
+
+		_, _, err := preferModelInConfig(configYAML, "missing-model")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+
+		if !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("error = %v, want not found", err)
 		}
 	})
 }

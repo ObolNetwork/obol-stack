@@ -1669,10 +1669,7 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 // current LiteLLM model list. For each LiteLLM-routed instance it:
 //  1. Patches the overlay YAML model list (for helm consistency)
 //  2. Writes a clean per-agent models.json to the host PVC
-//  3. Patches the openclaw-config ConfigMap with the best primary model
-//
-// Cloud models are promoted to primary (they're added because they're better
-// than local defaults). The previous primary becomes a fallback.
+//  3. Patches the openclaw-config ConfigMap with the preferred primary model
 func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	ids, err := ListInstanceIDs(cfg)
 	if err != nil || len(ids) == 0 {
@@ -1709,7 +1706,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 			u.Warnf("Failed to patch models.json for %s: %v", id, err)
 		}
 
-		// Patch ConfigMap with best primary model + fallbacks
+		// Patch ConfigMap with preferred primary model + fallbacks.
 		primary, fallbacks := rankModels(models)
 		if primary != "" {
 			patchModelHierarchy(cfg, id, primary, fallbacks, u)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -431,6 +432,28 @@ erpc:
 			t.Errorf("missing model in updated overlay:\n%s", updated)
 		}
 	})
+}
+
+func TestRankModelsHonorsConfiguredOrder(t *testing.T) {
+	primary, fallbacks := rankModels([]string{"llama3.2:3b", "claude-sonnet-4-6", "gpt-4.1"})
+	if primary != "openai/llama3.2:3b" {
+		t.Fatalf("primary = %q, want openai/llama3.2:3b", primary)
+	}
+
+	wantFallbacks := []string{"openai/claude-sonnet-4-6", "openai/gpt-4.1"}
+	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
+		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
+	}
+
+	primary, fallbacks = rankModels([]string{"claude-sonnet-4-6", "llama3.2:3b"})
+	if primary != "openai/claude-sonnet-4-6" {
+		t.Fatalf("primary = %q, want openai/claude-sonnet-4-6", primary)
+	}
+
+	wantFallbacks = []string{"openai/llama3.2:3b"}
+	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
+		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
+	}
 }
 
 func TestPatchAgentModelsJSON(t *testing.T) {

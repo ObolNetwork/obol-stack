@@ -27,6 +27,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			modelSyncCommand(cfg),
 			modelPullCommand(),
 			modelListCommand(cfg),
+			modelPreferCommand(cfg),
 			modelRemoveCommand(cfg),
 		},
 	}
@@ -213,6 +214,12 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 
+	if len(models) > 0 {
+		if err := model.PreferModel(cfg, u, models[0]); err != nil {
+			u.Warnf("Could not prefer configured model %q: %v", models[0], err)
+		}
+	}
+
 	return syncAgentModels(cfg, u)
 }
 
@@ -229,6 +236,28 @@ func modelSyncCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			u.Info("Reading model list from LiteLLM...")
+
+			return syncAgentModels(cfg, u)
+		},
+	}
+}
+
+func modelPreferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "prefer",
+		Usage:     "Move a configured model to the front of the LiteLLM preference order",
+		ArgsUsage: "<model-name>",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			modelName := cmd.Args().First()
+			if modelName == "" {
+				return errors.New("model name is required\n\nUsage: obol model prefer <model-name>\n\nList configured models with: obol model list")
+			}
+
+			if err := model.PreferModel(cfg, u, modelName); err != nil {
+				return err
+			}
 
 			return syncAgentModels(cfg, u)
 		},

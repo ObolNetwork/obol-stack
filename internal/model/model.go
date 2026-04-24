@@ -628,6 +628,121 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	return nil
 }
 
+// PreferModel moves a configured model to the front of the LiteLLM model_list.
+// Downstream runtimes use this order to choose their primary model.
+func PreferModel(cfg *config.Config, u *ui.UI, modelName string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return errors.New("cluster not running. Run 'obol stack up' first")
+	}
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return fmt.Errorf("failed to read LiteLLM config: %w", err)
+	}
+
+	updated, changed, err := preferModelInConfig([]byte(raw), modelName)
+	if err != nil {
+		return err
+	}
+
+	if !changed {
+		u.Successf("Model %q is already preferred", modelName)
+		return nil
+	}
+
+	escapedYAML, err := json.Marshal(string(updated))
+	if err != nil {
+		return fmt.Errorf("failed to escape YAML: %w", err)
+	}
+
+	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
+
+	u.Infof("Setting preferred model to %q", modelName)
+
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"patch", "configmap", configMapName, "-n", namespace,
+		"-p", patchJSON, "--type=merge"); err != nil {
+		return fmt.Errorf("failed to patch ConfigMap: %w", err)
+	}
+
+	u.Successf("Model %q is now preferred", modelName)
+
+	return nil
+}
+
+func preferModelInConfig(configYAML []byte, modelName string) ([]byte, bool, error) {
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal(configYAML, &litellmConfig); err != nil {
+		return nil, false, fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+
+	idx := -1
+
+	for i, entry := range litellmConfig.ModelList {
+		if modelEntryMatchesPreference(entry, modelName) {
+			idx = i
+			break
+		}
+	}
+
+	if idx < 0 {
+		return nil, false, fmt.Errorf("model %q not found in LiteLLM config", modelName)
+	}
+
+	if idx == 0 {
+		return configYAML, false, nil
+	}
+
+	preferred := litellmConfig.ModelList[idx]
+	reordered := make([]ModelEntry, 0, len(litellmConfig.ModelList))
+	reordered = append(reordered, preferred)
+	reordered = append(reordered, litellmConfig.ModelList[:idx]...)
+	reordered = append(reordered, litellmConfig.ModelList[idx+1:]...)
+	litellmConfig.ModelList = reordered
+
+	updated, err := yaml.Marshal(&litellmConfig)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	return updated, true, nil
+}
+
+func modelEntryMatchesPreference(entry ModelEntry, preference string) bool {
+	rawPreference := strings.TrimSpace(preference)
+	normalizedPreference := normalizeModelPreference(preference)
+
+	candidates := []string{
+		entry.ModelName,
+		entry.LiteLLMParams.Model,
+		normalizeModelPreference(entry.ModelName),
+		normalizeModelPreference(entry.LiteLLMParams.Model),
+	}
+
+	for _, candidate := range candidates {
+		if candidate == rawPreference || candidate == normalizedPreference {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeModelPreference(name string) string {
+	name = strings.TrimSpace(name)
+	for _, prefix := range []string{"openai/", "anthropic/", "ollama/", "ollama_chat/"} {
+		if strings.HasPrefix(name, prefix) {
+			return strings.TrimPrefix(name, prefix)
+		}
+	}
+
+	return name
+}
+
 // AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
 // after validating it works.
 //

@@ -21,6 +21,7 @@ func TestModelCommand_Structure(t *testing.T) {
 		"sync":   false,
 		"pull":   false,
 		"list":   false,
+		"prefer": false,
 		"remove": false,
 	}
 

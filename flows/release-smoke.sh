@@ -58,6 +58,7 @@ append_report_footer() {
 
 - The runner uses the real \`obol\` CLI and the flow scripts as black-box release checks.
 - Any \`FAIL:\` line is release-gating, even when a child script exits zero.
+- \`flow-12-agent-provider-smokes.sh\` always checks local obol-agent inference and only runs Anthropic/OpenAI smokes when their API key env vars are present.
 - \`flow-11-dual-stack.sh\` writes on-chain receipt artifacts under \`$ARTIFACT_DIR/flow-11-receipts\`.
 - Set \`RELEASE_SMOKE_INCLUDE_OBOL=true\` to run \`flow-12-obol-payment.sh\`, which requires a current x402-rs facilitator binary.
 EOF
@@ -142,6 +143,7 @@ main() {
         "$SCRIPT_DIR/flow-10-anvil-facilitator.sh"
         "$SCRIPT_DIR/flow-08-buy.sh"
         "$SCRIPT_DIR/flow-09-lifecycle.sh"
+        "$SCRIPT_DIR/flow-12-agent-provider-smokes.sh"
     )
 
     for flow in "${flows[@]}"; do
