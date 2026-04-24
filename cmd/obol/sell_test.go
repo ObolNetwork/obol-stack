@@ -182,7 +182,7 @@ func TestSellInference_Flags(t *testing.T) {
 	flags := flagMap(inf)
 
 	requireFlags(t, flags,
-		"model", "wallet", "price", "per-request", "per-mtok", "chain", "facilitator",
+		"model", "wallet", "price", "per-request", "per-mtok", "chain", "token", "facilitator",
 		"listen", "upstream", "enclave-tag",
 		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
 		"tee", "model-hash",
@@ -190,6 +190,7 @@ func TestSellInference_Flags(t *testing.T) {
 
 	assertStringDefault(t, flags, "price", "0.001")
 	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "listen", ":8402")
 	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
 	assertStringDefault(t, flags, "facilitator", "https://x402.gcp.obol.tech")
@@ -206,13 +207,14 @@ func TestSellHTTP_Flags(t *testing.T) {
 	flags := flagMap(http)
 
 	requireFlags(t, flags,
-		"wallet", "chain", "price", "per-request", "per-mtok", "per-hour",
+		"wallet", "chain", "token", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "no-register", "register-name", "register-description", "register-image", "private-key-file",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "namespace", "default")
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)

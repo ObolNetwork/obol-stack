@@ -80,3 +80,51 @@ func TestBuildV1Requirement(t *testing.T) {
 		t.Errorf("PayTo = %q, want %q", req.PayTo, "0xRecipient")
 	}
 }
+
+func TestResolveAssetInfo_Override(t *testing.T) {
+	asset := ResolveAssetInfo(ChainEthereumMainnet, &RouteRule{
+		AssetAddress:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		AssetSymbol:         "OBOL",
+		AssetDecimals:       18,
+		AssetTransferMethod: "permit2",
+		EIP712Name:          "Obol Network",
+		EIP712Version:       "1",
+	})
+
+	if asset.Address != "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7" {
+		t.Fatalf("asset.Address = %q", asset.Address)
+	}
+	if asset.TransferMethod != "permit2" {
+		t.Fatalf("asset.TransferMethod = %q", asset.TransferMethod)
+	}
+	if asset.Decimals != 18 {
+		t.Fatalf("asset.Decimals = %d", asset.Decimals)
+	}
+	if asset.EIP712Name != "Obol Network" || asset.EIP712Version != "1" {
+		t.Fatalf("asset EIP-712 metadata = %q/%q", asset.EIP712Name, asset.EIP712Version)
+	}
+}
+
+func TestBuildV2RequirementWithAsset(t *testing.T) {
+	req := BuildV2RequirementWithAsset(ChainEthereumMainnet, AssetInfo{
+		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		Symbol:         "OBOL",
+		Decimals:       18,
+		TransferMethod: "permit2",
+		EIP712Name:     "Obol Network",
+		EIP712Version:  "1",
+	}, "0.001", "0xRecipient")
+
+	if req.Amount != "1000000000000000" {
+		t.Fatalf("Amount = %q, want 1000000000000000", req.Amount)
+	}
+	if req.Asset != "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7" {
+		t.Fatalf("Asset = %q", req.Asset)
+	}
+	if req.Extra["assetTransferMethod"] != "permit2" {
+		t.Fatalf("assetTransferMethod = %v", req.Extra["assetTransferMethod"])
+	}
+	if req.Extra["name"] != "Obol Network" || req.Extra["version"] != "1" {
+		t.Fatalf("name/version = %v/%v", req.Extra["name"], req.Extra["version"])
+	}
+}

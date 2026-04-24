@@ -42,6 +42,22 @@ func TestParseQuickTunnelURL(t *testing.T) {
 	}
 }
 
+func TestParseQuickTunnelURL_PicksLatest(t *testing.T) {
+	logs := `
+2026-01-14T12:00:00Z INF | https://old-quick-tunnel.trycloudflare.com |
+2026-01-14T12:05:00Z INF | https://new-quick-tunnel.trycloudflare.com |
+`
+
+	url, ok := parseQuickTunnelURL(logs)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+
+	if url != "https://new-quick-tunnel.trycloudflare.com" {
+		t.Fatalf("unexpected url: %q", url)
+	}
+}
+
 func TestPatchAgentBaseURL_Insert(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "values-obol.yaml")

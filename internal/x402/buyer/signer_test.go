@@ -1,6 +1,7 @@
 package buyer
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -13,6 +14,8 @@ func TestPreSignedSigner_CanSign(t *testing.T) {
 		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
+		"USDC",
+		6,
 		[]*PreSignedAuth{makeAuth("0x1")},
 		0,
 		nil,
@@ -107,6 +110,8 @@ func TestPreSignedSigner_Sign(t *testing.T) {
 		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
+		"USDC",
+		6,
 		auths,
 		0,
 		nil,
@@ -179,6 +184,8 @@ func TestPreSignedSigner_ConcurrentSign(t *testing.T) {
 		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
+		"USDC",
+		6,
 		auths,
 		0,
 		nil,
@@ -234,6 +241,8 @@ func TestPreSignedSigner_HoldConfirmRelease(t *testing.T) {
 		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		"1000",
+		"USDC",
+		6,
 		[]*PreSignedAuth{makeAuth("0xhold")},
 		0,
 		func(*PreSignedAuth) error {
@@ -285,7 +294,7 @@ func TestPreSignedSigner_HoldConfirmRelease(t *testing.T) {
 }
 
 func TestPreSignedSigner_Interface(t *testing.T) {
-	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", nil, 0, nil)
+	signer := NewPreSignedSigner("base-sepolia", "0xpayto", "0xasset", "1000", "USDC", 6, nil, 0, nil)
 
 	// Verify interface compliance.
 	var _ Signer = signer
@@ -309,6 +318,73 @@ func TestPreSignedSigner_Interface(t *testing.T) {
 	tokens := signer.GetTokens()
 	if len(tokens) != 1 || tokens[0].Address != "0xasset" {
 		t.Errorf("GetTokens() = %+v", tokens)
+	}
+}
+
+func TestPreSignedSigner_SignGenericPayment(t *testing.T) {
+	var payment x402types.PaymentPayload
+	if err := json.Unmarshal([]byte(`{
+		"x402Version": 2,
+		"accepted": {
+			"scheme": "exact",
+			"network": "eip155:84532",
+			"amount": "1000",
+			"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+			"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+			"maxTimeoutSeconds": 60,
+			"extra": {"assetTransferMethod": "permit2", "name": "OBOL", "version": "1"}
+		},
+		"payload": {
+			"signature": "0xabc",
+			"permit2Authorization": {
+				"from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+				"spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+				"nonce": "42",
+				"deadline": "99",
+				"permitted": {
+					"token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"amount": "1000"
+				},
+				"witness": {
+					"to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+					"validAfter": "0"
+				}
+			}
+		},
+		"extensions": {
+			"eip2612GasSponsoring": {"info": {"version": "1"}}
+		}
+	}`), &payment); err != nil {
+		t.Fatalf("unmarshal payment: %v", err)
+	}
+
+	signer := NewPreSignedSigner(
+		"base-sepolia",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"1000",
+		"OBOL",
+		18,
+		[]*PreSignedAuth{{ID: "42", Payment: &payment}},
+		0,
+		nil,
+	)
+
+	req := &x402types.PaymentRequirements{
+		Network: "eip155:84532",
+		PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Amount:  "1000",
+	}
+	got, err := signer.Sign(req)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if got.Payload["permit2Authorization"] == nil {
+		t.Fatalf("expected permit2Authorization payload, got %+v", got.Payload)
+	}
+	if got.Extensions["eip2612GasSponsoring"] == nil {
+		t.Fatalf("expected eip2612 extension, got %+v", got.Extensions)
 	}
 }
 

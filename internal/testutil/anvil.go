@@ -9,7 +9,10 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +20,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+)
+
+const (
+	// ForkObolProjectDir is the local Foundry project used to deploy a fork-only
+	// OBOL-compatible ERC20Permit token for x402 testing.
+	ForkObolProjectDir = "contracts/fork-obol"
 )
 
 func jsonDecode(r io.Reader, v any) error {
@@ -37,6 +46,16 @@ type AnvilFork struct {
 type AnvilAccount struct {
 	Address    string
 	PrivateKey string
+}
+
+type AnvilTransactionReceipt struct {
+	TransactionHash   string `json:"transactionHash"`
+	BlockNumber       string `json:"blockNumber"`
+	From              string `json:"from"`
+	To                string `json:"to"`
+	Status            string `json:"status"`
+	GasUsed           string `json:"gasUsed"`
+	EffectiveGasPrice string `json:"effectiveGasPrice"`
 }
 
 // defaultAnvilAccounts returns the 10 deterministic accounts that Anvil
@@ -256,4 +275,318 @@ func (f *AnvilFork) GetUSDCBalance(t *testing.T, addr string) *big.Int {
 	balance.SetString(strings.TrimPrefix(result.Result, "0x"), 16)
 
 	return balance
+}
+
+// GetERC20Balance returns the ERC-20 balance for an address via eth_call.
+func (f *AnvilFork) GetERC20Balance(t *testing.T, tokenAddr, addr string) *big.Int {
+	t.Helper()
+
+	paddedAddr := fmt.Sprintf("%064s", common.HexToAddress(addr).Hex()[2:])
+	calldata := "0x70a08231" + paddedAddr
+
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"%s","data":"%s"},"latest"],"id":1}`,
+		tokenAddr, calldata,
+	)
+
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("eth_call balanceOf failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &result); err != nil {
+		t.Fatalf("parse balanceOf response: %v", err)
+	}
+
+	balance := new(big.Int)
+	balance.SetString(strings.TrimPrefix(result.Result, "0x"), 16)
+
+	return balance
+}
+
+func (f *AnvilFork) BlockNumber(t *testing.T) uint64 {
+	t.Helper()
+
+	body := `{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`
+	resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("eth_blockNumber failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &result); err != nil {
+		t.Fatalf("parse eth_blockNumber response: %v", err)
+	}
+
+	block, err := strconv.ParseUint(strings.TrimPrefix(result.Result, "0x"), 16, 64)
+	if err != nil {
+		t.Fatalf("parse eth_blockNumber %q: %v", result.Result, err)
+	}
+
+	return block
+}
+
+func (f *AnvilFork) FindERC20TransferReceipt(t *testing.T, tokenAddr, from, to string, fromBlock uint64) *AnvilTransactionReceipt {
+	t.Helper()
+
+	transferTopic := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)")).Hex()
+	fromTopic := common.LeftPadBytes(common.HexToAddress(from).Bytes(), 32)
+	toTopic := common.LeftPadBytes(common.HexToAddress(to).Bytes(), 32)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getLogs",
+		"params": []any{
+			map[string]any{
+				"address":   tokenAddr,
+				"fromBlock": fmt.Sprintf("0x%x", fromBlock),
+				"toBlock":   "latest",
+				"topics": []string{
+					transferTopic,
+					common.BytesToHash(fromTopic).Hex(),
+					common.BytesToHash(toTopic).Hex(),
+				},
+			},
+		},
+		"id": 1,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal eth_getLogs payload: %v", err)
+	}
+
+	resp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getLogs failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var logsResp struct {
+		Result []struct {
+			TransactionHash string `json:"transactionHash"`
+		} `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &logsResp); err != nil {
+		t.Fatalf("parse eth_getLogs response: %v", err)
+	}
+	if len(logsResp.Result) == 0 {
+		t.Fatalf("no ERC20 Transfer logs found for token=%s from=%s to=%s fromBlock=%d", tokenAddr, from, to, fromBlock)
+	}
+
+	txHash := logsResp.Result[len(logsResp.Result)-1].TransactionHash
+	receiptPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getTransactionReceipt",
+		"params":  []string{txHash},
+		"id":      1,
+	}
+	data, err = json.Marshal(receiptPayload)
+	if err != nil {
+		t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
+	}
+
+	receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getTransactionReceipt failed: %v", err)
+	}
+	defer receiptResp.Body.Close()
+
+	var receipt struct {
+		Result *AnvilTransactionReceipt `json:"result"`
+	}
+	if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
+		t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
+	}
+	if receipt.Result == nil {
+		t.Fatalf("no transaction receipt found for hash %s", txHash)
+	}
+
+	return receipt.Result
+}
+
+func (f *AnvilFork) FindERC20TransferReceipts(t *testing.T, tokenAddr, from, to string, fromBlock uint64) []*AnvilTransactionReceipt {
+	t.Helper()
+
+	transferTopic := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)")).Hex()
+	fromTopic := common.LeftPadBytes(common.HexToAddress(from).Bytes(), 32)
+	toTopic := common.LeftPadBytes(common.HexToAddress(to).Bytes(), 32)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "eth_getLogs",
+		"params": []any{
+			map[string]any{
+				"address":   tokenAddr,
+				"fromBlock": fmt.Sprintf("0x%x", fromBlock),
+				"toBlock":   "latest",
+				"topics": []string{
+					transferTopic,
+					common.BytesToHash(fromTopic).Hex(),
+					common.BytesToHash(toTopic).Hex(),
+				},
+			},
+		},
+		"id": 1,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal eth_getLogs payload: %v", err)
+	}
+
+	resp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("eth_getLogs failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var logsResp struct {
+		Result []struct {
+			TransactionHash string `json:"transactionHash"`
+		} `json:"result"`
+	}
+	if err := jsonDecode(resp.Body, &logsResp); err != nil {
+		t.Fatalf("parse eth_getLogs response: %v", err)
+	}
+	if len(logsResp.Result) == 0 {
+		t.Fatalf("no ERC20 Transfer logs found for token=%s from=%s to=%s fromBlock=%d", tokenAddr, from, to, fromBlock)
+	}
+
+	seen := make(map[string]struct{}, len(logsResp.Result))
+	receipts := make([]*AnvilTransactionReceipt, 0, len(logsResp.Result))
+	for _, logEntry := range logsResp.Result {
+		txHash := logEntry.TransactionHash
+		if _, ok := seen[txHash]; ok {
+			continue
+		}
+		seen[txHash] = struct{}{}
+
+		receiptPayload := map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "eth_getTransactionReceipt",
+			"params":  []string{txHash},
+			"id":      1,
+		}
+		data, err = json.Marshal(receiptPayload)
+		if err != nil {
+			t.Fatalf("marshal eth_getTransactionReceipt payload: %v", err)
+		}
+
+		receiptResp, err := http.Post(f.RPCURL, "application/json", bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("eth_getTransactionReceipt failed: %v", err)
+		}
+
+		var receipt struct {
+			Result *AnvilTransactionReceipt `json:"result"`
+		}
+		if err := jsonDecode(receiptResp.Body, &receipt); err != nil {
+			receiptResp.Body.Close()
+			t.Fatalf("parse eth_getTransactionReceipt response: %v", err)
+		}
+		receiptResp.Body.Close()
+		if receipt.Result == nil {
+			t.Fatalf("no transaction receipt found for hash %s", txHash)
+		}
+		receipts = append(receipts, receipt.Result)
+	}
+
+	return receipts
+}
+
+func ParseHexBigInt(t *testing.T, hexValue string) *big.Int {
+	t.Helper()
+
+	value := new(big.Int)
+	if _, ok := value.SetString(strings.TrimPrefix(hexValue, "0x"), 16); !ok {
+		t.Fatalf("parse hex big.Int %q", hexValue)
+	}
+
+	return value
+}
+
+// DeployForkObolToken deploys a fork-local OBOL-compatible ERC20Permit token
+// via Foundry and returns the deployed contract address.
+func (f *AnvilFork) DeployForkObolToken(t *testing.T, deployerKey, initialHolder string, initialSupply *big.Int) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("forge"); err != nil {
+		t.Skip("forge not installed — required for fork-local OBOL deployment")
+	}
+
+	// Build the contract once in the local Foundry project.
+	build := exec.Command("forge", "build")
+	build.Dir = filepathJoinRepoRoot(t, ForkObolProjectDir)
+	build.Stdout = os.Stderr
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("forge build fork-obol failed: %v", err)
+	}
+
+	args := []string{
+		"create",
+		"--root", filepathJoinRepoRoot(t, ForkObolProjectDir),
+		"src/ForkObolToken.sol:ForkObolToken",
+		"--rpc-url", f.RPCURL,
+		"--private-key", deployerKey,
+		"--broadcast",
+		"--json",
+		"--constructor-args", initialHolder, initialSupply.String(),
+	}
+	cmd := exec.Command("forge", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("forge create ForkObolToken failed: %v", err)
+	}
+
+	var result struct {
+		DeployedTo string `json:"deployedTo"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("parse forge create output: %v\n%s", err, out.String())
+	}
+	if result.DeployedTo == "" {
+		t.Fatalf("forge create did not return deployedTo: %s", out.String())
+	}
+	t.Logf("deployed fork OBOL token at %s", result.DeployedTo)
+	return result.DeployedTo
+}
+
+// MintMintableERC20 mints tokens on a permissive test ERC-20 with a public
+// mint(address,uint256) function.
+func (f *AnvilFork) MintMintableERC20(t *testing.T, tokenAddr, callerKey, to string, amount *big.Int) {
+	t.Helper()
+
+	cmd := exec.Command(
+		"cast", "send",
+		tokenAddr,
+		"mint(address,uint256)",
+		to,
+		amount.String(),
+		"--rpc-url", f.RPCURL,
+		"--private-key", callerKey,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mint test ERC20 failed: %v\n%s", err, string(out))
+	}
+	t.Logf("minted %s tokens at %s to %s", amount, tokenAddr, to)
+}
+
+func filepathJoinRepoRoot(t *testing.T, rel string) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	return filepath.Join(root, rel)
 }

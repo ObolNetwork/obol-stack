@@ -93,6 +93,14 @@ func TestPaymentTerms_JSONRoundTrip(t *testing.T) {
 		PayTo:             "0x1234567890abcdef1234567890abcdef12345678",
 		Scheme:            "exact",
 		MaxTimeoutSeconds: 300,
+		Asset: AssetTerms{
+			Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+			Symbol:         "OBOL",
+			Decimals:       18,
+			TransferMethod: AssetTransferMethodPermit2,
+			EIP712Name:     "Obol Network",
+			EIP712Version:  "1",
+		},
 		Price: PriceTable{
 			PerRequest: "0.001",
 			PerMTok:    "0.50",
@@ -123,6 +131,12 @@ func TestPaymentTerms_JSONRoundTrip(t *testing.T) {
 
 	if decoded.MaxTimeoutSeconds != original.MaxTimeoutSeconds {
 		t.Errorf("MaxTimeoutSeconds = %d, want %d", decoded.MaxTimeoutSeconds, original.MaxTimeoutSeconds)
+	}
+	if decoded.Asset.Address != original.Asset.Address {
+		t.Errorf("Asset.Address = %q, want %q", decoded.Asset.Address, original.Asset.Address)
+	}
+	if decoded.Asset.TransferMethod != original.Asset.TransferMethod {
+		t.Errorf("Asset.TransferMethod = %q, want %q", decoded.Asset.TransferMethod, original.Asset.TransferMethod)
 	}
 
 	if decoded.Price.PerRequest != original.Price.PerRequest {
@@ -187,6 +201,10 @@ func TestPaymentTerms_JSONFieldNames(t *testing.T) {
 		PayTo:             "0xABC",
 		Scheme:            "exact",
 		MaxTimeoutSeconds: 300,
+		Asset: AssetTerms{
+			Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+			TransferMethod: AssetTransferMethodPermit2,
+		},
 		Price: PriceTable{
 			PerRequest: "0.001",
 			PerMTok:    "0.50",
@@ -204,7 +222,7 @@ func TestPaymentTerms_JSONFieldNames(t *testing.T) {
 	}
 
 	// Check top-level camelCase field names
-	for _, expected := range []string{"payTo", "maxTimeoutSeconds", "network", "scheme", "price"} {
+	for _, expected := range []string{"payTo", "maxTimeoutSeconds", "network", "scheme", "price", "asset"} {
 		if _, ok := raw[expected]; !ok {
 			t.Errorf("expected JSON field %q not found in output", expected)
 		}
