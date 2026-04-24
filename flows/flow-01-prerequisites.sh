@@ -43,10 +43,26 @@ fi
 
 # Python packages required for paid inference (flow-08)
 step "Python eth_account + httpx installed"
-if python3 -c "import eth_account, httpx" 2>/dev/null; then
+if ensure_payment_python_deps; then
     pass "eth_account + httpx available"
 else
-    fail "Missing Python packages — run: pip install eth-account httpx"
+    fail "Missing Python packages and automatic venv setup failed — install eth-account httpx"
+fi
+
+# The default OpenClaw deployment depends on the published remote-signer chart.
+step "remote-signer Helm chart version is published"
+rs_version=$(remote_signer_chart_version)
+if [ -z "$rs_version" ]; then
+    fail "Could not parse remoteSignerChartVersion from internal/openclaw/openclaw.go"
+elif remote_signer_chart_available "$rs_version"; then
+    pass "obol/remote-signer $rs_version is available"
+else
+    helm repo update obol >/dev/null 2>&1 || true
+    if remote_signer_chart_available "$rs_version"; then
+        pass "obol/remote-signer $rs_version is available after helm repo update"
+    else
+        fail "obol/remote-signer $rs_version is not published in the configured Helm repo"
+    fi
 fi
 
 emit_metrics

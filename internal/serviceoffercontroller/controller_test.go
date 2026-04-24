@@ -76,3 +76,69 @@ func TestRequestPhaseReady(t *testing.T) {
 	}
 }
 
+func TestPurchaseReadyRequiresRuntimePoolToMatchSpec(t *testing.T) {
+	status := &monetizeapi.PurchaseRequestStatus{}
+	pr := &monetizeapi.PurchaseRequest{
+		Spec: monetizeapi.PurchaseRequestSpec{
+			PreSignedAuths: []monetizeapi.PreSignedAuth{
+				{Nonce: "a"},
+				{Nonce: "b"},
+				{Nonce: "c"},
+			},
+		},
+	}
+
+	status.Remaining = 1
+	status.Spent = 2
+	setPurchaseCondition(&status.Conditions, "Ready", "False", "RuntimeSyncing", "waiting")
+	if purchaseConditionIsTrue(status.Conditions, "Ready") {
+		t.Fatal("purchase should not be ready while runtime pool is still syncing")
+	}
+
+	status.Remaining = len(pr.Spec.PreSignedAuths)
+	setPurchaseCondition(&status.Conditions, "Ready", "True", "Reconciled", "synced")
+	if !purchaseConditionIsTrue(status.Conditions, "Ready") {
+		t.Fatal("purchase should be ready once runtime pool matches spec")
+	}
+}
+
+func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{
+		Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+	}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"}}
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			Phase:              registrationPhaseRegistered,
+			AgentID:            "42",
+			RegistrationTxHash: "0xtx",
+		},
+	}
+
+	applySharedRegistrationStatus(status, offer, owner, request)
+
+	if status.AgentID != "42" || status.RegistrationTxHash != "0xtx" {
+		t.Fatalf("shared registration identifiers not copied: %+v", status)
+	}
+	if !isConditionTrue(*status, "Registered") {
+		t.Fatalf("registered condition not set true: %+v", status.Conditions)
+	}
+}
+
+func TestApplySharedRegistrationStatus_WaitsForRoute(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			Phase:   registrationPhaseRegistered,
+			AgentID: "7",
+		},
+	}
+
+	applySharedRegistrationStatus(status, owner, owner, request)
+
+	if isConditionTrue(*status, "Registered") {
+		t.Fatalf("registered should remain false until route is published: %+v", status.Conditions)
+	}
+}

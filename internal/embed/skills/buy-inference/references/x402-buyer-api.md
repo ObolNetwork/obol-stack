@@ -36,6 +36,8 @@ Content-Type: application/json
 
 ## Sidecar Config Format (`x402-buyer-config` ConfigMap)
 
+The controller writes one `<purchase-name>.json` entry per `PurchaseRequest`.
+
 ```json
 {
   "url": "https://seller.example.com/services/qwen",
@@ -48,6 +50,8 @@ Content-Type: application/json
 ```
 
 ## Pre-Signed Auths Format (`x402-buyer-auths` ConfigMap)
+
+The controller writes one `<purchase-name>.json` auth pool per `PurchaseRequest`.
 
 ```json
 [
@@ -175,25 +179,61 @@ The agent signs each auth as EIP-712 `TransferWithAuthorization` (ERC-3009 USDC)
 }
 ```
 
-## LiteLLM Provider Entry (plain OpenAI → sidecar)
+## LiteLLM Model Entries
 
-The sidecar appears to LiteLLM as a standard OpenAI provider:
+LiteLLM keeps one static wildcard route in `litellm-config`, and the controller
+hot-adds explicit `paid/<model>` entries as purchases are reconciled:
 
-```json
-{
-  "remote-qwen": {
-    "id": "remote-qwen",
-    "npm": "@ai-sdk/openai",
-    "api": "http://x402-buyer.llm.svc.cluster.local:8402/upstream/remote-qwen",
-    "api_key": "unused",
-    "models": {"remote-qwen/qwen3.5:35b": {"name": "qwen3.5:35b"}},
-    "all_models": false,
-    "tool_call": false
-  }
-}
+```yaml
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+  - model_name: "paid/qwen3.5:9b"
+    litellm_params:
+      model: "openai/paid/qwen3.5:9b"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
 ```
 
-No special x402 extension needed in LiteLLM — the sidecar handles all payment logic.
+The controller persists these entries in the `litellm-config` ConfigMap and
+uses LiteLLM's `/model/new` and `/model/delete` APIs to avoid rolling the pod.
+
+## PurchaseRequest Authoring Path
+
+The agent does not write buyer ConfigMaps directly anymore. The control-plane
+contract between the agent and the controller is:
+
+```yaml
+apiVersion: obol.org/v1alpha1
+kind: PurchaseRequest
+metadata:
+  name: remote-qwen
+  namespace: openclaw-obol-agent
+spec:
+  endpoint: https://seller.example.com/services/qwen/v1/chat/completions
+  model: qwen3.5:9b
+  count: 100
+  payment:
+    network: base-sepolia
+    payTo: "0xSellerAddr"
+    price: "1000"
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+  preSignedAuths:
+    - signature: "0xabc..."
+      from: "0xBuyerAddr"
+      to: "0xSellerAddr"
+      value: "1000"
+      validAfter: "0"
+      validBefore: "4294967295"
+      nonce: "0xdeadbeef..."
+```
+
+The controller turns that CR into the sidecar config/auth files shown above.
+
+No special x402 extension is needed in LiteLLM — the sidecar handles all payment logic.
 
 ## USDC Contract Addresses
 
@@ -205,7 +245,9 @@ No special x402 extension needed in LiteLLM — the sidecar handles all payment 
 
 ## Remote-Signer API (used during pre-signing only)
 
-The remote-signer is only accessed during `buy` and `refill` — never at runtime.
+The remote-signer is only accessed during pre-signing — never at runtime. In
+the currently shipped controller-mode path, that means `buy` and the
+agent-owned `process --all` refill loop.
 
 ```
 POST http://remote-signer.<ns>.svc.cluster.local:9000/api/v1/sign/<address>/typed-data
@@ -228,9 +270,8 @@ Other useful endpoints:
 ```
 1. Agent probes seller → 402 + pricing (payTo, network, price, asset)
 2. Agent pre-signs N auths via remote-signer (EIP-712 TransferWithAuthorization)
-3. Agent stores auths in x402-buyer-auths ConfigMap
-4. Agent stores upstream config in x402-buyer-config ConfigMap
-5. Agent deploys x402-buyer sidecar (or restarts if exists)
-6. Agent patches LiteLLM providers.json → plain OpenAI provider → sidecar
-7. At runtime: request → LiteLLM → sidecar → upstream (402 → pop auth → retry → 200)
+3. Agent creates or updates a PurchaseRequest in its own namespace
+4. Controller validates pricing and writes one config/auth file pair into the llm ConfigMaps
+5. Controller hot-adds the paid/<model> LiteLLM entry and triggers sidecar reload
+6. At runtime: request → LiteLLM → sidecar → upstream (402 → hold auth → retry → 200)
 ```

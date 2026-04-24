@@ -32,21 +32,14 @@ const (
 
 // Init initializes the stack configuration
 func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
-	// Check if any stack config already exists
+	// Check if any stack config already exists (legacy k3d.yaml included).
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
-	backendFilePath := filepath.Join(cfg.ConfigDir, stackBackendFile)
-
 	hasExistingConfig := false
-	if _, err := os.Stat(stackIDPath); err == nil {
-		hasExistingConfig = true
-	}
-
-	if _, err := os.Stat(backendFilePath); err == nil {
-		hasExistingConfig = true
-	}
-	// Also check legacy k3d.yaml for backward compatibility
-	if _, err := os.Stat(filepath.Join(cfg.ConfigDir, k3dConfigFile)); err == nil {
-		hasExistingConfig = true
+	for _, f := range []string{stackIDFile, stackBackendFile, k3dConfigFile} {
+		if _, err := os.Stat(filepath.Join(cfg.ConfigDir, f)); err == nil {
+			hasExistingConfig = true
+			break
+		}
 	}
 
 	if hasExistingConfig && !force {

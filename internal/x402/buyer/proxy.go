@@ -70,14 +70,7 @@ func NewProxy(cfg *Config, auths AuthsFile, state *StateStore) (*Proxy, error) {
 		reloadCh:    make(chan struct{}, 1),
 	}
 
-	p.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
-	})
-	p.mux.HandleFunc("GET /status", p.handleStatus)
-	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
-	p.mux.Handle("GET /metrics", p.metrics.handler())
-	registerOpenAIRoutes(p.mux, p.handleModelRequest)
+	p.registerCoreRoutes()
 
 	if err := p.Reload(cfg, auths); err != nil {
 		return nil, err
@@ -158,19 +151,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (p *Proxy) syncCompatibilityRoutesLocked() {
 	p.mux = http.NewServeMux()
+	p.registerCoreRoutes()
+	for name, upstream := range p.upstreams {
+		prefix := fmt.Sprintf("/upstream/%s/", name)
+		p.mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), upstream.handler))
+	}
+}
+
+// registerCoreRoutes wires the built-in /healthz, /status, /admin/*, /metrics,
+// and OpenAI-compatible routes onto p.mux. Called both at construction and on
+// every reload (since reload rebuilds the mux to drop stale upstream routes).
+func (p *Proxy) registerCoreRoutes() {
 	p.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	})
 	p.mux.HandleFunc("GET /status", p.handleStatus)
 	p.mux.HandleFunc("POST /admin/reload", p.handleAdminReload)
+	p.mux.HandleFunc("POST /admin/remove", p.handleAdminRemove)
 	p.mux.Handle("GET /metrics", p.metrics.handler())
 	registerOpenAIRoutes(p.mux, p.handleModelRequest)
-
-	for name, upstream := range p.upstreams {
-		prefix := fmt.Sprintf("/upstream/%s/", name)
-		p.mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), upstream.handler))
-	}
 }
 
 func (p *Proxy) syncMetricsLocked() {
@@ -325,14 +325,11 @@ func (p *Proxy) resolveModelRequest(body []byte) (string, []byte, *upstreamEntry
 
 func normalizeRemoteModel(model string) string {
 	normalized := strings.TrimSpace(model)
-
 	for {
-		switch {
-		case strings.HasPrefix(normalized, "paid/"):
-			normalized = strings.TrimPrefix(normalized, "paid/")
-		case strings.HasPrefix(normalized, "openai/"):
-			normalized = strings.TrimPrefix(normalized, "openai/")
-		default:
+		before := normalized
+		normalized = strings.TrimPrefix(normalized, "paid/")
+		normalized = strings.TrimPrefix(normalized, "openai/")
+		if normalized == before {
 			return normalized
 		}
 	}
@@ -390,12 +387,12 @@ func releaseHeldPreSignedSpend(signers []Signer, held *PreSignedAuth) {
 // request body from GetBody for each attempt so retries stay valid under
 // httputil.ReverseProxy on newer Go versions.
 type replayableX402Transport struct {
-	Base             http.RoundTripper
-	Signers          []Signer
-	Selector         PaymentSelector
-	OnPaymentAttempt PaymentCallback
-	OnPaymentSuccess PaymentCallback
-	OnPaymentFailure PaymentCallback
+	Base                  http.RoundTripper
+	Signers               []Signer
+	Selector              PaymentSelector
+	OnPaymentAttempt      PaymentCallback
+	OnPaymentSuccess      PaymentCallback
+	OnPaymentFailure      PaymentCallback
 	OnConfirmSpendFailure PaymentCallback
 	// OnPaymentUnsettled fires when the upstream returned 2xx without a
 	// successful X-PAYMENT-RESPONSE. The auth has been consumed locally via
@@ -728,8 +725,34 @@ func (p *Proxy) handleAdminReload(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+func (p *Proxy) handleAdminRemove(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(w, "missing name", http.StatusBadRequest)
+		return
+	}
+
+	p.mu.Lock()
+	p.removeUpstreamLocked(name)
+	p.syncCompatibilityRoutesLocked()
+	p.syncMetricsLocked()
+	p.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"status":"removed","name":%q}`, name)
+}
+
 func (p *Proxy) ReloadCh() <-chan struct{} {
 	return p.reloadCh
+}
+
+func (p *Proxy) removeUpstreamLocked(name string) {
+	entry := p.upstreams[name]
+	delete(p.signers, name)
+	delete(p.upstreams, name)
+	if entry != nil && p.modelRoutes[entry.remoteModel] == name {
+		delete(p.modelRoutes, entry.remoteModel)
+	}
 }
 
 // singleJoiningSlash joins a base and suffix path with exactly one slash.

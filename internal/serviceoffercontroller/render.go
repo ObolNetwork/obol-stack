@@ -23,27 +23,6 @@ const (
 	skillCatalogRouteName     = "obol-skill-md-route"
 )
 
-func buildMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "traefik.io/v1alpha1",
-			"kind":       "Middleware",
-			"metadata": map[string]any{
-				"name":            "x402-" + offer.Name,
-				"namespace":       offer.Namespace,
-				"ownerReferences": []any{ownerRefMap(offer)},
-			},
-			"spec": map[string]any{
-				"forwardAuth": map[string]any{
-					"address":             "http://x402-verifier.x402.svc.cluster.local:8080/verify",
-					"authResponseHeaders": []any{"X-Payment-Status", "X-Payment-Tx", "Authorization"},
-				},
-			},
-		},
-	}
-	return obj
-}
-
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -496,28 +475,12 @@ func registrationRouteName(name string) string {
 	return safeName("so-", name, "-wellknown")
 }
 
-func ownerRef(offer *monetizeapi.ServiceOffer) metav1.OwnerReference {
-	return ownerRefFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.ServiceOfferKind, offer.Name, offer.UID)
-}
-
 func ownerRefMap(offer *monetizeapi.ServiceOffer) map[string]any {
 	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.ServiceOfferKind, offer.Name, offer.UID)
 }
 
 func registrationRequestOwnerRefMap(request *monetizeapi.RegistrationRequest) map[string]any {
 	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.RegistrationRequestKind, request.Name, request.UID)
-}
-
-func ownerRefFor(apiVersion, kind, name string, uid types.UID) metav1.OwnerReference {
-	trueValue := true
-	return metav1.OwnerReference{
-		APIVersion:         apiVersion,
-		Kind:               kind,
-		Name:               name,
-		UID:                uid,
-		Controller:         &trueValue,
-		BlockOwnerDeletion: &trueValue,
-	}
 }
 
 func ownerRefMapFor(apiVersion, kind, name string, uid types.UID) map[string]any {
@@ -566,50 +529,32 @@ func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string
 	return false
 }
 
-func buildActiveRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
+func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
 	baseURL = strings.TrimRight(baseURL, "/")
-	description := offer.Spec.Registration.Description
+	description := owner.Spec.Registration.Description
 	if description == "" {
-		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(offer), offer.Name)
+		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
 	}
-	if offer.IsInference() && offer.Spec.Model.Name != "" {
-		description = fmt.Sprintf("%s inference via x402 micropayments", offer.Spec.Model.Name)
+	if owner.IsInference() && owner.Spec.Model.Name != "" {
+		description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
 	}
 
-	image := offer.Spec.Registration.Image
+	image := owner.Spec.Registration.Image
 	if image == "" {
 		image = baseURL + "/agent-icon.png"
 	}
 
-	services := []erc8004.ServiceDef{{
-		Name:     "web",
-		Endpoint: baseURL + offer.EffectivePath(),
-	}}
-	if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
-		services = append(services, erc8004.ServiceDef{
-			Name:    "OASF",
-			Version: "0.8",
-			Skills:  offer.Spec.Registration.Skills,
-			Domains: offer.Spec.Registration.Domains,
-		})
-	}
-	for _, service := range offer.Spec.Registration.Services {
-		services = append(services, erc8004.ServiceDef{
-			Name:     service.Name,
-			Endpoint: service.Endpoint,
-			Version:  service.Version,
-		})
-	}
+	services := buildRegistrationServices(owner, offers, baseURL)
 
 	registration := erc8004.AgentRegistration{
 		Type:           erc8004.RegistrationType,
-		Name:           defaultString(offer.Spec.Registration.Name, offer.Name),
+		Name:           defaultString(owner.Spec.Registration.Name, owner.Name),
 		Description:    description,
 		Image:          image,
 		Services:       services,
 		X402Support:    true,
 		Active:         true,
-		SupportedTrust: offer.Spec.Registration.SupportedTrust,
+		SupportedTrust: owner.Spec.Registration.SupportedTrust,
 	}
 	if agentID != "" {
 		registration.Registrations = []erc8004.OnChainReg{{
@@ -617,21 +562,87 @@ func buildActiveRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, a
 			AgentRegistry: fmt.Sprintf("eip155:%d:%s", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia),
 		}}
 	}
-	if metadata := nonEmptyStringMap(offer.Spec.Registration.Metadata); len(metadata) > 0 {
+	if metadata := nonEmptyStringMap(owner.Spec.Registration.Metadata); len(metadata) > 0 {
 		registration.Metadata = metadata
 	}
-	if provenance := nonEmptyStringMap(offer.Spec.Provenance); len(provenance) > 0 {
+	if provenance := nonEmptyStringMap(owner.Spec.Provenance); len(provenance) > 0 {
 		registration.Provenance = provenance
 	}
 	return registration
 }
 
 func buildTombstoneRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
-	registration := buildActiveRegistrationDocument(offer, baseURL, agentID)
+	registration := buildActiveRegistrationDocument(offer, []*monetizeapi.ServiceOffer{offer}, baseURL, agentID)
 	registration.Active = false
 	registration.X402Support = false
 	registration.Description = fmt.Sprintf("%s (deactivated)", registration.Description)
 	return registration
+}
+
+func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL string) []erc8004.ServiceDef {
+	baseURL = strings.TrimRight(baseURL, "/")
+	type offerKey struct {
+		namespace string
+		name      string
+	}
+	seen := map[offerKey]struct{}{}
+	ordered := []*monetizeapi.ServiceOffer{}
+	add := func(offer *monetizeapi.ServiceOffer, force bool) {
+		if offer == nil {
+			return
+		}
+		key := offerKey{namespace: offer.Namespace, name: offer.Name}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		if !force && !offerPublishedForRegistration(offer) {
+			return
+		}
+		seen[key] = struct{}{}
+		ordered = append(ordered, offer)
+	}
+
+	add(owner, true)
+	for _, offer := range offers {
+		if owner != nil && offer != nil && offer.Namespace == owner.Namespace && offer.Name == owner.Name {
+			continue
+		}
+		add(offer, false)
+	}
+
+	services := make([]erc8004.ServiceDef, 0, len(ordered)*2)
+	for _, offer := range ordered {
+		services = append(services, erc8004.ServiceDef{
+			Name:     "web",
+			Endpoint: baseURL + offer.EffectivePath(),
+		})
+		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
+			services = append(services, erc8004.ServiceDef{
+				Name:    "OASF",
+				Version: "0.8",
+				Skills:  offer.Spec.Registration.Skills,
+				Domains: offer.Spec.Registration.Domains,
+			})
+		}
+		for _, service := range offer.Spec.Registration.Services {
+			services = append(services, erc8004.ServiceDef{
+				Name:     service.Name,
+				Endpoint: service.Endpoint,
+				Version:  service.Version,
+			})
+		}
+	}
+	return services
+}
+
+func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
+	if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+		return false
+	}
+	return isConditionTrue(offer.Status, "ModelReady") &&
+		isConditionTrue(offer.Status, "UpstreamHealthy") &&
+		isConditionTrue(offer.Status, "PaymentGateReady") &&
+		isConditionTrue(offer.Status, "RoutePublished")
 }
 
 func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {

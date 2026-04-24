@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -235,15 +236,21 @@ func (c *Controller) enqueueOfferFromRegistration(obj any) {
 	if u == nil {
 		return
 	}
-	var request monetizeapi.RegistrationRequest
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &request); err != nil {
-		log.Printf("serviceoffer-controller: decode registrationrequest for parent enqueue: %v", err)
-		return
+	for _, item := range c.offerInformer.GetStore().List() {
+		u := asUnstructured(item)
+		if u == nil {
+			continue
+		}
+		offer, err := decodeServiceOffer(u)
+		if err != nil {
+			log.Printf("serviceoffer-controller: decode offer for registration fan-out: %v", err)
+			continue
+		}
+		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+			continue
+		}
+		c.offerQueue.Add(offer.Namespace + "/" + offer.Name)
 	}
-	if request.Spec.ServiceOfferNamespace == "" || request.Spec.ServiceOfferName == "" {
-		return
-	}
-	c.offerQueue.Add(request.Spec.ServiceOfferNamespace + "/" + request.Spec.ServiceOfferName)
 }
 
 func (c *Controller) enqueueDiscoveryRefresh(obj any) {
@@ -343,7 +350,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	}
 
 	if offer.DeletionTimestamp != nil {
-		if !containsFinalizer(raw, serviceOfferFinalizer) {
+		if !slices.Contains(raw.GetFinalizers(), serviceOfferFinalizer) {
 			return nil
 		}
 		if err := c.reconcileDeletingOffer(ctx, offer); err != nil {
@@ -363,7 +370,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
-	if !containsFinalizer(raw, serviceOfferFinalizer) {
+	if !slices.Contains(raw.GetFinalizers(), serviceOfferFinalizer) {
 		return c.addFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
@@ -371,11 +378,11 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	status.ObservedGeneration = offer.Generation
 	status.Endpoint = offer.EffectivePath()
 
-	if err := c.reconcileModel(statusFor(&status), offer); err != nil {
+	if err := c.reconcileModel(&status, offer); err != nil {
 		return err
 	}
 
-	upstreamHealthy, err := c.reconcileUpstream(ctx, statusFor(&status), offer)
+	upstreamHealthy, err := c.reconcileUpstream(ctx, &status, offer)
 	if err != nil {
 		return err
 	}
@@ -387,11 +394,11 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "PaymentGateReady", "False", "Paused", "Offer is paused")
 		setCondition(&status, "RoutePublished", "False", "Paused", "Offer is paused")
 	} else if upstreamHealthy && isConditionTrue(status, "ModelReady") {
-		if err := c.reconcilePaymentGate(ctx, statusFor(&status), offer); err != nil {
+		if err := c.reconcilePaymentGate(ctx, &status, offer); err != nil {
 			return err
 		}
 		if isConditionTrue(status, "PaymentGateReady") {
-			if err := c.reconcileRoute(ctx, statusFor(&status), offer); err != nil {
+			if err := c.reconcileRoute(ctx, &status, offer); err != nil {
 				return err
 			}
 		}
@@ -400,7 +407,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
 	}
 
-	if err := c.reconcileRegistrationStatus(ctx, statusFor(&status), offer); err != nil {
+	if err := c.reconcileRegistrationStatus(ctx, &status, offer); err != nil {
 		return err
 	}
 
@@ -417,6 +424,15 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 
 	if err := c.updateOfferStatus(ctx, raw, status); err != nil {
 		return err
+	}
+	if offer.Spec.Registration.Enabled {
+		owner, err := c.registrationOwner()
+		if err != nil {
+			return err
+		}
+		if owner != nil {
+			c.registrationQueue.Add(owner.Namespace + "/" + registrationRequestName(owner.Name))
+		}
 	}
 	if !ready {
 		// Dependent resources like the upstream Deployment, Middleware, HTTPRoute,
@@ -439,6 +455,21 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
 	if err := c.deleteRouteChildren(ctx, offer); err != nil {
 		return err
+	}
+
+	if offer.Spec.Registration.Enabled {
+		nextOwner, err := c.registrationOwner()
+		if err != nil {
+			return err
+		}
+		if nextOwner != nil {
+			if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
+				return err
+			}
+			c.offerQueue.Add(nextOwner.Namespace + "/" + nextOwner.Name)
+			c.registrationQueue.Add(nextOwner.Namespace + "/" + registrationRequestName(nextOwner.Name))
+			return nil
+		}
 	}
 
 	if !offer.Spec.Registration.Enabled && strings.TrimSpace(offer.Status.AgentID) == "" {
@@ -565,22 +596,33 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 	if err != nil {
 		return err
 	}
-	if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
+	if owner == nil {
+		setCondition(status, "Registered", "False", "Pending", "Waiting for shared registration owner")
+		return nil
+	}
+	if owner.Namespace != offer.Namespace || owner.Name != offer.Name {
 		if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
 			return err
 		}
-		setCondition(
-			status,
-			"Registered",
-			"False",
-			"SingletonConflict",
-			fmt.Sprintf("Registration path /.well-known/agent-registration.json is reserved by %s/%s", owner.Namespace, owner.Name),
-		)
-		log.Printf("serviceoffer-controller: registration for %s/%s blocked by singleton owner %s/%s", offer.Namespace, offer.Name, owner.Namespace, owner.Name)
-		return nil
-	}
-	if !isConditionTrue(*status, "RoutePublished") {
-		setCondition(status, "Registered", "False", "WaitingForRoute", "Waiting for route publication before registration")
+		raw, err := c.registrationRequests.Namespace(owner.Namespace).Get(ctx, registrationRequestName(owner.Name), metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			setCondition(
+				status,
+				"Registered",
+				"False",
+				"Pending",
+				fmt.Sprintf("Waiting for shared registration owned by %s/%s", owner.Namespace, owner.Name),
+			)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		request, err := decodeRegistrationRequest(raw)
+		if err != nil {
+			return err
+		}
+		applySharedRegistrationStatus(status, offer, owner, request)
 		return nil
 	}
 
@@ -603,14 +645,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 	status.AgentID = request.Status.AgentID
 	status.RegistrationTxHash = request.Status.RegistrationTxHash
 
-	if requestPhaseReady(request.Status.Phase) {
-		setCondition(status, "Registered", "True", request.Status.Phase, defaultString(request.Status.Message, "Registration reconciled"))
-		return nil
-	}
-
-	reason := defaultString(request.Status.Phase, "Pending")
-	message := defaultString(request.Status.Message, "Waiting for RegistrationRequest to finish")
-	setCondition(status, "Registered", "False", reason, message)
+	applySharedRegistrationStatus(status, offer, owner, request)
 	return nil
 }
 
@@ -654,6 +689,18 @@ func (c *Controller) reconcileRegistrationRequest(ctx context.Context, key strin
 
 	offerRaw, err := c.offers.Namespace(request.Spec.ServiceOfferNamespace).Get(ctx, request.Spec.ServiceOfferName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
+		owner, ownerErr := c.registrationOwner()
+		if ownerErr != nil {
+			return ownerErr
+		}
+		if owner != nil {
+			if err := c.deleteRegistrationRequest(ctx, namespace, request.Spec.ServiceOfferName); err != nil {
+				return err
+			}
+			c.offerQueue.Add(owner.Namespace + "/" + owner.Name)
+			c.registrationQueue.Add(owner.Namespace + "/" + registrationRequestName(owner.Name))
+			return nil
+		}
 		if err := c.deleteRegistrationResources(ctx, request); err != nil {
 			return err
 		}
@@ -689,7 +736,11 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	agentID := firstNonEmpty(status.AgentID, offer.Status.AgentID)
 	txHash := firstNonEmpty(status.RegistrationTxHash, offer.Status.RegistrationTxHash)
 
-	document := buildActiveRegistrationDocument(offer, baseURL, agentID)
+	offers, err := c.registrationOffers("", "")
+	if err != nil {
+		return err
+	}
+	document := buildActiveRegistrationDocument(offer, offers, baseURL, agentID)
 	documentJSON, contentHash, err := marshalRegistrationDocument(document)
 	if err != nil {
 		return err
@@ -830,7 +881,7 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	status.RegistrationOwner = firstNonEmpty(status.RegistrationOwner, c.registrationOwnerAddress)
 	status.RegistrationURI = firstNonEmpty(status.RegistrationURI, status.PublishedURL)
 	if agentID != "" && c.registrationKey != nil && client != nil && !status.MetadataSynced {
-		agentIDBig, ok := newBigInt(agentID)
+		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
 		if !ok {
 			return fmt.Errorf("invalid agent id %q", agentID)
 		}
@@ -914,7 +965,7 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 		}
 		defer client.Close()
 
-		agentIDBig, ok := newBigInt(agentID)
+		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
 		if !ok {
 			return fmt.Errorf("invalid agent id %q", agentID)
 		}
@@ -1117,7 +1168,7 @@ func (c *Controller) deleteRegistrationRequest(ctx context.Context, namespace, o
 	return nil
 }
 
-func (c *Controller) registrationOwner() (*monetizeapi.ServiceOffer, error) {
+func (c *Controller) registrationOffers(excludeNamespace, excludeName string) ([]*monetizeapi.ServiceOffer, error) {
 	var candidates []*monetizeapi.ServiceOffer
 	for _, item := range c.offerInformer.GetStore().List() {
 		u := asUnstructured(item)
@@ -1128,10 +1179,21 @@ func (c *Controller) registrationOwner() (*monetizeapi.ServiceOffer, error) {
 		if err != nil {
 			return nil, err
 		}
+		if offer.Namespace == excludeNamespace && offer.Name == excludeName {
+			continue
+		}
 		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
 			continue
 		}
 		candidates = append(candidates, offer)
+	}
+	return candidates, nil
+}
+
+func (c *Controller) registrationOwner() (*monetizeapi.ServiceOffer, error) {
+	candidates, err := c.registrationOffers("", "")
+	if err != nil {
+		return nil, err
 	}
 	return selectRegistrationOwner(candidates), nil
 }
@@ -1158,6 +1220,36 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 		}
 	})
 	return offers[0]
+}
+
+func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer, owner *monetizeapi.ServiceOffer, request *monetizeapi.RegistrationRequest) {
+	status.AgentID = request.Status.AgentID
+	status.RegistrationTxHash = request.Status.RegistrationTxHash
+
+	if !isConditionTrue(*status, "RoutePublished") {
+		setCondition(status, "Registered", "False", "WaitingForRoute", "Waiting for route publication before shared registration")
+		return
+	}
+
+	if requestPhaseReady(request.Status.Phase) {
+		message := defaultString(request.Status.Message, "Registration reconciled")
+		if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
+			if request.Status.AgentID != "" {
+				message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, request.Status.AgentID)
+			} else {
+				message = fmt.Sprintf("Shared registration via %s/%s is active", owner.Namespace, owner.Name)
+			}
+		}
+		setCondition(status, "Registered", "True", request.Status.Phase, message)
+		return
+	}
+
+	reason := defaultString(request.Status.Phase, "Pending")
+	message := defaultString(request.Status.Message, "Waiting for RegistrationRequest to finish")
+	if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
+		message = fmt.Sprintf("Waiting for shared registration owned by %s/%s: %s", owner.Namespace, owner.Name, message)
+	}
+	setCondition(status, "Registered", "False", reason, message)
 }
 
 func (c *Controller) applyObject(ctx context.Context, resource dynamic.ResourceInterface, desired *unstructured.Unstructured) error {
@@ -1211,14 +1303,7 @@ func (c *Controller) addFinalizer(ctx context.Context, raw *unstructured.Unstruc
 
 func (c *Controller) removeFinalizer(ctx context.Context, raw *unstructured.Unstructured, finalizer string) error {
 	patched := raw.DeepCopy()
-	finalizers := patched.GetFinalizers()
-	filtered := finalizers[:0]
-	for _, item := range finalizers {
-		if item != finalizer {
-			filtered = append(filtered, item)
-		}
-	}
-	patched.SetFinalizers(filtered)
+	patched.SetFinalizers(slices.DeleteFunc(patched.GetFinalizers(), func(s string) bool { return s == finalizer }))
 	_, err := c.offers.Namespace(patched.GetNamespace()).Update(ctx, patched, metav1.UpdateOptions{})
 	return err
 }
@@ -1237,15 +1322,6 @@ func (c *Controller) registrationBaseURL(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return c.defaultBaseURL, nil
-}
-
-func containsFinalizer(raw *unstructured.Unstructured, finalizer string) bool {
-	for _, item := range raw.GetFinalizers() {
-		if item == finalizer {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeServiceOffer(raw *unstructured.Unstructured) (*monetizeapi.ServiceOffer, error) {
@@ -1279,10 +1355,6 @@ func asUnstructured(obj any) *unstructured.Unstructured {
 	return nil
 }
 
-func statusFor(status *monetizeapi.ServiceOfferStatus) *monetizeapi.ServiceOfferStatus {
-	return status
-}
-
 func requestPhaseReady(phase string) bool {
 	return phase == registrationPhaseRegistered
 }
@@ -1306,11 +1378,6 @@ func truncateMessage(message string) string {
 		return message
 	}
 	return message[:200]
-}
-
-func newBigInt(value string) (*big.Int, bool) {
-	parsed, ok := new(big.Int).SetString(strings.TrimSpace(value), 10)
-	return parsed, ok
 }
 
 func loadRegistrationSigningKey() (*ecdsa.PrivateKey, error) {
