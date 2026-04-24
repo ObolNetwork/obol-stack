@@ -195,7 +195,7 @@ def _get_agent_namespace():
         with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
+        return os.environ.get("AGENT_NAMESPACE", "hermes-obol-agent")
 
 
 def _purchase_collection_path(ns=None):

@@ -24,10 +24,10 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
@@ -185,7 +185,7 @@ Examples:
 
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
@@ -484,7 +484,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "private-key-file",
-				Usage: "Path to the ERC-8004 signing key file (defaults to the OpenClaw remote-signer wallet)",
+				Usage: "Path to the ERC-8004 signing key file (defaults to the Hermes remote-signer wallet)",
 			},
 			&cli.StringSliceFlag{
 				Name:  "register-skills",
@@ -572,7 +572,7 @@ Examples:
 			// Auto-discover wallet from remote-signer if not set.
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
@@ -796,8 +796,8 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	)
 
 	if strings.TrimSpace(opts.PrivateKeyInput) == "" {
-		if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-			ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+		if _, err := hermes.ResolveWalletAddress(cfg); err == nil {
+			ns, nsErr := hermes.ResolveInstanceNamespace(cfg)
 			if nsErr == nil {
 				pf, pfErr := startSignerPortForward(cfg, ns)
 				if pfErr != nil {
@@ -1624,7 +1624,7 @@ Reloads the payment verifier when configuration is changed.`,
 
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else {
@@ -1753,14 +1753,14 @@ Examples:
 			agentURI := endpoint + "/.well-known/agent-registration.json"
 
 			// Determine signing method: private key file (if explicitly provided)
-			// or remote-signer (default when OpenClaw agent is deployed).
+			// or remote-signer (default when Hermes agent is deployed).
 			useRemoteSigner := false
 			var signerNS string
 
 			// If --private-key-file is explicitly provided, honour user intent.
 			if !cmd.IsSet("private-key-file") {
-				if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-					ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
+				if _, err := hermes.ResolveWalletAddress(cfg); err == nil {
+					ns, nsErr := hermes.ResolveInstanceNamespace(cfg)
 					if nsErr == nil {
 						useRemoteSigner = true
 						signerNS = ns

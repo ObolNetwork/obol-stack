@@ -21,7 +21,7 @@ func ResolveWalletAddress(cfg *config.Config) (string, error) {
 
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("no OpenClaw instances found — run 'obol agent init' first, or use --wallet")
+		return "", fmt.Errorf("no OpenClaw instances found — run 'obol openclaw onboard' first, or use --wallet")
 	case 1:
 		wallet, err := ReadWalletMetadata(DeploymentPath(cfg, ids[0]))
 		if err != nil {
@@ -51,7 +51,7 @@ func ResolveInstanceNamespace(cfg *config.Config) (string, error) {
 
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("no OpenClaw instances found — run 'obol agent init' first")
+		return "", fmt.Errorf("no OpenClaw instances found — run 'obol openclaw onboard' first")
 	case 1:
 		return instanceNamespace(ids[0]), nil
 	default:

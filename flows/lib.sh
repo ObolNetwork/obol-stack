@@ -47,22 +47,94 @@ HARDHAT_MNEMONIC="test test test test test test test test test test test junk"
 hh_key()  { cast wallet derive-private-key "$HARDHAT_MNEMONIC" "$1"; }
 hh_addr() { cast wallet address --private-key "$(hh_key "$1")"; }
 
-# Anvil deterministic accounts (derived at runtime -- no secrets in source)
-export SELLER_WALLET=$(hh_addr 1)
-export SELLER_KEY=$(hh_key 1)
-export CONSUMER_WALLET=$(hh_addr 0)
-export CONSUMER_PRIVATE_KEY=$(hh_key 0)
-export FACILITATOR_PRIVATE_KEY=$(hh_key 3)
+# Anvil deterministic accounts (derived at runtime -- no secrets in source).
+# Flows that do not touch on-chain payment should not require Foundry/cast.
+if command -v cast >/dev/null 2>&1; then
+    export SELLER_WALLET=$(hh_addr 1)
+    export SELLER_KEY=$(hh_key 1)
+    export CONSUMER_WALLET=$(hh_addr 0)
+    export CONSUMER_PRIVATE_KEY=$(hh_key 0)
+    export FACILITATOR_PRIVATE_KEY=$(hh_key 3)
+else
+    export SELLER_WALLET="${SELLER_WALLET:-}"
+    export SELLER_KEY="${SELLER_KEY:-}"
+    export CONSUMER_WALLET="${CONSUMER_WALLET:-}"
+    export CONSUMER_PRIVATE_KEY="${CONSUMER_PRIVATE_KEY:-}"
+    export FACILITATOR_PRIVATE_KEY="${FACILITATOR_PRIVATE_KEY:-}"
+fi
 export USDC_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 export CHAIN="base-sepolia"
 export ANVIL_RPC="http://localhost:8545"
 
 # Model used for flow tests (small, fast, local Ollama)
 export FLOW_MODEL="${FLOW_MODEL:-qwen3.5:9b}"
+OBOL_INGRESS_URL_OVERRIDE="${OBOL_INGRESS_URL:-}"
 
 # macOS mDNS can be slow resolving .stack TLD from /etc/hosts.
 # Use --resolve to bypass DNS and go straight to 127.0.0.1.
-CURL_OBOL="curl --resolve obol.stack:80:127.0.0.1 --resolve obol.stack:8080:127.0.0.1 --resolve obol.stack:443:127.0.0.1"
+obol_ingress_url() {
+    if [ -n "${OBOL_INGRESS_URL_OVERRIDE:-}" ]; then
+        echo "${OBOL_INGRESS_URL_OVERRIDE%/}"
+        return 0
+    fi
+
+    local k3d_config="$OBOL_CONFIG_DIR/k3d.yaml"
+    if [ -f "$k3d_config" ]; then
+        local host_port
+        host_port=$(awk '
+            /- port:/ {
+                gsub(/"/, "", $3)
+                split($3, parts, ":")
+                if (parts[2] == "80") {
+                    print parts[1]
+                    exit
+                }
+            }
+        ' "$k3d_config")
+        if [ -n "$host_port" ]; then
+            if [ "$host_port" = "80" ]; then
+                echo "http://obol.stack"
+            else
+                echo "http://obol.stack:$host_port"
+            fi
+            return 0
+        fi
+    fi
+
+    if ! is_port_listening 80; then
+        echo "http://obol.stack"
+    else
+        echo "http://obol.stack:8080"
+    fi
+}
+
+obol_curl_command_for_url() {
+    local url="${1%/}"
+    local port="80"
+
+    case "$url" in
+        http://obol.stack:*)
+            port="${url#http://obol.stack:}"
+            port="${port%%/*}"
+            ;;
+        https://obol.stack:*)
+            port="${url#https://obol.stack:}"
+            port="${port%%/*}"
+            ;;
+        https://obol.stack)
+            port="443"
+            ;;
+    esac
+
+    echo "curl --resolve obol.stack:$port:127.0.0.1 --resolve obol.stack:80:127.0.0.1 --resolve obol.stack:8080:127.0.0.1 --resolve obol.stack:443:127.0.0.1"
+}
+
+refresh_obol_ingress_env() {
+    export OBOL_INGRESS_URL
+    OBOL_INGRESS_URL="$(obol_ingress_url)"
+    CURL_OBOL="$(obol_curl_command_for_url "$OBOL_INGRESS_URL")"
+    export CURL_OBOL
+}
 
 step() {
     STEP_COUNT=$((STEP_COUNT + 1))
@@ -208,3 +280,5 @@ with socket.socket() as sock:
     print(sock.getsockname()[1])
 PY
 }
+
+refresh_obol_ingress_env

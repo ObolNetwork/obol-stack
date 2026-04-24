@@ -62,6 +62,22 @@ Tier 2: Per-Instance                Tier 1: Cluster-Wide Gateway
 | Integration testing | `references/integration-testing.md` |
 | Troubleshooting | `references/troubleshooting.md` |
 
+## Dev Registry Cache
+
+When `OBOL_DEVELOPMENT=true`, `obol stack up` provisions pull-through k3d registry caches before creating a new cluster. Current mirrors:
+
+- `docker.io` -> `k3d-obol-docker-io.localhost:54100`
+- `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101`
+- `quay.io` -> `k3d-obol-quay-io.localhost:54102`
+
+The generated registry config lives at `$OBOL_CONFIG_DIR/registries.yaml`. Cached image layers are stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` if set.
+
+Use this mental model:
+
+- Fresh dev cluster: new cluster creation gets `--registry-config` and `--registry-use` entries, so pulls benefit from the cache.
+- Existing dev cluster: `obol stack up` only starts the cluster and does not re-run registry setup.
+- This is an upstream pull cache, not a dedicated local-build publishing workflow.
+
 ## 4 Inference Paths (All Through LiteLLM)
 
 | Path | Model Name | LiteLLM model_list | Example |
@@ -125,9 +141,9 @@ go test -tags integration -v -timeout 10m ./internal/openclaw/  # Integration te
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
-## OpenClaw Skills System
+## Agent Skills System
 
-Skills are SKILL.md files (with optional scripts and references) that give the agent domain-specific capabilities. Delivered via host-path PVC injection to `/data/.openclaw/skills/` inside the pod.
+Skills are SKILL.md files (with optional scripts and references) that give the agent domain-specific capabilities. Hermes receives embedded Obol skills through native `skills.external_dirs` at `/data/.hermes/obol-skills` with `OBOL_SKILLS_DIR` set. OpenClaw receives embedded skills through host-path PVC injection to `/data/.openclaw/skills/`.
 
 ### Default Embedded Skills
 
@@ -242,9 +258,9 @@ obol sell http qwen35 \
   --upstream ollama --port 11434 --namespace llm --health-path /api/tags \
   --per-request "0.001" --chain "base-sepolia" --wallet "0x<wallet>"
 
-# Trigger reconciliation (or wait for heartbeat)
-obol kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
-  python3 /data/.openclaw/skills/monetize/scripts/monetize.py process qwen35 --namespace llm
+# Trigger reconciliation from the default Hermes agent pod
+obol kubectl exec -n hermes-obol-agent deploy/hermes -c hermes -- \
+  python3 /data/.hermes/obol-skills/monetize/scripts/monetize.py process qwen35 --namespace llm
 
 # Verify 402
 curl -X POST http://obol.stack:8080/services/qwen35/v1/chat/completions \

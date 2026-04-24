@@ -3,6 +3,9 @@
 # Runs AFTER flow-06 (ServiceOffer flow-qwen must be Ready).
 source "$(dirname "$0")/lib.sh"
 
+refresh_obol_ingress_env
+INGRESS_URL="${OBOL_INGRESS_URL%/}"
+
 # Controller-based reconciliation lives in the x402 namespace.
 run_step_grep "serviceoffer-controller pod running" "Running" \
     "$OBOL" kubectl get pods -n x402 -l app=serviceoffer-controller --no-headers
@@ -27,22 +30,22 @@ else
     fail "Frontend HTTPRoute missing hostname restriction — exposed to public tunnel! ($fe_hostnames)"
 fi
 
-# Security: OpenClaw dashboard restricted to local subdomain (not public)
-step "OpenClaw HTTPRoute restricted to subdomain (security: not fully public)"
-oc_hostnames=$("$OBOL" kubectl get httproute openclaw -n openclaw-obol-agent \
+# Security: default Hermes agent restricted to local subdomain (not public)
+step "Hermes HTTPRoute restricted to subdomain (security: not fully public)"
+agent_hostnames=$("$OBOL" kubectl get httproute hermes -n hermes-obol-agent \
     -o jsonpath='{.spec.hostnames}' 2>&1) || true
-if echo "$oc_hostnames" | grep -q "obol.stack"; then
-    pass "OpenClaw HTTPRoute hostname: $oc_hostnames (local subdomain)"
+if echo "$agent_hostnames" | grep -q "obol.stack"; then
+    pass "Hermes HTTPRoute hostname: $agent_hostnames (local subdomain)"
 else
-    fail "OpenClaw HTTPRoute missing hostname restriction — ${oc_hostnames:0:100}"
+    fail "Hermes HTTPRoute missing hostname restriction — ${agent_hostnames:0:100}"
 fi
 
 # §1.6 pre-check: eRPC accessible (local Traefik, obol.stack only — never via tunnel)
 # GET /rpc returns network list (from getting-started.md §2, monetize §1.6)
-step "eRPC accessible at obol.stack:8080/rpc"
-erpc_out=$($CURL_OBOL -sf --max-time 10 http://obol.stack:8080/rpc 2>&1) || true
+step "eRPC accessible at $INGRESS_URL/rpc"
+erpc_out=$($CURL_OBOL -sf --max-time 10 "$INGRESS_URL/rpc" 2>&1) || true
 if echo "$erpc_out" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'rpc' in d or 'error' in d" 2>/dev/null; then
-    pass "eRPC at obol.stack:8080/rpc returned JSON"
+    pass "eRPC at $INGRESS_URL/rpc returned JSON"
 else
     fail "eRPC not responding — ${erpc_out:0:100}"
 fi
@@ -78,7 +81,7 @@ done
 step "402 via local Traefik"
 for i in $(seq 1 6); do
     local_code=$($CURL_OBOL -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
-        "http://obol.stack:8080/services/flow-qwen/v1/chat/completions" \
+        "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
     if [ "$local_code" = "402" ]; then
@@ -92,7 +95,7 @@ done
 # Validate 402 JSON body has required x402 fields
 step "402 body has x402Version and accepts[]"
 body=$($CURL_OBOL -s --max-time 10 -X POST \
-    "http://obol.stack:8080/services/flow-qwen/v1/chat/completions" \
+    "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
 if echo "$body" | python3 -c "

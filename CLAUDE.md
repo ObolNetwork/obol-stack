@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Obol Stack: framework for AI agents to run decentralised infrastructure locally. k3d cluster with OpenClaw AI agent, blockchain networks, payment-gated inference (x402), Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
+Obol Stack: framework for AI agents to run decentralised infrastructure locally. k3d cluster with a Hermes default AI agent, optional OpenClaw instances, blockchain networks, payment-gated inference (x402), and Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
 
 ## Conventions
 
@@ -60,6 +60,7 @@ obol
 ├── agent           init (deploys obol-agent singleton)
 ├── network         list, install, add, remove, status, sync, delete
 ├── sell            inference, http, list, status, stop, delete, pricing, register
+├── hermes          onboard, setup, sync, list, delete, token, wallet, skills
 ├── openclaw        onboard, setup, sync, list, delete, dashboard, cli, token, skills
 ├── model           setup, status
 ├── app             install, sync, list, delete
@@ -73,7 +74,7 @@ obol
 
 Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (verifier + serviceoffer-controller), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `registrationrequest-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
 
-Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), LiteLLM (`llm` ns), x402-verifier (`x402` ns), serviceoffer-controller (`x402` ns), obol-agent (`openclaw-obol-agent` ns), ServiceOffer + RegistrationRequest CRDs.
+Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), LiteLLM (`llm` ns), x402-verifier (`x402` ns), serviceoffer-controller (`x402` ns), default obol-agent (`hermes-obol-agent` ns), ServiceOffer + RegistrationRequest CRDs.
 
 ## Monetize Subsystem
 
@@ -83,7 +84,7 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, USDC 
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` pre-signs ERC-3009 auths into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
 
-**buy.py** lives at `/data/.openclaw/skills/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
+**buy.py** lives at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
 ```
 probe <endpoint-url> [--model <id>]          Probe x402 pricing from a 402 endpoint
 buy <name> --endpoint <url> --model <id>     Pre-sign ERC-3009 auths + create PurchaseRequest
@@ -179,6 +180,21 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 **Local access**: On macOS, port 80 is privileged and may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`) for local browser and curl access. Port 8080 maps to the same Traefik load balancer as port 80.
 
+### Dev Registry Cache
+
+When `OBOL_DEVELOPMENT=true`, `obol stack up` creates pull-through k3d registry caches and wires new clusters to use them on image pulls:
+
+- `docker.io` -> `k3d-obol-docker-io.localhost:54100`
+- `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101`
+- `quay.io` -> `k3d-obol-quay-io.localhost:54102`
+
+The generated k3d registry config is written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data is stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
+
+Important caveats:
+
+- This is a pull-through cache for upstream registries, not a first-class local build registry workflow.
+- It is only set up during cluster creation. If `obol stack up` is just starting an existing k3d cluster, registry setup is skipped.
+
 ## LLM Routing
 
 **Service access from the Mac host** — not every cluster service is reachable via `obol.stack:8080`. Only routes published through Traefik are externally accessible. Everything else is ClusterIP-only and requires `kubectl port-forward`:
@@ -194,7 +210,7 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 **x402-buyer sidecar is distroless** — no `wget`, `curl`, or shell inside the container. Use port-forward from the host, not `kubectl exec`.
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via the LiteLLM model API. Paid remote inference uses the Obol LiteLLM fork plus the `x402-buyer` sidecar, with a static `paid/* -> openai/* -> http://127.0.0.1:8402` route and explicit paid-model entries when needed. OpenClaw always routes through LiteLLM (openai provider slot), never native providers; `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via the LiteLLM model API. Paid remote inference uses the Obol LiteLLM fork plus the `x402-buyer` sidecar, with a static `paid/* -> openai/* -> http://127.0.0.1:8402` route and explicit paid-model entries when needed. Hermes uses a custom OpenAI-compatible provider pointed at LiteLLM; optional OpenClaw instances use the OpenAI provider slot. `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
 
 **Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
 
@@ -204,9 +220,13 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 `obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM. Key code: `internal/inference/` (gateway, container, store) and `internal/enclave/` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
 
-## OpenClaw & Skills
+## Agent Runtimes & Skills
 
-Skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`, 23 skills). Delivered via host-path PVC injection to `$DATA_DIR/openclaw-<id>/openclaw-data/.openclaw/skills/`. Categories: Infrastructure (ethereum-networks, ethereum-local-wallet, obol-stack, distributed-validators, monetize, discovery), Ethereum Dev (addresses, building-blocks, concepts, gas, indexing, l2s, orchestration, security, standards, ship, testing, tools, wallets), Frontend (frontend-playbook, frontend-ux, qa, why).
+Hermes is the stack-managed default runtime. Default instance state lives under `applications/hermes/obol-agent`, namespace `hermes-obol-agent`, service/deployment `hermes`, ConfigMap `hermes-config`, and PVC path `$DATA_DIR/hermes-obol-agent/hermes-data/.hermes`.
+
+OpenClaw remains an optional manual runtime. OpenClaw instances live under `applications/openclaw/<id>`, namespace `openclaw-<id>`, service/deployment `openclaw`, and ConfigMap `openclaw-config`.
+
+Obol skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`). Hermes receives them via native `skills.external_dirs` at `/data/.hermes/obol-skills` with `OBOL_SKILLS_DIR` set to that path. OpenClaw receives them via PVC injection at `/data/.openclaw/skills`.
 
 **Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, and `/skill.md` publication.
 

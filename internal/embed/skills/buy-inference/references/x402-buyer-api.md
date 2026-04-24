@@ -211,7 +211,7 @@ apiVersion: obol.org/v1alpha1
 kind: PurchaseRequest
 metadata:
   name: remote-qwen
-  namespace: openclaw-obol-agent
+  namespace: hermes-obol-agent
 spec:
   endpoint: https://seller.example.com/services/qwen/v1/chat/completions
   model: qwen3.5:9b

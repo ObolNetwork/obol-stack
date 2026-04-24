@@ -49,7 +49,7 @@ else
     fail "Missing Python packages and automatic venv setup failed — install eth-account httpx"
 fi
 
-# The default OpenClaw deployment depends on the published remote-signer chart.
+# The default Hermes deployment depends on the published remote-signer chart.
 step "remote-signer Helm chart version is published"
 rs_version=$(remote_signer_chart_version)
 if [ -z "$rs_version" ]; then

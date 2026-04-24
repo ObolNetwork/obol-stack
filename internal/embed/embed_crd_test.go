@@ -361,9 +361,9 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 
 	docs := multiDoc(data)
 
-	ns := findDocByName(docs, "Namespace", "openclaw-obol-agent")
+	ns := findDocByName(docs, "Namespace", "hermes-obol-agent")
 	if ns == nil {
-		t.Fatal("no Namespace 'openclaw-obol-agent' found")
+		t.Fatal("no Namespace 'hermes-obol-agent' found")
 	}
 
 	// ── Read ClusterRole ────────────────────────────────────────────────
@@ -409,8 +409,8 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if writeRole == nil {
 		t.Fatal("no Role 'openclaw-monetize-write' found")
 	}
-	if ns := nested(writeRole, "metadata", "namespace"); ns != "openclaw-obol-agent" {
-		t.Errorf("write Role namespace = %v, want openclaw-obol-agent", ns)
+	if ns := nested(writeRole, "metadata", "namespace"); ns != "hermes-obol-agent" {
+		t.Errorf("write Role namespace = %v, want hermes-obol-agent", ns)
 	}
 	writeRules, ok := writeRole["rules"].([]interface{})
 	if !ok || len(writeRules) == 0 {

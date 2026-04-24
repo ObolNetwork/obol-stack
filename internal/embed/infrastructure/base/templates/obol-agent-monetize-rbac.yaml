@@ -1,5 +1,5 @@
 ---
-# Monetize RBAC for OpenClaw Agents
+# Monetize RBAC for the default agent runtime
 #
 # The agent remains a compatibility CLI surface for creating and inspecting
 # ServiceOffer objects. The serviceoffer-controller owns all child resources,
@@ -14,7 +14,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: openclaw-obol-agent
+  name: hermes-obol-agent
 
 ---
 #------------------------------------------------------------------------------
@@ -46,7 +46,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: openclaw-monetize-write
-  namespace: openclaw-obol-agent
+  namespace: hermes-obol-agent
 rules:
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
@@ -72,8 +72,8 @@ roleRef:
   name: openclaw-monetize-read
 subjects:
   - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
+    name: hermes
+    namespace: hermes-obol-agent
 
 ---
 #------------------------------------------------------------------------------
@@ -83,12 +83,12 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: openclaw-monetize-write-binding
-  namespace: openclaw-obol-agent
+  namespace: hermes-obol-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: openclaw-monetize-write
 subjects:
   - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
+    name: hermes
+    namespace: hermes-obol-agent
