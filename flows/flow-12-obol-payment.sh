@@ -73,17 +73,46 @@ import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for path in (
-    root / "crates" / "x402-facilitator" / "Cargo.toml",
-    root / "crates" / "x402-facilitator-local" / "Cargo.toml",
-):
-    if not path.exists():
-        continue
-    for line in path.read_text().splitlines():
-        match = re.match(r'version\s*=\s*"([^"]+)"', line)
-        if match:
-            print(match.group(1))
-            raise SystemExit(0)
+workspace_version = ""
+root_manifest = root / "Cargo.toml"
+if root_manifest.exists():
+    in_workspace_package = False
+    for line in root_manifest.read_text().splitlines():
+        stripped = line.strip()
+        if stripped == "[workspace.package]":
+            in_workspace_package = True
+            continue
+        if stripped.startswith("[") and stripped != "[workspace.package]":
+            in_workspace_package = False
+        if in_workspace_package:
+            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
+            if match:
+                workspace_version = match.group(1)
+                break
+
+for path in (root / "facilitator" / "Cargo.toml", root / "crates" / "x402-facilitator-local" / "Cargo.toml"):
+    if path.exists():
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if re.match(r'version\s*\.workspace\s*=\s*true', stripped) and workspace_version:
+                print(workspace_version)
+                raise SystemExit(0)
+            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
+            if match:
+                print(match.group(1))
+                raise SystemExit(0)
+
+for path in (root / "crates" / "x402-facilitator" / "Cargo.toml",):
+    if path.exists():
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
+            if match:
+                print(match.group(1))
+                raise SystemExit(0)
+if workspace_version:
+    print(workspace_version)
+    raise SystemExit(0)
 raise SystemExit(1)
 PY
         ) || version=""

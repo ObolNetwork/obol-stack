@@ -66,6 +66,21 @@ func deleteServiceOffer(t *testing.T, cfg *config.Config, name, namespace string
 	_, _ = obolRunErr(cfg, "kubectl", "delete", "serviceoffers.obol.org", name, "-n", namespace, "--ignore-not-found")
 }
 
+func cleanupPurchaseRequestsForTest(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	namespace := agentNamespace(cfg)
+
+	if out, err := obolRunErr(cfg, "kubectl", "get", "purchaserequests.obol.org",
+		"-n", namespace, "-o", "name"); err == nil {
+		for _, name := range strings.Fields(out) {
+			_, _ = obolRunErr(cfg, "kubectl", "patch", name,
+				"-n", namespace, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+		}
+	}
+	_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org",
+		"-n", namespace, "--all", "--ignore-not-found", "--wait=false")
+}
+
 // getServiceOffer returns the ServiceOffer as a parsed JSON map.
 func getServiceOffer(t *testing.T, cfg *config.Config, name, namespace string) map[string]interface{} {
 	t.Helper()
@@ -3496,9 +3511,7 @@ spec:
 	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(masterKey)); err == nil {
 		masterKey = string(decoded)
 	}
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
-	obolRun(t, cfg, "kubectl", "patch", "httproute", fmt.Sprintf("so-%s", name),
-		"-n", ns, "--type=json", "-p", patchJSON)
+	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
 	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
 
 	// Wait for Traefik to pick up the HTTPRoute + Reloader to restart x402-verifier
@@ -3850,7 +3863,7 @@ func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	obolRun(t, cfg, "openclaw", "skills", "sync", agentInstanceID(cfg), "--from", filepath.Join(repoRoot, "internal", "embed", "skills"))
 	t.Log("synced embedded skills to running OpenClaw instance")
-	obolRun(t, cfg, "kubectl", "delete", "purchaserequests.obol.org", "-n", agentNamespace(cfg), "--all", "--ignore-not-found")
+	cleanupPurchaseRequestsForTest(t, cfg)
 	time.Sleep(5 * time.Second)
 
 	facilitator := testutil.StartRealFacilitatorWithOptions(t, anvil, testutil.RealFacilitatorOptions{
@@ -3938,9 +3951,7 @@ spec:
 	}
 
 	masterKey := getLiteLLMMasterKey(t, cfg)
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
-	obolRun(t, cfg, "kubectl", "patch", "httproute", fmt.Sprintf("so-%s", name),
-		"-n", ns, "--type=json", "-p", patchJSON)
+	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
 	time.Sleep(15 * time.Second)
 
 	localBaseURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
@@ -4293,9 +4304,54 @@ func getLiteLLMMasterKey(t *testing.T, cfg *config.Config) string {
 // header to an HTTPRoute. Required because monetize.py doesn't inject this yet.
 func patchHTTPRouteAuth(t *testing.T, cfg *config.Config, routeName, namespace, masterKey string) {
 	t.Helper()
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
+
+	raw := obolRun(t, cfg, "kubectl", "get", "httproute", routeName, "-n", namespace, "-o", "json")
+	var route struct {
+		Spec struct {
+			Rules []struct {
+				Filters []json.RawMessage `json:"filters"`
+			} `json:"rules"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &route); err != nil {
+		t.Fatalf("parse HTTPRoute %s/%s: %v", namespace, routeName, err)
+	}
+	if len(route.Spec.Rules) == 0 {
+		t.Fatalf("HTTPRoute %s/%s has no rules", namespace, routeName)
+	}
+
+	filter := map[string]any{
+		"type": "RequestHeaderModifier",
+		"requestHeaderModifier": map[string]any{
+			"set": []map[string]string{
+				{
+					"name":  "Authorization",
+					"value": "Bearer " + masterKey,
+				},
+			},
+		},
+	}
+
+	patchPath := "/spec/rules/0/filters"
+	var patchValue any = []map[string]any{filter}
+	if route.Spec.Rules[0].Filters != nil {
+		patchPath = "/spec/rules/0/filters/-"
+		patchValue = filter
+	}
+
+	patchJSON, err := json.Marshal([]map[string]any{
+		{
+			"op":    "add",
+			"path":  patchPath,
+			"value": patchValue,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal HTTPRoute auth patch: %v", err)
+	}
+
 	obolRun(t, cfg, "kubectl", "patch", "httproute", routeName,
-		"-n", namespace, "--type=json", "-p", patchJSON)
+		"-n", namespace, "--type=json", "-p", string(patchJSON))
 }
 
 // monetizePy is the in-pod path to the monetize.py reconciler script.
