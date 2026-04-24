@@ -79,7 +79,11 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
+            # format=long + empty prefix emits the full 40-char commit SHA so the
+            # security-scan job's `image-ref: ...:${{ github.sha }}` reference resolves.
+            # Previously `type=sha,prefix=` produced the 7-char short SHA,
+            # causing Trivy to fail with MANIFEST_UNKNOWN on every run.
+            type=sha,format=long,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.component }}
