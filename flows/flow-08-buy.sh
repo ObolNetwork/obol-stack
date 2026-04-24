@@ -83,10 +83,11 @@ if command -v cast &>/dev/null; then
 fi
 
 # §2.3: Paid inference — sign EIP-712 ERC-3009 payment and retry
-# Uses eth_account (installed with: pip install eth-account) to sign
-# the TransferWithAuthorization payload, matching internal/testutil/eip712_signer.go
+# Uses eth_account to sign the TransferWithAuthorization payload, matching
+# internal/testutil/eip712_signer.go. If host Python lacks the dependency,
+# lib.sh creates an isolated .workspace/venv and puts it on PATH.
 step "Paid inference via x402 payment signing"
-if python3 -c "import eth_account, httpx" 2>/dev/null; then
+if ensure_payment_python_deps; then
     paid_out=$(python3 << 'PYEOF' 2>&1
 import sys, os, json, base64, secrets, time
 import httpx
@@ -202,7 +203,7 @@ PYEOF
         fail "Paid inference failed — ${paid_out:0:400}"
     fi
 else
-    fail "eth_account/httpx not installed — run: pip install eth-account httpx"
+    fail "eth_account/httpx unavailable and automatic venv setup failed"
 fi
 
 # §2.4: Balance checks (requires cast/Foundry)
