@@ -262,6 +262,18 @@ bob_buy_skill_balance() {
         python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance 2>&1 || true
 }
 
+bob_remote_signer_address() {
+    bob kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
+        python3 -c "
+import json
+import urllib.request
+
+resp = urllib.request.urlopen('http://remote-signer:9000/api/v1/keys', timeout=10)
+keys = json.loads(resp.read()).get('keys', [])
+print(keys[0] if keys else '')
+" 2>/dev/null || true
+}
+
 wait_erpc_chain_id() {
     local label="$1"
     local runner="$2"
@@ -354,11 +366,22 @@ stack_init_and_up_with_retry() {
     local label="$1"
     local runner="$2"
     local dir="$3"
+    local pre_up_hook="${4:-}"
     local attempt out rc
 
     for attempt in 1 2 3; do
         step "$label: stack init"
-        "$runner" stack init --force 2>&1 | tail -1
+        set +e
+        out=$("$runner" stack init --force 2>&1)
+        rc=$?
+        set -e
+        printf '%s\n' "$out" | tail -1
+        if [ "$rc" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -120
+            fail "$label: stack init failed (exit $rc)"
+            emit_metrics
+            exit "$rc"
+        fi
         if [ "$label" = "Alice" ]; then
             rewrite_k3d_ports "$dir/config/k3d.yaml" \
                 "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT"
@@ -367,6 +390,9 @@ stack_init_and_up_with_retry() {
             rewrite_k3d_ports "$dir/config/k3d.yaml" \
                 "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
             pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
+        fi
+        if [ -n "$pre_up_hook" ]; then
+            "$pre_up_hook"
         fi
 
         step "$label: stack up"
@@ -402,6 +428,59 @@ stack_init_and_up_with_retry() {
         emit_metrics
         exit "$rc"
     done
+}
+
+preseed_bob_wallet() {
+    local deploy_dir existing import_out key_file onboard_out rc
+
+    deploy_dir="$BOB_DIR/config/applications/openclaw/obol-agent"
+    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
+        step "Bob: scaffold default agent before stack up"
+        set +e
+        onboard_out=$(bob openclaw onboard --id obol-agent --no-sync 2>&1)
+        rc=$?
+        set -e
+        echo "$onboard_out" | tail -8
+        if [ "$rc" -ne 0 ]; then
+            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
+            emit_metrics
+            exit "$rc"
+        fi
+        pass "Bob default agent scaffolded"
+    fi
+
+    existing=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
+        pass "Bob wallet preseeded: $existing"
+        return 0
+    fi
+
+    step "Bob: import derived buyer wallet before stack up"
+    key_file=$(mktemp)
+    chmod 600 "$key_file"
+    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
+    set +e
+    import_out=$(bob wallet import \
+        --instance obol-agent \
+        --private-key-file "$key_file" \
+        --force 2>&1)
+    rc=$?
+    set -e
+    rm -f "$key_file"
+    echo "$import_out" | tail -8
+    if [ "$rc" -ne 0 ]; then
+        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
+        emit_metrics
+        exit "$rc"
+    fi
+
+    existing=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
+        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
+        emit_metrics
+        exit 1
+    fi
+    pass "Bob wallet preseeded: $existing"
 }
 
 litellm_paid_inference() {
@@ -586,9 +665,9 @@ if [ -z "$SIGNER_KEY" ]; then
     fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
     emit_metrics; exit 1
 fi
-# Bob is the second deterministic derived key. The flow imports this key into
-# Bob's remote-signer so x402 purchases spend from the already-funded wallet,
-# not a generated throwaway wallet.
+# Bob is the second deterministic derived key. The flow pre-seeds this key
+# before Bob's stack starts so x402 purchases spend from the already-funded
+# wallet, not a generated throwaway wallet.
 BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
 BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
 # Use the .env key directly as Alice's seller wallet (it has ETH for registration gas)
@@ -881,7 +960,7 @@ for tool in kubectl helm helmfile k3d k9s openclaw; do
 done
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
 
 poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
@@ -915,37 +994,23 @@ if [ "$bob_tunnel_code" != "402" ]; then
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# BOB: INJECT FUNDED BUYER WALLET INTO REMOTE-SIGNER
+# BOB: VERIFY PRESEEDED BUYER WALLET IN REMOTE-SIGNER
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: import derived buyer wallet into remote-signer"
-BOB_KEY_FILE=$(mktemp)
-chmod 600 "$BOB_KEY_FILE"
-printf '%s\n' "$BOB_PRIVATE_KEY" > "$BOB_KEY_FILE"
-import_out=$(bob openclaw wallet import-private-key obol-agent \
-    --private-key-file "$BOB_KEY_FILE" \
-    --force 2>&1 || true)
-rm -f "$BOB_KEY_FILE"
-echo "$import_out" | tail -8
-if ! echo "$import_out" | grep -q "Wallet imported"; then
-    fail "Could not import Bob buyer wallet: ${import_out:0:300}"
-    emit_metrics; exit 1
-fi
-
-BOB_SIGNER_ADDR=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
-if [ -z "$BOB_SIGNER_ADDR" ]; then
-    fail "Could not determine Bob's remote-signer address"
-    emit_metrics; exit 1
-fi
+step "Bob: remote-signer uses preseeded buyer wallet"
+BOB_SIGNER_ADDR=""
+for attempt in $(seq 1 24); do
+    BOB_SIGNER_ADDR=$(bob_remote_signer_address)
+    if [ "$(lower_addr "$BOB_SIGNER_ADDR")" = "$(lower_addr "$BOB_WALLET")" ]; then
+        pass "Bob remote-signer uses funded derived wallet: $BOB_SIGNER_ADDR"
+        break
+    fi
+    sleep 5
+done
 if [ "$(lower_addr "$BOB_SIGNER_ADDR")" != "$(lower_addr "$BOB_WALLET")" ]; then
-    fail "Bob remote-signer wallet mismatch — signer=$BOB_SIGNER_ADDR expected=$BOB_WALLET"
+    fail "Bob remote-signer wallet mismatch — signer=${BOB_SIGNER_ADDR:-unknown} expected=$BOB_WALLET"
     emit_metrics; exit 1
 fi
-pass "Bob remote-signer uses funded derived wallet: $BOB_SIGNER_ADDR"
-
-step "Bob: remote-signer rollout after wallet import"
-bob kubectl rollout status deployment/remote-signer -n openclaw-obol-agent --timeout=120s 2>&1 | tail -2
-pass "Bob remote-signer restarted with injected wallet"
 
 step "Bob: buyer wallet balance available"
 PRE_BUY_BOB_SIGNER_USDC=0

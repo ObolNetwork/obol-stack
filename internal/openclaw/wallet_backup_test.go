@@ -203,6 +203,11 @@ func TestBackupRestoreEncryptedRoundTrip(t *testing.T) {
 func TestImportPrivateKeyWalletCmd_ReplacesExistingWallet(t *testing.T) {
 	cfg, id, origWallet := setupTestInstance(t)
 	deployDir := DeploymentPath(cfg, id)
+	manualKeystore := filepath.Join(KeystoreVolumePath(cfg, id), "manual-recovery.json")
+	if err := os.WriteFile(manualKeystore, []byte(`{"manual":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	keyFile := filepath.Join(t.TempDir(), "buyer.key")
 	keyHex := "0x0000000000000000000000000000000000000000000000000000000000000001"
 	if err := os.WriteFile(keyFile, []byte(keyHex+"\n"), 0o600); err != nil {
@@ -237,6 +242,19 @@ func TestImportPrivateKeyWalletCmd_ReplacesExistingWallet(t *testing.T) {
 	if wallet.Address == origWallet.Address {
 		t.Fatal("wallet address did not change after forced import")
 	}
+	if _, err := os.Stat(manualKeystore); err != nil {
+		t.Fatalf("manual keystore should not be deleted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(KeystoreVolumePath(cfg, id), origWallet.KeystoreUUID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("old tracked keystore should be archived away from active dir, stat err=%v", err)
+	}
+	archived, err := filepath.Glob(filepath.Join(KeystoreVolumePath(cfg, id), "replaced", origWallet.KeystoreUUID+"-*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived) != 1 {
+		t.Fatalf("archived old keystores = %d, want 1", len(archived))
+	}
 
 	password, err := readKeystorePassword(deployDir)
 	if err != nil {
@@ -266,8 +284,8 @@ func TestImportPrivateKeyWalletCmd_ReplacesExistingWallet(t *testing.T) {
 			jsonKeystores++
 		}
 	}
-	if jsonKeystores != 1 {
-		t.Fatalf("keystore dir has %d JSON keystores, want 1", jsonKeystores)
+	if jsonKeystores != 2 {
+		t.Fatalf("keystore dir has %d JSON keystores, want new import plus manual file", jsonKeystores)
 	}
 }
 

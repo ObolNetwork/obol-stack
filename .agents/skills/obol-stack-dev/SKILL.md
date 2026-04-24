@@ -84,7 +84,7 @@ All 4 paths use the same OpenClaw config pattern:
 - `x402-buyer` runs as a **sidecar in the LiteLLM pod**, not as a separate Service.
 - `buy.py buy` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer files and keeps LiteLLM model entries in sync.
 - The currently validated local OSS model is `qwen3.5:9b`. Prefer that exact model in live commerce tests.
-- In `flow-11-dual-stack.sh`, do not confuse the derived `BOB_WALLET` with the wallet that actually buys. Alice sells/registers with the `.env` `REMOTE_SIGNER_PRIVATE_KEY`, while Bob's agent signs through the Bob stack's `remote-signer` key. The flow now imports the second deterministic derived key into Bob's remote-signer via `obol openclaw wallet import-private-key`, asserts `bobSigner == BOB_WALLET`, and spends from that already-funded wallet. Do not reintroduce a funding transfer to a generated throwaway signer.
+- In `flow-11-dual-stack.sh`, do not confuse the derived `BOB_WALLET` with the wallet that actually buys. Alice sells/registers with the `.env` `REMOTE_SIGNER_PRIVATE_KEY`, while Bob's agent signs through the Bob stack's `remote-signer` key. The flow scaffolds Bob's default agent with `obol openclaw onboard --id obol-agent --no-sync`, pre-seeds the second deterministic derived key with `obol wallet import --instance obol-agent --private-key-file ... --force` before `stack up`, asserts `bobSigner == BOB_WALLET`, and spends from that already-funded wallet. Do not reintroduce a funding transfer to a generated throwaway signer.
 
 ## Essential Commands
 

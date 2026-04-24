@@ -79,35 +79,9 @@ func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error
 	if err != nil {
 		return nil, fmt.Errorf("key generation failed: %w", err)
 	}
+	defer zeroBytes(privKey)
 
-	address := addressFromPublicKey(pubKey)
-
-	password, err := generateRandomPassword(32)
-	if err != nil {
-		return nil, fmt.Errorf("password generation failed: %w", err)
-	}
-
-	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
-	if err != nil {
-		return nil, fmt.Errorf("keystore encryption failed: %w", err)
-	}
-
-	keystorePath, err := provisionKeystoreToVolume(cfg, id, keystoreID, keystoreJSON, u)
-	if err != nil {
-		return nil, fmt.Errorf("keystore provisioning failed: %w", err)
-	}
-
-	// Uncompressed public key with 04 prefix for the frontend.
-	pubKeyHex := "0x04" + hex.EncodeToString(pubKey)
-
-	return &WalletInfo{
-		Address:      address,
-		PublicKey:    pubKeyHex,
-		KeystoreUUID: keystoreID,
-		KeystorePath: keystorePath,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-		Password:     password,
-	}, nil
+	return provisionWalletFromKeyMaterial(cfg, id, privKey, pubKey, "", u)
 }
 
 // ImportWalletFromPrivateKey provisions an existing Ethereum private key as the
@@ -131,12 +105,32 @@ func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u 
 		return nil, errors.New("invalid private key material")
 	}
 
+	return provisionWalletFromKeyMaterial(
+		cfg,
+		id,
+		privKey,
+		pubKeyWithPrefix[1:],
+		ethcrypto.PubkeyToAddress(key.PublicKey).Hex(),
+		u,
+	)
+}
+
+func provisionWalletFromKeyMaterial(cfg *config.Config, id string, privKey, pubKey []byte, address string, u *ui.UI) (*WalletInfo, error) {
+	if len(privKey) != 32 {
+		return nil, errors.New("private key must be 32 bytes")
+	}
+	if len(pubKey) != 64 {
+		return nil, errors.New("public key must be 64 bytes without prefix")
+	}
+	if address == "" {
+		address = addressFromPublicKey(pubKey)
+	}
+
 	password, err := generateRandomPassword(32)
 	if err != nil {
 		return nil, fmt.Errorf("password generation failed: %w", err)
 	}
 
-	pubKey := pubKeyWithPrefix[1:]
 	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
 	if err != nil {
 		return nil, fmt.Errorf("keystore encryption failed: %w", err)
@@ -148,8 +142,8 @@ func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u 
 	}
 
 	return &WalletInfo{
-		Address:      ethcrypto.PubkeyToAddress(key.PublicKey).Hex(),
-		PublicKey:    "0x" + hex.EncodeToString(pubKeyWithPrefix),
+		Address:      address,
+		PublicKey:    "0x04" + hex.EncodeToString(pubKey),
 		KeystoreUUID: keystoreID,
 		KeystorePath: keystorePath,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),

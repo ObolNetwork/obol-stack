@@ -43,6 +43,7 @@ COMMANDS:
      stack purge     Delete stack config (use --force to also delete data)
    Obol Agent:
      agent init      Initialize the Obol Agent
+     wallet import   Import an existing wallet for the Obol Agent
    Network Management:
      network list    List all networks (local nodes + remote RPCs)
      network install Install and deploy a local blockchain node
@@ -223,6 +224,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					},
 				},
 			},
+			walletCommand(cfg),
 			// ============================================================
 			// Tunnel Management Commands
 			// ============================================================
