@@ -22,8 +22,10 @@ charts/*/Chart.lock
 logs/
 dist/
 build/
+.build/
 .cache/
 .workspace/
+.workspace-*/
 
 # Go binary
 /obol
