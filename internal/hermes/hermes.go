@@ -38,8 +38,9 @@ const (
 	defaultImage = "nousresearch/hermes-agent:latest"
 	hermesBinary = "/opt/hermes/.venv/bin/hermes"
 
-	containerUID = 10000
-	containerGID = 10000
+	containerUID  = 10000
+	containerGID  = 10000
+	dashboardPort = 9119
 )
 
 type OnboardOptions struct {
@@ -230,6 +231,7 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Success("Hermes installed successfully!")
 	u.Detail("Namespace", agentruntime.Namespace(agentruntime.Hermes, id))
 	u.Detail("URL", "http://"+agentruntime.Hostname(agentruntime.Hermes, id))
+	u.Detail("Dashboard", "http://"+dashboardHostname(id))
 	u.Blank()
 	u.Dim("[Optional] Retrieve an API server token:")
 	u.Printf("  obol hermes token %s", id)
@@ -560,12 +562,13 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	hostname := agentruntime.Hostname(agentruntime.Hermes, id)
+	dashboardHostname := dashboardHostname(id)
 	configData, err := generateConfig(cfg, primary)
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, agentBaseURL, token, primary, configData)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary, configData)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
 	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, helmfileFileName), []byte(generateHelmfile(namespace)), 0o600); err != nil {
@@ -607,7 +610,11 @@ releases:
 `, namespace, rawChartVersion, valuesFileName, namespace, remoteSignerChartVersion)
 }
 
-func generateValues(namespace, hostname, agentBaseURL, token, primary string, configData []byte) string {
+func dashboardHostname(id string) string {
+	return fmt.Sprintf("%s-ui.%s", agentruntime.Namespace(agentruntime.Hermes, id), agentruntime.DefaultDomain)
+}
+
+func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
 
 	var b strings.Builder
@@ -761,6 +768,50 @@ func generateValues(namespace, hostname, agentBaseURL, token, primary string, co
               volumeMounts:
                 - name: data
                   mountPath: /data
+            - name: hermes-dashboard
+              image: %s
+              imagePullPolicy: IfNotPresent
+              args:
+                - dashboard
+                - --host
+                - 0.0.0.0
+                - --port
+                - "%d"
+                - --no-open
+                - --insecure
+              ports:
+                - name: dashboard
+                  containerPort: %d
+              env:
+                - name: HERMES_HOME
+                  value: /data/.hermes
+                - name: HOME
+                  value: /data/.hermes/home
+                - name: GATEWAY_HEALTH_URL
+                  value: http://localhost:%d
+                - name: GATEWAY_HEALTH_TIMEOUT
+                  value: "3"
+              readinessProbe:
+                httpGet:
+                  path: /api/status
+                  port: %d
+                initialDelaySeconds: 5
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /api/status
+                  port: %d
+                initialDelaySeconds: 15
+                periodSeconds: 20
+              startupProbe:
+                httpGet:
+                  path: /api/status
+                  port: %d
+                periodSeconds: 5
+                failureThreshold: 24
+              volumeMounts:
+                - name: data
+                  mountPath: /data
           volumes:
             - name: data
               persistentVolumeClaim:
@@ -780,7 +831,10 @@ func generateValues(namespace, hostname, agentBaseURL, token, primary string, co
       ports:
         - name: http
           port: %d
-          targetPort: %d
+          targetPort: http
+        - name: dashboard
+          port: %d
+          targetPort: dashboard
 
   - apiVersion: gateway.networking.k8s.io/v1
     kind: HTTPRoute
@@ -798,7 +852,29 @@ func generateValues(namespace, hostname, agentBaseURL, token, primary string, co
         - backendRefs:
             - name: %s
               port: %d
-`, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort, desc.DataPVCName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, desc.DefaultPort, desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort)
+
+  - apiVersion: gateway.networking.k8s.io/v1
+    kind: HTTPRoute
+    metadata:
+      name: %s-dashboard
+      namespace: %s
+    spec:
+      hostnames:
+        - %s
+      parentRefs:
+        - name: traefik-gateway
+          namespace: traefik
+          sectionName: web
+      rules:
+        - backendRefs:
+            - name: %s
+              port: %d
+`, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
+		quoteYAML(image()), dashboardPort, dashboardPort, desc.DefaultPort, dashboardPort, dashboardPort, dashboardPort,
+		desc.DataPVCName,
+		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,
+		desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort,
+		desc.ServiceName, namespace, quoteYAML(dashboardHostname), desc.ServiceName, dashboardPort)
 
 	return strings.ReplaceAll(b.String(), "\t", "")
 }

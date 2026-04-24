@@ -77,6 +77,7 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	values := generateValues(
 		"hermes-obol-agent",
 		"hermes-obol-agent.obol.stack",
+		"hermes-obol-agent-ui.obol.stack",
 		"https://agent.example.com",
 		"secret-token",
 		"gpt-5.2",
@@ -94,8 +95,12 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"OBOL_SKILLS_DIR",
 		"/data/.hermes/obol-skills",
 		"containerPort: 8642",
+		"containerPort: 9119",
 		"init-hermes-data",
 		`- "hermes-obol-agent.obol.stack"`,
+		`- "hermes-obol-agent-ui.obol.stack"`,
+		"name: hermes-dashboard",
+		"name: GATEWAY_HEALTH_URL",
 	} {
 		if !strings.Contains(values, needle) {
 			t.Fatalf("generateValues() missing %q:\n%s", needle, values)
