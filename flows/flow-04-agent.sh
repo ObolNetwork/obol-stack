@@ -129,6 +129,27 @@ else
     fail "Hermes gateway health check failed — ${oc_health:0:100}"
 fi
 
+step "Hermes native dashboard UI via deeplink"
+HERMES_DASHBOARD_HOST="hermes-obol-agent-ui.obol.stack"
+if [ "$ingress_port" = "80" ]; then
+    HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}"
+else
+    HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}:${ingress_port}"
+fi
+dashboard_html=""
+for i in $(seq 1 15); do
+    dashboard_html=$(curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
+        -sf --max-time 10 "$HERMES_DASHBOARD_URL/" 2>&1) || true
+    if echo "$dashboard_html" | grep -q "__HERMES_SESSION_TOKEN__"; then
+        pass "Hermes dashboard UI loaded: $HERMES_DASHBOARD_URL"
+        break
+    fi
+    sleep 2
+done
+if ! echo "$dashboard_html" | grep -q "__HERMES_SESSION_TOKEN__"; then
+    fail "Hermes dashboard UI deeplink failed — ${dashboard_html:0:100}"
+fi
+
 # §4: Verify Hermes config still has the expected model/provider wiring.
 oc_config=$("$OBOL" kubectl get cm hermes-config -n hermes-obol-agent \
     -o jsonpath='{.data.config\.yaml}' 2>&1) || true
