@@ -574,12 +574,18 @@ pass "Alice has $alice_eth ETH"
 step "Preflight: clean stale ethereum network deployments"
 # Ethereum full nodes (execution+consensus) use 50-200 GB of disk per network.
 # This test only needs eRPC (lightweight proxy) for Base Sepolia RPC access.
-# Delete any stale network namespaces to free disk.
-for ns in $(kubectl get ns --no-headers 2>/dev/null | awk '{print $1}' | grep "^ethereum-"); do
-    echo "  Deleting stale network namespace: $ns"
-    kubectl delete ns "$ns" --timeout=60s 2>/dev/null || true
-done
-pass "No ethereum full nodes deployed (using eRPC proxy for RPC)"
+# Delete stale namespaces only when the default local workspace is initialized;
+# never use the ambient kubectl context for cleanup.
+if [ -f "$OBOL_CONFIG_DIR/.stack-id" ] && [ -f "$OBOL_CONFIG_DIR/kubeconfig.yaml" ] && "$OBOL" kubectl cluster-info >/dev/null 2>&1; then
+    assert_obol_kubeconfig
+    for ns in $("$OBOL" kubectl get ns --no-headers 2>/dev/null | awk '{print $1}' | grep "^ethereum-" || true); do
+        echo "  Deleting stale network namespace: $ns"
+        "$OBOL" kubectl delete ns "$ns" --timeout=60s 2>/dev/null || true
+    done
+    pass "No stale ethereum namespaces found in default local workspace"
+else
+    pass "No default local stack cleanup needed"
+fi
 
 step "Preflight: facilitator reachable"
 if curl -sf --max-time 5 "$FACILITATOR_URL/supported" >/dev/null 2>&1; then

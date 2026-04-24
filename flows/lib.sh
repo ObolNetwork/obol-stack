@@ -22,6 +22,7 @@ export OBOL_DEVELOPMENT="${OBOL_DEVELOPMENT:-true}"
 export OBOL_CONFIG_DIR="${OBOL_CONFIG_DIR:-$OBOL_ROOT/.workspace/config}"
 export OBOL_BIN_DIR="${OBOL_BIN_DIR:-$OBOL_ROOT/.workspace/bin}"
 export OBOL_DATA_DIR="${OBOL_DATA_DIR:-$OBOL_ROOT/.workspace/data}"
+export KUBECONFIG="${KUBECONFIG:-$OBOL_CONFIG_DIR/kubeconfig.yaml}"
 OBOL="${OBOL:-$OBOL_BIN_DIR/obol}"
 
 STEP_COUNT=0
@@ -148,6 +149,82 @@ emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
     echo "METRIC steps_failed=$FAIL_COUNT"
     echo "METRIC total_steps=$STEP_COUNT"
+}
+
+canonical_path() {
+    python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
+require_tool() {
+    local tool="$1"
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        fail "$tool not found on PATH"
+        emit_metrics
+        exit 1
+    fi
+}
+
+assert_obol_kubeconfig() {
+    local expected actual
+
+    expected=$(canonical_path "$OBOL_CONFIG_DIR/kubeconfig.yaml")
+    actual=$(canonical_path "${KUBECONFIG:-}")
+    if [ "$actual" != "$expected" ]; then
+        fail "KUBECONFIG must point at the active local stack config: expected $expected, got ${KUBECONFIG:-unset}"
+        emit_metrics
+        exit 1
+    fi
+}
+
+assert_local_stack_context() {
+    local stack_id context
+
+    if [ ! -x "$OBOL" ]; then
+        fail "obol binary not found or not executable at $OBOL"
+        emit_metrics
+        exit 1
+    fi
+    if [ ! -f "$OBOL_CONFIG_DIR/.stack-id" ]; then
+        fail "stack ID not found in $OBOL_CONFIG_DIR; run obol stack init/up for this workspace"
+        emit_metrics
+        exit 1
+    fi
+    if [ ! -f "$OBOL_CONFIG_DIR/kubeconfig.yaml" ]; then
+        fail "kubeconfig not found in $OBOL_CONFIG_DIR; run obol stack up for this workspace"
+        emit_metrics
+        exit 1
+    fi
+
+    assert_obol_kubeconfig
+
+    stack_id=$(cat "$OBOL_CONFIG_DIR/.stack-id")
+    context=$("$OBOL" kubectl config current-context 2>/dev/null || true)
+    if [ -z "$context" ]; then
+        fail "could not read kubectl context from $OBOL_CONFIG_DIR/kubeconfig.yaml"
+        emit_metrics
+        exit 1
+    fi
+
+    case "$context" in
+        *"$stack_id"*|default|k3s)
+            ;;
+        *)
+            fail "kubectl context '$context' does not match local stack ID '$stack_id'"
+            emit_metrics
+            exit 1
+            ;;
+    esac
+
+    if ! "$OBOL" kubectl cluster-info >/dev/null 2>&1; then
+        fail "local stack Kubernetes API is not reachable through $OBOL_CONFIG_DIR/kubeconfig.yaml"
+        emit_metrics
+        exit 1
+    fi
 }
 
 ensure_payment_python_deps() {
