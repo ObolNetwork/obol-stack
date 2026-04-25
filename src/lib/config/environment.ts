@@ -12,6 +12,7 @@ export const config = {
   // Defaults to the in-cluster service; override with ERPC_BASE_URL for local port-forwarding.
   erpcBaseUrl:
     process.env.ERPC_BASE_URL || 'http://erpc.erpc.svc.cluster.local',
+  agentIngressBaseDomain: process.env.AGENT_INGRESS_BASE_DOMAIN || 'obol.stack',
   openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
   commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',

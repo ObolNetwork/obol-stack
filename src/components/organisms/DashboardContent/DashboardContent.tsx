@@ -1,14 +1,14 @@
 import { Box, styled } from '@obolnetwork/obol-ui';
 import { NetworksSection } from '../NetworksSection/NetworksSection';
 import { NodeOverview } from '../NodeOverview';
-import { OpenClawList } from '../OpenClawList';
+import { AgentList } from '../AgentList';
 import { AgentRegistry } from '../AgentRegistry';
 import { DashboardData } from '../../../types/dashboard';
-import { OpenClawChatSidebar } from '../../molecules/OpenClawChatSidebar';
+import { AgentChatSidebar } from '../../molecules/AgentChatSidebar';
 import { ErrorState } from '../../molecules/ErrorState';
 import { useState, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
-import type { OpenClawInstance } from '@/types/openclaw';
+import type { AgentInstance } from '@/types/agent';
 
 interface DashboardContentProps {
   data: DashboardData | null;
@@ -61,11 +61,9 @@ export function DashboardContent({
 }: DashboardContentProps) {
   const { hasHash } = useAnchorHash({ hash: '#agent' });
   const [isSidebarOpen, setIsSidebarOpen] = useState(hasHash);
-  const [chatInstance, setChatInstance] = useState<OpenClawInstance | null>(
-    null
-  );
+  const [chatInstance, setChatInstance] = useState<AgentInstance | null>(null);
 
-  const handleInstanceSelect = (instance: OpenClawInstance) => {
+  const handleInstanceSelect = (instance: AgentInstance) => {
     setIsSidebarOpen(true);
     setChatInstance(instance);
   };
@@ -78,7 +76,7 @@ export function DashboardContent({
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
-          <OpenClawList onInstanceSelect={handleInstanceSelect} />
+          <AgentList onInstanceSelect={handleInstanceSelect} />
           <AgentRegistry />
           {error && <ErrorState onRetry={onRetry} />}
           {data && (data.localNodes.length > 0 || data.erpcData) && (
@@ -91,7 +89,7 @@ export function DashboardContent({
         </SectionContainer>
       </MainSection>
 
-      <OpenClawChatSidebar
+      <AgentChatSidebar
         isSidebarOpen={isSidebarOpen}
         instance={chatInstance}
         onClose={handleChatClose}
