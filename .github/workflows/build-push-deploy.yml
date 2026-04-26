@@ -44,6 +44,17 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
+      - name: Compute integration branch version
+        id: integration
+        if: startsWith(github.ref, 'refs/heads/integration/')
+        run: |
+          INTEGRATION_VERSION="${GITHUB_REF_NAME#integration/}"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "version=$INTEGRATION_VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Integration version: $INTEGRATION_VERSION"
+          echo "Short SHA: $SHORT_SHA"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
@@ -56,19 +67,20 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             # set next tag for default branch
             type=raw,value=next,enable={{is_default_branch}}
-            # branch event
-            type=ref,event=branch
+            # branch event (skipped for integration/* — see -dev-<sha> rule below)
+            type=ref,event=branch,enable=${{ !startsWith(github.ref, 'refs/heads/integration/') }}
             # tag event
             type=ref,event=tag
             # short sha
             type=sha
             # Additionally, add 'latest' tag for release tags (v*)
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
-            # integration/<version> branches publish a <version>-dev image
-            # e.g. integration/0.1.17-rc.4 -> obolnetwork/obol-stack-front-end:0.1.17-rc.4-dev
-            type=match,pattern=integration/(.*),group=1,suffix=-dev
-            # rolling 'dev' tag pointing at the latest integration build
-            type=raw,value=dev,enable=${{ startsWith(github.ref, 'refs/heads/integration/') }}
+            # integration/<version> branches publish a <version>-dev-<sha> image per commit.
+            # SHA suffix keeps every push unique, which is required because Docker Hub on
+            # this repo enforces tag immutability (a stable :<version>-dev tag would fail
+            # on the second push to the same integration branch).
+            # e.g. integration/0.1.17-rc.4 @ abc1234 -> obolnetwork/obol-stack-front-end:0.1.17-rc.4-dev-abc1234
+            type=raw,value=${{ steps.integration.outputs.version }}-dev-${{ steps.integration.outputs.short_sha }},enable=${{ startsWith(github.ref, 'refs/heads/integration/') }}
           labels: |
             org.opencontainers.image.title=Obol Stack Front End
             org.opencontainers.image.description=Monitoring dashboard for Obol Stack and Ethereum node status
