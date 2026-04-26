@@ -7,6 +7,10 @@ import type {
 } from '@/types/agent';
 import type { WalletMetadata } from '@/types/openclaw';
 import { config } from '@/lib/config/environment';
+import {
+  DEFAULT_AGENT_ID,
+  getAgentDashboardHostname,
+} from '@/lib/services/agent-runtime';
 
 const RUNTIME_CONFIG = {
   hermes: {
@@ -31,8 +35,6 @@ const RUNTIME_ORDER: Record<AgentRuntime, number> = {
   hermes: 0,
   openclaw: 1,
 };
-
-const HERMES_DEFAULT_ID = 'obol-agent';
 
 type RuntimeDescriptor = (typeof RUNTIME_CONFIG)[AgentRuntime];
 
@@ -85,14 +87,20 @@ export class AgentClient {
       return null;
     }
 
+    const id = namespace.replace(this.descriptor(runtime).namespacePrefix, '');
+
     return {
-      id: namespace.replace(this.descriptor(runtime).namespacePrefix, ''),
+      id,
       runtime,
       namespace,
       hostname: `${namespace}.${config.agentIngressBaseDomain}`,
       dashboardHostname:
         runtime === 'hermes'
-          ? `${namespace}-ui.${config.agentIngressBaseDomain}`
+          ? getAgentDashboardHostname(
+              id,
+              runtime,
+              config.agentIngressBaseDomain
+            )
           : undefined,
       status: 'unknown',
     };
@@ -130,9 +138,9 @@ export class AgentClient {
 
     hydrated.sort((a, b) => {
       const aDefault =
-        a.runtime === 'hermes' && a.id === HERMES_DEFAULT_ID ? -1 : 0;
+        a.runtime === 'hermes' && a.id === DEFAULT_AGENT_ID ? -1 : 0;
       const bDefault =
-        b.runtime === 'hermes' && b.id === HERMES_DEFAULT_ID ? -1 : 0;
+        b.runtime === 'hermes' && b.id === DEFAULT_AGENT_ID ? -1 : 0;
       if (aDefault !== bDefault) {
         return aDefault - bDefault;
       }

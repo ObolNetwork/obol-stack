@@ -276,7 +276,7 @@ export function OpenClawChatSidebar({
     onSidebarToggle(false);
     clearMessages();
     onClose();
-  }, [onClose]);
+  }, [clearMessages, onClose, onSidebarToggle]);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();

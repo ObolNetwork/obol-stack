@@ -40,6 +40,9 @@ jobs:
       - name: Run linter
         run: pnpm run lint
 
+      - name: Run tests
+        run: pnpm run test
+
       - name: Check TypeScript types
         run: npx tsc --noEmit
 
