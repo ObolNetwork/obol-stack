@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/agent"
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -318,10 +319,10 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	// Ensure the base host before syncing defaults. Default app setup may add
-	// per-agent hostnames; writing only obol.stack after that would drop them
-	// from the managed /etc/hosts block.
-	if err := dns.EnsureHostsEntries(nil); err != nil {
+	// Ensure the base host before syncing defaults. Include existing agent
+	// hostnames so stack up never shrinks the managed /etc/hosts block to only
+	// obol.stack when default setup is skipped.
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg)); err != nil {
 		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
 	}
 
