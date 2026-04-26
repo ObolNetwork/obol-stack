@@ -35,8 +35,10 @@ const (
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
 
-	defaultImage = "nousresearch/hermes-agent:latest"
-	hermesBinary = "/opt/hermes/.venv/bin/hermes"
+	defaultImage     = "nousresearch/hermes-agent:latest"
+	hermesInstallDir = "/data/.hermes/hermes-agent"
+	hermesRepoURL    = "https://github.com/NousResearch/hermes-agent.git"
+	hermesBinary     = hermesInstallDir + "/venv/bin/hermes"
 
 	containerUID  = 10000
 	containerGID  = 10000
@@ -99,6 +101,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, id)
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	hostname := agentruntime.Hostname(agentruntime.Hermes, id)
+	dashboardHost := dashboardHostname(id)
 
 	if _, err := os.Stat(deploymentDir); err == nil && !opts.Force && !opts.IsDefault {
 		return fmt.Errorf("deployment already exists: hermes/%s\nDirectory: %s\nUse --force or -f to overwrite", id, deploymentDir)
@@ -107,6 +110,9 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
 			u.Info("Default Hermes instance already configured, re-syncing...")
+			if err := dns.EnsureHostsEntries([]string{hostname, dashboardHost}); err != nil {
+				u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
+			}
 			if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
 				return err
 			}
@@ -125,8 +131,8 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	if err := dns.EnsureHostsEntries([]string{hostname}); err != nil {
-		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
+	if err := dns.EnsureHostsEntries([]string{hostname, dashboardHost}); err != nil {
+		u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 	}
 
 	u.Blank()
@@ -192,6 +198,13 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: hermes/%s\nDirectory: %s", id, deploymentDir)
+	}
+
+	if err := dns.EnsureHostsEntries([]string{
+		agentruntime.Hostname(agentruntime.Hermes, id),
+		dashboardHostname(id),
+	}); err != nil {
+		u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 	}
 
 	if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
@@ -562,13 +575,13 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	hostname := agentruntime.Hostname(agentruntime.Hermes, id)
-	dashboardHostname := dashboardHostname(id)
+	dashboardHost := dashboardHostname(id)
 	configData, err := generateConfig(cfg, primary)
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary, configData)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
 	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, helmfileFileName), []byte(generateHelmfile(namespace)), 0o600); err != nil {
@@ -611,6 +624,9 @@ releases:
 }
 
 func dashboardHostname(id string) string {
+	if id == agentruntime.DefaultInstanceID {
+		return fmt.Sprintf("%s.%s", agentruntime.DefaultInstanceID, agentruntime.DefaultDomain)
+	}
 	return fmt.Sprintf("%s-ui.%s", agentruntime.Namespace(agentruntime.Hermes, id), agentruntime.DefaultDomain)
 }
 
@@ -706,10 +722,55 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
               volumeMounts:
                 - name: data
                   mountPath: /data
+            - name: bootstrap-hermes-install
+              image: %s
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -ec
+                - |
+                  install_dir=%s
+                  repo_url=%s
+                  mkdir -p /data/.hermes/home /data/.hermes/workspace
+                  if [ ! -d "$install_dir/.git" ]; then
+                    rm -rf "${install_dir}.tmp"
+                    if [ -e "$install_dir" ]; then
+                      mv "$install_dir" "${install_dir}.backup.$(date +%%s)"
+                    fi
+                    git clone --depth 1 "$repo_url" "$install_dir"
+                  fi
+                  cd "$install_dir"
+                  if [ ! -x "$install_dir/venv/bin/hermes" ]; then
+                    rm -rf "$install_dir/venv"
+                    uv venv --python python3 --system-site-packages venv
+                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e "."
+                  fi
+                  if [ -f /data/.hermes/state.db ]; then
+                    if ! python3 - <<'PY'
+                  import sqlite3
+                  conn = sqlite3.connect('/data/.hermes/state.db')
+                  row = conn.execute('PRAGMA quick_check').fetchone()
+                  raise SystemExit(0 if row and row[0] == 'ok' else 1)
+                  PY
+                    then
+                      ts="$(date -u +%%Y%%m%%dT%%H%%M%%SZ)"
+                      backup_dir="/data/.hermes/backups/state-db-corrupt-$ts"
+                      mkdir -p "$backup_dir"
+                      cp -a /data/.hermes/state.db* "$backup_dir"/ 2>/dev/null || true
+                      mv /data/.hermes/state.db "/data/.hermes/state.db.corrupt-$ts"
+                      rm -f /data/.hermes/state.db-shm /data/.hermes/state.db-wal
+                      echo "Backed up malformed Hermes state DB to $backup_dir"
+                    fi
+                  fi
+              volumeMounts:
+                - name: data
+                  mountPath: /data
           containers:
             - name: %s
               image: %s
               imagePullPolicy: IfNotPresent
+              command:
+                - %s
               args:
                 - gateway
                 - run
@@ -741,7 +802,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, containerUID, containerGID, desc.ServiceName, quoteYAML(image()), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, containerUID, containerGID, quoteYAML(image()), quoteYAML(hermesInstallDir), quoteYAML(hermesRepoURL), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
@@ -771,6 +832,8 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: hermes-dashboard
               image: %s
               imagePullPolicy: IfNotPresent
+              command:
+                - %s
               args:
                 - dashboard
                 - --host
@@ -870,7 +933,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: %s
               port: %d
 `, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
-		quoteYAML(image()), dashboardPort, dashboardPort, desc.DefaultPort, dashboardPort, dashboardPort, dashboardPort,
+		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, dashboardPort, dashboardPort, dashboardPort,
 		desc.DataPVCName,
 		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,
 		desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort,

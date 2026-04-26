@@ -318,15 +318,17 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
+	// Ensure the base host before syncing defaults. Default app setup may add
+	// per-agent hostnames; writing only obol.stack after that would drop them
+	// from the managed /etc/hosts block.
+	if err := dns.EnsureHostsEntries(nil); err != nil {
+		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
+	}
+
 	// Sync defaults with backend-aware dataDir
 	dataDir := backend.DataDir(cfg)
 	if err := syncDefaults(cfg, u, kubeconfigPath, dataDir); err != nil {
 		return err
-	}
-
-	// Ensure obol.stack resolves to localhost via /etc/hosts (works everywhere).
-	if err := dns.EnsureHostsEntries(nil); err != nil {
-		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
 	}
 
 	// Wildcard *.obol.stack DNS is opt-in (--wildcard-dns) because it

@@ -77,7 +77,7 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	values := generateValues(
 		"hermes-obol-agent",
 		"hermes-obol-agent.obol.stack",
-		"hermes-obol-agent-ui.obol.stack",
+		"obol-agent.obol.stack",
 		"https://agent.example.com",
 		"secret-token",
 		"gpt-5.2",
@@ -97,8 +97,16 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"containerPort: 8642",
 		"containerPort: 9119",
 		"init-hermes-data",
+		"bootstrap-hermes-install",
+		`install_dir="/data/.hermes/hermes-agent"`,
+		`repo_url="https://github.com/NousResearch/hermes-agent.git"`,
+		"uv venv --python python3 --system-site-packages venv",
+		`uv pip install -e "."`,
+		`PRAGMA quick_check`,
+		`state-db-corrupt-$ts`,
+		`- "/data/.hermes/hermes-agent/venv/bin/hermes"`,
 		`- "hermes-obol-agent.obol.stack"`,
-		`- "hermes-obol-agent-ui.obol.stack"`,
+		`- "obol-agent.obol.stack"`,
 		"name: hermes-dashboard",
 		"name: GATEWAY_HEALTH_URL",
 	} {
@@ -113,6 +121,30 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	}
 }
 
+func TestDashboardHostname_UsesDefaultAgentHostAndHermesUIHostForNamedInstances(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{
+			id:   "obol-agent",
+			want: "obol-agent.obol.stack",
+		},
+		{
+			id:   "research-agent",
+			want: "hermes-research-agent-ui.obol.stack",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			if got := dashboardHostname(tt.id); got != tt.want {
+				t.Fatalf("dashboardHostname(%q) = %q, want %q", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {
 	got := hermesExecArgs("hermes-obol-agent", []string{"skills", "audit"}, false)
 	want := []string{
@@ -121,7 +153,7 @@ func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {
 		"-n", "hermes-obol-agent",
 		"deploy/hermes",
 		"--",
-		"/opt/hermes/.venv/bin/hermes",
+		"/data/.hermes/hermes-agent/venv/bin/hermes",
 		"skills",
 		"audit",
 	}
