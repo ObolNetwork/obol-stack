@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'integration/**'
     tags:
       - 'v*'
   release:
@@ -63,6 +64,11 @@ jobs:
             type=sha
             # Additionally, add 'latest' tag for release tags (v*)
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
+            # integration/<version> branches publish a <version>-dev image
+            # e.g. integration/0.1.17-rc.4 -> obolnetwork/obol-stack-front-end:0.1.17-rc.4-dev
+            type=match,pattern=integration/(.*),group=1,suffix=-dev
+            # rolling 'dev' tag pointing at the latest integration build
+            type=raw,value=dev,enable=${{ startsWith(github.ref, 'refs/heads/integration/') }}
           labels: |
             org.opencontainers.image.title=Obol Stack Front End
             org.opencontainers.image.description=Monitoring dashboard for Obol Stack and Ethereum node status
