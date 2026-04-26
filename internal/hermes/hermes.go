@@ -101,7 +101,6 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, id)
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	hostname := agentruntime.Hostname(agentruntime.Hermes, id)
-	dashboardHost := dashboardHostname(id)
 
 	if _, err := os.Stat(deploymentDir); err == nil && !opts.Force && !opts.IsDefault {
 		return fmt.Errorf("deployment already exists: hermes/%s\nDirectory: %s\nUse --force or -f to overwrite", id, deploymentDir)
@@ -110,7 +109,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
 			u.Info("Default Hermes instance already configured, re-syncing...")
-			if err := dns.EnsureHostsEntries([]string{hostname, dashboardHost}); err != nil {
+			if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
+				Runtime: agentruntime.Hermes,
+				ID:      id,
+			})); err != nil {
 				u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 			}
 			if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
@@ -131,7 +133,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	if err := dns.EnsureHostsEntries([]string{hostname, dashboardHost}); err != nil {
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
+		Runtime: agentruntime.Hermes,
+		ID:      id,
+	})); err != nil {
 		u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 	}
 
@@ -200,10 +205,10 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("deployment not found: hermes/%s\nDirectory: %s", id, deploymentDir)
 	}
 
-	if err := dns.EnsureHostsEntries([]string{
-		agentruntime.Hostname(agentruntime.Hermes, id),
-		dashboardHostname(id),
-	}); err != nil {
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
+		Runtime: agentruntime.Hermes,
+		ID:      id,
+	})); err != nil {
 		u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 	}
 
@@ -624,10 +629,7 @@ releases:
 }
 
 func dashboardHostname(id string) string {
-	if id == agentruntime.DefaultInstanceID {
-		return fmt.Sprintf("%s.%s", agentruntime.DefaultInstanceID, agentruntime.DefaultDomain)
-	}
-	return fmt.Sprintf("%s-ui.%s", agentruntime.Namespace(agentruntime.Hermes, id), agentruntime.DefaultDomain)
+	return agentruntime.DashboardHostname(agentruntime.Hermes, id)
 }
 
 func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
