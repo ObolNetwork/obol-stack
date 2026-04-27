@@ -853,9 +853,14 @@ pass "Bob eRPC configured for Base Sepolia"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
-# Wait for Bob's buyer agent to be ready (label set by detect_buyer_runtime)
-poll_step_grep "Bob: Hermes agent ready" "Running" 24 5 \
-    bob kubectl get pods -n "$BOB_AGENT_NS" -l "$BOB_AGENT_LABEL" --no-headers
+# Wait for Bob's buyer agent's API-server container to be Ready. We check the
+# specific container's ready=true rather than the pod-summary STATUS column,
+# because in a multi-container pod (e.g. Hermes' API server + dashboard) one
+# container's CrashLoopBackOff makes the STATUS column read "CrashLoopBackOff"
+# even when the API server we actually need is happily running.
+poll_step_grep "Bob: ${BOB_AGENT_RUNTIME} agent API-server ready" "true" 36 5 \
+    bob kubectl get pods -n "$BOB_AGENT_NS" -l "$BOB_AGENT_LABEL" \
+        -o "jsonpath={range .items[*].status.containerStatuses[?(@.name=='${BOB_AGENT_CONTAINER}')]}{.ready}{'\n'}{end}"
 
 step "Bob: tunnel reachable from agent pod"
 bob_tunnel_code=""
