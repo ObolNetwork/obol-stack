@@ -141,7 +141,7 @@ All 4 paths use the same OpenClaw config pattern:
 ### Paid Routing Notes
 
 - The paid path uses the **Obol LiteLLM fork** because paid-model lifecycle relies on the config-only model management API.
-- `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402`.
+- `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402/v1`.
 - `x402-buyer` runs as a **sidecar in the LiteLLM pod**, not as a separate Service.
 - `buy.py buy` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer files and keeps LiteLLM model entries in sync.
 - The currently validated local OSS model is `qwen3.5:9b`. Prefer that exact model in live commerce tests.
