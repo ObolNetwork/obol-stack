@@ -3,11 +3,11 @@
 #
 # Two independent obol stacks on the same machine. Alice registers her
 # inference service on the ERC-8004 Identity Registry (Base Sepolia).
-# Bob's agent discovers her by scanning the registry, buys inference
+# Bob's Hermes agent discovers her by scanning the registry, buys inference
 # tokens via x402, and uses the paid/* sidecar route.
 #
 # This is the most human-like integration test: every interaction with
-# Bob is through natural language prompts to his OpenClaw agent.
+# Bob is through natural language prompts to his Hermes agent.
 #
 # Requires:
 #   - .env with REMOTE_SIGNER_PRIVATE_KEY (funded on Base Sepolia with ETH + USDC)
@@ -59,6 +59,12 @@ FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m
 BASE_SEPOLIA_RPC="${FLOW11_BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
+BOB_AGENT_NS="hermes-obol-agent"
+BOB_AGENT_DEPLOY="hermes"
+BOB_AGENT_CONTAINER="hermes"
+BOB_AGENT_SERVICE="hermes"
+BOB_AGENT_REMOTE_PORT="8642"
+BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
 mkdir -p "$FLOW11_ARTIFACT_DIR"
 
 rewrite_k3d_ports() {
@@ -207,7 +213,7 @@ bob() {
 }
 
 purchase_request_status() {
-    bob kubectl get purchaserequests.obol.org -n openclaw-obol-agent --no-headers 2>&1 || true
+    bob kubectl get purchaserequests.obol.org -n "$BOB_AGENT_NS" --no-headers 2>&1 || true
 }
 
 buyer_sidecar_status() {
@@ -225,7 +231,7 @@ except Exception as e:
 }
 
 bob_tunnel_402_code() {
-    bob kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
+    bob kubectl exec -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
         python3 -c "
 import json
 import urllib.error
@@ -250,8 +256,8 @@ except Exception as e:
 
 bob_buy_skill_balance() {
     bob kubectl exec \
-        -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
-        python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance 2>&1 || true
+        -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
+        python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
 }
 
 run_tail_or_fail() {
@@ -829,9 +835,9 @@ pass "Bob eRPC configured for Base Sepolia"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
-# Wait for Bob's OpenClaw agent to be ready
-poll_step_grep "Bob: OpenClaw agent ready" "Running" 24 5 \
-    bob kubectl get pods -n openclaw-obol-agent -l app.kubernetes.io/name=openclaw --no-headers
+# Wait for Bob's Hermes agent to be ready
+poll_step_grep "Bob: Hermes agent ready" "Running" 24 5 \
+    bob kubectl get pods -n "$BOB_AGENT_NS" -l app.kubernetes.io/name=hermes --no-headers
 
 step "Bob: tunnel reachable from agent pod"
 bob_tunnel_code=""
@@ -858,7 +864,7 @@ step "Bob: fund remote-signer wallet with USDC"
 BOB_SIGNER_ADDR=$(python3 -c "
 import json, sys
 try:
-    d = json.load(open('$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json'))
+    d = json.load(open('$BOB_DIR/config/applications/hermes/obol-agent/wallet.json'))
     print(d.get('address',''))
 except: pass
 " 2>&1)
@@ -936,21 +942,21 @@ fi
 # BOB'S AGENT: DISCOVER ALICE VIA ERC-8004 + BUY + USE
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: get OpenClaw gateway token"
-BOB_TOKEN=$(bob openclaw token obol-agent 2>/dev/null || true)
+step "Bob: get Hermes API server token"
+BOB_TOKEN=$(bob hermes token obol-agent 2>/dev/null || true)
 if [ -z "$BOB_TOKEN" ]; then
     fail "Could not get Bob's gateway token"
     emit_metrics; exit 1
 fi
 pass "Token: ${BOB_TOKEN:0:10}..."
 
-# Port-forward to Bob's OpenClaw for chat API access.
+# Port-forward to Bob's Hermes API server for chat access.
 BOB_AGENT_PORT=$(pick_free_port)
 PF_AGENT_LOG=$(mktemp)
-bob kubectl port-forward -n openclaw-obol-agent svc/openclaw "${BOB_AGENT_PORT}:18789" >"$PF_AGENT_LOG" 2>&1 &
+bob kubectl port-forward -n "$BOB_AGENT_NS" "svc/$BOB_AGENT_SERVICE" "${BOB_AGENT_PORT}:${BOB_AGENT_REMOTE_PORT}" >"$PF_AGENT_LOG" 2>&1 &
 PF_AGENT=$!
 
-step "Bob: OpenClaw API port-forward ready"
+step "Bob: Hermes API port-forward ready"
 pf_ready=0
 for i in $(seq 1 20); do
     if python3 - "$BOB_AGENT_PORT" <<'PY'
@@ -976,9 +982,9 @@ PY
     sleep 1
 done
 if [ "$pf_ready" = "1" ]; then
-    pass "OpenClaw API available on localhost:$BOB_AGENT_PORT"
+    pass "Hermes API available on localhost:$BOB_AGENT_PORT"
 else
-    fail "OpenClaw port-forward failed: $(tail -n 10 "$PF_AGENT_LOG" 2>/dev/null | tr '\n' ' ')"
+    fail "Hermes port-forward failed: $(tail -n 10 "$PF_AGENT_LOG" 2>/dev/null | tr '\n' ' ')"
     cleanup_pid "$PF_AGENT"
     rm -f "$PF_AGENT_LOG"
     emit_metrics; exit 1
@@ -990,7 +996,7 @@ discover_response=$(curl -sf --max-time 300 \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"openclaw\",
+        \"model\": \"hermes-agent\",
         \"messages\": [{
             \"role\": \"user\",
             \"content\": \"Search the ERC-8004 agent identity registry on Base Sepolia for recently registered AI inference services that support x402 payments. Use the discovery skill to scan for agents. Look for one named 'Dual-Stack Test Inference' or similar with natural_language_processing skills. Report what you find — the agent ID, name, endpoint URL, and whether it supports x402.\"
@@ -1013,11 +1019,11 @@ buy_response=$(curl -sf --max-time 300 \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"openclaw\",
+        \"model\": \"hermes-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy 5 inference tokens from Alice. Run exactly: python3 scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy 5 inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false

@@ -5,7 +5,8 @@ source "$(dirname "$0")/lib.sh"
 
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
 TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
-BASE_URL="http://obol.stack:8080"
+refresh_obol_ingress_env
+BASE_URL="${OBOL_INGRESS_URL%/}"
 if [ -n "$TUNNEL_URL" ]; then
     tunnel_probe=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
         "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
@@ -94,7 +95,7 @@ import httpx
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 
-SERVICE_URL = os.environ.get('BASE_URL', 'http://obol.stack:8080')
+SERVICE_URL = os.environ.get('BASE_URL', os.environ.get('OBOL_INGRESS_URL', 'http://obol.stack:8080'))
 SERVICE_PATH = "/services/flow-qwen/v1/chat/completions"
 CONSUMER_KEY  = os.environ["CONSUMER_PRIVATE_KEY"]  # derived from Hardhat mnemonic in lib.sh
 USDC_ADDRESS  = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"

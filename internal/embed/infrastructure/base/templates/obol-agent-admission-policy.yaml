@@ -1,6 +1,6 @@
 ---
-# Admission Policy for OpenClaw-created resources
-# Ensures that when OpenClaw service accounts create Traefik middlewares or
+# Admission Policy for agent-created resources
+# Ensures that when OpenClaw or Hermes service accounts create Traefik middlewares or
 # Gateway API HTTPRoutes, they conform to expected patterns:
 #   - HTTPRoutes must reference the shared traefik-gateway
 #   - ForwardAuth middlewares must target x402-verifier.x402.svc
@@ -8,7 +8,7 @@
 # Uses Kubernetes ValidatingAdmissionPolicy (v1, GA in 1.30+).
 
 #------------------------------------------------------------------------------
-# ValidatingAdmissionPolicy - Guards resources created by OpenClaw agents
+# ValidatingAdmissionPolicy - Guards resources created by agent runtimes
 #------------------------------------------------------------------------------
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -26,11 +26,11 @@ spec:
         resources: ["httproutes"]
         operations: ["CREATE", "UPDATE"]
   matchConditions:
-    - name: only-openclaw-sa
-      expression: 'request.userInfo.username.startsWith("system:serviceaccount:openclaw-")'
+    - name: only-agent-runtime-sa
+      expression: 'request.userInfo.username.startsWith("system:serviceaccount:openclaw-") || request.userInfo.username.startsWith("system:serviceaccount:hermes-")'
   validations:
     - expression: '!has(object.spec.parentRefs) || object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
-      message: "HTTPRoutes created by OpenClaw must reference traefik-gateway"
+      message: "HTTPRoutes created by agent runtimes must reference traefik-gateway"
     - expression: '!has(object.spec.forwardAuth) || object.spec.forwardAuth.address.startsWith("http://x402-verifier.x402.svc")'
       message: "ForwardAuth middlewares must target x402-verifier.x402.svc"
 

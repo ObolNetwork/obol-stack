@@ -1,7 +1,9 @@
 package embed
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
@@ -26,6 +28,38 @@ var networksFS embed.FS
 
 //go:embed all:skills
 var skillsFS embed.FS
+
+// InfrastructureDigest returns a stable digest of the embedded infrastructure
+// assets. Callers use this to decide whether an existing copied defaults tree
+// needs to be refreshed from the current binary.
+func InfrastructureDigest() (string, error) {
+	hash := sha256.New()
+
+	if err := fs.WalkDir(infrastructureFS, "infrastructure", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		data, err := infrastructureFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
+		}
+
+		hash.Write([]byte(path))
+		hash.Write([]byte{0})
+		hash.Write(data)
+		hash.Write([]byte{0})
+
+		return nil
+	}); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
 
 // CopyDefaults recursively copies all embedded infrastructure manifests to the destination directory.
 // The replacements map is applied to every file: each key (e.g. "{{OLLAMA_HOST}}") is replaced

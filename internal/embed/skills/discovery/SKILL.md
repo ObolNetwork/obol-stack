@@ -123,10 +123,10 @@ Once you find an agent with `"x402Support": true` and a service endpoint, use th
 
 ```bash
 # 1. Probe the endpoint for pricing
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
 
 # 2. Buy access (pre-signs payment auths, configures sidecar)
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy <name> \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy <name> \
   --endpoint <service-endpoint> --model <model-name>
 
 # 3. Use via LiteLLM as paid/<model-name>

@@ -26,6 +26,11 @@ const (
 	buyerAuthsCM     = "x402-buyer-auths"
 	litellmSecret    = "litellm-secrets"
 	litellmMasterKey = "LITELLM_MASTER_KEY"
+
+	// Helm owns litellm-config.data["config.yaml"] via server-side apply.
+	// Runtime writers use the same field manager so stack upgrades do not
+	// create managedFields conflicts on the shared persistence key.
+	litellmConfigFieldManager = "helm"
 )
 
 // litellmBaseURL returns the LiteLLM HTTP base URL. In production it resolves
@@ -317,7 +322,7 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 	}
 
 	cm.Data["config.yaml"] = string(rendered)
-	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{FieldManager: litellmConfigFieldManager}); err != nil {
 		log.Printf("purchase: failed to update litellm-config: %v", err)
 		return
 	}
@@ -423,7 +428,7 @@ func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName 
 			return
 		}
 		cm.Data["config.yaml"] = string(rendered)
-		if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{FieldManager: litellmConfigFieldManager}); err != nil {
 			log.Printf("purchase: remove model: failed to update litellm-config: %v", err)
 			return
 		}

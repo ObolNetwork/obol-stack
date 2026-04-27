@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -120,16 +121,17 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// InjectBaseURL sets AGENT_BASE_URL on the default OpenClaw deployment so that
+// InjectBaseURL sets AGENT_BASE_URL on the default Hermes deployment so that
 // monetize.py uses the tunnel URL in registration JSON.
 func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	desc := agentruntime.Describe(agentruntime.Hermes)
 
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
-		"set", "env", "deployment/openclaw",
-		"-n", "openclaw-obol-agent",
+		"set", "env", "deployment/"+desc.ServiceName,
+		"-n", agentruntime.Namespace(agentruntime.Hermes, agentruntime.DefaultInstanceID),
 		"AGENT_BASE_URL="+strings.TrimRight(tunnelURL, "/"),
 	)
 

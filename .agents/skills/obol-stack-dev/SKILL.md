@@ -62,6 +62,67 @@ Tier 2: Per-Instance                Tier 1: Cluster-Wide Gateway
 | Integration testing | `references/integration-testing.md` |
 | Troubleshooting | `references/troubleshooting.md` |
 
+## Dev Registry Cache
+
+When `OBOL_DEVELOPMENT=true`, `obol stack up` provisions pull-through k3d registry caches before creating a new cluster. Current mirrors:
+
+- `docker.io` -> `k3d-obol-docker-io.localhost:54100`
+- `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101`
+- `quay.io` -> `k3d-obol-quay-io.localhost:54102`
+
+The generated registry config lives at `$OBOL_CONFIG_DIR/registries.yaml`. Cached image layers are stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` if set.
+
+Use this mental model:
+
+- Fresh dev cluster: new cluster creation gets `--registry-config` and `--registry-use` entries, so pulls benefit from the cache.
+- Existing dev cluster: `obol stack up` only starts the cluster and does not re-run registry setup.
+- This is an upstream pull cache, not a dedicated local-build publishing workflow.
+
+## Existing Dev Stack Refresh
+
+When testing a new frontend or stack branch against an already-initialized `.workspace/config`, rebuild the local CLI before `stack up`. Current `obol stack up` refreshes `$OBOL_CONFIG_DIR/defaults` when the embedded infrastructure digest, backend, or stack ID changes, then preserves mutable LiteLLM model entries across Helm sync. If testing raw file edits without rebuilding the CLI, patch the generated defaults copy manually or re-run after rebuilding.
+
+```bash
+# Prefer origin-only fetches in this checkout. Some Radicle remotes may be stale
+# and can make `git fetch --all` fail after GitHub has already fetched.
+git fetch origin --prune
+
+# Rebuild the local CLI from the current branch.
+go build -o .workspace/bin/obol ./cmd/obol
+
+# For a released frontend image, verify and pull the exact tag first.
+docker manifest inspect obolnetwork/obol-stack-front-end:v0.1.17-rc.5 >/dev/null
+docker pull obolnetwork/obol-stack-front-end:v0.1.17-rc.5
+
+# Confirm the embedded source has the intended image tag before rebuilding.
+rg -n 'obol-stack-front-end|tag:' internal/embed/infrastructure/values/obol-frontend.yaml.gotmpl
+
+OBOL_CONFIG_DIR="$PWD/.workspace/config" \
+OBOL_BIN_DIR="$PWD/.workspace/bin" \
+OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol stack up
+```
+
+Expected verification for frontend image refresh:
+
+```bash
+OBOL_CONFIG_DIR="$PWD/.workspace/config" OBOL_BIN_DIR="$PWD/.workspace/bin" OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol kubectl -n obol-frontend get deploy obol-frontend-obol-app \
+  -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
+
+OBOL_CONFIG_DIR="$PWD/.workspace/config" OBOL_BIN_DIR="$PWD/.workspace/bin" OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol kubectl -n obol-frontend rollout status deploy/obol-frontend-obol-app --timeout=180s
+
+curl -sS -I --max-time 10 http://obol.stack
+curl -sS --max-time 15 http://obol.stack/api/agents/instances
+```
+
+Known existing-stack migration failures:
+
+- `Namespace "hermes-obol-agent" ... exists and cannot be imported into the current release`: the namespace or monetize RBAC predated Helm ownership. Current `obol stack up` adopts known base-owned resources before Helm sync. If doing it manually, label and annotate the existing resource with `app.kubernetes.io/managed-by=Helm`, `meta.helm.sh/release-name=base`, and `meta.helm.sh/release-namespace=kube-system`.
+- `conflict with "kubectl-patch" ... llm/litellm-config .data.config.yaml`: older writers used a non-Helm field manager for `data.config.yaml`, which conflicts with Helm server-side apply. Current writers use Helm's field manager. During `obol stack up`, the existing LiteLLM config is backed up and previous model entries are merged into the new chart config; if a non-Helm manager is detected, the ConfigMap is deleted before Helm sync so ownership is recreated cleanly.
+- `/etc/hosts` updates require interactive sudo. Codex cannot satisfy the password prompt in non-interactive execution; if DNS fails in the browser, run `obol stack up` or `obol hermes sync obol-agent` from a normal terminal, or manually add `127.0.0.1 obol-agent.obol.stack` and flush local DNS.
+
 ## 4 Inference Paths (All Through LiteLLM)
 
 | Path | Model Name | LiteLLM model_list | Example |
@@ -80,7 +141,7 @@ All 4 paths use the same OpenClaw config pattern:
 ### Paid Routing Notes
 
 - The paid path uses the **Obol LiteLLM fork** because paid-model lifecycle relies on the config-only model management API.
-- `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402`.
+- `litellm-config` carries one static route: `paid/* -> openai/* -> http://127.0.0.1:8402/v1`.
 - `x402-buyer` runs as a **sidecar in the LiteLLM pod**, not as a separate Service.
 - `buy.py buy` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer files and keeps LiteLLM model entries in sync.
 - The currently validated local OSS model is `qwen3.5:9b`. Prefer that exact model in live commerce tests.
@@ -125,9 +186,9 @@ go test -tags integration -v -timeout 10m ./internal/openclaw/  # Integration te
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 
-## OpenClaw Skills System
+## Agent Skills System
 
-Skills are SKILL.md files (with optional scripts and references) that give the agent domain-specific capabilities. Delivered via host-path PVC injection to `/data/.openclaw/skills/` inside the pod.
+Skills are SKILL.md files (with optional scripts and references) that give the agent domain-specific capabilities. Hermes receives embedded Obol skills through native `skills.external_dirs` at `/data/.hermes/obol-skills` with `OBOL_SKILLS_DIR` set. OpenClaw receives embedded skills through host-path PVC injection to `/data/.openclaw/skills/`.
 
 ### Default Embedded Skills
 
@@ -271,9 +332,9 @@ obol sell http qwen35 \
   --upstream ollama --port 11434 --namespace llm --health-path /api/tags \
   --per-request "0.001" --chain "base-sepolia" --wallet "0x<wallet>"
 
-# Trigger reconciliation (or wait for heartbeat)
-obol kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
-  python3 /data/.openclaw/skills/monetize/scripts/monetize.py process qwen35 --namespace llm
+# Trigger reconciliation from the default Hermes agent pod
+obol kubectl exec -n hermes-obol-agent deploy/hermes -c hermes -- \
+  python3 /data/.hermes/obol-skills/monetize/scripts/monetize.py process qwen35 --namespace llm
 
 # Verify 402
 curl -X POST http://obol.stack:8080/services/qwen35/v1/chat/completions \

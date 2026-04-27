@@ -1,6 +1,4 @@
-.workspace/
-.workspace-*/
-.workspace-live*/
+.workspace*
 .build/
 .tmp/
 .git/

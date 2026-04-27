@@ -13,9 +13,12 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/agent"
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -23,6 +26,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	petname "github.com/dustinkirkland/golang-petname"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -90,25 +94,8 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 		return err
 	}
 
-	// Copy embedded defaults (helmfile + charts for infrastructure)
-	// Resolve {{OLLAMA_HOST}} based on backend:
-	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
-	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
-	// Resolve {{OLLAMA_HOST_IP}} to a numeric IP for the Endpoints object:
-	// - Endpoints require an IP, not a hostname (ClusterIP+Endpoints pattern)
-	ollamaHost := ollamaHostForBackend(backendName)
-
-	ollamaHostIP, err := ollamaHostIPForBackend(backendName)
-	if err != nil {
-		return fmt.Errorf("failed to resolve Ollama host IP: %w", err)
-	}
-
-	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	if err := embed.CopyDefaults(defaultsDir, map[string]string{
-		"{{OLLAMA_HOST}}":    ollamaHost,
-		"{{OLLAMA_HOST_IP}}": ollamaHostIP,
-		"{{CLUSTER_ID}}":     stackID,
-	}); err != nil {
+	// Copy embedded defaults (helmfile + charts for infrastructure).
+	if err := stackdefaults.CopyInfrastructure(cfg, backendName, stackID); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
 
@@ -172,123 +159,24 @@ func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 	}
 }
 
-// ollamaHostForBackend returns the hostname/IP that reaches the host Ollama
-// instance from inside the cluster.
 func ollamaHostForBackend(backendName string) string {
-	if backendName == BackendK3s {
-		return "127.0.0.1"
-	}
-
-	if runtime.GOOS == "darwin" {
-		return "host.docker.internal"
-	}
-
-	return "host.k3d.internal"
+	return stackdefaults.OllamaHostForBackend(backendName)
 }
 
-// ollamaHostIPForBackend resolves the Ollama host to an IP address.
-// ClusterIP+Endpoints requires an IP (not a hostname).
-//
-// Resolution strategy:
-//  1. If already an IP (k3s: 127.0.0.1), return as-is
-//  2. Try host-side DNS resolution
-//  3. macOS: use Docker Desktop VM gateway (192.168.65.254)
-//  4. Linux: fall back to docker0 bridge interface IP
 func ollamaHostIPForBackend(backendName string) (string, error) {
-	host := ollamaHostForBackend(backendName)
-
-	// If already an IP, return as-is (k3s: 127.0.0.1)
-	if net.ParseIP(host) != nil {
-		return host, nil
-	}
-
-	// Try host-side DNS resolution first.
-	addrs, err := net.LookupHost(host)
-	if err == nil && len(addrs) > 0 {
-		return addrs[0], nil
-	}
-
-	// macOS Docker Desktop: host.docker.internal is only resolvable inside
-	// containers (Docker injects it via DNS), not on the host. Use the
-	// well-known VM gateway IP that Docker Desktop exposes to containers.
-	if runtime.GOOS == "darwin" && backendName == BackendK3d {
-		return dockerDesktopGatewayIP(), nil
-	}
-
-	// Linux fallback: docker0 bridge interface IP (reachable from all containers).
-	if runtime.GOOS == "linux" && backendName == BackendK3d {
-		ip, bridgeErr := dockerBridgeGatewayIP()
-		if bridgeErr == nil {
-			return ip, nil
-		}
-
-		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %w", host, err, bridgeErr)
-	}
-
-	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
+	return stackdefaults.OllamaHostIPForBackend(backendName)
 }
 
-// dockerDesktopGatewayIP returns the Docker Desktop VM gateway IP.
-// On macOS, Docker Desktop runs a LinuxKit VM. The host is reachable from
-// containers at this well-known gateway address (192.168.65.254 maps to
-// host.docker.internal inside the VM). This has been stable across Docker
-// Desktop versions since the transition from HyperKit to Apple Virtualization.
 func dockerDesktopGatewayIP() string {
-	return "192.168.65.254"
+	return stackdefaults.DockerDesktopGatewayIP()
 }
 
-// dockerBridgeGatewayIP returns the IPv4 address of an active Docker bridge
-// interface. It prefers docker0 (the default bridge, typically 172.17.0.1).
-// If docker0 is present but DOWN (e.g. when only k3d's custom bridge network
-// is active), it falls back to the first UP interface whose name starts with
-// "br-" — which is how Docker names per-network bridge interfaces.
 func dockerBridgeGatewayIP() (string, error) {
-	if ip, err := bridgeInterfaceIP("docker0"); err == nil {
-		return ip, nil
-	}
-
-	// docker0 missing or DOWN — scan for an active br-<network-id> bridge.
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("cannot list network interfaces: %w", err)
-	}
-
-	for _, iface := range ifaces {
-		if !strings.HasPrefix(iface.Name, "br-") {
-			continue
-		}
-		if ip, err := bridgeInterfaceIP(iface.Name); err == nil {
-			return ip, nil
-		}
-	}
-
-	return "", errors.New("no active Docker bridge interface found (docker0 or br-*)")
+	return stackdefaults.DockerBridgeGatewayIP()
 }
 
-// bridgeInterfaceIP returns the IPv4 address of a named network interface,
-// or an error if the interface does not exist, is DOWN, or has no IPv4 address.
 func bridgeInterfaceIP(name string) (string, error) {
-	iface, err := net.InterfaceByName(name)
-	if err != nil {
-		return "", fmt.Errorf("interface %s not found: %w", name, err)
-	}
-
-	if iface.Flags&net.FlagUp == 0 {
-		return "", fmt.Errorf("interface %s is down", name)
-	}
-
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", fmt.Errorf("cannot get addresses for %s: %w", name, err)
-	}
-
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
-			return ipNet.IP.String(), nil
-		}
-	}
-
-	return "", fmt.Errorf("no IPv4 address found on interface %s", name)
+	return stackdefaults.BridgeInterfaceIP(name)
 }
 
 // Up starts the cluster using the configured backend
@@ -307,8 +195,6 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
-	portsBlocked := checkPortsAvailable([]int{80, 443}) != nil
-
 	kubeconfigData, err := backend.Up(cfg, u, stackID)
 	if err != nil {
 		return err
@@ -319,15 +205,23 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
+	if refreshed, err := stackdefaults.RefreshInfrastructureIfChanged(cfg, backend.Name(), stackID); err != nil {
+		return fmt.Errorf("failed to refresh default infrastructure templates: %w", err)
+	} else if refreshed {
+		u.Dim("Refreshed default infrastructure templates from embedded assets")
+	}
+
+	// Ensure the base host before syncing defaults. Include existing agent
+	// hostnames so stack up never shrinks the managed /etc/hosts block to only
+	// obol.stack when default setup is skipped.
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg)); err != nil {
+		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
+	}
+
 	// Sync defaults with backend-aware dataDir
 	dataDir := backend.DataDir(cfg)
 	if err := syncDefaults(cfg, u, kubeconfigPath, dataDir); err != nil {
 		return err
-	}
-
-	// Ensure obol.stack resolves to localhost via /etc/hosts (works everywhere).
-	if err := dns.EnsureHostsEntries(nil); err != nil {
-		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
 	}
 
 	// Wildcard *.obol.stack DNS is opt-in (--wildcard-dns) because it
@@ -345,12 +239,11 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 
 	u.Blank()
 	u.Bold("Stack started successfully.")
-	if portsBlocked {
-		u.Warnf("Ports 80/443 are in use by another process — use http://obol.stack:8080 instead")
-		u.Print("Visit http://obol.stack:8080 in your browser to get started.")
-	} else {
-		u.Print("Visit http://obol.stack in your browser to get started.")
+	ingressURL := LocalIngressURL(cfg)
+	if ingressURL != "http://obol.stack" {
+		u.Warnf("Default ingress ports are in use by another process — use %s instead", ingressURL)
 	}
+	u.Printf("Visit %s in your browser to get started.", ingressURL)
 	update.HintIfStale(cfg)
 
 	return nil
@@ -457,6 +350,15 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
+	if err := migrateBaseHelmOwnership(cfg, kubeconfigPath); err != nil {
+		u.Warnf("Failed to migrate existing base resources into Helm ownership: %v", err)
+	}
+
+	previousLiteLLMConfig, err := preserveLiteLLMConfigForHelm(cfg, kubeconfigPath)
+	if err != nil {
+		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
+	}
+
 	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
@@ -486,6 +388,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}); err != nil {
 		u.Warn("Helmfile sync failed, stopping cluster")
 
+		if previousLiteLLMConfig != "" {
+			if restoreErr := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); restoreErr != nil {
+				u.Warnf("Failed to restore LiteLLM config after Helmfile error: %v", restoreErr)
+			}
+		}
+
 		if downErr := Down(cfg, u); downErr != nil {
 			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
@@ -494,6 +402,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	u.Success("Default infrastructure deployed")
+
+	if previousLiteLLMConfig != "" {
+		if err := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); err != nil {
+			u.Warnf("Failed to restore LiteLLM config after base migration: %v", err)
+		}
+	}
 
 	// Populate the x402-verifier CA bundle from the host so TLS verification of
 	// the facilitator works without needing to run `obol sell pricing` first.
@@ -506,22 +420,22 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// step required. Non-fatal: the user can always run `obol model setup` later.
 	autoConfigureLLM(cfg, u)
 
-	// Deploy default OpenClaw instance (non-fatal on failure).
+	// Deploy default Hermes instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
 	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
 	// An outer spinner would fight with that output and block any sudo password
 	// prompt (e.g. EnsureHostsEntries writing /etc/hosts).
 	u.Blank()
-	u.Info("Setting up default OpenClaw instance")
+	u.Info("Setting up default Hermes instance")
 
-	if err := openclaw.SetupDefault(cfg, u); err != nil {
-		u.Warnf("Failed to set up default OpenClaw: %v", err)
-		u.Dim("  You can manually set up OpenClaw later with: obol openclaw onboard")
-	} else if walletAddr, walletErr := openclaw.ResolveWalletAddress(cfg); walletErr == nil {
+	if err := hermes.SetupDefault(cfg, u); err != nil {
+		u.Warnf("Failed to set up default Hermes: %v", err)
+		u.Dim("  You can manually set up Hermes later with: obol hermes onboard")
+	} else if walletAddr, walletErr := hermes.ResolveWalletAddress(cfg); walletErr == nil {
 		u.Blank()
 		u.Successf("Default agent wallet: %s", walletAddr)
 		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
-		u.Dim("  Retrieve later with: obol openclaw wallet address obol-agent")
+		u.Dim("  Retrieve later with: obol hermes wallet list obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.
@@ -679,11 +593,12 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
 	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
-	dockerfile string // relative to project root, e.g. "Dockerfile.x402-verifier"
+	dockerfile string // relative to project root or absolute path
+	contextDir string // relative to project root or absolute path (empty = project root)
 }
 
 // localImages lists images that should be built locally and imported into k3d.
-var localImages = []localImage{
+var baseLocalImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
 	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
 	{tag: "ghcr.io/obolnetwork/x402-buyer:latest", dockerfile: "Dockerfile.x402-buyer"},
@@ -694,6 +609,41 @@ func devPreloadImages() []string {
 	if ref := openclaw.ImageRef(); ref != "" {
 		images = append(images, ref)
 	}
+	return images
+}
+
+func hermesSourceDir(projectRoot string) string {
+	if override := strings.TrimSpace(os.Getenv("OBOL_HERMES_SOURCE_DIR")); override != "" {
+		return override
+	}
+
+	candidates := []string{
+		filepath.Join(filepath.Dir(projectRoot), "hermes-agent"),
+		filepath.Join(os.Getenv("HOME"), "Development", "R&D", "hermes-agent"),
+	}
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(candidate, "Dockerfile")); err == nil {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func devLocalImages(projectRoot string) []localImage {
+	images := append([]localImage(nil), baseLocalImages...)
+	if hermesDir := hermesSourceDir(projectRoot); hermesDir != "" {
+		images = append(images, localImage{
+			tag:        "nousresearch/hermes-agent:latest",
+			dockerfile: filepath.Join(hermesDir, "Dockerfile"),
+			contextDir: hermesDir,
+		})
+	}
+
 	return images
 }
 
@@ -716,10 +666,20 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 
-	for _, img := range localImages {
+	for _, img := range devLocalImages(projectRoot) {
 		contextDir := projectRoot
+		if img.contextDir != "" {
+			if filepath.IsAbs(img.contextDir) {
+				contextDir = img.contextDir
+			} else {
+				contextDir = filepath.Join(projectRoot, img.contextDir)
+			}
+		}
 
-		dockerfilePath := filepath.Join(projectRoot, img.dockerfile)
+		dockerfilePath := img.dockerfile
+		if !filepath.IsAbs(dockerfilePath) {
+			dockerfilePath = filepath.Join(projectRoot, img.dockerfile)
+		}
 		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			continue // Dockerfile not present (production install without source)
 		}
@@ -924,4 +884,168 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 	}
 
 	return os.WriteFile(helmfilePath, []byte(updated), 0o600) //nolint:gosec // G703: path from user's local config dir
+}
+
+type baseHelmResource struct {
+	Kind      string
+	Name      string
+	Namespace string
+}
+
+func migrateBaseHelmOwnership(cfg *config.Config, kubeconfigPath string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	resources := []baseHelmResource{
+		{Kind: "namespace", Name: "agent"},
+		{Kind: "namespace", Name: "hermes-obol-agent"},
+		{Kind: "clusterrole", Name: "openclaw-monetize-read"},
+		{Kind: "clusterrolebinding", Name: "openclaw-monetize-read-binding"},
+		{Kind: "role", Name: "openclaw-monetize-write", Namespace: "hermes-obol-agent"},
+		{Kind: "rolebinding", Name: "openclaw-monetize-write-binding", Namespace: "hermes-obol-agent"},
+	}
+
+	var failures []error
+
+	for _, resource := range resources {
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, append([]string{"get", resource.Kind, resource.Name}, resource.namespaceArgs()...)...); err != nil {
+			continue
+		}
+
+		labelArgs := append([]string{"label", resource.Kind, resource.Name}, resource.namespaceArgs()...)
+		labelArgs = append(labelArgs, "app.kubernetes.io/managed-by=Helm", "--overwrite")
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, labelArgs...); err != nil {
+			failures = append(failures, fmt.Errorf("label %s/%s: %w", resource.Kind, resource.Name, err))
+			continue
+		}
+
+		annotateArgs := append([]string{"annotate", resource.Kind, resource.Name}, resource.namespaceArgs()...)
+		annotateArgs = append(annotateArgs,
+			"meta.helm.sh/release-name=base",
+			"meta.helm.sh/release-namespace=kube-system",
+			"--overwrite",
+		)
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, annotateArgs...); err != nil {
+			failures = append(failures, fmt.Errorf("annotate %s/%s: %w", resource.Kind, resource.Name, err))
+		}
+	}
+
+	return errors.Join(failures...)
+}
+
+func (r baseHelmResource) namespaceArgs() []string {
+	if r.Namespace == "" {
+		return nil
+	}
+
+	return []string{"-n", r.Namespace}
+}
+
+// preserveLiteLLMConfigForHelm snapshots the mutable LiteLLM config before
+// Helm sync. Helm owns the ConfigMap object, but provider and purchase flows
+// append model routes to data["config.yaml"], which is a single scalar field
+// from Kubernetes' managedFields perspective.
+func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+
+	managers, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm",
+		"--show-managed-fields", "-o", "jsonpath={.metadata.managedFields[*].manager}")
+	if err != nil || !needsLiteLLMConfigHelmMigration(managers) {
+		return raw, nil
+	}
+
+	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
+		"delete", "configmap", "litellm-config", "-n", "llm"); err != nil {
+		return "", err
+	}
+
+	return raw, nil
+}
+
+func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	if current, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}"); err == nil && strings.TrimSpace(current) != "" {
+		merged, err := mergeLiteLLMConfig(current, raw)
+		if err != nil {
+			return err
+		}
+		raw = merged
+	}
+
+	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
+
+	return kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+}
+
+func needsLiteLLMConfigHelmMigration(managers string) bool {
+	for _, manager := range strings.Fields(managers) {
+		if manager != "helm" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
+	var current model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(currentRaw), &current); err != nil {
+		return "", fmt.Errorf("parse current LiteLLM config: %w", err)
+	}
+
+	var previous model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(previousRaw), &previous); err != nil {
+		return "", fmt.Errorf("parse previous LiteLLM config: %w", err)
+	}
+
+	byName := make(map[string]int, len(current.ModelList))
+	for i, entry := range current.ModelList {
+		byName[entry.ModelName] = i
+	}
+
+	for _, entry := range previous.ModelList {
+		if strings.TrimSpace(entry.ModelName) == "" {
+			continue
+		}
+		if _, ok := byName[entry.ModelName]; ok {
+			continue
+		}
+		byName[entry.ModelName] = len(current.ModelList)
+		current.ModelList = append(current.ModelList, entry)
+	}
+
+	if len(current.GeneralSettings) == 0 && len(previous.GeneralSettings) > 0 {
+		current.GeneralSettings = previous.GeneralSettings
+	}
+	if len(current.LiteLLMSettings) == 0 && len(previous.LiteLLMSettings) > 0 {
+		current.LiteLLMSettings = previous.LiteLLMSettings
+	}
+
+	merged, err := yaml.Marshal(&current)
+	if err != nil {
+		return "", fmt.Errorf("serialize merged LiteLLM config: %w", err)
+	}
+
+	return string(merged), nil
+}
+
+func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n  namespace: %s\ndata:\n  %s: |\n", name, namespace, key)
+	for _, line := range strings.Split(value, "\n") {
+		fmt.Fprintf(&b, "    %s\n", line)
+	}
+
+	return []byte(b.String())
 }

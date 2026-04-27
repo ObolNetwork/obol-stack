@@ -28,18 +28,18 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 
 ```bash
 # Probe an endpoint to see its pricing
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
 # Probe with the concrete remote model when the seller validates model IDs
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
 
 # Buy access (probes, pre-signs auths, creates/updates a PurchaseRequest)
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
 
 # Buy with agent-managed auto-refill intent
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 100 \
@@ -48,25 +48,25 @@ python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
   --refill-count 50
 
 # Manual top-up on the same purchase name
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 25
 
 # List purchased providers + remaining auths
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py list
 
 # Check sidecar health + remaining auths
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py status remote-qwen
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py status remote-qwen
 
 # Reconcile auto-refill policies (heartbeat / cron entrypoint)
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
 
 # Check your USDC balance
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py balance
 
 # Compatibility alias for the same reconcile loop
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py maintain
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py maintain
 ```
 
 ## Commands
@@ -116,7 +116,7 @@ Use the absolute script path inside the pod. Do not rely on `cd ... && ...`
 shell wrapping.
 
 ```bash
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
 ```
 
 Tell the agent to schedule that as its maintenance loop only when at least one
@@ -131,7 +131,7 @@ CLI example:
 
 ```bash
 hermes cron create "every 5m" \
-  "Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all. Report only errors or state changes." \
+  "Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all. Report only errors or state changes." \
   --name "x402 buy reconcile" \
   --skill buy-inference
 ```
@@ -142,7 +142,7 @@ Python API example:
 from cron.jobs import create_job
 
 create_job(
-    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all. Report only errors or state changes.",
+    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all. Report only errors or state changes.",
     schedule="every 5m",
     name="x402 buy reconcile",
     skills=["buy-inference"],
@@ -220,7 +220,7 @@ flowchart LR
 
 5. **Runtime mount**: A lean Go sidecar (`x402-buyer`) already runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
 
-6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
+6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402/v1`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
 
 7. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller
@@ -297,10 +297,10 @@ This is the complete journey from discovering a seller to using purchased infere
 
 ```bash
 # Search the ERC-8004 registry for recently registered agents
-python3 /data/.openclaw/skills/discovery/scripts/discovery.py search --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/discovery/scripts/discovery.py search --chain base-sepolia
 
 # Fetch a candidate's registration JSON to check x402Support and services
-python3 /data/.openclaw/skills/discovery/scripts/discovery.py uri <agent-id> --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/discovery/scripts/discovery.py uri <agent-id> --chain base-sepolia
 ```
 
 Look for agents with `"x402Support": true` and a `"web"` service endpoint.
@@ -309,7 +309,7 @@ Look for agents with `"x402Support": true` and a `"web"` service endpoint.
 
 ```bash
 # Send an unauthenticated request to get 402 pricing
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
 ```
 
 This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USDC contract).
@@ -318,10 +318,10 @@ This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USD
 
 ```bash
 # Check USDC balance
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py balance --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py balance --chain base-sepolia
 
 # Buy access (pre-sign auths, create PurchaseRequest, wait for controller reconciliation)
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py buy <friendly-name> \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy <friendly-name> \
   --endpoint <service-endpoint> \
   --model <model-name> \
   --count 20
@@ -344,13 +344,13 @@ The `paid/` prefix routes through the x402-buyer sidecar, which transparently at
 
 ```bash
 # Check remaining auths
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py list
 
 # Check one purchased upstream in detail
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py status <friendly-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py status <friendly-name>
 
 # Reconcile auto-refill intent (what the heartbeat should run)
-python3 /data/.openclaw/skills/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
 ```
 
 Manual `refill` and `remove` commands are still not available in the current

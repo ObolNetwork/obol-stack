@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
@@ -98,6 +100,153 @@ func TestFormatPorts(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("formatPorts(%v) = %q, want %q", tt.ports, got, tt.expected)
 		}
+	}
+}
+
+func TestPortBlock_MatchesEmbeddedTemplate(t *testing.T) {
+	// Guard: if someone reformats k3d-config.yaml, portBlock-based stripping
+	// silently stops working. Verify the embedded template contains every
+	// portBlock we might try to strip.
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Skip("project root not found")
+	}
+
+	tmpl, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/k3d-config.yaml"))
+	if err != nil {
+		t.Fatalf("read embedded template: %v", err)
+	}
+
+	for _, ports := range [][2]int{{80, 80}, {443, 443}, {8080, 80}, {8443, 443}} {
+		block := portBlock(ports[0], ports[1])
+		if !strings.Contains(string(tmpl), block) {
+			t.Errorf("portBlock(%d, %d) not found in k3d-config.yaml — template may have been reformatted", ports[0], ports[1])
+		}
+	}
+}
+
+func TestStripConflictingPorts_StringManipulation(t *testing.T) {
+	// Verify that removal produces valid YAML structure.
+	block80 := portBlock(80, 80)
+	block443 := portBlock(443, 443)
+
+	fullConfig := "ports:\n" + block80 +
+		"  - port: 8080:80\n    nodeFilters:\n      - loadbalancer\n" +
+		block443 +
+		"  - port: 8443:443\n    nodeFilters:\n      - loadbalancer\n" +
+		"options:\n"
+
+	// Simulate removing port 80 block.
+	after80 := strings.Replace(fullConfig, block80, "", 1)
+	if strings.Contains(after80, block80) {
+		t.Fatal("80:80 block should be removed")
+	}
+	if !strings.Contains(after80, "8080:80") {
+		t.Fatal("8080:80 should be preserved")
+	}
+	if !strings.Contains(after80, block443) {
+		t.Fatal("443:443 block should be preserved")
+	}
+
+	// Simulate removing both.
+	afterBoth := strings.Replace(after80, block443, "", 1)
+	if strings.Contains(afterBoth, block443) {
+		t.Fatal("443:443 block should be removed")
+	}
+	if !strings.Contains(afterBoth, "8443:443") {
+		t.Fatal("8443:443 should be preserved")
+	}
+	if !strings.Contains(afterBoth, "ports:\n") {
+		t.Fatal("YAML ports key should remain")
+	}
+}
+
+func TestRewriteConflictingPorts_PreservesAvailableFallbacks(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(port int) bool {
+		return port == 8080 || port == 8443
+	}, func() (int, error) {
+		t.Fatal("should not pick an ephemeral port when fallbacks are available")
+		return 0, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected %s mapping to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 8080:80", "- port: 8443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be preserved:\n%s", expected, got)
+		}
+	}
+}
+
+func TestRewriteConflictingPorts_PicksEphemeralWhenAllDefaultsBusy(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+	picks := []int{18080, 18443}
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(int) bool {
+		return false
+	}, func() (int, error) {
+		if len(picks) == 0 {
+			t.Fatal("unexpected extra port pick")
+		}
+		port := picks[0]
+		picks = picks[1:]
+		return port, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 8080:80", "- port: 443:443", "- port: 8443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected default mapping %s to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 18080:80", "- port: 18443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be inserted:\n%s", expected, got)
+		}
+	}
+	if !strings.Contains(got, "options:\n") {
+		t.Fatal("YAML options key should remain")
+	}
+}
+
+func TestEnsureK3dPortsAvailable_NoDefaultMappings(t *testing.T) {
+	// Verify the file read/write path stays a no-op for configs that do not
+	// contain the default ingress mappings.
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "k3d.yaml")
+
+	original := "ports:\n" +
+		portBlock(18080, 80) +
+		portBlock(18443, 443)
+
+	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	u := ui.New(false)
+	ensureK3dPortsAvailable(cfgPath, u)
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(data) != original {
+		t.Errorf("expected config unchanged when no default mappings are present\ngot:\n%s", string(data))
 	}
 }
 
@@ -346,4 +495,140 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	if strings.Contains(out, "custom_provider_map") {
 		t.Fatalf("llm template should not require a custom provider:\n%s", out)
 	}
+}
+
+func TestNeedsLiteLLMConfigHelmMigration(t *testing.T) {
+	tests := []struct {
+		name     string
+		managers string
+		want     bool
+	}{
+		{name: "helm only", managers: "helm", want: false},
+		{name: "empty", managers: "", want: false},
+		{name: "old kubectl patch", managers: "helm kubectl-patch", want: true},
+		{name: "controller update", managers: "helm serviceoffer-controller", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := needsLiteLLMConfigHelmMigration(tt.managers); got != tt.want {
+				t.Fatalf("needsLiteLLMConfigHelmMigration(%q) = %v, want %v", tt.managers, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeLiteLLMConfigPreservesChartDefaultsAndPreviousModels(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  cache: false
+  drop_params: true
+`
+	previous := `
+model_list:
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-5-20250929"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	if !hasLiteLLMModel(got, "paid/*") {
+		t.Fatalf("merged config lost chart paid route:\n%s", merged)
+	}
+	if !hasLiteLLMModel(got, "anthropic/*") {
+		t.Fatalf("merged config lost previous provider route:\n%s", merged)
+	}
+	if got.GeneralSettings["master_key"] != "os.environ/LITELLM_MASTER_KEY" {
+		t.Fatalf("merged config lost chart general_settings:\n%#v", got.GeneralSettings)
+	}
+	if got.LiteLLMSettings["drop_params"] != true {
+		t.Fatalf("merged config lost chart litellm_settings:\n%#v", got.LiteLLMSettings)
+	}
+}
+
+func TestMergeLiteLLMConfigCurrentEntryWinsForChartDefaults(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+`
+	previous := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://custom-buyer:8402/v1"
+      api_key: "custom"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	for _, entry := range got.ModelList {
+		if entry.ModelName == "paid/*" {
+			if entry.LiteLLMParams.APIBase != "http://127.0.0.1:8402/v1" {
+				t.Fatalf("current paid route did not win over previous route:\n%+v", entry)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("merged config missing paid route:\n%s", merged)
+}
+
+func TestConfigMapFieldOwnershipManifestUsesLiteralBlock(t *testing.T) {
+	manifest := string(configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", "model_list:\n  - model_name: paid/*\n"))
+
+	for _, want := range []string{
+		"apiVersion: v1\n",
+		"kind: ConfigMap\n",
+		"  name: litellm-config\n",
+		"  namespace: llm\n",
+		"  config.yaml: |\n",
+		"    model_list:\n",
+		"      - model_name: paid/*\n",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("manifest missing %q:\n%s", want, manifest)
+		}
+	}
+}
+
+func hasLiteLLMModel(cfg model.LiteLLMConfig, name string) bool {
+	for _, entry := range cfg.ModelList {
+		if entry.ModelName == name {
+			return true
+		}
+	}
+
+	return false
 }

@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
-const agentDeploymentID = "obol-agent"
+const agentDeploymentID = agentruntime.DefaultInstanceID
 
-// SyncAgentBaseURL patches AGENT_BASE_URL in the obol-agent's values-obol.yaml
+// SyncAgentBaseURL patches AGENT_BASE_URL in the default Hermes deployment
 // and runs helmfile sync to apply the change. It is a no-op if the obol-agent
 // deployment directory does not exist (agent not yet initialized).
 func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
@@ -27,28 +28,27 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	}
 
 	if err := patchAgentBaseURL(overlayPath, tunnelURL); err != nil {
-		return fmt.Errorf("failed to patch values-obol.yaml: %w", err)
+		return fmt.Errorf("failed to patch values-hermes.yaml: %w", err)
 	}
 
 	// Run helmfile sync to apply the change to the cluster.
 	deploymentDir := filepath.Dir(overlayPath)
-
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
 		// Overlay exists but helmfile.yaml is missing — unusual, skip sync.
-		fmt.Printf("⚠ AGENT_BASE_URL updated in values-obol.yaml but helmfile.yaml not found; run 'obol openclaw sync %s' manually.\n", agentDeploymentID)
+		fmt.Printf("⚠ AGENT_BASE_URL updated in values-hermes.yaml but helmfile.yaml not found; run 'obol hermes sync %s' manually.\n", agentDeploymentID)
 		return nil
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		fmt.Printf("⚠ AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol openclaw sync %s'.\n", agentDeploymentID)
+		fmt.Printf("⚠ AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol hermes sync %s'.\n", agentDeploymentID)
 		return nil
 	}
 
 	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
 	if _, err := os.Stat(helmfileBin); os.IsNotExist(err) {
-		fmt.Printf("⚠ helmfile not found at %s; run 'obol openclaw sync %s' manually.\n", helmfileBin, agentDeploymentID)
+		fmt.Printf("⚠ helmfile not found at %s; run 'obol hermes sync %s' manually.\n", helmfileBin, agentDeploymentID)
 		return nil
 	}
 
@@ -72,7 +72,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 }
 
 func agentOverlayPath(cfg *config.Config) string {
-	return filepath.Join(cfg.ConfigDir, "applications", "openclaw", agentDeploymentID, "values-obol.yaml")
+	return filepath.Join(cfg.ConfigDir, "applications", string(agentruntime.Hermes), agentDeploymentID, "values-hermes.yaml")
 }
 
 func readCurrentAgentBaseURL(overlayPath string) (string, error) {
@@ -91,10 +91,9 @@ func readCurrentAgentBaseURL(overlayPath string) (string, error) {
 	return "", nil
 }
 
-// patchAgentBaseURL reads values-obol.yaml and ensures the extraEnv list
-// contains an AGENT_BASE_URL entry with the given value. If the entry already
-// exists it is updated in place; otherwise it is appended after the
-// REMOTE_SIGNER_URL entry.
+// patchAgentBaseURL reads values-hermes.yaml and ensures the env list contains
+// an AGENT_BASE_URL entry with the given value. If the entry already exists it
+// is updated in place; otherwise it is appended after REMOTE_SIGNER_URL.
 func patchAgentBaseURL(path, tunnelURL string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -119,6 +118,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
+		leading := line[:len(line)-len(strings.TrimLeft(line, " "))]
 
 		// Case 1: AGENT_BASE_URL already present — update its value line.
 		if strings.Contains(line, "name: AGENT_BASE_URL") {
@@ -129,7 +129,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 			if i+1 < len(lines) && strings.Contains(lines[i+1], "value:") {
 				i++
 
-				out = append(out, "    value: "+tunnelURL)
+				out = append(out, leading+"  value: "+tunnelURL)
 			}
 
 			continue
@@ -139,9 +139,13 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 
 		// Case 2: AGENT_BASE_URL not yet in the file — insert after REMOTE_SIGNER_URL.
 		if !alreadyPresent && !inserted && strings.Contains(line, "value: http://remote-signer:9000") {
+			nameIndent := leading
+			if strings.HasSuffix(nameIndent, "  ") {
+				nameIndent = nameIndent[:len(nameIndent)-2]
+			}
 			out = append(out,
-				"  - name: AGENT_BASE_URL",
-				"    value: "+tunnelURL,
+				nameIndent+"- name: AGENT_BASE_URL",
+				leading+"value: "+tunnelURL,
 			)
 			inserted = true
 		}
@@ -149,7 +153,7 @@ func patchAgentBaseURL(path, tunnelURL string) error {
 
 	// Case 3: Neither AGENT_BASE_URL nor REMOTE_SIGNER_URL found (unusual).
 	if !inserted {
-		out = append(out, "extraEnv:", "  - name: AGENT_BASE_URL\n    value: "+tunnelURL)
+		out = append(out, "                - name: AGENT_BASE_URL", "                  value: "+tunnelURL)
 	}
 
 	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600) //nolint:gosec // G703: path from user's local config dir

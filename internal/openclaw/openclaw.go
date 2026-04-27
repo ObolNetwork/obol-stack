@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
@@ -260,7 +261,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	// Ensure /etc/hosts has an entry for this subdomain.
 	// macOS Sequoia's /etc/resolver/ doesn't reliably forward subdomain queries.
-	if err := dns.EnsureHostsEntries(collectAllHostnames(cfg, hostname)); err != nil {
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
+		Runtime: agentruntime.OpenClaw,
+		ID:      id,
+	})); err != nil {
 		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
 	}
 
@@ -2835,32 +2839,4 @@ releases:
     values:
       - values-remote-signer.yaml
 `, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
-}
-
-// collectAllHostnames gathers all openclaw subdomain hostnames that should be
-// in /etc/hosts. Scans existing deployments and includes the new hostname.
-func collectAllHostnames(cfg *config.Config, newHostname string) []string {
-	hostnames := []string{newHostname}
-	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
-
-	entries, err := os.ReadDir(appsDir)
-	if err != nil {
-		return hostnames
-	}
-
-	seen := map[string]bool{newHostname: true}
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-
-		h := fmt.Sprintf("openclaw-%s.%s", e.Name(), defaultDomain)
-		if !seen[h] {
-			hostnames = append(hostnames, h)
-			seen[h] = true
-		}
-	}
-
-	return hostnames
 }
