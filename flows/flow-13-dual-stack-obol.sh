@@ -722,13 +722,17 @@ poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
 step "Alice: anvil reachable from inside cluster via host.k3d.internal"
-if alice kubectl exec -n erpc deploy/erpc -- \
-    wget -qO- --timeout=5 "$ANVIL_RPC_CLUSTER" \
-    --post-data='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
-    --header='Content-Type: application/json' 2>&1 | grep -q '0x14a34'; then
+# Use a transient busybox pod for the probe — the eRPC container is distroless
+# and has no wget/curl. busybox's wget is enough to POST a JSON-RPC request.
+probe_out=$(alice kubectl run flow13-probe-alice-$RANDOM \
+    --rm -i --restart=Never --image=busybox:1.36 --quiet \
+    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
+        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
+        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
+if echo "$probe_out" | grep -q '0x14a34'; then
     pass "Alice cluster can reach $ANVIL_RPC_CLUSTER"
 else
-    fail "Alice cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER"
+    fail "Alice cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
     emit_metrics; exit 1
 fi
 
@@ -899,13 +903,15 @@ poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
 step "Bob: anvil reachable from inside cluster"
-if bob kubectl exec -n erpc deploy/erpc -- \
-    wget -qO- --timeout=5 "$ANVIL_RPC_CLUSTER" \
-    --post-data='{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
-    --header='Content-Type: application/json' 2>&1 | grep -q '0x14a34'; then
+probe_out=$(bob kubectl run flow13-probe-bob-$RANDOM \
+    --rm -i --restart=Never --image=busybox:1.36 --quiet \
+    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
+        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
+        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
+if echo "$probe_out" | grep -q '0x14a34'; then
     pass "Bob cluster can reach $ANVIL_RPC_CLUSTER"
 else
-    fail "Bob cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER"
+    fail "Bob cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
     emit_metrics; exit 1
 fi
 
@@ -987,13 +993,15 @@ env -u CHAIN cast rpc anvil_setBalance "$BOB_SIGNER_ADDR" "0xDE0B6B3A7640000" \
     --rpc-url "$ANVIL_RPC_HOST" >/dev/null 2>&1 || true
 
 step "Bob: eRPC reflects funded OBOL balance via cluster RPC"
+# Probe eRPC from a transient busybox pod (eRPC's own container is distroless).
 got_balance=""
 for attempt in $(seq 1 18); do
-    got_balance=$(bob kubectl exec -n erpc deploy/erpc -- \
-        wget -qO- --timeout=5 \
-        --header='Content-Type: application/json' \
-        --post-data="{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"$OBOL_TOKEN\",\"data\":\"0x70a08231000000000000000000000000${BOB_SIGNER_ADDR#0x}\"},\"latest\"],\"id\":1}" \
-        "http://localhost:4000" 2>/dev/null | grep -oE '"result":"0x[0-9a-fA-F]*"' | head -1 || true)
+    got_balance=$(bob kubectl run flow13-erpc-probe-$RANDOM \
+        --rm -i --restart=Never --image=busybox:1.36 --quiet \
+        -- sh -c "wget -qO- --timeout=5 \
+            --header='Content-Type: application/json' \
+            --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_call\",\"params\":[{\"to\":\"$OBOL_TOKEN\",\"data\":\"0x70a08231000000000000000000000000${BOB_SIGNER_ADDR#0x}\"},\"latest\"],\"id\":1}' \
+            'http://erpc.erpc.svc.cluster.local:4000'" 2>/dev/null | grep -oE '"result":"0x[0-9a-fA-F]*"' | head -1 || true)
     if [ -n "$got_balance" ] && [ "$got_balance" != '"result":"0x"' ] && [ "$got_balance" != '"result":"0x0"' ]; then
         pass "Bob eRPC sees Bob OBOL balance (attempt $attempt: $got_balance)"
         break
