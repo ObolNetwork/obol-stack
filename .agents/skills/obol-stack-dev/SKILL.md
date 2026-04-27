@@ -80,7 +80,7 @@ Use this mental model:
 
 ## Existing Dev Stack Refresh
 
-When testing a new frontend or stack branch against an already-initialized `.workspace/config`, update both the embedded source and the generated defaults copy. `obol stack init` copies embedded infrastructure into `$OBOL_CONFIG_DIR/defaults`; later edits to `internal/embed/infrastructure/...` do not affect that existing generated directory until re-init or manual patching.
+When testing a new frontend or stack branch against an already-initialized `.workspace/config`, rebuild the local CLI before `stack up`. Current `obol stack up` refreshes `$OBOL_CONFIG_DIR/defaults` when the embedded infrastructure digest, backend, or stack ID changes, then preserves mutable LiteLLM model entries across Helm sync. If testing raw file edits without rebuilding the CLI, patch the generated defaults copy manually or re-run after rebuilding.
 
 ```bash
 # Prefer origin-only fetches in this checkout. Some Radicle remotes may be stale
@@ -94,10 +94,8 @@ go build -o .workspace/bin/obol ./cmd/obol
 docker manifest inspect obolnetwork/obol-stack-front-end:v0.1.17-rc.5 >/dev/null
 docker pull obolnetwork/obol-stack-front-end:v0.1.17-rc.5
 
-# Existing initialized stacks need the generated defaults value patched too.
-rg -n 'obol-stack-front-end|tag:' \
-  internal/embed/infrastructure/values/obol-frontend.yaml.gotmpl \
-  .workspace/config/defaults/values/obol-frontend.yaml.gotmpl
+# Confirm the embedded source has the intended image tag before rebuilding.
+rg -n 'obol-stack-front-end|tag:' internal/embed/infrastructure/values/obol-frontend.yaml.gotmpl
 
 OBOL_CONFIG_DIR="$PWD/.workspace/config" \
 OBOL_BIN_DIR="$PWD/.workspace/bin" \
@@ -122,7 +120,7 @@ curl -sS --max-time 15 http://obol.stack/api/agents/instances
 Known existing-stack migration failures:
 
 - `Namespace "hermes-obol-agent" ... exists and cannot be imported into the current release`: the namespace or monetize RBAC predated Helm ownership. Current `obol stack up` adopts known base-owned resources before Helm sync. If doing it manually, label and annotate the existing resource with `app.kubernetes.io/managed-by=Helm`, `meta.helm.sh/release-name=base`, and `meta.helm.sh/release-namespace=kube-system`.
-- `conflict with "kubectl-patch" ... llm/litellm-config .data.config.yaml`: older model setup patches used the `kubectl-patch` field manager, which conflicts with Helm server-side apply. Current patches use Helm's field manager, and `obol stack up` backs up, recreates, and restores the existing LiteLLM config around Helm sync when it detects the old manager.
+- `conflict with "kubectl-patch" ... llm/litellm-config .data.config.yaml`: older writers used a non-Helm field manager for `data.config.yaml`, which conflicts with Helm server-side apply. Current writers use Helm's field manager. During `obol stack up`, the existing LiteLLM config is backed up and previous model entries are merged into the new chart config; if a non-Helm manager is detected, the ConfigMap is deleted before Helm sync so ownership is recreated cleanly.
 - `/etc/hosts` updates require interactive sudo. Codex cannot satisfy the password prompt in non-interactive execution; if DNS fails in the browser, run `obol stack up` or `obol hermes sync obol-agent` from a normal terminal, or manually add `127.0.0.1 obol-agent.obol.stack` and flush local DNS.
 
 ## 4 Inference Paths (All Through LiteLLM)

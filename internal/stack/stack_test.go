@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
@@ -493,4 +495,140 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	if strings.Contains(out, "custom_provider_map") {
 		t.Fatalf("llm template should not require a custom provider:\n%s", out)
 	}
+}
+
+func TestNeedsLiteLLMConfigHelmMigration(t *testing.T) {
+	tests := []struct {
+		name     string
+		managers string
+		want     bool
+	}{
+		{name: "helm only", managers: "helm", want: false},
+		{name: "empty", managers: "", want: false},
+		{name: "old kubectl patch", managers: "helm kubectl-patch", want: true},
+		{name: "controller update", managers: "helm serviceoffer-controller", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := needsLiteLLMConfigHelmMigration(tt.managers); got != tt.want {
+				t.Fatalf("needsLiteLLMConfigHelmMigration(%q) = %v, want %v", tt.managers, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeLiteLLMConfigPreservesChartDefaultsAndPreviousModels(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  cache: false
+  drop_params: true
+`
+	previous := `
+model_list:
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-5-20250929"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	if !hasLiteLLMModel(got, "paid/*") {
+		t.Fatalf("merged config lost chart paid route:\n%s", merged)
+	}
+	if !hasLiteLLMModel(got, "anthropic/*") {
+		t.Fatalf("merged config lost previous provider route:\n%s", merged)
+	}
+	if got.GeneralSettings["master_key"] != "os.environ/LITELLM_MASTER_KEY" {
+		t.Fatalf("merged config lost chart general_settings:\n%#v", got.GeneralSettings)
+	}
+	if got.LiteLLMSettings["drop_params"] != true {
+		t.Fatalf("merged config lost chart litellm_settings:\n%#v", got.LiteLLMSettings)
+	}
+}
+
+func TestMergeLiteLLMConfigCurrentEntryWinsForChartDefaults(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+`
+	previous := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://custom-buyer:8402/v1"
+      api_key: "custom"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	for _, entry := range got.ModelList {
+		if entry.ModelName == "paid/*" {
+			if entry.LiteLLMParams.APIBase != "http://127.0.0.1:8402/v1" {
+				t.Fatalf("current paid route did not win over previous route:\n%+v", entry)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("merged config missing paid route:\n%s", merged)
+}
+
+func TestConfigMapFieldOwnershipManifestUsesLiteralBlock(t *testing.T) {
+	manifest := string(configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", "model_list:\n  - model_name: paid/*\n"))
+
+	for _, want := range []string{
+		"apiVersion: v1\n",
+		"kind: ConfigMap\n",
+		"  name: litellm-config\n",
+		"  namespace: llm\n",
+		"  config.yaml: |\n",
+		"    model_list:\n",
+		"      - model_name: paid/*\n",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("manifest missing %q:\n%s", want, manifest)
+		}
+	}
+}
+
+func hasLiteLLMModel(cfg model.LiteLLMConfig, name string) bool {
+	for _, entry := range cfg.ModelList {
+		if entry.ModelName == name {
+			return true
+		}
+	}
+
+	return false
 }

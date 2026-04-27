@@ -42,6 +42,30 @@ func TestParseQuickTunnelURL(t *testing.T) {
 	}
 }
 
+func TestBuildLocalManagedConfigYAMLRoutesOnlyRequestedHostname(t *testing.T) {
+	out := string(buildLocalManagedConfigYAML("stack.example.com", "00000000-0000-0000-0000-000000000000"))
+
+	for _, want := range []string{
+		"tunnel: 00000000-0000-0000-0000-000000000000",
+		"- hostname: stack.example.com",
+		"service: http://traefik.traefik.svc.cluster.local:80",
+		"- service: http_status:404",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("config missing %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Count(out, "hostname:") != 1 {
+		t.Fatalf("persistent tunnel config should expose exactly one hostname:\n%s", out)
+	}
+	for _, unexpected := range []string{"obol-agent.obol.stack", "hermes-obol-agent.obol.stack", "*.obol.stack"} {
+		if strings.Contains(out, unexpected) {
+			t.Fatalf("persistent tunnel config exposes local agent hostname %q:\n%s", unexpected, out)
+		}
+	}
+}
+
 func TestPatchAgentBaseURL_Insert(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "values-obol.yaml")

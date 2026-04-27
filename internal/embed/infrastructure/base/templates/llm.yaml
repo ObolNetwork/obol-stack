@@ -13,7 +13,8 @@
 #     k3s  → 127.0.0.1 (k3s runs directly on the host)
 # - Using ClusterIP+Endpoints instead of ExternalName for Traefik Gateway API
 #   compatibility (ExternalName services are rejected as HTTPRoute backends).
-# - LiteLLM starts with an empty model_list; models are added via `obol model setup`.
+# - LiteLLM starts with a base paid/* route; provider models are added via
+#   `obol model setup`, and purchased remote models are added by the controller.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -54,8 +55,8 @@ subsets:
         protocol: TCP
 
 ---
-# LiteLLM configuration: empty model_list by default.
-# Models are added via `obol model setup` which patches this ConfigMap.
+# LiteLLM configuration: base paid/* route plus provider and purchased models.
+# Models are persisted here so LiteLLM reloads survive pod restarts.
 apiVersion: v1
 kind: ConfigMap
 metadata:
