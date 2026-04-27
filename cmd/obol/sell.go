@@ -1937,6 +1937,14 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", addr.Hex())
 
+	// The Register tx is mined on the WRITE upstream, but a follow-up
+	// setMetadata estimateGas goes through the READ upstream which can lag
+	// (we observed ERC721NonexistentToken reverts when a stale eRPC route was
+	// pinned to a parallel Anvil fork). Block until the reader sees the token.
+	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
+		u.Warnf("agent not visible to reader after register: %v", err)
+	}
+
 	// Set x402 metadata.
 	x402Meta := []byte(`{"x402":true}`)
 	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", x402Meta); err != nil {
@@ -1970,6 +1978,12 @@ func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, ne
 	txAddr := crypto.PubkeyToAddress(key.PublicKey)
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", txAddr.Hex())
+
+	// Wait for the chain READER to catch up to the freshly-minted agent id;
+	// see comment in registerWithRemoteSigner for the rationale.
+	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
+		u.Warnf("agent not visible to reader after register: %v", err)
+	}
 
 	x402Meta := []byte(`{"x402":true}`)
 	if err := client.SetMetadata(ctx, key, agentID, "x402", x402Meta); err != nil {
