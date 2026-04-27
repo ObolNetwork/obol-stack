@@ -121,7 +121,7 @@ Known existing-stack migration failures:
 
 - `Namespace "hermes-obol-agent" ... exists and cannot be imported into the current release`: the namespace or monetize RBAC predated Helm ownership. Current `obol stack up` adopts known base-owned resources before Helm sync. If doing it manually, label and annotate the existing resource with `app.kubernetes.io/managed-by=Helm`, `meta.helm.sh/release-name=base`, and `meta.helm.sh/release-namespace=kube-system`.
 - `conflict with "kubectl-patch" ... llm/litellm-config .data.config.yaml`: older writers used a non-Helm field manager for `data.config.yaml`, which conflicts with Helm server-side apply. Current writers use Helm's field manager. During `obol stack up`, the existing LiteLLM config is backed up and previous model entries are merged into the new chart config; if a non-Helm manager is detected, the ConfigMap is deleted before Helm sync so ownership is recreated cleanly.
-- `/etc/hosts` updates require interactive sudo. Codex cannot satisfy the password prompt in non-interactive execution; if DNS fails in the browser, run `obol stack up` or `obol hermes sync obol-agent` from a normal terminal, or manually add `127.0.0.1 obol-agent.obol.stack` and flush local DNS.
+- `/etc/hosts` updates require interactive sudo. Codex cannot satisfy the password prompt in non-interactive execution; if DNS fails in the browser, run `obol stack up` or `obol agent sync obol-agent` from a normal terminal, or manually add `127.0.0.1 obol-agent.obol.stack` and flush local DNS.
 
 ## 4 Inference Paths (All Through LiteLLM)
 

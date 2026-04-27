@@ -1,20 +1,20 @@
 #!/bin/bash
 # Flow 04: Agent Init + Inference — getting-started.md §4-5.
-# Tests: agent init, hermes list, token, agent gateway inference.
+# Tests: agent init, agent list, auth, agent gateway inference.
 source "$(dirname "$0")/lib.sh"
 
 # §4: Deploy AI Agent (idempotent)
 run_step "obol agent init" "$OBOL" agent init
 
 # List agent instances — verify name AND URL are shown (getting-started §4)
-run_step_grep "hermes list shows instances" "obol-agent" "$OBOL" hermes list
-step "hermes list shows agent URL"
-list_out=$("$OBOL" hermes list 2>&1) || true
+run_step_grep "agent list shows instances" "obol-agent" "$OBOL" agent list
+step "agent list shows agent URL"
+list_out=$("$OBOL" agent list 2>&1) || true
 if echo "$list_out" | grep -q "obol.stack\|URL:"; then
     url=$(echo "$list_out" | grep -oE 'http://[a-z0-9.-]+' | head -1)
-    pass "hermes list shows agent URL: $url"
+    pass "agent list shows agent URL: $url"
 else
-    fail "hermes list missing URL — ${list_out:0:200}"
+    fail "agent list missing URL — ${list_out:0:200}"
 fi
 
 # PR 299 moves monetization reconciliation to serviceoffer-controller.
@@ -32,7 +32,7 @@ run_step_grep "serviceoffer-controller running" "Running" \
 
 # §5: Hermes service on port 8642 (getting-started §5 uses port-forward 8642:8642)
 step "Hermes service on port 8642"
-NS=$("$OBOL" hermes list 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
+NS=$("$OBOL" agent list --runtime hermes 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
 oc_port=$("$OBOL" kubectl get svc hermes -n "$NS" \
     -o jsonpath='{.spec.ports[0].port}' 2>&1) || true
 if [ "$oc_port" = "8642" ]; then
@@ -43,7 +43,7 @@ fi
 
 # §5: Test Agent Inference
 step "Get Hermes API server token"
-TOKEN=$("$OBOL" hermes token obol-agent 2>/dev/null || "$OBOL" hermes token default 2>/dev/null || true)
+TOKEN=$("$OBOL" agent auth obol-agent 2>/dev/null || "$OBOL" agent auth 2>/dev/null || true)
 if [ -n "$TOKEN" ]; then
     pass "Got token: ${TOKEN:0:8}..."
 else
@@ -61,7 +61,7 @@ else
 fi
 
 # Determine the namespace for port-forward
-NS=$("$OBOL" hermes list 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
+NS=$("$OBOL" agent list --runtime hermes 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
 
 step "Agent inference via port-forward"
 AGENT_PF_PORT="${FLOW04_AGENT_PORT:-$(pick_free_port)}"
@@ -134,13 +134,13 @@ cleanup_pid "$PF_PID"
 
 # §4: Ethereum signing wallet created by obol agent init (getting-started §4)
 # "A unique Ethereum signing wallet" is listed as a feature of obol agent init.
-step "obol hermes wallet list shows Ethereum address"
-wallet_out=$("$OBOL" hermes wallet list obol-agent 2>&1) || true
+step "obol agent wallet list shows Ethereum address"
+wallet_out=$("$OBOL" agent wallet list obol-agent 2>&1) || true
 if echo "$wallet_out" | grep -q "0x[0-9a-fA-F]\{40\}\|Address:"; then
     addr=$(echo "$wallet_out" | grep -oE '0x[0-9a-fA-F]{40}' | head -1)
     pass "Agent wallet address: $addr"
 else
-    fail "hermes wallet list missing address — ${wallet_out:0:200}"
+    fail "agent wallet list missing address — ${wallet_out:0:200}"
 fi
 
 # §4: Hermes gateway health via HTTPRoute URL (getting-started §4 output shows URL)

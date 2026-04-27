@@ -1129,7 +1129,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: get Hermes API server token"
-BOB_TOKEN=$(bob "$BOB_AGENT_RUNTIME" token obol-agent 2>/dev/null || true)
+BOB_TOKEN=$(bob agent auth obol-agent 2>/dev/null || true)
 if [ -z "$BOB_TOKEN" ]; then
     fail "Could not get Bob's gateway token"
     emit_metrics; exit 1

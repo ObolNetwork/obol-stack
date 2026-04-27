@@ -432,12 +432,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	if err := hermes.SetupDefault(cfg, u); err != nil {
 		u.Warnf("Failed to set up default Hermes: %v", err)
-		u.Dim("  You can manually set up Hermes later with: obol hermes onboard")
+		u.Dim("  You can manually set up Hermes later with: obol agent new --runtime hermes")
 	} else if walletAddr, walletErr := hermes.ResolveWalletAddress(cfg); walletErr == nil {
 		u.Blank()
 		u.Successf("Default agent wallet: %s", walletAddr)
 		u.Dim("  Fund this wallet for x402 buying or direct on-chain registration.")
-		u.Dim("  Retrieve later with: obol hermes wallet list obol-agent")
+		u.Dim("  Retrieve later with: obol agent wallet list obol-agent")
 	}
 
 	// Apply agent capabilities (RBAC + heartbeat) to the default instance.

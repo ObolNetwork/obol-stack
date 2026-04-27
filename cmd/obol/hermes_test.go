@@ -2,41 +2,20 @@ package main
 
 import "testing"
 
-func TestHermesCommand_Structure(t *testing.T) {
+func TestHermesCommand_IsNativePassthrough(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := hermesCommand(cfg)
 
-	expected := map[string]bool{
-		"onboard":   false,
-		"sync":      false,
-		"token":     false,
-		"list":      false,
-		"delete":    false,
-		"setup":     false,
-		"dashboard": false,
-		"wallet":    false,
-		"skills":    false,
+	if cmd.Usage != "Run native Hermes CLI against a deployed Hermes instance" {
+		t.Fatalf("unexpected usage: %q", cmd.Usage)
 	}
-
-	for _, sub := range cmd.Commands {
-		if _, ok := expected[sub.Name]; ok {
-			expected[sub.Name] = true
-		}
+	if !cmd.SkipFlagParsing {
+		t.Fatal("Hermes command should pass native Hermes flags through")
 	}
-
-	for name, found := range expected {
-		if !found {
-			t.Errorf("missing Hermes subcommand %q", name)
-		}
+	if !cmd.HideHelp {
+		t.Fatal("Hermes command should pass native --help through")
 	}
-}
-
-func TestHermesSkillsCommand_UsesRawFlagParsing(t *testing.T) {
-	cfg := newTestConfig(t)
-	cmd := hermesCommand(cfg)
-	skills := findSubcommand(t, cmd, "skills")
-
-	if !skills.SkipFlagParsing {
-		t.Fatal("Hermes skills command should pass native Hermes flags through")
+	if len(cmd.Commands) != 0 {
+		t.Fatalf("Hermes command should not define Obol-managed subcommands, got %d", len(cmd.Commands))
 	}
 }

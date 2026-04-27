@@ -71,7 +71,7 @@ func DeploymentPath(cfg *config.Config, id string) string {
 func SetupDefault(cfg *config.Config, u *ui.UI) error {
 	if _, _, err := configuredModels(cfg, u); err != nil {
 		u.Warnf("Skipping default Hermes agent: %v", err)
-		u.Print("  Run 'obol model setup' to configure LiteLLM, then 'obol hermes onboard obol-agent'.")
+		u.Print("  Run 'obol model setup' to configure LiteLLM, then 'obol agent init'.")
 		return nil
 	}
 
@@ -193,7 +193,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		return Sync(cfg, id, u)
 	}
 
-	u.Printf("\nTo deploy: obol hermes sync %s", id)
+	u.Printf("\nTo deploy: obol agent sync %s", id)
 	return nil
 }
 
@@ -250,7 +250,7 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Detail("Dashboard", "http://"+dashboardHostname(id))
 	u.Blank()
 	u.Dim("[Optional] Retrieve an API server token:")
-	u.Printf("  obol hermes token %s", id)
+	u.Printf("  obol agent auth %s", id)
 	u.Blank()
 	u.Dim("[Optional] Port-forward fallback:")
 	u.Printf("  obol kubectl -n %s port-forward svc/%s %d:%d",
@@ -289,7 +289,7 @@ func List(cfg *config.Config, u *ui.UI) error {
 
 	if len(instances) == 0 {
 		u.Print("No Hermes instances installed")
-		u.Print("\nTo create one: obol hermes onboard")
+		u.Print("\nTo create one: obol agent new --runtime hermes")
 		return nil
 	}
 
@@ -479,8 +479,92 @@ func Skills(cfg *config.Config, id string, args []string) error {
 	return cliViaKubectlExec(cfg, id, append([]string{"skills"}, args...))
 }
 
+func CLI(cfg *config.Config, id string, args []string) error {
+	return cliViaKubectlExec(cfg, id, args)
+}
+
 func ResolveInstance(cfg *config.Config, args []string) (string, []string, error) {
 	return agentruntime.ResolveInstance(cfg, agentruntime.Hermes, args)
+}
+
+func ResolveCLIInvocation(cfg *config.Config, args []string) (string, []string, error) {
+	selectedID, hermesArgs, err := splitCLISelection(args)
+	if err != nil {
+		return "", nil, err
+	}
+
+	ids, err := agentruntime.ListInstanceIDs(cfg, agentruntime.Hermes)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(ids) == 0 {
+		return "", nil, errors.New("no Hermes instances found — run 'obol agent init' or 'obol agent new --runtime hermes' to create one")
+	}
+
+	if selectedID != "" {
+		if containsID(ids, selectedID) {
+			return selectedID, hermesArgs, nil
+		}
+		return "", nil, fmt.Errorf("Hermes instance %q not found; available: %s", selectedID, strings.Join(ids, ", "))
+	}
+
+	if containsID(ids, agentruntime.DefaultInstanceID) {
+		return agentruntime.DefaultInstanceID, hermesArgs, nil
+	}
+	if len(ids) == 1 {
+		return ids[0], hermesArgs, nil
+	}
+
+	return "", nil, fmt.Errorf("multiple Hermes instances found, specify one with --agent: %s", strings.Join(ids, ", "))
+}
+
+func splitCLISelection(args []string) (selectedID string, hermesArgs []string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			hermesArgs = append(hermesArgs, args[i+1:]...)
+			return selectedID, hermesArgs, nil
+		}
+
+		if arg == "--agent" {
+			if selectedID != "" {
+				return "", nil, errors.New("--agent specified multiple times")
+			}
+			if i+1 >= len(args) {
+				return "", nil, errors.New("--agent requires an instance name")
+			}
+			selectedID = strings.TrimSpace(args[i+1])
+			if selectedID == "" {
+				return "", nil, errors.New("--agent requires an instance name")
+			}
+			i++
+			continue
+		}
+
+		if value, ok := strings.CutPrefix(arg, "--agent="); ok {
+			if selectedID != "" {
+				return "", nil, errors.New("--agent specified multiple times")
+			}
+			selectedID = strings.TrimSpace(value)
+			if selectedID == "" {
+				return "", nil, errors.New("--agent requires an instance name")
+			}
+			continue
+		}
+
+		hermesArgs = append(hermesArgs, arg)
+	}
+
+	return selectedID, hermesArgs, nil
+}
+
+func containsID(ids []string, id string) bool {
+	for _, candidate := range ids {
+		if candidate == id {
+			return true
+		}
+	}
+	return false
 }
 
 func cliViaKubectlExec(cfg *config.Config, id string, args []string) error {
@@ -600,7 +684,7 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 }
 
 func generateHelmfile(namespace string) string {
-	return fmt.Sprintf(`# Managed by obol hermes
+	return fmt.Sprintf(`# Managed by obol agent
 
 repositories:
   - name: obol

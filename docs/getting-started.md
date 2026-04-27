@@ -164,7 +164,7 @@ The default `obol-agent` instance includes:
 List all agent instances:
 
 ```bash
-obol hermes list
+obol agent list
 ```
 
 ## Step 5 -- Test Agent Inference
@@ -173,16 +173,16 @@ Get the gateway token for your agent instance:
 
 ```bash
 # For the default instance
-obol hermes token default
+obol agent auth
 
 # For obol-agent
-obol hermes token obol-agent
+obol agent auth obol-agent
 ```
 
 Test inference through the agent gateway:
 
 ```bash
-TOKEN=$(obol hermes token default)
+TOKEN=$(obol agent auth obol-agent)
 
 obol kubectl port-forward -n hermes-obol-agent svc/hermes 8642:8642 &
 PF_PID=$!

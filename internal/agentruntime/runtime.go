@@ -185,7 +185,7 @@ func ResolveInstance(cfg *config.Config, runtime Runtime, args []string) (id str
 
 	switch len(instances) {
 	case 0:
-		return "", nil, fmt.Errorf("no %s instances found — run 'obol %s onboard' to create one", desc.DisplayName, runtime)
+		return "", nil, fmt.Errorf("no %s instances found — run 'obol agent new --runtime %s' to create one", desc.DisplayName, runtime)
 	case 1:
 		return instances[0], args, nil
 	default:

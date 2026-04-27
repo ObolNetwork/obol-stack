@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -205,5 +206,46 @@ func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("hermesExecArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveCLIInvocation_DefaultsToObolAgent(t *testing.T) {
+	cfg := testConfig(t)
+	mkdirInstance(t, cfg, agentruntime.DefaultInstanceID)
+	mkdirInstance(t, cfg, "research")
+
+	id, args, err := ResolveCLIInvocation(cfg, []string{"skills", "list"})
+	if err != nil {
+		t.Fatalf("ResolveCLIInvocation() error = %v", err)
+	}
+	if id != agentruntime.DefaultInstanceID {
+		t.Fatalf("id = %q, want %q", id, agentruntime.DefaultInstanceID)
+	}
+	if !reflect.DeepEqual(args, []string{"skills", "list"}) {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
+func TestResolveCLIInvocation_UsesExplicitAgent(t *testing.T) {
+	cfg := testConfig(t)
+	mkdirInstance(t, cfg, agentruntime.DefaultInstanceID)
+	mkdirInstance(t, cfg, "research")
+
+	id, args, err := ResolveCLIInvocation(cfg, []string{"--agent", "research", "config", "show"})
+	if err != nil {
+		t.Fatalf("ResolveCLIInvocation() error = %v", err)
+	}
+	if id != "research" {
+		t.Fatalf("id = %q, want research", id)
+	}
+	if !reflect.DeepEqual(args, []string{"config", "show"}) {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
+func mkdirInstance(t *testing.T, cfg *config.Config, id string) {
+	t.Helper()
+	if err := os.MkdirAll(DeploymentPath(cfg, id), 0o755); err != nil {
+		t.Fatalf("create Hermes instance %q: %v", id, err)
 	}
 }
