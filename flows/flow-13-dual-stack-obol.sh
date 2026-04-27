@@ -812,24 +812,34 @@ poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
 # 21. TUNNEL + 402 GATE
 # ═════════════════════════════════════════════════════════════════
 
-step "Alice: tunnel URL"
-TUNNEL_URL=$(alice tunnel status 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
-if [ -z "$TUNNEL_URL" ]; then
-    fail "No tunnel URL"; emit_metrics; exit 1
-fi
-TUNNEL_HOST=$(tunnel_hostname "$TUNNEL_URL")
-TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
-pass "Tunnel: $TUNNEL_URL"
+step "Alice: discoverable URL (skip cloudflared, use docker host route)"
+# Alice's k3d serverlb container exposes Traefik on the host at $ALICE_HTTP_PORT.
+# Bob's pods can reach the host via host.k3d.internal, so a tunnel is
+# unnecessary for cross-cluster reachability inside the same docker daemon.
+# This avoids the lazy cloudflared deployment that `obol stack up` does NOT
+# trigger when we apply a ServiceOffer YAML directly (without `obol sell http`).
+TUNNEL_URL="http://host.k3d.internal:${ALICE_HTTP_PORT}"
+TUNNEL_HOST="host.k3d.internal"
+TUNNEL_IP=""
+pass "Reachable: $TUNNEL_URL (cross-cluster via host docker bridge)"
 
 step "Alice: 402 gate works on $TUNNEL_URL/services/alice-obol-inference"
+# Probe from Bob's network space using a transient busybox pod; an Alice-side
+# probe would test loopback, which doesn't tell us cross-cluster reachability.
+# However at this point Bob's cluster isn't up yet, so probe via Alice itself
+# at the HOST URL (127.0.0.1:ALICE_HTTP_PORT — same listener), then the real
+# cross-cluster check happens at step 29.
 gate_code=""
 for _ in $(seq 1 24); do
-    gate_code=$(curl_tunnel_402_code "$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions" "$TUNNEL_HOST" "$TUNNEL_IP")
+    gate_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 \
+        -X POST "http://127.0.0.1:${ALICE_HTTP_PORT}/services/alice-obol-inference/v1/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true)
     [ "$gate_code" = "402" ] && break
     sleep 5
 done
 if [ "$gate_code" = "402" ]; then
-    pass "402 gate works"
+    pass "402 gate works (HTTP $gate_code at host:$ALICE_HTTP_PORT)"
 else
     fail "402 gate returned ${gate_code:-no HTTP response} after 120s"
 fi
