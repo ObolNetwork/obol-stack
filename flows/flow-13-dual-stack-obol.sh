@@ -813,13 +813,15 @@ poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: bring up cloudflared tunnel"
-# `obol stack up` deploys the chart but does NOT start cloudflared. `obol sell
-# http` would have, but flow-13 applies the OBOL ServiceOffer YAML directly
-# (because `obol sell http` doesn't expose the OBOL Permit2 asset metadata
-# flags yet). So we trigger the tunnel explicitly here to keep the path
-# faithful to a real production deployment.
-alice tunnel restart 2>&1 | tail -3
-pass "Tunnel restart issued"
+# `obol stack up` deploys the cloudflared Deployment at 0 replicas. `obol sell
+# http` would scale it to 1 via internal EnsureTunnelForSell, but flow-13
+# applies the OBOL ServiceOffer YAML directly (because `obol sell http`
+# doesn't expose the OBOL Permit2 asset metadata flags yet). `obol tunnel
+# restart` only does `rollout restart` — a no-op when replicas=0. So we
+# explicitly scale here, then poll for tunnel-status to capture the URL.
+alice kubectl scale deployment/cloudflared -n traefik --replicas=1 2>&1 | tail -2
+alice kubectl rollout status deployment/cloudflared -n traefik --timeout=180s 2>&1 | tail -3
+pass "Cloudflared scaled to 1"
 
 step "Alice: tunnel URL"
 TUNNEL_URL=""
