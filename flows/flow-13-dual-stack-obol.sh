@@ -570,8 +570,8 @@ cat > "$FACILITATOR_CONFIG" << FEOF
     "rpc": [{"http": "$ANVIL_RPC_HOST", "rate_limit": 50}]}},
   "schemes": [
     {"id": "v1-eip155-exact", "chains": "eip155:*"},
-    {"id": "v2-eip155-exact", "chains": "eip155:*"},
-    {"id": "v2-eip155-permit2", "chains": "eip155:*"}
+    {"id": "v2-eip155-exact", "chains": "eip155:*",
+     "config": {"eip2612_gas_sponsoring": true}}
   ]
 }
 FEOF
@@ -599,7 +599,12 @@ else
     emit_metrics; exit 1
 fi
 
-step "Facilitator: /supported advertises base-sepolia exact + permit2"
+step "Facilitator: /supported advertises base-sepolia exact (v1+v2)"
+# The OBOL Permit2 / EIP-2612 gas sponsoring path is enabled via
+# config.eip2612_gas_sponsoring=true on the v2-eip155-exact scheme — there is
+# no separate "permit2" scheme. The buyer-side is what produces a Permit2
+# payment payload; the facilitator's only job is to advertise v2-exact and
+# accept the sponsored authorization at /verify and /settle time.
 sup_json=$(curl -sf --max-time 5 "$FACILITATOR_URL_HOST/supported" 2>/dev/null || true)
 if SUP="$sup_json" python3 - <<'PY'
 import json, os, sys
@@ -607,22 +612,23 @@ try:
     d = json.loads(os.environ["SUP"])
 except Exception:
     sys.exit(1)
-exact_ok = False
-permit2_ok = False
+v1_ok = False
+v2_ok = False
 for k in d.get("kinds", []):
     net = k.get("network", "")
     scheme = k.get("scheme", "")
-    if net in ("base-sepolia", "eip155:84532"):
-        if scheme == "exact":
-            exact_ok = True
-        if "permit2" in scheme:
-            permit2_ok = True
-sys.exit(0 if exact_ok and permit2_ok else 1)
+    ver = k.get("x402Version")
+    if net in ("base-sepolia", "eip155:84532") and scheme == "exact":
+        if ver == 1:
+            v1_ok = True
+        if ver == 2:
+            v2_ok = True
+sys.exit(0 if v1_ok and v2_ok else 1)
 PY
 then
-    pass "Facilitator advertises base-sepolia exact + permit2"
+    pass "Facilitator advertises base-sepolia v1+v2 exact (Permit2 path ready)"
 else
-    fail "Facilitator missing exact/permit2 for base-sepolia — kinds: ${sup_json:0:300}"
+    fail "Facilitator missing v1+v2 exact for base-sepolia — kinds: ${sup_json:0:300}"
     emit_metrics; exit 1
 fi
 
