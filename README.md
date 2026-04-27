@@ -53,8 +53,8 @@ obol stack up
 obol agent init
 
 # Inspect the default Hermes agent
-obol hermes list
-obol hermes token obol-agent
+obol agent list
+obol agent auth obol-agent
 ```
 
 `obol stack up` provisions the default [Hermes Agent](https://github.com/NousResearch/hermes-agent) runtime behind LiteLLM. `obol agent init` applies the controller-based agent capabilities used for monetization and reconciliation.
@@ -151,24 +151,24 @@ Hermes is the default AI agent runtime deployed by the stack as `obol-agent`. Op
 
 ```bash
 # Default stack-managed Hermes agent
-obol hermes list
-obol hermes token obol-agent
+obol agent list
+obol agent auth obol-agent
 obol hermes skills list
 
 # Create and deploy an additional Hermes instance
-obol hermes onboard --id research
+obol agent new --id research
 
 # Create and deploy an optional OpenClaw instance
-obol openclaw onboard
+obol agent new --runtime openclaw
 
 # List optional OpenClaw instances
-obol openclaw list
+obol agent list --runtime openclaw
 
 # Open the OpenClaw web dashboard
 obol openclaw dashboard
 ```
 
-When only one runtime-specific instance is installed, the instance ID is optional. With multiple instances, specify the name: `obol hermes sync research` or `obol openclaw setup prod`.
+Use `obol agent` for Obol-managed lifecycle and auth flows. Use `obol hermes` for native Hermes CLI commands against the default instance, or pass `--agent <id>` for a non-default Hermes instance.
 
 ### Skills
 

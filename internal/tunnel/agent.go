@@ -36,19 +36,19 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
 		// Overlay exists but helmfile.yaml is missing — unusual, skip sync.
-		fmt.Printf("⚠ AGENT_BASE_URL updated in values-hermes.yaml but helmfile.yaml not found; run 'obol hermes sync %s' manually.\n", agentDeploymentID)
+		fmt.Printf("⚠ AGENT_BASE_URL updated in values-hermes.yaml but helmfile.yaml not found; run 'obol agent sync %s' manually.\n", agentDeploymentID)
 		return nil
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		fmt.Printf("⚠ AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol hermes sync %s'.\n", agentDeploymentID)
+		fmt.Printf("⚠ AGENT_BASE_URL updated but cluster not running; changes will apply on next 'obol agent sync %s'.\n", agentDeploymentID)
 		return nil
 	}
 
 	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
 	if _, err := os.Stat(helmfileBin); os.IsNotExist(err) {
-		fmt.Printf("⚠ helmfile not found at %s; run 'obol hermes sync %s' manually.\n", helmfileBin, agentDeploymentID)
+		fmt.Printf("⚠ helmfile not found at %s; run 'obol agent sync %s' manually.\n", helmfileBin, agentDeploymentID)
 		return nil
 	}
 

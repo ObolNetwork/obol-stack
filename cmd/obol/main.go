@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 	"syscall"
 
-	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -42,7 +41,13 @@ COMMANDS:
      stack down      Stop the Obol Stack
      stack purge     Delete stack config (use --force to also delete data)
    Obol Agent:
-     agent init      Initialize the Obol Agent
+     agent init      Initialize the stack-managed Obol Agent
+     agent new       Create and deploy an agent instance
+     agent sync      Deploy or update an agent instance
+     agent auth      Retrieve or regenerate an agent API token
+     agent wallet    Manage agent wallets
+     agent list      List agent instances
+     agent delete    Remove an agent instance
      wallet import   Import an existing wallet for the Obol Agent
    Network Management:
      network list    List all networks (local nodes + remote RPCs)
@@ -52,14 +57,12 @@ COMMANDS:
      network status  Show eRPC gateway health and upstreams
      network delete  Remove network deployment
 
-   Hermes (Default Agent Runtime):
-     hermes onboard     Create and deploy a Hermes instance
-     hermes setup       Re-render Hermes config for a deployed instance
-     hermes sync        Deploy or update a Hermes instance
-     hermes token       Retrieve Hermes API server token
-     hermes list        List Hermes instances
-     hermes delete      Remove instance and cluster resources
-     hermes wallet      Inspect Hermes wallets
+   Hermes (Native Agent Runtime):
+     hermes          Run native Hermes CLI against a deployed instance
+     hermes skills   Run native Hermes skills commands
+     hermes chat     Run native Hermes chat commands
+     hermes config   Run native Hermes config commands
+     hermes dashboard Run native Hermes dashboard commands
 
    OpenClaw (Alternate Agent Runtime):
      openclaw onboard   Create and deploy an OpenClaw instance
@@ -220,19 +223,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			// ============================================================
 			// Obol Agent Commands
 			// ============================================================
-			{
-				Name:  "agent",
-				Usage: "Manage Obol Agent",
-				Commands: []*cli.Command{
-					{
-						Name:  "init",
-						Usage: "Initialize the Obol Agent",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return agent.Init(cfg, getUI(cmd))
-						},
-					},
-				},
-			},
+			agentCommand(cfg),
 			walletCommand(cfg),
 			// ============================================================
 			// Tunnel Management Commands

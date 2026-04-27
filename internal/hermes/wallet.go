@@ -233,7 +233,7 @@ func encryptToV3Keystore(privKey, pubKey []byte, password string) ([]byte, strin
 
 func generateRemoteSignerValues(wallet *WalletInfo) string {
 	return fmt.Sprintf(`# Remote-signer configuration
-# Managed by obol hermes — do not edit manually.
+# Managed by obol agent — do not edit manually.
 
 keystorePassword:
   value: %q
@@ -280,7 +280,7 @@ func ResolveWalletAddress(cfg *config.Config) (string, error) {
 
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("no Hermes instances found — run 'obol hermes onboard' first, or use --wallet")
+		return "", fmt.Errorf("no Hermes instances found — run 'obol agent new --runtime hermes' first, or use --wallet")
 	case 1:
 		wallet, err := ReadWalletMetadata(DeploymentPath(cfg, ids[0]))
 		if err != nil {
@@ -308,7 +308,7 @@ func ResolveInstanceNamespace(cfg *config.Config) (string, error) {
 
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("no Hermes instances found — run 'obol hermes onboard' first")
+		return "", fmt.Errorf("no Hermes instances found — run 'obol agent new --runtime hermes' first")
 	case 1:
 		return agentruntime.Namespace(agentruntime.Hermes, ids[0]), nil
 	default:
