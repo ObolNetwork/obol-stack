@@ -18,6 +18,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -458,6 +459,15 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
+	if err := migrateBaseHelmOwnership(cfg, kubeconfigPath); err != nil {
+		u.Warnf("Failed to migrate existing base resources into Helm ownership: %v", err)
+	}
+
+	previousLiteLLMConfig, err := migrateLiteLLMConfigForHelm(cfg, kubeconfigPath)
+	if err != nil {
+		u.Warnf("Failed to migrate LiteLLM config ownership: %v", err)
+	}
+
 	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
@@ -487,6 +497,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}); err != nil {
 		u.Warn("Helmfile sync failed, stopping cluster")
 
+		if previousLiteLLMConfig != "" {
+			if restoreErr := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); restoreErr != nil {
+				u.Warnf("Failed to restore LiteLLM config after Helmfile error: %v", restoreErr)
+			}
+		}
+
 		if downErr := Down(cfg, u); downErr != nil {
 			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
@@ -495,6 +511,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	u.Success("Default infrastructure deployed")
+
+	if previousLiteLLMConfig != "" {
+		if err := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); err != nil {
+			u.Warnf("Failed to restore LiteLLM config after base migration: %v", err)
+		}
+	}
 
 	// Populate the x402-verifier CA bundle from the host so TLS verification of
 	// the facilitator works without needing to run `obol sell pricing` first.
@@ -971,4 +993,103 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 	}
 
 	return os.WriteFile(helmfilePath, []byte(updated), 0o600) //nolint:gosec // G703: path from user's local config dir
+}
+
+type baseHelmResource struct {
+	Kind      string
+	Name      string
+	Namespace string
+}
+
+func migrateBaseHelmOwnership(cfg *config.Config, kubeconfigPath string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	resources := []baseHelmResource{
+		{Kind: "namespace", Name: "agent"},
+		{Kind: "namespace", Name: "hermes-obol-agent"},
+		{Kind: "clusterrole", Name: "openclaw-monetize-read"},
+		{Kind: "clusterrolebinding", Name: "openclaw-monetize-read-binding"},
+		{Kind: "role", Name: "openclaw-monetize-write", Namespace: "hermes-obol-agent"},
+		{Kind: "rolebinding", Name: "openclaw-monetize-write-binding", Namespace: "hermes-obol-agent"},
+	}
+
+	var failures []error
+
+	for _, resource := range resources {
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, append([]string{"get", resource.Kind, resource.Name}, resource.namespaceArgs()...)...); err != nil {
+			continue
+		}
+
+		labelArgs := append([]string{"label", resource.Kind, resource.Name}, resource.namespaceArgs()...)
+		labelArgs = append(labelArgs, "app.kubernetes.io/managed-by=Helm", "--overwrite")
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, labelArgs...); err != nil {
+			failures = append(failures, fmt.Errorf("label %s/%s: %w", resource.Kind, resource.Name, err))
+			continue
+		}
+
+		annotateArgs := append([]string{"annotate", resource.Kind, resource.Name}, resource.namespaceArgs()...)
+		annotateArgs = append(annotateArgs,
+			"meta.helm.sh/release-name=base",
+			"meta.helm.sh/release-namespace=kube-system",
+			"--overwrite",
+		)
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, annotateArgs...); err != nil {
+			failures = append(failures, fmt.Errorf("annotate %s/%s: %w", resource.Kind, resource.Name, err))
+		}
+	}
+
+	return errors.Join(failures...)
+}
+
+func (r baseHelmResource) namespaceArgs() []string {
+	if r.Namespace == "" {
+		return nil
+	}
+
+	return []string{"-n", r.Namespace}
+}
+
+func migrateLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	managers, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm",
+		"--show-managed-fields", "-o", "jsonpath={.metadata.managedFields[*].manager}")
+	if err != nil || !strings.Contains(managers, "kubectl-patch") {
+		return "", nil
+	}
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+
+	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
+		"delete", "configmap", "litellm-config", "-n", "llm"); err != nil {
+		return "", err
+	}
+
+	return raw, nil
+}
+
+func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
+
+	return kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+}
+
+func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n  namespace: %s\ndata:\n  %s: |\n", name, namespace, key)
+	for _, line := range strings.Split(value, "\n") {
+		fmt.Fprintf(&b, "    %s\n", line)
+	}
+
+	return []byte(b.String())
 }
