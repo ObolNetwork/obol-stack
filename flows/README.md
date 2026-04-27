@@ -17,6 +17,7 @@ idempotent and exits non-zero on failure.
 - `flow-10-anvil-facilitator.sh` — Anvil + Facilitator local test infra (§3). Run BEFORE flow-08.
 - `flow-11-dual-stack.sh` — Dual-Stack: Alice sells, Bob discovers via ERC-8004 and buys.
 - `flow-12-obol-payment.sh` — OBOL payment asset over the existing USDC commerce baseline.
+- `flow-13-dual-stack-obol.sh` — Dual-Stack OBOL: Alice sells, Bob discovers and buys, but the payment asset is a fork-local OBOL ERC20Permit token and the facilitator is a local x402-rs build (not the public Obol facilitator). Use this when you want to validate the OBOL Permit2 path end-to-end without depending on the public Obol facilitator or any USDC contract. Both obol stacks share ONE local Anvil fork of Base Sepolia via `host.k3d.internal:$ANVIL_PORT`. Requires `cast` + `anvil` + `forge` and an `X402_FACILITATOR_BIN` (or `X402_RS_DIR`) pointing at an x402-rs build with `eip2612GasSponsoring`; the script skips with a single PASS if neither is set.
 
 `lib.sh` is shared helpers; `release-smoke.sh` is the release gate.
 
