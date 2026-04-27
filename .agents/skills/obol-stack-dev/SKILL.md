@@ -358,3 +358,119 @@ go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_
 - **Projected ConfigMap refresh**: the LiteLLM pod can take ~60s to reflect updated buyer ConfigMaps in the sidecar.
 - **eRPC balance lag**: `buy.py balance` uses `eth_call` through eRPC, and the default unfinalized cache TTL is 10s. After a paid request, poll until the reported balance catches up with the on-chain delta.
 - **kubectl exec shell quoting**: NEVER use `sh -c` with `fmt.Sprintf` to embed JSON or secrets in shell commands passed via `kubectl exec`. JSON body or auth tokens containing single quotes will break the shell. Instead, pass args directly: `kubectl exec ... -- wget -qO- --post-data=<json> --header=Authorization:\ Bearer\ <key> <url>`. Each argument goes as a separate argv element, bypassing shell interpretation entirely.
+
+## Running Flows on Remote Hosts (spark1/spark2/CI)
+
+A long flow (`flow-11`, `flow-13`) launched from an SSH session needs to survive the SSH connection ending. Don't trust `nohup` or `setsid -f` — both have been observed to die mid-flow over Cloudflare-tunneled SSH (the parent-shell SIGHUP propagates regardless). Use the canonical wrapper:
+
+```bash
+ssh host "cd ~/obol-stack-src && bash flows/run-detached.sh flow-11-dual-stack.sh"
+# Prints the log path; tail it from a new SSH session to follow.
+```
+
+`flows/run-detached.sh` tries `tmux` → `screen` → `setsid -f` in that order. Tmux is by far the most reliable; spark hosts already have it.
+
+### Mandatory environment for non-login shells
+
+A bash shell launched by `nohup`/`setsid`/cron does NOT source `.bashrc` and so will not see `~/.foundry/bin` (cast/anvil/forge) or `~/.local/bin` (kubectl/helm/k3d). `flows/lib.sh` exports the canonical PATH at source time — every flow must `source "$(dirname "$0")/lib.sh"` before its first `cast`/`kubectl` call. If you write a new flow, source lib.sh first, never inline.
+
+### `.env` parsing
+
+The flow harness extracts `REMOTE_SIGNER_PRIVATE_KEY` with an anchored regex (`^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=`) and `cut -d= -f2-`. A loose `grep REMOTE_SIGNER_PRIVATE_KEY` matches comment lines too and produces multi-line junk that `cast wallet address --private-key` then chokes on. Keep the anchored form when copy-pasting into new flows.
+
+### Probing in-cluster from outside containers
+
+eRPC, x402-verifier, x402-buyer, and Hermes API-server are all distroless — no `wget`/`curl`/`nc` baked in. Don't `kubectl exec deploy/erpc -- wget …`; it always fails. Instead spin up a transient probe pod:
+
+```bash
+kubectl run flow-probe-$RANDOM --rm -i --restart=Never --image=busybox:1.36 --quiet \
+    -- sh -c "wget -qO- --timeout=5 http://erpc.erpc.svc.cluster.local:4000 \
+        --post-data='{...}' --header='Content-Type: application/json'"
+```
+
+This is what `flows/flow-13-dual-stack-obol.sh` does for the `host.k3d.internal` reachability checks.
+
+### Polling pod readiness in multi-container pods
+
+`kubectl get pods` STATUS column collapses a `1/2 CrashLoopBackOff` pod to "CrashLoopBackOff" even when the container we care about is happily Running. For the buyer's API-server check on Hermes (where `hermes-dashboard` may be unhealthy), poll the *specific* container's `containerStatuses[?(@.name==<name>)].ready` instead of the pod-summary column:
+
+```bash
+poll_step_grep "Bob: Hermes API-server ready" "true" 36 5 \
+    bob kubectl get pods -n "$BOB_AGENT_NS" -l "$BOB_AGENT_LABEL" \
+        -o "jsonpath={range .items[*].status.containerStatuses[?(@.name=='${BOB_AGENT_CONTAINER}')]}{.ready}{'\n'}{end}"
+```
+
+Use `BOB_AGENT_*` vars exported by `detect_buyer_runtime` (added to `flows/lib.sh`). Don't hardcode `openclaw-obol-agent` / `app.kubernetes.io/name=openclaw` — those break on Hermes.
+
+### Hermes dashboard requires `GATEWAY_ALLOW_ALL_USERS=true` in dev
+
+The `hermes-dashboard` container in the upstream `nousresearch/hermes-agent` image refuses to start without an allowlist:
+
+```
+WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied.
+Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or
+configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+```
+
+The chart at `internal/hermes/hermes.go` injects `GATEWAY_ALLOW_ALL_USERS=true` for the dashboard container only — safe in a local k3d cluster (no public messaging endpoint to defend), required to override in production.
+
+### Anvil fork hosting
+
+Anvil binds 127.0.0.1 by default. For a k3d cluster to reach it via `host.k3d.internal`, start with `--host 0.0.0.0`:
+
+```bash
+anvil --fork-url https://sepolia.base.org --port "$ANVIL_PORT" --host 0.0.0.0
+```
+
+Both Alice's and Bob's clusters share the same Anvil through `host.k3d.internal:$ANVIL_PORT`, but each cluster's eRPC must be pinned to the custom upstream:
+
+```bash
+alice network add base-sepolia --endpoint "http://host.k3d.internal:$ANVIL_PORT" --allow-writes
+# Then patch eRPC to drop the public Base Sepolia upstream so requests hit only the fork.
+# pin_erpc_chain_single_upstream is a flow-13 helper; mirror it for new flows.
+```
+
+### x402-rs facilitator scheme config
+
+There is NO standalone `v2-eip155-permit2` scheme. OBOL Permit2 / EIP-2612 gas sponsoring is enabled by adding `config.eip2612_gas_sponsoring=true` to the `v2-eip155-exact` scheme entry — same as `internal/testutil/facilitator_real.go::writeRealFacilitatorConfig` does. The `/supported` endpoint will list `v1+v2 exact` for `base-sepolia`/`eip155:84532`; the buyer-side is what produces the Permit2 payload.
+
+### Cloudflared is lazy
+
+`obol stack up` does NOT deploy cloudflared. The deployment is created on demand by `obol sell http` (which calls `tunnel.EnsureTunnelForSell`). If a flow applies a ServiceOffer YAML directly (because the CLI doesn't expose the asset metadata flags it needs), it must call `obol tunnel restart` (or equivalent) to bring cloudflared up explicitly before `obol tunnel status` can return a URL. flow-13 does this.
+
+### `--namespace` on `obol sell http` is overloaded
+
+`--namespace` sets BOTH the ServiceOffer CR namespace AND the upstream service namespace (the chart can't separate them on this command). Pass the same `-n <ns>` to every follow-up `sell status|stop|delete`. The CLI prints the correct namespace after creation; copy from there.
+
+### Cloudflared image stalls on aarch64 hosts
+
+On some aarch64 hosts (we've seen this on a Spark with NVIDIA stack), the k3d registry mirror gets stuck on `cloudflare/cloudflared:2026.1.2` — manifest HEAD returns 200 but no blob GETs follow and kubelet sits in `ContainerCreating` forever. Workaround in `flows/lib.sh::ensure_image_in_k3d`: pull via host docker, save tarball, ctr-import directly into the k3d node:
+
+```bash
+ensure_image_in_k3d cloudflare/cloudflared:2026.1.2 obol-stack-<petname>
+```
+
+Run this before `obol stack up` finishes pulling the chart, or right after if you observe the stall.
+
+### Don't trust agent natural-language responses as test assertions
+
+LLM agents (OpenClaw or Hermes) give different wording across runs. `grep -qE "purchase complete|successful|paid"` is brittle — once we hit "Successfully purchased N tokens" (Hermes) it didn't match the regex aimed at OpenClaw and we got a false FAIL even though the on-chain state was correct. Treat the agent's natural-language output as informational; assert on **structural** state (`PurchaseRequest.status.Ready=True`, `cast logs Transfer(...)` receipt with status=0x1) instead.
+
+### ERC-8004 registration prerequisites in flows
+
+If the ServiceOffer has `registration.enabled: true`, the controller will not move to `Ready=True` until registration completes. Two paths to satisfy that:
+
+1. **Via `obol sell http --private-key-file`** — supplies a signing key to the controller. The CLI also calls `EnsureTunnelForSell` first so the controller gets the tunnel URL in the `obol-stack-config` ConfigMap, which is required for the registration metadata. flow-11 takes this path.
+2. **YAML-apply with `registration.enabled: false`** — skip ERC-8004 entirely. Suitable for tests that exercise only the payment path. flow-13 does this; cross-cluster discovery falls back to skill.md / a known-URL hand-off.
+
+If you apply a ServiceOffer YAML with `registration.enabled: true` and never give the controller a key, it parks at `AwaitingExternalRegistration` and `Ready` stays False. Either supply the key or drop the flag.
+
+### setMetadata revert during simulation (live Base Sepolia)
+
+`erc8004.Client.SetMetadata` writes via `setMetadata(uint256,string,bytes)` on the registry contract. If the `eth_estimateGas` simulation reverts, the broadcast is aborted (only `register` lands; the wallet nonce only goes 0→1). The most common causes:
+
+1. The eRPC chain route is pinned to a stale Anvil fork from a prior flow-12/13 run that didn't unwind. Verify with `obol kubectl get cm erpc-config -n erpc -o yaml` — if the `base-sepolia` upstream points anywhere other than the public RPC (`https://sepolia.base.org`), the simulation runs against a dead fork. `obol network sync` or `obol network remove base-sepolia && obol network add base-sepolia --allow-writes` to reset.
+2. Contract-level: the registry's `setMetadata` checks ownership of the agent ID. If the registration tx and the setMetadata simulation use different `from` addresses (e.g. signer-key mismatch between commands), the revert is "not owner". `cast call --from <signer> 0x8004... "setMetadata(uint256,string,bytes)" <agentId> "x402.supported" 0x01 --rpc-url https://sepolia.base.org` reproduces it cheaply.
+3. Encoding: `[]byte{1}` for `x402.supported` is the historical convention but the on-chain ERC-8004 spec may require a string `"true"` or a typed value. Check the registry source on Basescan if the static call's revert reason mentions schema/length.
+
+When in doubt, run the static `cast call --from $SIGNER ...` first; the revert reason it surfaces is the same one the CLI sees from `eth_estimateGas`.
