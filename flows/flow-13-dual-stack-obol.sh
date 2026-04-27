@@ -516,7 +516,11 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Anvil: start fork of Base Sepolia on port $ANVIL_PORT"
+# Bind 0.0.0.0 so the k3d clusters can reach this from inside their containers
+# via the docker-managed `host.k3d.internal` alias. Default 127.0.0.1 binding
+# would only be reachable from the same loopback the host shell uses.
 nohup anvil --fork-url https://sepolia.base.org --port "$ANVIL_PORT" \
+    --host 0.0.0.0 \
     > "$ANVIL_LOG" 2>&1 &
 ANVIL_PID=$!
 # Poll readiness for up to 20s.
