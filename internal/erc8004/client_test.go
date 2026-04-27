@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -632,4 +633,94 @@ func TestGetMetadata_EmptyResult(t *testing.T) {
 // parseABI is a helper that parses the embedded ABI for use in tests.
 func parseABI() (abi.ABI, error) {
 	return abi.JSON(strings.NewReader(identityRegistryABI))
+}
+
+// TestWaitForAgent_RetriesUntilOwnerVisible verifies that WaitForAgent keeps
+// polling ownerOf until the reader returns a successful result, simulating
+// the read-side staleness window between Register's WaitMined (write upstream)
+// and a subsequent setMetadata estimateGas (read upstream).
+func TestWaitForAgent_RetriesUntilOwnerVisible(t *testing.T) {
+	var attempts int
+	owner := common.HexToAddress("0x2FbFe6cF08Ac224f97915ecF07eE29Be0b213f51")
+
+	parsedABI, err := parseABI()
+	if err != nil {
+		t.Fatalf("parseABI: %v", err)
+	}
+
+	handlers := map[string]func([]json.RawMessage) (json.RawMessage, error){
+		"eth_chainId": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x14a34"`), nil
+		},
+		"eth_call": func(_ []json.RawMessage) (json.RawMessage, error) {
+			attempts++
+			if attempts < 3 {
+				// Simulate ERC721NonexistentToken on first two calls (read
+				// upstream not yet caught up).
+				return nil, fmt.Errorf("execution reverted")
+			}
+			// Third call: encode owner as ownerOf return.
+			ownerBytes, encErr := parsedABI.Methods["getAgentWallet"].Outputs.Pack(owner)
+			if encErr != nil {
+				return nil, encErr
+			}
+			return json.RawMessage(fmt.Sprintf("%q", "0x"+common.Bytes2Hex(ownerBytes))), nil
+		},
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	got, err := client.WaitForAgent(ctx, big.NewInt(5196), 20*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForAgent: %v after %d attempts", err, attempts)
+	}
+	if got != owner {
+		t.Errorf("expected owner %s, got %s", owner, got)
+	}
+	if attempts < 3 {
+		t.Errorf("expected at least 3 attempts (2 reverts + 1 success), got %d", attempts)
+	}
+}
+
+// TestWaitForAgent_TimeoutReturnsError verifies that persistent reverts
+// surface as a timeout error.
+func TestWaitForAgent_TimeoutReturnsError(t *testing.T) {
+	handlers := map[string]func([]json.RawMessage) (json.RawMessage, error){
+		"eth_chainId": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"0x14a34"`), nil
+		},
+		"eth_call": func(_ []json.RawMessage) (json.RawMessage, error) {
+			return nil, fmt.Errorf("execution reverted")
+		},
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.WaitForAgent(ctx, big.NewInt(5196), 3*time.Second)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("expected 'timed out' in error, got: %v", err)
+	}
 }
