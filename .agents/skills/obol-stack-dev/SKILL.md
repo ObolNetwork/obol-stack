@@ -78,6 +78,53 @@ Use this mental model:
 - Existing dev cluster: `obol stack up` only starts the cluster and does not re-run registry setup.
 - This is an upstream pull cache, not a dedicated local-build publishing workflow.
 
+## Existing Dev Stack Refresh
+
+When testing a new frontend or stack branch against an already-initialized `.workspace/config`, update both the embedded source and the generated defaults copy. `obol stack init` copies embedded infrastructure into `$OBOL_CONFIG_DIR/defaults`; later edits to `internal/embed/infrastructure/...` do not affect that existing generated directory until re-init or manual patching.
+
+```bash
+# Prefer origin-only fetches in this checkout. Some Radicle remotes may be stale
+# and can make `git fetch --all` fail after GitHub has already fetched.
+git fetch origin --prune
+
+# Rebuild the local CLI from the current branch.
+go build -o .workspace/bin/obol ./cmd/obol
+
+# For a released frontend image, verify and pull the exact tag first.
+docker manifest inspect obolnetwork/obol-stack-front-end:v0.1.17-rc.5 >/dev/null
+docker pull obolnetwork/obol-stack-front-end:v0.1.17-rc.5
+
+# Existing initialized stacks need the generated defaults value patched too.
+rg -n 'obol-stack-front-end|tag:' \
+  internal/embed/infrastructure/values/obol-frontend.yaml.gotmpl \
+  .workspace/config/defaults/values/obol-frontend.yaml.gotmpl
+
+OBOL_CONFIG_DIR="$PWD/.workspace/config" \
+OBOL_BIN_DIR="$PWD/.workspace/bin" \
+OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol stack up
+```
+
+Expected verification for frontend image refresh:
+
+```bash
+OBOL_CONFIG_DIR="$PWD/.workspace/config" OBOL_BIN_DIR="$PWD/.workspace/bin" OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol kubectl -n obol-frontend get deploy obol-frontend-obol-app \
+  -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
+
+OBOL_CONFIG_DIR="$PWD/.workspace/config" OBOL_BIN_DIR="$PWD/.workspace/bin" OBOL_DATA_DIR="$PWD/.workspace/data" \
+  .workspace/bin/obol kubectl -n obol-frontend rollout status deploy/obol-frontend-obol-app --timeout=180s
+
+curl -sS -I --max-time 10 http://obol.stack
+curl -sS --max-time 15 http://obol.stack/api/agents/instances
+```
+
+Known existing-stack migration failures:
+
+- `Namespace "hermes-obol-agent" ... exists and cannot be imported into the current release`: the namespace or monetize RBAC predated Helm ownership. Current `obol stack up` adopts known base-owned resources before Helm sync. If doing it manually, label and annotate the existing resource with `app.kubernetes.io/managed-by=Helm`, `meta.helm.sh/release-name=base`, and `meta.helm.sh/release-namespace=kube-system`.
+- `conflict with "kubectl-patch" ... llm/litellm-config .data.config.yaml`: older model setup patches used the `kubectl-patch` field manager, which conflicts with Helm server-side apply. Current patches use Helm's field manager, and `obol stack up` backs up, recreates, and restores the existing LiteLLM config around Helm sync when it detects the old manager.
+- `/etc/hosts` updates require interactive sudo. Codex cannot satisfy the password prompt in non-interactive execution; if DNS fails in the browser, run `obol stack up` or `obol hermes sync obol-agent` from a normal terminal, or manually add `127.0.0.1 obol-agent.obol.stack` and flush local DNS.
+
 ## 4 Inference Paths (All Through LiteLLM)
 
 | Path | Model Name | LiteLLM model_list | Example |

@@ -193,6 +193,36 @@ func Apply(binary, kubeconfig string, data []byte) error {
 	return err
 }
 
+// ApplyServerSideForceConflicts pipes the given data into kubectl apply
+// --server-side --force-conflicts -f -. It is intended for compatibility
+// migrations that need to transfer managedFields ownership before Helm's
+// server-side apply runs.
+func ApplyServerSideForceConflicts(binary, kubeconfig string, data []byte, fieldManager string) error {
+	args := []string{"apply", "--server-side", "--force-conflicts", "-f", "-"}
+	if strings.TrimSpace(fieldManager) != "" {
+		args = []string{"apply", "--server-side", "--force-conflicts", "--field-manager=" + fieldManager, "-f", "-"}
+	}
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+	cmd.Stdin = bytes.NewReader(data)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = os.Stdout
+
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return wrapClusterDown(fmt.Errorf("kubectl apply --server-side: %w: %s", err, errMsg), errMsg)
+		}
+
+		return wrapClusterDown(fmt.Errorf("kubectl apply --server-side: %w", err), "")
+	}
+
+	return nil
+}
+
 // ApplyOutput pipes the given data into kubectl apply -f - and returns stdout.
 func ApplyOutput(binary, kubeconfig string, data []byte) (string, error) {
 	cmd := exec.Command(binary, "apply", "-f", "-")

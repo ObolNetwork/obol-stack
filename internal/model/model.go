@@ -613,7 +613,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", patchJSON, "--type=merge"); err != nil {
+		"-p", patchJSON, "--type=merge", "--field-manager=helm"); err != nil {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
 	}
 
@@ -1175,7 +1175,7 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 
 	return kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", patchJSON, "--type=merge")
+		"-p", patchJSON, "--type=merge", "--field-manager=helm")
 }
 
 // detectProvider infers the provider name from a model_list entry.
