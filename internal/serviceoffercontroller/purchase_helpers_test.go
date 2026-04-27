@@ -114,6 +114,9 @@ func TestAddLiteLLMModelEntryUpdatesConfigMapAndHotAdds(t *testing.T) {
 	if entry.LiteLLMParams.Model != "openai/paid/qwen3.5:9b" {
 		t.Fatalf("litellm_params.model = %q", entry.LiteLLMParams.Model)
 	}
+	if entry.LiteLLMParams.APIBase != "http://127.0.0.1:8402/v1" {
+		t.Fatalf("litellm_params.api_base = %q", entry.LiteLLMParams.APIBase)
+	}
 
 	if got := fakeAPI.addCalls.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 call to /model/new, got %d", got)
@@ -168,6 +171,43 @@ func TestAddLiteLLMModelEntryHandlesMissingConfigMap(t *testing.T) {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/test-model")
+}
+
+func TestNormalizePurchasedUpstreamURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{
+			name:     "openai v1 chat completions",
+			endpoint: "https://seller.example/services/inference/v1/chat/completions",
+			want:     "https://seller.example/services/inference",
+		},
+		{
+			name:     "bare chat completions",
+			endpoint: "https://seller.example/services/inference/chat/completions",
+			want:     "https://seller.example/services/inference",
+		},
+		{
+			name:     "trailing slash",
+			endpoint: "https://seller.example/services/inference/v1/chat/completions/",
+			want:     "https://seller.example/services/inference",
+		},
+		{
+			name:     "already base",
+			endpoint: "https://seller.example/services/inference",
+			want:     "https://seller.example/services/inference",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizePurchasedUpstreamURL(tt.endpoint); got != tt.want {
+				t.Fatalf("normalizePurchasedUpstreamURL(%q) = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestRemoveLiteLLMModelEntryUpdatesConfigMapAndHotDeletes(t *testing.T) {
