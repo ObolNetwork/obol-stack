@@ -41,6 +41,14 @@ else
     fail "Hermes service port unexpected: $oc_port (expected 8642)"
 fi
 
+step "Native Hermes CLI passthrough works for default agent"
+hermes_version_out=$("$OBOL" hermes --agent obol-agent version 2>&1) || true
+if echo "$hermes_version_out" | grep -qi "hermes"; then
+    pass "Native Hermes CLI passthrough returned version"
+else
+    fail "Native Hermes CLI passthrough failed — ${hermes_version_out:0:200}"
+fi
+
 # §5: Test Agent Inference
 step "Get Hermes API server token"
 TOKEN=$("$OBOL" agent auth obol-agent 2>/dev/null || "$OBOL" agent auth 2>/dev/null || true)

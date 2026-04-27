@@ -243,6 +243,97 @@ func TestResolveCLIInvocation_UsesExplicitAgent(t *testing.T) {
 	}
 }
 
+func TestResolveCLIInvocation(t *testing.T) {
+	tests := []struct {
+		name      string
+		instances []string
+		input     []string
+		wantID    string
+		wantArgs  []string
+		wantErr   string
+	}{
+		{
+			name:    "no instances",
+			input:   []string{"version"},
+			wantErr: "no Hermes instances found",
+		},
+		{
+			name:      "single instance fallback",
+			instances: []string{"solo"},
+			input:     []string{"version"},
+			wantID:    "solo",
+			wantArgs:  []string{"version"},
+		},
+		{
+			name:      "multiple non-default instances require selector",
+			instances: []string{"research", "ops"},
+			input:     []string{"version"},
+			wantErr:   "multiple Hermes instances found",
+		},
+		{
+			name:      "explicit agent equals syntax",
+			instances: []string{agentruntime.DefaultInstanceID, "research"},
+			input:     []string{"--agent=research", "config", "show"},
+			wantID:    "research",
+			wantArgs:  []string{"config", "show"},
+		},
+		{
+			name:      "separator preserves native flags",
+			instances: []string{agentruntime.DefaultInstanceID},
+			input:     []string{"--agent", agentruntime.DefaultInstanceID, "--", "--help"},
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"--help"},
+		},
+		{
+			name:      "missing agent value",
+			instances: []string{agentruntime.DefaultInstanceID},
+			input:     []string{"--agent"},
+			wantErr:   "--agent requires an instance name",
+		},
+		{
+			name:      "duplicate agent selector",
+			instances: []string{agentruntime.DefaultInstanceID, "research"},
+			input:     []string{"--agent", agentruntime.DefaultInstanceID, "--agent=research", "version"},
+			wantErr:   "--agent specified multiple times",
+		},
+		{
+			name:      "unknown explicit agent",
+			instances: []string{agentruntime.DefaultInstanceID},
+			input:     []string{"--agent", "missing", "version"},
+			wantErr:   `Hermes instance "missing" not found`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			for _, id := range tt.instances {
+				mkdirInstance(t, cfg, id)
+			}
+
+			gotID, gotArgs, err := ResolveCLIInvocation(cfg, tt.input)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveCLIInvocation() error = %v", err)
+			}
+			if gotID != tt.wantID {
+				t.Fatalf("id = %q, want %q", gotID, tt.wantID)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Fatalf("args = %#v, want %#v", gotArgs, tt.wantArgs)
+			}
+		})
+	}
+}
+
 func mkdirInstance(t *testing.T, cfg *config.Config, id string) {
 	t.Helper()
 	if err := os.MkdirAll(DeploymentPath(cfg, id), 0o755); err != nil {
