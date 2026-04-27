@@ -5,12 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -115,15 +114,13 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 	u.Blank()
 	u.Info("Refreshing default infrastructure templates...")
 
-	ollamaHost := "host.k3d.internal"
-	if runtime.GOOS == "darwin" {
-		ollamaHost = "host.docker.internal"
+	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
+	stackID := stackdefaults.StackID(cfg)
+	if stackID == "" {
+		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
 
-	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	if err := embed.CopyDefaults(defaultsDir, map[string]string{
-		"{{OLLAMA_HOST}}": ollamaHost,
-	}); err != nil {
+	if err := stackdefaults.CopyInfrastructure(cfg, stackdefaults.DetectedBackendName(cfg), stackID); err != nil {
 		return fmt.Errorf("failed to refresh defaults: %w", err)
 	}
 

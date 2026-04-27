@@ -15,8 +15,8 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
@@ -26,6 +26,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	petname "github.com/dustinkirkland/golang-petname"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -93,25 +94,8 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 		return err
 	}
 
-	// Copy embedded defaults (helmfile + charts for infrastructure)
-	// Resolve {{OLLAMA_HOST}} based on backend:
-	// - k3d (Docker): host.docker.internal (macOS) or host.k3d.internal (Linux)
-	// - k3s (bare-metal): 127.0.0.1 (k3s runs directly on the host)
-	// Resolve {{OLLAMA_HOST_IP}} to a numeric IP for the Endpoints object:
-	// - Endpoints require an IP, not a hostname (ClusterIP+Endpoints pattern)
-	ollamaHost := ollamaHostForBackend(backendName)
-
-	ollamaHostIP, err := ollamaHostIPForBackend(backendName)
-	if err != nil {
-		return fmt.Errorf("failed to resolve Ollama host IP: %w", err)
-	}
-
-	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	if err := embed.CopyDefaults(defaultsDir, map[string]string{
-		"{{OLLAMA_HOST}}":    ollamaHost,
-		"{{OLLAMA_HOST_IP}}": ollamaHostIP,
-		"{{CLUSTER_ID}}":     stackID,
-	}); err != nil {
+	// Copy embedded defaults (helmfile + charts for infrastructure).
+	if err := stackdefaults.CopyInfrastructure(cfg, backendName, stackID); err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
 	}
 
@@ -175,123 +159,24 @@ func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 	}
 }
 
-// ollamaHostForBackend returns the hostname/IP that reaches the host Ollama
-// instance from inside the cluster.
 func ollamaHostForBackend(backendName string) string {
-	if backendName == BackendK3s {
-		return "127.0.0.1"
-	}
-
-	if runtime.GOOS == "darwin" {
-		return "host.docker.internal"
-	}
-
-	return "host.k3d.internal"
+	return stackdefaults.OllamaHostForBackend(backendName)
 }
 
-// ollamaHostIPForBackend resolves the Ollama host to an IP address.
-// ClusterIP+Endpoints requires an IP (not a hostname).
-//
-// Resolution strategy:
-//  1. If already an IP (k3s: 127.0.0.1), return as-is
-//  2. Try host-side DNS resolution
-//  3. macOS: use Docker Desktop VM gateway (192.168.65.254)
-//  4. Linux: fall back to docker0 bridge interface IP
 func ollamaHostIPForBackend(backendName string) (string, error) {
-	host := ollamaHostForBackend(backendName)
-
-	// If already an IP, return as-is (k3s: 127.0.0.1)
-	if net.ParseIP(host) != nil {
-		return host, nil
-	}
-
-	// Try host-side DNS resolution first.
-	addrs, err := net.LookupHost(host)
-	if err == nil && len(addrs) > 0 {
-		return addrs[0], nil
-	}
-
-	// macOS Docker Desktop: host.docker.internal is only resolvable inside
-	// containers (Docker injects it via DNS), not on the host. Use the
-	// well-known VM gateway IP that Docker Desktop exposes to containers.
-	if runtime.GOOS == "darwin" && backendName == BackendK3d {
-		return dockerDesktopGatewayIP(), nil
-	}
-
-	// Linux fallback: docker0 bridge interface IP (reachable from all containers).
-	if runtime.GOOS == "linux" && backendName == BackendK3d {
-		ip, bridgeErr := dockerBridgeGatewayIP()
-		if bridgeErr == nil {
-			return ip, nil
-		}
-
-		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %w", host, err, bridgeErr)
-	}
-
-	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
+	return stackdefaults.OllamaHostIPForBackend(backendName)
 }
 
-// dockerDesktopGatewayIP returns the Docker Desktop VM gateway IP.
-// On macOS, Docker Desktop runs a LinuxKit VM. The host is reachable from
-// containers at this well-known gateway address (192.168.65.254 maps to
-// host.docker.internal inside the VM). This has been stable across Docker
-// Desktop versions since the transition from HyperKit to Apple Virtualization.
 func dockerDesktopGatewayIP() string {
-	return "192.168.65.254"
+	return stackdefaults.DockerDesktopGatewayIP()
 }
 
-// dockerBridgeGatewayIP returns the IPv4 address of an active Docker bridge
-// interface. It prefers docker0 (the default bridge, typically 172.17.0.1).
-// If docker0 is present but DOWN (e.g. when only k3d's custom bridge network
-// is active), it falls back to the first UP interface whose name starts with
-// "br-" — which is how Docker names per-network bridge interfaces.
 func dockerBridgeGatewayIP() (string, error) {
-	if ip, err := bridgeInterfaceIP("docker0"); err == nil {
-		return ip, nil
-	}
-
-	// docker0 missing or DOWN — scan for an active br-<network-id> bridge.
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("cannot list network interfaces: %w", err)
-	}
-
-	for _, iface := range ifaces {
-		if !strings.HasPrefix(iface.Name, "br-") {
-			continue
-		}
-		if ip, err := bridgeInterfaceIP(iface.Name); err == nil {
-			return ip, nil
-		}
-	}
-
-	return "", errors.New("no active Docker bridge interface found (docker0 or br-*)")
+	return stackdefaults.DockerBridgeGatewayIP()
 }
 
-// bridgeInterfaceIP returns the IPv4 address of a named network interface,
-// or an error if the interface does not exist, is DOWN, or has no IPv4 address.
 func bridgeInterfaceIP(name string) (string, error) {
-	iface, err := net.InterfaceByName(name)
-	if err != nil {
-		return "", fmt.Errorf("interface %s not found: %w", name, err)
-	}
-
-	if iface.Flags&net.FlagUp == 0 {
-		return "", fmt.Errorf("interface %s is down", name)
-	}
-
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", fmt.Errorf("cannot get addresses for %s: %w", name, err)
-	}
-
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
-			return ipNet.IP.String(), nil
-		}
-	}
-
-	return "", fmt.Errorf("no IPv4 address found on interface %s", name)
+	return stackdefaults.BridgeInterfaceIP(name)
 }
 
 // Up starts the cluster using the configured backend
@@ -318,6 +203,12 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	// Write kubeconfig
 	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0o600); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
+	}
+
+	if refreshed, err := stackdefaults.RefreshInfrastructureIfChanged(cfg, backend.Name(), stackID); err != nil {
+		return fmt.Errorf("failed to refresh default infrastructure templates: %w", err)
+	} else if refreshed {
+		u.Dim("Refreshed default infrastructure templates from embedded assets")
 	}
 
 	// Ensure the base host before syncing defaults. Include existing agent
@@ -463,9 +354,9 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to migrate existing base resources into Helm ownership: %v", err)
 	}
 
-	previousLiteLLMConfig, err := migrateLiteLLMConfigForHelm(cfg, kubeconfigPath)
+	previousLiteLLMConfig, err := preserveLiteLLMConfigForHelm(cfg, kubeconfigPath)
 	if err != nil {
-		u.Warnf("Failed to migrate LiteLLM config ownership: %v", err)
+		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
 	}
 
 	// Compatibility migration
@@ -1048,20 +939,24 @@ func (r baseHelmResource) namespaceArgs() []string {
 	return []string{"-n", r.Namespace}
 }
 
-func migrateLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
+// preserveLiteLLMConfigForHelm snapshots the mutable LiteLLM config before
+// Helm sync. Helm owns the ConfigMap object, but provider and purchase flows
+// append model routes to data["config.yaml"], which is a single scalar field
+// from Kubernetes' managedFields perspective.
+func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-
-	managers, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", "litellm-config", "-n", "llm",
-		"--show-managed-fields", "-o", "jsonpath={.metadata.managedFields[*].manager}")
-	if err != nil || !strings.Contains(managers, "kubectl-patch") {
-		return "", nil
-	}
 
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}")
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return "", nil
+	}
+
+	managers, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm",
+		"--show-managed-fields", "-o", "jsonpath={.metadata.managedFields[*].manager}")
+	if err != nil || !needsLiteLLMConfigHelmMigration(managers) {
+		return raw, nil
 	}
 
 	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
@@ -1078,9 +973,70 @@ func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error 
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	if current, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}"); err == nil && strings.TrimSpace(current) != "" {
+		merged, err := mergeLiteLLMConfig(current, raw)
+		if err != nil {
+			return err
+		}
+		raw = merged
+	}
+
 	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
 
 	return kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+}
+
+func needsLiteLLMConfigHelmMigration(managers string) bool {
+	for _, manager := range strings.Fields(managers) {
+		if manager != "helm" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
+	var current model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(currentRaw), &current); err != nil {
+		return "", fmt.Errorf("parse current LiteLLM config: %w", err)
+	}
+
+	var previous model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(previousRaw), &previous); err != nil {
+		return "", fmt.Errorf("parse previous LiteLLM config: %w", err)
+	}
+
+	byName := make(map[string]int, len(current.ModelList))
+	for i, entry := range current.ModelList {
+		byName[entry.ModelName] = i
+	}
+
+	for _, entry := range previous.ModelList {
+		if strings.TrimSpace(entry.ModelName) == "" {
+			continue
+		}
+		if _, ok := byName[entry.ModelName]; ok {
+			continue
+		}
+		byName[entry.ModelName] = len(current.ModelList)
+		current.ModelList = append(current.ModelList, entry)
+	}
+
+	if len(current.GeneralSettings) == 0 && len(previous.GeneralSettings) > 0 {
+		current.GeneralSettings = previous.GeneralSettings
+	}
+	if len(current.LiteLLMSettings) == 0 && len(previous.LiteLLMSettings) > 0 {
+		current.LiteLLMSettings = previous.LiteLLMSettings
+	}
+
+	merged, err := yaml.Marshal(&current)
+	if err != nil {
+		return "", fmt.Errorf("serialize merged LiteLLM config: %w", err)
+	}
+
+	return string(merged), nil
 }
 
 func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte {

@@ -194,9 +194,9 @@ func Apply(binary, kubeconfig string, data []byte) error {
 }
 
 // ApplyServerSideForceConflicts pipes the given data into kubectl apply
-// --server-side --force-conflicts -f -. It is intended for compatibility
-// migrations that need to transfer managedFields ownership before Helm's
-// server-side apply runs.
+// --server-side --force-conflicts -f -. Use it only for narrow compatibility
+// migrations where the caller has already decided which manager must own the
+// restored fields.
 func ApplyServerSideForceConflicts(binary, kubeconfig string, data []byte, fieldManager string) error {
 	args := []string{"apply", "--server-side", "--force-conflicts", "-f", "-"}
 	if strings.TrimSpace(fieldManager) != "" {
