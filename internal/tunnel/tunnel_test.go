@@ -5,7 +5,35 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestWaitReadyTimeout(t *testing.T) {
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("default: got %s, want %s", got, defaultWaitReadyTimeout)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "90s")
+	if got := waitReadyTimeout(); got != 90*time.Second {
+		t.Errorf("duration override: got %s, want 90s", got)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "120")
+	if got := waitReadyTimeout(); got != 120*time.Second {
+		t.Errorf("integer-seconds override: got %s, want 120s", got)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "not-a-duration")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("invalid override: got %s, want default %s", got, defaultWaitReadyTimeout)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "0")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("zero override should fall back to default: got %s, want %s", got, defaultWaitReadyTimeout)
+	}
+}
 
 func TestNormalizeHostname(t *testing.T) {
 	tests := []struct {

@@ -440,18 +440,22 @@ func requireAgent(t *testing.T, cfg *config.Config) {
 func execInAgent(t *testing.T, cfg *config.Config, args ...string) string {
 	t.Helper()
 	ns := agentNamespace(cfg)
-	fullArgs := append([]string{"kubectl", "exec", "-i",
+	fullArgs := append([]string{
+		"kubectl", "exec", "-i",
 		"-n", ns, "deploy/openclaw",
-		"-c", "openclaw", "--"}, args...)
+		"-c", "openclaw", "--",
+	}, args...)
 	return obolRun(t, cfg, fullArgs...)
 }
 
 // execInAgentErr runs a command inside the OpenClaw pod, returning output + error.
 func execInAgentErr(cfg *config.Config, args ...string) (string, error) {
 	ns := agentNamespace(cfg)
-	fullArgs := append([]string{"kubectl", "exec", "-i",
+	fullArgs := append([]string{
+		"kubectl", "exec", "-i",
 		"-n", ns, "deploy/openclaw",
-		"-c", "openclaw", "--"}, args...)
+		"-c", "openclaw", "--",
+	}, args...)
 	return obolRunErr(cfg, fullArgs...)
 }
 
@@ -4040,6 +4044,15 @@ spec:
 			effectiveGasPrice.String(),
 			receiptGasWei.String(),
 		)
+		// Structured marker consumed by flows/flow-12-obol-payment.sh to build
+		// receipt-summary.json. The shell extractor takes the first match, so
+		// we emit one line per settlement and the summary captures the first.
+		// FLOW12_AGENT_ID / FLOW12_REGISTRATION_TX / FLOW12_FUNDING_TX are
+		// intentionally not emitted: this test does not perform ERC-8004
+		// registration, and the funding helpers (FundETH=anvil_setBalance
+		// cheat, MintMintableERC20=cast send with discarded output) do not
+		// surface a transaction hash through the testutil API.
+		t.Logf("FLOW12_SETTLEMENT_TX=%s", receipt.TransactionHash)
 	}
 	t.Logf(
 		"OBOL exact pack benchmark: requests=%d totalGasUsed=%s totalGasWei=%s avgGasUsedPerRequest=%s avgGasWeiPerRequest=%s",

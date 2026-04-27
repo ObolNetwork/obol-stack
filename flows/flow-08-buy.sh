@@ -83,6 +83,13 @@ if command -v cast &>/dev/null; then
     [[ "$PRE_SELLER_BAL" =~ ^[0-9] ]] || PRE_SELLER_BAL=""
 fi
 
+# Capture start block before paid inference for on-chain settlement receipt search
+BUY_START_BLOCK=""
+if command -v cast &>/dev/null; then
+    BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC" 2>/dev/null | tr -d ' ' || true)
+    [[ "$BUY_START_BLOCK" =~ ^[0-9]+$ ]] || BUY_START_BLOCK=""
+fi
+
 # §2.3: Paid inference — sign EIP-712 ERC-3009 payment and retry
 # Uses eth_account to sign the TransferWithAuthorization payload, matching
 # internal/testutil/eip712_signer.go. If host Python lacks the dependency,
@@ -193,6 +200,7 @@ if resp2.status_code == 200 and "choices" in resp2.text:
     d = resp2.json()
     nc = len(d.get("choices", []))
     print(f"PAID_RESPONSE: HTTP 200, choices={nc}")
+    print(f"PAID_AMOUNT_USDC={amount}")
 else:
     print(f"ERROR: payment rejected — HTTP {resp2.status_code}: {resp2.text[:300]}")
     sys.exit(1)
@@ -205,6 +213,23 @@ PYEOF
     fi
 else
     fail "eth_account/httpx unavailable and automatic venv setup failed"
+fi
+
+step "On-chain: settlement receipt"
+PAID_AMOUNT=$(echo "$paid_out" | grep -oE 'PAID_AMOUNT_USDC=[0-9]+' | head -1 | cut -d= -f2)
+if [ -z "$PAID_AMOUNT" ] || [ -z "$BUY_START_BLOCK" ]; then
+    fail "Could not capture amount or start block — settlement receipt skipped"
+else
+    ARTIFACT_DIR="${FLOW08_ARTIFACT_DIR:-${ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-08-$(date +%Y%m%d-%H%M%S)}}"
+    mkdir -p "$ARTIFACT_DIR"
+    settlement_match=$(USDC_ADDRESS_BASE_SEPOLIA="$USDC_ADDRESS" BASE_SEPOLIA_RPC="$ANVIL_RPC" \
+        wait_usdc_transfer_receipt settlement "$CONSUMER_WALLET" "$SELLER_WALLET" "$PAID_AMOUNT" "$BUY_START_BLOCK" 30 2 || true)
+    SETTLEMENT_TX=$(echo "$settlement_match" | awk '{print $1; exit}')
+    if [ -n "$SETTLEMENT_TX" ]; then
+        pass "Settlement receipt archived: $SETTLEMENT_TX"
+    else
+        fail "No USDC Transfer($CONSUMER_WALLET → $SELLER_WALLET, $PAID_AMOUNT) found after block $BUY_START_BLOCK"
+    fi
 fi
 
 # §2.4: Balance checks (requires cast/Foundry)

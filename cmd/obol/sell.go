@@ -704,6 +704,27 @@ Examples:
 				spec["registration"] = reg
 			}
 
+			// When registration is enabled, the serviceoffer-controller reads the
+			// public tunnel URL from the obol-frontend ConfigMap to populate
+			// .well-known/agent-registration.json. If the tunnel isn't fully ready
+			// (deployment rolled out AND a *.trycloudflare.com URL captured) by the
+			// time we create the ServiceOffer, the registration reconcile parks in
+			// AwaitingExternalRegistration. Block here so that, on success, the
+			// controller's first reconcile already has a usable base URL.
+			//
+			// For --no-register flows the tunnel is best-effort: we still try to
+			// bring it up afterwards, but a tunnel failure must not fail the sell.
+			var tunnelURL string
+			if registerEnabled {
+				u.Info("Waiting for Cloudflare tunnel before creating ServiceOffer...")
+				url, terr := tunnel.EnsureTunnelForSell(cfg, u)
+				if terr != nil {
+					return fmt.Errorf("tunnel not ready for registered sell: %w\n\n  Tip: run with --no-register to publish without on-chain registration, or restart the tunnel with 'obol tunnel restart'", terr)
+				}
+				tunnelURL = url
+				u.Successf("Tunnel active: %s", tunnelURL)
+			}
+
 			manifest := map[string]any{
 				"apiVersion": "obol.org/v1alpha1",
 				"kind":       "ServiceOffer",
@@ -729,30 +750,33 @@ Examples:
 			u.Infof("The agent will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
 
-			// Ensure tunnel is active for public access.
-			u.Blank()
-			u.Info("Ensuring tunnel is active for public access...")
+			if !registerEnabled {
+				// Best-effort tunnel for --no-register: not fatal if it doesn't come up.
+				u.Blank()
+				u.Info("Ensuring tunnel is active for public access...")
+				if url, terr := tunnel.EnsureTunnelForSell(cfg, u); terr != nil {
+					u.Warnf("Tunnel not started: %v", terr)
+					u.Dim("  Start manually with: obol tunnel restart")
+				} else {
+					u.Successf("Tunnel active: %s", url)
+				}
+				return nil
+			}
 
-			if tunnelURL, err := tunnel.EnsureTunnelForSell(cfg, u); err != nil {
-				u.Warnf("Tunnel not started: %v", err)
-				u.Dim("  Start manually with: obol tunnel restart")
-			} else {
-				u.Successf("Tunnel active: %s", tunnelURL)
-
-				if reg, ok := spec["registration"].(map[string]any); ok {
-					if enabled, _ := reg["enabled"].(bool); enabled {
-						u.Blank()
-						u.Info("Registering seller agent on ERC-8004...")
-						if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
-							ChainCSV:        cmd.String("chain"),
-							Endpoint:        tunnelURL,
-							AgentName:       registrationNameForPrompt(name, reg),
-							AgentDesc:       registrationDescriptionForPrompt(name, reg),
-							PrivateKeyInput: cmd.String("private-key-file"),
-							ExpectedOwner:   wallet,
-						}); err != nil {
-							return fmt.Errorf("automatic sell registration failed: %w", err)
-						}
+			// Registration path: tunnelURL has already been awaited above.
+			if reg, ok := spec["registration"].(map[string]any); ok {
+				if enabled, _ := reg["enabled"].(bool); enabled {
+					u.Blank()
+					u.Info("Registering seller agent on ERC-8004...")
+					if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
+						ChainCSV:        cmd.String("chain"),
+						Endpoint:        tunnelURL,
+						AgentName:       registrationNameForPrompt(name, reg),
+						AgentDesc:       registrationDescriptionForPrompt(name, reg),
+						PrivateKeyInput: cmd.String("private-key-file"),
+						ExpectedOwner:   wallet,
+					}); err != nil {
+						return fmt.Errorf("automatic sell registration failed: %w", err)
 					}
 				}
 			}

@@ -4,6 +4,11 @@
 
 set -euo pipefail
 
+# Make the standard Foundry / k3d / kubectl install paths available even when
+# the script is launched from nohup / setsid / cron — none of which source
+# .bashrc the way an interactive login shell does.
+export PATH="$HOME/.foundry/bin:$HOME/.local/bin:/usr/local/go/bin:$PATH"
+
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # Auto-load .env so flow scripts can read REMOTE_SIGNER_PRIVATE_KEY and any
@@ -390,6 +395,201 @@ with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
     print(sock.getsockname()[1])
 PY
+}
+
+detect_buyer_runtime() {
+    local runner="${1:-bob}"
+    if command -v "$runner" >/dev/null 2>&1 && \
+       "$runner" kubectl get ns openclaw-obol-agent >/dev/null 2>&1; then
+        BOB_AGENT_RUNTIME="openclaw"
+        BOB_AGENT_NS="openclaw-obol-agent"
+        BOB_AGENT_DEPLOY="openclaw"
+        BOB_AGENT_CONTAINER="openclaw"
+        BOB_AGENT_SERVICE="openclaw"
+        BOB_AGENT_REMOTE_PORT="18789"
+        BOB_OBOL_SKILLS_DIR="/data/.openclaw/skills"
+        BOB_AGENT_LABEL="app.kubernetes.io/name=openclaw"
+    else
+        BOB_AGENT_RUNTIME="hermes"
+        BOB_AGENT_NS="hermes-obol-agent"
+        BOB_AGENT_DEPLOY="hermes"
+        BOB_AGENT_CONTAINER="hermes"
+        BOB_AGENT_SERVICE="hermes"
+        BOB_AGENT_REMOTE_PORT="8642"
+        BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
+        BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
+    fi
+    export BOB_AGENT_RUNTIME BOB_AGENT_NS BOB_AGENT_DEPLOY BOB_AGENT_CONTAINER \
+           BOB_AGENT_SERVICE BOB_AGENT_REMOTE_PORT BOB_OBOL_SKILLS_DIR BOB_AGENT_LABEL
+}
+
+# Receipt + USDC transfer helpers — promoted from flow-11 so flow-08 and
+# flow-12 can reuse them. They expect the caller to set BASE_SEPOLIA_RPC,
+# USDC_ADDRESS_BASE_SEPOLIA, and FLOW11_ARTIFACT_DIR before invocation.
+if ! declare -F find_usdc_transfer >/dev/null; then
+    write_receipt() {
+        local name="$1"
+        local tx="$2"
+        [ -n "$tx" ] || return 0
+        env -u CHAIN cast receipt --json "$tx" --rpc-url "$BASE_SEPOLIA_RPC" \
+            > "$FLOW11_ARTIFACT_DIR/${name}-receipt.json" 2>/dev/null || true
+    }
+
+    receipt_status_ok() {
+        local tx="$1"
+        [ -n "$tx" ] || return 1
+        env -u CHAIN cast receipt --json "$tx" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | \
+            python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("status") in ("0x1", 1, "1") else 1)' 2>/dev/null
+    }
+
+    archive_receipt() {
+        local name="$1"
+        local tx="$2"
+        local attempts="${3:-12}"
+        local interval="${4:-2}"
+        local receipt_file="$FLOW11_ARTIFACT_DIR/${name}-receipt.json"
+
+        [ -n "$tx" ] || return 1
+        for _ in $(seq 1 "$attempts"); do
+            if env -u CHAIN cast receipt --json "$tx" --rpc-url "$BASE_SEPOLIA_RPC" \
+                > "$receipt_file.tmp" 2>/dev/null && \
+                python3 - "$receipt_file.tmp" <<'PY' 2>/dev/null
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if data.get("status") in ("0x1", 1, "1") else 1)
+PY
+            then
+                mv "$receipt_file.tmp" "$receipt_file"
+                return 0
+            fi
+            rm -f "$receipt_file.tmp"
+            sleep "$interval"
+        done
+        rm -f "$receipt_file.tmp"
+        return 1
+    }
+
+    extract_tx_hash() {
+        python3 - <<'PY'
+import re
+import sys
+
+text = sys.stdin.read()
+for line in text.splitlines():
+    if "transactionHash" not in line:
+        continue
+    match = re.search(r"transactionHash[^\n]*?(0x[0-9a-fA-F]{64})", line)
+    if match:
+        print(match.group(1))
+        sys.exit(0)
+sys.exit(1)
+PY
+    }
+
+    find_usdc_transfer() {
+        local from_addr="$1"
+        local to_addr="$2"
+        local amount="$3"
+        local from_block="$4"
+        local logs
+
+        logs=$(env -u CHAIN cast logs --json --rpc-url "$BASE_SEPOLIA_RPC" \
+            --address "$USDC_ADDRESS_BASE_SEPOLIA" \
+            --from-block "$from_block" --to-block latest \
+            "Transfer(address,address,uint256)" 2>/dev/null || true)
+        FLOW11_TRANSFER_LOGS="$logs" \
+        FLOW11_TRANSFER_FROM="$from_addr" \
+        FLOW11_TRANSFER_TO="$to_addr" \
+        FLOW11_TRANSFER_AMOUNT="$amount" \
+        python3 - <<'PY'
+import json
+import os
+import sys
+
+try:
+    logs = json.loads(os.environ.get("FLOW11_TRANSFER_LOGS") or "[]")
+except Exception:
+    sys.exit(1)
+
+src_expected = os.environ["FLOW11_TRANSFER_FROM"].lower().replace("0x", "")
+dst_expected = os.environ["FLOW11_TRANSFER_TO"].lower().replace("0x", "")
+amount_expected = int(os.environ["FLOW11_TRANSFER_AMOUNT"])
+matches = []
+
+for log in logs:
+    topics = log.get("topics", [])
+    if len(topics) < 3:
+        continue
+    src = topics[1][-40:].lower()
+    dst = topics[2][-40:].lower()
+    if src != src_expected or dst != dst_expected:
+        continue
+    try:
+        amount = int(log.get("data", "0x0"), 16)
+    except ValueError:
+        continue
+    if amount != amount_expected:
+        continue
+    tx = log.get("transactionHash", "")
+    if tx:
+        matches.append((int(log.get("blockNumber", "0x0"), 16), int(log.get("logIndex", "0x0"), 16), tx, amount))
+
+if not matches:
+    sys.exit(1)
+
+_, _, tx, amount = sorted(matches)[-1]
+print(f"{tx} {amount}")
+PY
+    }
+
+    wait_usdc_transfer_receipt() {
+        local name="$1"
+        local from_addr="$2"
+        local to_addr="$3"
+        local amount="$4"
+        local from_block="$5"
+        local attempts="${6:-30}"
+        local interval="${7:-2}"
+        local match tx actual_amount
+
+        for _ in $(seq 1 "$attempts"); do
+            match=$(find_usdc_transfer "$from_addr" "$to_addr" "$amount" "$from_block" 2>/dev/null || true)
+            tx=$(echo "$match" | awk '{print $1; exit}')
+            actual_amount=$(echo "$match" | awk '{print $2; exit}')
+            if [ -n "$tx" ] && [ "$actual_amount" = "$amount" ] && archive_receipt "$name" "$tx" 1 0; then
+                echo "$tx $actual_amount"
+                return 0
+            fi
+            sleep "$interval"
+        done
+        return 1
+    }
+fi
+
+ensure_image_in_k3d() {
+    local img="$1"
+    local cluster="$2"
+    local node="k3d-${cluster}-server-0"
+    if ! docker exec "$node" crictl images 2>/dev/null | grep -q "$(echo "$img" | cut -d: -f1)\b"; then
+        docker pull -q "$img" >/dev/null 2>&1 || return 1
+        local tar
+        tar=$(mktemp -t k3d-img-XXXXXX.tar)
+        docker save "$img" -o "$tar"
+        docker cp "$tar" "$node:/tmp/$(basename "$tar")"
+        docker exec "$node" ctr -n k8s.io images import "/tmp/$(basename "$tar")"
+        docker exec "$node" rm -f "/tmp/$(basename "$tar")"
+        rm -f "$tar"
+    fi
 }
 
 refresh_obol_ingress_env

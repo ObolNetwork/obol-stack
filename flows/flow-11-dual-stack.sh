@@ -59,12 +59,20 @@ FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m
 BASE_SEPOLIA_RPC="${FLOW11_BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
+# Initial Hermes defaults for Bob's buyer agent. These are replaced at runtime by
+# detect_buyer_runtime bob (called after Bob's stack comes up) which inspects which
+# agent namespace actually exists in Bob's cluster and re-exports BOB_AGENT_NS,
+# BOB_AGENT_DEPLOY, BOB_AGENT_CONTAINER, BOB_AGENT_SERVICE, BOB_AGENT_REMOTE_PORT,
+# BOB_OBOL_SKILLS_DIR, BOB_AGENT_LABEL, BOB_AGENT_RUNTIME accordingly. This lets the
+# flow run against either Hermes or OpenClaw without code changes.
 BOB_AGENT_NS="hermes-obol-agent"
 BOB_AGENT_DEPLOY="hermes"
 BOB_AGENT_CONTAINER="hermes"
 BOB_AGENT_SERVICE="hermes"
 BOB_AGENT_REMOTE_PORT="8642"
 BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
+BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
+BOB_AGENT_RUNTIME="hermes"
 mkdir -p "$FLOW11_ARTIFACT_DIR"
 
 rewrite_k3d_ports() {
@@ -529,7 +537,7 @@ wait_usdc_transfer_receipt() {
 }
 
 step "Preflight: .env key"
-SIGNER_KEY=$(grep REMOTE_SIGNER_PRIVATE_KEY "$OBOL_ROOT/.env" 2>/dev/null | cut -d= -f2)
+SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
     fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
     emit_metrics; exit 1
@@ -752,7 +760,11 @@ step "Alice: ERC-8004 registration reflected in ServiceOffer"
 reg_out=$(alice sell status alice-inference -n llm 2>&1) || true
 echo "$reg_out" | tail -12
 if echo "$reg_out" | grep -q "Agent ID:"; then
-    AGENT_ID=$(echo "$reg_out" | grep 'Agent ID:' | awk '{print $3}' | head -1)
+    AGENT_ID=$(echo "$reg_out" | awk '/Agent ID:/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i; exit } }' | head -1)
+    if ! [[ "$AGENT_ID" =~ ^[0-9]+$ ]]; then
+        fail "ERC-8004 registration not reflected as numeric Agent ID — sell status output:\n$reg_out"
+        AGENT_ID=""
+    fi
     pass "ERC-8004 registered: Agent ID $AGENT_ID"
 else
     fail "Registration not reflected in sell status: ${reg_out:0:200}"
@@ -824,6 +836,12 @@ pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
 
+# Detect which buyer-agent runtime (Hermes or OpenClaw) Bob's cluster actually deployed.
+# This re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE / REMOTE_PORT /
+# OBOL_SKILLS_DIR / LABEL / RUNTIME based on which namespace exists. Must run before
+# any `bob kubectl exec` against the agent pod or any `bob <runtime> token` call.
+detect_buyer_runtime bob
+
 poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
@@ -835,9 +853,9 @@ pass "Bob eRPC configured for Base Sepolia"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
-# Wait for Bob's Hermes agent to be ready
+# Wait for Bob's buyer agent to be ready (label set by detect_buyer_runtime)
 poll_step_grep "Bob: Hermes agent ready" "Running" 24 5 \
-    bob kubectl get pods -n "$BOB_AGENT_NS" -l app.kubernetes.io/name=hermes --no-headers
+    bob kubectl get pods -n "$BOB_AGENT_NS" -l "$BOB_AGENT_LABEL" --no-headers
 
 step "Bob: tunnel reachable from agent pod"
 bob_tunnel_code=""
@@ -943,7 +961,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: get Hermes API server token"
-BOB_TOKEN=$(bob hermes token obol-agent 2>/dev/null || true)
+BOB_TOKEN=$(bob "$BOB_AGENT_RUNTIME" token obol-agent 2>/dev/null || true)
 if [ -z "$BOB_TOKEN" ]; then
     fail "Could not get Bob's gateway token"
     emit_metrics; exit 1
@@ -1030,12 +1048,11 @@ buy_response=$(curl -sf --max-time 300 \
 	    }" 2>&1 || true)
 
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
+# The agent's textual response is informational only; the purchase is confirmed
+# structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
+# matching has been brittle across runtime versions (OpenClaw vs Hermes).
 echo "${buy_content:0:500}"
-if echo "$buy_content" | grep -qiE "purchase complete|PurchaseRequest created|pre-signed|model is now accessible"; then
-    pass "Agent bought Alice's inference"
-else
-    fail "Buy response: ${buy_response:0:300}"
-fi
+pass "Agent buy command issued (success will be confirmed by PurchaseRequest CR)"
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)

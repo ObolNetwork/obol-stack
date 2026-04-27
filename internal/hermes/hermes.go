@@ -856,6 +856,11 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: http://localhost:%d
                 - name: GATEWAY_HEALTH_TIMEOUT
                   value: "3"
+                # Local k3d/dev clusters do not expose the dashboard's messaging integrations
+                # (Telegram/Discord/etc.) to the public internet, so enabling open-allowlist
+                # is safe here. Production deployments must override this via a values overlay.
+                - name: GATEWAY_ALLOW_ALL_USERS
+                  value: "true"
               readinessProbe:
                 httpGet:
                   path: /api/status

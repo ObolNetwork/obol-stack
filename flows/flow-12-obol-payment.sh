@@ -181,15 +181,49 @@ validate_x402_rs_source
 pass "x402-rs facilitator source validated"
 
 step "OBOL Permit2 sell->buy->settle integration test"
+ARTIFACT_DIR="${FLOW12_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-12-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$ARTIFACT_DIR"
+LOG="$ARTIFACT_DIR/test-output.log"
 set +e
 go test -tags integration -v \
     -run '^TestIntegration_SellBuySidecar_OBOLPermit2$' \
     -timeout "${FLOW12_TIMEOUT:-30m}" \
-    ./internal/openclaw/
-rc=$?
+    ./internal/openclaw/ 2>&1 | tee "$LOG"
+rc=${PIPESTATUS[0]}
 set -e
+
+extract() { grep -oE "$1=\\S+" "$LOG" | head -1 | cut -d= -f2; }
+AGENT_ID=$(extract FLOW12_AGENT_ID)
+REGISTRATION_TX=$(extract FLOW12_REGISTRATION_TX)
+FUNDING_TX=$(extract FLOW12_FUNDING_TX)
+SETTLEMENT_TX=$(extract FLOW12_SETTLEMENT_TX)
+COMMIT=$(git -C "$OBOL_ROOT" rev-parse HEAD 2>/dev/null || echo "")
+ARTIFACT_DIR="$ARTIFACT_DIR" \
+COMMIT="$COMMIT" \
+AGENT_ID="$AGENT_ID" \
+REGISTRATION_TX="$REGISTRATION_TX" \
+FUNDING_TX="$FUNDING_TX" \
+SETTLEMENT_TX="$SETTLEMENT_TX" \
+python3 - <<'PY'
+import json, os
+out = os.path.join(os.environ["ARTIFACT_DIR"], "receipt-summary.json")
+data = {
+    "commit": os.environ.get("COMMIT", ""),
+    "agentId": os.environ.get("AGENT_ID", ""),
+    "transactions": {
+        "registration": os.environ.get("REGISTRATION_TX", ""),
+        "funding": os.environ.get("FUNDING_TX", ""),
+        "settlement": os.environ.get("SETTLEMENT_TX", ""),
+    },
+}
+with open(out, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+
 if [ "$rc" -eq 0 ]; then
     pass "OBOL Permit2 integration passed"
+    pass "Receipt summary: $ARTIFACT_DIR/receipt-summary.json"
 else
     fail "OBOL Permit2 integration failed with exit $rc"
 fi
