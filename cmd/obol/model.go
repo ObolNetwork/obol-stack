@@ -244,6 +244,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
 			&cli.StringFlag{Name: "model", Usage: "Model name at the endpoint", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -256,6 +257,9 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
+			if cmd.Bool("no-sync") {
+				return nil
+			}
 			return syncAgentModels(cfg, u)
 		},
 	}
@@ -494,6 +498,9 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 		Name:      "remove",
 		Usage:     "Remove a model from the LiteLLM gateway",
 		ArgsUsage: "<model-name>",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
@@ -506,6 +513,9 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
+			if cmd.Bool("no-sync") {
+				return nil
+			}
 			return syncAgentModels(cfg, u)
 		},
 	}

@@ -303,18 +303,16 @@ cleanup_k3d_obol_networks() {
 # OBOL_LLM_NAME is the LiteLLM short name registered for the endpoint (default
 # external-llm).
 #
-# Sequence:
-#   1. obol model remove <auto-detected ollama>  (only when present —
-#      each `obol model` write triggers syncAgentModels -> hermes.Sync ->
-#      helmfile sync, which produces a fresh Deployment revision and a
-#      new ReplicaSet. Three back-to-back rollouts in a slow-pull
-#      environment stack RSes and starve image pulls. Skip the remove
-#      when there is nothing to remove. The auto-detected Ollama entries
-#      otherwise out-rank the custom entry: rank.go parses `:9b` to 90
-#      deci-billions vs 0 for the unparseable custom name.)
-#   2. obol model setup custom --name … --endpoint … --model … [--api-key …]
-#      (validates the endpoint, patches LiteLLM, then internally calls
-#      syncAgentModels which re-renders the default Hermes agent.)
+# Sequence (all model edits use --no-sync so we trigger only ONE Hermes
+# helmfile rollout at the end — rolling three back-to-back wedged k3d
+# clusters with stacked ReplicaSets):
+#   1. obol model remove <auto-detected ollama> --no-sync  (only when
+#      present — auto-detected Ollama entries otherwise out-rank the
+#      custom entry: rank.go parses `:9b` to 90 deci-billions vs 0 for
+#      the unparseable `custom/...` name.)
+#   2. obol model setup custom --name … --endpoint … --model … --no-sync
+#      (validates the endpoint, patches LiteLLM, hot-adds the model.)
+#   3. obol model sync (single agent re-render with the final model list).
 #
 # Each peer (alice/bob) routes independently — caller passes the runner.
 route_llm_via_obol_cli() {
@@ -332,15 +330,19 @@ route_llm_via_obol_cli() {
     local entry
     for entry in qwen3.5:9b qwen3:0.6b; do
         if printf '%s' "$existing" | grep -Fq "$entry"; then
-            $runner model remove "$entry" >/dev/null 2>&1 || true
+            $runner model remove "$entry" --no-sync >/dev/null 2>&1 || true
         fi
     done
 
-    local args=(model setup custom --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
+    local args=(model setup custom --no-sync --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
     if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
         args+=(--api-key "$OBOL_LLM_API_KEY")
     fi
     $runner "${args[@]}"
+
+    # Single sync at the end — batches all preceding edits into ONE
+    # Hermes deployment revision instead of one per CLI call.
+    $runner model sync
 }
 
 emit_metrics() {
