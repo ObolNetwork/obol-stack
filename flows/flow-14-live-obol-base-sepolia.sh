@@ -688,17 +688,28 @@ alice kubectl apply -f "$ALICE_OFFER_YAML" 2>&1 | tail -2
 rm -f "$ALICE_OFFER_YAML"
 pass "ServiceOffer alice-obol-inference applied"
 
-# Drive registration on-chain via `obol sell register` — same code path as
-# flow-11. This exercises PR #387's WaitForAgent fix on the OBOL-priced offer.
+# Drive ERC-8004 registration on-chain via `obol sell register`. The
+# controller publishes the registration metadata + sets RoutePublished, but
+# leaves Registered=AwaitingExternalRegistration until an off-cluster signer
+# actually sends the IdentityRegistry tx. `obol sell register` is that
+# signer step. Note: this CLI takes only --chain / --sponsored / --endpoint
+# / --name / --description / --image / --private-key-file — it has no
+# `--namespace` flag (the offer is found by the controller, not the CLI).
 step "Alice: drive ERC-8004 registration (obol sell register)"
 KEY_FILE=$(mktemp)
 echo "$SIGNER_KEY" > "$KEY_FILE"
 register_out=$(alice sell register \
-    --name alice-obol-inference \
-    --namespace llm \
-    --private-key-file "$KEY_FILE" 2>&1) || true
-printf '%s\n' "$register_out" | tail -10
+    --chain base-sepolia \
+    --name "Live OBOL Base Sepolia Test Inference" \
+    --private-key-file "$KEY_FILE" 2>&1)
+register_rc=$?
 rm -f "$KEY_FILE"
+printf '%s\n' "$register_out" | tail -10
+if [ "$register_rc" -ne 0 ]; then
+    fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
+    emit_metrics
+    exit "$register_rc"
+fi
 pass "obol sell register issued"
 
 poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
