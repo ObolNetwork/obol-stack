@@ -834,10 +834,11 @@ spec:
       perRequest: "0.001"
   path: /services/alice-obol-inference
   # Intentionally NO registration: this flow's focus is the OBOL Permit2
-  # payment path, not ERC-8004 discovery. The controller can't drive
-  # registration without a signing private key (which `obol sell http` normally
-  # supplies via --private-key-file); leaving registration off keeps Ready=True
-  # reachable. Matches TestIntegration_SellBuySidecar_OBOLPermit2's offer YAML.
+  # payment path, not ERC-8004 discovery. The controller never signs
+  # on-chain (registration is a CLI/remote-signer flow); leaving
+  # registration off keeps Ready=True reachable without needing to seed
+  # a remote-signer. Matches TestIntegration_SellBuySidecar_OBOLPermit2's
+  # offer YAML.
 YAML
 alice kubectl apply -f "$ALICE_OFFER_YAML" 2>&1 | tail -2
 rm -f "$ALICE_OFFER_YAML"

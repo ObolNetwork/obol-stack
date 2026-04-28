@@ -2,16 +2,12 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/urfave/cli/v3"
 )
 
@@ -211,7 +207,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"wallet", "chain", "token", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
-		"register", "no-register", "register-name", "register-description", "register-image", "private-key-file",
+		"register", "no-register", "register-name", "register-description", "register-image",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
@@ -245,52 +241,6 @@ func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for --no-register with registration-specific flags")
-	}
-}
-
-func TestReadPrivateKeyMaterial_RawKey(t *testing.T) {
-	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
-	gotKey, gotAddr, err := readPrivateKeyMaterial(raw)
-	if err != nil {
-		t.Fatalf("readPrivateKeyMaterial: %v", err)
-	}
-	if gotKey != raw {
-		t.Fatalf("got key = %q, want %q", gotKey, raw)
-	}
-	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
-		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
-	}
-}
-
-func TestReadPrivateKeyMaterial_File(t *testing.T) {
-	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
-	path := filepath.Join(t.TempDir(), "key.txt")
-	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	gotKey, gotAddr, err := readPrivateKeyMaterial(path)
-	if err != nil {
-		t.Fatalf("readPrivateKeyMaterial: %v", err)
-	}
-	if gotKey != raw {
-		t.Fatalf("got key = %q, want %q", gotKey, raw)
-	}
-	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
-		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
-	}
-}
-
-func TestReadPrivateKeyMaterial_Invalid(t *testing.T) {
-	if _, _, err := readPrivateKeyMaterial("0xdeadbeef"); err == nil {
-		t.Fatal("expected error for invalid private key")
 	}
 }
 
@@ -349,7 +299,7 @@ func TestSellRegister_Flags(t *testing.T) {
 	flags := flagMap(reg)
 
 	requireFlags(t, flags,
-		"chain", "sponsored", "private-key-file",
+		"chain", "sponsored",
 		"endpoint", "name", "description", "image",
 	)
 

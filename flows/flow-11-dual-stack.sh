@@ -869,8 +869,30 @@ if [ -z "$REG_START_BLOCK" ]; then
     fail "Could not read Base Sepolia block number before registration"
     emit_metrics; exit 1
 fi
+
+# Seed the remote-signer with the Alice key so `obol sell http` can sign
+# ERC-8004 register/setMetadata via the agent's signer (no key passes
+# through the CLI). --force overwrites the auto-generated key from
+# `obol stack up`'s default-agent setup.
+step "Alice: import seller wallet into remote-signer"
 KEY_FILE=$(mktemp)
+chmod 600 "$KEY_FILE"
 echo "$SIGNER_KEY" > "$KEY_FILE"
+set +e
+import_out=$(alice wallet import \
+    --instance obol-agent \
+    --private-key-file "$KEY_FILE" \
+    --force 2>&1)
+import_rc=$?
+set -e
+rm -f "$KEY_FILE"
+echo "$import_out" | tail -6
+if [ "$import_rc" -ne 0 ]; then
+    fail "Could not seed Alice remote-signer: ${import_out:0:300}"
+    emit_metrics; exit "$import_rc"
+fi
+pass "Alice remote-signer seeded with seller wallet"
+
 set +e
 sell_http_out=$(alice sell http alice-inference \
     --wallet "$ALICE_WALLET" \
@@ -883,12 +905,10 @@ sell_http_out=$(alice sell http alice-inference \
     --register-name "Dual-Stack Test Inference" \
     --register-description "Integration test: local model inference via x402" \
     --register-skills natural_language_processing/text_generation \
-    --register-domains technology/artificial_intelligence \
-    --private-key-file "$KEY_FILE" 2>&1)
+    --register-domains technology/artificial_intelligence 2>&1)
 sell_http_rc=$?
 set -e
 printf '%s\n' "$sell_http_out" | tail -8
-rm -f "$KEY_FILE"
 if [ "$sell_http_rc" -ne 0 ]; then
     fail "ServiceOffer create/register failed (exit $sell_http_rc): ${sell_http_out:0:300}"
     emit_metrics; exit "$sell_http_rc"

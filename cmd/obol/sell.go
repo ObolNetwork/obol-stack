@@ -37,7 +37,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/urfave/cli/v3"
 )
 
@@ -500,10 +499,6 @@ Examples:
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
 			},
-			&cli.StringFlag{
-				Name:  "private-key-file",
-				Usage: "Path to the ERC-8004 signing key file (defaults to the Hermes remote-signer wallet)",
-			},
 			&cli.StringSliceFlag{
 				Name:  "register-skills",
 				Usage: "OASF skills for discovery (e.g. natural_language_processing/text_generation)",
@@ -689,15 +684,14 @@ Examples:
 			}
 
 			reg, registerEnabled, err := buildSellHTTPRegistrationConfig(name, sellHTTPRegistrationInput{
-				NoRegister:     cmd.Bool("no-register"),
-				Register:       cmd.Bool("register"),
-				Name:           cmd.String("register-name"),
-				Description:    cmd.String("register-description"),
-				Image:          cmd.String("register-image"),
-				PrivateKeyFile: cmd.String("private-key-file"),
-				Skills:         cmd.StringSlice("register-skills"),
-				Domains:        cmd.StringSlice("register-domains"),
-				MetadataPairs:  cmd.StringSlice("register-metadata"),
+				NoRegister:    cmd.Bool("no-register"),
+				Register:      cmd.Bool("register"),
+				Name:          cmd.String("register-name"),
+				Description:   cmd.String("register-description"),
+				Image:         cmd.String("register-image"),
+				Skills:        cmd.StringSlice("register-skills"),
+				Domains:       cmd.StringSlice("register-domains"),
+				MetadataPairs: cmd.StringSlice("register-metadata"),
 			})
 			if err != nil {
 				return err
@@ -771,12 +765,11 @@ Examples:
 					u.Blank()
 					u.Info("Registering seller agent on ERC-8004...")
 					if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
-						ChainCSV:        cmd.String("chain"),
-						Endpoint:        tunnelURL,
-						AgentName:       registrationNameForPrompt(name, reg),
-						AgentDesc:       registrationDescriptionForPrompt(name, reg),
-						PrivateKeyInput: cmd.String("private-key-file"),
-						ExpectedOwner:   wallet,
+						ChainCSV:      cmd.String("chain"),
+						Endpoint:      tunnelURL,
+						AgentName:     registrationNameForPrompt(name, reg),
+						AgentDesc:     registrationDescriptionForPrompt(name, reg),
+						ExpectedOwner: wallet,
 					}); err != nil {
 						return fmt.Errorf("automatic sell registration failed: %w", err)
 					}
@@ -809,26 +802,29 @@ func registrationDescriptionForPrompt(fallback string, reg map[string]any) strin
 }
 
 type autoRegisterOptions struct {
-	ChainCSV        string
-	Endpoint        string
-	AgentName       string
-	AgentDesc       string
-	PrivateKeyInput string
-	ExpectedOwner   string
+	ChainCSV      string
+	Endpoint      string
+	AgentName     string
+	AgentDesc     string
+	ExpectedOwner string
 }
 
 type sellHTTPRegistrationInput struct {
-	NoRegister     bool
-	Register       bool
-	Name           string
-	Description    string
-	Image          string
-	PrivateKeyFile string
-	Skills         []string
-	Domains        []string
-	MetadataPairs  []string
+	NoRegister    bool
+	Register      bool
+	Name          string
+	Description   string
+	Image         string
+	Skills        []string
+	Domains       []string
+	MetadataPairs []string
 }
 
+// autoRegisterServiceOffer performs ERC-8004 registration via the agent's
+// remote-signer. The remote-signer holds the only copy of the agent's
+// signing key — the CLI never sees raw key material. If no remote-signer is
+// configured (no Hermes default agent), the operator must run
+// `obol agent init` first (or `obol wallet import` to seed a known key).
 func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI, opts autoRegisterOptions) error {
 	if opts.Endpoint == "" {
 		return errors.New("endpoint is required for automatic registration")
@@ -839,42 +835,26 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 		return err
 	}
 
-	useRemoteSigner := false
-	var (
-		signerNS    string
-		fallbackKey string
-		signerAddr  string
-	)
-
-	if strings.TrimSpace(opts.PrivateKeyInput) == "" {
-		if _, err := hermes.ResolveWalletAddress(cfg); err == nil {
-			ns, nsErr := hermes.ResolveInstanceNamespace(cfg)
-			if nsErr == nil {
-				pf, pfErr := startSignerPortForward(cfg, ns)
-				if pfErr != nil {
-					return fmt.Errorf("port-forward to remote-signer: %w", pfErr)
-				}
-				defer pf.Stop()
-
-				signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
-				addr, addrErr := signer.GetAddress(ctx)
-				if addrErr != nil {
-					return addrErr
-				}
-
-				signerAddr = addr.Hex()
-				useRemoteSigner = true
-				signerNS = ns
-			}
-		}
+	if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
+		return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
+	}
+	signerNS, err := hermes.ResolveInstanceNamespace(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve Hermes instance namespace: %w", err)
 	}
 
-	if !useRemoteSigner {
-		fallbackKey, signerAddr, err = readPrivateKeyMaterial(opts.PrivateKeyInput)
-		if err != nil {
-			return err
-		}
+	pf, err := startSignerPortForward(cfg, signerNS)
+	if err != nil {
+		return fmt.Errorf("port-forward to remote-signer: %w", err)
 	}
+	defer pf.Stop()
+
+	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
+	addr, err := signer.GetAddress(ctx)
+	if err != nil {
+		return err
+	}
+	signerAddr := addr.Hex()
 
 	if opts.ExpectedOwner != "" && !strings.EqualFold(strings.TrimSpace(opts.ExpectedOwner), strings.TrimSpace(signerAddr)) {
 		return fmt.Errorf("registration signer %s does not match the payment wallet %s.\nUse a matching signer, omit --wallet so the remote-signer wallet is used, or pass --no-register", signerAddr, opts.ExpectedOwner)
@@ -889,16 +869,9 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
 		u.Printf("    Registry: %s", net.RegistryAddress)
 
-		if useRemoteSigner {
-			if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
-				u.Warnf("direct registration failed: %v", err)
-				continue
-			}
-		} else {
-			if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
-				u.Warnf("registration failed: %v", err)
-				continue
-			}
+		if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+			u.Warnf("direct registration failed: %v", err)
+			continue
 		}
 
 		u.Printf("    Name:     %s", opts.AgentName)
@@ -919,7 +892,7 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistrationInput) (map[string]any, bool, error) {
 	registerEnabled := !in.NoRegister
 	if !registerEnabled && (in.Register || in.Name != "" || in.Description != "" || in.Image != "" ||
-		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0 || in.PrivateKeyFile != "") {
+		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0) {
 		return nil, false, errors.New("--no-register cannot be combined with registration-specific flags")
 	}
 	if !registerEnabled {
@@ -954,32 +927,6 @@ func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistration
 		reg["metadata"] = meta
 	}
 	return reg, true, nil
-}
-
-func readPrivateKeyMaterial(input string) (keyHex string, address string, err error) {
-	raw := strings.TrimSpace(input)
-	if raw == "" {
-		return "", "", nil
-	}
-
-	if strings.HasPrefix(raw, "0x") && len(raw) >= 64 {
-		keyHex = raw
-	} else {
-		data, readErr := os.ReadFile(raw)
-		if readErr != nil {
-			return "", "", fmt.Errorf("read private key file: %w", readErr)
-		}
-		keyHex = strings.TrimSpace(string(data))
-	}
-
-	keyHex = strings.TrimPrefix(keyHex, "0x")
-	key, parseErr := crypto.HexToECDSA(keyHex)
-	if parseErr != nil {
-		return "", "", fmt.Errorf("invalid private key: %w", parseErr)
-	}
-
-	addr := crypto.PubkeyToAddress(key.PublicKey)
-	return "0x" + keyHex, addr.Hex(), nil
 }
 
 func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOffer) []string {
@@ -1736,11 +1683,6 @@ Examples:
 				Name:  "image",
 				Usage: "Agent image URL for registration",
 			},
-			&cli.StringFlag{
-				Name:    "private-key-file",
-				Usage:   "Path to private key file (fallback if no remote-signer available)",
-				Sources: cli.EnvVars("ERC8004_PRIVATE_KEY"),
-			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -1803,31 +1745,16 @@ Examples:
 			}
 			agentURI := endpoint + "/.well-known/agent-registration.json"
 
-			// Determine signing method: private key file (if explicitly provided)
-			// or remote-signer (default when Hermes agent is deployed).
-			useRemoteSigner := false
-			var signerNS string
-
-			// If --private-key-file is explicitly provided, honour user intent.
-			if !cmd.IsSet("private-key-file") {
-				if _, err := hermes.ResolveWalletAddress(cfg); err == nil {
-					ns, nsErr := hermes.ResolveInstanceNamespace(cfg)
-					if nsErr == nil {
-						useRemoteSigner = true
-						signerNS = ns
-					}
-				}
+			// All signing happens via the agent's remote-signer; the CLI never
+			// sees raw key material. If no Hermes default agent is configured,
+			// the operator must run `obol agent init` (or `obol wallet import`
+			// to seed a known key) first.
+			if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
+				return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
 			}
-
-			// Fallback to private key file if no remote-signer.
-			var fallbackKey string
-			if !useRemoteSigner {
-				var signerAddr string
-				fallbackKey, signerAddr, err = readPrivateKeyMaterial(cmd.String("private-key-file"))
-				if fallbackKey == "" {
-					return fmt.Errorf("no remote-signer wallet found and no --private-key-file provided.\nRun 'obol agent init' first, or use --private-key-file")
-				}
-				u.Printf("  Wallet:    %s", signerAddr)
+			signerNS, err := hermes.ResolveInstanceNamespace(cfg)
+			if err != nil {
+				return fmt.Errorf("resolve Hermes instance namespace: %w", err)
 			}
 
 			// Register on each network (best-effort).
@@ -1843,22 +1770,14 @@ Examples:
 
 				sponsored := net.HasSponsor() && (cmd.Bool("sponsored") || !cmd.IsSet("sponsored"))
 
-				if sponsored && useRemoteSigner {
-					// Sponsored path via remote-signer.
+				if sponsored {
 					if err := registerSponsored(ctx, cfg, u, net, agentURI, signerNS); err != nil {
 						u.Warnf("sponsored registration failed: %v", err)
 						continue
 					}
-				} else if useRemoteSigner {
-					// Direct on-chain via remote-signer (needs funded wallet).
+				} else {
 					if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
 						u.Warnf("direct registration failed: %v", err)
-						continue
-					}
-				} else {
-					// Fallback: direct on-chain with private key file.
-					if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
-						u.Warnf("registration failed: %v", err)
 						continue
 					}
 				}
@@ -1956,51 +1875,6 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	// Set x402 metadata.
 	x402Meta := []byte(`{"x402":true}`)
 	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", x402Meta); err != nil {
-		u.Warnf("failed to set x402 metadata: %v", err)
-	}
-	return nil
-}
-
-// registerDirectWithKey performs a direct on-chain registration using a raw private key.
-func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, keyHex string) error {
-	u.Printf("    Using direct on-chain registration with private key...")
-
-	keyHex = strings.TrimPrefix(keyHex, "0x")
-	key, err := crypto.HexToECDSA(keyHex)
-	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
-	}
-
-	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
-	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
-	if err != nil {
-		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
-	}
-	defer client.Close()
-
-	txAddr := crypto.PubkeyToAddress(key.PublicKey)
-	startBlock := registrationRecoveryStartBlock(ctx, client, u)
-	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, txAddr, startBlock, func() (*big.Int, string, error) {
-		return client.RegisterDetailed(ctx, key, agentURI)
-	})
-	if err != nil {
-		return err
-	}
-
-	u.Printf("    Agent ID: %s", agentID.String())
-	u.Printf("    Owner:    %s", txAddr.Hex())
-	if txHash != "" {
-		u.Printf("    Tx:       %s", txHash)
-	}
-
-	// Wait for the chain READER to catch up to the freshly-minted agent id;
-	// see comment in registerWithRemoteSigner for the rationale.
-	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
-		u.Warnf("agent not visible to reader after register: %v", err)
-	}
-
-	x402Meta := []byte(`{"x402":true}`)
-	if err := client.SetMetadata(ctx, key, agentID, "x402", x402Meta); err != nil {
 		u.Warnf("failed to set x402 metadata: %v", err)
 	}
 	return nil

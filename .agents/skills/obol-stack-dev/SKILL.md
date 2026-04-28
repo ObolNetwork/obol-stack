@@ -459,16 +459,20 @@ LLM agents (OpenClaw or Hermes) give different wording across runs. `grep -qE "p
 
 ### ERC-8004 registration prerequisites in flows
 
-If the ServiceOffer has `registration.enabled: true`, the controller will not move to `Ready=True` until registration completes. Two paths to satisfy that:
+The serviceoffer-controller never signs on-chain. All ERC-8004 registration goes through the CLI (`obol sell http`, `obol sell register`), which delegates signing to the agent's remote-signer pod — the CLI never sees raw key material. If the ServiceOffer has `registration.enabled: true`, the controller will publish the registration document and watch the chain, but it depends on the operator (or a flow script) to land the on-chain register tx via the CLI.
 
-1. **Via `obol sell http --private-key-file`** — supplies a signing key to the controller. The CLI also calls `EnsureTunnelForSell` first so the controller gets the tunnel URL in the `obol-stack-config` ConfigMap, which is required for the registration metadata. flow-11 takes this path.
+Two paths to satisfy that for a flow:
+
+1. **Via `obol sell http`** — `obol agent init` (or `obol stack up`'s default-agent setup) must have created a Hermes remote-signer with a usable wallet. If you need a specific test wallet, run `obol wallet import --instance obol-agent --private-key-file <file> --force` first, then `obol sell http` will sign register/setMetadata via that imported key. The CLI also calls `EnsureTunnelForSell` so the controller gets the tunnel URL in the `obol-stack-config` ConfigMap. flow-11 and flow-14 take this path.
 2. **YAML-apply with `registration.enabled: false`** — skip ERC-8004 entirely. Suitable for tests that exercise only the payment path. flow-13 does this; cross-cluster discovery falls back to skill.md / a known-URL hand-off.
 
-If you apply a ServiceOffer YAML with `registration.enabled: true` and never give the controller a key, it parks at `AwaitingExternalRegistration` and `Ready` stays False. Either supply the key or drop the flag.
+If you apply a ServiceOffer YAML with `registration.enabled: true` and never run the CLI register step, the request parks at `AwaitingExternalRegistration` and `Ready` stays False. Either run `obol sell register` or drop the flag.
 
 ### setMetadata revert during simulation (live Base Sepolia)
 
-`erc8004.Client.SetMetadata` writes via `setMetadata(uint256,string,bytes)` on the registry contract. If the `eth_estimateGas` simulation reverts, the broadcast is aborted (only `register` lands; the wallet nonce only goes 0→1). The most common causes:
+`erc8004.Client.SetMetadata` writes via `setMetadata(uint256,string,bytes)` on the registry contract. If the `eth_estimateGas` simulation reverts, the broadcast is aborted (only `register` lands; the wallet nonce only goes 0→1). The dominant cause we hit is **read-side staleness**: eRPC's read upstream returns `ERC721NonexistentToken` for the freshly-minted agent ID even though the register tx already landed on the write upstream. PR #387 closes this window by inserting `Client.WaitForAgent` between `Register` and `SetMetadata`, which polls `ownerOf(agentID)` until the reader catches up — that's the right fix and is now wired into both `registerSponsored` and `registerDirectViaSigner`.
+
+Other less-common causes worth ruling out:
 
 1. The eRPC chain route is pinned to a stale Anvil fork from a prior flow-12/13 run that didn't unwind. Verify with `obol kubectl get cm erpc-config -n erpc -o yaml` — if the `base-sepolia` upstream points anywhere other than the public RPC (`https://sepolia.base.org`), the simulation runs against a dead fork. `obol network sync` or `obol network remove base-sepolia && obol network add base-sepolia --allow-writes` to reset.
 2. Contract-level: the registry's `setMetadata` checks ownership of the agent ID. If the registration tx and the setMetadata simulation use different `from` addresses (e.g. signer-key mismatch between commands), the revert is "not owner". `cast call --from <signer> 0x8004... "setMetadata(uint256,string,bytes)" <agentId> "x402.supported" 0x01 --rpc-url https://sepolia.base.org` reproduces it cheaply.

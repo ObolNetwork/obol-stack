@@ -2,12 +2,10 @@ package serviceoffercontroller
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"os"
 	"slices"
@@ -19,7 +17,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -80,27 +77,15 @@ type Controller struct {
 	// instead of the in-cluster litellm Service DNS. Empty in production.
 	litellmURLOverride string
 
-	registrationKey          *ecdsa.PrivateKey
-	registrationOwnerAddress string
-	registrationRPCURL       string
-	baseURLOverride          string
-	defaultBaseURL           string
+	registrationRPCURL string
+	baseURLOverride    string
+	defaultBaseURL     string
 }
 
 func New(cfg *rest.Config) (*Controller, error) {
 	client, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic client: %w", err)
-	}
-
-	registrationKey, err := loadRegistrationSigningKey()
-	if err != nil {
-		return nil, err
-	}
-	if registrationKey != nil {
-		log.Printf("serviceoffer-controller: ERC-8004 signing key loaded")
-	} else {
-		log.Printf("serviceoffer-controller: no ERC-8004 signing key configured; on-chain registration disabled")
 	}
 
 	kubeClient, err := kubernetes.NewForConfig(cfg)
@@ -117,36 +102,29 @@ func New(cfg *rest.Config) (*Controller, error) {
 	})
 	configMapInformer := configMapFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
 
-	registrationOwnerAddress := ""
-	if registrationKey != nil {
-		registrationOwnerAddress = crypto.PubkeyToAddress(registrationKey.PublicKey).Hex()
-	}
-
 	controller := &Controller{
-		kubeClient:               kubeClient,
-		dynClient:                client,
-		client:                   client,
-		offers:                   client.Resource(monetizeapi.ServiceOfferGVR),
-		registrationRequests:     client.Resource(monetizeapi.RegistrationRequestGVR),
-		services:                 client.Resource(monetizeapi.ServiceGVR),
-		configMaps:               client.Resource(monetizeapi.ConfigMapGVR),
-		deployments:              client.Resource(monetizeapi.DeploymentGVR),
-		middlewares:              client.Resource(monetizeapi.MiddlewareGVR),
-		httpRoutes:               client.Resource(monetizeapi.HTTPRouteGVR),
-		referenceGrants:          client.Resource(monetizeapi.ReferenceGrantGVR),
-		offerInformer:            offerInformer,
-		registrationInformer:     registrationInformer,
-		purchaseInformer:         purchaseInformer,
-		configMapInformer:        configMapInformer,
-		offerQueue:               workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		registrationQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		purchaseQueue:            workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		httpClient:               &http.Client{Timeout: 3 * time.Second},
-		registrationKey:          registrationKey,
-		registrationOwnerAddress: registrationOwnerAddress,
-		registrationRPCURL:       getenvDefault("ERC8004_RPC_URL", erc8004.DefaultRPCURL),
-		baseURLOverride:          strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
-		defaultBaseURL:           "http://obol.stack:8080",
+		kubeClient:           kubeClient,
+		dynClient:            client,
+		client:               client,
+		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
+		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
+		services:             client.Resource(monetizeapi.ServiceGVR),
+		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
+		deployments:          client.Resource(monetizeapi.DeploymentGVR),
+		middlewares:          client.Resource(monetizeapi.MiddlewareGVR),
+		httpRoutes:           client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:      client.Resource(monetizeapi.ReferenceGrantGVR),
+		offerInformer:        offerInformer,
+		registrationInformer: registrationInformer,
+		purchaseInformer:     purchaseInformer,
+		configMapInformer:    configMapInformer,
+		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		httpClient:           &http.Client{Timeout: 3 * time.Second},
+		registrationRPCURL:   getenvDefault("ERC8004_RPC_URL", erc8004.DefaultRPCURL),
+		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
+		defaultBaseURL:       "http://obol.stack:8080",
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -760,80 +738,21 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
 
+	// On-chain registration is performed by the CLI (`obol sell register` /
+	// `obol sell http`) via the agent's remote-signer — never by the
+	// controller. The controller only publishes the registration document
+	// and watches for the registration tx to land on-chain so it can mark
+	// the request Ready=True.
 	var client *erc8004.Client
-	if agentID == "" || c.registrationKey != nil {
+	if agentID == "" {
 		client, err = erc8004.NewClient(ctx, c.registrationRPCURL)
 		if err != nil {
-			waitPhase := registrationPhaseRegistering
-			if c.registrationKey == nil {
-				waitPhase = registrationPhaseAwaitingExternal
-			}
-			status.Phase = waitPhase
+			status.Phase = registrationPhaseAwaitingExternal
 			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity: %v", err))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 		defer client.Close()
-	}
 
-	if agentID == "" && c.registrationKey != nil {
-		if status.RegistrationURI != status.PublishedURL ||
-			!strings.EqualFold(status.RegistrationOwner, c.registrationOwnerAddress) ||
-			status.RegistrationSearchFromBlock == 0 {
-			height, err := client.CurrentBlockNumber(ctx)
-			if err != nil {
-				status.Phase = registrationPhaseRegistering
-				status.Message = truncateMessage(fmt.Sprintf("Preparing on-chain registration: %v", err))
-				return c.updateRegistrationStatus(ctx, raw, status)
-			}
-
-			status.Phase = registrationPhaseRegistering
-			status.Message = "Prepared on-chain registration and fenced duplicate retries"
-			status.RegistrationOwner = c.registrationOwnerAddress
-			status.RegistrationURI = status.PublishedURL
-			fromBlock := int64(height)
-			if fromBlock > 0 {
-				fromBlock--
-			}
-			status.RegistrationSearchFromBlock = fromBlock
-			status.RegistrationTxHash = ""
-			status.MetadataSynced = false
-			return c.updateRegistrationStatus(ctx, raw, status)
-		}
-
-		recoveredAgentID, recoveredTxHash, found, err := c.recoverRegistration(ctx, client, status)
-		if err != nil {
-			status.Phase = registrationPhaseRegistering
-			status.Message = truncateMessage(fmt.Sprintf("Recovering on-chain registration state: %v", err))
-			if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
-				return updateErr
-			}
-			return err
-		}
-		switch {
-		case found:
-			agentID = recoveredAgentID
-			txHash = recoveredTxHash
-		case status.RegistrationTxHash == "":
-			submittedTxHash, err := client.SubmitRegister(ctx, c.registrationKey, status.PublishedURL)
-			if err != nil {
-				status.Phase = registrationPhaseRegistering
-				status.Message = truncateMessage(fmt.Sprintf("Submitting on-chain registration: %v", err))
-				if updateErr := c.updateRegistrationStatus(ctx, raw, status); updateErr != nil {
-					return updateErr
-				}
-				return err
-			}
-
-			status.Phase = registrationPhaseRegistering
-			status.Message = fmt.Sprintf("Submitted on-chain registration transaction %s", submittedTxHash)
-			status.RegistrationTxHash = submittedTxHash
-			return c.updateRegistrationStatus(ctx, raw, status)
-		default:
-			status.Phase = registrationPhaseRegistering
-			status.Message = fmt.Sprintf("Waiting for on-chain registration transaction %s", status.RegistrationTxHash)
-			return c.updateRegistrationStatus(ctx, raw, status)
-		}
-	} else if agentID == "" {
 		if status.RegistrationURI != status.PublishedURL ||
 			!strings.EqualFold(status.RegistrationOwner, offer.Spec.Payment.PayTo) ||
 			status.RegistrationSearchFromBlock == 0 {
@@ -878,27 +797,10 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 
 	status.AgentID = agentID
 	status.RegistrationTxHash = txHash
-	status.RegistrationOwner = firstNonEmpty(status.RegistrationOwner, c.registrationOwnerAddress)
 	status.RegistrationURI = firstNonEmpty(status.RegistrationURI, status.PublishedURL)
-	if agentID != "" && c.registrationKey != nil && client != nil && !status.MetadataSynced {
-		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
-		if !ok {
-			return fmt.Errorf("invalid agent id %q", agentID)
-		}
-		if err := c.syncRegistrationMetadata(ctx, client, offer, agentIDBig); err == nil {
-			status.MetadataSynced = true
-			log.Printf("serviceoffer-controller: on-chain metadata synced for agent %s", agentID)
-		} else {
-			log.Printf("serviceoffer-controller: metadata sync failed for agent %s (will retry): %v", agentID, err)
-		}
-	}
 	if agentID != "" {
 		status.Phase = registrationPhaseRegistered
-		if status.MetadataSynced || c.registrationKey == nil {
-			status.Message = fmt.Sprintf("Published registration document and recorded agent %s", agentID)
-		} else {
-			status.Message = fmt.Sprintf("Published registration document and recorded agent %s; metadata sync will retry on the next reconcile", agentID)
-		}
+		status.Message = fmt.Sprintf("Published registration document and recorded agent %s", agentID)
 	}
 
 	return c.updateRegistrationStatus(ctx, raw, status)
@@ -929,66 +831,18 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 	return agentID.String(), resolvedTxHash, true, nil
 }
 
-func (c *Controller) syncRegistrationMetadata(ctx context.Context, client *erc8004.Client, offer *monetizeapi.ServiceOffer, agentID *big.Int) error {
-	if err := client.SetMetadata(ctx, c.registrationKey, agentID, "x402.supported", []byte{1}); err != nil {
-		return err
-	}
-	if err := client.SetMetadata(ctx, c.registrationKey, agentID, "service.type", []byte(fallbackOfferType(offer))); err != nil {
-		return err
-	}
-	for key, value := range offer.Spec.Registration.Metadata {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key == "" || value == "" {
-			continue
-		}
-		if err := client.SetMetadata(ctx, c.registrationKey, agentID, "metadata."+key, []byte(value)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
+func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, _ string) error {
 	status := request.Status
 	agentID := firstNonEmpty(status.AgentID, offer.Status.AgentID)
 
-	if agentID != "" && c.registrationKey != nil {
-		client, err := erc8004.NewClient(ctx, c.registrationRPCURL)
-		if err != nil {
-			status.Phase = registrationPhaseOffChainOnly
-			status.Message = truncateMessage(fmt.Sprintf("Deleted registration resources but could not connect for tombstone: %v", err))
-			if err := c.deleteRegistrationResources(ctx, request); err != nil {
-				return err
-			}
-			return c.updateRegistrationStatus(ctx, raw, status)
-		}
-		defer client.Close()
-
-		agentIDBig, ok := new(big.Int).SetString(strings.TrimSpace(agentID), 10)
-		if !ok {
-			return fmt.Errorf("invalid agent id %q", agentID)
-		}
-		tombstoneURI, err := registrationDataURL(buildTombstoneRegistrationDocument(offer, baseURL, agentID))
-		if err != nil {
-			return err
-		}
-		if err := client.SetAgentURI(ctx, c.registrationKey, agentIDBig, tombstoneURI); err != nil {
-			status.Phase = registrationPhaseOffChainOnly
-			status.Message = truncateMessage(fmt.Sprintf("Deleted registration resources but could not tombstone on-chain: %v", err))
-			if err := c.deleteRegistrationResources(ctx, request); err != nil {
-				return err
-			}
-			return c.updateRegistrationStatus(ctx, raw, status)
-		}
-		if err := client.SetMetadata(ctx, c.registrationKey, agentIDBig, "x402.supported", []byte{0}); err != nil {
-			log.Printf("serviceoffer-controller: failed to clear x402.supported metadata for agent %s: %v", agentID, err)
-		}
-		status.Phase = registrationPhaseTombstoned
-		status.Message = fmt.Sprintf("Tombstoned registration for agent %s", agentID)
-	} else if agentID != "" {
+	// On-chain tombstoning is the operator's responsibility via the CLI
+	// (the controller has no signing key by design — registration is a
+	// CLI/remote-signer flow). We only delete the published registration
+	// resources here and mark the request OffChainOnly when an agent ID
+	// was ever assigned, otherwise Tombstoned (nothing to tombstone).
+	if agentID != "" {
 		status.Phase = registrationPhaseOffChainOnly
-		status.Message = "Deleted registration resources; controller has no ERC-8004 signing key for tombstone"
+		status.Message = "Deleted registration resources; on-chain tombstone is the operator's responsibility"
 	} else {
 		status.Phase = registrationPhaseTombstoned
 		status.Message = "Deleted registration resources"
@@ -1378,28 +1232,6 @@ func truncateMessage(message string) string {
 		return message
 	}
 	return message[:200]
-}
-
-func loadRegistrationSigningKey() (*ecdsa.PrivateKey, error) {
-	keyHex := strings.TrimSpace(os.Getenv("ERC8004_PRIVATE_KEY"))
-	if keyHex == "" {
-		if path := strings.TrimSpace(os.Getenv("ERC8004_PRIVATE_KEY_FILE")); path != "" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil, fmt.Errorf("read ERC8004_PRIVATE_KEY_FILE: %w", err)
-			}
-			keyHex = strings.TrimSpace(string(data))
-		}
-	}
-	if keyHex == "" {
-		return nil, nil
-	}
-
-	key, err := crypto.HexToECDSA(strings.TrimPrefix(keyHex, "0x"))
-	if err != nil {
-		return nil, fmt.Errorf("parse ERC8004 private key: %w", err)
-	}
-	return key, nil
 }
 
 func getenvDefault(key, fallback string) string {

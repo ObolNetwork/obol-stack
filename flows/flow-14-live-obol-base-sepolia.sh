@@ -720,15 +720,32 @@ pass "Tunnel: $TUNNEL_URL"
 # Drive the on-chain IdentityRegistry tx via `obol sell register`. The
 # controller publishes the registration metadata + sets RoutePublished
 # but leaves Registered=AwaitingExternalRegistration until this CLI
-# call lands the on-chain register. The CLI takes --chain / --sponsored
-# / --endpoint / --name / --description / --image / --private-key-file —
-# it has no `--namespace` flag (the offer is reconciled by the
-# controller, not looked up by the CLI).
+# call lands the on-chain register. Signing happens via the agent's
+# remote-signer — there is no longer any `--private-key-file` escape
+# hatch on `obol sell register`. We seed the remote-signer with the
+# Alice key here so the register tx uses a known, funded wallet.
 # ═════════════════════════════════════════════════════════════════
 
-step "Alice: drive ERC-8004 registration (obol sell register)"
+step "Alice: import seller wallet into remote-signer"
 KEY_FILE=$(mktemp)
+chmod 600 "$KEY_FILE"
 echo "$SIGNER_KEY" > "$KEY_FILE"
+set +e
+import_out=$(alice wallet import \
+    --instance obol-agent \
+    --private-key-file "$KEY_FILE" \
+    --force 2>&1)
+import_rc=$?
+set -e
+rm -f "$KEY_FILE"
+printf '%s\n' "$import_out" | tail -6
+if [ "$import_rc" -ne 0 ]; then
+    fail "Could not seed Alice remote-signer: ${import_out:0:300}"
+    emit_metrics; exit "$import_rc"
+fi
+pass "Alice remote-signer seeded with seller wallet"
+
+step "Alice: drive ERC-8004 registration (obol sell register)"
 # 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
 # should complete in ~30-60s; anything beyond that is a hang we want
 # to surface, not silently block the run. `timeout` is an external
@@ -742,10 +759,8 @@ register_out=$(timeout 300 \
         "$ALICE_DIR/bin/obol" sell register \
             --chain base-sepolia \
             --endpoint "$TUNNEL_URL" \
-            --name "Live OBOL Base Sepolia Test Inference" \
-            --private-key-file "$KEY_FILE" 2>&1)
+            --name "Live OBOL Base Sepolia Test Inference" 2>&1)
 register_rc=$?
-rm -f "$KEY_FILE"
 printf '%s\n' "$register_out" | tail -10
 if [ "$register_rc" -ne 0 ]; then
     fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
