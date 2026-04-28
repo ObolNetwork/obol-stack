@@ -363,7 +363,9 @@ bob_obol_balance_via_erpc() {
 import json, urllib.request
 data = json.dumps({'jsonrpc':'2.0','method':'eth_call','id':1,
     'params':[{'to':'$token','data':'0x70a08231'+'$sigNo0x'.lower().zfill(64)},'latest']}).encode()
-req = urllib.request.Request('http://erpc.erpc.svc.cluster.local:4000/rpc/base-sepolia',
+# eRPC's k8s Service exposes port 80 (chart 'service.port'). The /rpc/<network>
+# path matches what other in-cluster skills (signer.py, rpc.py) already use.
+req = urllib.request.Request('http://erpc.erpc.svc.cluster.local/rpc/base-sepolia',
     data=data, headers={'content-type':'application/json'})
 try:
     body = json.load(urllib.request.urlopen(req, timeout=10))
