@@ -597,7 +597,10 @@ type localImage struct {
 	contextDir string // relative to project root or absolute path (empty = project root)
 }
 
-// localImages lists images that should be built locally and imported into k3d.
+// localImages lists images that we build from source in this repo and import
+// into k3d. Hermes is NOT here — it has no Obol-side customization, so it's
+// pulled directly from `nousresearch/hermes-agent` like any other upstream
+// image. Override the tag with OBOL_HERMES_IMAGE if needed.
 var baseLocalImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/x402-verifier:latest", dockerfile: "Dockerfile.x402-verifier"},
 	{tag: "ghcr.io/obolnetwork/serviceoffer-controller:latest", dockerfile: "Dockerfile.serviceoffer-controller"},
@@ -609,41 +612,6 @@ func devPreloadImages() []string {
 	if ref := openclaw.ImageRef(); ref != "" {
 		images = append(images, ref)
 	}
-	return images
-}
-
-func hermesSourceDir(projectRoot string) string {
-	if override := strings.TrimSpace(os.Getenv("OBOL_HERMES_SOURCE_DIR")); override != "" {
-		return override
-	}
-
-	candidates := []string{
-		filepath.Join(filepath.Dir(projectRoot), "hermes-agent"),
-		filepath.Join(os.Getenv("HOME"), "Development", "R&D", "hermes-agent"),
-	}
-
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(candidate, "Dockerfile")); err == nil {
-			return candidate
-		}
-	}
-
-	return ""
-}
-
-func devLocalImages(projectRoot string) []localImage {
-	images := append([]localImage(nil), baseLocalImages...)
-	if hermesDir := hermesSourceDir(projectRoot); hermesDir != "" {
-		images = append(images, localImage{
-			tag:        "nousresearch/hermes-agent:latest",
-			dockerfile: filepath.Join(hermesDir, "Dockerfile"),
-			contextDir: hermesDir,
-		})
-	}
-
 	return images
 }
 
@@ -666,7 +634,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 
-	for _, img := range devLocalImages(projectRoot) {
+	for _, img := range baseLocalImages {
 		contextDir := projectRoot
 		if img.contextDir != "" {
 			if filepath.IsAbs(img.contextDir) {
