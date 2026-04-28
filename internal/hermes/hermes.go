@@ -1014,8 +1014,13 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 		return nil, "", errors.New("no LiteLLM models configured")
 	}
 
-	if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
-		return nil, "", fmt.Errorf("failed to auto-configure LiteLLM for Ollama: %w", err)
+	// Skip LiteLLM auto-config when the cluster isn't reachable — stack-up's
+	// own auto-config step runs after deploy. Lets `obol hermes onboard
+	// --no-sync` scaffold the deploy dir without a live cluster.
+	if _, statErr := os.Stat(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")); statErr == nil {
+		if err := model.ConfigureLiteLLM(cfg, u, "ollama", "", names); err != nil {
+			return nil, "", fmt.Errorf("failed to auto-configure LiteLLM for Ollama: %w", err)
+		}
 	}
 
 	primary, _ := rankModels(names)
