@@ -344,6 +344,12 @@ except Exception:
 PY
 }
 
+bob_buy_skill_balance() {
+    bob kubectl exec \
+        -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
+        python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
+}
+
 litellm_paid_inference() {
     bob kubectl exec -n llm deployment/litellm -c litellm -- \
         python3 -c "
@@ -879,18 +885,50 @@ else
     fi
 fi
 
-step "Bob: signer holds funded OBOL balance (live on-chain)"
-got_balance=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-    "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-if [ -n "$got_balance" ]; then
-    enough=$(python3 -c "print(1 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 0)")
-    if [ "$enough" = "1" ]; then
-        pass "Bob signer OBOL balance: $got_balance wei (>= 1 OBOL_PRICE_WEI)"
-    else
-        fail "Bob signer OBOL balance $got_balance wei is below $OBOL_PRICE_WEI (one paid request)"
-    fi
+step "Bob: signer holds funded OBOL balance (live on-chain, poll up to 24s)"
+# Poll the public RPC because Base Sepolia public endpoints fan out to read
+# replicas that can be a block or two behind the writer. Same pattern flow-11
+# uses for USDC. Without this, a single-shot balanceOf right after a fresh
+# transfer often returns 0 even when the tx is mined.
+got_balance="0"
+for _ in $(seq 1 12); do
+    got_balance=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
+        "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || echo 0)
+    [ -n "$got_balance" ] && [ "$got_balance" != "0" ] && \
+        python3 -c "import sys; sys.exit(0 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 1)" && break
+    sleep 2
+done
+if [ -n "$got_balance" ] && python3 -c "import sys; sys.exit(0 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 1)"; then
+    pass "Bob signer OBOL balance: $got_balance wei (>= 1 OBOL_PRICE_WEI)"
 else
-    fail "Could not read Bob signer OBOL balance"
+    fail "Bob signer OBOL balance $got_balance wei is below $OBOL_PRICE_WEI after 24s of polling"
+    emit_metrics; exit 1
+fi
+
+# Now wait for Bob's in-cluster eRPC view to reflect the funding too. buy.py
+# inside the agent pod reads through eRPC, which has its own ~10s eth_call
+# cache TTL — without this poll the next step (the AI agent buy) often runs
+# while the in-pod balance still reads 0 and the buy short-circuits with no
+# PurchaseRequest CR.
+step "Bob: eRPC reflects funding (in-pod buy.py balance >= price)"
+erpc_balance_output=""
+erpc_balance_wei=""
+for attempt in $(seq 1 18); do
+    erpc_balance_output=$(bob_buy_skill_balance)
+    # buy.py's `balance` prints e.g. "Wallet: 0x... balance: 5e15 wei (5000 micro-units)"
+    # We accept whichever digit form it emits and treat the largest extracted
+    # number as the wei balance — defensive against minor format drift.
+    erpc_balance_wei=$(echo "$erpc_balance_output" | grep -oE '[0-9]{15,}' | sort -rn | head -1)
+    if [ -n "$erpc_balance_wei" ] && \
+       python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
+        pass "Bob: eRPC reflects funding (attempt $attempt, balance $erpc_balance_wei wei)"
+        break
+    fi
+    sleep 5
+done
+if [ -z "$erpc_balance_wei" ] || ! python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
+    fail "Bob: in-pod eRPC balance did not catch up — ${erpc_balance_output:0:300}"
+    emit_metrics; exit 1
 fi
 
 BOB_SIGNER_BAL_BEFORE_PAID="$got_balance"
