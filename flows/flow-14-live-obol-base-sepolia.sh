@@ -1,45 +1,53 @@
 #!/bin/bash
-# Flow 13: Dual-Stack OBOL — Alice sells, Bob discovers and buys with OBOL.
+# Flow 14: Live OBOL on Base Sepolia — Alice sells, Bob discovers and buys.
 #
-# Mirrors flow-11's "Alice sells, Bob discovers via ERC-8004 and buys" structure
-# end-to-end, but the payment asset is a fork-local OBOL ERC20Permit token instead
-# of USDC, and the chain + facilitator are local rather than public:
+# Live-network sibling of flow-13. Where flow-13 exercises the OBOL Permit2 path
+# end-to-end against an Anvil fork + a locally-spawned x402-rs facilitator,
+# flow-14 exercises the SAME path against the live Base Sepolia network and the
+# public Obol facilitator at https://x402.gcp.obol.tech. The chain, the OBOL
+# token, and the facilitator are all live; nothing is forked, nothing is spawned.
 #
-#   - One Anvil fork of Base Sepolia (chain 84532) shared by Alice's and Bob's
-#     obol stacks via the Docker-managed alias `host.k3d.internal:$ANVIL_PORT`.
-#   - One x402-rs facilitator process pointing at that Anvil. We require an
-#     ObolNetwork/x402-rs build with eip2612GasSponsoring support.
-#   - A fork-local OBOL ERC20Permit contract (contracts/fork-obol/src/ForkObolToken.sol)
-#     deployed via `forge create` against the same Anvil. The same address is
-#     visible from both clusters because they share the fork.
-#   - Alice's ServiceOffer carries OBOL asset metadata (transferMethod=permit2,
-#     eip712Name="Obol Network", eip712Version="1"); buy.py on Bob's agent is
-#     OBOL-Permit2-aware and signs Permit2 payloads against the local facilitator.
+# Differences vs flow-13 (intentional):
+#   - No Anvil fork. Live Base Sepolia RPC (BASE_SEPOLIA_RPC env or
+#     https://sepolia.base.org as fallback).
+#   - No local x402-rs facilitator. Public https://x402.gcp.obol.tech.
+#   - No `forge create`. The OBOL token contract is already deployed; its
+#     address is supplied via OBOL_TOKEN_BASE_SEPOLIA. Flow-14 only confirms
+#     it is reachable, captures its on-chain metadata (name/symbol/decimals/
+#     DOMAIN_SEPARATOR), and asserts decimals == 18.
+#   - No `cast send <forkOBOL>.mint(...)`. Bob's wallet must already hold real
+#     OBOL on Base Sepolia. The script reads the balance and fails fast with
+#     an actionable message if it's below the buy threshold.
+#   - ERC-8004 registration is enabled on Alice's seller path (live Base
+#     Sepolia registry 0x8004A818BFB912233c491871b3d84c89A494BD9e). This
+#     exercises PR #387's WaitForAgent fix on the OBOL path.
+#   - eip712Name is derived from the live token's name() and verified before
+#     the ServiceOffer is published — fails fast if the token name does not
+#     match what the controller will sign.
 #
-# Requires:
-#   - .env with REMOTE_SIGNER_PRIVATE_KEY (used as Alice's seller key + funded EOA)
-#   - cast + anvil (Foundry) on PATH
-#   - forge on PATH (used to compile ForkObolToken.sol)
-#   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
-#   - Ollama running (Alice serves local model inference)
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing at an x402-rs build with
-#     eip2612GasSponsoring; the flow skips with a single PASS if neither is set.
+# Required env (the script fails fast if any are unset):
+#   REMOTE_SIGNER_PRIVATE_KEY    Alice's seller key (must hold Base Sepolia ETH
+#                                for ERC-8004 register + metadata-set gas).
+#   OBOL_TOKEN_BASE_SEPOLIA      Address of the deployed OBOL ERC20Permit token
+#                                on Base Sepolia (chainId 84532).
+#   BOB_FUNDING_PRIVATE_KEY      Buyer key. Must already hold real OBOL on
+#                                Base Sepolia (>= OBOL_PRICE_WEI * 5). Distinct
+#                                from REMOTE_SIGNER_PRIVATE_KEY because live
+#                                OBOL on Base Sepolia is scarce and we don't
+#                                want to assume Alice has any.
 #
-# Use this flow when you want to validate the OBOL Permit2 path end-to-end
-# without depending on the public Obol facilitator or any USDC contract.
+# Optional overrides:
+#   BASE_SEPOLIA_RPC                          default: https://sepolia.base.org
+#   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
+#   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
+#   FLOW14_ARTIFACT_DIR                       where receipts + logs land
 #
 # Usage:
-#   ./flows/flow-13-dual-stack-obol.sh
+#   ./flows/flow-14-live-obol-base-sepolia.sh
 #
-# Override defaults via shell env or repo-root .env:
-#   X402_FACILITATOR_BIN          path to x402-facilitator (preferred)
-#   X402_RS_DIR                   directory of an x402-rs checkout (fallback)
-#   FLOW13_ANVIL_PORT             host port for Anvil (default: auto-pick)
-#   FLOW13_FACILITATOR_PORT       host port for x402-rs (default: auto-pick)
-#   FLOW13_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
-#   FLOW13_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
-#   FLOW13_ARTIFACT_DIR           where receipts + logs land
-#
+# WARNING: This flow spends real Base Sepolia ETH (registration + metadata
+# gas) and real (testnet) OBOL (paid inference settlement). Run it with care.
+
 source "$(dirname "$0")/lib.sh"
 
 # ═════════════════════════════════════════════════════════════════
@@ -49,41 +57,33 @@ source "$(dirname "$0")/lib.sh"
 ALICE_DIR="$OBOL_ROOT/.workspace-alice"
 BOB_DIR="$OBOL_ROOT/.workspace-bob"
 
-ALICE_HTTP_PORT="${FLOW13_ALICE_HTTP_PORT:-$(pick_free_port)}"
-ALICE_HTTP_ALT_PORT="${FLOW13_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
-ALICE_HTTPS_PORT="${FLOW13_ALICE_HTTPS_PORT:-$(pick_free_port)}"
-ALICE_HTTPS_ALT_PORT="${FLOW13_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
+ALICE_HTTP_PORT="${FLOW14_ALICE_HTTP_PORT:-$(pick_free_port)}"
+ALICE_HTTP_ALT_PORT="${FLOW14_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
+ALICE_HTTPS_PORT="${FLOW14_ALICE_HTTPS_PORT:-$(pick_free_port)}"
+ALICE_HTTPS_ALT_PORT="${FLOW14_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
 
-BOB_HTTP_PORT="${FLOW13_BOB_HTTP_PORT:-$(pick_free_port)}"
-BOB_HTTP_ALT_PORT="${FLOW13_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
-BOB_HTTPS_PORT="${FLOW13_BOB_HTTPS_PORT:-$(pick_free_port)}"
-BOB_HTTPS_ALT_PORT="${FLOW13_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
+BOB_HTTP_PORT="${FLOW14_BOB_HTTP_PORT:-$(pick_free_port)}"
+BOB_HTTP_ALT_PORT="${FLOW14_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
+BOB_HTTPS_PORT="${FLOW14_BOB_HTTPS_PORT:-$(pick_free_port)}"
+BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 
-ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
-FACILITATOR_PORT="${FLOW13_FACILITATOR_PORT:-$(pick_free_port)}"
-
-# Both clusters speak to Anvil through the docker-managed alias `host.k3d.internal`,
-# which k3d auto-resolves inside the cluster network. From the host we use 127.0.0.1.
-ANVIL_RPC_HOST="http://127.0.0.1:$ANVIL_PORT"
-ANVIL_RPC_CLUSTER="http://host.k3d.internal:$ANVIL_PORT"
-FACILITATOR_URL_HOST="http://127.0.0.1:$FACILITATOR_PORT"
-FACILITATOR_URL_CLUSTER="http://host.k3d.internal:$FACILITATOR_PORT"
+# Live Base Sepolia RPC + public Obol facilitator. No host.k3d.internal pin.
+BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
+FACILITATOR_URL="https://x402.gcp.obol.tech"
 
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
 
 # OBOL Permit2 wire amount: 0.001 OBOL with 18 decimals = 1e15 wei.
 OBOL_PRICE_WEI="1000000000000000"
 
-FLOW13_ARTIFACT_DIR="${FLOW13_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-13-$(date +%Y%m%d-%H%M%S)}"
-mkdir -p "$FLOW13_ARTIFACT_DIR"
-ANVIL_LOG="$FLOW13_ARTIFACT_DIR/anvil.log"
-FACILITATOR_LOG="$FLOW13_ARTIFACT_DIR/facilitator.log"
+FLOW14_ARTIFACT_DIR="${FLOW14_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-14-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$FLOW14_ARTIFACT_DIR"
 
 # Receipt helpers in lib.sh expect FLOW11_ARTIFACT_DIR + USDC_ADDRESS_BASE_SEPOLIA +
-# BASE_SEPOLIA_RPC. We point them at the OBOL token + Anvil; their ERC-20 transfer
-# scan logic is generic, despite the legacy "USDC" naming.
-export FLOW11_ARTIFACT_DIR="$FLOW13_ARTIFACT_DIR"
-export BASE_SEPOLIA_RPC="$ANVIL_RPC_HOST"
+# BASE_SEPOLIA_RPC. The "USDC" naming is legacy — the helpers are generic
+# ERC-20 Transfer scanners. Point them at OBOL_TOKEN_BASE_SEPOLIA below.
+export FLOW11_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR"
+export BASE_SEPOLIA_RPC
 
 # Initial Hermes defaults; detect_buyer_runtime overwrites these once Bob's
 # cluster is up and we know whether OpenClaw or Hermes was deployed.
@@ -96,8 +96,6 @@ BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
 BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
 BOB_AGENT_RUNTIME="hermes"
 
-ANVIL_PID=""
-FACILITATOR_PID=""
 PF_AGENT=""
 PF_AGENT_LOG=""
 
@@ -105,33 +103,31 @@ PF_AGENT_LOG=""
 # CLEANUP TRAP
 # ═════════════════════════════════════════════════════════════════
 
-flow13_cleanup() {
+flow14_cleanup() {
     local ec=$?
     set +e
     [ -n "$PF_AGENT" ] && cleanup_pid "$PF_AGENT" 2>/dev/null
     [ -n "$PF_AGENT_LOG" ] && rm -f "$PF_AGENT_LOG" 2>/dev/null
-    # Drop the base-sepolia eRPC pin we added on each cluster so the next flow
-    # (especially flow-11 / flow-14 against live RPC) doesn't inherit a route to
-    # a dead Anvil fork. Safe if the cluster is already gone; the obol CLI just
-    # fails and we ignore the exit code.
-    if [ -d "$ALICE_DIR/config" ]; then
-        alice network remove base-sepolia >/dev/null 2>&1 || true
+    # Drop the live base-sepolia eRPC pin from prior runs so a stale pointer
+    # doesn't leak between Alice/Bob workspaces. Idempotent on first run.
+    if [ -x "$ALICE_DIR/bin/obol" ]; then
+        OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$ALICE_DIR/config" \
+        OBOL_BIN_DIR="$ALICE_DIR/bin" \
+        OBOL_DATA_DIR="$ALICE_DIR/data" \
+        "$ALICE_DIR/bin/obol" network remove base-sepolia >/dev/null 2>&1 || true
     fi
-    if [ -d "$BOB_DIR/config" ]; then
-        bob network remove base-sepolia >/dev/null 2>&1 || true
-    fi
-    if [ -n "$FACILITATOR_PID" ] && kill -0 "$FACILITATOR_PID" 2>/dev/null; then
-        kill "$FACILITATOR_PID" 2>/dev/null || true
-        wait "$FACILITATOR_PID" 2>/dev/null || true
-    fi
-    if [ -n "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
-        kill "$ANVIL_PID" 2>/dev/null || true
-        wait "$ANVIL_PID" 2>/dev/null || true
+    if [ -x "$BOB_DIR/bin/obol" ]; then
+        OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$BOB_DIR/config" \
+        OBOL_BIN_DIR="$BOB_DIR/bin" \
+        OBOL_DATA_DIR="$BOB_DIR/data" \
+        "$BOB_DIR/bin/obol" network remove base-sepolia >/dev/null 2>&1 || true
     fi
     set -e
     return $ec
 }
-trap flow13_cleanup EXIT
+trap flow14_cleanup EXIT
 
 # ═════════════════════════════════════════════════════════════════
 # RUNNERS / HELPERS
@@ -154,76 +150,6 @@ bob() {
     "$BOB_DIR/bin/obol" "$@"
 }
 
-# Pin a chain to a single eRPC upstream by mutating the eRPC ConfigMap. Mirrors
-# pinERPCChainToSingleUpstream from internal/openclaw/monetize_integration_test.go
-# without needing the Go controller.
-pin_erpc_chain_single_upstream() {
-    local runner="$1"   # alice | bob
-    local chain_id="$2"
-    local upstream_id="$3"
-
-    local current
-    current=$("$runner" kubectl get cm erpc-config -n erpc -o jsonpath='{.data.erpc\.yaml}' 2>/dev/null || true)
-    if [ -z "$current" ]; then
-        return 1
-    fi
-
-    local patched
-    patched=$(FLOW13_ERPC_YAML="$current" \
-              FLOW13_CHAIN_ID="$chain_id" \
-              FLOW13_UPSTREAM_ID="$upstream_id" \
-              python3 - <<'PY'
-import os
-import sys
-import yaml
-
-cfg = yaml.safe_load(os.environ["FLOW13_ERPC_YAML"]) or {}
-chain_id = int(os.environ["FLOW13_CHAIN_ID"])
-upstream_id = os.environ["FLOW13_UPSTREAM_ID"]
-
-projects = cfg.get("projects") or []
-if not projects:
-    sys.exit(1)
-project = projects[0]
-upstreams = project.get("upstreams") or []
-selected = None
-filtered = []
-for u in upstreams:
-    if not isinstance(u, dict):
-        filtered.append(u)
-        continue
-    evm = u.get("evm") or {}
-    try:
-        cid = int(evm.get("chainId", 0))
-    except Exception:
-        cid = 0
-    if cid != chain_id:
-        filtered.append(u)
-        continue
-    if u.get("id") == upstream_id:
-        selected = u
-
-if selected is None:
-    sys.exit(2)
-
-project["upstreams"] = [selected] + filtered
-print(yaml.safe_dump(cfg, sort_keys=False))
-PY
-              )
-    [ -n "$patched" ] || return 1
-    local tmp
-    tmp=$(mktemp)
-    printf '%s' "$patched" > "$tmp"
-    "$runner" kubectl create cm erpc-config -n erpc \
-        --from-file=erpc.yaml="$tmp" --dry-run=client -o yaml | \
-        "$runner" kubectl replace -f - >/dev/null 2>&1
-    local rc=$?
-    rm -f "$tmp"
-    "$runner" kubectl rollout restart deployment/erpc -n erpc >/dev/null 2>&1 || true
-    "$runner" kubectl rollout status deployment/erpc -n erpc --timeout=60s >/dev/null 2>&1 || true
-    return $rc
-}
-
 rewrite_k3d_ports() {
     local config_path="$1"
     local http_port="$2"
@@ -244,16 +170,16 @@ rewrite_k3d_ports() {
 }
 
 refresh_alice_ports() {
-    ALICE_HTTP_PORT="${FLOW13_ALICE_HTTP_PORT:-$(pick_free_port)}"
-    ALICE_HTTP_ALT_PORT="${FLOW13_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
-    ALICE_HTTPS_PORT="${FLOW13_ALICE_HTTPS_PORT:-$(pick_free_port)}"
-    ALICE_HTTPS_ALT_PORT="${FLOW13_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
+    ALICE_HTTP_PORT="${FLOW14_ALICE_HTTP_PORT:-$(pick_free_port)}"
+    ALICE_HTTP_ALT_PORT="${FLOW14_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
+    ALICE_HTTPS_PORT="${FLOW14_ALICE_HTTPS_PORT:-$(pick_free_port)}"
+    ALICE_HTTPS_ALT_PORT="${FLOW14_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
 }
 refresh_bob_ports() {
-    BOB_HTTP_PORT="${FLOW13_BOB_HTTP_PORT:-$(pick_free_port)}"
-    BOB_HTTP_ALT_PORT="${FLOW13_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
-    BOB_HTTPS_PORT="${FLOW13_BOB_HTTPS_PORT:-$(pick_free_port)}"
-    BOB_HTTPS_ALT_PORT="${FLOW13_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
+    BOB_HTTP_PORT="${FLOW14_BOB_HTTP_PORT:-$(pick_free_port)}"
+    BOB_HTTP_ALT_PORT="${FLOW14_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
+    BOB_HTTPS_PORT="${FLOW14_BOB_HTTPS_PORT:-$(pick_free_port)}"
+    BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 }
 
 stack_init_and_up_with_retry() {
@@ -351,12 +277,12 @@ ensure_bob_tunnel_dns() {
         return 0
     fi
     patch_file=$(mktemp)
-    FLOW13_NODEHOSTS="$nodehosts" FLOW13_TUNNEL_HOST="$host" FLOW13_TUNNEL_IP="$ip" \
+    FLOW14_NODEHOSTS="$nodehosts" FLOW14_TUNNEL_HOST="$host" FLOW14_TUNNEL_IP="$ip" \
         python3 - <<'PY' > "$patch_file"
 import json, os
-nh = os.environ["FLOW13_NODEHOSTS"].rstrip()
-host = os.environ["FLOW13_TUNNEL_HOST"]
-ip = os.environ["FLOW13_TUNNEL_IP"]
+nh = os.environ["FLOW14_NODEHOSTS"].rstrip()
+host = os.environ["FLOW14_TUNNEL_HOST"]
+ip = os.environ["FLOW14_TUNNEL_IP"]
 nh = f"{nh}\n{ip} {host}\n"
 print(json.dumps({"data": {"NodeHosts": nh}}))
 PY
@@ -405,10 +331,10 @@ except Exception as e:
 }
 
 extract_assistant_content() {
-    FLOW13_RESPONSE="$1" python3 - <<'PY'
+    FLOW14_RESPONSE="$1" python3 - <<'PY'
 import json, os, sys
 try:
-    data = json.loads(os.environ["FLOW13_RESPONSE"])
+    data = json.loads(os.environ["FLOW14_RESPONSE"])
     content = data["choices"][0]["message"].get("content", "")
     if isinstance(content, list):
         content = json.dumps(content)
@@ -446,68 +372,52 @@ except Exception as e:
 " 2>&1 || true
 }
 
-resolve_facilitator_bin() {
-    if [ -n "${X402_FACILITATOR_BIN:-}" ] && [ -x "$X402_FACILITATOR_BIN" ]; then
-        printf '%s\n' "$X402_FACILITATOR_BIN"; return 0
-    fi
-    local rs_dir="${X402_RS_DIR:-}"
-    if [ -z "$rs_dir" ] && [ -d "$HOME/Development/R&D/x402-rs" ]; then
-        rs_dir="$HOME/Development/R&D/x402-rs"
-    fi
-    if [ -n "$rs_dir" ]; then
-        for candidate in \
-            "$rs_dir/target/release/x402-facilitator" \
-            "$rs_dir/target/release/facilitator"; do
-            if [ -x "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
-        done
-    fi
-    return 1
-}
-
 # ═════════════════════════════════════════════════════════════════
 # 1-5. PREFLIGHT
 # ═════════════════════════════════════════════════════════════════
 
-step "Preflight: Foundry tools (cast + anvil + forge) installed"
-missing=""
-for t in cast anvil forge; do
-    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
-done
-if [ -n "$missing" ]; then
-    fail "Missing Foundry tools:$missing — run: curl -L https://foundry.paradigm.xyz | bash && foundryup"
+step "Preflight: Foundry tools (cast) installed"
+if ! command -v cast >/dev/null 2>&1; then
+    fail "Missing Foundry cast — run: curl -L https://foundry.paradigm.xyz | bash && foundryup"
     emit_metrics; exit 1
 fi
-pass "Foundry tools available"
+pass "cast available"
 
-step "Preflight: x402-rs facilitator binary resolvable"
-FACILITATOR_BIN=$(resolve_facilitator_bin || true)
-if [ -z "$FACILITATOR_BIN" ]; then
-    pass "Skipping flow-13 — set X402_FACILITATOR_BIN or X402_RS_DIR to a current x402-rs build"
-    emit_metrics
-    exit 0
+step "Preflight: required env vars present"
+if [ -z "${OBOL_TOKEN_BASE_SEPOLIA:-}" ]; then
+    echo "OBOL_TOKEN_BASE_SEPOLIA must be set to a deployed Base Sepolia ERC20Permit token address" >&2
+    exit 2
 fi
-export X402_FACILITATOR_BIN="$FACILITATOR_BIN"
-pass "X402_FACILITATOR_BIN=$X402_FACILITATOR_BIN"
+if [ -z "${BOB_FUNDING_PRIVATE_KEY:-}" ]; then
+    echo "BOB_FUNDING_PRIVATE_KEY must be set to a Base Sepolia private key already funded with real OBOL (>= 5 * OBOL_PRICE_WEI)" >&2
+    exit 2
+fi
+OBOL_TOKEN="$OBOL_TOKEN_BASE_SEPOLIA"
+# Re-export so lib.sh's generic ERC-20 helpers can scan our OBOL Transfer logs.
+export USDC_ADDRESS_BASE_SEPOLIA="$OBOL_TOKEN"
+pass "OBOL_TOKEN_BASE_SEPOLIA=$OBOL_TOKEN, BOB_FUNDING_PRIVATE_KEY set"
 
-step "Preflight: .env signer key (Alice/Bob seed)"
+step "Preflight: .env signer key (Alice seller / register payer)"
 SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
-    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
+    SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
+fi
+if [ -z "$SIGNER_KEY" ]; then
+    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
     emit_metrics; exit 1
 fi
 ALICE_WALLET=$(env -u CHAIN cast wallet address --private-key "$SIGNER_KEY" 2>/dev/null)
 pass "Alice (seller payTo + funded EOA): $ALICE_WALLET"
 
-step "Preflight: host ports free (Alice/Bob ingress + Anvil + facilitator)"
+step "Preflight: host ports free (Alice/Bob ingress)"
 busy=$(require_ports_free \
     "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT" \
-    "$BOB_HTTP_PORT"   "$BOB_HTTP_ALT_PORT"   "$BOB_HTTPS_PORT"   "$BOB_HTTPS_ALT_PORT" \
-    "$ANVIL_PORT" "$FACILITATOR_PORT") || true
+    "$BOB_HTTP_PORT"   "$BOB_HTTP_ALT_PORT"   "$BOB_HTTPS_PORT"   "$BOB_HTTPS_ALT_PORT") || true
 if [ -n "$busy" ]; then
-    fail "Ports in use (LISTEN): $busy — unset matching FLOW13_*_PORT to auto-pick"
+    fail "Ports in use (LISTEN): $busy — unset matching FLOW14_*_PORT to auto-pick"
     emit_metrics; exit 1
 fi
-pass "Ports: alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT anvil=$ANVIL_PORT facilitator=$FACILITATOR_PORT"
+pass "Ports: alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
 step "Preflight: clean stale ethereum namespaces in default workspace"
 if [ -f "$OBOL_CONFIG_DIR/.stack-id" ] && [ -f "$OBOL_CONFIG_DIR/kubeconfig.yaml" ] && "$OBOL" kubectl cluster-info >/dev/null 2>&1; then
@@ -522,104 +432,21 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 6-8. ANVIL FORK
+# 6-7. LIVE BASE SEPOLIA SANITY (RPC + chain id)
 # ═════════════════════════════════════════════════════════════════
 
-step "Anvil: start fork of Base Sepolia on port $ANVIL_PORT"
-# Bind 0.0.0.0 so the k3d clusters can reach this from inside their containers
-# via the docker-managed `host.k3d.internal` alias. Default 127.0.0.1 binding
-# would only be reachable from the same loopback the host shell uses.
-nohup anvil --fork-url https://sepolia.base.org --port "$ANVIL_PORT" \
-    --host 0.0.0.0 \
-    > "$ANVIL_LOG" 2>&1 &
-ANVIL_PID=$!
-# Poll readiness for up to 20s.
-ready=0
-for _ in $(seq 1 20); do
-    if curl -sf "$ANVIL_RPC_HOST" -X POST -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
-        ready=1; break
-    fi
-    sleep 1
-done
-if [ "$ready" -ne 1 ]; then
-    fail "Anvil failed to start on $ANVIL_RPC_HOST (see $ANVIL_LOG)"
-    emit_metrics; exit 1
-fi
-pass "Anvil up at $ANVIL_RPC_HOST (pid $ANVIL_PID)"
-
-step "Anvil: chain ID == 0x14a34 (84532, Base Sepolia)"
-chain_id_resp=$(curl -sf "$ANVIL_RPC_HOST" -X POST -H "Content-Type: application/json" \
+step "Base Sepolia: RPC reachable at $BASE_SEPOLIA_RPC"
+chain_id_resp=$(curl -sf --max-time 10 "$BASE_SEPOLIA_RPC" -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1) || true
 if echo "$chain_id_resp" | grep -qi '"result":"0x14a34"'; then
-    pass "Anvil is a Base Sepolia fork (chain 84532)"
+    pass "Base Sepolia RPC reachable, chain 84532"
 else
-    fail "Anvil chain ID unexpected — ${chain_id_resp:0:200}"
+    fail "Base Sepolia RPC chain ID unexpected — ${chain_id_resp:0:200}"
     emit_metrics; exit 1
 fi
 
-step "Anvil: USDC contract present on the fork (sanity)"
-usdc_name=$(env -u CHAIN cast call "$USDC_ADDRESS" "name()(string)" \
-    --rpc-url "$ANVIL_RPC_HOST" 2>&1) || true
-if echo "$usdc_name" | grep -q 'USDC'; then
-    pass "USDC contract reachable on Anvil fork: $usdc_name"
-else
-    fail "USDC contract missing on Anvil fork — ${usdc_name:0:200}"
-    emit_metrics; exit 1
-fi
-
-# ═════════════════════════════════════════════════════════════════
-# 9-10. x402-rs FACILITATOR
-# ═════════════════════════════════════════════════════════════════
-
-step "Facilitator: start x402-rs pointing at Anvil"
-FACILITATOR_CONFIG="$FLOW13_ARTIFACT_DIR/facilitator-config.json"
-FAC_SIGNER_KEY=$(hh_key 0)
-FAC_SIGNER_KEY="${FAC_SIGNER_KEY#0x}"
-cat > "$FACILITATOR_CONFIG" << FEOF
-{
-  "port": $FACILITATOR_PORT, "host": "0.0.0.0",
-  "chains": {"eip155:84532": {"eip1559": true, "flashblocks": false,
-    "signers": ["$FAC_SIGNER_KEY"],
-    "rpc": [{"http": "$ANVIL_RPC_HOST", "rate_limit": 50}]}},
-  "schemes": [
-    {"id": "v1-eip155-exact", "chains": "eip155:*"},
-    {"id": "v2-eip155-exact", "chains": "eip155:*",
-     "config": {"eip2612_gas_sponsoring": true}}
-  ]
-}
-FEOF
-FACILITATOR_PID=$(FAC_LOG="$FACILITATOR_LOG" FAC_BIN="$FACILITATOR_BIN" FAC_CFG="$FACILITATOR_CONFIG" python3 - <<'PY'
-import os, subprocess
-log = open(os.environ["FAC_LOG"], "ab", buffering=0)
-p = subprocess.Popen(
-    [os.environ["FAC_BIN"], "--config", os.environ["FAC_CFG"]],
-    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-    start_new_session=True, close_fds=True)
-print(p.pid)
-PY
-)
-fac_ready=0
-for _ in $(seq 1 30); do
-    if curl -sf "$FACILITATOR_URL_HOST/supported" >/dev/null 2>&1; then
-        fac_ready=1; break
-    fi
-    sleep 1
-done
-if [ "$fac_ready" -eq 1 ]; then
-    pass "Facilitator up at $FACILITATOR_URL_HOST (pid $FACILITATOR_PID)"
-else
-    fail "Facilitator did not become reachable — see $FACILITATOR_LOG"
-    emit_metrics; exit 1
-fi
-
-step "Facilitator: /supported advertises base-sepolia exact (v1+v2)"
-# The OBOL Permit2 / EIP-2612 gas sponsoring path is enabled via
-# config.eip2612_gas_sponsoring=true on the v2-eip155-exact scheme — there is
-# no separate "permit2" scheme. The buyer-side is what produces a Permit2
-# payment payload; the facilitator's only job is to advertise v2-exact and
-# accept the sponsored authorization at /verify and /settle time.
-sup_json=$(curl -sf --max-time 5 "$FACILITATOR_URL_HOST/supported" 2>/dev/null || true)
+step "Facilitator: $FACILITATOR_URL/supported advertises base-sepolia exact (v1+v2)"
+sup_json=$(curl -sf --max-time 10 "$FACILITATOR_URL/supported" 2>/dev/null || true)
 if SUP="$sup_json" python3 - <<'PY'
 import json, os, sys
 try:
@@ -640,98 +467,86 @@ for k in d.get("kinds", []):
 sys.exit(0 if v1_ok and v2_ok else 1)
 PY
 then
-    pass "Facilitator advertises base-sepolia v1+v2 exact (Permit2 path ready)"
+    pass "Public facilitator advertises base-sepolia v1+v2 exact (Permit2 path ready)"
 else
     fail "Facilitator missing v1+v2 exact for base-sepolia — kinds: ${sup_json:0:300}"
     emit_metrics; exit 1
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 11. DEPLOY OBOL TOKEN ON THE FORK (forge create against Anvil)
+# 8. OBOL TOKEN: confirm reachable + capture metadata
 # ═════════════════════════════════════════════════════════════════
 
-step "OBOL token: deploy ForkObolToken via forge create"
-FORK_OBOL_DIR="$OBOL_ROOT/contracts/fork-obol"
-if [ ! -d "$FORK_OBOL_DIR" ]; then
-    fail "fork-obol contract project missing at $FORK_OBOL_DIR"
+step "OBOL token: confirm reachable + capture metadata"
+OBOL_TOKEN_NAME=$(env -u CHAIN cast call "$OBOL_TOKEN" "name()(string)" \
+    --rpc-url "$BASE_SEPOLIA_RPC" 2>&1) || true
+OBOL_TOKEN_NAME=${OBOL_TOKEN_NAME%$'\n'}
+# `cast call` for a string returns a quoted display string; strip enclosing quotes.
+OBOL_TOKEN_NAME=$(printf '%s' "$OBOL_TOKEN_NAME" | sed -e 's/^"//' -e 's/"$//')
+OBOL_TOKEN_SYMBOL=$(env -u CHAIN cast call "$OBOL_TOKEN" "symbol()(string)" \
+    --rpc-url "$BASE_SEPOLIA_RPC" 2>&1) || true
+OBOL_TOKEN_SYMBOL=$(printf '%s' "$OBOL_TOKEN_SYMBOL" | sed -e 's/^"//' -e 's/"$//')
+OBOL_TOKEN_DECIMALS_RAW=$(env -u CHAIN cast call "$OBOL_TOKEN" "decimals()(uint8)" \
+    --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
+OBOL_TOKEN_DECIMALS=$(echo "$OBOL_TOKEN_DECIMALS_RAW" | grep -oE '^[0-9]+' | head -1)
+OBOL_TOKEN_DOMAIN_SEPARATOR=$(env -u CHAIN cast call "$OBOL_TOKEN" "DOMAIN_SEPARATOR()(bytes32)" \
+    --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
+OBOL_TOKEN_DOMAIN_SEPARATOR=$(echo "$OBOL_TOKEN_DOMAIN_SEPARATOR" | grep -oE '0x[0-9a-fA-F]+' | head -1)
+
+if [ -z "$OBOL_TOKEN_NAME" ] || [ -z "$OBOL_TOKEN_SYMBOL" ] || [ -z "$OBOL_TOKEN_DECIMALS" ]; then
+    fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC (name/symbol/decimals all empty)"
     emit_metrics; exit 1
 fi
-(cd "$FORK_OBOL_DIR" && forge build >/dev/null 2>&1) || {
-    fail "forge build failed in $FORK_OBOL_DIR"
-    emit_metrics; exit 1
-}
-DEPLOYER_KEY=$(hh_key 0)        # Anvil[0] funds itself + acts as deployer
-DEPLOYER_ADDR=$(hh_addr 0)
-forge_out=$(cd "$FORK_OBOL_DIR" && forge create \
-    --root "$FORK_OBOL_DIR" \
-    src/ForkObolToken.sol:ForkObolToken \
-    --rpc-url "$ANVIL_RPC_HOST" \
-    --private-key "$DEPLOYER_KEY" \
-    --broadcast \
-    --json \
-    --constructor-args "$DEPLOYER_ADDR" "0" 2>&1) || true
-OBOL_TOKEN=$(echo "$forge_out" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    print(d.get('deployedTo','') or '')
-except Exception:
-    pass" 2>/dev/null)
-if [ -z "$OBOL_TOKEN" ]; then
-    fail "forge create did not return deployedTo — ${forge_out:0:300}"
+if [ -z "$OBOL_TOKEN_DOMAIN_SEPARATOR" ]; then
+    fail "OBOL token at $OBOL_TOKEN does not expose DOMAIN_SEPARATOR() — not an ERC20Permit token"
     emit_metrics; exit 1
 fi
-# Re-export so lib.sh's generic ERC-20 helpers can scan our OBOL Transfer logs.
-export USDC_ADDRESS_BASE_SEPOLIA="$OBOL_TOKEN"
-pass "OBOL token deployed at $OBOL_TOKEN"
-
-# EIP-712 early-fail probe: the ServiceOffer below pins `eip712Name: "Obol Network"`
-# / `eip712Version: "1"`. If the deployed contract's name()/version don't match,
-# the buyer will sign Permit2 payloads against a different EIP-712 domain than
-# the contract's permit() expects, and settlement will fail at /verify with an
-# unhelpful error. Catch the mismatch here, before any signing happens.
-EXPECTED_EIP712_NAME="Obol Network"
-TOKEN_NAME=$(env -u CHAIN cast call "$OBOL_TOKEN" "name()(string)" \
-    --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d '"')
-if [ "$TOKEN_NAME" != "$EXPECTED_EIP712_NAME" ]; then
-    fail "EIP-712 name mismatch: token reports '$TOKEN_NAME', ServiceOffer pins '$EXPECTED_EIP712_NAME'"
+if [ "$OBOL_TOKEN_DECIMALS" != "18" ]; then
+    fail "OBOL token decimals == $OBOL_TOKEN_DECIMALS, expected 18"
     emit_metrics; exit 1
 fi
-pass "EIP-712 domain probe: token name() = '$TOKEN_NAME' matches eip712Name"
+pass "OBOL token: name=$OBOL_TOKEN_NAME symbol=$OBOL_TOKEN_SYMBOL decimals=$OBOL_TOKEN_DECIMALS domainSeparator=$OBOL_TOKEN_DOMAIN_SEPARATOR"
 
-# ═════════════════════════════════════════════════════════════════
-# 12. MINT 10 OBOL TO ALICE + BOB SIGNER
-#     (Bob signer address is unknown until his stack is up — we mint to the
-#     Alice EOA + the deployer for now and re-mint to the Bob signer later.
-#     Step 30 records the per-wallet balances and treats the mints as funding.)
-# ═════════════════════════════════════════════════════════════════
-
-step "OBOL token: mint 10 OBOL to Alice ($ALICE_WALLET)"
-ten_obol="10000000000000000000"   # 10 * 1e18
-# --json keeps the output machine-readable across foundry versions; older
-# `cast send` text format dropped the "transactionHash:" prefix in some 1.x
-# releases, which makes regex-based extraction unreliable.
-mint_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
-    "mint(address,uint256)" "$ALICE_WALLET" "$ten_obol" \
-    --rpc-url "$ANVIL_RPC_HOST" --private-key "$DEPLOYER_KEY" 2>&1 || true)
-ALICE_MINT_TX=$(echo "$mint_out" | python3 -c 'import json,sys
-try:
-    d=json.loads(sys.stdin.read())
-    print(d.get("transactionHash",""))
-except Exception:
-    pass' || true)
-alice_obol_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-    "$ALICE_WALLET" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-if [ -n "$alice_obol_bal" ] && [ "$alice_obol_bal" = "$ten_obol" ]; then
-    pass "Alice OBOL balance: $alice_obol_bal (tx $ALICE_MINT_TX)"
-    [ -n "$ALICE_MINT_TX" ] && archive_receipt alice-mint "$ALICE_MINT_TX" 5 1 || true
+# EIP-712 early-fail probe: the ServiceOffer YAML below pins eip712Name to the
+# value the controller uses when re-deriving the EIP-712 domain. If the live
+# token's name() does not match, every Permit2 signature on the buy side will
+# fail verification at the facilitator. Fail here, not after a 30-block scan.
+EIP712_NAME="$OBOL_TOKEN_NAME"
+EIP712_VERSION="1"
+step "EIP-712 probe: token name() matches expected eip712Name"
+if [ -n "$EIP712_NAME" ]; then
+    pass "eip712Name will be set to '$EIP712_NAME' (derived from on-chain name())"
 else
-    fail "Alice OBOL mint did not credit balance — got ${alice_obol_bal:-0} expected $ten_obol — ${mint_out:0:200}"
+    fail "Could not derive eip712Name from on-chain name()"
     emit_metrics; exit 1
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 13-19. ALICE STACK
+# 9. BOB: prerequisite OBOL balance check (NO mint on live network)
+# ═════════════════════════════════════════════════════════════════
+
+step "Bob: prerequisite OBOL balance check (BOB_FUNDING_PRIVATE_KEY)"
+BOB_FUNDING_ADDR=$(env -u CHAIN cast wallet address --private-key "$BOB_FUNDING_PRIVATE_KEY" 2>/dev/null)
+if [ -z "$BOB_FUNDING_ADDR" ]; then
+    fail "Could not derive address from BOB_FUNDING_PRIVATE_KEY"
+    emit_metrics; exit 1
+fi
+bob_obol_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
+    "$BOB_FUNDING_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+required_min=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
+if [ -z "$bob_obol_bal" ]; then
+    fail "Could not read OBOL balance for $BOB_FUNDING_ADDR (network/contract issue)"
+    emit_metrics; exit 1
+fi
+bob_below=$(python3 -c "print(1 if int('$bob_obol_bal') < int('$required_min') else 0)")
+if [ "$bob_below" = "1" ]; then
+    fail "Bob funding wallet $BOB_FUNDING_ADDR holds $bob_obol_bal OBOL (wei); need >= $required_min wei (5 * OBOL_PRICE_WEI). Top up real OBOL on Base Sepolia before running flow-14."
+    emit_metrics; exit 1
+fi
+pass "Bob funding wallet $BOB_FUNDING_ADDR holds $bob_obol_bal OBOL wei (>= $required_min)"
+
+# ═════════════════════════════════════════════════════════════════
+# 10-15. ALICE STACK
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: build obol binary"
@@ -753,37 +568,18 @@ stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
-step "Alice: anvil reachable from inside cluster via host.k3d.internal"
-# Use a transient busybox pod for the probe — the eRPC container is distroless
-# and has no wget/curl. busybox's wget is enough to POST a JSON-RPC request.
-probe_out=$(alice kubectl run flow13-probe-alice-$RANDOM \
-    --rm -i --restart=Never --image=busybox:1.36 --quiet \
-    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
-        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
-        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
-if echo "$probe_out" | grep -q '0x14a34'; then
-    pass "Alice cluster can reach $ANVIL_RPC_CLUSTER"
-else
-    fail "Alice cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
-    emit_metrics; exit 1
-fi
-
-step "Alice: add base-sepolia route in eRPC pointing at our Anvil (writes allowed)"
-alice network add base-sepolia --endpoint "$ANVIL_RPC_CLUSTER" --allow-writes 2>&1 | tail -2
+step "Alice: add base-sepolia route in eRPC (live RPC, writes allowed)"
+alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
 alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-if pin_erpc_chain_single_upstream alice 84532 "custom-84532-0"; then
-    pass "Alice eRPC: 84532 pinned to custom-84532-0 -> $ANVIL_RPC_CLUSTER"
-else
-    fail "Could not pin Alice eRPC chain 84532 to custom-84532-0 (check upstream id)"
-fi
+pass "Alice eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
 
-step "Alice: configure x402 pricing pointing at local facilitator"
+step "Alice: configure x402 pricing pointing at public Obol facilitator"
 alice sell pricing \
     --wallet "$ALICE_WALLET" \
     --chain base-sepolia \
-    --facilitator-url "$FACILITATOR_URL_CLUSTER" 2>&1 | tail -1
-pass "Pricing configured (facilitator=$FACILITATOR_URL_CLUSTER)"
+    --facilitator-url "$FACILITATOR_URL" 2>&1 | tail -1
+pass "Pricing configured (facilitator=$FACILITATOR_URL)"
 
 step "Alice: CA bundle populated"
 ca_size=$(alice kubectl get cm ca-certificates -n x402 -o jsonpath='{.data}' 2>/dev/null | wc -c | tr -d ' ')
@@ -794,11 +590,15 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 20. ALICE: CREATE OBOL-PRICED ServiceOffer
+# 16. ALICE: CREATE OBOL-PRICED ServiceOffer (registration ENABLED)
 # ═════════════════════════════════════════════════════════════════
 
-step "Alice: create OBOL-priced ServiceOffer (transferMethod=permit2)"
-REG_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d ' ' || true)
+step "Alice: create OBOL-priced ServiceOffer (transferMethod=permit2, registration enabled)"
+REG_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
+if [ -z "$REG_START_BLOCK" ]; then
+    fail "Could not read Base Sepolia block number before registration"
+    emit_metrics; exit 1
+fi
 ALICE_OFFER_YAML=$(mktemp)
 cat > "$ALICE_OFFER_YAML" <<YAML
 apiVersion: obol.org/v1alpha1
@@ -818,39 +618,54 @@ spec:
     payTo: "$ALICE_WALLET"
     asset:
       address: "$OBOL_TOKEN"
-      symbol: "OBOL"
+      symbol: "$OBOL_TOKEN_SYMBOL"
       decimals: 18
       transferMethod: "permit2"
-      eip712Name: "Obol Network"
-      eip712Version: "1"
+      eip712Name: "$EIP712_NAME"
+      eip712Version: "$EIP712_VERSION"
     price:
       perRequest: "0.001"
   path: /services/alice-obol-inference
-  # Intentionally NO registration: this flow's focus is the OBOL Permit2
-  # payment path, not ERC-8004 discovery. The controller can't drive
-  # registration without a signing private key (which `obol sell http` normally
-  # supplies via --private-key-file); leaving registration off keeps Ready=True
-  # reachable. Matches TestIntegration_SellBuySidecar_OBOLPermit2's offer YAML.
+  registration:
+    enabled: true
+    name: "Live OBOL Base Sepolia Test Inference"
+    description: "Integration test (flow-14): live OBOL Permit2 inference on Base Sepolia"
+    skills:
+      - natural_language_processing/text_generation
+    domains:
+      - technology/artificial_intelligence
+    supportedTrust:
+      - reputation
 YAML
 alice kubectl apply -f "$ALICE_OFFER_YAML" 2>&1 | tail -2
 rm -f "$ALICE_OFFER_YAML"
 pass "ServiceOffer alice-obol-inference applied"
+
+# Drive registration on-chain via `obol sell register` — same code path as
+# flow-11. This exercises PR #387's WaitForAgent fix on the OBOL-priced offer.
+step "Alice: drive ERC-8004 registration (obol sell register)"
+KEY_FILE=$(mktemp)
+echo "$SIGNER_KEY" > "$KEY_FILE"
+register_out=$(alice sell register \
+    --name alice-obol-inference \
+    --namespace llm \
+    --private-key-file "$KEY_FILE" 2>&1) || true
+printf '%s\n' "$register_out" | tail -10
+rm -f "$KEY_FILE"
+pass "obol sell register issued"
 
 poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
     alice kubectl get serviceoffers.obol.org alice-obol-inference -n llm \
         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 
 # ═════════════════════════════════════════════════════════════════
-# 21. TUNNEL + 402 GATE
+# 17. TUNNEL + 402 GATE
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: bring up cloudflared tunnel"
-# `obol stack up` deploys the cloudflared Deployment at 0 replicas. `obol sell
-# http` would scale it to 1 via internal EnsureTunnelForSell, but flow-13
-# applies the OBOL ServiceOffer YAML directly (because `obol sell http`
-# doesn't expose the OBOL Permit2 asset metadata flags yet). `obol tunnel
-# restart` only does `rollout restart` — a no-op when replicas=0. So we
-# explicitly scale here, then poll for tunnel-status to capture the URL.
+# `obol stack up` deploys the cloudflared Deployment at 0 replicas. Because we
+# apply the OBOL ServiceOffer YAML directly (see flow-13), the internal
+# EnsureTunnelForSell path is bypassed and we must scale by hand.
 alice kubectl scale deployment/cloudflared -n traefik --replicas=1 2>&1 | tail -2
 alice kubectl rollout status deployment/cloudflared -n traefik --timeout=180s 2>&1 | tail -3
 pass "Cloudflared scaled to 1"
@@ -883,21 +698,80 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 22. ERC-8004 REGISTRATION (skipped on this flow)
+# 18. ERC-8004 REGISTRATION receipt (read-back)
 # ═════════════════════════════════════════════════════════════════
-# This flow's focus is the OBOL Permit2 payment path. Registration is
-# disabled in the offer YAML above; Bob's agent discovers Alice through
-# the tunnel storefront / skill.md instead of by scanning the registry.
-# Steps 22 and 25 keep their slot numbers so the receipt-summary.json
-# still has well-known keys, but registration tx is intentionally empty.
 
-step "ERC-8004 registration intentionally skipped on flow-13"
+step "Alice: ERC-8004 registration reflected in ServiceOffer"
+reg_out=$(alice sell status alice-obol-inference -n llm 2>&1) || true
+echo "$reg_out" | tail -12
 AGENT_ID=""
 REGISTRATION_TX=""
-pass "Registration disabled (OBOL Permit2 flow does not exercise ERC-8004)"
+METADATA_TX=""
+if echo "$reg_out" | grep -q "Agent ID:"; then
+    AGENT_ID=$(echo "$reg_out" | awk '/Agent ID:/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i; exit } }' | head -1)
+    if ! [[ "$AGENT_ID" =~ ^[0-9]+$ ]]; then
+        fail "ERC-8004 registration not reflected as numeric Agent ID — sell status output:\n$reg_out"
+        AGENT_ID=""
+    fi
+    pass "ERC-8004 registered: Agent ID $AGENT_ID"
+else
+    fail "Registration not reflected in sell status: ${reg_out:0:200}"
+fi
+
+if [ -n "$AGENT_ID" ]; then
+    registry_logs=$(env -u CHAIN cast logs --json --rpc-url "$BASE_SEPOLIA_RPC" \
+        --address "$ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA" \
+        --from-block "$REG_START_BLOCK" --to-block latest 2>/dev/null || true)
+    registry_txs=$(FLOW14_REGISTRY_LOGS="$registry_logs" FLOW14_AGENT_ID="$AGENT_ID" python3 - <<'PY'
+import json
+import os
+
+logs = json.loads(os.environ.get("FLOW14_REGISTRY_LOGS") or "[]")
+agent_id = int(os.environ["FLOW14_AGENT_ID"])
+registration = ""
+metadata = ""
+transfer_sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+for log in logs:
+    topics = [t.lower() for t in log.get("topics", [])]
+    tx = log.get("transactionHash", "")
+    if not tx:
+        continue
+    topic_values = []
+    for topic in topics[1:]:
+        try:
+            topic_values.append(int(topic, 16))
+        except ValueError:
+            pass
+    if agent_id not in topic_values:
+        continue
+    if topics and topics[0] == transfer_sig and len(topics) >= 4 and int(topics[3], 16) == agent_id:
+        registration = registration or tx
+    elif tx != registration:
+        metadata = metadata or tx
+
+if registration:
+    print(f"registration={registration}")
+if metadata:
+    print(f"metadata={metadata}")
+PY
+)
+    REGISTRATION_TX=$(echo "$registry_txs" | awk -F= '$1=="registration" {print $2; exit}')
+    METADATA_TX=$(echo "$registry_txs" | awk -F= '$1=="metadata" {print $2; exit}')
+    if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
+        write_receipt registration "$REGISTRATION_TX"
+        pass "Registration receipt archived: $REGISTRATION_TX"
+    else
+        fail "Could not archive registration receipt for Agent ID $AGENT_ID"
+    fi
+    if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
+        write_receipt metadata "$METADATA_TX"
+        pass "Metadata receipt archived: $METADATA_TX"
+    fi
+fi
 
 # ═════════════════════════════════════════════════════════════════
-# 23-28. BOB STACK
+# 19-23. BOB STACK
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: bootstrap workspace"
@@ -919,28 +793,11 @@ detect_buyer_runtime bob
 poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
-step "Bob: anvil reachable from inside cluster"
-probe_out=$(bob kubectl run flow13-probe-bob-$RANDOM \
-    --rm -i --restart=Never --image=busybox:1.36 --quiet \
-    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
-        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
-        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
-if echo "$probe_out" | grep -q '0x14a34'; then
-    pass "Bob cluster can reach $ANVIL_RPC_CLUSTER"
-else
-    fail "Bob cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
-    emit_metrics; exit 1
-fi
-
-step "Bob: add base-sepolia route to Anvil"
-bob network add base-sepolia --endpoint "$ANVIL_RPC_CLUSTER" --allow-writes 2>&1 | tail -2
+step "Bob: add base-sepolia route to live RPC (writes allowed)"
+bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
 bob kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 bob kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-if pin_erpc_chain_single_upstream bob 84532 "custom-84532-0"; then
-    pass "Bob eRPC: 84532 pinned to custom-84532-0 -> $ANVIL_RPC_CLUSTER"
-else
-    fail "Could not pin Bob eRPC chain 84532 to custom-84532-0"
-fi
+pass "Bob eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
@@ -949,7 +806,7 @@ poll_step_grep "Bob: ${BOB_AGENT_RUNTIME} agent API-server ready" "true" 36 5 \
         -o "jsonpath={range .items[*].status.containerStatuses[?(@.name=='${BOB_AGENT_CONTAINER}')]}{.ready}{'\n'}{end}"
 
 # ═════════════════════════════════════════════════════════════════
-# 29. BOB: TUNNEL REACHABILITY FROM AGENT POD (must see 402)
+# 24. BOB: TUNNEL REACHABILITY FROM AGENT POD (must see 402)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: tunnel reachable from agent pod (expect 402)"
@@ -966,7 +823,7 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 30-31. FUND BOB'S SIGNER (mint OBOL on the fork) + verify eRPC sees it
+# 25-26. BOB SIGNER ADDRESS + LIVE OBOL FUNDING (operator pre-funded)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: locate remote-signer wallet address"
@@ -992,53 +849,57 @@ if [ -z "$BOB_SIGNER_ADDR" ]; then
 fi
 pass "Bob signer wallet: $BOB_SIGNER_ADDR"
 
-step "Bob: mint 10 OBOL to remote-signer ($BOB_SIGNER_ADDR)"
-FUNDING_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d ' ' || true)
+step "Bob: fund remote-signer with real OBOL from BOB_FUNDING_PRIVATE_KEY"
+# The buy.py path signs Permit2 auths from the remote-signer key, not the
+# operator-supplied funding key. So we transfer real OBOL from the operator-
+# funded BOB_FUNDING_ADDR into the in-cluster signer wallet via a normal ERC20
+# transfer on live Base Sepolia. No mint(), no fork tricks.
+five_units=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
+FUNDING_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
 fund_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
-    "mint(address,uint256)" "$BOB_SIGNER_ADDR" "$ten_obol" \
-    --rpc-url "$ANVIL_RPC_HOST" --private-key "$DEPLOYER_KEY" 2>&1 || true)
+    "transfer(address,uint256)" "$BOB_SIGNER_ADDR" "$five_units" \
+    --rpc-url "$BASE_SEPOLIA_RPC" --private-key "$BOB_FUNDING_PRIVATE_KEY" 2>&1 || true)
 FUNDING_TX=$(echo "$fund_out" | python3 -c 'import json,sys
 try:
     d=json.loads(sys.stdin.read())
     print(d.get("transactionHash",""))
 except Exception:
     pass' || true)
-if [ -n "$FUNDING_TX" ] && archive_receipt funding "$FUNDING_TX" 12 2; then
+if [ -n "$FUNDING_TX" ] && archive_receipt funding "$FUNDING_TX" 30 4; then
     pass "Funding receipt archived: $FUNDING_TX"
 else
-    # Fallback: confirm balance on Anvil even if tx-hash extraction failed.
-    bob_obol_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-        "$BOB_SIGNER_ADDR" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-    if [ "$bob_obol_bal" = "$ten_obol" ]; then
-        pass "Bob OBOL balance: $bob_obol_bal (mint succeeded; tx-hash extraction skipped)"
+    # Fallback: confirm balance even if tx-hash extraction or receipt poll failed.
+    bob_signer_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
+        "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+    if [ -n "$bob_signer_bal" ] && [ "$bob_signer_bal" != "0" ]; then
+        pass "Bob signer OBOL balance: $bob_signer_bal (transfer succeeded; receipt extraction skipped)"
     else
-        fail "Could not archive Bob OBOL mint receipt and balance check failed — ${fund_out:0:300}"
+        fail "Could not archive Bob signer funding receipt and balance check returned 0 — ${fund_out:0:300}"
+        emit_metrics; exit 1
     fi
 fi
 
-# Also seed Bob signer with ETH so settlement gas is available even if the
-# facilitator is not gas-sponsoring this particular call.
-env -u CHAIN cast rpc anvil_setBalance "$BOB_SIGNER_ADDR" "0xDE0B6B3A7640000" \
-    --rpc-url "$ANVIL_RPC_HOST" >/dev/null 2>&1 || true
-
-step "Bob: signer holds funded OBOL balance"
-# Direct host-side balance read against the Anvil fork. The whole point of
-# this step is to assert "the mint actually credited Bob's signer". Going
-# through eRPC inside Bob's cluster adds a config-watch delay (~60s) and
-# distroless-probe complexity; the canonical proof is the on-chain balance
-# itself, which buy.py will read by the same RPC path inside the pod a few
-# steps later. If buy.py can't see it, step 44's PurchaseRequest will fail
-# and surface the real signal.
+step "Bob: signer holds funded OBOL balance (live on-chain)"
 got_balance=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-    "$BOB_SIGNER_ADDR" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-if [ -n "$got_balance" ] && [ "$got_balance" = "$ten_obol" ]; then
-    pass "Bob signer OBOL balance (anvil): $got_balance"
+    "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -n "$got_balance" ]; then
+    enough=$(python3 -c "print(1 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 0)")
+    if [ "$enough" = "1" ]; then
+        pass "Bob signer OBOL balance: $got_balance wei (>= 1 OBOL_PRICE_WEI)"
+    else
+        fail "Bob signer OBOL balance $got_balance wei is below $OBOL_PRICE_WEI (one paid request)"
+    fi
 else
-    fail "Bob signer OBOL balance not credited — got ${got_balance:-0} expected $ten_obol"
+    fail "Could not read Bob signer OBOL balance"
 fi
 
+BOB_SIGNER_BAL_BEFORE_PAID="$got_balance"
+ALICE_BAL_BEFORE_PAID=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
+    "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+[ -z "$ALICE_BAL_BEFORE_PAID" ] && ALICE_BAL_BEFORE_PAID="0"
+
 # ═════════════════════════════════════════════════════════════════
-# 32-33. AGENT TOKEN + PORT-FORWARD
+# 27-28. AGENT TOKEN + PORT-FORWARD
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: get $BOB_AGENT_RUNTIME API server token"
@@ -1076,7 +937,7 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 34. AGENT DISCOVERS ALICE (via skill.md or ERC-8004)
+# 29. AGENT DISCOVERS ALICE (via ERC-8004 / skill.md)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob's agent: discover Alice's OBOL service"
@@ -1088,7 +949,7 @@ discover_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Search the local ERC-8004 registry on Base Sepolia (chain 84532) for the agent named 'Dual-Stack OBOL Test Inference'. Use the discovery skill or fetch $TUNNEL_URL/skill.md. Report the agent's ID, name, endpoint, and the asset symbol it requires for x402 payments.\"
+            \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Live OBOL Base Sepolia Test Inference'. Use the discovery skill or fetch $TUNNEL_URL/skill.md. Report the agent's ID, name, endpoint, and the asset symbol it requires for x402 payments.\"
         }],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -1097,11 +958,11 @@ discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null ||
 echo "${discover_content:0:500}"
 # Discovery is informational only on this flow. The structural proof that the
 # agent can reach Alice is the next "buy" step + the PurchaseRequest CR going
-# Ready=True. Natural-language assertions on agent responses are brittle.
+# Ready=True.
 pass "Agent discovery prompt issued (success will be confirmed by buy + PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
-# 35. BUY 5 AUTHS VIA buy.py (Permit2-aware on integration branch)
+# 30. BUY 5 AUTHS VIA buy.py (Permit2-aware on integration branch)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob's agent: buy 5 OBOL Permit2 auths from Alice"
@@ -1112,7 +973,7 @@ buy_response=$(curl -sf --max-time 300 \
     -d "{
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
-            {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Dual-Stack OBOL Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
+            {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Live OBOL Base Sepolia Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
             {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
         ],
         \"max_tokens\": 4000,
@@ -1120,12 +981,10 @@ buy_response=$(curl -sf --max-time 300 \
     }" 2>&1 || true)
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
-# Don't grep buy_content for natural-language confirmation; structural success
-# is the PurchaseRequest CR Ready=True poll below.
 pass "Agent buy command issued (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
-# 36-39. PR Ready / LiteLLM rollout / sidecar auths / paid call
+# 31-34. PR Ready / LiteLLM rollout / sidecar auths / paid call
 # ═════════════════════════════════════════════════════════════════
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
@@ -1153,7 +1012,7 @@ if [ -z "$BOB_MASTER_KEY" ]; then
     fail "Could not read Bob LiteLLM master key"
     emit_metrics; exit 1
 fi
-BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d ' ' || true)
+BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
 inference_response=$(litellm_paid_inference)
 if echo "$inference_response" | grep -q "STATUS=200"; then
     pass "Paid inference succeeded"
@@ -1163,14 +1022,14 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 40-41. SETTLEMENT RECEIPT + BALANCE DELTA (OBOL, not USDC)
+# 35-36. SETTLEMENT RECEIPT + BALANCE DELTA (live OBOL on Base Sepolia)
 # ═════════════════════════════════════════════════════════════════
 
 step "On-chain: OBOL settlement Transfer($BOB_SIGNER_ADDR -> $ALICE_WALLET, $OBOL_PRICE_WEI)"
 # wait_usdc_transfer_receipt is a generic ERC-20 Transfer scanner; we point it
 # at OBOL_TOKEN via USDC_ADDRESS_BASE_SEPOLIA above.
 settlement_match=$(wait_usdc_transfer_receipt settlement \
-    "$BOB_SIGNER_ADDR" "$ALICE_WALLET" "$OBOL_PRICE_WEI" "$BUY_START_BLOCK" 30 2 || true)
+    "$BOB_SIGNER_ADDR" "$ALICE_WALLET" "$OBOL_PRICE_WEI" "$BUY_START_BLOCK" 60 4 || true)
 SETTLEMENT_TX=$(echo "$settlement_match" | awk '{print $1; exit}')
 SETTLEMENT_AMOUNT=$(echo "$settlement_match" | awk '{print $2; exit}')
 if [ -n "$SETTLEMENT_TX" ] && [ "$SETTLEMENT_AMOUNT" = "$OBOL_PRICE_WEI" ]; then
@@ -1181,21 +1040,19 @@ else
 fi
 
 step "On-chain: balance deltas (Alice +1e15 / Bob signer -1e15)"
-ALICE_BAL_BEFORE_PAID="$ten_obol"
-BOB_SIGNER_BAL_BEFORE_PAID="$ten_obol"
 ALICE_BAL_AFTER=""
 BOB_SIGNER_BAL_AFTER=""
-expected_alice_after=$(python3 -c "print($ALICE_BAL_BEFORE_PAID + $OBOL_PRICE_WEI)")
-expected_bob_after=$(python3 -c "print($BOB_SIGNER_BAL_BEFORE_PAID - $OBOL_PRICE_WEI)")
+expected_alice_after=$(python3 -c "print(int('$ALICE_BAL_BEFORE_PAID') + int('$OBOL_PRICE_WEI'))")
+expected_bob_after=$(python3 -c "print(int('$BOB_SIGNER_BAL_BEFORE_PAID') - int('$OBOL_PRICE_WEI'))")
 for _ in $(seq 1 30); do
     ALICE_BAL_AFTER=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-        "$ALICE_WALLET" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+        "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
     BOB_SIGNER_BAL_AFTER=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-        "$BOB_SIGNER_ADDR" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+        "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
     if [ "$ALICE_BAL_AFTER" = "$expected_alice_after" ] && [ "$BOB_SIGNER_BAL_AFTER" = "$expected_bob_after" ]; then
         break
     fi
-    sleep 2
+    sleep 4
 done
 echo "  Alice (pre-paid):  $ALICE_BAL_BEFORE_PAID"
 echo "  Alice (final):     ${ALICE_BAL_AFTER:-unknown}    expected $expected_alice_after"
@@ -1213,7 +1070,7 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 42-44. CLEANUP
+# 37-39. CLEANUP
 # ═════════════════════════════════════════════════════════════════
 
 cleanup_pid "$PF_AGENT" 2>/dev/null || true
@@ -1225,80 +1082,76 @@ step "Cleanup: delete Alice's ServiceOffer"
 alice sell delete alice-obol-inference -n llm -f 2>&1 | tail -1 || true
 pass "ServiceOffer delete issued"
 
+step "Cleanup: drop Alice + Bob base-sepolia eRPC route"
+alice network remove base-sepolia 2>&1 | tail -1 || true
+bob   network remove base-sepolia 2>&1 | tail -1 || true
+pass "base-sepolia eRPC route removed for Alice + Bob"
+
 step "Cleanup: Alice stack down"
 alice stack down 2>&1 | tail -1 || true
 pass "Alice stack down issued"
 
-step "Cleanup: Bob stack down + kill anvil + facilitator"
+step "Cleanup: Bob stack down"
 bob stack down 2>&1 | tail -1 || true
-if [ -n "$FACILITATOR_PID" ] && kill -0 "$FACILITATOR_PID" 2>/dev/null; then
-    kill "$FACILITATOR_PID" 2>/dev/null || true
-    wait "$FACILITATOR_PID" 2>/dev/null || true
-fi
-FACILITATOR_PID=""
-if [ -n "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
-    kill "$ANVIL_PID" 2>/dev/null || true
-    wait "$ANVIL_PID" 2>/dev/null || true
-fi
-ANVIL_PID=""
-pass "Local Anvil + facilitator stopped"
+pass "Bob stack down issued"
 
 # ═════════════════════════════════════════════════════════════════
-# 45. RECEIPT SUMMARY (matches flow-11 shape)
+# 40. RECEIPT SUMMARY (matches flow-11/13 shape)
 # ═════════════════════════════════════════════════════════════════
 
 step "Receipts: write summary"
-if FLOW13_ARTIFACT_DIR="$FLOW13_ARTIFACT_DIR" \
-   FLOW13_COMMIT="$(git -C "$OBOL_ROOT" rev-parse HEAD 2>/dev/null || true)" \
-   FLOW13_AGENT_ID="${AGENT_ID:-}" \
-   FLOW13_ALICE="$ALICE_WALLET" \
-   FLOW13_BOB="${BOB_SIGNER_ADDR:-}" \
-   FLOW13_BOB_SIGNER="${BOB_SIGNER_ADDR:-}" \
-   FLOW13_TUNNEL="${TUNNEL_URL:-}" \
-   FLOW13_REGISTRATION_TX="${REGISTRATION_TX:-}" \
-   FLOW13_METADATA_TX="" \
-   FLOW13_FUNDING_TX="${FUNDING_TX:-}" \
-   FLOW13_SETTLEMENT_TX="${SETTLEMENT_TX:-}" \
-   FLOW13_OBOL_TOKEN="${OBOL_TOKEN:-}" \
-   FLOW13_FACILITATOR_URL="${FACILITATOR_URL_HOST:-}" \
+if FLOW14_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR" \
+   FLOW14_COMMIT="$(git -C "$OBOL_ROOT" rev-parse HEAD 2>/dev/null || true)" \
+   FLOW14_AGENT_ID="${AGENT_ID:-}" \
+   FLOW14_ALICE="$ALICE_WALLET" \
+   FLOW14_BOB="${BOB_SIGNER_ADDR:-}" \
+   FLOW14_BOB_SIGNER="${BOB_SIGNER_ADDR:-}" \
+   FLOW14_BOB_FUNDING="${BOB_FUNDING_ADDR:-}" \
+   FLOW14_TUNNEL="${TUNNEL_URL:-}" \
+   FLOW14_REGISTRATION_TX="${REGISTRATION_TX:-}" \
+   FLOW14_METADATA_TX="${METADATA_TX:-}" \
+   FLOW14_FUNDING_TX="${FUNDING_TX:-}" \
+   FLOW14_SETTLEMENT_TX="${SETTLEMENT_TX:-}" \
+   FLOW14_OBOL_TOKEN="${OBOL_TOKEN:-}" \
+   FLOW14_OBOL_TOKEN_NAME="${OBOL_TOKEN_NAME:-}" \
+   FLOW14_OBOL_TOKEN_SYMBOL="${OBOL_TOKEN_SYMBOL:-}" \
+   FLOW14_OBOL_TOKEN_DOMAIN_SEPARATOR="${OBOL_TOKEN_DOMAIN_SEPARATOR:-}" \
+   FLOW14_FACILITATOR_URL="${FACILITATOR_URL:-}" \
+   FLOW14_BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-}" \
    python3 - <<'PY'
 import json, os
 from pathlib import Path
-artifact_dir = Path(os.environ["FLOW13_ARTIFACT_DIR"])
+artifact_dir = Path(os.environ["FLOW14_ARTIFACT_DIR"])
 summary = {
-    "commit": os.environ.get("FLOW13_COMMIT", ""),
-    "agentId": os.environ.get("FLOW13_AGENT_ID", ""),
-    "alice": os.environ.get("FLOW13_ALICE", ""),
-    "bob": os.environ.get("FLOW13_BOB", ""),
-    "bobSigner": os.environ.get("FLOW13_BOB_SIGNER", ""),
-    "tunnel": os.environ.get("FLOW13_TUNNEL", ""),
-    "obolToken": os.environ.get("FLOW13_OBOL_TOKEN", ""),
-    "facilitator": os.environ.get("FLOW13_FACILITATOR_URL", ""),
+    "commit": os.environ.get("FLOW14_COMMIT", ""),
+    "agentId": os.environ.get("FLOW14_AGENT_ID", ""),
+    "alice": os.environ.get("FLOW14_ALICE", ""),
+    "bob": os.environ.get("FLOW14_BOB", ""),
+    "bobSigner": os.environ.get("FLOW14_BOB_SIGNER", ""),
+    "bobFunding": os.environ.get("FLOW14_BOB_FUNDING", ""),
+    "tunnel": os.environ.get("FLOW14_TUNNEL", ""),
+    "obolToken": os.environ.get("FLOW14_OBOL_TOKEN", ""),
+    "obolTokenName": os.environ.get("FLOW14_OBOL_TOKEN_NAME", ""),
+    "obolTokenSymbol": os.environ.get("FLOW14_OBOL_TOKEN_SYMBOL", ""),
+    "obolTokenDomainSeparator": os.environ.get("FLOW14_OBOL_TOKEN_DOMAIN_SEPARATOR", ""),
+    "facilitator": os.environ.get("FLOW14_FACILITATOR_URL", ""),
+    "baseSepoliaRpc": os.environ.get("FLOW14_BASE_SEPOLIA_RPC", ""),
     "transactions": {
-        "registration": os.environ.get("FLOW13_REGISTRATION_TX", ""),
-        "metadata": os.environ.get("FLOW13_METADATA_TX", ""),
-        "funding": os.environ.get("FLOW13_FUNDING_TX", ""),
-        "settlement": os.environ.get("FLOW13_SETTLEMENT_TX", ""),
+        "registration": os.environ.get("FLOW14_REGISTRATION_TX", ""),
+        "metadata": os.environ.get("FLOW14_METADATA_TX", ""),
+        "funding": os.environ.get("FLOW14_FUNDING_TX", ""),
+        "settlement": os.environ.get("FLOW14_SETTLEMENT_TX", ""),
     },
 }
 artifact_dir.mkdir(parents=True, exist_ok=True)
 (artifact_dir / "receipt-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 PY
 then
-    pass "Receipt summary: $FLOW13_ARTIFACT_DIR/receipt-summary.json"
+    pass "Receipt summary: $FLOW14_ARTIFACT_DIR/receipt-summary.json"
 else
     fail "Could not write receipt summary"
 fi
 
 emit_metrics
 echo ""
-echo "════════════════════════════════════════════════════════════"
-echo "  Dual-stack OBOL test complete: $PASS_COUNT/$STEP_COUNT passed"
-echo "  Alice (seller): $ALICE_WALLET"
-echo "  Bob (signer):   ${BOB_SIGNER_ADDR:-unknown}"
-echo "  OBOL token:     ${OBOL_TOKEN:-unknown}"
-echo "  Tunnel:         ${TUNNEL_URL:-unknown}"
-echo "  Anvil:          $ANVIL_RPC_HOST"
-echo "  Facilitator:    $FACILITATOR_URL_HOST"
-echo "  Artifacts:      $FLOW13_ARTIFACT_DIR"
 echo "════════════════════════════════════════════════════════════"

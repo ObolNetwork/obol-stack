@@ -494,7 +494,8 @@ cat > config-sepolia.json << EOF
   },
   "schemes": [
     {"id": "v1-eip155-exact", "chains": "eip155:*"},
-    {"id": "v2-eip155-exact", "chains": "eip155:*"}
+    {"id": "v2-eip155-exact", "chains": "eip155:*",
+     "config": {"eip2612_gas_sponsoring": true}}
   ]
 }
 EOF
@@ -508,6 +509,17 @@ EOF
 > ```json
 > "rpc": [{"http": "http://127.0.0.1:8545", "rate_limit": 50}]
 > ```
+
+> [!IMPORTANT]
+> **`eip2612_gas_sponsoring: true` shifts gas to the facilitator signer.**
+> The OBOL Permit2 path settles `permit + transferFrom` against an ERC20Permit token in a single outer transaction; the facilitator pays gas for the permit step so the buyer never has to hold the chain's native asset. In practice the facilitator's signer wallet (`$FACILITATOR_PRIVATE_KEY`) bears that cost. If the signer balance drops below the gas needed for the next settlement, all OBOL settlements fail and paying buyers see opaque facilitator errors with no on-chain trace.
+>
+> Operators promoting from RC to production must:
+> 1. Monitor the facilitator signer's native-asset balance on every chain it advertises (`eip155:1`, `eip155:8453`, `eip155:84532` for the OBOL chart).
+> 2. Alarm well above empty — at least `100 × max_settlement_gas_price × max_settlement_gas` per chain, refilled before it trips.
+> 3. Have a runbook for refilling without taking the facilitator down.
+>
+> The chart-side change to expose this metric to Prometheus is tracked separately in `obol-infrastructure`. Until it lands, monitor by polling `eth_getBalance` against the signer address.
 
 Verify it's running:
 
