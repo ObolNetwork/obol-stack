@@ -1725,55 +1725,19 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	return nil
 }
 
-// rankModels picks the best model as primary and demotes the rest to fallbacks.
-// Cloud models (Anthropic, OpenAI) are ranked above local models (Ollama).
-// Within a tier, the first model wins.
+// rankModels delegates to model.Rank for capability-aware ranking, then
+// prefixes every entry with `openai/` for LiteLLM routing. Both runtimes used
+// to roll their own ranker that picked `local[0]` (whatever Ollama listed
+// first), which produced the llama3.2:1b regression — see internal/model/rank.go.
 func rankModels(models []string) (primary string, fallbacks []string) {
-	if len(models) == 0 {
-		return "", nil
+	primary, fallbacks = model.Rank(models)
+	if primary != "" {
+		primary = "openai/" + primary
 	}
-
-	// Partition into cloud and local
-	var cloud, local []string
-
-	for _, m := range models {
-		if isCloudModel(m) {
-			cloud = append(cloud, m)
-		} else {
-			local = append(local, m)
-		}
-	}
-
-	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
-	if len(cloud) > 0 {
-		primary = cloud[0]
-		fallbacks = append(append([]string{}, cloud[1:]...), local...)
-	} else {
-		primary = local[0]
-		fallbacks = local[1:]
-	}
-
-	// Prefix with openai/ for LiteLLM routing
-	primary = "openai/" + primary
-
 	for i, f := range fallbacks {
 		fallbacks[i] = "openai/" + f
 	}
-
 	return primary, fallbacks
-}
-
-// isCloudModel returns true if the model name looks like a cloud provider model.
-func isCloudModel(name string) bool {
-	if strings.Contains(name, "claude") {
-		return true
-	}
-
-	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
-		return true
-	}
-
-	return false
 }
 
 // patchModelHierarchy updates the openclaw-config ConfigMap with the given

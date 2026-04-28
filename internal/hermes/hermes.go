@@ -1190,41 +1190,16 @@ func stripProviderPrefixes(modelNames []string) []string {
 	return out
 }
 
+// rankModels delegates to model.Rank, which knows how to prefer larger local
+// models and frontier cloud models. Kept as a thin wrapper so call sites
+// don't need to import internal/model directly and to preserve the existing
+// stripProviderPrefix shape on the inputs.
 func rankModels(models []string) (primary string, fallbacks []string) {
-	if len(models) == 0 {
-		return "", nil
+	stripped := make([]string, len(models))
+	for i, m := range models {
+		stripped[i] = stripProviderPrefix(m)
 	}
-
-	var cloud []string
-	var local []string
-	for _, m := range models {
-		trimmed := stripProviderPrefix(m)
-		if isCloudModel(trimmed) {
-			cloud = append(cloud, trimmed)
-		} else {
-			local = append(local, trimmed)
-		}
-	}
-
-	if len(cloud) > 0 {
-		primary = cloud[0]
-		fallbacks = append(append([]string{}, cloud[1:]...), local...)
-	} else {
-		primary = local[0]
-		fallbacks = local[1:]
-	}
-
-	return primary, fallbacks
-}
-
-func isCloudModel(name string) bool {
-	if strings.Contains(name, "claude") {
-		return true
-	}
-	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
-		return true
-	}
-	return false
+	return model.Rank(stripped)
 }
 
 func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {
