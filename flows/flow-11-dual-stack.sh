@@ -1189,7 +1189,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model qwen3.5:9b --count $FLOW11_BUY_COUNT\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false
@@ -1224,7 +1224,7 @@ pass "Sidecar has auths: $buyer_status"
 # Extract the paid model name from sidecar status
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
 if [ -z "$PAID_MODEL" ]; then
-    PAID_MODEL="paid/qwen3.5:9b"  # fallback
+    PAID_MODEL="paid/${OBOL_LLM_MODEL:-qwen3.5:9b}"  # fallback
 fi
 
 step "Bob's agent: use paid model for inference"

@@ -1086,7 +1086,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Live OBOL Base Sepolia Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
+            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -1115,7 +1115,7 @@ poll_step_grep "Bob: buyer sidecar has auths (remaining=5)" "remaining=[1-9]" 24
 buyer_status=$(buyer_sidecar_status)
 pass "Sidecar auths: $buyer_status"
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
-[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/qwen3.5:9b"
+[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/${OBOL_LLM_MODEL:-qwen3.5:9b}"
 
 step "Bob's agent: paid inference via $PAID_MODEL"
 BOB_MASTER_KEY=$(bob kubectl get secret litellm-secrets -n llm \
