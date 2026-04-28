@@ -268,10 +268,11 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					}
 
 					return openclaw.RestoreWalletCmd(cfg, id, openclaw.RestoreWalletOptions{
-						Input:       cmd.String("input"),
-						Passphrase:  cmd.String("passphrase"),
-						HasPassFlag: cmd.IsSet("passphrase"),
-						Force:       cmd.Bool("force"),
+						Input:        cmd.String("input"),
+						Passphrase:   cmd.String("passphrase"),
+						HasPassFlag:  cmd.IsSet("passphrase"),
+						Force:        cmd.Bool("force"),
+						ApplyCluster: true,
 					}, getUI(cmd))
 				},
 			},

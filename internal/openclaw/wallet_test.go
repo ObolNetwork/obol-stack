@@ -182,6 +182,40 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	}
 }
 
+func TestImportWalletFromPrivateKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{DataDir: tmpDir}
+
+	keyHex := "0x0000000000000000000000000000000000000000000000000000000000000001"
+	wallet, err := ImportWalletFromPrivateKey(cfg, "imported", keyHex, testUI())
+	if err != nil {
+		t.Fatalf("import wallet: %v", err)
+	}
+
+	wantAddr := "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+	if wallet.Address != wantAddr {
+		t.Errorf("address = %q, want %q", wallet.Address, wantAddr)
+	}
+
+	if !strings.HasPrefix(wallet.PublicKey, "0x04") || len(wallet.PublicKey) != 132 {
+		t.Errorf("public key should be uncompressed 0x04-prefixed key, got %q", wallet.PublicKey)
+	}
+
+	keystoreJSON, err := os.ReadFile(wallet.KeystorePath)
+	if err != nil {
+		t.Fatalf("read keystore: %v", err)
+	}
+
+	recovered, err := decryptV3Keystore(keystoreJSON, wallet.Password)
+	if err != nil {
+		t.Fatalf("decrypt imported keystore: %v", err)
+	}
+
+	if got := "0x" + hex.EncodeToString(recovered); got != keyHex {
+		t.Errorf("recovered key = %q, want %q", got, keyHex)
+	}
+}
+
 func TestDecryptWrongPassword(t *testing.T) {
 	privKey, pubKey, err := generateKeypair()
 	if err != nil {

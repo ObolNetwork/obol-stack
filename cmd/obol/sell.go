@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/urfave/cli/v3"
 )
@@ -1929,13 +1931,19 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	// Create TransactOpts that delegates signing to the remote-signer.
 	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
 
-	agentID, err := client.RegisterWithOpts(ctx, opts, agentURI)
+	startBlock := registrationRecoveryStartBlock(ctx, client, u)
+	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, addr, startBlock, func() (*big.Int, string, error) {
+		return client.RegisterWithOptsDetailed(ctx, opts, agentURI)
+	})
 	if err != nil {
 		return err
 	}
 
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", addr.Hex())
+	if txHash != "" {
+		u.Printf("    Tx:       %s", txHash)
+	}
 
 	// The Register tx is mined on the WRITE upstream, but a follow-up
 	// setMetadata estimateGas goes through the READ upstream which can lag
@@ -1970,14 +1978,20 @@ func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, ne
 	}
 	defer client.Close()
 
-	agentID, err := client.Register(ctx, key, agentURI)
+	txAddr := crypto.PubkeyToAddress(key.PublicKey)
+	startBlock := registrationRecoveryStartBlock(ctx, client, u)
+	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, txAddr, startBlock, func() (*big.Int, string, error) {
+		return client.RegisterDetailed(ctx, key, agentURI)
+	})
 	if err != nil {
 		return err
 	}
 
-	txAddr := crypto.PubkeyToAddress(key.PublicKey)
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", txAddr.Hex())
+	if txHash != "" {
+		u.Printf("    Tx:       %s", txHash)
+	}
 
 	// Wait for the chain READER to catch up to the freshly-minted agent id;
 	// see comment in registerWithRemoteSigner for the rationale.
@@ -1990,6 +2004,98 @@ func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, ne
 		u.Warnf("failed to set x402 metadata: %v", err)
 	}
 	return nil
+}
+
+func registrationRecoveryStartBlock(ctx context.Context, client *erc8004.Client, u *ui.UI) uint64 {
+	startBlock, err := client.CurrentBlockNumber(ctx)
+	if err != nil {
+		u.Warnf("could not read registration recovery start block: %v", err)
+		return 0
+	}
+	return startBlock
+}
+
+func registerWithRecovery(
+	ctx context.Context,
+	u *ui.UI,
+	client *erc8004.Client,
+	agentURI string,
+	owner common.Address,
+	startBlock uint64,
+	submit func() (*big.Int, string, error),
+) (*big.Int, string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		agentID, txHash, err := submit()
+		if err == nil {
+			return agentID, txHash, nil
+		}
+		lastErr = err
+
+		if agentID, txHash, ok := recoverRegistrationByOwnerAndURI(ctx, client, owner, agentURI, startBlock); ok {
+			u.Warnf("registration submit returned an error but the on-chain event was recovered: %v", err)
+			return agentID, txHash, nil
+		}
+
+		if attempt == 3 || !isTransientRegistrationError(err) {
+			return nil, "", err
+		}
+
+		u.Warnf("registration attempt %d/3 failed: %v; retrying", attempt, err)
+		if !sleepWithContext(ctx, time.Duration(attempt*4)*time.Second) {
+			return nil, "", ctx.Err()
+		}
+	}
+	return nil, "", lastErr
+}
+
+func recoverRegistrationByOwnerAndURI(ctx context.Context, client *erc8004.Client, owner common.Address, agentURI string, startBlock uint64) (*big.Int, string, bool) {
+	for attempt := 1; attempt <= 4; attempt++ {
+		agentID, txHash, found, err := client.FindRegistrationByOwnerAndURI(ctx, owner, agentURI, startBlock)
+		if err == nil && found {
+			return agentID, txHash, true
+		}
+		if !sleepWithContext(ctx, 2*time.Second) {
+			return nil, "", false
+		}
+	}
+	return nil, "", false
+}
+
+func isTransientRegistrationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"500 internal server error",
+		"502 bad gateway",
+		"503 service unavailable",
+		"504 gateway timeout",
+		"timeout",
+		"deadline exceeded",
+		"temporarily unavailable",
+		"connection reset",
+		"eof",
+		"too many requests",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // ---------------------------------------------------------------------------

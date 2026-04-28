@@ -179,6 +179,107 @@ func TestPatchERPCConfig_Idempotent(t *testing.T) {
 	}
 }
 
+func TestUpsertCustomRPCUpstream_PrioritizesExplicitEndpoint(t *testing.T) {
+	configYAML := `projects:
+  - id: rpc
+    upstreams:
+      - id: base-sepolia-official
+        endpoint: https://sepolia.base.org
+        evm:
+          chainId: 84532
+      - id: custom-84532-0
+        endpoint: https://old.example
+        evm:
+          chainId: 84532
+    networks:
+      - architecture: evm
+        alias: base-sepolia
+        evm:
+          chainId: 84532
+`
+
+	var erpcConfig map[string]any
+	if err := yaml.Unmarshal([]byte(configYAML), &erpcConfig); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	project := erpcConfig["projects"].([]any)[0].(map[string]any)
+	if err := upsertCustomRPCUpstream(project, 84532, "base-sepolia", "https://base-sepolia-rpc.publicnode.com", false); err != nil {
+		t.Fatalf("upsert custom rpc: %v", err)
+	}
+
+	upstreams := project["upstreams"].([]any)
+	if len(upstreams) != 2 {
+		t.Fatalf("upstreams = %d, want 2", len(upstreams))
+	}
+
+	first := upstreams[0].(map[string]any)
+	if first["id"] != "custom-84532-0" {
+		t.Fatalf("first upstream id = %v, want custom-84532-0", first["id"])
+	}
+	if first["endpoint"] != "https://base-sepolia-rpc.publicnode.com" {
+		t.Fatalf("first upstream endpoint = %v", first["endpoint"])
+	}
+	if _, ok := first["ignoreMethods"]; ok {
+		t.Fatal("write-enabled custom endpoint should not block write methods")
+	}
+
+	networks := project["networks"].([]any)
+	network := networks[0].(map[string]any)
+	policy, ok := network["selectionPolicy"].(map[string]any)
+	if !ok {
+		t.Fatal("write-enabled custom endpoint should install a write selection policy")
+	}
+	evalFunction, _ := policy["evalFunction"].(string)
+	if !strings.Contains(evalFunction, "eth_sendRawTransaction") {
+		t.Fatalf("selection policy = %q, want eth_sendRawTransaction guard", evalFunction)
+	}
+	if !strings.Contains(evalFunction, "custom-84532-0") {
+		t.Fatalf("selection policy = %q, want custom upstream pin", evalFunction)
+	}
+
+	second := upstreams[1].(map[string]any)
+	if second["id"] != "base-sepolia-official" {
+		t.Fatalf("second upstream id = %v, want base-sepolia-official", second["id"])
+	}
+}
+
+func TestUpsertCustomRPCUpstream_ReadOnlyRemovesCustomWritePolicy(t *testing.T) {
+	project := map[string]any{
+		"upstreams": []any{
+			map[string]any{
+				"id":       "custom-84532-0",
+				"endpoint": "https://old.example",
+				"evm":      map[string]any{"chainId": 84532},
+			},
+		},
+		"networks": []any{
+			map[string]any{
+				"architecture": "evm",
+				"alias":        "base-sepolia",
+				"evm":          map[string]any{"chainId": 84532},
+				"selectionPolicy": map[string]any{
+					"evalFunction": "return upstreams.filter(u => u.config.id === 'custom-84532-0')",
+				},
+			},
+		},
+	}
+
+	if err := upsertCustomRPCUpstream(project, 84532, "base-sepolia", "https://base-sepolia-rpc.publicnode.com", true); err != nil {
+		t.Fatalf("upsert custom rpc: %v", err)
+	}
+
+	upstream := project["upstreams"].([]any)[0].(map[string]any)
+	if _, ok := upstream["ignoreMethods"]; !ok {
+		t.Fatal("read-only custom endpoint should block write methods")
+	}
+
+	network := project["networks"].([]any)[0].(map[string]any)
+	if _, ok := network["selectionPolicy"]; ok {
+		t.Fatal("read-only custom endpoint should remove stale custom-only write selection policy")
+	}
+}
+
 func TestPatchERPCConfig_PreservesWriteOnlySelectionPolicy(t *testing.T) {
 	// The obol-stack eRPC config routes eth_sendRawTransaction exclusively
 	// to obol-rpc-mainnet. When a local node is registered, the selection
