@@ -461,11 +461,11 @@ stack_init_and_up_with_retry() {
 preseed_bob_wallet() {
     local deploy_dir existing import_out key_file onboard_out rc
 
-    deploy_dir="$BOB_DIR/config/applications/openclaw/obol-agent"
+    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
     if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
         step "Bob: scaffold default agent before stack up"
         set +e
-        onboard_out=$(bob openclaw onboard --id obol-agent --no-sync 2>&1)
+        onboard_out=$(bob hermes onboard --id obol-agent --no-sync 2>&1)
         rc=$?
         set -e
         echo "$onboard_out" | tail -8
@@ -477,7 +477,7 @@ preseed_bob_wallet() {
         pass "Bob default agent scaffolded"
     fi
 
-    existing=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
+    existing=$(bob hermes wallet address obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
         pass "Bob wallet preseeded: $existing"
         return 0
@@ -502,7 +502,7 @@ preseed_bob_wallet() {
         exit "$rc"
     fi
 
-    existing=$(bob openclaw wallet address obol-agent 2>/dev/null || true)
+    existing=$(bob hermes wallet address obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
         fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
         emit_metrics

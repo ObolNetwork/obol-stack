@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/urfave/cli/v3"
 )
 
@@ -28,7 +28,7 @@ func walletCommand(cfg *config.Config) *cli.Command {
 					},
 					&cli.StringFlag{
 						Name:  "instance",
-						Usage: "OpenClaw instance to update",
+						Usage: "Agent instance to update",
 						Value: defaultWalletInstance,
 					},
 					&cli.BoolFlag{
@@ -41,7 +41,7 @@ func walletCommand(cfg *config.Config) *cli.Command {
 					if instance == "" {
 						instance = defaultWalletInstance
 					}
-					return openclaw.ImportPrivateKeyWalletCmd(cfg, instance, openclaw.ImportPrivateKeyWalletOptions{
+					return hermes.ImportPrivateKeyWalletCmd(cfg, instance, hermes.ImportPrivateKeyWalletOptions{
 						PrivateKeyFile: cmd.String("private-key-file"),
 						Force:          cmd.Bool("force"),
 						ApplyCluster:   walletClusterAvailable(cfg),
