@@ -1021,6 +1021,21 @@ else
     fail "Paid inference failed: $inference_response"
 fi
 
+# Same content-coherence check as flow-04's free path — a paid 200 still has
+# to come back with a real answer, not the tool-catalogue parrot we saw on
+# the colleague's screenshot.
+step "Paid OBOL inference: response content is a coherent answer"
+PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p')
+if [ -z "$PAID_CONTENT" ]; then
+    fail "Paid inference response had no CONTENT line: ${inference_response:0:300}"
+elif echo "$PAID_CONTENT" | grep -qiE "\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"; then
+    fail "Paid inference reply parroted tool catalogue: ${PAID_CONTENT:0:300}"
+elif [ "${#PAID_CONTENT}" -lt 5 ]; then
+    fail "Paid inference reply is suspiciously short (${#PAID_CONTENT} chars): $PAID_CONTENT"
+else
+    pass "Paid OBOL inference reply is coherent (${#PAID_CONTENT} chars)"
+fi
+
 # ═════════════════════════════════════════════════════════════════
 # 35-36. SETTLEMENT RECEIPT + BALANCE DELTA (live OBOL on Base Sepolia)
 # ═════════════════════════════════════════════════════════════════

@@ -1112,6 +1112,24 @@ else
     emit_metrics; exit 1
 fi
 
+# Correctness, not just liveness. The paid path returned 200, but the
+# response body must also be a coherent answer — same regression class as
+# the colleague's free-inference screenshot, except now we're validating it
+# happens correctly against a paid endpoint. The prompt was a one-sentence
+# question; the answer should be a single short sentence and must not parrot
+# the agent's tool catalogue.
+step "Paid inference: response content is a coherent answer"
+PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p')
+if [ -z "$PAID_CONTENT" ]; then
+    fail "Paid inference response had no CONTENT line: ${inference_response:0:300}"
+elif echo "$PAID_CONTENT" | grep -qiE "\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"; then
+    fail "Paid inference reply parroted tool catalogue: ${PAID_CONTENT:0:300}"
+elif [ "${#PAID_CONTENT}" -lt 5 ]; then
+    fail "Paid inference reply is suspiciously short (${#PAID_CONTENT} chars): $PAID_CONTENT"
+else
+    pass "Paid inference reply is coherent (${#PAID_CONTENT} chars)"
+fi
+
 cleanup_pid $PF_AGENT
 rm -f "$PF_AGENT_LOG"
 

@@ -90,6 +90,46 @@ else
     fail "Agent inference failed — ${out:0:200}"
 fi
 
+# Regression check from the model-rank fix (PR #388): a 1B-parameter local
+# model was being chosen as default, producing system-prompt parroting on a
+# bare "hello" prompt (response listed Hermes/Skills/Terminal/Todo as a
+# numbered tool catalogue). Send "hello", parse the message content, and
+# assert it neither leaks tool-catalogue language nor blows past the byte
+# budget a coherent greeting would respect.
+step "Agent answers 'hello' without parroting tool catalogue (model rank regression)"
+hello_out=$(curl -sf --max-time 120 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"max_tokens\":150,\"stream\":false}" 2>&1) || true
+hello_content=$(echo "$hello_out" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d['choices'][0]['message']['content'])
+except Exception:
+    pass
+" 2>/dev/null)
+
+if [ -z "$hello_content" ]; then
+    fail "agent did not produce content for 'hello' — raw: ${hello_out:0:200}"
+elif echo "$hello_content" | grep -qiE "\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"; then
+    fail "agent parroted tool catalogue on 'hello' (model too small / prompt leak): ${hello_content:0:300}"
+elif [ "${#hello_content}" -gt 600 ]; then
+    fail "agent reply to 'hello' is suspiciously long (${#hello_content} chars): ${hello_content:0:300}"
+else
+    pass "agent reply to 'hello' is coherent (${#hello_content} chars)"
+fi
+
+# Belt-and-braces: the configured default must not be a 1B / 0.5B model. Any
+# model whose tag declares a ≤1B parameter count is too small to handle the
+# agent's system prompt and shouldn't reach this far.
+step "Default model is ≥ 2B parameters"
+if echo "$model_name" | grep -qiE ":(0\\.5|0\\.6|1)b\\b|:(0\\.5|0\\.6|1)b-"; then
+    fail "default model $model_name is too small for agent workloads"
+else
+    pass "default model $model_name passes size floor"
+fi
+
 cleanup_pid "$PF_PID"
 
 # §4: Ethereum signing wallet created by obol agent init (getting-started §4)
