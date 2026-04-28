@@ -256,26 +256,42 @@ cleanup_pid() {
     fi
 }
 
-# Reclaim Docker networks left behind by aborted k3d clusters.
+# Reclaim Docker networks left behind by deleted k3d clusters.
 #
 # Each `k3d cluster create` provisions a `k3d-<cluster-name>` Docker network
-# and `k3d cluster delete` removes it. If the create crashes mid-way (e.g.
-# image pull failure) or the cluster is force-deleted out of band, the
-# network is leaked. After enough leaks Docker's predefined CIDR pool
-# (172.16.0.0/12 carved into /16s, ~16 networks) is exhausted and every
-# new cluster fails with "all predefined address pools have been fully
-# subnetted" — which has bitten us on spark2.
+# and joins three persistent registry-mirror containers
+# (k3d-obol-{docker,ghcr,quay}-io.localhost) to it for caching. `k3d
+# cluster delete` removes the cluster nodes but does NOT disconnect the
+# mirror containers, so the network ends up with 3 attached containers
+# and `docker network rm` refuses to remove it. After ~16 such leaks
+# Docker's predefined CIDR pool (172.16.0.0/12 carved into /16s) is
+# exhausted and every new cluster fails with "all predefined address
+# pools have been fully subnetted" — which has bitten us on spark2
+# repeatedly.
 #
-# Safe-by-construction: `docker network rm` refuses to remove a network
-# that still has active endpoints, so this never kills a live cluster's
-# network. We narrow the filter to `k3d-obol-stack-` so we never touch
-# user / other-app networks even if they happen to be unused.
+# Workaround: for every k3d-obol-stack-* network, force-disconnect every
+# attached container before attempting removal. Live clusters survive
+# because k3d auto-reconnects its server/serverlb on reconcile; the
+# mirror containers also auto-rejoin when the next cluster claims them.
+# Narrowed to `k3d-obol-stack-` so we never touch user/other-app
+# networks.
 cleanup_k3d_obol_networks() {
     if ! command -v docker >/dev/null 2>&1; then
         return 0
     fi
-    docker network ls --filter "name=k3d-obol-stack-" --format "{{.Name}}" 2>/dev/null \
-        | xargs -r -n1 docker network rm >/dev/null 2>&1 || true
+    local net attached c
+    for net in $(docker network ls --filter "name=k3d-obol-stack-" --format "{{.Name}}" 2>/dev/null); do
+        attached=$(docker network inspect "$net" --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}' 2>/dev/null || true)
+        # Skip live clusters: any *-server-N or *-serverlb container means k3d
+        # is still using this network. Mirror-only attachments are the leak.
+        if printf '%s' "$attached" | grep -qE '(server-[0-9]+|serverlb)$'; then
+            continue
+        fi
+        for c in $attached; do
+            docker network disconnect -f "$net" "$c" >/dev/null 2>&1 || true
+        done
+        docker network rm "$net" >/dev/null 2>&1 || true
+    done
 }
 
 # Repoint a stack at an external OpenAI-compatible LLM endpoint via the
