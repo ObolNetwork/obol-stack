@@ -658,9 +658,22 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 		u.Infof("Cluster endpoint: %s (translated from %s)", clusterEndpoint, endpoint)
 	}
 
-	// Build model entry
+	// Build model entry. The LiteLLM `model_name` is the user-facing
+	// identifier the agent will pass on chat-completion calls. We use the
+	// bare `modelName` so the agent's request matches the LiteLLM entry by
+	// exact string — the `name` flag is still surfaced in `obol model
+	// status` / `list` for human reference, but LiteLLM keys the route by
+	// the model alone. Re-running `obol model setup custom --name X
+	// --model Y` with the same Y simply re-binds, which is the natural
+	// "repoint my model" behavior an operator wants.
+	//
+	// (The historical `custom/<name>/<model>` namespaced ID caused
+	// Hermes to call LiteLLM with a stripped name that no longer matched
+	// the entry, surfacing as 400 "no healthy deployments for this model"
+	// on every agent invocation.)
 	litellmModel := "openai/" + modelName
-	modelID := fmt.Sprintf("custom/%s/%s", name, modelName)
+	modelID := modelName
+	_ = name // currently informational only; reserved for future multi-endpoint namespacing
 
 	entry := ModelEntry{
 		ModelName: modelID,
