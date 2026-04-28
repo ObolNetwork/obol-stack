@@ -69,6 +69,11 @@ func TestRank_LocalParameterParsing(t *testing.T) {
 		{"mixtral 8x7b", []string{"qwen3.5:9b", "mixtral:8x7b"}, "mixtral:8x7b"},
 		{"235b cloud variant", []string{"qwen3.5:9b", "qwen3-vl:235b-cloud"}, "qwen3-vl:235b-cloud"},
 		{"untagged family lookup", []string{"qwen3.5:9b", "llama3.3"}, "llama3.3"}, // family default 70 > 9
+		// Regression on regression: a `:0.6b` Ollama tag must NOT fall through
+		// to the qwen3 family default (~14B) — that would mistakenly outrank
+		// qwen3.5:9b. The decimal-aware regex parses it as 0.6 directly.
+		{"decimal size below 1b", []string{"qwen3:0.6b", "qwen3.5:9b"}, "qwen3.5:9b"},
+		{"decimal size 1.5b", []string{"qwen3.5:9b", "smol:1.5b"}, "qwen3.5:9b"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

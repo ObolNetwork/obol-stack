@@ -115,18 +115,26 @@ var cloudPrecedence = []string{
 	"o5", "o4", "o3", "o1",
 }
 
-// paramSizeRe matches the parameter-count tag in model names. Examples:
+// paramSizeRe matches the parameter-count tag in model names. Decimals are
+// allowed so a `:0.6b` Ollama tag doesn't fall through to the family default
+// and accidentally outrank a `:9b` peer. The captured groups are:
 //
-//	llama3.2:1b           → 1
-//	qwen3.5:9b            → 9
-//	deepseek-r1:32b       → 32
-//	mixtral:8x7b          → 56  (multiplied)
-//	qwen3-vl:235b-cloud   → 235
-var paramSizeRe = regexp.MustCompile(`(?i)(?::|-)(\d+(?:x\d+)?)b\b`)
+//	llama3.2:1b           → "1"           → 10  (deci-billions)
+//	qwen3.5:9b            → "9"           → 90
+//	qwen3:0.6b            → "0.6"         → 6
+//	deepseek-r1:32b       → "32"          → 320
+//	mixtral:8x7b          → "8x7"         → 560 (8 * 70)
+//	qwen3-vl:235b-cloud   → "235"         → 2350
+//
+// localRank returns deci-billions (parameter count × 10) so 0.5b / 0.6b
+// fractional sizes still produce distinct integer ranks without complicating
+// the comparator.
+var paramSizeRe = regexp.MustCompile(`(?i)(?::|-)(\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)?)b\b`)
 
-// localRank returns the parameter count (in billions) for a local model name.
-// Models with no parseable tag fall back to a family-average lookup; truly
-// unknown models return 0 (worst). Larger parameter counts → higher rank.
+// localRank returns the parameter count (in deci-billions, i.e. params × 10)
+// for a local model name. Decimal sizes (`0.5b`, `0.6b`) survive the int
+// conversion intact. Untagged Ollama models fall back to a family-average
+// lookup; truly unknown models return 0 (worst). Larger → higher rank.
 func localRank(name string) int {
 	n := strings.ToLower(stripProviderPrefix(name))
 	n = strings.TrimSuffix(n, ":latest")
@@ -134,12 +142,15 @@ func localRank(name string) int {
 	if m := paramSizeRe.FindStringSubmatch(n); m != nil {
 		raw := m[1]
 		if x := strings.Index(raw, "x"); x >= 0 {
-			a, _ := strconv.Atoi(raw[:x])
-			b, _ := strconv.Atoi(raw[x+1:])
-			return a * b
+			a, errA := strconv.ParseFloat(raw[:x], 64)
+			b, errB := strconv.ParseFloat(raw[x+1:], 64)
+			if errA == nil && errB == nil {
+				return int(a * b * 10)
+			}
 		}
-		v, _ := strconv.Atoi(raw)
-		return v
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			return int(v * 10)
+		}
 	}
 
 	// No size in the tag — fall back to a family heuristic. These default
@@ -155,27 +166,29 @@ func localRank(name string) int {
 }
 
 // untaggedFamilyDefaults maps a model-family prefix to a typical parameter
-// count, used when an Ollama model tag doesn't carry a size. The numbers
-// don't have to be exact — the goal is "is this roughly bigger than that
-// other model", not a precise sort.
+// count expressed in deci-billions (params × 10), so the table shares units
+// with localRank's tagged-parsing branch. The numbers don't have to be exact
+// — the goal is "is this roughly bigger than that other model", not a
+// precise sort. Untagged-model selection is rare; most Ollama users carry
+// a size in the tag.
 var untaggedFamilyDefaults = map[string]int{
-	"qwen3.5":        9,
-	"qwen3":          14,
-	"qwen2.5":        7,
-	"llama3.3":       70,
-	"llama3.2":       3,
-	"llama3.1":       8,
-	"llama3":         8,
-	"deepseek-r1":    14,
-	"deepseek-coder": 6,
-	"deepseek-ocr":   7,
-	"mistral":        7,
-	"mixtral":        56,
-	"phi4":           14,
-	"phi3":           3,
-	"gemma3":         7,
-	"gemma2":         9,
-	"command-r":      35,
+	"qwen3.5":        90,
+	"qwen3":          140,
+	"qwen2.5":        70,
+	"llama3.3":       700,
+	"llama3.2":       30,
+	"llama3.1":       80,
+	"llama3":         80,
+	"deepseek-r1":    140,
+	"deepseek-coder": 60,
+	"deepseek-ocr":   70,
+	"mistral":        70,
+	"mixtral":        560,
+	"phi4":           140,
+	"phi3":           30,
+	"gemma3":         70,
+	"gemma2":         90,
+	"command-r":      350,
 	"nomic-embed":    0, // embedding model, never pick as agent default
 }
 
