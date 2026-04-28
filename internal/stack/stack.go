@@ -612,6 +612,9 @@ func devPreloadImages() []string {
 	if ref := openclaw.ImageRef(); ref != "" {
 		images = append(images, ref)
 	}
+	if ref := hermes.ImageRef(); ref != "" {
+		images = append(images, ref)
+	}
 	return images
 }
 
