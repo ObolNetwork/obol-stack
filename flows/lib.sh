@@ -278,6 +278,43 @@ cleanup_k3d_obol_networks() {
         | xargs -r -n1 docker network rm >/dev/null 2>&1 || true
 }
 
+# Repoint a stack at an external OpenAI-compatible LLM endpoint via the
+# canonical `obol model` CLI — same path a real operator with a GPU box
+# would use ("Alice has her own vLLM, point her stack at it").
+#
+# Activated when OBOL_LLM_ENDPOINT is set (e.g. http://192.168.18.23:8000/v1).
+# OBOL_LLM_MODEL is the upstream model id (default qwen36-fast).
+# OBOL_LLM_NAME is the LiteLLM short name registered for the endpoint (default
+# external-llm).
+#
+# Sequence:
+#   1. obol model remove qwen3.5:9b qwen3:0.6b  (drop auto-detected Ollama
+#      entries — left in place they outrank the custom entry because
+#      `:9b` parses to 90 deci-billions vs the unparseable custom name).
+#   2. obol model setup custom --name … --endpoint … --model … [--api-key …]
+#      (validates the endpoint, patches LiteLLM, then internally calls
+#      syncAgentModels which re-renders the default Hermes agent).
+#
+# Each peer (alice/bob) routes independently — caller passes the runner.
+route_llm_via_obol_cli() {
+    local runner=$1
+    if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+        return 0
+    fi
+    local model="${OBOL_LLM_MODEL:-qwen36-fast}"
+    local name="${OBOL_LLM_NAME:-external-llm}"
+
+    # Idempotent — exit 0 if the entry already absent.
+    $runner model remove qwen3.5:9b   >/dev/null 2>&1 || true
+    $runner model remove qwen3:0.6b   >/dev/null 2>&1 || true
+
+    local args=(model setup custom --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
+    if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
+        args+=(--api-key "$OBOL_LLM_API_KEY")
+    fi
+    $runner "${args[@]}"
+}
+
 emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
     echo "METRIC steps_failed=$FAIL_COUNT"

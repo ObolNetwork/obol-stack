@@ -828,6 +828,11 @@ pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 
+# Repoint Alice's LiteLLM at an external GPU LLM via the canonical CLI when
+# OBOL_LLM_ENDPOINT is set. See flow-14 / lib.sh for the full rationale —
+# avoids burning host CPU on qwen3.5:9b for paid inference responses.
+route_llm_via_obol_cli alice
+
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
@@ -999,6 +1004,11 @@ done
 pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
+
+# Repoint Bob's LiteLLM at the external GPU LLM via the canonical CLI when
+# OBOL_LLM_ENDPOINT is set. See flow-14 / lib.sh for the full rationale —
+# the agent's autonomous discover+buy reasoning depends on responsive LLM.
+route_llm_via_obol_cli bob
 
 # Detect which buyer-agent runtime (Hermes or OpenClaw) Bob's cluster actually deployed.
 # This re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE / REMOTE_PORT /

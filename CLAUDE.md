@@ -214,6 +214,32 @@ Important caveats:
 
 **Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
 
+**Pointing the stack at an external OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / a remote GPU box) — canonical user flow, no ConfigMap surgery:
+
+```bash
+obol stack up                                                  # cluster + base infra (auto-config picks up host Ollama if present)
+
+# Drop the auto-detected Ollama entries — without this they out-rank the new
+# custom entry because `:9b` parses to 90 deci-billions in internal/model/rank.go
+# while `qwen36-fast` (no `:Nb` tag) ranks 0, so the agent stays on the slow
+# host model. This is the easy footgun.
+obol model remove qwen3.5:9b
+obol model remove qwen3:0.6b
+
+obol model setup custom \
+    --name spark1-vllm \
+    --endpoint http://192.168.18.23:8000/v1 \
+    --model qwen36-fast
+# `setup custom` validates the endpoint, patches LiteLLM, and internally calls
+# syncAgentModels → hermes.Sync → rewrites the default agent's deployment files
+# with the new primary model. No manual restart needed.
+
+obol model list                                                # confirm the new entry is the only local model
+obol model status                                              # show provider state
+```
+
+The flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this exact sequence behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_NAME` / `OBOL_LLM_API_KEY` env vars, so smoke tests can target a GPU host without burning host CPU on local Ollama.
+
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 
 ## Standalone Inference Gateway

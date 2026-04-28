@@ -606,6 +606,12 @@ pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 
+# Repoint Alice's LiteLLM at an external GPU LLM via the canonical CLI when
+# OBOL_LLM_ENDPOINT is set. Real-world recipe: Alice already has vLLM/sglang
+# running on her GPU box — `obol model remove` + `obol model setup custom`
+# wires that endpoint in and re-syncs the default agent.
+route_llm_via_obol_cli alice
+
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
@@ -826,6 +832,13 @@ done
 pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
+
+# Repoint Bob's LiteLLM at the external GPU LLM via the canonical CLI when
+# OBOL_LLM_ENDPOINT is set. Critical for the agent's autonomous discover+buy
+# chat completions — qwen3.5:9b on host CPU blows past the gateway's 180s
+# per-call envelope, the agent never runs buy.py, no PurchaseRequest CR
+# materializes. With the GPU endpoint wired in, the agent reasons fast.
+route_llm_via_obol_cli bob
 
 # detect_buyer_runtime re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE /
 # REMOTE_PORT / OBOL_SKILLS_DIR / LABEL / RUNTIME based on Bob's actual namespace.
