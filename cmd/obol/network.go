@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -493,6 +494,17 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "status",
 		Usage: "Show eRPC gateway health and upstream counts",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "no-probe",
+				Usage: "Skip the eth_chainId reachability probe against each upstream.",
+			},
+			&cli.DurationFlag{
+				Name:  "probe-timeout",
+				Value: 2 * time.Second,
+				Usage: "Per-upstream probe timeout. Probes run in parallel.",
+			},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
@@ -528,9 +540,63 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
+			if cmd.Bool("no-probe") {
+				return nil
+			}
+
+			renderUpstreamProbes(ctx, cfg, u, cmd.Duration("probe-timeout"))
 			return nil
 		},
 	}
+}
+
+// renderUpstreamProbes runs eth_chainId against every upstream and prints a
+// warning block when any upstream is unreachable or returns a chain id that
+// disagrees with the chain it's pinned to in the eRPC config. The most common
+// trigger is a custom pin (`obol network add <name> --endpoint <local-anvil>`)
+// left over from a flow run whose Anvil has since been killed or recreated for
+// a different chain.
+func renderUpstreamProbes(ctx context.Context, cfg *config.Config, u uiPrinter, timeout time.Duration) {
+	results, err := network.ProbeAllUpstreams(ctx, cfg, timeout)
+	if err != nil {
+		u.Warnf("upstream probe skipped: %v", err)
+		return
+	}
+
+	var dead, mismatched []network.UpstreamProbeResult
+	for _, r := range results {
+		switch {
+		case !r.Reachable:
+			dead = append(dead, r)
+		case r.Mismatch():
+			mismatched = append(mismatched, r)
+		}
+	}
+
+	if len(dead) == 0 && len(mismatched) == 0 {
+		u.Printf("\nReachability: all %d upstream(s) responded with the expected chain id.\n", len(results))
+		return
+	}
+
+	u.Printf("\nReachability warnings:\n")
+	for _, r := range dead {
+		u.Warnf("  upstream %q (chain %d) at %s is unreachable: %s",
+			r.ID, r.DeclaredChain, r.Endpoint, r.Err)
+	}
+	for _, r := range mismatched {
+		u.Warnf("  upstream %q is pinned to chain %d but answered eth_chainId with %d (%s)",
+			r.ID, r.DeclaredChain, r.ObservedChain, r.Endpoint)
+	}
+	u.Printf("\nIf any of these are stale custom pins from a previous test run, drop them with:\n")
+	u.Printf("  obol network remove <chain-name>   # e.g. obol network remove base-sepolia\n")
+}
+
+// uiPrinter is the subset of *ui.UI used by renderUpstreamProbes. Defined
+// locally so tests can pass a buffer-backed printer without dragging the full
+// ui.UI type into the test scope.
+type uiPrinter interface {
+	Printf(format string, args ...any)
+	Warnf(format string, args ...any)
 }
 
 // chainIDToName returns a human-readable name for a chain ID.
