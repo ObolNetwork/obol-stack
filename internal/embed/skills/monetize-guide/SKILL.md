@@ -62,8 +62,8 @@ for m in data.get('models', []):
 
 Report the available models to the user. If no models are found, suggest they pull one:
 ```bash
-ollama pull qwen3.5:4b   # Small, fast
-ollama pull qwen3.5:9b   # Medium, good quality
+ollama pull qwen3:8b      # Laptop-friendly, ~5 GB
+ollama pull qwen3.6:27b   # High quality, ~17 GB (needs ≥32GB RAM)
 ```
 
 #### For External LAN Resources (GPU servers, vLLM, etc.)

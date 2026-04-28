@@ -137,7 +137,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			} else {
 				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
 				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull qwen3.5:4b")
+				u.Print("  or pull a model with: ollama pull qwen3:8b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
 			}
 		} else {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
