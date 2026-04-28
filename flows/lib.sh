@@ -288,12 +288,17 @@ cleanup_k3d_obol_networks() {
 # external-llm).
 #
 # Sequence:
-#   1. obol model remove qwen3.5:9b qwen3:0.6b  (drop auto-detected Ollama
-#      entries — left in place they outrank the custom entry because
-#      `:9b` parses to 90 deci-billions vs the unparseable custom name).
+#   1. obol model remove <auto-detected ollama>  (only when present —
+#      each `obol model` write triggers syncAgentModels -> hermes.Sync ->
+#      helmfile sync, which produces a fresh Deployment revision and a
+#      new ReplicaSet. Three back-to-back rollouts in a slow-pull
+#      environment stack RSes and starve image pulls. Skip the remove
+#      when there is nothing to remove. The auto-detected Ollama entries
+#      otherwise out-rank the custom entry: rank.go parses `:9b` to 90
+#      deci-billions vs 0 for the unparseable custom name.)
 #   2. obol model setup custom --name … --endpoint … --model … [--api-key …]
 #      (validates the endpoint, patches LiteLLM, then internally calls
-#      syncAgentModels which re-renders the default Hermes agent).
+#      syncAgentModels which re-renders the default Hermes agent.)
 #
 # Each peer (alice/bob) routes independently — caller passes the runner.
 route_llm_via_obol_cli() {
@@ -304,9 +309,16 @@ route_llm_via_obol_cli() {
     local model="${OBOL_LLM_MODEL:-qwen36-fast}"
     local name="${OBOL_LLM_NAME:-external-llm}"
 
-    # Idempotent — exit 0 if the entry already absent.
-    $runner model remove qwen3.5:9b   >/dev/null 2>&1 || true
-    $runner model remove qwen3:0.6b   >/dev/null 2>&1 || true
+    # `obol model list` lists every entry currently in LiteLLM. Only remove
+    # entries that actually exist so we don't burn rollouts on no-ops.
+    local existing
+    existing=$($runner model list 2>/dev/null || true)
+    local entry
+    for entry in qwen3.5:9b qwen3:0.6b; do
+        if printf '%s' "$existing" | grep -Fq "$entry"; then
+            $runner model remove "$entry" >/dev/null 2>&1 || true
+        fi
+    done
 
     local args=(model setup custom --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
     if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
