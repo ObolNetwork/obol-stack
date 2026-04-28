@@ -240,9 +240,9 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Name:  "custom",
 		Usage: "Add a custom OpenAI-compatible endpoint (validates before adding)",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Usage: "Short name for the endpoint (e.g. my-vllm)", Required: true},
+			&cli.StringFlag{Name: "name", Usage: "Short label for the endpoint (informational only — LiteLLM keys the route by --model, not --name)", Required: true},
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
-			&cli.StringFlag{Name: "model", Usage: "Model name at the endpoint", Required: true},
+			&cli.StringFlag{Name: "model", Usage: "Model identifier at the endpoint — this is also the LiteLLM model_name the agent will call", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
 			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
 		},

@@ -23,6 +23,51 @@ func testConfig(t *testing.T) *config.Config {
 	return &config.Config{ConfigDir: dir, DataDir: dir, BinDir: dir}
 }
 
+// TestGenerateConfig_PrimaryIsRoundTrippable guards the LiteLLM model_name
+// contract end-to-end: whatever string the agent's `model.default` is set to
+// MUST match a `model_name` entry in the LiteLLM ConfigMap byte-for-byte,
+// because Hermes will pass it back as the `model` field on every
+// chat-completion call. Stripping anywhere on this path causes the agent to
+// call LiteLLM with a key that no longer matches a registered route — the
+// flow-14 / ca820c9 regression.
+func TestGenerateConfig_PrimaryIsRoundTrippable(t *testing.T) {
+	cases := []struct {
+		name    string
+		primary string
+	}{
+		{"bare ollama tag", "qwen3.5:9b"},
+		{"bare claude id", "claude-opus-4-7"},
+		{"bare openai id", "gpt-5.4"},
+		// Wildcard-expanded entries can carry the provider prefix; the
+		// agent must still send back the exact string LiteLLM published.
+		{"provider-prefixed", "anthropic/claude-3-5-sonnet-latest"},
+		// Custom endpoints write `model_name: <bare>` after the contract
+		// fix; this case guards that the agent picks up that bare name
+		// without re-namespacing.
+		{"custom endpoint bare", "qwen36-fast"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := generateConfig(testConfig(t), tc.primary)
+			if err != nil {
+				t.Fatalf("generateConfig: %v", err)
+			}
+			var cfg map[string]any
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("yaml.Unmarshal: %v", err)
+			}
+			modelCfg, ok := cfg["model"].(map[string]any)
+			if !ok {
+				t.Fatalf("model config missing")
+			}
+			if got := modelCfg["default"]; got != tc.primary {
+				t.Fatalf("model.default = %q, want %q (round-trip mismatch)", got, tc.primary)
+			}
+		})
+	}
+}
+
 func TestGenerateConfig_UsesLiteLLMCustomProvider(t *testing.T) {
 	raw, err := generateConfig(testConfig(t), "gpt-5.2")
 	if err != nil {

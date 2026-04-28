@@ -88,6 +88,57 @@ func TestBuildModelEntries(t *testing.T) {
 	})
 }
 
+// TestBuildCustomEndpointEntry encodes the LiteLLM `model_name` contract for
+// custom endpoints added via `obol model setup custom`:
+//
+//   - `model_name` is the BARE model identifier (no `custom/<name>/` namespace
+//     and no `openai/` provider prefix). The agent reads this string and
+//     passes it back as the `model` field on chat-completion calls; any
+//     namespacing here breaks the round-trip — the flow-14 / ca820c9 bug.
+//   - `litellm_params.model` carries the `openai/` provider hint so LiteLLM
+//     routes through its OpenAI-compatible adapter to the user's upstream.
+//   - The `name` (label) flag does NOT participate in the route key.
+func TestBuildCustomEndpointEntry(t *testing.T) {
+	t.Run("bare model_name with openai-compat routing", func(t *testing.T) {
+		entry := buildCustomEndpointEntry("qwen36-fast", "http://host.k3d.internal:8000/v1", "secret-key")
+		if entry.ModelName != "qwen36-fast" {
+			t.Errorf("ModelName = %q, want bare %q (contract: bare LiteLLM model_name)", entry.ModelName, "qwen36-fast")
+		}
+		if strings.HasPrefix(entry.ModelName, "custom/") {
+			t.Errorf("ModelName = %q must NOT carry custom/<name>/ namespace", entry.ModelName)
+		}
+		if entry.LiteLLMParams.Model != "openai/qwen36-fast" {
+			t.Errorf("litellm_params.model = %q, want openai/qwen36-fast", entry.LiteLLMParams.Model)
+		}
+		if entry.LiteLLMParams.APIBase != "http://host.k3d.internal:8000/v1" {
+			t.Errorf("api_base = %q", entry.LiteLLMParams.APIBase)
+		}
+		if entry.LiteLLMParams.APIKey != "secret-key" {
+			t.Errorf("api_key = %q, want secret-key", entry.LiteLLMParams.APIKey)
+		}
+	})
+
+	t.Run("empty api_key falls back to none", func(t *testing.T) {
+		// Some self-hosted OpenAI-compatible servers (vLLM, llama.cpp, mlx-lm)
+		// don't require auth. LiteLLM still wants a non-empty api_key field
+		// or the openai client errors before even hitting the endpoint.
+		entry := buildCustomEndpointEntry("any-model", "http://host:8000/v1", "")
+		if entry.LiteLLMParams.APIKey != "none" {
+			t.Errorf("api_key = %q, want %q (LiteLLM placeholder)", entry.LiteLLMParams.APIKey, "none")
+		}
+	})
+
+	t.Run("model with colon tag survives intact", func(t *testing.T) {
+		// A custom endpoint can serve a tagged model id (e.g. mlx-lm publishing
+		// `qwen3:9b-mlx`). The colon must NOT be stripped or interpreted as a
+		// provider separator.
+		entry := buildCustomEndpointEntry("qwen3:9b-mlx", "http://host:8000/v1", "")
+		if entry.ModelName != "qwen3:9b-mlx" {
+			t.Errorf("ModelName = %q, want qwen3:9b-mlx unchanged", entry.ModelName)
+		}
+	})
+}
+
 func TestExpandWildcard(t *testing.T) {
 	t.Run("uses live models when available", func(t *testing.T) {
 		live := []string{"claude-sonnet-4-6", "claude-opus-4", "gpt-4o"}
