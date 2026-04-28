@@ -128,10 +128,17 @@ flow13_cleanup() {
         kill "$ANVIL_PID" 2>/dev/null || true
         wait "$ANVIL_PID" 2>/dev/null || true
     fi
+    # Reclaim Docker networks left behind by k3d clusters that crashed mid-
+    # create or were force-removed without `obol stack down`. Targeted to
+    # `k3d-obol-stack-*` and naturally skips networks with active endpoints.
+    cleanup_k3d_obol_networks
     set -e
     return $ec
 }
 trap flow13_cleanup EXIT
+# Proactive: reclaim leaked Docker networks at start so the new cluster can
+# allocate even if a prior aborted run left orphans behind.
+cleanup_k3d_obol_networks
 
 # ═════════════════════════════════════════════════════════════════
 # RUNNERS / HELPERS

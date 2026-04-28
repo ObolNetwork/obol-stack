@@ -256,6 +256,28 @@ cleanup_pid() {
     fi
 }
 
+# Reclaim Docker networks left behind by aborted k3d clusters.
+#
+# Each `k3d cluster create` provisions a `k3d-<cluster-name>` Docker network
+# and `k3d cluster delete` removes it. If the create crashes mid-way (e.g.
+# image pull failure) or the cluster is force-deleted out of band, the
+# network is leaked. After enough leaks Docker's predefined CIDR pool
+# (172.16.0.0/12 carved into /16s, ~16 networks) is exhausted and every
+# new cluster fails with "all predefined address pools have been fully
+# subnetted" — which has bitten us on spark2.
+#
+# Safe-by-construction: `docker network rm` refuses to remove a network
+# that still has active endpoints, so this never kills a live cluster's
+# network. We narrow the filter to `k3d-obol-stack-` so we never touch
+# user / other-app networks even if they happen to be unused.
+cleanup_k3d_obol_networks() {
+    if ! command -v docker >/dev/null 2>&1; then
+        return 0
+    fi
+    docker network ls --filter "name=k3d-obol-stack-" --format "{{.Name}}" 2>/dev/null \
+        | xargs -r -n1 docker network rm >/dev/null 2>&1 || true
+}
+
 emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
     echo "METRIC steps_failed=$FAIL_COUNT"
