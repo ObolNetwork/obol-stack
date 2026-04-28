@@ -987,11 +987,20 @@ func syncObolSkills(cfg *config.Config, id string) error {
 	return nil
 }
 
+// configuredModels returns the agent-facing model list and the primary model
+// name. Both are returned as round-trippable LiteLLM `model_name` strings:
+// the agent passes `primary` back as the `model` field on chat-completion
+// calls, and LiteLLM matches by exact string against the entries in the
+// returned slice. NO provider-prefix stripping happens on this path —
+// LiteLLM `model_name` is the contract identifier end-to-end.
+//
+// See internal/model/model.go (AddCustomEndpoint, buildModelEntries) for
+// where the bare-name convention is written into the LiteLLM ConfigMap.
 func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 	models, err := model.GetConfiguredModels(cfg)
 	if err == nil && len(models) > 0 {
 		primary, _ := rankModels(models)
-		return stripProviderPrefixes(models), stripProviderPrefix(primary), nil
+		return models, primary, nil
 	}
 
 	ollamaModels, ollamaErr := model.ListOllamaModels()
@@ -1024,7 +1033,7 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 	}
 
 	primary, _ := rankModels(names)
-	return names, stripProviderPrefix(primary), nil
+	return names, primary, nil
 }
 
 func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
@@ -1183,38 +1192,17 @@ func litellmMasterKey(cfg *config.Config) string {
 	return "sk-obol-" + strings.TrimSpace(string(data))
 }
 
-func stripProviderPrefix(modelName string) string {
-	modelName = strings.TrimSpace(strings.Trim(modelName, `"'`))
-	if before, after, ok := strings.Cut(modelName, "/"); ok && before != "" && after != "" {
-		return after
-	}
-	return modelName
-}
-
-func stripProviderPrefixes(modelNames []string) []string {
-	if len(modelNames) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(modelNames))
-	for _, name := range modelNames {
-		if trimmed := stripProviderPrefix(name); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
-}
-
 // rankModels delegates to model.Rank, which knows how to prefer larger local
 // models and frontier cloud models. Kept as a thin wrapper so call sites
-// don't need to import internal/model directly and to preserve the existing
-// stripProviderPrefix shape on the inputs.
+// don't need to import internal/model directly.
+//
+// IMPORTANT: do NOT pre-strip provider prefixes here. model.Rank strips
+// internally for ranking heuristics but returns the ORIGINAL strings so the
+// agent can round-trip them back to LiteLLM. Stripping at this layer would
+// break that round-trip — that's exactly the double-strip bug that
+// ca820c9 worked around for custom endpoints.
 func rankModels(models []string) (primary string, fallbacks []string) {
-	stripped := make([]string, len(models))
-	for i, m := range models {
-		stripped[i] = stripProviderPrefix(m)
-	}
-	return model.Rank(stripped)
+	return model.Rank(models)
 }
 
 func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {

@@ -88,6 +88,17 @@ func IsCloudModel(name string) bool {
 	return false
 }
 
+// stripProviderPrefix is an internal helper for ranking only. It is NOT
+// exported and MUST NOT be used to mutate model identifiers that the agent
+// will pass back to LiteLLM on chat-completion calls.
+//
+// LiteLLM `model_name` is bare (no provider prefix) — see the contract
+// documented on AddCustomEndpoint and buildModelEntries. The only place a
+// `provider/model` shape can sneak in is wildcard entries like `anthropic/*`,
+// or legacy entries from older releases that namespaced custom endpoints as
+// `custom/<name>/<model>`. We strip those here so size/family parsing in
+// IsCloudModel/cloudRank/localRank still works on tagged tokens, but the
+// caller in Rank() returns the ORIGINAL string — never the stripped form.
 func stripProviderPrefix(name string) string {
 	if idx := strings.Index(name, "/"); idx >= 0 {
 		return name[idx+1:]

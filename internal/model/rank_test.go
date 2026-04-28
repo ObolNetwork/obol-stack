@@ -107,6 +107,45 @@ func TestRank_EmbeddingModelLast(t *testing.T) {
 	}
 }
 
+// TestRank_PreservesProviderPrefixOnOutput documents the contract relied on
+// by internal/hermes and internal/openclaw: Rank() may use the provider
+// prefix internally for ranking heuristics (e.g. detecting "claude" in
+// "anthropic/claude-opus-4-7"), but it MUST return the input strings
+// UNCHANGED. The agent round-trips the returned primary back to LiteLLM as
+// the `model` field on chat-completions; stripping here would mismatch the
+// LiteLLM model_name and surface as 400 "no healthy deployments".
+func TestRank_PreservesProviderPrefixOnOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{
+			"anthropic/-prefixed wins over local",
+			[]string{"anthropic/claude-opus-4-7", "qwen3.5:9b"},
+			"anthropic/claude-opus-4-7",
+		},
+		{
+			"openai/-prefixed wins over local",
+			[]string{"qwen3.5:9b", "openai/gpt-4o"},
+			"openai/gpt-4o",
+		},
+		{
+			"legacy custom/<name>/<model> round-trips",
+			[]string{"custom/spark1-vllm/qwen36-fast"},
+			"custom/spark1-vllm/qwen36-fast",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			primary, _ := Rank(tc.in)
+			if primary != tc.want {
+				t.Fatalf("Rank(%v): got %q, want %q (must round-trip unchanged)", tc.in, primary, tc.want)
+			}
+		})
+	}
+}
+
 func TestRank_Empty(t *testing.T) {
 	primary, fallbacks := Rank(nil)
 	if primary != "" || len(fallbacks) != 0 {
