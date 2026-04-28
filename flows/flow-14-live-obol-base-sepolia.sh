@@ -730,13 +730,20 @@ step "Alice: drive ERC-8004 registration (obol sell register)"
 KEY_FILE=$(mktemp)
 echo "$SIGNER_KEY" > "$KEY_FILE"
 # 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
-# should complete in ~30-60s; anything beyond that is a hang we want to
-# surface, not silently block the run.
-register_out=$(timeout 300 alice sell register \
-    --chain base-sepolia \
-    --endpoint "$TUNNEL_URL" \
-    --name "Live OBOL Base Sepolia Test Inference" \
-    --private-key-file "$KEY_FILE" 2>&1)
+# should complete in ~30-60s; anything beyond that is a hang we want
+# to surface, not silently block the run. `timeout` is an external
+# program and cannot see the `alice()` bash function, so call the
+# binary directly with the same env the function exports.
+register_out=$(timeout 300 \
+    env OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$ALICE_DIR/config" \
+        OBOL_BIN_DIR="$ALICE_DIR/bin" \
+        OBOL_DATA_DIR="$ALICE_DIR/data" \
+        "$ALICE_DIR/bin/obol" sell register \
+            --chain base-sepolia \
+            --endpoint "$TUNNEL_URL" \
+            --name "Live OBOL Base Sepolia Test Inference" \
+            --private-key-file "$KEY_FILE" 2>&1)
 register_rc=$?
 rm -f "$KEY_FILE"
 printf '%s\n' "$register_out" | tail -10
