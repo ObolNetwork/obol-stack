@@ -350,6 +350,32 @@ bob_buy_skill_balance() {
         python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
 }
 
+# bob_obol_balance_via_erpc directly queries OBOL `balanceOf(signer)` against
+# Bob's in-cluster eRPC, bypassing buy.py's `balance` subcommand which is
+# hardcoded to query USDC. We use the litellm pod because it ships with
+# python3 and has the same eRPC reachability the buyer sidecar will use.
+bob_obol_balance_via_erpc() {
+    local signer="$1"
+    local token="$2"
+    local sigNo0x="${signer#0x}"
+    bob kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import json, urllib.request
+data = json.dumps({'jsonrpc':'2.0','method':'eth_call','id':1,
+    'params':[{'to':'$token','data':'0x70a08231'+'$sigNo0x'.lower().zfill(64)},'latest']}).encode()
+req = urllib.request.Request('http://erpc.erpc.svc.cluster.local:4000/rpc/base-sepolia',
+    data=data, headers={'content-type':'application/json'})
+try:
+    body = json.load(urllib.request.urlopen(req, timeout=10))
+    if 'result' in body:
+        print(int(body['result'], 16))
+    else:
+        print('ERR:' + json.dumps(body)[:200])
+except Exception as e:
+    print('ERR:' + str(e)[:200])
+" 2>/dev/null || true
+}
+
 litellm_paid_inference() {
     bob kubectl exec -n llm deployment/litellm -c litellm -- \
         python3 -c "
@@ -905,29 +931,28 @@ else
     emit_metrics; exit 1
 fi
 
-# Now wait for Bob's in-cluster eRPC view to reflect the funding too. buy.py
-# inside the agent pod reads through eRPC, which has its own ~10s eth_call
-# cache TTL — without this poll the next step (the AI agent buy) often runs
-# while the in-pod balance still reads 0 and the buy short-circuits with no
-# PurchaseRequest CR.
-step "Bob: eRPC reflects funding (in-pod buy.py balance >= price)"
+# Now wait for Bob's in-cluster eRPC view to reflect the funding too. The
+# buyer sidecar reads through eRPC (10s eth_call cache TTL); without this
+# poll the next step's AI-agent-driven buy often runs against a stale view
+# and short-circuits with no PurchaseRequest CR. We probe OBOL balanceOf
+# directly via JSON-RPC against eRPC because buy.py's `balance` subcommand
+# is hardcoded to USDC.
+step "Bob: eRPC reflects funding (direct OBOL balanceOf eth_call >= price)"
 erpc_balance_output=""
 erpc_balance_wei=""
 for attempt in $(seq 1 18); do
-    erpc_balance_output=$(bob_buy_skill_balance)
-    # buy.py's `balance` prints e.g. "Wallet: 0x... balance: 5e15 wei (5000 micro-units)"
-    # We accept whichever digit form it emits and treat the largest extracted
-    # number as the wei balance — defensive against minor format drift.
-    erpc_balance_wei=$(echo "$erpc_balance_output" | grep -oE '[0-9]{15,}' | sort -rn | head -1)
-    if [ -n "$erpc_balance_wei" ] && \
-       python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
-        pass "Bob: eRPC reflects funding (attempt $attempt, balance $erpc_balance_wei wei)"
-        break
+    erpc_balance_output=$(bob_obol_balance_via_erpc "$BOB_SIGNER_ADDR" "$OBOL_TOKEN")
+    if echo "$erpc_balance_output" | grep -qE '^[0-9]+$'; then
+        erpc_balance_wei="$erpc_balance_output"
+        if python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
+            pass "Bob: eRPC reflects funding (attempt $attempt, balance $erpc_balance_wei wei)"
+            break
+        fi
     fi
     sleep 5
 done
 if [ -z "$erpc_balance_wei" ] || ! python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
-    fail "Bob: in-pod eRPC balance did not catch up — ${erpc_balance_output:0:300}"
+    fail "Bob: in-cluster eRPC OBOL balance did not catch up — last=${erpc_balance_output:0:200}"
     emit_metrics; exit 1
 fi
 
