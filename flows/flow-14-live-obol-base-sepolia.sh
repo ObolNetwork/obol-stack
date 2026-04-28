@@ -688,42 +688,15 @@ alice kubectl apply -f "$ALICE_OFFER_YAML" 2>&1 | tail -2
 rm -f "$ALICE_OFFER_YAML"
 pass "ServiceOffer alice-obol-inference applied"
 
-# Drive ERC-8004 registration on-chain via `obol sell register`. The
-# controller publishes the registration metadata + sets RoutePublished, but
-# leaves Registered=AwaitingExternalRegistration until an off-cluster signer
-# actually sends the IdentityRegistry tx. `obol sell register` is that
-# signer step. Note: this CLI takes only --chain / --sponsored / --endpoint
-# / --name / --description / --image / --private-key-file — it has no
-# `--namespace` flag (the offer is found by the controller, not the CLI).
-step "Alice: drive ERC-8004 registration (obol sell register)"
-KEY_FILE=$(mktemp)
-echo "$SIGNER_KEY" > "$KEY_FILE"
-register_out=$(alice sell register \
-    --chain base-sepolia \
-    --name "Live OBOL Base Sepolia Test Inference" \
-    --private-key-file "$KEY_FILE" 2>&1)
-register_rc=$?
-rm -f "$KEY_FILE"
-printf '%s\n' "$register_out" | tail -10
-if [ "$register_rc" -ne 0 ]; then
-    fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
-    emit_metrics
-    exit "$register_rc"
-fi
-pass "obol sell register issued"
-
-poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
-    alice kubectl get serviceoffers.obol.org alice-obol-inference -n llm \
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-
 # ═════════════════════════════════════════════════════════════════
-# 17. TUNNEL + 402 GATE
+# 17. TUNNEL (must come BEFORE register — register auto-detects the
+# endpoint from the tunnel URL stored in the obol-frontend ConfigMap.
+# `obol stack up` deploys cloudflared at 0 replicas; we apply the OBOL
+# ServiceOffer YAML directly (see flow-13), so the in-CLI
+# EnsureTunnelForSell path is bypassed and we must scale by hand.)
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: bring up cloudflared tunnel"
-# `obol stack up` deploys the cloudflared Deployment at 0 replicas. Because we
-# apply the OBOL ServiceOffer YAML directly (see flow-13), the internal
-# EnsureTunnelForSell path is bypassed and we must scale by hand.
 alice kubectl scale deployment/cloudflared -n traefik --replicas=1 2>&1 | tail -2
 alice kubectl rollout status deployment/cloudflared -n traefik --timeout=180s 2>&1 | tail -3
 pass "Cloudflared scaled to 1"
@@ -741,6 +714,42 @@ fi
 TUNNEL_HOST=$(tunnel_hostname "$TUNNEL_URL")
 TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
 pass "Tunnel: $TUNNEL_URL"
+
+# ═════════════════════════════════════════════════════════════════
+# 18. ERC-8004 REGISTRATION (now that tunnel + offer are live)
+# Drive the on-chain IdentityRegistry tx via `obol sell register`. The
+# controller publishes the registration metadata + sets RoutePublished
+# but leaves Registered=AwaitingExternalRegistration until this CLI
+# call lands the on-chain register. The CLI takes --chain / --sponsored
+# / --endpoint / --name / --description / --image / --private-key-file —
+# it has no `--namespace` flag (the offer is reconciled by the
+# controller, not looked up by the CLI).
+# ═════════════════════════════════════════════════════════════════
+
+step "Alice: drive ERC-8004 registration (obol sell register)"
+KEY_FILE=$(mktemp)
+echo "$SIGNER_KEY" > "$KEY_FILE"
+# 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
+# should complete in ~30-60s; anything beyond that is a hang we want to
+# surface, not silently block the run.
+register_out=$(timeout 300 alice sell register \
+    --chain base-sepolia \
+    --endpoint "$TUNNEL_URL" \
+    --name "Live OBOL Base Sepolia Test Inference" \
+    --private-key-file "$KEY_FILE" 2>&1)
+register_rc=$?
+rm -f "$KEY_FILE"
+printf '%s\n' "$register_out" | tail -10
+if [ "$register_rc" -ne 0 ]; then
+    fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
+    emit_metrics
+    exit "$register_rc"
+fi
+pass "obol sell register issued"
+
+poll_step_grep "Alice: ServiceOffer Ready=True" "True" 60 5 \
+    alice kubectl get serviceoffers.obol.org alice-obol-inference -n llm \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 
 step "Alice: 402 gate works on $TUNNEL_URL/services/alice-obol-inference"
 gate_code=""
