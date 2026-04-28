@@ -278,7 +278,9 @@ bob_buy_skill_balance() {
 }
 
 bob_remote_signer_address() {
-    bob kubectl exec -n openclaw-obol-agent deploy/openclaw -c openclaw -- \
+    # BOB_AGENT_NS / BOB_AGENT_DEPLOY / BOB_AGENT_CONTAINER are set by
+    # detect_buyer_runtime so this works against either Hermes or OpenClaw.
+    bob kubectl exec -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
         python3 -c "
 import json
 import urllib.request
