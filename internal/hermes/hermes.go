@@ -30,13 +30,6 @@ const (
 	gatewayTokenFileName = ".gateway-token"
 	obolSkillsDirName    = "obol-skills"
 
-	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	// MUST match internal/openclaw/openclaw.go's remoteSignerChartVersion —
-	// guarded by TestRemoteSignerChartVersionConsistency. Chart 0.3.1 ships
-	// remote-signer image v0.2.0 which accepts the canonical-string signer
-	// contract (PR #359 / commit b9495b8); 0.3.0 ships v0.1.0 which only
-	// accepts the legacy u64 contract and breaks `obol sell register`.
-	remoteSignerChartVersion = "0.3.1"
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
 
@@ -630,7 +623,7 @@ releases:
     version: %s
     values:
       - values-remote-signer.yaml
-`, namespace, rawChartVersion, valuesFileName, namespace, remoteSignerChartVersion)
+`, namespace, rawChartVersion, valuesFileName, namespace, agentruntime.RemoteSignerChartVersion)
 }
 
 func dashboardHostname(id string) string {
