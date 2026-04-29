@@ -33,7 +33,7 @@ const (
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
 
-	defaultImage     = "nousresearch/hermes-agent:latest"
+	defaultImage     = "nousresearch/hermes-agent:v2026.4.23"
 	hermesInstallDir = "/data/.hermes/hermes-agent"
 	hermesRepoURL    = "https://github.com/NousResearch/hermes-agent.git"
 	hermesBinary     = hermesInstallDir + "/venv/bin/hermes"
@@ -824,10 +824,16 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                     git clone --depth 1 "$repo_url" "$install_dir"
                   fi
                   cd "$install_dir"
-                  if [ ! -x "$install_dir/venv/bin/hermes" ]; then
+                  # Reinstall when the venv is missing the hermes binary OR
+                  # when the dashboard's web extra (fastapi/uvicorn) is absent.
+                  # The upstream image installs ".[all]" (which pulls in
+                  # ".[web]"); we re-create the venv from a fresh clone, so
+                  # the extras must be re-requested explicitly here.
+                  if [ ! -x "$install_dir/venv/bin/hermes" ] || \
+                     ! "$install_dir/venv/bin/python3" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
                     rm -rf "$install_dir/venv"
                     uv venv --python python3 --system-site-packages venv
-                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e "."
+                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e ".[web]"
                   fi
                   if [ -f /data/.hermes/state.db ]; then
                     if ! python3 - <<'PY'
