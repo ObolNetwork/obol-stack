@@ -231,7 +231,8 @@ func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x
 		return nil, x402types.PaymentRequirements{}, nil, false
 	}
 
-	requirement := BuildV2Requirement(chain, rule.Price, wallet)
+	asset := ResolveAssetInfo(chain, rule)
+	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
 	return rule, requirement, prometheusLabels(rule), true
 }
 

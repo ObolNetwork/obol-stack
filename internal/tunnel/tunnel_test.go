@@ -5,7 +5,35 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestWaitReadyTimeout(t *testing.T) {
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("default: got %s, want %s", got, defaultWaitReadyTimeout)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "90s")
+	if got := waitReadyTimeout(); got != 90*time.Second {
+		t.Errorf("duration override: got %s, want 90s", got)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "120")
+	if got := waitReadyTimeout(); got != 120*time.Second {
+		t.Errorf("integer-seconds override: got %s, want 120s", got)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "not-a-duration")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("invalid override: got %s, want default %s", got, defaultWaitReadyTimeout)
+	}
+
+	t.Setenv("FLOW_TUNNEL_TIMEOUT", "0")
+	if got := waitReadyTimeout(); got != defaultWaitReadyTimeout {
+		t.Errorf("zero override should fall back to default: got %s, want %s", got, defaultWaitReadyTimeout)
+	}
+}
 
 func TestNormalizeHostname(t *testing.T) {
 	tests := []struct {
@@ -39,6 +67,46 @@ func TestParseQuickTunnelURL(t *testing.T) {
 
 	if url != "https://seasonal-deck-organisms-sf.trycloudflare.com" {
 		t.Fatalf("unexpected url: %q", url)
+	}
+}
+
+func TestParseQuickTunnelURL_PicksLatest(t *testing.T) {
+	logs := `
+2026-01-14T12:00:00Z INF | https://old-quick-tunnel.trycloudflare.com |
+2026-01-14T12:05:00Z INF | https://new-quick-tunnel.trycloudflare.com |
+`
+
+	url, ok := parseQuickTunnelURL(logs)
+	if !ok {
+		t.Fatalf("expected ok=true")
+	}
+
+	if url != "https://new-quick-tunnel.trycloudflare.com" {
+		t.Fatalf("unexpected url: %q", url)
+	}
+}
+
+func TestBuildLocalManagedConfigYAMLRoutesOnlyRequestedHostname(t *testing.T) {
+	out := string(buildLocalManagedConfigYAML("stack.example.com", "00000000-0000-0000-0000-000000000000"))
+
+	for _, want := range []string{
+		"tunnel: 00000000-0000-0000-0000-000000000000",
+		"- hostname: stack.example.com",
+		"service: http://traefik.traefik.svc.cluster.local:80",
+		"- service: http_status:404",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("config missing %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Count(out, "hostname:") != 1 {
+		t.Fatalf("persistent tunnel config should expose exactly one hostname:\n%s", out)
+	}
+	for _, unexpected := range []string{"obol-agent.obol.stack", "hermes-obol-agent.obol.stack", "*.obol.stack"} {
+		if strings.Contains(out, unexpected) {
+			t.Fatalf("persistent tunnel config exposes local agent hostname %q:\n%s", unexpected, out)
+		}
 	}
 }
 
@@ -111,5 +179,41 @@ skills:
 	// Should only have one AGENT_BASE_URL (no duplicate insertion).
 	if strings.Count(content, "AGENT_BASE_URL") != 1 {
 		t.Errorf("expected exactly 1 AGENT_BASE_URL entry:\n%s", content)
+	}
+}
+
+func TestPatchAgentBaseURL_InsertHermesManifestIndentation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "values-hermes.yaml")
+
+	original := `resources:
+  - apiVersion: apps/v1
+    kind: Deployment
+    spec:
+      template:
+        spec:
+          containers:
+            - name: openclaw
+              env:
+                - name: REMOTE_SIGNER_URL
+                  value: http://remote-signer:9000
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := patchAgentBaseURL(path, "https://mystack.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if !strings.Contains(content, "                - name: AGENT_BASE_URL") {
+		t.Fatalf("patched Hermes manifest missing preserved indent for name:\n%s", content)
+	}
+
+	if !strings.Contains(content, "                  value: https://mystack.example.com") {
+		t.Fatalf("patched Hermes manifest missing preserved indent for value:\n%s", content)
 	}
 }

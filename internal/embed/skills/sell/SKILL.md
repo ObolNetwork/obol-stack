@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "\ud83d\udcb0", "requires": { "bins": ["pytho
 
 # Sell
 
-Sell access to services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments. The cluster's `serviceoffer-controller` performs reconciliation; `monetize.py process` now waits for controller convergence and refreshes `/skill.md`.
+Sell access to services via ServiceOffer custom resources. Each ServiceOffer describes a service to expose publicly with x402 micropayments (USDC via EIP-3009 or OBOL via Permit2, selected with `--token`). The cluster's `serviceoffer-controller` performs reconciliation; `monetize.py process` now waits for controller convergence and refreshes `/skill.md`.
 
 ## When to Use
 
@@ -30,7 +30,7 @@ python3 scripts/monetize.py list
 
 # Create a new offer to monetize a local Ollama model
 python3 scripts/monetize.py create my-inference \
-  --model qwen3:8b \
+  --model qwen3.5:9b \
   --runtime ollama \
   --upstream ollama \
   --namespace llm \

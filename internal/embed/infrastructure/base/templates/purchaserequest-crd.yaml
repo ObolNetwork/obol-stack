@@ -61,10 +61,14 @@ spec:
                   description: "Number of pre-signed auths to create"
                 preSignedAuths:
                   type: array
-                  description: "Pre-signed ERC-3009 auths (created by buy.py, consumed by controller)"
+                  description: "Pre-signed x402 payments (legacy ERC-3009 auths still supported)"
                   items:
                     type: object
                     properties:
+                      id: { type: string }
+                      payment:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       signature: { type: string }
                       from: { type: string }
                       to: { type: string }
@@ -105,7 +109,22 @@ spec:
                       description: "Micro-USDC per request"
                     asset:
                       type: string
-                      description: "USDC contract address"
+                      description: "ERC-20 contract address"
+                    assetSymbol:
+                      type: string
+                      description: "Human-friendly token symbol (e.g. USDC, OBOL)"
+                    assetDecimals:
+                      type: integer
+                      description: "Token decimals in atomic units"
+                    assetTransferMethod:
+                      type: string
+                      description: "x402 transfer method used for this asset"
+                    eip712Name:
+                      type: string
+                      description: "EIP-712 domain name used for signing"
+                    eip712Version:
+                      type: string
+                      description: "EIP-712 domain version used for signing"
             status:
               type: object
               properties:

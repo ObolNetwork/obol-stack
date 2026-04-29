@@ -19,6 +19,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/scrypt"
 	"golang.org/x/crypto/sha3"
@@ -78,8 +79,52 @@ func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error
 	if err != nil {
 		return nil, fmt.Errorf("key generation failed: %w", err)
 	}
+	defer zeroBytes(privKey)
 
-	address := addressFromPublicKey(pubKey)
+	return provisionWalletFromKeyMaterial(cfg, id, privKey, pubKey, "", u)
+}
+
+// ImportWalletFromPrivateKey provisions an existing Ethereum private key as the
+// remote-signer wallet for an OpenClaw instance.
+func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u *ui.UI) (*WalletInfo, error) {
+	privateKeyHex = strings.TrimSpace(strings.TrimPrefix(privateKeyHex, "0x"))
+	if privateKeyHex == "" {
+		return nil, errors.New("private key is empty")
+	}
+
+	key, err := ethcrypto.HexToECDSA(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+
+	privKey := ethcrypto.FromECDSA(key)
+	defer zeroBytes(privKey)
+
+	pubKeyWithPrefix := ethcrypto.FromECDSAPub(&key.PublicKey)
+	if len(privKey) != 32 || len(pubKeyWithPrefix) != 65 || pubKeyWithPrefix[0] != 0x04 {
+		return nil, errors.New("invalid private key material")
+	}
+
+	return provisionWalletFromKeyMaterial(
+		cfg,
+		id,
+		privKey,
+		pubKeyWithPrefix[1:],
+		ethcrypto.PubkeyToAddress(key.PublicKey).Hex(),
+		u,
+	)
+}
+
+func provisionWalletFromKeyMaterial(cfg *config.Config, id string, privKey, pubKey []byte, address string, u *ui.UI) (*WalletInfo, error) {
+	if len(privKey) != 32 {
+		return nil, errors.New("private key must be 32 bytes")
+	}
+	if len(pubKey) != 64 {
+		return nil, errors.New("public key must be 64 bytes without prefix")
+	}
+	if address == "" {
+		address = addressFromPublicKey(pubKey)
+	}
 
 	password, err := generateRandomPassword(32)
 	if err != nil {
@@ -96,12 +141,9 @@ func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error
 		return nil, fmt.Errorf("keystore provisioning failed: %w", err)
 	}
 
-	// Uncompressed public key with 04 prefix for the frontend.
-	pubKeyHex := "0x04" + hex.EncodeToString(pubKey)
-
 	return &WalletInfo{
 		Address:      address,
-		PublicKey:    pubKeyHex,
+		PublicKey:    "0x04" + hex.EncodeToString(pubKey),
 		KeystoreUUID: keystoreID,
 		KeystorePath: keystorePath,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -306,6 +348,12 @@ func hmacEqual(a, b []byte) bool {
 	}
 
 	return result == 0
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // generateRandomPassword creates a cryptographically random password using

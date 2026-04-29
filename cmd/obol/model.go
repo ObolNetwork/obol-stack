@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -148,7 +148,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 		if len(ollamaModels) == 0 {
 			u.Warn("No models pulled in Ollama")
 			u.Print("")
-			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:4b")
+			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:9b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
 			u.Print("  Hint: Or run: obol model pull")
 
 			return errors.New("ollama is running but has no models")
@@ -174,7 +174,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 
 	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncOpenClawModels(cfg, u)
+	return syncAgentModels(cfg, u)
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
@@ -213,32 +213,24 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncOpenClawModels(cfg, u)
+	return syncAgentModels(cfg, u)
 }
 
-// syncOpenClawModels reads the full LiteLLM model list and updates all
-// deployed OpenClaw instances so their "openai" provider (LiteLLM gateway)
-// model list stays in sync. This prevents OpenClaw from trying to use
-// native provider routing for models it discovers but doesn't recognise.
-func syncOpenClawModels(cfg *config.Config, u *ui.UI) error {
-	allModels, err := model.GetConfiguredModels(cfg)
-	if err != nil {
-		u.Warnf("Could not read LiteLLM model list: %v", err)
-		return nil // non-fatal
-	}
-
-	return openclaw.SyncOverlayModels(cfg, allModels, u)
+// syncAgentModels re-renders the stack-managed Hermes default agent from the
+// current LiteLLM model inventory.
+func syncAgentModels(cfg *config.Config, u *ui.UI) error {
+	return hermes.SyncDefaultModels(cfg, u)
 }
 
 func modelSyncCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "sync",
-		Usage: "Sync LiteLLM model list to all OpenClaw instances",
+		Usage: "Sync LiteLLM model list to the stack-managed Hermes agent",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			u.Info("Reading model list from LiteLLM...")
 
-			return syncOpenClawModels(cfg, u)
+			return syncAgentModels(cfg, u)
 		},
 	}
 }
@@ -248,10 +240,11 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Name:  "custom",
 		Usage: "Add a custom OpenAI-compatible endpoint (validates before adding)",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Usage: "Short name for the endpoint (e.g. my-vllm)", Required: true},
+			&cli.StringFlag{Name: "name", Usage: "Short label for the endpoint (informational only — LiteLLM keys the route by --model, not --name)", Required: true},
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
-			&cli.StringFlag{Name: "model", Usage: "Model name at the endpoint", Required: true},
+			&cli.StringFlag{Name: "model", Usage: "Model identifier at the endpoint — this is also the LiteLLM model_name the agent will call", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -264,7 +257,10 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			return syncOpenClawModels(cfg, u)
+			if cmd.Bool("no-sync") {
+				return nil
+			}
+			return syncAgentModels(cfg, u)
 		},
 	}
 }
@@ -502,6 +498,9 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 		Name:      "remove",
 		Usage:     "Remove a model from the LiteLLM gateway",
 		ArgsUsage: "<model-name>",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
@@ -514,7 +513,10 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			return syncOpenClawModels(cfg, u)
+			if cmd.Bool("no-sync") {
+				return nil
+			}
+			return syncAgentModels(cfg, u)
 		},
 	}
 }
@@ -573,15 +575,19 @@ func promptModelPull(u *ui.UI) (string, error) {
 	}
 
 	suggestions := []string{
-		"qwen3.5:4b      (2.7 GB) — Fast general-purpose (recommended)",
-		"qwen2.5-coder:7b (4.7 GB) — Code generation",
-		"deepseek-r1:8b   (4.9 GB) — Reasoning",
-		"gemma3:4b        (3.3 GB) — Lightweight, multilingual",
+		"qwen3.6:27b              (17 GB) — High-quality general-purpose (recommended, needs ≥32GB RAM)",
+		"qwen3.6:27b-coding-mxfp8 (31 GB) — Code generation (Qwen3.6, MXFP8 quant)",
+		"qwen3.5:9b               (6.6 GB) — Validated baseline; fits on most laptops",
+		"qwen3.5:4b               (3.4 GB) — Smallest current Qwen, low-RAM laptops",
+		"deepseek-r1:8b           (4.9 GB) — Reasoning",
+		"gemma3:4b                (3.3 GB) — Lightweight, multilingual",
 		"Other (enter name)",
 	}
 	modelNames := []string{
+		"qwen3.6:27b",
+		"qwen3.6:27b-coding-mxfp8",
+		"qwen3.5:9b",
 		"qwen3.5:4b",
-		"qwen2.5-coder:7b",
 		"deepseek-r1:8b",
 		"gemma3:4b",
 	}

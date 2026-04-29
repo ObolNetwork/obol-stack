@@ -1,2 +1,11 @@
-.workspace/
+.workspace*
+.build/
+.tmp/
+.git/
+.gitignore
 .worktrees/
+node_modules/
+coverage/
+*.log
+*.out
+*.tmp

@@ -9,9 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -120,16 +122,17 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// InjectBaseURL sets AGENT_BASE_URL on the default OpenClaw deployment so that
+// InjectBaseURL sets AGENT_BASE_URL on the default Hermes deployment so that
 // monetize.py uses the tunnel URL in registration JSON.
 func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	desc := agentruntime.Describe(agentruntime.Hermes)
 
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
-		"set", "env", "deployment/openclaw",
-		"-n", "openclaw-obol-agent",
+		"set", "env", "deployment/"+desc.ServiceName,
+		"-n", agentruntime.Namespace(agentruntime.Hermes, agentruntime.DefaultInstanceID),
 		"AGENT_BASE_URL="+strings.TrimRight(tunnelURL, "/"),
 	)
 
@@ -166,10 +169,39 @@ func GetTunnelURL(cfg *config.Config) (string, error) {
 	return "", errors.New("tunnel URL not found in logs")
 }
 
-// EnsureRunning scales the cloudflared deployment to 1 replica if it's at 0,
-// waits for the pod to be ready, and returns the tunnel URL once available.
-// If the tunnel is already running, it returns the current URL immediately.
-func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
+// defaultWaitReadyTimeout is the upper-bound budget for both the cloudflared
+// rollout and the trycloudflare URL appearing in pod logs. Override with
+// FLOW_TUNNEL_TIMEOUT (a duration like "90s" or a positive integer of seconds).
+const defaultWaitReadyTimeout = 5 * time.Minute
+
+// waitReadyTimeout returns the configured WaitReady budget, honouring the
+// FLOW_TUNNEL_TIMEOUT environment variable. Falls back to defaultWaitReadyTimeout
+// when unset or unparseable.
+func waitReadyTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("FLOW_TUNNEL_TIMEOUT"))
+	if raw == "" {
+		return defaultWaitReadyTimeout
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return defaultWaitReadyTimeout
+}
+
+// WaitReady scales the cloudflared deployment up if needed, then polls until
+// BOTH the deployment rollout is complete AND a public *.trycloudflare.com URL
+// has been captured from the pod logs. The budget is bounded by
+// waitReadyTimeout (defaultWaitReadyTimeout / FLOW_TUNNEL_TIMEOUT). On timeout
+// it returns an error that names both subjects (deployment + URL) so callers
+// can distinguish a half-baked tunnel from a missing one.
+//
+// Side effects on success: injects AGENT_BASE_URL into the agent deployment and
+// writes the tunnel URL to the obol-frontend ConfigMap consumed by the
+// serviceoffer-controller for ERC-8004 registration metadata.
+func WaitReady(cfg *config.Config, u *ui.UI) (string, error) {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -177,14 +209,14 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 		return "", errors.New("stack not running")
 	}
 
-	// Check if already running.
+	// Fast path: tunnel pod is already running and exposing a URL.
 	if podStatus, err := getPodStatus(kubectlPath, kubeconfigPath); err == nil && podStatus == "running" {
 		if url, err := GetTunnelURL(cfg); err == nil {
 			return url, nil
 		}
 	}
 
-	// Scale to 1 replica.
+	// Scale to 1 replica (idempotent).
 	scaleCmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"scale", "deployment/cloudflared",
@@ -195,46 +227,61 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 		return "", fmt.Errorf("failed to scale cloudflared: %w", err)
 	}
 
-	// Wait for rollout.
+	totalBudget := waitReadyTimeout()
+	deadline := time.Now().Add(totalBudget)
+
+	// Stage 1: wait for the deployment rollout.
+	rolloutTimeout := totalBudget
+	if rolloutTimeout > 5*time.Minute {
+		rolloutTimeout = 5 * time.Minute
+	}
 	waitCmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"rollout", "status", "deployment/cloudflared",
 		"-n", tunnelNamespace,
-		"--timeout=30s",
+		fmt.Sprintf("--timeout=%ds", int(rolloutTimeout.Seconds())),
 	)
-	if err := u.Exec(ui.ExecConfig{
-		Name: "Starting Cloudflare tunnel",
+	rolloutErr := u.Exec(ui.ExecConfig{
+		Name: "Waiting for cloudflared rollout",
 		Cmd:  waitCmd,
-	}); err != nil {
-		return "", fmt.Errorf("cloudflared rollout failed: %w", err)
-	}
+	})
 
-	// Poll for tunnel URL (quick tunnels take a few seconds to register).
+	// Stage 2: poll the tunnel pod logs for the trycloudflare URL until the
+	// remaining budget runs out. Even when the rollout above failed, we still
+	// give the URL probe a brief grace window in case the pod is up but the
+	// rollout watcher returned spuriously.
 	var tunnelURL string
-
-	for range 20 {
-		time.Sleep(time.Second)
-
-		if url, err := GetTunnelURL(cfg); err == nil {
+	for time.Now().Before(deadline) {
+		if url, err := GetTunnelURL(cfg); err == nil && strings.HasPrefix(url, "https://") {
 			tunnelURL = url
 			break
 		}
+		time.Sleep(5 * time.Second)
 	}
 
 	if tunnelURL == "" {
-		return "", errors.New("tunnel started but URL not available yet — run 'obol tunnel status' in a few seconds")
+		if rolloutErr != nil {
+			return "", fmt.Errorf("cloudflared not ready within %s: deployment rollout failed (%w) and no public *.trycloudflare.com URL captured", totalBudget, rolloutErr)
+		}
+		return "", fmt.Errorf("cloudflared not ready within %s: deployment is rolled out but no public *.trycloudflare.com URL captured from pod logs", totalBudget)
 	}
 
-	// Inject into obol-agent.
+	// URL captured: propagate to agent + frontend ConfigMap. Best-effort.
 	if err := InjectBaseURL(cfg, tunnelURL); err == nil {
 		u.Dim("Agent base URL updated to " + tunnelURL)
 	}
-
 	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
 		u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
 	}
 
 	return tunnelURL, nil
+}
+
+// EnsureRunning is the historical alias for WaitReady. New callers should
+// prefer WaitReady directly; this is kept so existing call sites compile
+// unchanged.
+func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
+	return WaitReady(cfg, u)
 }
 
 // Restart restarts the cloudflared deployment.
@@ -611,8 +658,9 @@ func DeleteStorefront(cfg *config.Config) error {
 func parseQuickTunnelURL(logs string) (string, bool) {
 	// Quick tunnel logs print a random *.trycloudflare.com URL.
 	re := regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
-	if url := re.FindString(logs); url != "" {
-		return url, true
+	matches := re.FindAllString(logs, -1)
+	if len(matches) > 0 {
+		return matches[len(matches)-1], true
 	}
 
 	return "", false

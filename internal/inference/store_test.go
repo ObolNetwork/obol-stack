@@ -71,6 +71,12 @@ func TestStoreCreateAndGet(t *testing.T) {
 	if got.Chain != "base" {
 		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")
 	}
+	if got.Chain != "base" {
+		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")
+	}
+	if got.Chain != "base" {
+		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")
+	}
 }
 
 func TestStoreCreate_PersistsPerMTokMetadata(t *testing.T) {

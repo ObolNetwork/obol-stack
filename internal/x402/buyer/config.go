@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	x402types "github.com/coinbase/x402/go/types"
 )
 
 // Config is the top-level sidecar configuration, loaded from a JSON file
@@ -41,26 +43,82 @@ type UpstreamConfig struct {
 	// Asset is the token contract address (e.g. USDC on Base Sepolia).
 	Asset string `json:"asset"`
 
+	// AssetSymbol is the human-friendly token symbol (e.g. USDC, OBOL).
+	AssetSymbol string `json:"assetSymbol,omitempty"`
+
+	// AssetDecimals is the token precision in atomic units.
+	AssetDecimals int `json:"assetDecimals,omitempty"`
+
+	// AssetTransferMethod is the x402 transfer method (eip3009 or permit2).
+	AssetTransferMethod string `json:"assetTransferMethod,omitempty"`
+
+	// EIP712Name is the EIP-712 domain name for the token or permit flow.
+	EIP712Name string `json:"eip712Name,omitempty"`
+
+	// EIP712Version is the EIP-712 domain version for the token or permit flow.
+	EIP712Version string `json:"eip712Version,omitempty"`
+
 	// Price is the amount in atomic units per request (e.g. "1000" for 0.001 USDC).
 	Price string `json:"price"`
 }
 
-// PreSignedAuth is a single pre-signed ERC-3009 TransferWithAuthorization voucher.
-// Each voucher is single-use — consumed when the facilitator calls settle() on-chain.
+// PreSignedAuth is a queued signed x402 payment. Legacy ERC-3009 auth fields are
+// still supported for backward compatibility, but new entries should prefer the
+// fully formed Payment payload.
 type PreSignedAuth struct {
-	Signature   string `json:"signature"`
-	From        string `json:"from"`
-	To          string `json:"to"`
-	Value       string `json:"value"`
-	ValidAfter  string `json:"validAfter"`
-	ValidBefore string `json:"validBefore"`
-	Nonce       string `json:"nonce"`
+	ID          string                    `json:"id,omitempty"`
+	Payment     *x402types.PaymentPayload `json:"payment,omitempty"`
+	Signature   string                    `json:"signature"`
+	From        string                    `json:"from"`
+	To          string                    `json:"to"`
+	Value       string                    `json:"value"`
+	ValidAfter  string                    `json:"validAfter"`
+	ValidBefore string                    `json:"validBefore"`
+	Nonce       string                    `json:"nonce"`
 }
 
 // AuthsFile is the top-level structure for the pre-signed authorizations file,
 // loaded from the x402-buyer-auths ConfigMap.
 // Keys are upstream names matching Config.Upstreams.
 type AuthsFile map[string][]*PreSignedAuth
+
+func (a *PreSignedAuth) ConsumeKey() string {
+	if a == nil {
+		return ""
+	}
+	if a.ID != "" {
+		return a.ID
+	}
+	if a.Nonce != "" {
+		return a.Nonce
+	}
+	if a.Payment != nil {
+		if nonce := paymentNonce(a.Payment); nonce != "" {
+			return nonce
+		}
+	}
+	if a.Signature != "" {
+		return a.Signature
+	}
+	return ""
+}
+
+func paymentNonce(payment *x402types.PaymentPayload) string {
+	if payment == nil {
+		return ""
+	}
+	if authz, ok := payment.Payload["authorization"].(map[string]interface{}); ok {
+		if nonce, ok := authz["nonce"].(string); ok {
+			return nonce
+		}
+	}
+	if authz, ok := payment.Payload["permit2Authorization"].(map[string]interface{}); ok {
+		if nonce, ok := authz["nonce"].(string); ok {
+			return nonce
+		}
+	}
+	return ""
+}
 
 // LoadConfig reads and parses the sidecar config from a JSON file.
 func LoadConfig(path string) (*Config, error) {

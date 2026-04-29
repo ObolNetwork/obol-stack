@@ -4,10 +4,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,8 +69,8 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
 
-	// Strip port mappings for occupied host ports so k3d cluster create won't
-	// fail.  The fallback mappings (8080→80, 8443→443) are always preserved.
+	// Rewrite occupied host-port mappings so k3d cluster create won't fail
+	// when another local stack is already bound to the default ingress ports.
 	k3dConfig = stripConflictingPorts(k3dConfig, u)
 
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
@@ -260,35 +262,126 @@ func portBlock(host, container int) string {
 	return fmt.Sprintf("  - port: %d:%d\n    nodeFilters:\n      - loadbalancer\n", host, container)
 }
 
-// stripConflictingPorts removes the identity port mappings (80:80, 443:443)
-// from a k3d config string when those host ports are already in use. The
-// fallback mappings (8080→80, 8443→443) are always preserved so Traefik
-// remains reachable on an alternative port.
+// stripConflictingPorts removes occupied default k3d ingress mappings. If all
+// default host ports for a container port are occupied, it adds an ephemeral
+// host-port mapping so multiple dev stacks can coexist on the same machine.
 func stripConflictingPorts(k3dConfig string, u *ui.UI) string {
-	type mapping struct {
-		hostPort      int
-		containerPort int
-		fallbackPort  int
-	}
+	return rewriteConflictingPorts(k3dConfig, u, hostPortAvailable, pickAvailableHostPort)
+}
 
-	// Only strip the identity mappings; the high-port fallbacks are kept.
-	candidates := []mapping{
-		{80, 80, 8080},
-		{443, 443, 8443},
-	}
+func rewriteConflictingPorts(
+	k3dConfig string,
+	u *ui.UI,
+	available func(int) bool,
+	pickPort func() (int, error),
+) string {
+	hasMapping := map[int]bool{}
 
-	for _, c := range candidates {
-		if checkPortsAvailable([]int{c.hostPort}) != nil {
-			block := portBlock(c.hostPort, c.containerPort)
-			if strings.Contains(k3dConfig, block) {
-				k3dConfig = strings.Replace(k3dConfig, block, "", 1)
-				u.Warnf("Port %d is in use — removed %d:%d mapping (use port %d instead)",
-					c.hostPort, c.hostPort, c.containerPort, c.fallbackPort)
-			}
+	for _, c := range parseK3dPortMappings(k3dConfig) {
+		if c.containerPort != 80 && c.containerPort != 443 {
+			continue
+		}
+
+		block := portBlock(c.hostPort, c.containerPort)
+		if !strings.Contains(k3dConfig, block) {
+			continue
+		}
+		if available(c.hostPort) {
+			hasMapping[c.containerPort] = true
+			continue
+		}
+
+		k3dConfig = strings.Replace(k3dConfig, block, "", 1)
+		if fallbackPort := fallbackForDefaultPort(c); fallbackPort > 0 {
+			u.Warnf("Port %d is in use — removed %d:%d mapping (use port %d instead if available)",
+				c.hostPort, c.hostPort, c.containerPort, fallbackPort)
+		} else {
+			u.Warnf("Port %d is in use — removed %d:%d mapping", c.hostPort, c.hostPort, c.containerPort)
 		}
 	}
 
+	for _, containerPort := range []int{80, 443} {
+		if hasMapping[containerPort] {
+			continue
+		}
+
+		hostPort, err := pickPort()
+		if err != nil {
+			u.Warnf("No default host port is available for container port %d and no ephemeral port could be selected: %v", containerPort, err)
+			continue
+		}
+		k3dConfig = insertK3dPortMapping(k3dConfig, portBlock(hostPort, containerPort))
+		u.Warnf("All default host ports for container port %d are in use — using %d:%d instead", containerPort, hostPort, containerPort)
+	}
+
 	return k3dConfig
+}
+
+type k3dPortMapping struct {
+	hostPort      int
+	containerPort int
+}
+
+func parseK3dPortMappings(k3dConfig string) []k3dPortMapping {
+	var mappings []k3dPortMapping
+	for _, line := range strings.Split(k3dConfig, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- port:") {
+			continue
+		}
+
+		portSpec := strings.TrimSpace(strings.TrimPrefix(line, "- port:"))
+		parts := strings.Split(portSpec, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		hostPort, hostErr := strconv.Atoi(parts[0])
+		containerPort, containerErr := strconv.Atoi(parts[1])
+		if hostErr != nil || containerErr != nil {
+			continue
+		}
+		mappings = append(mappings, k3dPortMapping{hostPort: hostPort, containerPort: containerPort})
+	}
+	return mappings
+}
+
+func fallbackForDefaultPort(mapping k3dPortMapping) int {
+	switch mapping {
+	case k3dPortMapping{hostPort: 80, containerPort: 80}:
+		return 8080
+	case k3dPortMapping{hostPort: 443, containerPort: 443}:
+		return 8443
+	default:
+		return 0
+	}
+}
+
+func hostPortAvailable(port int) bool {
+	return checkPortsAvailable([]int{port}) == nil
+}
+
+func pickAvailableHostPort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer ln.Close()
+
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok || addr.Port == 0 {
+		return 0, fmt.Errorf("unexpected listener address %q", ln.Addr().String())
+	}
+	return addr.Port, nil
+}
+
+func insertK3dPortMapping(k3dConfig, block string) string {
+	if strings.Contains(k3dConfig, "options:\n") {
+		return strings.Replace(k3dConfig, "options:\n", block+"options:\n", 1)
+	}
+	if strings.Contains(k3dConfig, "ports:\n") {
+		return k3dConfig + block
+	}
+	return k3dConfig + "\nports:\n" + block
 }
 
 // ensureK3dPortsAvailable re-reads the k3d config file, strips any port

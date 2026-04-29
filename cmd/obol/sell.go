@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -24,10 +25,10 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
@@ -35,7 +36,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v3"
 )
 
@@ -102,6 +103,11 @@ Examples:
 				Name:  "chain",
 				Usage: "Payment chain (base, base-sepolia, ethereum)",
 				Value: "base",
+			},
+			&cli.StringFlag{
+				Name:  "token",
+				Usage: "Payment token (USDC, OBOL)",
+				Value: "USDC",
 			},
 			&cli.StringFlag{
 				Name:  "facilitator",
@@ -185,7 +191,7 @@ Examples:
 
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
@@ -260,7 +266,13 @@ Examples:
 				}
 			}
 
-			chain, err := x402verifier.ResolveChainInfo(cmd.String("chain"))
+			chainName := cmd.String("chain")
+			assetTerms, err := resolveAssetTerms(cmd, &chainName)
+			if err != nil {
+				return err
+			}
+
+			chain, err := x402verifier.ResolveChainInfo(chainName)
 			if err != nil {
 				return err
 			}
@@ -283,7 +295,7 @@ Examples:
 				WalletAddress:   wallet,
 				PricePerRequest: perRequest,
 				PricePerMTok:    priceTable.PerMTok,
-				Chain:           cmd.String("chain"),
+				Chain:           chainName,
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
 				VMImage:         cmd.String("vm-image"),
@@ -349,7 +361,7 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port)
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms)
 					if err != nil {
 						return err
 					}
@@ -417,6 +429,11 @@ Examples:
 				Value: "base",
 			},
 			&cli.StringFlag{
+				Name:  "token",
+				Usage: "Payment token (USDC, OBOL)",
+				Value: "USDC",
+			},
+			&cli.StringFlag{
 				Name:  "price",
 				Usage: "Per-request price in USDC (e.g. 0.001)",
 			},
@@ -481,10 +498,6 @@ Examples:
 			&cli.StringFlag{
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
-			},
-			&cli.StringFlag{
-				Name:  "private-key-file",
-				Usage: "Path to the ERC-8004 signing key file (defaults to the OpenClaw remote-signer wallet)",
 			},
 			&cli.StringSliceFlag{
 				Name:  "register-skills",
@@ -572,7 +585,7 @@ Examples:
 			// Auto-discover wallet from remote-signer if not set.
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
@@ -596,10 +609,10 @@ Examples:
 			ns := cmd.String("namespace")
 
 			if cmd.String("upstream") == "" {
-				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base --price 0.001", name)
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
 			}
 			if cmd.Int("port") == 0 {
-				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base --price 0.001", name)
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
 			}
 
 			priceTable, err := resolvePriceTable(cmd, true)
@@ -618,6 +631,12 @@ Examples:
 				price["perHour"] = priceTable.PerHour
 			}
 
+			chainName := cmd.String("chain")
+			assetTerms, err := resolveAssetTerms(cmd, &chainName)
+			if err != nil {
+				return err
+			}
+
 			spec := map[string]any{
 				"type": "http",
 				"upstream": map[string]any{
@@ -628,11 +647,14 @@ Examples:
 				},
 				"payment": map[string]any{
 					"scheme":            "exact",
-					"network":           cmd.String("chain"),
+					"network":           chainName,
 					"payTo":             wallet,
 					"maxTimeoutSeconds": cmd.Int("max-timeout"),
 					"price":             price,
 				},
+			}
+			if !assetTerms.IsZero() {
+				spec["payment"].(map[string]any)["asset"] = assetTerms
 			}
 
 			if path := cmd.String("path"); path != "" {
@@ -662,21 +684,41 @@ Examples:
 			}
 
 			reg, registerEnabled, err := buildSellHTTPRegistrationConfig(name, sellHTTPRegistrationInput{
-				NoRegister:     cmd.Bool("no-register"),
-				Register:       cmd.Bool("register"),
-				Name:           cmd.String("register-name"),
-				Description:    cmd.String("register-description"),
-				Image:          cmd.String("register-image"),
-				PrivateKeyFile: cmd.String("private-key-file"),
-				Skills:         cmd.StringSlice("register-skills"),
-				Domains:        cmd.StringSlice("register-domains"),
-				MetadataPairs:  cmd.StringSlice("register-metadata"),
+				NoRegister:    cmd.Bool("no-register"),
+				Register:      cmd.Bool("register"),
+				Name:          cmd.String("register-name"),
+				Description:   cmd.String("register-description"),
+				Image:         cmd.String("register-image"),
+				Skills:        cmd.StringSlice("register-skills"),
+				Domains:       cmd.StringSlice("register-domains"),
+				MetadataPairs: cmd.StringSlice("register-metadata"),
 			})
 			if err != nil {
 				return err
 			}
 			if registerEnabled {
 				spec["registration"] = reg
+			}
+
+			// When registration is enabled, the serviceoffer-controller reads the
+			// public tunnel URL from the obol-frontend ConfigMap to populate
+			// .well-known/agent-registration.json. If the tunnel isn't fully ready
+			// (deployment rolled out AND a *.trycloudflare.com URL captured) by the
+			// time we create the ServiceOffer, the registration reconcile parks in
+			// AwaitingExternalRegistration. Block here so that, on success, the
+			// controller's first reconcile already has a usable base URL.
+			//
+			// For --no-register flows the tunnel is best-effort: we still try to
+			// bring it up afterwards, but a tunnel failure must not fail the sell.
+			var tunnelURL string
+			if registerEnabled {
+				u.Info("Waiting for Cloudflare tunnel before creating ServiceOffer...")
+				url, terr := tunnel.EnsureTunnelForSell(cfg, u)
+				if terr != nil {
+					return fmt.Errorf("tunnel not ready for registered sell: %w\n\n  Tip: run with --no-register to publish without on-chain registration, or restart the tunnel with 'obol tunnel restart'", terr)
+				}
+				tunnelURL = url
+				u.Successf("Tunnel active: %s", tunnelURL)
 			}
 
 			manifest := map[string]any{
@@ -699,35 +741,37 @@ Examples:
 			}
 			u.Successf("ServiceOffer %s/%s %s (type: http)", ns, name, action)
 			if priceTable.PerMTok != "" {
-				u.Infof("Requests will be charged at %s", formatPriceTableSummary(priceTable))
+				u.Infof("Requests will be charged at %s", formatPriceTableSummary(priceTable, assetTerms.Symbol))
 			}
 			u.Infof("The agent will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
 
-			// Ensure tunnel is active for public access.
-			u.Blank()
-			u.Info("Ensuring tunnel is active for public access...")
+			if !registerEnabled {
+				// Best-effort tunnel for --no-register: not fatal if it doesn't come up.
+				u.Blank()
+				u.Info("Ensuring tunnel is active for public access...")
+				if url, terr := tunnel.EnsureTunnelForSell(cfg, u); terr != nil {
+					u.Warnf("Tunnel not started: %v", terr)
+					u.Dim("  Start manually with: obol tunnel restart")
+				} else {
+					u.Successf("Tunnel active: %s", url)
+				}
+				return nil
+			}
 
-			if tunnelURL, err := tunnel.EnsureTunnelForSell(cfg, u); err != nil {
-				u.Warnf("Tunnel not started: %v", err)
-				u.Dim("  Start manually with: obol tunnel restart")
-			} else {
-				u.Successf("Tunnel active: %s", tunnelURL)
-
-				if reg, ok := spec["registration"].(map[string]any); ok {
-					if enabled, _ := reg["enabled"].(bool); enabled {
-						u.Blank()
-						u.Info("Registering seller agent on ERC-8004...")
-						if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
-							ChainCSV:        cmd.String("chain"),
-							Endpoint:        tunnelURL,
-							AgentName:       registrationNameForPrompt(name, reg),
-							AgentDesc:       registrationDescriptionForPrompt(name, reg),
-							PrivateKeyInput: cmd.String("private-key-file"),
-							ExpectedOwner:   wallet,
-						}); err != nil {
-							return fmt.Errorf("automatic sell registration failed: %w", err)
-						}
+			// Registration path: tunnelURL has already been awaited above.
+			if reg, ok := spec["registration"].(map[string]any); ok {
+				if enabled, _ := reg["enabled"].(bool); enabled {
+					u.Blank()
+					u.Info("Registering seller agent on ERC-8004...")
+					if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
+						ChainCSV:      cmd.String("chain"),
+						Endpoint:      tunnelURL,
+						AgentName:     registrationNameForPrompt(name, reg),
+						AgentDesc:     registrationDescriptionForPrompt(name, reg),
+						ExpectedOwner: wallet,
+					}); err != nil {
+						return fmt.Errorf("automatic sell registration failed: %w", err)
 					}
 				}
 			}
@@ -758,26 +802,29 @@ func registrationDescriptionForPrompt(fallback string, reg map[string]any) strin
 }
 
 type autoRegisterOptions struct {
-	ChainCSV        string
-	Endpoint        string
-	AgentName       string
-	AgentDesc       string
-	PrivateKeyInput string
-	ExpectedOwner   string
+	ChainCSV      string
+	Endpoint      string
+	AgentName     string
+	AgentDesc     string
+	ExpectedOwner string
 }
 
 type sellHTTPRegistrationInput struct {
-	NoRegister     bool
-	Register       bool
-	Name           string
-	Description    string
-	Image          string
-	PrivateKeyFile string
-	Skills         []string
-	Domains        []string
-	MetadataPairs  []string
+	NoRegister    bool
+	Register      bool
+	Name          string
+	Description   string
+	Image         string
+	Skills        []string
+	Domains       []string
+	MetadataPairs []string
 }
 
+// autoRegisterServiceOffer performs ERC-8004 registration via the agent's
+// remote-signer. The remote-signer holds the only copy of the agent's
+// signing key — the CLI never sees raw key material. If no remote-signer is
+// configured (no Hermes default agent), the operator must run
+// `obol agent init` first (or `obol wallet import` to seed a known key).
 func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI, opts autoRegisterOptions) error {
 	if opts.Endpoint == "" {
 		return errors.New("endpoint is required for automatic registration")
@@ -788,42 +835,26 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 		return err
 	}
 
-	useRemoteSigner := false
-	var (
-		signerNS    string
-		fallbackKey string
-		signerAddr  string
-	)
-
-	if strings.TrimSpace(opts.PrivateKeyInput) == "" {
-		if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-			ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
-			if nsErr == nil {
-				pf, pfErr := startSignerPortForward(cfg, ns)
-				if pfErr != nil {
-					return fmt.Errorf("port-forward to remote-signer: %w", pfErr)
-				}
-				defer pf.Stop()
-
-				signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
-				addr, addrErr := signer.GetAddress(ctx)
-				if addrErr != nil {
-					return addrErr
-				}
-
-				signerAddr = addr.Hex()
-				useRemoteSigner = true
-				signerNS = ns
-			}
-		}
+	if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
+		return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
+	}
+	signerNS, err := hermes.ResolveInstanceNamespace(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve Hermes instance namespace: %w", err)
 	}
 
-	if !useRemoteSigner {
-		fallbackKey, signerAddr, err = readPrivateKeyMaterial(opts.PrivateKeyInput)
-		if err != nil {
-			return err
-		}
+	pf, err := startSignerPortForward(cfg, signerNS)
+	if err != nil {
+		return fmt.Errorf("port-forward to remote-signer: %w", err)
 	}
+	defer pf.Stop()
+
+	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
+	addr, err := signer.GetAddress(ctx)
+	if err != nil {
+		return err
+	}
+	signerAddr := addr.Hex()
 
 	if opts.ExpectedOwner != "" && !strings.EqualFold(strings.TrimSpace(opts.ExpectedOwner), strings.TrimSpace(signerAddr)) {
 		return fmt.Errorf("registration signer %s does not match the payment wallet %s.\nUse a matching signer, omit --wallet so the remote-signer wallet is used, or pass --no-register", signerAddr, opts.ExpectedOwner)
@@ -838,16 +869,9 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
 		u.Printf("    Registry: %s", net.RegistryAddress)
 
-		if useRemoteSigner {
-			if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
-				u.Warnf("direct registration failed: %v", err)
-				continue
-			}
-		} else {
-			if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
-				u.Warnf("registration failed: %v", err)
-				continue
-			}
+		if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+			u.Warnf("direct registration failed: %v", err)
+			continue
 		}
 
 		u.Printf("    Name:     %s", opts.AgentName)
@@ -868,7 +892,7 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistrationInput) (map[string]any, bool, error) {
 	registerEnabled := !in.NoRegister
 	if !registerEnabled && (in.Register || in.Name != "" || in.Description != "" || in.Image != "" ||
-		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0 || in.PrivateKeyFile != "") {
+		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0) {
 		return nil, false, errors.New("--no-register cannot be combined with registration-specific flags")
 	}
 	if !registerEnabled {
@@ -903,32 +927,6 @@ func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistration
 		reg["metadata"] = meta
 	}
 	return reg, true, nil
-}
-
-func readPrivateKeyMaterial(input string) (keyHex string, address string, err error) {
-	raw := strings.TrimSpace(input)
-	if raw == "" {
-		return "", "", nil
-	}
-
-	if strings.HasPrefix(raw, "0x") && len(raw) >= 64 {
-		keyHex = raw
-	} else {
-		data, readErr := os.ReadFile(raw)
-		if readErr != nil {
-			return "", "", fmt.Errorf("read private key file: %w", readErr)
-		}
-		keyHex = strings.TrimSpace(string(data))
-	}
-
-	keyHex = strings.TrimPrefix(keyHex, "0x")
-	key, parseErr := crypto.HexToECDSA(keyHex)
-	if parseErr != nil {
-		return "", "", fmt.Errorf("invalid private key: %w", parseErr)
-	}
-
-	addr := crypto.PubkeyToAddress(key.PublicKey)
-	return "0x" + keyHex, addr.Hex(), nil
 }
 
 func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOffer) []string {
@@ -1087,7 +1085,7 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				u.Printf("Local Inference Gateways:")
 				for _, d := range deployments {
 					u.Printf("  %-20s %s → %s  %s  chain=%s",
-						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d), d.Chain)
+						d.Name, d.ListenAddr, d.UpstreamURL, formatInferencePriceSummary(d, ""), d.Chain)
 				}
 			}
 
@@ -1173,7 +1171,7 @@ func sellStatusGlobalJSON(cfg *config.Config, u *ui.UI) error {
 			Name:        d.Name,
 			ListenAddr:  d.ListenAddr,
 			UpstreamURL: d.UpstreamURL,
-			Price:       formatInferencePriceSummary(d),
+			Price:       formatInferencePriceSummary(d, ""),
 			Chain:       d.Chain,
 		})
 	}
@@ -1624,7 +1622,7 @@ Reloads the payment verifier when configuration is changed.`,
 
 			wallet := cmd.String("wallet")
 			if wallet == "" {
-				if resolved, err := openclaw.ResolveWalletAddress(cfg); err == nil {
+				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else {
@@ -1654,7 +1652,7 @@ registration on networks that offer it (e.g. ethereum mainnet).
 
 Examples:
   obol sell register                                    # interactive, defaults to base
-  obol sell register --chain base-sepolia               # register on base-sepolia
+  obol sell register --chain base                       # register on base
   obol sell register --chain mainnet,base               # register on multiple chains
   obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
 		Flags: []cli.Flag{
@@ -1684,11 +1682,6 @@ Examples:
 			&cli.StringFlag{
 				Name:  "image",
 				Usage: "Agent image URL for registration",
-			},
-			&cli.StringFlag{
-				Name:    "private-key-file",
-				Usage:   "Path to private key file (fallback if no remote-signer available)",
-				Sources: cli.EnvVars("ERC8004_PRIVATE_KEY"),
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -1752,31 +1745,16 @@ Examples:
 			}
 			agentURI := endpoint + "/.well-known/agent-registration.json"
 
-			// Determine signing method: private key file (if explicitly provided)
-			// or remote-signer (default when OpenClaw agent is deployed).
-			useRemoteSigner := false
-			var signerNS string
-
-			// If --private-key-file is explicitly provided, honour user intent.
-			if !cmd.IsSet("private-key-file") {
-				if _, err := openclaw.ResolveWalletAddress(cfg); err == nil {
-					ns, nsErr := openclaw.ResolveInstanceNamespace(cfg)
-					if nsErr == nil {
-						useRemoteSigner = true
-						signerNS = ns
-					}
-				}
+			// All signing happens via the agent's remote-signer; the CLI never
+			// sees raw key material. If no Hermes default agent is configured,
+			// the operator must run `obol agent init` (or `obol wallet import`
+			// to seed a known key) first.
+			if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
+				return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
 			}
-
-			// Fallback to private key file if no remote-signer.
-			var fallbackKey string
-			if !useRemoteSigner {
-				var signerAddr string
-				fallbackKey, signerAddr, err = readPrivateKeyMaterial(cmd.String("private-key-file"))
-				if fallbackKey == "" {
-					return fmt.Errorf("no remote-signer wallet found and no --private-key-file provided.\nRun 'obol agent init' first, or use --private-key-file")
-				}
-				u.Printf("  Wallet:    %s", signerAddr)
+			signerNS, err := hermes.ResolveInstanceNamespace(cfg)
+			if err != nil {
+				return fmt.Errorf("resolve Hermes instance namespace: %w", err)
 			}
 
 			// Register on each network (best-effort).
@@ -1792,22 +1770,14 @@ Examples:
 
 				sponsored := net.HasSponsor() && (cmd.Bool("sponsored") || !cmd.IsSet("sponsored"))
 
-				if sponsored && useRemoteSigner {
-					// Sponsored path via remote-signer.
+				if sponsored {
 					if err := registerSponsored(ctx, cfg, u, net, agentURI, signerNS); err != nil {
 						u.Warnf("sponsored registration failed: %v", err)
 						continue
 					}
-				} else if useRemoteSigner {
-					// Direct on-chain via remote-signer (needs funded wallet).
+				} else {
 					if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
 						u.Warnf("direct registration failed: %v", err)
-						continue
-					}
-				} else {
-					// Fallback: direct on-chain with private key file.
-					if err := registerDirectWithKey(ctx, cfg, u, net, agentURI, fallbackKey); err != nil {
-						u.Warnf("registration failed: %v", err)
 						continue
 					}
 				}
@@ -1880,13 +1850,27 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	// Create TransactOpts that delegates signing to the remote-signer.
 	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
 
-	agentID, err := client.RegisterWithOpts(ctx, opts, agentURI)
+	startBlock := registrationRecoveryStartBlock(ctx, client, u)
+	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, addr, startBlock, func() (*big.Int, string, error) {
+		return client.RegisterWithOptsDetailed(ctx, opts, agentURI)
+	})
 	if err != nil {
 		return err
 	}
 
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", addr.Hex())
+	if txHash != "" {
+		u.Printf("    Tx:       %s", txHash)
+	}
+
+	// The Register tx is mined on the WRITE upstream, but a follow-up
+	// setMetadata estimateGas goes through the READ upstream which can lag
+	// (we observed ERC721NonexistentToken reverts when a stale eRPC route was
+	// pinned to a parallel Anvil fork). Block until the reader sees the token.
+	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
+		u.Warnf("agent not visible to reader after register: %v", err)
+	}
 
 	// Set x402 metadata.
 	x402Meta := []byte(`{"x402":true}`)
@@ -1896,37 +1880,96 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	return nil
 }
 
-// registerDirectWithKey performs a direct on-chain registration using a raw private key.
-func registerDirectWithKey(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, keyHex string) error {
-	u.Printf("    Using direct on-chain registration with private key...")
-
-	keyHex = strings.TrimPrefix(keyHex, "0x")
-	key, err := crypto.HexToECDSA(keyHex)
+func registrationRecoveryStartBlock(ctx context.Context, client *erc8004.Client, u *ui.UI) uint64 {
+	startBlock, err := client.CurrentBlockNumber(ctx)
 	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+		u.Warnf("could not read registration recovery start block: %v", err)
+		return 0
 	}
+	return startBlock
+}
 
-	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
-	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
-	if err != nil {
-		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
+func registerWithRecovery(
+	ctx context.Context,
+	u *ui.UI,
+	client *erc8004.Client,
+	agentURI string,
+	owner common.Address,
+	startBlock uint64,
+	submit func() (*big.Int, string, error),
+) (*big.Int, string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		agentID, txHash, err := submit()
+		if err == nil {
+			return agentID, txHash, nil
+		}
+		lastErr = err
+
+		if agentID, txHash, ok := recoverRegistrationByOwnerAndURI(ctx, client, owner, agentURI, startBlock); ok {
+			u.Warnf("registration submit returned an error but the on-chain event was recovered: %v", err)
+			return agentID, txHash, nil
+		}
+
+		if attempt == 3 || !isTransientRegistrationError(err) {
+			return nil, "", err
+		}
+
+		u.Warnf("registration attempt %d/3 failed: %v; retrying", attempt, err)
+		if !sleepWithContext(ctx, time.Duration(attempt*4)*time.Second) {
+			return nil, "", ctx.Err()
+		}
 	}
-	defer client.Close()
+	return nil, "", lastErr
+}
 
-	agentID, err := client.Register(ctx, key, agentURI)
-	if err != nil {
-		return err
+func recoverRegistrationByOwnerAndURI(ctx context.Context, client *erc8004.Client, owner common.Address, agentURI string, startBlock uint64) (*big.Int, string, bool) {
+	for attempt := 1; attempt <= 4; attempt++ {
+		agentID, txHash, found, err := client.FindRegistrationByOwnerAndURI(ctx, owner, agentURI, startBlock)
+		if err == nil && found {
+			return agentID, txHash, true
+		}
+		if !sleepWithContext(ctx, 2*time.Second) {
+			return nil, "", false
+		}
 	}
+	return nil, "", false
+}
 
-	txAddr := crypto.PubkeyToAddress(key.PublicKey)
-	u.Printf("    Agent ID: %s", agentID.String())
-	u.Printf("    Owner:    %s", txAddr.Hex())
-
-	x402Meta := []byte(`{"x402":true}`)
-	if err := client.SetMetadata(ctx, key, agentID, "x402", x402Meta); err != nil {
-		u.Warnf("failed to set x402 metadata: %v", err)
+func isTransientRegistrationError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return nil
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"500 internal server error",
+		"502 bad gateway",
+		"503 service unavailable",
+		"504 gateway timeout",
+		"timeout",
+		"deadline exceeded",
+		"temporarily unavailable",
+		"connection reset",
+		"eof",
+		"too many requests",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2133,7 +2176,7 @@ func sellInfoCommand(cfg *config.Config) *cli.Command {
 			u.Printf("Listen:       %s", d.ListenAddr)
 			u.Printf("Upstream:     %s", d.UpstreamURL)
 			u.Printf("Wallet:       %s", d.WalletAddress)
-			u.Printf("Price:        %s", formatInferencePriceSummary(d))
+			u.Printf("Price:        %s", formatInferencePriceSummary(d, ""))
 			u.Printf("Chain:        %s", d.Chain)
 			u.Printf("Facilitator:  %s", d.FacilitatorURL)
 			u.Printf("Created:      %s", d.CreatedAt)
@@ -2247,52 +2290,122 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 		if allowPerHour {
 			return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, --per-mtok, or --per-hour")
 		}
-
 		return schemas.PriceTable{}, errors.New("price required: use --price, --per-request, or --per-mtok")
 	}
 }
 
-func formatPriceTableSummary(priceTable schemas.PriceTable) string {
+func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms, error) {
+	tokenName := strings.ToUpper(strings.TrimSpace(cmd.String("token")))
+
+	// USDC = chain default — no asset override needed.
+	if tokenName == "USDC" {
+		return schemas.AssetTerms{}, nil
+	}
+
+	if chainName == nil {
+		return schemas.AssetTerms{}, fmt.Errorf("internal error: chain name pointer is nil")
+	}
+
+	// For non-default tokens, default to ethereum when --chain is not explicit.
+	if !cmd.IsSet("chain") {
+		if envChain := strings.TrimSpace(os.Getenv("OBOL_TOKEN_CHAIN")); envChain != "" {
+			*chainName = envChain
+		} else {
+			*chainName = "ethereum"
+		}
+	}
+
+	// Env var overrides bypass the registry — used for test deployments on
+	// chains where the token isn't officially deployed (e.g., fork-local OBOL
+	// on Base Sepolia via OBOL_TOKEN_ADDRESS).
+	if addr := strings.TrimSpace(os.Getenv("OBOL_TOKEN_ADDRESS")); addr != "" {
+		return schemas.AssetTerms{
+			Address:        addr,
+			Symbol:         envOrDefault("OBOL_TOKEN_SYMBOL", "OBOL"),
+			Decimals:       18,
+			TransferMethod: schemas.AssetTransferMethodPermit2,
+			EIP712Name:     envOrDefault("OBOL_TOKEN_NAME", "Obol Network"),
+			EIP712Version:  envOrDefault("OBOL_TOKEN_VERSION", "1"),
+		}, nil
+	}
+
+	// Registry lookup.
+	entry, ok := x402verifier.ResolveToken(tokenName, *chainName)
+	if !ok {
+		return schemas.AssetTerms{}, fmt.Errorf(
+			"--token %s is not available on chain %s (supported tokens: %s)",
+			tokenName, *chainName, strings.Join(x402verifier.SupportedTokens(), ", "),
+		)
+	}
+
+	return schemas.AssetTerms{
+		Address:        entry.Address,
+		Symbol:         entry.Symbol,
+		Decimals:       entry.Decimals,
+		TransferMethod: entry.TransferMethod,
+		EIP712Name:     entry.EIP712Name,
+		EIP712Version:  entry.EIP712Version,
+	}, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func formatPriceTableSummary(priceTable schemas.PriceTable, symbol string) string {
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	switch {
 	case priceTable.PerRequest != "":
-		return priceTable.PerRequest + " USDC/request"
+		return fmt.Sprintf("%s %s/request", priceTable.PerRequest, symbol)
 	case priceTable.PerMTok != "":
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			priceTable.EffectiveRequestPrice(),
-			priceTable.PerMTok,
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			priceTable.EffectiveRequestPrice(), symbol,
+			priceTable.PerMTok, symbol,
 			schemas.ApproxTokensPerRequest,
 		)
 	case priceTable.PerHour != "":
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/hour @ %d min/request)",
-			priceTable.EffectiveRequestPrice(),
-			priceTable.PerHour,
+		return fmt.Sprintf("%s %s/request (approx from %s %s/hour @ %d min/request)",
+			priceTable.EffectiveRequestPrice(), symbol,
+			priceTable.PerHour, symbol,
 			schemas.ApproxMinutesPerRequest,
 		)
 	default:
-		return "0 USDC/request"
+		return fmt.Sprintf("0 %s/request", symbol)
 	}
 }
 
 func formatRoutePriceSummary(route x402verifier.RouteRule) string {
+	symbol := route.AssetSymbol
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	if route.PriceModel == "perMTok" && route.PerMTok != "" && route.ApproxTokensPerRequest > 0 {
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			route.Price, route.PerMTok, route.ApproxTokensPerRequest)
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			route.Price, symbol, route.PerMTok, symbol, route.ApproxTokensPerRequest)
 	}
 
 	if route.Price != "" {
-		return route.Price + " USDC/request"
+		return fmt.Sprintf("%s %s/request", route.Price, symbol)
 	}
 
-	return "0 USDC/request"
+	return fmt.Sprintf("0 %s/request", symbol)
 }
 
-func formatInferencePriceSummary(d *inference.Deployment) string {
+func formatInferencePriceSummary(d *inference.Deployment, symbol string) string {
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	if d.PricePerMTok != "" && d.ApproxTokensPerRequest > 0 {
-		return fmt.Sprintf("%s USDC/request (approx from %s USDC/MTok @ %d tok/request)",
-			d.PricePerRequest, d.PricePerMTok, d.ApproxTokensPerRequest)
+		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
+			d.PricePerRequest, symbol, d.PricePerMTok, symbol, d.ApproxTokensPerRequest)
 	}
 
-	return d.PricePerRequest + " USDC/request"
+	return fmt.Sprintf("%s %s/request", d.PricePerRequest, symbol)
 }
 
 // loadProvenance reads a provenance JSON file and returns the parsed struct.
@@ -2409,7 +2522,7 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string) (map[string]any, error) {
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms) (map[string]any, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 1 || portNum > 65535 {
 		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
@@ -2429,6 +2542,9 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 			"price":   map[string]any{},
 		},
 		"path": "/services/" + d.Name,
+	}
+	if !asset.IsZero() {
+		spec["payment"].(map[string]any)["asset"] = asset
 	}
 
 	price := spec["payment"].(map[string]any)["price"].(map[string]any)

@@ -48,9 +48,9 @@ On first run, `stack up` will:
 1. Create the k3d cluster
 2. Deploy infrastructure (Traefik, monitoring, LLM gateway, etc.)
 3. Build and import the x402-verifier image (development mode only)
-4. Deploy a default OpenClaw agent instance with 23 skills
+4. Deploy a default Hermes agent instance with embedded Obol skills
 5. Generate an Ethereum signing wallet for the agent
-6. Import your local workspace (if `~/.openclaw/` exists)
+6. Import runtime state for the stack-managed agent
 
 ## Step 2 -- Verify the Cluster
 
@@ -70,8 +70,8 @@ All pods should show `Running` or `Completed` within ~2 minutes:
 | **Monitoring** | `monitoring` | Prometheus + kube-prometheus-stack |
 | **Reloader** | `reloader` | Auto-restarts workloads on config changes |
 | **x402 Gateway** | `x402` | Shared seller-owned payment gateway for priced HTTP routes |
-| **OpenClaw** | `openclaw-default` | AI agent with Ethereum wallet |
-| **Remote Signer** | `openclaw-default` | Ethereum transaction signing service |
+| **Hermes** | `hermes-obol-agent` | Default AI agent with Ethereum wallet |
+| **Remote Signer** | `hermes-obol-agent` | Ethereum transaction signing service |
 
 Open the frontend: http://obol.stack/
 
@@ -88,9 +88,9 @@ curl -s http://localhost:11434/api/tags | python3 -m json.tool
 If you don't have a model yet, pull one:
 
 ```bash
-ollama pull qwen3.5:35b   # Large model with tool-call support
+ollama pull qwen3.5:9b    # Validated baseline, ~6.6 GB
 # Or a smaller model for quick testing:
-ollama pull qwen3:0.6b
+ollama pull qwen3.5:4b    # ~3.4 GB
 ```
 
 ### 3b. Verify LiteLLM can reach Ollama
@@ -150,22 +150,21 @@ A successful response contains `tool_calls` with `get_weather` and `{"location":
 
 ## Step 4 -- Deploy the AI Agent
 
-The default OpenClaw instance was created during `stack up`. To deploy an additional agent:
+The default Hermes instance is created during `stack up`. Apply the agent-specific reconciliation capabilities with:
 
 ```bash
 obol agent init
 ```
 
-This creates an `obol-agent` instance with:
+The default `obol-agent` instance includes:
 - A unique Ethereum signing wallet
-- 23 embedded skills (Ethereum queries, monetization, cluster diagnostics, etc.)
 - RBAC permissions to manage ServiceOffers and Kubernetes resources
-- A heartbeat that runs the agent periodically
+- Hermes routed through LiteLLM for model access
 
 List all agent instances:
 
 ```bash
-obol openclaw list
+obol hermes list
 ```
 
 ## Step 5 -- Test Agent Inference
@@ -174,22 +173,22 @@ Get the gateway token for your agent instance:
 
 ```bash
 # For the default instance
-obol openclaw token default
+obol hermes token default
 
 # For obol-agent
-obol openclaw token obol-agent
+obol hermes token obol-agent
 ```
 
 Test inference through the agent gateway:
 
 ```bash
-TOKEN=$(obol openclaw token default)
+TOKEN=$(obol hermes token default)
 
-obol kubectl port-forward -n openclaw-default svc/openclaw 18789:18789 &
+obol kubectl port-forward -n hermes-obol-agent svc/hermes 8642:8642 &
 PF_PID=$!
 sleep 3
 
-curl -s --max-time 120 -X POST http://localhost:18789/v1/chat/completions \
+curl -s --max-time 120 -X POST http://localhost:8642/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"model":"qwen3.5:35b","messages":[{"role":"user","content":"What is 2+2?"}],"max_tokens":50,"stream":false}' \
@@ -198,7 +197,7 @@ curl -s --max-time 120 -X POST http://localhost:18789/v1/chat/completions \
 kill $PF_PID
 ```
 
-This confirms the full inference chain: **OpenClaw → LiteLLM → Ollama**.
+This confirms the full inference chain: **Hermes → LiteLLM → Ollama**.
 
 ## Step 6 -- Deploy a Blockchain Network
 

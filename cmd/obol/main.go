@@ -43,6 +43,7 @@ COMMANDS:
      stack purge     Delete stack config (use --force to also delete data)
    Obol Agent:
      agent init      Initialize the Obol Agent
+     wallet import   Import an existing wallet for the Obol Agent
    Network Management:
      network list    List all networks (local nodes + remote RPCs)
      network install Install and deploy a local blockchain node
@@ -51,7 +52,16 @@ COMMANDS:
      network status  Show eRPC gateway health and upstreams
      network delete  Remove network deployment
 
-   OpenClaw (AI Agent):
+   Hermes (Default Agent Runtime):
+     hermes onboard     Create and deploy a Hermes instance
+     hermes setup       Re-render Hermes config for a deployed instance
+     hermes sync        Deploy or update a Hermes instance
+     hermes token       Retrieve Hermes API server token
+     hermes list        List Hermes instances
+     hermes delete      Remove instance and cluster resources
+     hermes wallet      Inspect Hermes wallets
+
+   OpenClaw (Alternate Agent Runtime):
      openclaw onboard   Create and deploy an OpenClaw instance
      openclaw setup     Reconfigure model providers for a deployed instance
      openclaw dashboard Open the dashboard in a browser
@@ -223,6 +233,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					},
 				},
 			},
+			walletCommand(cfg),
 			// ============================================================
 			// Tunnel Management Commands
 			// ============================================================
@@ -365,6 +376,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			updateCommand(cfg),
 			upgradeCommand(cfg),
 			networkCommand(cfg),
+			hermesCommand(cfg),
 			openclawCommand(cfg),
 			sellCommand(cfg),
 			modelCommand(cfg),

@@ -59,17 +59,28 @@ append_report_footer() {
 - The runner uses the real \`obol\` CLI and the flow scripts as black-box release checks.
 - Any \`FAIL:\` line is release-gating, even when a child script exits zero.
 - \`flow-11-dual-stack.sh\` writes on-chain receipt artifacts under \`$ARTIFACT_DIR/flow-11-receipts\`.
+- Set \`RELEASE_SMOKE_INCLUDE_OBOL=true\` to run \`flow-12-obol-payment.sh\`, which requires a current x402-rs facilitator binary.
 EOF
 }
 
 prepare_workspace() {
     echo "==> Building obol"
-    (cd "$OBOL_ROOT" && go build -o "$OBOL" ./cmd/obol)
+    local tmp_obol="$OBOL.tmp"
+    rm -f "$tmp_obol"
+    (cd "$OBOL_ROOT" && go build -o "$tmp_obol" ./cmd/obol)
+    chmod +x "$tmp_obol"
+    mv "$tmp_obol" "$OBOL"
 
     local tool src
     for tool in kubectl helm helmfile k3d k9s openclaw; do
         src=$(command -v "$tool" 2>/dev/null || true)
         [ -n "$src" ] && ln -sf "$src" "$OBOL_BIN_DIR/$tool"
+    done
+    for tool in "$OBOL_BIN_DIR/kubectl" "$OBOL_BIN_DIR/helm" "$OBOL_BIN_DIR/helmfile" "$OBOL_BIN_DIR/k3d" "$OBOL_BIN_DIR/openclaw"; do
+        if [ ! -x "$tool" ]; then
+            echo "Missing required tool: $tool" >&2
+            return 1
+        fi
     done
 
     echo "==> Ensuring Python payment dependencies"
@@ -143,6 +154,12 @@ main() {
 
     if ! run_flow "$SCRIPT_DIR/flow-11-dual-stack.sh"; then
         failed=$((failed + 1))
+    fi
+
+    if [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]; then
+        if ! run_flow "$SCRIPT_DIR/flow-12-obol-payment.sh"; then
+            failed=$((failed + 1))
+        fi
     fi
 
     append_report_footer

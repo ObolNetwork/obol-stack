@@ -83,12 +83,16 @@ CAIP2_TO_CHAIN = {
 # EIP-712 domain for USDC TransferWithAuthorization
 USDC_DOMAIN_NAME = "USDC"
 USDC_DOMAIN_VERSION = "2"
+PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001"
 
 SEL_BALANCE_OF = "70a08231"
+SEL_NONCES = "7ecebe00"
 
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
 MAX_AUTH_COUNT = 1000         # Cap to prevent excessive signing time
+PERMIT2_SAFE_AUTH_COUNT = 500 # Current ConfigMap-backed exact path ceiling is ~537 auths
 DEFAULT_REFILL_THRESHOLD_DIVISOR = 5
 
 
@@ -122,6 +126,27 @@ def _normalize_signature_recovery(sig):
 def _normalize_chain_name(network):
     """Map facilitator/network identifiers to the local eRPC network name."""
     return CAIP2_TO_CHAIN.get(network, network)
+
+
+def _asset_display_meta(asset, extra=None):
+    """Best-effort display metadata for user-facing balance/price output."""
+    extra = extra or {}
+    asset_lower = (asset or "").lower()
+    if asset_lower in {addr.lower() for addr in USDC_CONTRACTS.values()}:
+        return ("USDC", 6, "micro-units")
+    if extra.get("name") == "Obol Network":
+        return ("OBOL", 18, "base-units")
+    return ("asset", None, "base-units")
+
+
+def _format_amount(amount, asset, extra=None):
+    """Render an integer token amount with best-effort symbol/decimals."""
+    symbol, decimals, units_label = _asset_display_meta(asset, extra)
+    raw = int(amount)
+    if decimals is None:
+        return f"{raw} {units_label}"
+    scaled = raw / (10 ** decimals)
+    return f"{raw} {units_label} ({scaled:.6f} {symbol})"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +220,7 @@ def _get_agent_namespace():
         with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
             return f.read().strip()
     except FileNotFoundError:
-        return os.environ.get("AGENT_NAMESPACE", "openclaw-obol-agent")
+        return os.environ.get("AGENT_NAMESPACE", "hermes-obol-agent")
 
 
 def _purchase_collection_path(ns=None):
@@ -331,8 +356,9 @@ def _purchase_has_pending_runtime_sync(pr):
     return False, ""
 
 
-def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None, existing_spec=None):
+def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None, payment_meta=None, existing_spec=None):
     existing_spec = existing_spec or {}
+    existing_payment = existing_spec.get("payment") or {}
     spec = {
         "endpoint": endpoint + "/v1/chat/completions",
         "model": model,
@@ -344,6 +370,11 @@ def _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, 
             "asset": asset,
         },
     }
+    for key in ("assetTransferMethod", "eip712Name", "eip712Version"):
+        if key in existing_payment:
+            spec["payment"][key] = existing_payment[key]
+    if payment_meta:
+        spec["payment"].update(payment_meta)
     if auths is not None:
         spec["preSignedAuths"] = auths
     elif existing_spec.get("preSignedAuths"):
@@ -376,7 +407,7 @@ def _build_active_auth_pool(existing_auths, live_status, new_auths):
     return _active_auth_pool(existing_auths, live_status) + list(new_auths or [])
 
 
-def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None):
+def _create_purchase_request(name, endpoint, model, count, network, pay_to, price, asset, auths=None, auto_refill=None, payment_meta=None):
     """Create or update a PurchaseRequest CR in the agent's namespace.
 
     When auths are provided, they are embedded in spec.preSignedAuths so the
@@ -389,7 +420,18 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
 
     path = _purchase_collection_path(ns)
     item_path = _purchase_item_path(name, ns)
-    spec = _build_purchase_spec(endpoint, model, count, network, pay_to, price, asset, auths=auths, auto_refill=auto_refill)
+    spec = _build_purchase_spec(
+        endpoint,
+        model,
+        count,
+        network,
+        pay_to,
+        price,
+        asset,
+        auths=auths,
+        auto_refill=auto_refill,
+        payment_meta=payment_meta,
+    )
 
     try:
         pr = {
@@ -415,6 +457,7 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
                 asset,
                 auths=auths,
                 auto_refill=auto_refill,
+                payment_meta=payment_meta,
                 existing_spec=existing.get("spec"),
             )
             result = _kube_json("PUT", item_path, token, ssl_ctx, existing)
@@ -503,73 +546,272 @@ def _get_usdc_balance(address, usdc_contract, chain=None):
     return str(int(result, 16))
 
 
+def _get_erc20_permit_nonce(address, token_contract, chain=None):
+    """Get ERC20Permit nonces(address) via eth_call."""
+    addr_hex = address.lower().replace("0x", "").zfill(64)
+    calldata = f"0x{SEL_NONCES}{addr_hex}"
+    result = _rpc_call(
+        "eth_call",
+        [{"to": token_contract, "data": calldata}, "latest"],
+        chain,
+    )
+    if not result or result == "0x":
+        return "0"
+    return str(int(result, 16))
+
+
+def _supports_erc20_permit(address, token_contract, chain=None):
+    """Best-effort detection for ERC20Permit support via nonces(address)."""
+    try:
+        _get_erc20_permit_nonce(address, token_contract, chain)
+        return True
+    except Exception:
+        return False
+
+
+def _validate_contract_exists(contract_address, chain=None):
+    """Verify that a contract exists at the given address via eth_getCode.
+
+    Prevents signing pre-authorized payments against non-existent or EOA
+    addresses, which would waste signing time and fail at settlement.
+    """
+    try:
+        result = _rpc_call("eth_getCode", [contract_address, "latest"], chain)
+        return result is not None and result != "0x" and len(result) > 2
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # EIP-712 pre-signing
 # ---------------------------------------------------------------------------
 
-def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count):
-    """Pre-sign N ERC-3009 TransferWithAuthorization vouchers."""
+def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
+    """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
     chain_id = CHAIN_IDS.get(chain, 84532)
     auths = []
+    payment = payment or {}
+    extensions = extensions or {}
+    extra = payment.get("extra", {}) or {}
+    transfer_method = extra.get("assetTransferMethod", "eip3009")
+    domain_name = extra.get("name", USDC_DOMAIN_NAME)
+    domain_version = extra.get("version", USDC_DOMAIN_VERSION)
+    eip2612_enabled = (
+        transfer_method == "permit2" and
+        ("eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain))
+    )
+    permit_nonce_base = int(_get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)) if eip2612_enabled else None
 
     print(f"Pre-signing {count} payment authorizations ...")
     for i in range(count):
-        nonce = "0x" + secrets.token_hex(32)
+        if transfer_method == "permit2":
+            valid_after = str(max(0, int(time.time()) - 600))
+            expiry_window = max(int(payment.get("maxTimeoutSeconds", 60)), 300)
+            deadline = str(int(time.time()) + expiry_window)
+            permit2_nonce = str(int.from_bytes(secrets.token_bytes(32), "big"))
+            typed_data = {
+                "types": {
+                    "EIP712Domain": [
+                        {"name": "name", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                        {"name": "verifyingContract", "type": "address"},
+                    ],
+                    "TokenPermissions": [
+                        {"name": "token", "type": "address"},
+                        {"name": "amount", "type": "uint256"},
+                    ],
+                    "Witness": [
+                        {"name": "to", "type": "address"},
+                        {"name": "validAfter", "type": "uint256"},
+                    ],
+                    "PermitWitnessTransferFrom": [
+                        {"name": "permitted", "type": "TokenPermissions"},
+                        {"name": "spender", "type": "address"},
+                        {"name": "nonce", "type": "uint256"},
+                        {"name": "deadline", "type": "uint256"},
+                        {"name": "witness", "type": "Witness"},
+                    ],
+                },
+                "primaryType": "PermitWitnessTransferFrom",
+                "domain": {
+                    "name": "Permit2",
+                    "chainId": chain_id,
+                    "verifyingContract": PERMIT2_ADDRESS,
+                },
+                "message": {
+                    "permitted": {"token": usdc_addr, "amount": str(price)},
+                    "spender": X402_EXACT_PERMIT2_PROXY,
+                    "nonce": permit2_nonce,
+                    "deadline": deadline,
+                    "witness": {"to": pay_to, "validAfter": valid_after},
+                },
+            }
+            result = _signer_post(f"/api/v1/sign/{signer_address}/typed-data", typed_data)
+            sig = result.get("signature", "")
+            if not sig:
+                print(f"Error: remote-signer returned no Permit2 signature for auth {i+1}", file=sys.stderr)
+                sys.exit(1)
+            payload = {
+                "x402Version": 2,
+                "accepted": {
+                    "scheme": payment.get("scheme", "exact"),
+                    "network": payment.get("network", f"eip155:{chain_id}"),
+                    "amount": str(payment.get("amount", price)),
+                    "asset": payment.get("asset", usdc_addr),
+                    "payTo": payment.get("payTo", pay_to),
+                    "maxTimeoutSeconds": int(payment.get("maxTimeoutSeconds", 60)),
+                    "extra": extra,
+                },
+                "payload": {
+                    "signature": sig,
+                    "permit2Authorization": {
+                        "permitted": {"token": payment.get("asset", usdc_addr), "amount": str(price)},
+                        "from": signer_address,
+                        "spender": X402_EXACT_PERMIT2_PROXY,
+                        "nonce": permit2_nonce,
+                        "deadline": deadline,
+                        "witness": {"to": pay_to, "validAfter": valid_after},
+                    },
+                },
+            }
+            if eip2612_enabled:
+                # The current exact Permit2 proxy requires the EIP-2612 permit
+                # value to match the per-request Permit2 amount, so we pre-sign
+                # one permit per auth and advance the token nonce locally.
+                permit_nonce = str(permit_nonce_base + i)
+                permit_typed_data = {
+                    "types": {
+                        "EIP712Domain": [
+                            {"name": "name", "type": "string"},
+                            {"name": "version", "type": "string"},
+                            {"name": "chainId", "type": "uint256"},
+                            {"name": "verifyingContract", "type": "address"},
+                        ],
+                        "Permit": [
+                            {"name": "owner", "type": "address"},
+                            {"name": "spender", "type": "address"},
+                            {"name": "value", "type": "uint256"},
+                            {"name": "nonce", "type": "uint256"},
+                            {"name": "deadline", "type": "uint256"},
+                        ],
+                    },
+                    "primaryType": "Permit",
+                    "domain": {
+                        "name": domain_name,
+                        "version": domain_version,
+                        "chainId": chain_id,
+                        "verifyingContract": payment.get("asset", usdc_addr),
+                    },
+                    "message": {
+                        "owner": signer_address,
+                        "spender": PERMIT2_ADDRESS,
+                        "value": str(price),
+                        "nonce": permit_nonce,
+                        "deadline": deadline,
+                    },
+                }
+                permit_result = _signer_post(f"/api/v1/sign/{signer_address}/typed-data", permit_typed_data)
+                permit_sig = permit_result.get("signature", "")
+                if not permit_sig:
+                    print(f"Error: remote-signer returned no EIP-2612 signature for auth {i+1}", file=sys.stderr)
+                    sys.exit(1)
+                payload["extensions"] = {
+                    "eip2612GasSponsoring": {
+                        "info": {
+                            "from": signer_address,
+                            "asset": payment.get("asset", usdc_addr),
+                            "spender": PERMIT2_ADDRESS,
+                            "amount": str(price),
+                            "nonce": permit_nonce,
+                            "deadline": deadline,
+                            "signature": permit_sig,
+                            "version": "1",
+                        }
+                    }
+                }
+            auths.append({
+                "id": permit2_nonce,
+                "payment": payload,
+            })
+        else:
+            # Keep the proven legacy USDC domain for ERC-3009/Base Sepolia.
+            # The current stack flow relies on this exact signing shape.
+            domain_name = USDC_DOMAIN_NAME
+            domain_version = USDC_DOMAIN_VERSION
+            nonce = "0x" + secrets.token_hex(32)
 
-        typed_data = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
-                ],
-                "TransferWithAuthorization": [
-                    {"name": "from", "type": "address"},
-                    {"name": "to", "type": "address"},
-                    {"name": "value", "type": "uint256"},
-                    {"name": "validAfter", "type": "uint256"},
-                    {"name": "validBefore", "type": "uint256"},
-                    {"name": "nonce", "type": "bytes32"},
-                ],
-            },
-            "primaryType": "TransferWithAuthorization",
-            "domain": {
-                "name": USDC_DOMAIN_NAME,
-                "version": USDC_DOMAIN_VERSION,
-                "chainId": chain_id,
-                "verifyingContract": usdc_addr,
-            },
-            "message": {
-                "from": signer_address,
-                "to": pay_to,
-                "value": str(price),
-                "validAfter": "0",
-                "validBefore": "4294967295",
-                "nonce": nonce,
-            },
-        }
+            typed_data = {
+                "types": {
+                    "EIP712Domain": [
+                        {"name": "name", "type": "string"},
+                        {"name": "version", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                        {"name": "verifyingContract", "type": "address"},
+                    ],
+                    "TransferWithAuthorization": [
+                        {"name": "from", "type": "address"},
+                        {"name": "to", "type": "address"},
+                        {"name": "value", "type": "uint256"},
+                        {"name": "validAfter", "type": "uint256"},
+                        {"name": "validBefore", "type": "uint256"},
+                        {"name": "nonce", "type": "bytes32"},
+                    ],
+                },
+                "primaryType": "TransferWithAuthorization",
+                "domain": {
+                    "name": domain_name,
+                    "version": domain_version,
+                    "chainId": chain_id,
+                    "verifyingContract": usdc_addr,
+                },
+                "message": {
+                    "from": signer_address,
+                    "to": pay_to,
+                    "value": str(price),
+                    "validAfter": "0",
+                    "validBefore": "4294967295",
+                    "nonce": nonce,
+                },
+            }
 
-        result = _signer_post(
-            f"/api/v1/sign/{signer_address}/typed-data",
-            typed_data,
-        )
-        sig = result.get("signature", "")
-        if not sig:
-            print(f"Error: remote-signer returned no signature for auth {i+1}",
-                  file=sys.stderr)
-            sys.exit(1)
-        sig = _normalize_signature_recovery(sig)
+            result = _signer_post(
+                f"/api/v1/sign/{signer_address}/typed-data",
+                typed_data,
+            )
+            sig = result.get("signature", "")
+            if not sig:
+                print(f"Error: remote-signer returned no signature for auth {i+1}",
+                      file=sys.stderr)
+                sys.exit(1)
+            sig = _normalize_signature_recovery(sig)
 
-        auths.append({
-            "signature": sig,
-            "from": signer_address,
-            "to": pay_to,
-            "value": str(price),
-            "validAfter": "0",
-            "validBefore": "4294967295",
-            "nonce": nonce,
-        })
+            payload = {
+                "x402Version": 2,
+                "accepted": {
+                    "scheme": payment.get("scheme", "exact"),
+                    "network": payment.get("network", f"eip155:{chain_id}"),
+                    "amount": str(payment.get("amount", price)),
+                    "asset": payment.get("asset", usdc_addr),
+                    "payTo": payment.get("payTo", pay_to),
+                    "maxTimeoutSeconds": int(payment.get("maxTimeoutSeconds", 60)),
+                    "extra": extra,
+                },
+                "payload": {
+                    "signature": sig,
+                    "authorization": {
+                        "from": signer_address,
+                        "to": pay_to,
+                        "value": str(price),
+                        "validAfter": "0",
+                        "validBefore": "4294967295",
+                        "nonce": nonce,
+                    },
+                },
+            }
+            auths.append({
+                "id": nonce,
+                "payment": payload,
+            })
 
         if (i + 1) % 50 == 0:
             print(f"  Signed {i + 1}/{count}")
@@ -665,7 +907,27 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
         return False
 
     print(f"{name}: {reason}; signing {refill_count} new authorizations")
-    new_auths = _presign_auths(signer_address, pay_to, price, chain, asset, refill_count)
+    payment_req = {
+        "scheme": "exact",
+        "network": payment.get("network", chain),
+        "amount": price,
+        "asset": asset,
+        "payTo": pay_to,
+        "extra": {
+            "assetTransferMethod": payment.get("assetTransferMethod", "eip3009"),
+            "name": payment.get("eip712Name", USDC_DOMAIN_NAME),
+            "version": payment.get("eip712Version", USDC_DOMAIN_VERSION),
+        },
+    }
+    new_auths = _presign_auths(
+        signer_address,
+        pay_to,
+        price,
+        chain,
+        asset,
+        refill_count,
+        payment=payment_req,
+    )
     try:
         updated_auths = _build_active_auth_pool(existing_auths, live_status, new_auths)
     except ValueError as e:
@@ -753,13 +1015,21 @@ def cmd_probe(endpoint_url, model_id=None):
     print()
     for i, acc in enumerate(pricing.get("accepts", [])):
         amount = acc.get("amount", acc.get("maxAmountRequired", "?"))
+        extra = acc.get("extra", {}) or {}
         print(f"  Payment option {i + 1}:")
         print(f"    payTo:   {acc.get('payTo', '?')}")
         print(f"    network: {acc.get('network', '?')}")
-        print(f"    price:   {amount} USDC micro-units")
         asset = acc.get("asset")
+        if amount != "?":
+            print(f"    price:   {_format_amount(amount, asset, extra)}")
+        else:
+            print(f"    price:   {amount}")
         if asset:
             print(f"    asset:   {asset}")
+        if extra.get("assetTransferMethod"):
+            print(f"    transfer:{extra.get('assetTransferMethod')}")
+        if extra.get("name") or extra.get("version"):
+            print(f"    eip712:  {extra.get('name', '?')} / {extra.get('version', '?')}")
         print()
 
     return pricing
@@ -789,6 +1059,12 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
+    extra = payment.get("extra", {}) or {}
+    payment_meta = {
+        "assetTransferMethod": extra.get("assetTransferMethod", ""),
+        "eip712Name": extra.get("name", ""),
+        "eip712Version": extra.get("version", ""),
+    }
 
     if not pay_to:
         print("Error: 402 response missing payTo.", file=sys.stderr)
@@ -799,10 +1075,15 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     signer_address = _get_signer_address()
     print(f"  Wallet: {signer_address}")
 
-    # 3. Check USDC balance.
+    # 3. Validate token contract and check balance.
     usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    if not _validate_contract_exists(usdc_addr, chain):
+        print(f"Error: no contract at {usdc_addr} on chain {chain}.", file=sys.stderr)
+        print(f"The token may not be deployed on this chain.", file=sys.stderr)
+        sys.exit(1)
     balance = _get_usdc_balance(signer_address, usdc_addr, chain)
-    print(f"  USDC balance: {balance} micro-units ({int(balance) / 1_000_000:.6f} USDC)")
+    symbol, _, _ = _asset_display_meta(usdc_addr, extra)
+    print(f"  {symbol} balance: {_format_amount(balance, usdc_addr, extra)}")
 
     # 4. Calculate count.
     budget_val = int(budget) if budget else int(DEFAULT_BUDGET)
@@ -813,6 +1094,9 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         n = min(budget_val // price_int, MAX_AUTH_COUNT)
     else:
         n = DEFAULT_AUTH_COUNT
+    if extra.get("assetTransferMethod", "eip3009") == "permit2" and n > PERMIT2_SAFE_AUTH_COUNT:
+        print(f"  Capping permit2 auth pool from {n} to {PERMIT2_SAFE_AUTH_COUNT} to stay within current ConfigMap storage limits")
+        n = PERMIT2_SAFE_AUTH_COUNT
     n = max(n, 1)
 
     token, _ = load_sa()
@@ -854,21 +1138,29 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
             sys.exit(1)
 
     total_cost = n * price_int
-    print(f"  Signing {n} authorizations (total cost: {total_cost} micro-units = "
-          f"{total_cost / 1_000_000:.6f} USDC)")
+    print(f"  Signing {n} authorizations (total cost: {_format_amount(total_cost, usdc_addr, extra)})")
 
     if int(balance) < total_cost:
         force = "--force" in sys.argv
         if not force:
             print(f"  Error: balance ({balance}) < total cost ({total_cost}).", file=sys.stderr)
-            print(f"  Fund wallet {signer_address} with USDC on {chain}, "
+            print(f"  Fund wallet {signer_address} with {symbol} on {chain}, "
                   "or pass --force to proceed anyway.", file=sys.stderr)
             sys.exit(1)
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
               "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
     # 5. Pre-sign authorizations locally (via remote-signer in same namespace).
-    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, n)
+    auths = _presign_auths(
+        signer_address,
+        pay_to,
+        price,
+        chain,
+        usdc_addr,
+        n,
+        payment=payment,
+        extensions=pricing.get("extensions", {}) or {},
+    )
 
     # 6. Create PurchaseRequest CR with auths embedded in spec.
     #    Controller reads auths from the CR itself — no cross-NS Secret read.
@@ -889,7 +1181,19 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    _create_purchase_request(name, ep, model_id, n, chain, pay_to, price, usdc_addr, auths, auto_refill=auto_refill)
+    _create_purchase_request(
+        name,
+        ep,
+        model_id,
+        n,
+        chain,
+        pay_to,
+        price,
+        usdc_addr,
+        auths,
+        auto_refill=auto_refill,
+        payment_meta=payment_meta,
+    )
 
     # 6. Wait for controller to reconcile.
     print("Waiting for controller to reconcile PurchaseRequest ...")
@@ -904,7 +1208,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         print(f"  python3 scripts/buy.py status {name}")
     print(f"  Alias:      paid/{model_id}")
     print(f"  Endpoint:   {ep}")
-    print(f"  Price:      {price} micro-units per request")
+    print(f"  Price:      {_format_amount(price, usdc_addr, extra)} per request")
     print(f"  Chain:      {chain}")
     print(f"  Count:      {n} auths requested")
     if auto_refill and auto_refill.get("enabled"):

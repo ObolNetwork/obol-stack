@@ -3,7 +3,7 @@
 This guide walks you through exposing a local LLM as a paid API endpoint using the Obol Stack. By the end, you'll have:
 
 - A local Ollama model serving inference
-- An x402 payment gate requiring USDC per request
+- An x402 payment gate requiring USDC (default) or OBOL per request
 - A public URL via Cloudflare tunnel
 - An ERC-8004 agent registration document for discoverability
 
@@ -82,7 +82,7 @@ Verify the key components:
 | Check | Command | Expected |
 |-------|---------|----------|
 | Cluster nodes | `obol kubectl get nodes` | 1 node Ready |
-| Agent running | `obol kubectl get pods -n openclaw-obol-agent` | Running |
+| Agent running | `obol kubectl get pods -n hermes-obol-agent` | Running |
 | CRD installed | `obol kubectl get crd serviceoffers.obol.org` | Found |
 | x402 verifier | `obol kubectl get pods -n x402` | 2 replicas Running |
 | Traefik gateway | `obol kubectl get gateway -n traefik` | traefik-gateway |
@@ -98,7 +98,7 @@ Make sure the model is available in your host Ollama:
 ollama pull qwen3.5:9b
 
 # Or a smaller model for quick testing
-ollama pull qwen3:0.6b
+ollama pull qwen3.5:4b
 
 # Verify it's available
 curl -s http://localhost:11434/api/tags | python3 -m json.tool
@@ -174,6 +174,20 @@ obol sell http my-qwen \
     --port 11434
 ```
 
+Both examples default to USDC payments. To accept OBOL token (Ethereum mainnet, Permit2) instead:
+
+```bash
+obol sell http my-qwen \
+    --wallet 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+    --token OBOL \
+    --per-request 0.001 \
+    --namespace llm \
+    --upstream ollama \
+    --port 11434
+```
+
+When `--token OBOL` is used without `--chain`, the chain defaults to `ethereum`.
+
 That stores both values in the pricing config:
 
 - source model: `perMTok = 1.25 USDC / 1M tokens`
@@ -236,7 +250,7 @@ curl -s -X POST "$TUNNEL_URL/rpc" \
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # ERC-8004 registration document (200)
 curl -s "$TUNNEL_URL/.well-known/agent-registration.json" | jq .
@@ -248,7 +262,7 @@ You can also verify locally (bypasses Cloudflare):
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "http://obol.stack:8080/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 A **402 Payment Required** response confirms the x402 gate is working. The response body contains the payment requirements:
@@ -309,7 +323,7 @@ Send a request without payment:
 ```bash
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}' \
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}' \
     -D - 2>&1 | head -30
 ```
 
@@ -333,7 +347,7 @@ client = LLMClient(
 )
 
 # Automatically: 402 -> sign EIP-712 -> retry with payment header -> 200
-response = client.chat("qwen3:0.6b", "Explain Ethereum in one sentence.")
+response = client.chat("qwen3.5:9b", "Explain Ethereum in one sentence.")
 print(f"Response: {response}")
 print(f"Session cost: ${client._session_total_usd}")
 ```
@@ -355,7 +369,7 @@ The SDK handles the full x402 flow:
 # Step 1: Get payment requirements from the 402 response
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Step 2: Sign the EIP-712 payment (requires SDK or custom code)
 # The 402 body contains: payTo, amount, asset, network, extra.name, extra.version
@@ -366,7 +380,7 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 # -> 200 OK + inference response
 ```
 
@@ -397,7 +411,7 @@ export TUNNEL_URL=$(obol tunnel status | grep -oE 'https://[a-z0-9-]+\.trycloudf
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Paid request through tunnel (supported production path)
 # The buyer talks to LiteLLM, which routes paid models through the in-pod
@@ -480,7 +494,8 @@ cat > config-sepolia.json << EOF
   },
   "schemes": [
     {"id": "v1-eip155-exact", "chains": "eip155:*"},
-    {"id": "v2-eip155-exact", "chains": "eip155:*"}
+    {"id": "v2-eip155-exact", "chains": "eip155:*",
+     "config": {"eip2612_gas_sponsoring": true}}
   ]
 }
 EOF
@@ -494,6 +509,17 @@ EOF
 > ```json
 > "rpc": [{"http": "http://127.0.0.1:8545", "rate_limit": 50}]
 > ```
+
+> [!IMPORTANT]
+> **`eip2612_gas_sponsoring: true` shifts gas to the facilitator signer.**
+> The OBOL Permit2 path settles `permit + transferFrom` against an ERC20Permit token in a single outer transaction; the facilitator pays gas for the permit step so the buyer never has to hold the chain's native asset. In practice the facilitator's signer wallet (`$FACILITATOR_PRIVATE_KEY`) bears that cost. If the signer balance drops below the gas needed for the next settlement, all OBOL settlements fail and paying buyers see opaque facilitator errors with no on-chain trace.
+>
+> Operators promoting from RC to production must:
+> 1. Monitor the facilitator signer's native-asset balance on every chain it advertises (`eip155:1`, `eip155:8453`, `eip155:84532` for the OBOL chart).
+> 2. Alarm well above empty — at least `100 × max_settlement_gas_price × max_settlement_gas` per chain, refilled before it trips.
+> 3. Have a runbook for refilling without taking the facilitator down.
+>
+> The chart-side change to expose this metric to Prometheus is tracked separately in `obol-infrastructure`. Until it lands, monitor by polling `eth_getBalance` against the signer address.
 
 Verify it's running:
 
@@ -751,23 +777,23 @@ Missing any of these fields causes the facilitator to reject the payment before 
 
 ### RBAC: forbidden
 
-If the OpenClaw agent cannot create or patch Kubernetes resources (ServiceOffers, Middlewares, HTTPRoutes), the ClusterRoleBindings may have empty `subjects` lists. Patch them manually:
+If the default Hermes agent cannot create or patch Obol resources, the RBAC bindings may have empty `subjects` lists. Patch them manually:
 
 ```bash
-# Patch both ClusterRoleBindings
-for BINDING in openclaw-monetize-read-binding openclaw-monetize-workload-binding; do
+# Patch the read ClusterRoleBinding
+for BINDING in openclaw-monetize-read-binding; do
   kubectl patch clusterrolebinding "$BINDING" \
       --type=json \
-      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
+      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
 done
 
-# Patch x402 namespace RoleBinding
-kubectl patch rolebinding openclaw-x402-pricing-binding -n x402 \
+# Patch the default-agent write RoleBinding
+kubectl patch rolebinding openclaw-monetize-write-binding -n hermes-obol-agent \
     --type=json \
-    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"openclaw","namespace":"openclaw-obol-agent"}]}]'
+    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
 ```
 
-Replace `openclaw-obol-agent` with your actual OpenClaw namespace if different.
+Replace `hermes-obol-agent` with your actual Hermes namespace if different.
 
 ---
 

@@ -66,6 +66,21 @@ func deleteServiceOffer(t *testing.T, cfg *config.Config, name, namespace string
 	_, _ = obolRunErr(cfg, "kubectl", "delete", "serviceoffers.obol.org", name, "-n", namespace, "--ignore-not-found")
 }
 
+func cleanupPurchaseRequestsForTest(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	namespace := agentNamespace(cfg)
+
+	if out, err := obolRunErr(cfg, "kubectl", "get", "purchaserequests.obol.org",
+		"-n", namespace, "-o", "name"); err == nil {
+		for _, name := range strings.Fields(out) {
+			_, _ = obolRunErr(cfg, "kubectl", "patch", name,
+				"-n", namespace, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
+		}
+	}
+	_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org",
+		"-n", namespace, "--all", "--ignore-not-found", "--wait=false")
+}
+
 // getServiceOffer returns the ServiceOffer as a parsed JSON map.
 func getServiceOffer(t *testing.T, cfg *config.Config, name, namespace string) map[string]interface{} {
 	t.Helper()
@@ -85,6 +100,9 @@ func resourceExists(t *testing.T, cfg *config.Config, kind, name, namespace stri
 
 func assertOfferRouteResourcesPresent(t *testing.T, cfg *config.Config, name, namespace string) {
 	t.Helper()
+	if !resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
+		t.Fatalf("middleware x402-%s not found in %s", name, namespace)
+	}
 	if !resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
 		t.Fatalf("httproute so-%s not found in %s", name, namespace)
 	}
@@ -92,6 +110,9 @@ func assertOfferRouteResourcesPresent(t *testing.T, cfg *config.Config, name, na
 
 func assertOfferRouteResourcesAbsent(t *testing.T, cfg *config.Config, name, namespace string) {
 	t.Helper()
+	if resourceExists(t, cfg, "middleware", "x402-"+name, namespace) {
+		t.Fatalf("middleware x402-%s still exists in %s", name, namespace)
+	}
 	if resourceExists(t, cfg, "httproute", "so-"+name, namespace) {
 		t.Fatalf("httproute so-%s still exists in %s", name, namespace)
 	}
@@ -323,32 +344,84 @@ func TestIntegration_CRD_Delete(t *testing.T) {
 
 // agentNamespace returns the namespace of the OpenClaw instance that has
 // monetize RBAC. This is always the "obol-agent" instance ("openclaw-obol-agent").
-func agentNamespace(cfg *config.Config) string {
+type listedAgentInstance struct {
+	ID        string
+	Namespace string
+}
+
+func listedAgentInstances(cfg *config.Config) []listedAgentInstance {
 	out, err := obolRunErr(cfg, "openclaw", "list")
 	if err != nil {
-		return "openclaw-obol-agent"
+		return nil
 	}
-	// Collect all namespaces from output.
-	var namespaces []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Namespace:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				namespaces = append(namespaces, parts[1])
+
+	var (
+		instances []listedAgentInstance
+		currentID string
+	)
+	for _, raw := range strings.Split(out, "\n") {
+		if strings.HasPrefix(raw, "  ") {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if strings.HasPrefix(trimmed, "Namespace:") {
+				if currentID == "" {
+					continue
+				}
+				parts := strings.Fields(trimmed)
+				if len(parts) >= 2 {
+					instances = append(instances, listedAgentInstance{
+						ID:        currentID,
+						Namespace: parts[1],
+					})
+				}
+				continue
+			}
+			if !strings.Contains(trimmed, ":") {
+				currentID = trimmed
 			}
 		}
 	}
-	// Prefer obol-agent (has RBAC from `obol agent init`).
-	for _, ns := range namespaces {
-		if ns == "openclaw-obol-agent" {
-			return ns
+
+	return instances
+}
+
+func hasOpenClawDeployment(cfg *config.Config, namespace string) bool {
+	_, err := obolRunErr(cfg, "kubectl", "get", "deploy", "openclaw", "-n", namespace)
+	return err == nil
+}
+
+func agentNamespace(cfg *config.Config) string {
+	instances := listedAgentInstances(cfg)
+	for _, inst := range instances {
+		if inst.ID == "obol-agent" && hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.Namespace
 		}
 	}
-	if len(namespaces) > 0 {
-		return namespaces[0]
+	for _, inst := range instances {
+		if hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.Namespace
+		}
 	}
+
 	return "openclaw-obol-agent"
+}
+
+func agentInstanceID(cfg *config.Config) string {
+	instances := listedAgentInstances(cfg)
+	for _, inst := range instances {
+		if inst.ID == "obol-agent" && hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.ID
+		}
+	}
+	for _, inst := range instances {
+		if hasOpenClawDeployment(cfg, inst.Namespace) {
+			return inst.ID
+		}
+	}
+
+	return "obol-agent"
 }
 
 // requireAgent skips the test if no OpenClaw instance is deployed.
@@ -367,18 +440,22 @@ func requireAgent(t *testing.T, cfg *config.Config) {
 func execInAgent(t *testing.T, cfg *config.Config, args ...string) string {
 	t.Helper()
 	ns := agentNamespace(cfg)
-	fullArgs := append([]string{"kubectl", "exec", "-i",
+	fullArgs := append([]string{
+		"kubectl", "exec", "-i",
 		"-n", ns, "deploy/openclaw",
-		"-c", "openclaw", "--"}, args...)
+		"-c", "openclaw", "--",
+	}, args...)
 	return obolRun(t, cfg, fullArgs...)
 }
 
 // execInAgentErr runs a command inside the OpenClaw pod, returning output + error.
 func execInAgentErr(cfg *config.Config, args ...string) (string, error) {
 	ns := agentNamespace(cfg)
-	fullArgs := append([]string{"kubectl", "exec", "-i",
+	fullArgs := append([]string{
+		"kubectl", "exec", "-i",
 		"-n", ns, "deploy/openclaw",
-		"-c", "openclaw", "--"}, args...)
+		"-c", "openclaw", "--",
+	}, args...)
 	return obolRunErr(cfg, fullArgs...)
 }
 
@@ -669,29 +746,6 @@ func waitForBuyerProbePricing(t *testing.T, cfg *config.Config, timeout time.Dur
 
 	t.Fatalf("timed out waiting for x402 pricing from %s\nlast output:\n%s", endpointURL, lastOut)
 	return ""
-}
-
-type buyerLiveUpstream struct {
-	URL         string `json:"url"`
-	RemoteModel string `json:"remote_model"`
-	PublicModel string `json:"public_model"`
-	Remaining   int    `json:"remaining"`
-	Spent       int    `json:"spent"`
-	Network     string `json:"network"`
-}
-
-func parseBuyerLiveUpstream(t *testing.T, output, name string) buyerLiveUpstream {
-	t.Helper()
-
-	var status map[string]buyerLiveUpstream
-	if err := json.Unmarshal([]byte(output), &status); err != nil {
-		t.Fatalf("parse buyer live status: %v\nraw: %s", err, output)
-	}
-	upstream, ok := status[name]
-	if !ok {
-		t.Fatalf("buyer live status missing %q:\n%s", name, output)
-	}
-	return upstream
 }
 
 func getPurchaseRequest(t *testing.T, cfg *config.Config, name string) map[string]interface{} {
@@ -989,6 +1043,29 @@ func consumePaidAuth(t *testing.T, cfg *config.Config, masterKey, model, buyerNa
 	return nil
 }
 
+type buyerLiveUpstream struct {
+	URL         string `json:"url"`
+	RemoteModel string `json:"remote_model"`
+	PublicModel string `json:"public_model"`
+	Remaining   int    `json:"remaining"`
+	Spent       int    `json:"spent"`
+	Network     string `json:"network"`
+}
+
+func parseBuyerLiveUpstream(t *testing.T, output, name string) buyerLiveUpstream {
+	t.Helper()
+
+	var status map[string]buyerLiveUpstream
+	if err := json.Unmarshal([]byte(output), &status); err != nil {
+		t.Fatalf("parse buyer live status: %v\nraw: %s", err, output)
+	}
+	upstream, ok := status[name]
+	if !ok {
+		t.Fatalf("buyer live status missing %q:\n%s", name, output)
+	}
+	return upstream
+}
+
 func getStatusFieldString(so map[string]interface{}, field string) string {
 	status, ok := so["status"].(map[string]interface{})
 	if !ok {
@@ -1039,9 +1116,6 @@ except urllib.error.HTTPError as err:
 `, model, prompt, "http://litellm.llm.svc.cluster.local:4000/v1/chat/completions", "Bearer "+masterKey)
 
 	out, err := execInAgentErr(cfg, "python3", "-c", script)
-	if idx := strings.Index(out, "command terminated with exit code"); idx >= 0 {
-		out = strings.TrimSpace(out[:idx])
-	}
 	var result struct {
 		Status int    `json:"status"`
 		Body   string `json:"body"`
@@ -1463,7 +1537,7 @@ func TestIntegration_Route_FullReconcile(t *testing.T) {
 	}
 }
 
-func TestIntegration_Route_SharedGatewayBacked(t *testing.T) {
+func TestIntegration_Route_MiddlewareCreated(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
 	requireAgent(t, cfg)
@@ -1483,13 +1557,13 @@ func TestIntegration_Route_SharedGatewayBacked(t *testing.T) {
 		"/data/.openclaw/skills/monetize/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
-	// Check the shared x402 gateway Service exists.
-	out, err := obolRunErr(cfg, "kubectl", "get", "svc", "x402-verifier", "-n", "x402", "-o", "json")
+	// Check for ForwardAuth Middleware
+	out, err := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "json")
 	if err != nil {
-		t.Skipf("shared gateway service not found: %v", err)
+		t.Skipf("no middlewares found: %v", err)
 	}
-	if !strings.Contains(out, "\"name\":\"x402-verifier\"") {
-		t.Logf("gateway output: %s", out)
+	if !strings.Contains(out, "forwardAuth") && !strings.Contains(out, "ForwardAuth") {
+		t.Logf("middleware output: %s", out)
 	}
 }
 
@@ -1613,7 +1687,12 @@ func TestIntegration_Route_DeleteCascades(t *testing.T) {
 	// Wait for garbage collection
 	time.Sleep(3 * time.Second)
 
-	// HTTPRoute should be gone (owner reference cascade).
+	// Middleware and HTTPRoute should be gone (owner reference cascade)
+	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
+	if strings.Contains(mwOut, name) {
+		t.Errorf("middleware still exists after ServiceOffer deletion:\n%s", mwOut)
+	}
+
 	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
 	if strings.Contains(hrOut, name) {
 		t.Errorf("httproute still exists after ServiceOffer deletion:\n%s", hrOut)
@@ -1637,9 +1716,9 @@ func setupMockFacilitator(t *testing.T, cfg *config.Config) *testutil.MockFacili
 		t.Fatalf("read original pricing config: %v", err)
 	}
 
-	// Patch facilitator URL to host-side mock, but keep ForwardAuth verify-only.
+	// Patch facilitator URL to host-side mock.
 	// The mock listens on 127.0.0.1 but k3d pods reach the host via host.k3d.internal.
-	patchYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: true\nroutes: []\n"}}`,
+	patchYAML := fmt.Sprintf(`{"data":{"pricing.yaml":"wallet: \"%s\"\nchain: \"%s\"\nfacilitatorURL: \"%s\"\nverifyOnly: false\nroutes: []\n"}}`,
 		origCfg.Wallet, origCfg.Chain, mf.ClusterURL)
 
 	obolRun(t, cfg, "kubectl", "patch", "configmap", "x402-pricing",
@@ -2329,7 +2408,11 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 
 	// Delete happened via kubectl, so only Kubernetes-owned resources are expected
 	// to disappear automatically here.
-	// Let's verify the K8s route resource is gone (cascade via OwnerRef).
+	// Let's verify the K8s resources are gone (cascade via OwnerRef).
+	mwOut, _ := obolRunErr(cfg, "kubectl", "get", "middleware", "-n", ns, "-o", "name")
+	if strings.Contains(mwOut, name) {
+		t.Errorf("middleware still exists after deletion")
+	}
 	hrOut, _ := obolRunErr(cfg, "kubectl", "get", "httproute", "-n", ns, "-o", "name")
 	if strings.Contains(hrOut, name) {
 		t.Errorf("httproute still exists after deletion")
@@ -2807,7 +2890,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 //
 // Prerequisites:
 //   - Running k3d cluster with CRD, agent, x402-verifier, CF quick tunnel
-//   - Ollama with a cached model (any model — qwen2.5, qwen3:0.6b, etc.)
+//   - Ollama with a cached model (any model — qwen3.5:4b, qwen3.5:9b, etc.)
 //   - Anvil (Foundry) installed
 //   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
 func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
@@ -2973,11 +3056,12 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 //
 //	Step 1: ModelReady        → model checked in Ollama /api/tags
 //	Step 2: UpstreamHealthy   → upstream service health-checked
-//	Step 3: PaymentGateReady  → shared x402 gateway is available
+//	Step 3: PaymentGateReady  → Middleware x402-<name> created
 //	                          → verifier derives route from published ServiceOffer
 //	Step 4: RoutePublished    → HTTPRoute so-<name> created
 //	                          → parentRef = traefik-gateway
-//	                          → backend = shared x402 gateway service
+//	                          → filter = ExtensionRef to Middleware
+//	                          → backend = upstream service
 //	Step 5: Registered        → skipped (registration.enabled=false)
 //	Step 6: Ready             → all conditions True
 //
@@ -3020,7 +3104,11 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	}
 	t.Log("Step 0: CR created — no conditions, no derived resources")
 
-	// Verify no route resources exist yet.
+	// Verify no derived resources exist yet.
+	_, mwErr := obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
+	if mwErr == nil {
+		t.Error("Step 0: Middleware should not exist before reconciliation")
+	}
 	_, hrErr := obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
 	if hrErr == nil {
 		t.Error("Step 0: HTTPRoute should not exist before reconciliation")
@@ -3073,20 +3161,32 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	}
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 3: Verify shared x402 gateway is available
+	// Step 3: Verify Middleware — ForwardAuth to x402-verifier
 	// ────────────────────────────────────────────────────────────────────
-	t.Log("Step 3: Verifying shared gateway x402/x402-verifier")
-	gatewayJSON := obolRun(t, cfg, "kubectl", "get", "svc",
-		"x402-verifier", "-n", "x402", "-o", "json")
+	t.Log("Step 3: Verifying Middleware x402-" + name)
+	mwJSON := obolRun(t, cfg, "kubectl", "get", "middleware",
+		fmt.Sprintf("x402-%s", name), "-n", ns, "-o", "json")
 
-	var gateway map[string]interface{}
-	if err := json.Unmarshal([]byte(gatewayJSON), &gateway); err != nil {
-		t.Fatalf("parse gateway service JSON: %v", err)
+	var mw map[string]interface{}
+	if err := json.Unmarshal([]byte(mwJSON), &mw); err != nil {
+		t.Fatalf("parse middleware JSON: %v", err)
 	}
-	if metadata, ok := gateway["metadata"].(map[string]interface{}); !ok || metadata["name"] != "x402-verifier" {
-		t.Fatalf("shared gateway service metadata = %+v, want name=x402-verifier", gateway["metadata"])
+
+	// Verify ForwardAuth address points at x402-verifier.
+	spec := mw["spec"].(map[string]interface{})
+	forwardAuth, ok := spec["forwardAuth"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Middleware missing spec.forwardAuth")
 	}
-	t.Log("  ✓ Shared x402 gateway service exists")
+	address, _ := forwardAuth["address"].(string)
+	if !strings.Contains(address, "x402-verifier") {
+		t.Errorf("Middleware forwardAuth address = %q, want x402-verifier URL", address)
+	} else {
+		t.Logf("  ✓ Middleware ForwardAuth → %s", address)
+	}
+
+	// Verify ownerReference back to ServiceOffer.
+	verifyOwnerRef(t, mw, name, "ServiceOffer")
 
 	// ────────────────────────────────────────────────────────────────────
 	// Step 4: Verify route resources
@@ -3095,7 +3195,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	assertOfferRouteResourcesPresent(t, cfg, name, ns)
 
 	// ────────────────────────────────────────────────────────────────────
-	// Step 5: Verify HTTPRoute — gateway parent + shared gateway backend
+	// Step 5: Verify HTTPRoute — gateway parent + middleware filter + backend
 	// ────────────────────────────────────────────────────────────────────
 	t.Log("Step 5: Verifying HTTPRoute so-" + name)
 	hrJSON := obolRun(t, cfg, "kubectl", "get", "httproute",
@@ -3140,20 +3240,34 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 		}
 	}
 
-	// 5c: backendRefs point at the shared x402 gateway service.
+	// 5c: filters include ExtensionRef to Middleware x402-<name>.
+	filters, _ := rule0["filters"].([]interface{})
+	foundMiddlewareFilter := false
+	for _, f := range filters {
+		fm := f.(map[string]interface{})
+		if fm["type"] == "ExtensionRef" {
+			ref, _ := fm["extensionRef"].(map[string]interface{})
+			refName, _ := ref["name"].(string)
+			if refName == fmt.Sprintf("x402-%s", name) {
+				foundMiddlewareFilter = true
+				t.Logf("  ✓ HTTPRoute filter: ExtensionRef → x402-%s", name)
+			}
+		}
+	}
+	if !foundMiddlewareFilter {
+		t.Errorf("HTTPRoute missing ExtensionRef filter to x402-%s", name)
+	}
+
+	// 5d: backendRefs point at the upstream service.
 	backendRefs, _ := rule0["backendRefs"].([]interface{})
 	if len(backendRefs) > 0 {
 		backend := backendRefs[0].(map[string]interface{})
 		backendName, _ := backend["name"].(string)
 		backendNS, _ := backend["namespace"].(string)
-		if backendName != "x402-verifier" || backendNS != "x402" {
-			t.Errorf("HTTPRoute backend = %s/%s, want x402/x402-verifier", backendNS, backendName)
-		} else {
-			t.Logf("  ✓ HTTPRoute backend: %s/%s", backendNS, backendName)
-		}
+		t.Logf("  ✓ HTTPRoute backend: %s/%s", backendNS, backendName)
 	}
 
-	// 5d: ownerReference.
+	// 5e: ownerReference.
 	verifyOwnerRef(t, hr, name, "ServiceOffer")
 
 	// ────────────────────────────────────────────────────────────────────
@@ -3225,7 +3339,15 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 		t.Logf("  ✓ ServiceOffer CR deleted")
 	}
 
-	// 8c: HTTPRoute gone (ownerRef cascade).
+	// 8c: Middleware gone (ownerRef cascade).
+	_, err = obolRunErr(cfg, "kubectl", "get", "middleware", fmt.Sprintf("x402-%s", name), "-n", ns)
+	if err == nil {
+		t.Error("Middleware still exists after ServiceOffer delete (ownerRef cascade failed)")
+	} else {
+		t.Logf("  ✓ Middleware x402-%s cascaded", name)
+	}
+
+	// 8d: HTTPRoute gone (ownerRef cascade).
 	_, err = obolRunErr(cfg, "kubectl", "get", "httproute", fmt.Sprintf("so-%s", name), "-n", ns)
 	if err == nil {
 		t.Error("HTTPRoute still exists after ServiceOffer delete (ownerRef cascade failed)")
@@ -3385,7 +3507,18 @@ spec:
 	regStatus := getConditionStatus(so, "Registered")
 	t.Logf("  Registered: %s", regStatus)
 
-	// Wait for Traefik to pick up the HTTPRoute and the shared gateway to reload routes.
+	// Patch the HTTPRoute with LiteLLM auth header (monetize.py doesn't add it yet).
+	// Without this, paid requests that pass x402 verification get 401 from LiteLLM.
+	masterKey := obolRun(t, cfg, "kubectl", "get", "secret", "litellm-secrets",
+		"-n", "llm", "-o", "jsonpath={.data.LITELLM_MASTER_KEY}")
+	// Decode base64
+	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(masterKey)); err == nil {
+		masterKey = string(decoded)
+	}
+	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
+	t.Log("  ✓ Patched HTTPRoute with LiteLLM auth header")
+
+	// Wait for Traefik to pick up the HTTPRoute + Reloader to restart x402-verifier
 	t.Log("  Waiting 15s for route propagation...")
 	time.Sleep(15 * time.Second)
 
@@ -3708,6 +3841,230 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	t.Logf("tunnel sidecar flow complete: registered agent %s, discovered endpoint, bought paid/%s, auths 3->2, spent 0->1", agentID, model)
 }
 
+// TestIntegration_SellBuySidecar_OBOLPermit2 validates the in-cluster buy path
+// using a fork-local OBOL-compatible ERC20Permit token deployed on an Anvil fork
+// of Base Sepolia. This avoids any dependence on a public bridged OBOL testnet
+// deployment while exercising:
+//   - seller-side OBOL asset metadata
+//   - buyer-side Permit2 payload construction
+//   - automatic EIP-2612 gas sponsoring attachment
+//   - x402-buyer replay of a full signed x402 payload
+func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
+	if os.Getenv("X402_FACILITATOR_BIN") == "" {
+		t.Skip("set X402_FACILITATOR_BIN to an ObolNetwork/x402-rs main build with eip2612GasSponsoring support")
+	}
+
+	cfg := requireCluster(t)
+	requireCRD(t, cfg)
+	requireAgent(t, cfg)
+	model := requireExactOllamaModel(t, "qwen3.5:9b")
+	anvil := requireAnvil(t)
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	obolRun(t, cfg, "openclaw", "skills", "sync", agentInstanceID(cfg), "--from", filepath.Join(repoRoot, "internal", "embed", "skills"))
+	t.Log("synced embedded skills to running OpenClaw instance")
+	cleanupPurchaseRequestsForTest(t, cfg)
+	time.Sleep(5 * time.Second)
+
+	facilitator := testutil.StartRealFacilitatorWithOptions(t, anvil, testutil.RealFacilitatorOptions{
+		EnableEIP2612GasSponsoring: true,
+	})
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	testutil.PatchVerifierFacilitator(t, kubectlBin, kubeconfig, facilitator.ClusterURL)
+
+	obolToken := anvil.DeployForkObolToken(t, anvil.Accounts[0].PrivateKey, anvil.Accounts[0].Address, big.NewInt(0))
+
+	agentWallet := getAgentWalletAddress(t, cfg)
+	sellerAddr := anvil.Accounts[1].Address
+	for _, addr := range []string{
+		anvil.Accounts[0].Address, // facilitator signer / token deployer
+		agentWallet,               // buyer / remote signer
+		sellerAddr,                // seller payTo
+	} {
+		anvil.ClearCode(t, addr)
+	}
+	anvil.FundETH(t, agentWallet, big.NewInt(1e18))
+	anvil.MintMintableERC20(t, obolToken, anvil.Accounts[0].PrivateKey, agentWallet, new(big.Int).Mul(big.NewInt(10), big.NewInt(1e18)))
+	t.Logf("funded agent wallet %s with 10 OBOL on fork token %s", agentWallet, obolToken)
+
+	originalERPCConfig := getERPCConfigYAML(t, cfg)
+	t.Cleanup(func() {
+		setERPCConfigYAML(t, cfg, originalERPCConfig)
+	})
+
+	anvilClusterURL := fmt.Sprintf("http://%s:%d", testutil.ClusterHostAddress(), anvil.Port)
+	obolRun(t, cfg, "network", "add", "base-sepolia", "--endpoint", anvilClusterURL, "--allow-writes")
+	pinERPCChainToSingleUpstream(t, cfg, 84532, "custom-84532-0")
+	t.Logf("eRPC route: base-sepolia -> %s", anvilClusterURL)
+
+	runID := petname.Generate(2, "-")
+	name := "test-obol-sidecar-" + runID
+	buyerName := "obol-sidecar-" + runID
+	ns := "llm"
+	offerYAML := fmt.Sprintf(`apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  upstream:
+    service: litellm
+    namespace: llm
+    port: 4000
+    healthPath: /health/readiness
+  payment:
+    network: base-sepolia
+    payTo: "%s"
+    asset:
+      address: "%s"
+      symbol: "OBOL"
+      decimals: 18
+      transferMethod: "permit2"
+      eip712Name: "Obol Network"
+      eip712Version: "1"
+    price:
+      perRequest: "0.001"
+  path: /services/%s
+`, name, ns, sellerAddr, obolToken, name)
+
+	applyServiceOffer(t, cfg, offerYAML)
+	t.Cleanup(func() {
+		_, _ = execInAgentErr(cfg, "python3",
+			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"remove", buyerName)
+		_, _ = execInAgentErr(cfg, "python3",
+			monetizePy,
+			"delete", name, "--namespace", ns)
+		deleteServiceOffer(t, cfg, name, ns)
+	})
+
+	processOut, processErr := execInAgentErr(cfg, "python3",
+		monetizePy,
+		"process", name, "--namespace", ns)
+	t.Logf("reconciliation output:\n%s", processOut)
+	if processErr != nil {
+		t.Fatalf("reconcile ServiceOffer: %v", processErr)
+	}
+	for _, cond := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished", "Ready"} {
+		waitForCondition(t, cfg, name, ns, cond, "True", 2*time.Minute)
+	}
+
+	masterKey := getLiteLLMMasterKey(t, cfg)
+	patchHTTPRouteAuth(t, cfg, fmt.Sprintf("so-%s", name), ns, masterKey)
+	time.Sleep(15 * time.Second)
+
+	localBaseURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
+	probeOut := waitForBuyerProbePricing(t, cfg, 90*time.Second, localBaseURL+"/v1/chat/completions", model)
+	t.Logf("probe output:\n%s", probeOut)
+	if !strings.Contains(probeOut, obolToken) {
+		t.Fatalf("probe output did not include OBOL token address %s:\n%s", obolToken, probeOut)
+	}
+	if !strings.Contains(probeOut, "permit2") {
+		t.Fatalf("probe output did not include permit2 transfer method:\n%s", probeOut)
+	}
+
+	buyOut, buyErr := execInAgentErr(cfg, "python3",
+		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"buy", buyerName,
+		"--endpoint", localBaseURL,
+		"--model", model,
+		"--count", "3")
+	t.Logf("buy output:\n%s", buyOut)
+	if buyErr != nil {
+		t.Fatalf("buy.py buy failed: %v", buyErr)
+	}
+	if !strings.Contains(buyOut, "paid/"+model) {
+		t.Fatalf("buy output did not advertise paid/%s:\n%s", model, buyOut)
+	}
+
+	liveBefore := waitForBuyerLiveAuthCount(t, cfg, buyerName, 3, 90*time.Second)
+	t.Logf("buyer live status before inference:\n%s", liveBefore)
+
+	buyerBefore := anvil.GetERC20Balance(t, obolToken, agentWallet)
+	sellerBefore := anvil.GetERC20Balance(t, obolToken, sellerAddr)
+	settlementFromBlock := anvil.BlockNumber(t)
+
+	requestCount := 3
+	for i := 1; i <= requestCount; i++ {
+		statusCode, body := callLiteLLMPaidModelFromAgent(t, cfg, masterKey, "paid/"+model, fmt.Sprintf("reply with one short paid word %d", i))
+		if statusCode != http.StatusOK {
+			t.Fatalf("paid alias request %d returned %d: %s", i, statusCode, string(body))
+		}
+		wantRemaining := requestCount - i
+		liveStatus := waitForBuyerLiveAuthCount(t, cfg, buyerName, wantRemaining, 60*time.Second)
+		t.Logf("buyer live status after request %d:\n%s", i, liveStatus)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	var buyerAfter, sellerAfter *big.Int
+	for time.Now().Before(deadline) {
+		buyerAfter = anvil.GetERC20Balance(t, obolToken, agentWallet)
+		sellerAfter = anvil.GetERC20Balance(t, obolToken, sellerAddr)
+		expectedBuyerDelta := new(big.Int).Mul(big.NewInt(int64(requestCount)), big.NewInt(1_000_000_000_000_000))
+		if new(big.Int).Sub(buyerBefore, buyerAfter).Cmp(expectedBuyerDelta) == 0 &&
+			new(big.Int).Sub(sellerAfter, sellerBefore).Cmp(expectedBuyerDelta) == 0 {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	expectedDelta := new(big.Int).Mul(big.NewInt(int64(requestCount)), big.NewInt(1_000_000_000_000_000))
+	if buyerAfter == nil || sellerAfter == nil ||
+		new(big.Int).Sub(buyerBefore, buyerAfter).Cmp(expectedDelta) != 0 ||
+		new(big.Int).Sub(sellerAfter, sellerBefore).Cmp(expectedDelta) != 0 {
+		t.Fatalf("OBOL settlement did not complete: buyer before=%s after=%s seller before=%s after=%s", buyerBefore, buyerAfter, sellerBefore, sellerAfter)
+	}
+
+	receipts := anvil.FindERC20TransferReceipts(t, obolToken, agentWallet, sellerAddr, settlementFromBlock)
+	if len(receipts) != requestCount {
+		t.Fatalf("expected %d OBOL settlement receipts, got %d", requestCount, len(receipts))
+	}
+	totalGasWei := big.NewInt(0)
+	totalGasUsed := big.NewInt(0)
+	for i, receipt := range receipts {
+		gasUsed := testutil.ParseHexBigInt(t, receipt.GasUsed)
+		effectiveGasPrice := testutil.ParseHexBigInt(t, receipt.EffectiveGasPrice)
+		receiptGasWei := new(big.Int).Mul(new(big.Int).Set(gasUsed), effectiveGasPrice)
+		totalGasUsed.Add(totalGasUsed, gasUsed)
+		totalGasWei.Add(totalGasWei, receiptGasWei)
+		t.Logf(
+			"OBOL settlement receipt %d/%d: tx=%s block=%s from=%s to=%s status=%s gasUsed=%s effectiveGasPriceWei=%s totalGasWei=%s",
+			i+1,
+			requestCount,
+			receipt.TransactionHash,
+			receipt.BlockNumber,
+			receipt.From,
+			receipt.To,
+			receipt.Status,
+			gasUsed.String(),
+			effectiveGasPrice.String(),
+			receiptGasWei.String(),
+		)
+		// Structured marker consumed by flows/flow-12-obol-payment.sh to build
+		// receipt-summary.json. The shell extractor takes the first match, so
+		// we emit one line per settlement and the summary captures the first.
+		// FLOW12_AGENT_ID / FLOW12_REGISTRATION_TX / FLOW12_FUNDING_TX are
+		// intentionally not emitted: this test does not perform ERC-8004
+		// registration, and the funding helpers (FundETH=anvil_setBalance
+		// cheat, MintMintableERC20=cast send with discarded output) do not
+		// surface a transaction hash through the testutil API.
+		t.Logf("FLOW12_SETTLEMENT_TX=%s", receipt.TransactionHash)
+	}
+	t.Logf(
+		"OBOL exact pack benchmark: requests=%d totalGasUsed=%s totalGasWei=%s avgGasUsedPerRequest=%s avgGasWeiPerRequest=%s",
+		requestCount,
+		totalGasUsed.String(),
+		totalGasWei.String(),
+		new(big.Int).Div(new(big.Int).Set(totalGasUsed), big.NewInt(int64(requestCount))).String(),
+		new(big.Int).Div(new(big.Int).Set(totalGasWei), big.NewInt(int64(requestCount))).String(),
+	)
+	t.Logf("OBOL sidecar flow complete: token=%s buyer delta=-%s seller delta=+%s", obolToken, new(big.Int).Sub(buyerBefore, buyerAfter), new(big.Int).Sub(sellerAfter, sellerBefore))
+}
+
 func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -3960,9 +4317,54 @@ func getLiteLLMMasterKey(t *testing.T, cfg *config.Config) string {
 // header to an HTTPRoute. Required because monetize.py doesn't inject this yet.
 func patchHTTPRouteAuth(t *testing.T, cfg *config.Config, routeName, namespace, masterKey string) {
 	t.Helper()
-	patchJSON := fmt.Sprintf(`[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"Authorization","value":"Bearer %s"}]}}}]`, masterKey)
+
+	raw := obolRun(t, cfg, "kubectl", "get", "httproute", routeName, "-n", namespace, "-o", "json")
+	var route struct {
+		Spec struct {
+			Rules []struct {
+				Filters []json.RawMessage `json:"filters"`
+			} `json:"rules"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &route); err != nil {
+		t.Fatalf("parse HTTPRoute %s/%s: %v", namespace, routeName, err)
+	}
+	if len(route.Spec.Rules) == 0 {
+		t.Fatalf("HTTPRoute %s/%s has no rules", namespace, routeName)
+	}
+
+	filter := map[string]any{
+		"type": "RequestHeaderModifier",
+		"requestHeaderModifier": map[string]any{
+			"set": []map[string]string{
+				{
+					"name":  "Authorization",
+					"value": "Bearer " + masterKey,
+				},
+			},
+		},
+	}
+
+	patchPath := "/spec/rules/0/filters"
+	var patchValue any = []map[string]any{filter}
+	if route.Spec.Rules[0].Filters != nil {
+		patchPath = "/spec/rules/0/filters/-"
+		patchValue = filter
+	}
+
+	patchJSON, err := json.Marshal([]map[string]any{
+		{
+			"op":    "add",
+			"path":  patchPath,
+			"value": patchValue,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal HTTPRoute auth patch: %v", err)
+	}
+
 	obolRun(t, cfg, "kubectl", "patch", "httproute", routeName,
-		"-n", namespace, "--type=json", "-p", patchJSON)
+		"-n", namespace, "--type=json", "-p", string(patchJSON))
 }
 
 // monetizePy is the in-pod path to the monetize.py reconciler script.

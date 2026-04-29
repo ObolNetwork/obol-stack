@@ -1,16 +1,13 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/urfave/cli/v3"
 )
 
@@ -182,7 +179,7 @@ func TestSellInference_Flags(t *testing.T) {
 	flags := flagMap(inf)
 
 	requireFlags(t, flags,
-		"model", "wallet", "price", "per-request", "per-mtok", "chain", "facilitator",
+		"model", "wallet", "price", "per-request", "per-mtok", "chain", "token", "facilitator",
 		"listen", "upstream", "enclave-tag",
 		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
 		"tee", "model-hash",
@@ -190,6 +187,7 @@ func TestSellInference_Flags(t *testing.T) {
 
 	assertStringDefault(t, flags, "price", "0.001")
 	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "listen", ":8402")
 	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
 	assertStringDefault(t, flags, "facilitator", "https://x402.gcp.obol.tech")
@@ -206,13 +204,14 @@ func TestSellHTTP_Flags(t *testing.T) {
 	flags := flagMap(http)
 
 	requireFlags(t, flags,
-		"wallet", "chain", "price", "per-request", "per-mtok", "per-hour",
+		"wallet", "chain", "token", "price", "per-request", "per-mtok", "per-hour",
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
-		"register", "no-register", "register-name", "register-description", "register-image", "private-key-file",
+		"register", "no-register", "register-name", "register-description", "register-image",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "namespace", "default")
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)
@@ -242,52 +241,6 @@ func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for --no-register with registration-specific flags")
-	}
-}
-
-func TestReadPrivateKeyMaterial_RawKey(t *testing.T) {
-	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
-	gotKey, gotAddr, err := readPrivateKeyMaterial(raw)
-	if err != nil {
-		t.Fatalf("readPrivateKeyMaterial: %v", err)
-	}
-	if gotKey != raw {
-		t.Fatalf("got key = %q, want %q", gotKey, raw)
-	}
-	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
-		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
-	}
-}
-
-func TestReadPrivateKeyMaterial_File(t *testing.T) {
-	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	raw := "0x" + fmt.Sprintf("%x", crypto.FromECDSA(key))
-	path := filepath.Join(t.TempDir(), "key.txt")
-	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	gotKey, gotAddr, err := readPrivateKeyMaterial(path)
-	if err != nil {
-		t.Fatalf("readPrivateKeyMaterial: %v", err)
-	}
-	if gotKey != raw {
-		t.Fatalf("got key = %q, want %q", gotKey, raw)
-	}
-	if gotAddr != crypto.PubkeyToAddress(key.PublicKey).Hex() {
-		t.Fatalf("got addr = %q, want %q", gotAddr, crypto.PubkeyToAddress(key.PublicKey).Hex())
-	}
-}
-
-func TestReadPrivateKeyMaterial_Invalid(t *testing.T) {
-	if _, _, err := readPrivateKeyMaterial("0xdeadbeef"); err == nil {
-		t.Fatal("expected error for invalid private key")
 	}
 }
 
@@ -346,7 +299,7 @@ func TestSellRegister_Flags(t *testing.T) {
 	flags := flagMap(reg)
 
 	requireFlags(t, flags,
-		"chain", "sponsored", "private-key-file",
+		"chain", "sponsored",
 		"endpoint", "name", "description", "image",
 	)
 
@@ -416,6 +369,27 @@ func TestResolveX402Chain(t *testing.T) {
 			_, err := x402verifier.ResolveChainInfo(tt.name)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResolveChainInfo(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsTransientRegistrationError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "rpc 500", err: errors.New("erc8004: register tx: 500 Internal Server Error"), want: true},
+		{name: "timeout", err: errors.New("context deadline exceeded while waiting for headers"), want: true},
+		{name: "revert", err: errors.New("erc8004: register tx: execution reverted"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientRegistrationError(tt.err); got != tt.want {
+				t.Fatalf("isTransientRegistrationError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

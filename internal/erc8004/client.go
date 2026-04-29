@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -292,6 +293,57 @@ func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID
 		return fmt.Errorf("erc8004: wait mined: %w", err)
 	}
 	return nil
+}
+
+// AgentWallet returns the registered wallet for an agent id via the ERC-8004
+// `getAgentWallet` view, or an error if the READER reports a revert (the
+// pre-mint case appears as ERC721NonexistentToken). Used by WaitForAgent to
+// confirm the chain READER has caught up to a recent register tx before
+// follow-up calls (setMetadata, setAgentURI) try to estimate gas against a
+// state where the token id is still unknown.
+func (c *Client) AgentWallet(ctx context.Context, agentID *big.Int) (common.Address, error) {
+	var out []interface{}
+	if err := c.contract.Call(&bind.CallOpts{Context: ctx}, &out, "getAgentWallet", agentID); err != nil {
+		return common.Address{}, fmt.Errorf("erc8004: getAgentWallet: %w", err)
+	}
+	if len(out) == 0 {
+		return common.Address{}, fmt.Errorf("erc8004: getAgentWallet: empty return")
+	}
+	addr, ok := out[0].(common.Address)
+	if !ok {
+		return common.Address{}, fmt.Errorf("erc8004: getAgentWallet: unexpected type %T", out[0])
+	}
+	return addr, nil
+}
+
+// WaitForAgent polls AgentWallet until the chain READER reports the agent id
+// as owned (any address). Returns when it does, or err on timeout. This closes
+// the read-side staleness window after Register: the Register tx confirms via
+// WaitMined on the WRITE upstream, but a subsequent setMetadata estimateGas
+// goes through the READ upstream which may still be a block or two behind
+// (we hit this in production when a stale eRPC route was pinned to a
+// parallel Anvil fork — the simulation reverted with ERC721NonexistentToken).
+func (c *Client) WaitForAgent(ctx context.Context, agentID *big.Int, timeout time.Duration) (common.Address, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		addr, err := c.AgentWallet(ctx, agentID)
+		if err == nil {
+			return addr, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return common.Address{}, fmt.Errorf("erc8004: waitForAgent %s timed out after %s: %w", agentID, timeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return common.Address{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // GetMetadata reads metadata for the given key from the agent NFT.

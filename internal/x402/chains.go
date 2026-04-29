@@ -35,6 +35,16 @@ type ChainInfo struct {
 	EIP3009Version string
 }
 
+// AssetInfo describes the token and EIP-712 metadata used for x402 settlement.
+type AssetInfo struct {
+	Address        string
+	Symbol         string
+	Decimals       int
+	TransferMethod string
+	EIP712Name     string
+	EIP712Version  string
+}
+
 // Chain constants — USDC addresses verified against coinbase/x402/go v2.7.0
 // mechanisms/evm/constants.go and on-chain contract deployments.
 var (
@@ -159,7 +169,6 @@ func NormalizeNetworkID(network string) string {
 	}
 }
 
-
 // ResolveChainInfo maps a human-friendly chain name to its ChainInfo.
 // Phase 2 renames this to ResolveChain after deleting the old one in config.go.
 func ResolveChainInfo(name string) (ChainInfo, error) {
@@ -205,14 +214,55 @@ func decimalToAtomic(amount string, decimals int) string {
 	return atomicInt.String()
 }
 
+// DefaultAsset returns the default settlement asset for a chain.
+func (c ChainInfo) DefaultAsset() AssetInfo {
+	return AssetInfo{
+		Address:        c.USDCAddress,
+		Symbol:         "USDC",
+		Decimals:       c.Decimals,
+		TransferMethod: "eip3009",
+		EIP712Name:     c.EIP3009Name,
+		EIP712Version:  c.EIP3009Version,
+	}
+}
+
+// ResolveAssetInfo applies any route-level asset overrides on top of the
+// chain's default settlement asset.
+func ResolveAssetInfo(chain ChainInfo, rule *RouteRule) AssetInfo {
+	asset := chain.DefaultAsset()
+	if rule == nil {
+		return asset
+	}
+	if rule.AssetAddress != "" {
+		asset.Address = rule.AssetAddress
+	}
+	if rule.AssetSymbol != "" {
+		asset.Symbol = rule.AssetSymbol
+	}
+	if rule.AssetDecimals > 0 {
+		asset.Decimals = rule.AssetDecimals
+	}
+	if rule.AssetTransferMethod != "" {
+		asset.TransferMethod = rule.AssetTransferMethod
+	}
+	if rule.EIP712Name != "" {
+		asset.EIP712Name = rule.EIP712Name
+	}
+	if rule.EIP712Version != "" {
+		asset.EIP712Version = rule.EIP712Version
+	}
+	return asset
+}
+
 // BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
 // the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
 func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirementsV1 {
+	asset := chain.DefaultAsset()
 	return x402types.PaymentRequirementsV1{
 		Scheme:            "exact",
 		Network:           chain.NetworkID,
-		MaxAmountRequired: decimalToAtomic(amount, chain.Decimals),
-		Asset:             chain.USDCAddress,
+		MaxAmountRequired: decimalToAtomic(amount, asset.Decimals),
+		Asset:             asset.Address,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: 60,
 	}
@@ -221,17 +271,23 @@ func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402ty
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the
 // given chain. amount is the decimal USDC amount (e.g. "0.001" = $0.001).
 func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirements {
+	return BuildV2RequirementWithAsset(chain, chain.DefaultAsset(), amount, recipientAddress)
+}
+
+// BuildV2RequirementWithAsset creates a v2 PaymentRequirements for the given
+// chain and settlement asset.
+func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string) x402types.PaymentRequirements {
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
-		Amount:            decimalToAtomic(amount, chain.Decimals),
-		Asset:             chain.USDCAddress,
+		Amount:            decimalToAtomic(amount, asset.Decimals),
+		Asset:             asset.Address,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: 60,
 		Extra: map[string]interface{}{
-			"name":                chain.EIP3009Name,
-			"version":             chain.EIP3009Version,
-			"assetTransferMethod": "eip3009",
+			"name":                asset.EIP712Name,
+			"version":             asset.EIP712Version,
+			"assetTransferMethod": asset.TransferMethod,
 		},
 	}
 }

@@ -138,6 +138,14 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		return errors.New("eRPC config project[0] is not a map")
 	}
 
+	if err := upsertCustomRPCUpstream(project, chainID, chainName, endpoint, readOnly); err != nil {
+		return err
+	}
+
+	return writeERPCConfig(cfg, erpcConfig)
+}
+
+func upsertCustomRPCUpstream(project map[string]any, chainID int, chainName, endpoint string, readOnly bool) error {
 	// Remove any existing custom upstream for this chain ID.
 	existingUpstreams, _ := project["upstreams"].([]any)
 
@@ -169,12 +177,16 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		upstream["ignoreMethods"] = writeMethods
 	}
 
-	filtered = append(filtered, upstream)
+	// Put explicit custom endpoints first. This makes --endpoint deterministic
+	// and, with --allow-writes, prevents flaky built-in/public upstreams from
+	// winning eth_sendRawTransaction routing before the user-selected RPC.
+	filtered = append([]any{upstream}, filtered...)
 	project["upstreams"] = filtered
 
 	// Ensure a network entry exists for this chain ID.
 	networksList, _ := project["networks"].([]any)
 	found := false
+	customID := fmt.Sprintf("custom-%d-0", chainID)
 
 	for _, n := range networksList {
 		nm, ok := n.(map[string]any)
@@ -185,13 +197,14 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		if evm, ok := nm["evm"].(map[string]any); ok {
 			if yamlInt(evm["chainId"]) == chainID {
 				found = true
+				configureCustomWritePolicy(nm, customID, readOnly)
 				break
 			}
 		}
 	}
 
 	if !found {
-		networksList = append(networksList, map[string]any{
+		network := map[string]any{
 			"architecture": "evm",
 			"evm":          map[string]any{"chainId": chainID},
 			"alias":        sanitizeAlias(chainName),
@@ -199,11 +212,36 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 				"timeout": map[string]any{"duration": "30s"},
 				"retry":   map[string]any{"maxAttempts": 2, "delay": "100ms"},
 			},
-		})
+		}
+		configureCustomWritePolicy(network, customID, readOnly)
+		networksList = append(networksList, network)
 		project["networks"] = networksList
 	}
 
-	return writeERPCConfig(cfg, erpcConfig)
+	return nil
+}
+
+func configureCustomWritePolicy(network map[string]any, upstreamID string, readOnly bool) {
+	if readOnly {
+		if policy, ok := network["selectionPolicy"].(map[string]any); ok {
+			if eval, _ := policy["evalFunction"].(string); strings.Contains(eval, upstreamID) {
+				delete(network, "selectionPolicy")
+			}
+		}
+		return
+	}
+
+	network["selectionPolicy"] = map[string]any{
+		"evalInterval":  "1m",
+		"evalPerMethod": true,
+		"evalFunction": fmt.Sprintf(`(upstreams, method) => {
+  if (method === 'eth_sendRawTransaction') {
+    return upstreams.filter(u => u.config.id === '%s');
+  }
+  return upstreams;
+}
+`, upstreamID),
+	}
 }
 
 func validateRPCEndpoint(endpoint string) error {

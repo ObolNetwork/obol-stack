@@ -1,6 +1,7 @@
 package buyer
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -15,10 +16,12 @@ import (
 //
 // Thread-safe via sync.Mutex.
 type PreSignedSigner struct {
-	network string
-	payTo   string
-	asset   string
-	price   string
+	network  string
+	payTo    string
+	asset    string
+	price    string
+	symbol   string
+	decimals int
 
 	onConsume func(*PreSignedAuth) error
 
@@ -28,7 +31,7 @@ type PreSignedSigner struct {
 }
 
 // NewPreSignedSigner creates a signer backed by a pool of pre-signed auths.
-func NewPreSignedSigner(network, payTo, asset, price string, auths []*PreSignedAuth, spent int, onConsume func(*PreSignedAuth) error) *PreSignedSigner {
+func NewPreSignedSigner(network, payTo, asset, price, symbol string, decimals int, auths []*PreSignedAuth, spent int, onConsume func(*PreSignedAuth) error) *PreSignedSigner {
 	pool := make([]*PreSignedAuth, len(auths))
 	copy(pool, auths)
 
@@ -37,6 +40,8 @@ func NewPreSignedSigner(network, payTo, asset, price string, auths []*PreSignedA
 		payTo:     payTo,
 		asset:     asset,
 		price:     price,
+		symbol:    symbol,
+		decimals:  decimals,
 		onConsume: onConsume,
 		auths:     pool,
 		spent:     spent,
@@ -135,6 +140,34 @@ func (s *PreSignedSigner) HoldSign(req *x402types.PaymentRequirements) (*x402typ
 		accepted.Amount = s.price
 	}
 
+	if auth.Payment != nil {
+		payment, err := clonePaymentPayload(auth.Payment)
+		if err != nil {
+			return nil, nil, err
+		}
+		if payment.Accepted.Scheme == "" {
+			payment.Accepted.Scheme = accepted.Scheme
+		}
+		if payment.Accepted.Network == "" {
+			payment.Accepted.Network = accepted.Network
+		} else {
+			payment.Accepted.Network = normalizeNetworkID(payment.Accepted.Network)
+		}
+		if payment.Accepted.Amount == "" {
+			payment.Accepted.Amount = accepted.Amount
+		}
+		if payment.Accepted.Asset == "" {
+			payment.Accepted.Asset = accepted.Asset
+		}
+		if payment.Accepted.PayTo == "" {
+			payment.Accepted.PayTo = accepted.PayTo
+		}
+		if payment.X402Version == 0 {
+			payment.X402Version = 2
+		}
+		return payment, auth, nil
+	}
+
 	payload := &x402types.PaymentPayload{
 		X402Version: 2,
 		Accepted:    accepted,
@@ -187,7 +220,7 @@ func (s *PreSignedSigner) GetPriority() int { return 0 }
 // GetTokens returns the single USDC token this signer handles.
 func (s *PreSignedSigner) GetTokens() []TokenConfig {
 	return []TokenConfig{
-		{Address: s.asset, Symbol: "USDC", Decimals: 6, Priority: 0},
+		{Address: s.asset, Symbol: fallbackString(s.symbol, "USDC"), Decimals: fallbackInt(s.decimals, 6), Priority: 0},
 	}
 }
 
@@ -238,4 +271,33 @@ func normalizeNetworkID(network string) string {
 	default:
 		return network
 	}
+}
+
+func clonePaymentPayload(payment *x402types.PaymentPayload) (*x402types.PaymentPayload, error) {
+	if payment == nil {
+		return nil, fmt.Errorf("payment payload is nil")
+	}
+	data, err := json.Marshal(payment)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payment payload: %w", err)
+	}
+	var cloned x402types.PaymentPayload
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return nil, fmt.Errorf("unmarshal payment payload: %w", err)
+	}
+	return &cloned, nil
+}
+
+func fallbackString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func fallbackInt(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

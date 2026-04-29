@@ -51,6 +51,24 @@ type RouteRule struct {
 	// If empty, falls back to PricingConfig.Chain.
 	Network string `yaml:"network,omitempty"`
 
+	// AssetAddress overrides the default token contract address for this route.
+	AssetAddress string `yaml:"assetAddress,omitempty"`
+
+	// AssetSymbol records the token symbol used for this route.
+	AssetSymbol string `yaml:"assetSymbol,omitempty"`
+
+	// AssetDecimals overrides the token decimals for this route.
+	AssetDecimals int `yaml:"assetDecimals,omitempty"`
+
+	// AssetTransferMethod overrides the x402 transfer method for this route.
+	AssetTransferMethod string `yaml:"assetTransferMethod,omitempty"`
+
+	// EIP712Name overrides the EIP-712 domain name for this route's asset.
+	EIP712Name string `yaml:"eip712Name,omitempty"`
+
+	// EIP712Version overrides the EIP-712 domain version for this route's asset.
+	EIP712Version string `yaml:"eip712Version,omitempty"`
+
 	// UpstreamAuth is injected as the Authorization header on approved requests.
 	// The shared seller gateway injects this header on approved upstream
 	// requests. This lets the upstream (e.g., LiteLLM) authenticate the request

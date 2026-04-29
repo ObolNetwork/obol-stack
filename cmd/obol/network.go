@@ -493,7 +493,7 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "status",
 		Usage: "Show eRPC gateway health and upstream counts",
-		Action: func(ctx context.Context, cmd *cli.Command) error {
+		Action: func(_ context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
 			podStatus, upstreamCounts, err := network.GetERPCStatus(cfg)

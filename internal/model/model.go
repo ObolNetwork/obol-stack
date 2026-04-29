@@ -613,7 +613,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", patchJSON, "--type=merge"); err != nil {
+		"-p", patchJSON, "--type=merge", "--field-manager=helm"); err != nil {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
 	}
 
@@ -630,6 +630,22 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 // AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
 // after validating it works.
+//
+// LiteLLM `model_name` contract — the canonical identifier is the bare
+// `modelName`. Same convention every other code path in this stack uses:
+// Ollama writes `qwen3.5:9b`, Anthropic writes `claude-opus-4-7`, OpenAI
+// writes `gpt-5.4`. The agent (Hermes / OpenClaw) reads `model_name` straight
+// back as the `model` field on chat-completion calls — any provider-prefix
+// namespacing (`custom/<name>/<model>`) on this side breaks that round-trip
+// because the agent then strips it and calls LiteLLM with a key that doesn't
+// match.
+//
+// The `name` arg is informational only. It is surfaced via
+// `obol model status` / `list` for human reference but does NOT participate
+// in the LiteLLM route key. Two custom endpoints that publish the same
+// `modelName` will overwrite each other in the LiteLLM ConfigMap; that is
+// the natural "repoint my model" behavior an operator running
+// `obol model setup custom` wants when they re-run the command.
 func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, apiKey string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -658,24 +674,16 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 		u.Infof("Cluster endpoint: %s (translated from %s)", clusterEndpoint, endpoint)
 	}
 
-	// Build model entry
-	litellmModel := "openai/" + modelName
-	modelID := fmt.Sprintf("custom/%s/%s", name, modelName)
+	entry := buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey)
 
-	entry := ModelEntry{
-		ModelName: modelID,
-		LiteLLMParams: LiteLLMParams{
-			Model:   litellmModel,
-			APIBase: clusterEndpoint,
-			APIKey:  apiKey,
-		},
+	// Patch ConfigMap for persistence. The display label is logged so an
+	// operator can correlate the call with their `--name` arg, but it isn't
+	// part of the route key.
+	if name != "" {
+		u.Infof("Adding custom endpoint %q (model: %s) to LiteLLM config", name, modelName)
+	} else {
+		u.Infof("Adding custom endpoint (model: %s) to LiteLLM config", modelName)
 	}
-	if apiKey == "" {
-		entry.LiteLLMParams.APIKey = "none"
-	}
-
-	// Patch ConfigMap for persistence.
-	u.Infof("Adding custom endpoint %q to LiteLLM config", name)
 
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, []ModelEntry{entry}); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
@@ -687,7 +695,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 		return RestartLiteLLM(cfg, u, name)
 	}
 
-	u.Successf("Custom endpoint %q added (model: %s)", name, modelID)
+	u.Successf("Custom endpoint %q added (model: %s)", name, modelName)
 
 	return nil
 }
@@ -1130,6 +1138,27 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 	return entries
 }
 
+// buildCustomEndpointEntry constructs the LiteLLM ModelEntry for a custom
+// OpenAI-compatible endpoint added via `obol model setup custom`. The
+// `model_name` is the bare `modelName` — see the AddCustomEndpoint doc
+// comment for the round-trip contract this enforces. Extracted as a
+// standalone helper so the entry shape is unit-testable without going
+// through the full kubectl-driven AddCustomEndpoint path.
+func buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey string) ModelEntry {
+	entry := ModelEntry{
+		ModelName: modelName,
+		LiteLLMParams: LiteLLMParams{
+			Model:   "openai/" + modelName,
+			APIBase: clusterEndpoint,
+			APIKey:  apiKey,
+		},
+	}
+	if apiKey == "" {
+		entry.LiteLLMParams.APIKey = "none"
+	}
+	return entry
+}
+
 // patchLiteLLMConfig reads the current config.yaml from the ConfigMap,
 // merges new model entries (replacing existing by model_name), and patches back.
 func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEntry) error {
@@ -1175,7 +1204,7 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 
 	return kubectl.Run(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", patchJSON, "--type=merge")
+		"-p", patchJSON, "--type=merge", "--field-manager=helm")
 }
 
 // detectProvider infers the provider name from a model_list entry.

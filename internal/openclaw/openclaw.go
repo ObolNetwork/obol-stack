@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
@@ -47,10 +48,6 @@ const (
 	// chartVersion pins the openclaw Helm chart version from the obol repo.
 	// renovate: datasource=helm depName=openclaw registryUrl=https://obolnetwork.github.io/helm-charts/
 	chartVersion = "0.4.0"
-
-	// remoteSignerChartVersion pins the remote-signer Helm chart version.
-	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.3.1"
 )
 
 // openclawVersionRaw is the single source of truth for the upstream OpenClaw
@@ -136,7 +133,7 @@ func SetupDefault(cfg *config.Config, u *ui.UI) error {
 			} else {
 				u.Successf("Local Ollama detected at %s (no models pulled)", ollamaEndpoint())
 				u.Print("  Run 'obol model setup' to configure a cloud provider,")
-				u.Print("  or pull a model with: ollama pull qwen3.5:4b")
+				u.Print("  or pull a model with: ollama pull qwen3.5:9b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
 			}
 		} else {
 			u.Warnf("Local Ollama not detected on host (%s)", ollamaEndpoint())
@@ -175,34 +172,38 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	// Idempotent re-run for default deployment: just re-sync
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
-			u.Info("Default OpenClaw instance already configured, re-syncing...")
-			// Always regenerate helmfile.yaml to pick up chart version bumps.
-			// values-obol.yaml (user config) is intentionally left unchanged.
-			namespace := fmt.Sprintf("%s-%s", appName, id)
+			if _, err := os.Stat(filepath.Join(deploymentDir, "values-obol.yaml")); os.IsNotExist(err) {
+				u.Warn("Default OpenClaw scaffold is incomplete; rebuilding missing values-obol.yaml")
+			} else {
+				u.Info("Default OpenClaw instance already configured, re-syncing...")
+				// Always regenerate helmfile.yaml to pick up chart version bumps.
+				// values-obol.yaml (user config) is intentionally left unchanged.
+				namespace := fmt.Sprintf("%s-%s", appName, id)
 
-			helmfileContent := generateHelmfile(id, namespace)
-			if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
-				return fmt.Errorf("failed to update helmfile.yaml: %w", err)
-			}
-
-			if opts.Sync {
-				if err := doSync(cfg, id, u); err != nil {
-					return err
-				}
-				// Import workspace on re-sync too
-				imported, importErr := DetectExistingConfig()
-				if importErr != nil {
-					u.Warnf("could not read existing config: %v", importErr)
+				helmfileContent := generateHelmfile(id, namespace)
+				if err := os.WriteFile(filepath.Join(deploymentDir, "helmfile.yaml"), []byte(helmfileContent), 0o600); err != nil {
+					return fmt.Errorf("failed to update helmfile.yaml: %w", err)
 				}
 
-				if imported != nil && imported.WorkspaceDir != "" {
-					copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
+				if opts.Sync {
+					if err := doSync(cfg, id, u); err != nil {
+						return err
+					}
+					// Import workspace on re-sync too
+					imported, importErr := DetectExistingConfig()
+					if importErr != nil {
+						u.Warnf("could not read existing config: %v", importErr)
+					}
+
+					if imported != nil && imported.WorkspaceDir != "" {
+						copyWorkspaceToVolume(cfg, id, imported.WorkspaceDir, u)
+					}
+
+					return nil
 				}
 
 				return nil
 			}
-
-			return nil
 		}
 	}
 
@@ -256,7 +257,10 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	// Ensure /etc/hosts has an entry for this subdomain.
 	// macOS Sequoia's /etc/resolver/ doesn't reliably forward subdomain queries.
-	if err := dns.EnsureHostsEntries(collectAllHostnames(cfg, hostname)); err != nil {
+	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
+		Runtime: agentruntime.OpenClaw,
+		ID:      id,
+	})); err != nil {
 		u.Warnf("Could not update /etc/hosts for %s: %v", hostname, err)
 	}
 
@@ -1717,55 +1721,19 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	return nil
 }
 
-// rankModels picks the best model as primary and demotes the rest to fallbacks.
-// Cloud models (Anthropic, OpenAI) are ranked above local models (Ollama).
-// Within a tier, the first model wins.
+// rankModels delegates to model.Rank for capability-aware ranking, then
+// prefixes every entry with `openai/` for LiteLLM routing. Both runtimes used
+// to roll their own ranker that picked `local[0]` (whatever Ollama listed
+// first), which produced the llama3.2:1b regression — see internal/model/rank.go.
 func rankModels(models []string) (primary string, fallbacks []string) {
-	if len(models) == 0 {
-		return "", nil
+	primary, fallbacks = model.Rank(models)
+	if primary != "" {
+		primary = "openai/" + primary
 	}
-
-	// Partition into cloud and local
-	var cloud, local []string
-
-	for _, m := range models {
-		if isCloudModel(m) {
-			cloud = append(cloud, m)
-		} else {
-			local = append(local, m)
-		}
-	}
-
-	// Best cloud model is primary; rest are fallbacks (cloud first, then local)
-	if len(cloud) > 0 {
-		primary = cloud[0]
-		fallbacks = append(append([]string{}, cloud[1:]...), local...)
-	} else {
-		primary = local[0]
-		fallbacks = local[1:]
-	}
-
-	// Prefix with openai/ for LiteLLM routing
-	primary = "openai/" + primary
-
 	for i, f := range fallbacks {
 		fallbacks[i] = "openai/" + f
 	}
-
 	return primary, fallbacks
-}
-
-// isCloudModel returns true if the model name looks like a cloud provider model.
-func isCloudModel(name string) bool {
-	if strings.Contains(name, "claude") {
-		return true
-	}
-
-	if strings.HasPrefix(name, "gpt") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") {
-		return true
-	}
-
-	return false
 }
 
 // patchModelHierarchy updates the openclaw-config ConfigMap with the given
@@ -2830,33 +2798,5 @@ releases:
     version: %s
     values:
       - values-remote-signer.yaml
-`, id, namespace, chartVersion, namespace, remoteSignerChartVersion)
-}
-
-// collectAllHostnames gathers all openclaw subdomain hostnames that should be
-// in /etc/hosts. Scans existing deployments and includes the new hostname.
-func collectAllHostnames(cfg *config.Config, newHostname string) []string {
-	hostnames := []string{newHostname}
-	appsDir := filepath.Join(cfg.ConfigDir, "applications", appName)
-
-	entries, err := os.ReadDir(appsDir)
-	if err != nil {
-		return hostnames
-	}
-
-	seen := map[string]bool{newHostname: true}
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-
-		h := fmt.Sprintf("openclaw-%s.%s", e.Name(), defaultDomain)
-		if !seen[h] {
-			hostnames = append(hostnames, h)
-			seen[h] = true
-		}
-	}
-
-	return hostnames
+`, id, namespace, chartVersion, namespace, agentruntime.RemoteSignerChartVersion)
 }

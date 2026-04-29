@@ -90,7 +90,11 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 
 		filtered := make([]*PreSignedAuth, 0, len(authPool))
 		for _, auth := range authPool {
-			if auth == nil || p.state.IsConsumed(name, auth.Nonce) {
+			if auth == nil {
+				continue
+			}
+			consumeKey := auth.ConsumeKey()
+			if consumeKey != "" && p.state.IsConsumed(name, consumeKey) {
 				continue
 			}
 
@@ -111,10 +115,16 @@ func (p *Proxy) Reload(cfg *Config, auths AuthsFile) error {
 			upstream.PayTo,
 			upstream.Asset,
 			upstream.Price,
+			upstream.AssetSymbol,
+			upstream.AssetDecimals,
 			filtered,
 			p.state.ConsumedCount(name),
 			func(auth *PreSignedAuth) error {
-				return p.state.MarkConsumed(name, auth.Nonce)
+				key := auth.ConsumeKey()
+				if key == "" {
+					return nil
+				}
+				return p.state.MarkConsumed(name, key)
 			},
 		)
 

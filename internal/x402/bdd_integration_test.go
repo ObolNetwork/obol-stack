@@ -104,7 +104,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("obol stack up: %v", err)
 	}
 
-	payTo, err := runObolOutput(obolBin, "openclaw", "wallet", "address", "obol-agent")
+	payTo, err := runObolOutput(obolBin, "hermes", "wallet", "address", "obol-agent")
 	if err != nil {
 		teardown(obolBin)
 		log.Fatalf("resolve seller wallet: %v", err)

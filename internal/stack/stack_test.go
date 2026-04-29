@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
@@ -159,19 +161,77 @@ func TestStripConflictingPorts_StringManipulation(t *testing.T) {
 	}
 }
 
-func TestEnsureK3dPortsAvailable_RewritesConfig(t *testing.T) {
-	// Verify that ensureK3dPortsAvailable reads, strips, and rewrites the
-	// config file when port blocks are present and those ports are occupied.
-	// We can't actually block port 80, so we verify the no-op path: when
-	// ports 80/443 are free, the file should remain unchanged.
+func TestRewriteConflictingPorts_PreservesAvailableFallbacks(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(port int) bool {
+		return port == 8080 || port == 8443
+	}, func() (int, error) {
+		t.Fatal("should not pick an ephemeral port when fallbacks are available")
+		return 0, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected %s mapping to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 8080:80", "- port: 8443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be preserved:\n%s", expected, got)
+		}
+	}
+}
+
+func TestRewriteConflictingPorts_PicksEphemeralWhenAllDefaultsBusy(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+	picks := []int{18080, 18443}
+
+	got := rewriteConflictingPorts(fullConfig, ui.New(false), func(int) bool {
+		return false
+	}, func() (int, error) {
+		if len(picks) == 0 {
+			t.Fatal("unexpected extra port pick")
+		}
+		port := picks[0]
+		picks = picks[1:]
+		return port, nil
+	})
+
+	for _, unexpected := range []string{"- port: 80:80", "- port: 8080:80", "- port: 443:443", "- port: 8443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected default mapping %s to be removed:\n%s", unexpected, got)
+		}
+	}
+	for _, expected := range []string{"- port: 18080:80", "- port: 18443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %s mapping to be inserted:\n%s", expected, got)
+		}
+	}
+	if !strings.Contains(got, "options:\n") {
+		t.Fatal("YAML options key should remain")
+	}
+}
+
+func TestEnsureK3dPortsAvailable_NoDefaultMappings(t *testing.T) {
+	// Verify the file read/write path stays a no-op for configs that do not
+	// contain the default ingress mappings.
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "k3d.yaml")
 
 	original := "ports:\n" +
-		portBlock(80, 80) +
-		portBlock(8080, 80) +
-		portBlock(443, 443) +
-		portBlock(8443, 443)
+		portBlock(18080, 80) +
+		portBlock(18443, 443)
 
 	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -185,10 +245,8 @@ func TestEnsureK3dPortsAvailable_RewritesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// On most dev machines ports 80/443 are free (or permission-denied which
-	// is treated as available), so the config should be unchanged.
 	if string(data) != original {
-		t.Errorf("expected config unchanged when ports are free\ngot:\n%s", string(data))
+		t.Errorf("expected config unchanged when no default mappings are present\ngot:\n%s", string(data))
 	}
 }
 
@@ -436,5 +494,143 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 
 	if strings.Contains(out, "custom_provider_map") {
 		t.Fatalf("llm template should not require a custom provider:\n%s", out)
+	}
+}
+
+func TestMergeLiteLLMConfigPreservesChartDefaultsAndPreviousModels(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  cache: false
+  drop_params: true
+`
+	previous := `
+model_list:
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-5-20250929"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	if !hasLiteLLMModel(got, "paid/*") {
+		t.Fatalf("merged config lost chart paid route:\n%s", merged)
+	}
+	if !hasLiteLLMModel(got, "anthropic/*") {
+		t.Fatalf("merged config lost previous provider route:\n%s", merged)
+	}
+	if got.GeneralSettings["master_key"] != "os.environ/LITELLM_MASTER_KEY" {
+		t.Fatalf("merged config lost chart general_settings:\n%#v", got.GeneralSettings)
+	}
+	if got.LiteLLMSettings["drop_params"] != true {
+		t.Fatalf("merged config lost chart litellm_settings:\n%#v", got.LiteLLMSettings)
+	}
+}
+
+func TestMergeLiteLLMConfigCurrentEntryWinsForChartDefaults(t *testing.T) {
+	current := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+`
+	previous := `
+model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://custom-buyer:8402/v1"
+      api_key: "custom"
+`
+
+	merged, err := mergeLiteLLMConfig(current, previous)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	for _, entry := range got.ModelList {
+		if entry.ModelName == "paid/*" {
+			if entry.LiteLLMParams.APIBase != "http://127.0.0.1:8402/v1" {
+				t.Fatalf("current paid route did not win over previous route:\n%+v", entry)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("merged config missing paid route:\n%s", merged)
+}
+
+func TestConfigMapFieldOwnershipManifestUsesLiteralBlock(t *testing.T) {
+	manifest := string(configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", "model_list:\n  - model_name: paid/*\n"))
+
+	for _, want := range []string{
+		"apiVersion: v1\n",
+		"kind: ConfigMap\n",
+		"  name: litellm-config\n",
+		"  namespace: llm\n",
+		"  config.yaml: |\n",
+		"    model_list:\n",
+		"      - model_name: paid/*\n",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("manifest missing %q:\n%s", want, manifest)
+		}
+	}
+}
+
+func hasLiteLLMModel(cfg model.LiteLLMConfig, name string) bool {
+	for _, entry := range cfg.ModelList {
+		if entry.ModelName == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+func TestHasLiveK3dCluster(t *testing.T) {
+	tests := []struct {
+		name       string
+		containers []string
+		want       bool
+	}{
+		{name: "empty", containers: nil, want: false},
+		{name: "only mirror", containers: []string{"k3d-obol-docker-io.localhost"}, want: false},
+		{name: "serverlb attached", containers: []string{"k3d-obol-stack-fancy-yak-serverlb"}, want: true},
+		{name: "server-0 attached", containers: []string{"k3d-obol-stack-fancy-yak-server-0"}, want: true},
+		{name: "server-12 attached", containers: []string{"k3d-obol-stack-fancy-yak-server-12"}, want: true},
+		{name: "server-non-numeric ignored", containers: []string{"unrelated-server-foo"}, want: false},
+		{name: "mixed mirror and live", containers: []string{"k3d-obol-ghcr-io.localhost", "k3d-obol-stack-blue-fox-server-0"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasLiveK3dCluster(tt.containers); got != tt.want {
+				t.Fatalf("hasLiveK3dCluster(%v) = %v, want %v", tt.containers, got, tt.want)
+			}
+		})
 	}
 }
