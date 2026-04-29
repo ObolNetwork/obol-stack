@@ -13,7 +13,7 @@ import "testing"
 // be able to round-trip the returned primary back to LiteLLM without
 // modification.
 func TestRankModels_HermesWrapper_PrefersLargerLocalModel(t *testing.T) {
-	primary, fallbacks := rankModels([]string{
+	primary, fallbacks := rankModels(nil, []string{
 		"llama3.2:1b",
 		"qwen3.5:9b",
 		"llama3.2:3b",
@@ -31,7 +31,7 @@ func TestRankModels_HermesWrapper_PrefersLargerLocalModel(t *testing.T) {
 // `claude-opus-4-7`, not `anthropic/claude-opus-4-7`), and the wrapper must
 // preserve that.
 func TestRankModels_HermesWrapper_PrefersClaudeOverLocal(t *testing.T) {
-	primary, _ := rankModels([]string{
+	primary, _ := rankModels(nil, []string{
 		"qwen3.5:9b",
 		"claude-opus-4-7",
 		"llama3.2:1b",
@@ -49,7 +49,7 @@ func TestRankModels_HermesWrapper_PrefersClaudeOverLocal(t *testing.T) {
 // was the double-strip bug fixed in ca820c9 — this test guards against
 // reintroducing it.
 func TestRankModels_HermesWrapper_PreservesProviderPrefixIfPresent(t *testing.T) {
-	primary, _ := rankModels([]string{
+	primary, _ := rankModels(nil, []string{
 		"anthropic/claude-opus-4-7",
 		"openai/gpt-4o",
 		"qwen3.5:9b",
@@ -65,7 +65,7 @@ func TestRankModels_HermesWrapper_PreservesProviderPrefixIfPresent(t *testing.T)
 // LiteLLM with a key that no longer matched the registered route.
 func TestRankModels_HermesWrapper_CustomNamespacedEntryRoundTrips(t *testing.T) {
 	in := []string{"custom/spark1-vllm/qwen36-fast"}
-	primary, _ := rankModels(in)
+	primary, _ := rankModels(nil, in)
 	if primary != in[0] {
 		t.Fatalf("primary: got %q, want %q (must round-trip unchanged)", primary, in[0])
 	}

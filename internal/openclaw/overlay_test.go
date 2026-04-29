@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 )
 
 // testConfig creates a temp config dir with a .stack-id file for testing.
@@ -434,25 +435,75 @@ erpc:
 	})
 }
 
-func TestRankModelsHonorsConfiguredOrder(t *testing.T) {
-	primary, fallbacks := rankModels([]string{"llama3.2:3b", "claude-sonnet-4-6", "gpt-4.1"})
-	if primary != "openai/llama3.2:3b" {
-		t.Fatalf("primary = %q, want openai/llama3.2:3b", primary)
+// TestRankModelsCapabilityWinsWithoutPreference is the corrected version of
+// the old TestRankModelsHonorsConfiguredOrder. The old test asserted that
+// rankModels picked models[0] regardless of capability — that was the exact
+// bug Oisin flagged: it meant `obol model prefer` was redundant because
+// rank already used input order, and any code path that re-sorted (e.g.
+// auto-config) would silently pick the wrong model.
+//
+// Correct contract: with NO explicit preference set, capability ranking
+// wins. Cloud frontier models (Claude/GPT) outrank local Ollama, regardless
+// of input order.
+func TestRankModelsCapabilityWinsWithoutPreference(t *testing.T) {
+	cfg := testConfig(t)
+
+	// llama listed first in input — should NOT win, capability rank picks Claude.
+	primary, fallbacks := rankModels(cfg, []string{"llama3.2:3b", "claude-sonnet-4-6", "gpt-4.1"})
+	if primary != "openai/claude-sonnet-4-6" {
+		t.Fatalf("primary = %q, want openai/claude-sonnet-4-6 (cloud > local)", primary)
 	}
 
+	// Fallbacks: remaining cloud first, then local.
+	wantFallbacks := []string{"openai/gpt-4.1", "openai/llama3.2:3b"}
+	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
+		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
+	}
+
+	primary, fallbacks = rankModels(cfg, []string{"claude-sonnet-4-6", "llama3.2:3b"})
+	if primary != "openai/claude-sonnet-4-6" {
+		t.Fatalf("primary = %q, want openai/claude-sonnet-4-6", primary)
+	}
+	wantFallbacks = []string{"openai/llama3.2:3b"}
+	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
+		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
+	}
+}
+
+// TestRankModelsHonorsExplicitPreference is the regression guard for the
+// prefer-over-rank fix. With a preference set on disk, rankModels must
+// return that model as primary even when capability ranking would pick
+// something else. This is what `obol model prefer` ships.
+func TestRankModelsHonorsExplicitPreference(t *testing.T) {
+	cfg := testConfig(t)
+
+	// User explicitly prefers llama3.2:3b — must win over Claude.
+	if err := model.WritePreference(cfg, "llama3.2:3b"); err != nil {
+		t.Fatalf("WritePreference: %v", err)
+	}
+
+	primary, fallbacks := rankModels(cfg, []string{"claude-sonnet-4-6", "gpt-4.1", "llama3.2:3b"})
+	if primary != "openai/llama3.2:3b" {
+		t.Fatalf("primary = %q, want openai/llama3.2:3b (preference must beat capability)", primary)
+	}
 	wantFallbacks := []string{"openai/claude-sonnet-4-6", "openai/gpt-4.1"}
 	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
 		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
 	}
+}
 
-	primary, fallbacks = rankModels([]string{"claude-sonnet-4-6", "llama3.2:3b"})
-	if primary != "openai/claude-sonnet-4-6" {
-		t.Fatalf("primary = %q, want openai/claude-sonnet-4-6", primary)
+// TestRankModelsStalePreferenceFallsBackToCapability covers the case where
+// the user's previously preferred model no longer appears in the candidate
+// list (e.g. they removed it). The preference file is silently ignored and
+// capability rank takes over — no error, no surprise primary.
+func TestRankModelsStalePreferenceFallsBackToCapability(t *testing.T) {
+	cfg := testConfig(t)
+	if err := model.WritePreference(cfg, "qwen3.5:9b"); err != nil {
+		t.Fatalf("WritePreference: %v", err)
 	}
-
-	wantFallbacks = []string{"openai/llama3.2:3b"}
-	if !reflect.DeepEqual(fallbacks, wantFallbacks) {
-		t.Fatalf("fallbacks = %#v, want %#v", fallbacks, wantFallbacks)
+	primary, _ := rankModels(cfg, []string{"claude-sonnet-4-6", "llama3.2:3b"})
+	if primary != "openai/claude-sonnet-4-6" {
+		t.Fatalf("primary = %q, want openai/claude-sonnet-4-6 (stale preference must fall back to rank)", primary)
 	}
 }
 

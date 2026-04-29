@@ -997,7 +997,7 @@ func syncObolSkills(cfg *config.Config, id string) error {
 func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 	models, err := model.GetConfiguredModels(cfg)
 	if err == nil && len(models) > 0 {
-		primary, _ := rankModels(models)
+		primary, _ := rankModels(cfg, models)
 		return models, primary, nil
 	}
 
@@ -1030,7 +1030,7 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 		}
 	}
 
-	primary, _ := rankModels(names)
+	primary, _ := rankModels(cfg, names)
 	return names, primary, nil
 }
 
@@ -1190,17 +1190,18 @@ func litellmMasterKey(cfg *config.Config) string {
 	return "sk-obol-" + strings.TrimSpace(string(data))
 }
 
-// rankModels delegates to model.Rank, which knows how to prefer larger local
-// models and frontier cloud models. Kept as a thin wrapper so call sites
-// don't need to import internal/model directly.
+// rankModels delegates to model.RankWithPreference, which honors any
+// explicit `obol model prefer` choice and otherwise falls through to
+// capability-aware ranking. Kept as a thin wrapper so call sites don't
+// need to import internal/model directly.
 //
 // IMPORTANT: do NOT pre-strip provider prefixes here. model.Rank strips
 // internally for ranking heuristics but returns the ORIGINAL strings so the
 // agent can round-trip them back to LiteLLM. Stripping at this layer would
 // break that round-trip — that's exactly the double-strip bug that
 // ca820c9 worked around for custom endpoints.
-func rankModels(models []string) (primary string, fallbacks []string) {
-	return model.Rank(models)
+func rankModels(cfg *config.Config, models []string) (primary string, fallbacks []string) {
+	return model.RankWithPreference(models, model.ReadPreference(cfg))
 }
 
 func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {

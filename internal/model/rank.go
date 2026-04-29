@@ -69,6 +69,68 @@ func Rank(models []string) (primary string, fallbacks []string) {
 	return primary, fallbacks
 }
 
+// RankWithPreference is Rank, but a non-empty preferred model wins over the
+// capability ordering as long as it appears in the candidate list. Fallbacks
+// are the remaining models in capability order.
+//
+// Resolution order is therefore: explicit user preference → capability rank
+// → input order. This is the contract `obol model prefer` relies on: an
+// explicit pick must remain primary across stack restarts and defaults
+// refreshes, otherwise rank silently overrides the user every time.
+//
+// A preferred model that is not in the candidate list is treated as absent
+// (stale preference) and the function falls back to plain Rank — empty
+// preference is normal and produces the same result.
+func RankWithPreference(models []string, preferred string) (primary string, fallbacks []string) {
+	if len(models) == 0 {
+		return "", nil
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return Rank(models)
+	}
+	matchIdx := -1
+	for i, m := range models {
+		if modelMatchesPreference(m, preferred) {
+			matchIdx = i
+			break
+		}
+	}
+	if matchIdx < 0 {
+		return Rank(models)
+	}
+	rest := make([]string, 0, len(models)-1)
+	rest = append(rest, models[:matchIdx]...)
+	rest = append(rest, models[matchIdx+1:]...)
+	_, restFallbacks := Rank(rest)
+	// Rank returns a non-empty primary for non-empty input; flatten primary +
+	// fallbacks back into the fallback list, capability-ordered.
+	if rp, _ := Rank(rest); rp != "" {
+		out := append([]string{rp}, restFallbacks...)
+		return models[matchIdx], out
+	}
+	return models[matchIdx], restFallbacks
+}
+
+// modelMatchesPreference returns true when candidate corresponds to the
+// preferred model name, ignoring provider prefix differences. The user can
+// type `claude-sonnet-4-6` and match `anthropic/claude-sonnet-4-6` or
+// `openai/claude-sonnet-4-6`; equally `qwen3.5:9b` matches itself or any
+// `ollama/qwen3.5:9b` variant.
+func modelMatchesPreference(candidate, preferred string) bool {
+	candidate = strings.TrimSpace(candidate)
+	preferred = strings.TrimSpace(preferred)
+	if candidate == "" || preferred == "" {
+		return false
+	}
+	if candidate == preferred {
+		return true
+	}
+	cb := stripProviderPrefix(candidate)
+	pb := stripProviderPrefix(preferred)
+	return cb == pb
+}
+
 // IsCloudModel reports whether a model name belongs to a frontier cloud
 // provider (Anthropic Claude, OpenAI GPT or o-series). The check is by
 // substring/prefix because LiteLLM model ids carry a provider prefix

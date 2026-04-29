@@ -1707,7 +1707,7 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 		}
 
 		// Patch ConfigMap with preferred primary model + fallbacks.
-		primary, fallbacks := rankModels(models)
+		primary, fallbacks := rankModels(cfg, models)
 		if primary != "" {
 			patchModelHierarchy(cfg, id, primary, fallbacks, u)
 		}
@@ -1718,12 +1718,13 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	return nil
 }
 
-// rankModels delegates to model.Rank for capability-aware ranking, then
-// prefixes every entry with `openai/` for LiteLLM routing. Both runtimes used
-// to roll their own ranker that picked `local[0]` (whatever Ollama listed
-// first), which produced the llama3.2:1b regression — see internal/model/rank.go.
-func rankModels(models []string) (primary string, fallbacks []string) {
-	primary, fallbacks = model.Rank(models)
+// rankModels delegates to model.RankWithPreference for capability-aware
+// ranking that honors any explicit `obol model prefer` choice, then prefixes
+// every entry with `openai/` for LiteLLM routing. Both runtimes used to roll
+// their own ranker that picked `local[0]` (whatever Ollama listed first),
+// which produced the llama3.2:1b regression — see internal/model/rank.go.
+func rankModels(cfg *config.Config, models []string) (primary string, fallbacks []string) {
+	primary, fallbacks = model.RankWithPreference(models, model.ReadPreference(cfg))
 	if primary != "" {
 		primary = "openai/" + primary
 	}

@@ -628,14 +628,36 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	return nil
 }
 
-// PreferModel moves a configured model to the front of the LiteLLM model_list.
-// Downstream runtimes use this order to choose their primary model.
+// PreferModel records an explicit user preference for the given model and
+// reorders the LiteLLM model_list so the preferred entry sits first.
+//
+// Two artifacts are written, deliberately:
+//
+//  1. The persistent preference file at $OBOL_CONFIG_DIR/preferred-model.
+//     This is the load-bearing signal — RankWithPreference reads it on every
+//     resolution so the user's pick survives stack restarts, defaults
+//     refreshes, and any code path that rewrites the LiteLLM ConfigMap.
+//  2. The LiteLLM ConfigMap order. This is purely cosmetic now (UX hint:
+//     `obol model list` shows the preferred entry on top), but it keeps the
+//     ConfigMap and the preference file in agreement.
+//
+// If the file write succeeds but the ConfigMap patch fails, the preference
+// is still recorded — the next resolution will honor it. Returning the patch
+// error after persisting is intentional so the user sees the failure mode
+// without losing the preference itself.
 func PreferModel(cfg *config.Config, u *ui.UI, modelName string) error {
+	if err := WritePreference(cfg, modelName); err != nil {
+		return fmt.Errorf("failed to persist preference: %w", err)
+	}
+
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return errors.New("cluster not running. Run 'obol stack up' first")
+		// No live cluster — the preference file is enough. Future resolutions
+		// after `obol stack up` will honor it via RankWithPreference.
+		u.Successf("Model %q recorded as preferred (cluster not running; will apply on next stack up)", modelName)
+		return nil
 	}
 
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
