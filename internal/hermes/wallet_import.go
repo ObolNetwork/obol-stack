@@ -11,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
@@ -69,19 +70,46 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 	u.Detail("Instance", id)
 
 	// When the cluster is live, helmfile-sync so the new keystore password
-	// Secret reaches the pod and helm rolls the remote-signer deployment.
-	// Without this, the pod keeps decrypting with the old chart-bootstrap
-	// password and remote-signer calls sign with the throwaway address.
+	// Secret reaches the pod, then explicitly roll the deployment — helm
+	// does not roll on Secret-data-only changes, so the pod would keep
+	// decrypting with the old chart-bootstrap password and remote-signer
+	// calls would sign with the throwaway address.
 	if opts.ApplyCluster {
 		u.Blank()
 		u.Info("Applying changes to cluster (helmfile sync)...")
 		if err := Sync(cfg, id, u); err != nil {
 			u.Warnf("helmfile sync failed: %v", err)
 			u.Printf("Run 'obol hermes sync %s' manually before issuing remote-signer calls.", id)
+		} else {
+			restartHermesRemoteSigner(cfg, id, u)
 		}
 	}
 
 	return nil
+}
+
+// restartHermesRemoteSigner kicks a rollout-restart on the remote-signer
+// deployment so the pod re-reads the freshly-applied keystore-password Secret.
+// Best-effort: a still-coming-up cluster will surface the error to the caller
+// as a warning, not a hard failure, since wallet metadata + values files have
+// already been written and a later `obol hermes sync` can finish the job.
+func restartHermesRemoteSigner(cfg *config.Config, id string, u *ui.UI) {
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+	kubectlBin, kubeconfig := kubectl.Paths(cfg)
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
+	); err != nil {
+		u.Warnf("Could not restart remote-signer (cluster may not be running): %v", err)
+		u.Printf("Run 'obol kubectl -n %s rollout restart deployment/remote-signer' to apply the new keystore.", namespace)
+		return
+	}
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "status", "deployment/remote-signer", "-n", namespace, "--timeout=120s",
+	); err != nil {
+		u.Warnf("remote-signer rollout did not complete in 120s: %v", err)
+		return
+	}
+	u.Success("Remote-signer restarted")
 }
 
 // ImportWalletFromPrivateKey provisions an existing Ethereum private key as

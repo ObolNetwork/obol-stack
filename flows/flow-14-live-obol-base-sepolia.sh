@@ -751,6 +751,7 @@ step "Alice: drive ERC-8004 registration (obol sell register)"
 # to surface, not silently block the run. `timeout` is an external
 # program and cannot see the `alice()` bash function, so call the
 # binary directly with the same env the function exports.
+set +e
 register_out=$(timeout 300 \
     env OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
         OBOL_CONFIG_DIR="$ALICE_DIR/config" \
@@ -761,6 +762,7 @@ register_out=$(timeout 300 \
             --endpoint "$TUNNEL_URL" \
             --name "Live OBOL Base Sepolia Test Inference" 2>&1)
 register_rc=$?
+set -e
 printf '%s\n' "$register_out" | tail -10
 if [ "$register_rc" -ne 0 ]; then
     fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
