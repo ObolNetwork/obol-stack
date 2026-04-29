@@ -497,27 +497,6 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	}
 }
 
-func TestNeedsLiteLLMConfigHelmMigration(t *testing.T) {
-	tests := []struct {
-		name     string
-		managers string
-		want     bool
-	}{
-		{name: "helm only", managers: "helm", want: false},
-		{name: "empty", managers: "", want: false},
-		{name: "old kubectl patch", managers: "helm kubectl-patch", want: true},
-		{name: "controller update", managers: "helm serviceoffer-controller", want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := needsLiteLLMConfigHelmMigration(tt.managers); got != tt.want {
-				t.Fatalf("needsLiteLLMConfigHelmMigration(%q) = %v, want %v", tt.managers, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMergeLiteLLMConfigPreservesChartDefaultsAndPreviousModels(t *testing.T) {
 	current := `
 model_list:

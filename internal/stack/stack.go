@@ -350,10 +350,6 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
-	if err := migrateBaseHelmOwnership(cfg, kubeconfigPath); err != nil {
-		u.Warnf("Failed to migrate existing base resources into Helm ownership: %v", err)
-	}
-
 	previousLiteLLMConfig, err := preserveLiteLLMConfigForHelm(cfg, kubeconfigPath)
 	if err != nil {
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
@@ -857,63 +853,12 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 	return os.WriteFile(helmfilePath, []byte(updated), 0o600) //nolint:gosec // G703: path from user's local config dir
 }
 
-type baseHelmResource struct {
-	Kind      string
-	Name      string
-	Namespace string
-}
-
-func migrateBaseHelmOwnership(cfg *config.Config, kubeconfigPath string) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	resources := []baseHelmResource{
-		{Kind: "namespace", Name: "agent"},
-		{Kind: "namespace", Name: "hermes-obol-agent"},
-		{Kind: "clusterrole", Name: "openclaw-monetize-read"},
-		{Kind: "clusterrolebinding", Name: "openclaw-monetize-read-binding"},
-		{Kind: "role", Name: "openclaw-monetize-write", Namespace: "hermes-obol-agent"},
-		{Kind: "rolebinding", Name: "openclaw-monetize-write-binding", Namespace: "hermes-obol-agent"},
-	}
-
-	var failures []error
-
-	for _, resource := range resources {
-		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, append([]string{"get", resource.Kind, resource.Name}, resource.namespaceArgs()...)...); err != nil {
-			continue
-		}
-
-		labelArgs := append([]string{"label", resource.Kind, resource.Name}, resource.namespaceArgs()...)
-		labelArgs = append(labelArgs, "app.kubernetes.io/managed-by=Helm", "--overwrite")
-		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, labelArgs...); err != nil {
-			failures = append(failures, fmt.Errorf("label %s/%s: %w", resource.Kind, resource.Name, err))
-			continue
-		}
-
-		annotateArgs := append([]string{"annotate", resource.Kind, resource.Name}, resource.namespaceArgs()...)
-		annotateArgs = append(annotateArgs,
-			"meta.helm.sh/release-name=base",
-			"meta.helm.sh/release-namespace=kube-system",
-			"--overwrite",
-		)
-		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath, annotateArgs...); err != nil {
-			failures = append(failures, fmt.Errorf("annotate %s/%s: %w", resource.Kind, resource.Name, err))
-		}
-	}
-
-	return errors.Join(failures...)
-}
-
-func (r baseHelmResource) namespaceArgs() []string {
-	if r.Namespace == "" {
-		return nil
-	}
-
-	return []string{"-n", r.Namespace}
-}
-
-// preserveLiteLLMConfigForHelm snapshots the mutable LiteLLM config before
-// Helm sync. Helm owns the ConfigMap object, but provider and purchase flows
-// append model routes to data["config.yaml"], which is a single scalar field
-// from Kubernetes' managedFields perspective.
+// preserveLiteLLMConfigForHelm snapshots the LiteLLM config.yaml ConfigMap
+// before helmfile sync re-templates it. The base chart only knows the
+// `paid/*` catch-all route, so without this snapshot every `obol stack up`
+// would wipe user-added cloud providers, Ollama models, and custom
+// endpoints. The snapshot is merged back in by restoreLiteLLMConfig after
+// helmfile sync completes.
 func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 
@@ -922,19 +867,6 @@ func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (st
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return "", nil
 	}
-
-	managers, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", "litellm-config", "-n", "llm",
-		"--show-managed-fields", "-o", "jsonpath={.metadata.managedFields[*].manager}")
-	if err != nil || !needsLiteLLMConfigHelmMigration(managers) {
-		return raw, nil
-	}
-
-	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
-		"delete", "configmap", "litellm-config", "-n", "llm"); err != nil {
-		return "", err
-	}
-
 	return raw, nil
 }
 
@@ -956,16 +888,6 @@ func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error 
 	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
 
 	return kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
-}
-
-func needsLiteLLMConfigHelmMigration(managers string) bool {
-	for _, manager := range strings.Fields(managers) {
-		if manager != "helm" {
-			return true
-		}
-	}
-
-	return false
 }
 
 func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
