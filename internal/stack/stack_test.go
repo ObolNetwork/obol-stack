@@ -611,3 +611,26 @@ func hasLiteLLMModel(cfg model.LiteLLMConfig, name string) bool {
 
 	return false
 }
+
+func TestHasLiveK3dCluster(t *testing.T) {
+	tests := []struct {
+		name       string
+		containers []string
+		want       bool
+	}{
+		{name: "empty", containers: nil, want: false},
+		{name: "only mirror", containers: []string{"k3d-obol-docker-io.localhost"}, want: false},
+		{name: "serverlb attached", containers: []string{"k3d-obol-stack-fancy-yak-serverlb"}, want: true},
+		{name: "server-0 attached", containers: []string{"k3d-obol-stack-fancy-yak-server-0"}, want: true},
+		{name: "server-12 attached", containers: []string{"k3d-obol-stack-fancy-yak-server-12"}, want: true},
+		{name: "server-non-numeric ignored", containers: []string{"unrelated-server-foo"}, want: false},
+		{name: "mixed mirror and live", containers: []string{"k3d-obol-ghcr-io.localhost", "k3d-obol-stack-blue-fox-server-0"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasLiveK3dCluster(tt.containers); got != tt.want {
+				t.Fatalf("hasLiveK3dCluster(%v) = %v, want %v", tt.containers, got, tt.want)
+			}
+		})
+	}
+}

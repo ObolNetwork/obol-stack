@@ -290,6 +290,12 @@ func Purge(cfg *config.Config, u *ui.UI, force bool) error {
 		}
 	}
 
+	// In dev mode, reclaim any leaked k3d-obol-stack-* networks. The
+	// pull-through registry mirrors hold the network open after
+	// `k3d cluster delete`, which would otherwise silently exhaust
+	// Docker's predefined CIDR pool over repeated dev cycles.
+	reclaimLeakedDevK3dNetworks(u)
+
 	// Stop DNS resolver and remove system resolver config
 	dns.Stop()
 	dns.RemoveSystemResolver()
@@ -941,4 +947,84 @@ func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte 
 	}
 
 	return []byte(b.String())
+}
+
+// reclaimLeakedDevK3dNetworks force-disconnects pull-through registry-mirror
+// containers from any orphaned `k3d-obol-stack-*` Docker networks and then
+// removes the network. Only runs when OBOL_DEVELOPMENT=true, because the
+// mirror containers (k3d-obol-{docker,ghcr,quay}-io.localhost) are only
+// created in development mode and they're the reason `k3d cluster delete`
+// can't free the network on a dev box.
+//
+// Each `k3d cluster create` reserves a /16 from Docker's predefined
+// 172.16.0.0/12 pool (~16 networks). Without reclaiming these on purge,
+// roughly sixteen dev cycles exhaust the pool and every subsequent
+// cluster create fails with "all predefined address pools have been
+// fully subnetted".
+//
+// Live clusters are detected by `*-server-N` or `*-serverlb` attachments
+// and skipped, so this is safe to call alongside other running stacks.
+// Mirror containers auto-rejoin the next cluster's network on the next
+// `obol stack up`, so disconnecting them here is non-destructive for the
+// cache.
+func reclaimLeakedDevK3dNetworks(u *ui.UI) {
+	if os.Getenv("OBOL_DEVELOPMENT") != "true" {
+		return
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		return
+	}
+
+	out, err := exec.Command("docker", "network", "ls",
+		"--filter", "name=k3d-obol-stack-",
+		"--format", "{{.Name}}").Output()
+	if err != nil {
+		return
+	}
+
+	networks := strings.Fields(strings.TrimSpace(string(out)))
+	if len(networks) == 0 {
+		return
+	}
+
+	reclaimed := 0
+	for _, network := range networks {
+		inspect, err := exec.Command("docker", "network", "inspect", network,
+			"--format", `{{range .Containers}}{{.Name}}{{"\n"}}{{end}}`).Output()
+		if err != nil {
+			continue
+		}
+		attached := strings.Fields(strings.TrimSpace(string(inspect)))
+
+		if hasLiveK3dCluster(attached) {
+			continue
+		}
+
+		for _, container := range attached {
+			_ = exec.Command("docker", "network", "disconnect", "-f", network, container).Run()
+		}
+		if err := exec.Command("docker", "network", "rm", network).Run(); err == nil {
+			reclaimed++
+		}
+	}
+
+	if reclaimed > 0 {
+		u.Infof("Reclaimed %d leaked dev registry network(s)", reclaimed)
+	}
+}
+
+// hasLiveK3dCluster returns true if any container name on the network
+// looks like a k3d cluster node — `*-serverlb` or `*-server-<N>`.
+func hasLiveK3dCluster(containers []string) bool {
+	for _, c := range containers {
+		if strings.HasSuffix(c, "-serverlb") {
+			return true
+		}
+		if i := strings.LastIndex(c, "-server-"); i >= 0 {
+			if _, err := strconv.Atoi(c[i+len("-server-"):]); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
