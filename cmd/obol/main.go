@@ -57,12 +57,13 @@ COMMANDS:
      network status  Show eRPC gateway health and upstreams
      network delete  Remove network deployment
 
-   Hermes (Native Agent Runtime):
-     hermes          Run native Hermes CLI against a deployed instance
-     hermes skills   Run native Hermes skills commands
-     hermes chat     Run native Hermes chat commands
-     hermes config   Run native Hermes config commands
-     hermes dashboard Run native Hermes dashboard commands
+   Hermes (Default Agent Runtime — these commands passthrough to the hermes CLI):
+     hermes help      List every native Hermes command
+     hermes skills    Manage Hermes skills
+     hermes chat      Chat with the agent
+     hermes config    Inspect or edit Hermes config
+     hermes dashboard Dashboard controls
+                      (use --agent <id> to target a non-default instance)
 
    OpenClaw (Alternate Agent Runtime):
      openclaw onboard   Create and deploy an OpenClaw instance
