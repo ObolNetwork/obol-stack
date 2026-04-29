@@ -11,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
@@ -22,6 +23,16 @@ type ImportPrivateKeyWalletOptions struct {
 	Force          bool
 	ApplyCluster   bool
 }
+
+// Indirection seams so tests can spy on / replace the cluster-side calls
+// without standing up a real k3d cluster. Production wires them to the real
+// helmfile-sync + kubectl rollout helpers.
+var (
+	syncFn                      = Sync
+	restartHermesRemoteSignerFn = restartHermesRemoteSigner
+	ensureVolumeWritableFn      = ensureVolumeWritable
+	fixRuntimeVolumeOwnershipFn = fixRuntimeVolumeOwnership
+)
 
 // ImportPrivateKeyWalletCmd imports an existing private key as the
 // remote-signer wallet for a Hermes instance. Mirror of the OpenClaw path.
@@ -68,7 +79,47 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 	u.Detail("Address", wallet.Address)
 	u.Detail("Instance", id)
 
+	// When the cluster is live, helmfile-sync so the new keystore password
+	// Secret reaches the pod, then explicitly roll the deployment — helm
+	// does not roll on Secret-data-only changes, so the pod would keep
+	// decrypting with the old chart-bootstrap password and remote-signer
+	// calls would sign with the throwaway address.
+	if opts.ApplyCluster {
+		u.Blank()
+		u.Info("Applying changes to cluster (helmfile sync)...")
+		if err := syncFn(cfg, id, u); err != nil {
+			u.Warnf("helmfile sync failed: %v", err)
+			u.Printf("Run 'obol hermes sync %s' manually before issuing remote-signer calls.", id)
+		} else {
+			restartHermesRemoteSignerFn(cfg, id, u)
+		}
+	}
+
 	return nil
+}
+
+// restartHermesRemoteSigner kicks a rollout-restart on the remote-signer
+// deployment so the pod re-reads the freshly-applied keystore-password Secret.
+// Best-effort: a still-coming-up cluster will surface the error to the caller
+// as a warning, not a hard failure, since wallet metadata + values files have
+// already been written and a later `obol hermes sync` can finish the job.
+func restartHermesRemoteSigner(cfg *config.Config, id string, u *ui.UI) {
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+	kubectlBin, kubeconfig := kubectl.Paths(cfg)
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "restart", "deployment/remote-signer", "-n", namespace,
+	); err != nil {
+		u.Warnf("Could not restart remote-signer (cluster may not be running): %v", err)
+		u.Printf("Run 'obol kubectl -n %s rollout restart deployment/remote-signer' to apply the new keystore.", namespace)
+		return
+	}
+	if err := kubectl.RunSilent(kubectlBin, kubeconfig,
+		"rollout", "status", "deployment/remote-signer", "-n", namespace, "--timeout=120s",
+	); err != nil {
+		u.Warnf("remote-signer rollout did not complete in 120s: %v", err)
+		return
+	}
+	u.Success("Remote-signer restarted")
 }
 
 // ImportWalletFromPrivateKey provisions an existing Ethereum private key as
@@ -130,6 +181,14 @@ func archiveReplacedHermesKeystore(cfg *config.Config, id string, existingWallet
 	}
 
 	dir := agentruntime.KeystoreVolumePath(cfg, agentruntime.Hermes, id)
+
+	// The keystores volume is normally container-owned (uid 10000, mode 700)
+	// after provisionKeystoreToVolume's fixRuntimeVolumeOwnership. Bookend the
+	// stat/mkdir/rename with the same ownership flip provision uses, otherwise
+	// the host process can't even traverse the directory.
+	ensureVolumeWritableFn(cfg, dir, u)
+	defer fixRuntimeVolumeOwnershipFn(cfg, dir, u)
+
 	oldPath := filepath.Join(dir, existingWallet.KeystoreUUID+".json")
 	if _, err := os.Stat(oldPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {

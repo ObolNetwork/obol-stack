@@ -30,8 +30,6 @@ const (
 	gatewayTokenFileName = ".gateway-token"
 	obolSkillsDirName    = "obol-skills"
 
-	// renovate: datasource=helm depName=remote-signer registryUrl=https://obolnetwork.github.io/helm-charts/
-	remoteSignerChartVersion = "0.3.0"
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
 
@@ -625,7 +623,7 @@ releases:
     version: %s
     values:
       - values-remote-signer.yaml
-`, namespace, rawChartVersion, valuesFileName, namespace, remoteSignerChartVersion)
+`, namespace, rawChartVersion, valuesFileName, namespace, agentruntime.RemoteSignerChartVersion)
 }
 
 func dashboardHostname(id string) string {
