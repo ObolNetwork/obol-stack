@@ -68,6 +68,19 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 	u.Detail("Address", wallet.Address)
 	u.Detail("Instance", id)
 
+	// When the cluster is live, helmfile-sync so the new keystore password
+	// Secret reaches the pod and helm rolls the remote-signer deployment.
+	// Without this, the pod keeps decrypting with the old chart-bootstrap
+	// password and remote-signer calls sign with the throwaway address.
+	if opts.ApplyCluster {
+		u.Blank()
+		u.Info("Applying changes to cluster (helmfile sync)...")
+		if err := Sync(cfg, id, u); err != nil {
+			u.Warnf("helmfile sync failed: %v", err)
+			u.Printf("Run 'obol hermes sync %s' manually before issuing remote-signer calls.", id)
+		}
+	}
+
 	return nil
 }
 
