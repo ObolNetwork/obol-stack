@@ -2890,7 +2890,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 //
 // Prerequisites:
 //   - Running k3d cluster with CRD, agent, x402-verifier, CF quick tunnel
-//   - Ollama with a cached model (any model — qwen2.5, qwen3:0.6b, etc.)
+//   - Ollama with a cached model (any model — qwen3.5:4b, qwen3.5:9b, etc.)
 //   - Anvil (Foundry) installed
 //   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
 func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {

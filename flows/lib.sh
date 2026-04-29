@@ -328,7 +328,7 @@ route_llm_via_obol_cli() {
     local existing
     existing=$($runner model list 2>/dev/null || true)
     local entry
-    for entry in qwen3.5:9b qwen3:0.6b; do
+    for entry in qwen3.5:9b qwen3.5:4b; do
         if printf '%s' "$existing" | grep -Fq "$entry"; then
             $runner model remove "$entry" --no-sync >/dev/null 2>&1 || true
         fi

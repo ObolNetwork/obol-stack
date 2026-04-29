@@ -30,7 +30,7 @@ python3 scripts/monetize.py list
 
 # Create a new offer to monetize a local Ollama model
 python3 scripts/monetize.py create my-inference \
-  --model qwen3:8b \
+  --model qwen3.5:9b \
   --runtime ollama \
   --upstream ollama \
   --namespace llm \

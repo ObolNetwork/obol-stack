@@ -41,8 +41,8 @@ for i in $(seq 1 15); do
     sleep 2
 done
 
-# Use qwen3.5:9b — it is configured in LiteLLM's model_list (FLOW_MODEL qwen3:0.6b
-# is only registered in Ollama directly; the x402 sell/buy flows use it via that path)
+# Use qwen3.5:9b — it is configured in LiteLLM's model_list (FLOW_MODEL is the
+# default in flows/lib.sh; the x402 sell/buy flows route through it directly)
 LITELLM_MODEL="qwen3.5:9b"
 out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
     -H "Content-Type: application/json" \

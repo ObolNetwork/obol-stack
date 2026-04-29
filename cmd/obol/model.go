@@ -148,7 +148,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 		if len(ollamaModels) == 0 {
 			u.Warn("No models pulled in Ollama")
 			u.Print("")
-			u.Print("  Hint: Pull a model with: ollama pull qwen3:8b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
+			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:9b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
 			u.Print("  Hint: Or run: obol model pull")
 
 			return errors.New("ollama is running but has no models")
@@ -576,8 +576,9 @@ func promptModelPull(u *ui.UI) (string, error) {
 
 	suggestions := []string{
 		"qwen3.6:27b              (17 GB) — High-quality general-purpose (recommended, needs ≥32GB RAM)",
-		"qwen3.6:27b-coding-mxfp8 (~13 GB) — Code generation (Qwen3.6, MXFP8 quant)",
-		"qwen3:8b                 (5.2 GB) — Fast general-purpose, laptop-friendly",
+		"qwen3.6:27b-coding-mxfp8 (31 GB) — Code generation (Qwen3.6, MXFP8 quant)",
+		"qwen3.5:9b               (6.6 GB) — Validated baseline; fits on most laptops",
+		"qwen3.5:4b               (3.4 GB) — Smallest current Qwen, low-RAM laptops",
 		"deepseek-r1:8b           (4.9 GB) — Reasoning",
 		"gemma3:4b                (3.3 GB) — Lightweight, multilingual",
 		"Other (enter name)",
@@ -585,7 +586,8 @@ func promptModelPull(u *ui.UI) (string, error) {
 	modelNames := []string{
 		"qwen3.6:27b",
 		"qwen3.6:27b-coding-mxfp8",
-		"qwen3:8b",
+		"qwen3.5:9b",
+		"qwen3.5:4b",
 		"deepseek-r1:8b",
 		"gemma3:4b",
 	}

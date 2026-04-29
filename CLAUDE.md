@@ -224,7 +224,7 @@ obol stack up                                                  # cluster + base 
 # while `qwen36-fast` (no `:Nb` tag) ranks 0, so the agent stays on the slow
 # host model. This is the easy footgun.
 obol model remove qwen3.5:9b
-obol model remove qwen3:0.6b
+obol model remove qwen3.5:4b
 
 obol model setup custom \
     --name spark1-vllm \

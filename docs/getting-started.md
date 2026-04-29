@@ -88,9 +88,9 @@ curl -s http://localhost:11434/api/tags | python3 -m json.tool
 If you don't have a model yet, pull one:
 
 ```bash
-ollama pull qwen3.5:35b   # Large model with tool-call support
+ollama pull qwen3.5:9b    # Validated baseline, ~6.6 GB
 # Or a smaller model for quick testing:
-ollama pull qwen3:0.6b
+ollama pull qwen3.5:4b    # ~3.4 GB
 ```
 
 ### 3b. Verify LiteLLM can reach Ollama

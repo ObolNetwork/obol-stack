@@ -98,7 +98,7 @@ Make sure the model is available in your host Ollama:
 ollama pull qwen3.5:9b
 
 # Or a smaller model for quick testing
-ollama pull qwen3:0.6b
+ollama pull qwen3.5:4b
 
 # Verify it's available
 curl -s http://localhost:11434/api/tags | python3 -m json.tool
@@ -250,7 +250,7 @@ curl -s -X POST "$TUNNEL_URL/rpc" \
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # ERC-8004 registration document (200)
 curl -s "$TUNNEL_URL/.well-known/agent-registration.json" | jq .
@@ -262,7 +262,7 @@ You can also verify locally (bypasses Cloudflare):
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "http://obol.stack:8080/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 A **402 Payment Required** response confirms the x402 gate is working. The response body contains the payment requirements:
@@ -323,7 +323,7 @@ Send a request without payment:
 ```bash
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}' \
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}' \
     -D - 2>&1 | head -30
 ```
 
@@ -347,7 +347,7 @@ client = LLMClient(
 )
 
 # Automatically: 402 -> sign EIP-712 -> retry with payment header -> 200
-response = client.chat("qwen3:0.6b", "Explain Ethereum in one sentence.")
+response = client.chat("qwen3.5:9b", "Explain Ethereum in one sentence.")
 print(f"Response: {response}")
 print(f"Session cost: ${client._session_total_usd}")
 ```
@@ -369,7 +369,7 @@ The SDK handles the full x402 flow:
 # Step 1: Get payment requirements from the 402 response
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Step 2: Sign the EIP-712 payment (requires SDK or custom code)
 # The 402 body contains: payTo, amount, asset, network, extra.name, extra.version
@@ -380,7 +380,7 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "X-PAYMENT: <base64-encoded-x402-envelope>" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 # -> 200 OK + inference response
 ```
 
@@ -411,7 +411,7 @@ export TUNNEL_URL=$(obol tunnel status | grep -oE 'https://[a-z0-9-]+\.trycloudf
 curl -s -w "\nHTTP %{http_code}" -X POST \
     "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"qwen3:0.6b","messages":[{"role":"user","content":"Hello"}]}'
+    -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"Hello"}]}'
 
 # Paid request through tunnel (supported production path)
 # The buyer talks to LiteLLM, which routes paid models through the in-pod
