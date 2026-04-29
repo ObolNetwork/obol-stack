@@ -424,6 +424,287 @@ func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 	}
 }
 
+func TestBuildServiceCatalogJSON(t *testing.T) {
+	readyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hello", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Upstream: monetizeapi.ServiceOfferUpstream{
+				Service: "demo-hello",
+				Port:    8080,
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0xabc",
+				Price: monetizeapi.ServiceOfferPriceTable{
+					PerRequest: "0.00001",
+				},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Description: "Proof-of-payment echo service",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+	notReadyOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "demo"},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+
+	if len(services) != 1 {
+		t.Fatalf("expected 1 ready service, got %d", len(services))
+	}
+	svc := services[0]
+	if svc.Name != "demo-hello" {
+		t.Errorf("name = %q, want demo-hello", svc.Name)
+	}
+	if svc.Price != "0.00001 USDC/request" {
+		t.Errorf("price = %q, want '0.00001 USDC/request'", svc.Price)
+	}
+	if !svc.IsDemo {
+		t.Error("expected isDemo=true for namespace=demo")
+	}
+	if svc.Endpoint != "https://example.com/services/demo-hello" {
+		t.Errorf("endpoint = %q, want https://example.com/services/demo-hello", svc.Endpoint)
+	}
+	if svc.Description != "Proof-of-payment echo service" {
+		t.Errorf("description = %q, want 'Proof-of-payment echo service'", svc.Description)
+	}
+}
+
+func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
+	jsonStr := buildServiceCatalogJSON(nil, "https://example.com")
+	if jsonStr != "[]" {
+		t.Errorf("expected empty array, got %q", jsonStr)
+	}
+}
+
+// TestBuildServiceCatalogJSON_ExcludesNonReady locks in the filter pipeline:
+// nil offers, paused offers, and offers with a DeletionTimestamp must never
+// leak onto the public storefront, even if they carry Ready=True.
+func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+
+	deleting := metav1.Now()
+	offers := []*monetizeapi.ServiceOffer{
+		nil,
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "paused-svc", Namespace: "llm",
+				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"}},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "deleting-svc", Namespace: "llm",
+				DeletionTimestamp: &deleting},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "not-ready-svc", Namespace: "llm"},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "ready-svc", Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "http",
+				Payment: monetizeapi.ServiceOfferPayment{
+					Network: "base",
+					PayTo:   "0xabc",
+					Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected exactly 1 service (ready-svc), got %d: %+v", len(services), services)
+	}
+	if services[0].Name != "ready-svc" {
+		t.Errorf("got %q, want ready-svc — filter pipeline leaked another offer", services[0].Name)
+	}
+}
+
+// TestBuildServiceCatalogJSON_SortOrder ensures offers render in
+// deterministic alphabetical order, not insertion order. The informer
+// store yields items in arbitrary order, so without a sort the public
+// storefront reorders itself between reconciles.
+func TestBuildServiceCatalogJSON_SortOrder(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	makeOffer := func(name string) *monetizeapi.ServiceOffer {
+		return &monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		}
+	}
+	offers := []*monetizeapi.ServiceOffer{
+		makeOffer("charlie"),
+		makeOffer("alpha"),
+		makeOffer("bravo"),
+	}
+
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	names := []string{services[0].Name, services[1].Name, services[2].Name}
+	want := []string{"alpha", "bravo", "charlie"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("sort order = %v, want %v", names, want)
+		}
+	}
+}
+
+// TestBuildServiceCatalogJSON_PerMTokPricing verifies that per-mtok-only
+// offers render a non-empty Price string (via describeOfferPrice) but leave
+// PriceRaw empty — PriceRaw is only populated from PerRequest. Without this
+// test, a per-mtok seller could show up on the storefront with an empty
+// price label on refactor.
+func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "mtok-svc", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "qwen3.5:9b"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0xabc",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerMTok: "5.00"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	got := services[0]
+	if got.PriceRaw != "" {
+		t.Errorf("PriceRaw = %q, want empty for per-mtok pricing", got.PriceRaw)
+	}
+	if got.Price == "" {
+		t.Error("Price must not be empty for per-mtok pricing")
+	}
+	if got.Model != "qwen3.5:9b" {
+		t.Errorf("Model = %q, want qwen3.5:9b", got.Model)
+	}
+	// Endpoint falls back to /services/<name> when Spec.Path is unset.
+	if got.Endpoint != "https://example.com/services/mtok-svc" {
+		t.Errorf("Endpoint = %q, want https://example.com/services/mtok-svc", got.Endpoint)
+	}
+}
+
+// TestBuildServiceCatalogJSON_FallbackDescription verifies the autogenerated
+// description when Spec.Registration.Description is empty.
+func TestBuildServiceCatalogJSON_FallbackDescription(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-desc", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "inference",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+			// Spec.Registration.Description intentionally omitted.
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	if !strings.Contains(services[0].Description, "inference") {
+		t.Errorf("fallback description should mention type, got %q", services[0].Description)
+	}
+}
+
+// TestBuildServiceCatalogJSON_BaseURLTrailingSlash verifies the baseURL
+// trimming so we don't emit double-slash endpoints like https://ex.com//services/...
+func TestBuildServiceCatalogJSON_BaseURLTrailingSlash(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "trim-svc", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Payment: monetizeapi.ServiceOfferPayment{
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com/")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	if strings.Contains(services[0].Endpoint, "//services") {
+		t.Errorf("endpoint has double-slash, got %q", services[0].Endpoint)
+	}
+	if services[0].Endpoint != "https://example.com/services/trim-svc" {
+		t.Errorf("endpoint = %q, want https://example.com/services/trim-svc", services[0].Endpoint)
+	}
+}
+
+func TestBuildServicesJSONHTTPRoute(t *testing.T) {
+	route := buildServicesJSONHTTPRoute()
+	if route.GetName() != servicesJSONRouteName {
+		t.Fatalf("route name = %q, want %q", route.GetName(), servicesJSONRouteName)
+	}
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	match := rules[0].(map[string]any)["matches"].([]any)[0].(map[string]any)
+	path := match["path"].(map[string]any)
+	if path["value"] != "/api/services.json" {
+		t.Errorf("path = %q, want /api/services.json", path["value"])
+	}
+}
+
 func TestSafeName_Short(t *testing.T) {
 	// Short names should pass through unchanged.
 	if got := childName("demo"); got != "so-demo" {

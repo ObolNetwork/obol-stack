@@ -21,6 +21,7 @@ const (
 	skillCatalogNamespace     = "x402"
 	skillCatalogConfigMapName = "obol-skill-md"
 	skillCatalogRouteName     = "obol-skill-md-route"
+	servicesJSONRouteName     = "obol-services-json-route"
 )
 
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
@@ -201,7 +202,7 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 	}
 }
 
-func buildSkillCatalogConfigMap(content string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -215,8 +216,9 @@ func buildSkillCatalogConfigMap(content string) *unstructured.Unstructured {
 				},
 			},
 			"data": map[string]any{
-				"skill.md":   content,
-				"httpd.conf": ".md:text/markdown\n",
+				"skill.md":       content,
+				"services.json":  servicesJSON,
+				"httpd.conf":     ".md:text/markdown\n.json:application/json\n",
 			},
 		},
 	}
@@ -271,8 +273,11 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 							map[string]any{
 								"name": "content",
 								"configMap": map[string]any{
-									"name":  skillCatalogConfigMapName,
-									"items": []any{map[string]any{"key": "skill.md", "path": "skill.md"}},
+									"name": skillCatalogConfigMapName,
+									"items": []any{
+										map[string]any{"key": "skill.md", "path": "skill.md"},
+										map[string]any{"key": "services.json", "path": "api/services.json"},
+									},
 								},
 							},
 							map[string]any{
@@ -342,6 +347,50 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 								"path": map[string]any{
 									"type":  "Exact",
 									"value": "/skill.md",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      servicesJSONRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api/services.json",
 								},
 							},
 						},
@@ -717,6 +766,69 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// ServiceJSON is the JSON representation of a ServiceOffer for the public storefront.
+type ServiceJSON struct {
+	Name        string `json:"name"`
+	Namespace   string `json:"namespace"`
+	Type        string `json:"type"`
+	Model       string `json:"model,omitempty"`
+	Endpoint    string `json:"endpoint"`
+	Price       string `json:"price"`
+	PriceRaw    string `json:"priceRaw,omitempty"`
+	PayTo       string `json:"payTo"`
+	Network     string `json:"network"`
+	Description string `json:"description"`
+	IsDemo      bool   `json:"isDemo"`
+}
+
+// buildServiceCatalogJSON returns a JSON array of ready ServiceOffers for the public storefront.
+func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	var ready []*monetizeapi.ServiceOffer
+	for _, offer := range offers {
+		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
+			continue
+		}
+		if isConditionTrue(offer.Status, "Ready") {
+			ready = append(ready, offer)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		return ready[i].Name < ready[j].Name
+	})
+
+	services := make([]ServiceJSON, 0, len(ready))
+	for _, offer := range ready {
+		desc := offer.Spec.Registration.Description
+		if desc == "" {
+			desc = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
+		}
+		svc := ServiceJSON{
+			Name:        offer.Name,
+			Namespace:   offer.Namespace,
+			Type:        fallbackOfferType(offer),
+			Model:       offer.Spec.Model.Name,
+			Endpoint:    baseURL + offer.EffectivePath(),
+			Price:       describeOfferPrice(offer),
+			PayTo:       offer.Spec.Payment.PayTo,
+			Network:     offer.Spec.Payment.Network,
+			Description: desc,
+			IsDemo:      offer.Namespace == "demo",
+		}
+		if offer.Spec.Payment.Price.PerRequest != "" {
+			svc.PriceRaw = offer.Spec.Payment.Price.PerRequest
+		}
+		services = append(services, svc)
+	}
+
+	out, err := json.MarshalIndent(services, "", "  ")
+	if err != nil {
+		return "[]"
+	}
+	return string(out)
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {

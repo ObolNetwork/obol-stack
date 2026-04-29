@@ -151,6 +151,7 @@ func TestSellCommand_Structure(t *testing.T) {
 	expected := map[string]bool{
 		"inference": false,
 		"http":      false,
+		"demo":      false,
 		"list":      false,
 		"status":    false,
 		"stop":      false,
@@ -267,6 +268,16 @@ func TestServiceOfferStatusLines(t *testing.T) {
 			t.Fatalf("status lines missing %q\n%s", want, joined)
 		}
 	}
+}
+
+func TestSellDemo_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	demo := findSubcommand(t, cmd, "demo")
+	flags := flagMap(demo)
+
+	requireFlags(t, flags, "wallet", "chain", "price", "name")
+	assertStringDefault(t, flags, "chain", "base")
 }
 
 func TestSellStop_Structure(t *testing.T) {
@@ -393,4 +404,50 @@ func TestIsTransientRegistrationError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDemoRPCNetwork(t *testing.T) {
+	tests := []struct {
+		paymentChain string
+		want         string
+	}{
+		{"base", "base"},
+		{"base-mainnet", "base"},
+		{"base-sepolia", "base-sepolia"},
+		{"ethereum", "mainnet"},
+		{"mainnet", "mainnet"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.paymentChain, func(t *testing.T) {
+			if got := demoRPCNetwork(tt.paymentChain); got != tt.want {
+				t.Fatalf("demoRPCNetwork(%q) = %q, want %q", tt.paymentChain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildDemoResources_UsesImportedImageAndERPCPath(t *testing.T) {
+	resources := buildDemoResources("demo-blocks", demoSpec{Type: "blocks", NeedsERPC: true}, "base-sepolia")
+	deploy := resources[1]
+	spec := deploy["spec"].(map[string]any)
+	template := spec["template"].(map[string]any)
+	podSpec := template["spec"].(map[string]any)
+	container := podSpec["containers"].([]map[string]any)[0]
+
+	if got := container["imagePullPolicy"]; got != "IfNotPresent" {
+		t.Fatalf("imagePullPolicy = %v, want IfNotPresent", got)
+	}
+
+	env := container["env"].([]map[string]string)
+	for _, kv := range env {
+		if kv["name"] == "ERPC_URL" {
+			if kv["value"] != "http://erpc.erpc.svc.cluster.local/rpc/base-sepolia" {
+				t.Fatalf("ERPC_URL = %q", kv["value"])
+			}
+			return
+		}
+	}
+
+	t.Fatal("ERPC_URL not set for chain-backed demo")
 }
