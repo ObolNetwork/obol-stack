@@ -745,6 +745,33 @@ if [ "$import_rc" -ne 0 ]; then
 fi
 pass "Alice remote-signer seeded with seller wallet"
 
+# Guard: confirm the remote-signer pod was actually rolled by the wallet
+# import. Helm does NOT re-roll a Deployment when only a Secret's data
+# changed, so a regression that drops the explicit kubectl rollout-restart
+# would leave the pod running with the chart's bootstrap keystore-password
+# Secret in env. The pod would then sign with the throwaway address and
+# `obol sell register` would fail 5 minutes later with "gas required
+# exceeds allowance (0)" — a confusing, slow failure. This step fails
+# fast with a clear diagnostic instead.
+step "Alice: remote-signer pod rolled by wallet import (age < 120s)"
+set +e
+pod_start=$(alice kubectl get pods -n hermes-obol-agent \
+    -l app.kubernetes.io/name=remote-signer \
+    -o jsonpath='{.items[0].status.startTime}' 2>/dev/null)
+set -e
+if [ -z "$pod_start" ]; then
+    fail "remote-signer pod not found (label app.kubernetes.io/name=remote-signer)"
+    emit_metrics; exit 1
+fi
+pod_epoch=$(date -u -d "$pod_start" +%s 2>/dev/null || python3 -c "import datetime,sys; print(int(datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).timestamp()))" "$pod_start")
+now_epoch=$(date -u +%s)
+pod_age=$((now_epoch - pod_epoch))
+if [ "$pod_age" -gt 120 ]; then
+    fail "remote-signer pod is ${pod_age}s old — wallet import did not roll the deployment (likely stale keystore-password Secret). Run 'obol kubectl -n hermes-obol-agent rollout restart deployment/remote-signer' and retry."
+    emit_metrics; exit 1
+fi
+pass "remote-signer pod is ${pod_age}s old (rolled by wallet import)"
+
 step "Alice: drive ERC-8004 registration (obol sell register)"
 # 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
 # should complete in ~30-60s; anything beyond that is a hang we want

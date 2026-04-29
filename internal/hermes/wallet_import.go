@@ -24,6 +24,16 @@ type ImportPrivateKeyWalletOptions struct {
 	ApplyCluster   bool
 }
 
+// Indirection seams so tests can spy on / replace the cluster-side calls
+// without standing up a real k3d cluster. Production wires them to the real
+// helmfile-sync + kubectl rollout helpers.
+var (
+	syncFn                      = Sync
+	restartHermesRemoteSignerFn = restartHermesRemoteSigner
+	ensureVolumeWritableFn      = ensureVolumeWritable
+	fixRuntimeVolumeOwnershipFn = fixRuntimeVolumeOwnership
+)
+
 // ImportPrivateKeyWalletCmd imports an existing private key as the
 // remote-signer wallet for a Hermes instance. Mirror of the OpenClaw path.
 func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivateKeyWalletOptions, u *ui.UI) error {
@@ -77,11 +87,11 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 	if opts.ApplyCluster {
 		u.Blank()
 		u.Info("Applying changes to cluster (helmfile sync)...")
-		if err := Sync(cfg, id, u); err != nil {
+		if err := syncFn(cfg, id, u); err != nil {
 			u.Warnf("helmfile sync failed: %v", err)
 			u.Printf("Run 'obol hermes sync %s' manually before issuing remote-signer calls.", id)
 		} else {
-			restartHermesRemoteSigner(cfg, id, u)
+			restartHermesRemoteSignerFn(cfg, id, u)
 		}
 	}
 
@@ -176,8 +186,8 @@ func archiveReplacedHermesKeystore(cfg *config.Config, id string, existingWallet
 	// after provisionKeystoreToVolume's fixRuntimeVolumeOwnership. Bookend the
 	// stat/mkdir/rename with the same ownership flip provision uses, otherwise
 	// the host process can't even traverse the directory.
-	ensureVolumeWritable(cfg, dir, u)
-	defer fixRuntimeVolumeOwnership(cfg, dir, u)
+	ensureVolumeWritableFn(cfg, dir, u)
+	defer fixRuntimeVolumeOwnershipFn(cfg, dir, u)
 
 	oldPath := filepath.Join(dir, existingWallet.KeystoreUUID+".json")
 	if _, err := os.Stat(oldPath); err != nil {
