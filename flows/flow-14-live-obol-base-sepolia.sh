@@ -15,9 +15,10 @@
 #     address is supplied via OBOL_TOKEN_BASE_SEPOLIA. Flow-14 only confirms
 #     it is reachable, captures its on-chain metadata (name/symbol/decimals/
 #     DOMAIN_SEPARATOR), and asserts decimals == 18.
-#   - No `cast send <forkOBOL>.mint(...)`. Bob's wallet must already hold real
-#     OBOL on Base Sepolia. The script reads the balance and fails fast with
-#     an actionable message if it's below the buy threshold.
+#   - No `cast send <forkOBOL>.mint(...)`. Bob's deterministic second-derived
+#     wallet must already hold real OBOL on Base Sepolia. The script pre-seeds
+#     Bob's remote-signer with that key before stack up, reads the balance, and
+#     fails fast with an actionable message if it's below the buy threshold.
 #   - ERC-8004 registration is enabled on Alice's seller path (live Base
 #     Sepolia registry 0x8004A818BFB912233c491871b3d84c89A494BD9e). This
 #     exercises PR #387's WaitForAgent fix on the OBOL path.
@@ -25,19 +26,16 @@
 #     the ServiceOffer is published — fails fast if the token name does not
 #     match what the controller will sign.
 #
-# Required env (the script fails fast if any are unset):
+# Required env (the script fails fast if unset):
 #   REMOTE_SIGNER_PRIVATE_KEY    Alice's seller key (must hold Base Sepolia ETH
 #                                for ERC-8004 register + metadata-set gas).
-#   OBOL_TOKEN_BASE_SEPOLIA      Address of the deployed OBOL ERC20Permit token
-#                                on Base Sepolia (chainId 84532).
-#   BOB_FUNDING_PRIVATE_KEY      Buyer key. Must already hold real OBOL on
-#                                Base Sepolia (>= OBOL_PRICE_WEI * 5). Distinct
-#                                from REMOTE_SIGNER_PRIVATE_KEY because live
-#                                OBOL on Base Sepolia is scarce and we don't
-#                                want to assume Alice has any.
+#                                Bob is derived deterministically from this key
+#                                using the same second-key derivation as flow-11
+#                                and must hold OBOL on Base Sepolia.
 #
 # Optional overrides:
 #   BASE_SEPOLIA_RPC                          default: https://sepolia.base.org
+#   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
 #   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
@@ -70,6 +68,9 @@ BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 # Live Base Sepolia RPC + public Obol facilitator. No host.k3d.internal pin.
 BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 FACILITATOR_URL="https://x402.gcp.obol.tech"
+
+DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4"
+OBOL_TOKEN_BASE_SEPOLIA="${OBOL_TOKEN_BASE_SEPOLIA:-$DEFAULT_OBOL_TOKEN_BASE_SEPOLIA}"
 
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
 
@@ -157,6 +158,10 @@ bob() {
     "$BOB_DIR/bin/obol" "$@"
 }
 
+lower_addr() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 rewrite_k3d_ports() {
     local config_path="$1"
     local http_port="$2"
@@ -193,6 +198,7 @@ stack_init_and_up_with_retry() {
     local label="$1"
     local runner="$2"
     local dir="$3"
+    local pre_up_hook="${4:-}"
     local attempt out rc
 
     for attempt in 1 2 3; do
@@ -206,6 +212,9 @@ stack_init_and_up_with_retry() {
             rewrite_k3d_ports "$dir/config/k3d.yaml" \
                 "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
             pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
+        fi
+        if [ -n "$pre_up_hook" ]; then
+            "$pre_up_hook"
         fi
 
         step "$label: stack up"
@@ -234,6 +243,56 @@ stack_init_and_up_with_retry() {
         emit_metrics
         exit "$rc"
     done
+}
+
+preseed_bob_wallet() {
+    local deploy_dir existing import_out key_file onboard_out rc
+
+    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
+    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
+        step "Bob: scaffold default agent before stack up"
+        set +e
+        onboard_out=$(bob agent new --runtime hermes --id obol-agent --no-sync 2>&1)
+        rc=$?
+        set -e
+        echo "$onboard_out" | tail -8
+        if [ "$rc" -ne 0 ]; then
+            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
+            emit_metrics; exit "$rc"
+        fi
+        pass "Bob default agent scaffolded"
+    fi
+
+    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
+        pass "Bob wallet preseeded: $existing"
+        return 0
+    fi
+
+    step "Bob: import derived buyer wallet before stack up"
+    key_file=$(mktemp)
+    chmod 600 "$key_file"
+    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
+    set +e
+    import_out=$(bob wallet import \
+        --instance obol-agent \
+        --private-key-file "$key_file" \
+        --force 2>&1)
+    rc=$?
+    set -e
+    rm -f "$key_file"
+    echo "$import_out" | tail -8
+    if [ "$rc" -ne 0 ]; then
+        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
+        emit_metrics; exit "$rc"
+    fi
+
+    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
+        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
+        emit_metrics; exit 1
+    fi
+    pass "Bob wallet preseeded: $existing"
 }
 
 tunnel_hostname() {
@@ -429,14 +488,10 @@ if [ -z "${OBOL_TOKEN_BASE_SEPOLIA:-}" ]; then
     echo "OBOL_TOKEN_BASE_SEPOLIA must be set to a deployed Base Sepolia ERC20Permit token address" >&2
     exit 2
 fi
-if [ -z "${BOB_FUNDING_PRIVATE_KEY:-}" ]; then
-    echo "BOB_FUNDING_PRIVATE_KEY must be set to a Base Sepolia private key already funded with real OBOL (>= 5 * OBOL_PRICE_WEI)" >&2
-    exit 2
-fi
 OBOL_TOKEN="$OBOL_TOKEN_BASE_SEPOLIA"
 # Re-export so lib.sh's generic ERC-20 helpers can scan our OBOL Transfer logs.
 export USDC_ADDRESS_BASE_SEPOLIA="$OBOL_TOKEN"
-pass "OBOL_TOKEN_BASE_SEPOLIA=$OBOL_TOKEN, BOB_FUNDING_PRIVATE_KEY set"
+pass "OBOL_TOKEN_BASE_SEPOLIA=$OBOL_TOKEN"
 
 step "Preflight: .env signer key (Alice seller / register payer)"
 SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
@@ -448,7 +503,9 @@ if [ -z "$SIGNER_KEY" ]; then
     emit_metrics; exit 1
 fi
 ALICE_WALLET=$(env -u CHAIN cast wallet address --private-key "$SIGNER_KEY" 2>/dev/null)
-pass "Alice (seller payTo + funded EOA): $ALICE_WALLET"
+BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
+BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
+pass "Alice (seller payTo + funded EOA): $ALICE_WALLET, Bob (derived buyer): $BOB_WALLET"
 
 step "Preflight: host ports free (Alice/Bob ingress)"
 busy=$(require_ports_free \
@@ -563,28 +620,23 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 9. BOB: prerequisite OBOL balance check (NO mint on live network)
+# 9. BOB: prerequisite OBOL balance check (NO mint/funding transfer on live network)
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: prerequisite OBOL balance check (BOB_FUNDING_PRIVATE_KEY)"
-BOB_FUNDING_ADDR=$(env -u CHAIN cast wallet address --private-key "$BOB_FUNDING_PRIVATE_KEY" 2>/dev/null)
-if [ -z "$BOB_FUNDING_ADDR" ]; then
-    fail "Could not derive address from BOB_FUNDING_PRIVATE_KEY"
-    emit_metrics; exit 1
-fi
+step "Bob: derived buyer wallet has OBOL"
 bob_obol_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-    "$BOB_FUNDING_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+    "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
 required_min=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
 if [ -z "$bob_obol_bal" ]; then
-    fail "Could not read OBOL balance for $BOB_FUNDING_ADDR (network/contract issue)"
+    fail "Could not read OBOL balance for derived Bob wallet $BOB_WALLET (network/contract issue)"
     emit_metrics; exit 1
 fi
 bob_below=$(python3 -c "print(1 if int('$bob_obol_bal') < int('$required_min') else 0)")
 if [ "$bob_below" = "1" ]; then
-    fail "Bob funding wallet $BOB_FUNDING_ADDR holds $bob_obol_bal OBOL (wei); need >= $required_min wei (5 * OBOL_PRICE_WEI). Top up real OBOL on Base Sepolia before running flow-14."
+    fail "Derived Bob wallet $BOB_WALLET holds $bob_obol_bal OBOL wei; need >= $required_min wei (5 * OBOL_PRICE_WEI). Top up this deterministic wallet on Base Sepolia before running flow-14."
     emit_metrics; exit 1
 fi
-pass "Bob funding wallet $BOB_FUNDING_ADDR holds $bob_obol_bal OBOL wei (>= $required_min)"
+pass "Derived Bob wallet $BOB_WALLET holds $bob_obol_bal OBOL wei (>= $required_min)"
 
 # ═════════════════════════════════════════════════════════════════
 # 10-15. ALICE STACK
@@ -902,7 +954,7 @@ for tool in kubectl helm helmfile k3d k9s openclaw; do
 done
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
 
 # Repoint Bob's LiteLLM at the external GPU LLM via the canonical CLI when
 # OBOL_LLM_ENDPOINT is set. Critical for the agent's autonomous discover+buy
@@ -948,10 +1000,10 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 25-26. BOB SIGNER ADDRESS + LIVE OBOL FUNDING (operator pre-funded)
+# 25-26. BOB SIGNER ADDRESS + PRE-FUNDED LIVE OBOL BALANCE
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: locate remote-signer wallet address"
+step "Bob: remote-signer uses preseeded buyer wallet"
 BOB_SIGNER_ADDR=""
 for candidate_path in \
     "$BOB_DIR/config/applications/$BOB_AGENT_RUNTIME/obol-agent/wallet.json" \
@@ -972,65 +1024,26 @@ if [ -z "$BOB_SIGNER_ADDR" ]; then
     fail "Could not determine Bob's remote-signer address"
     emit_metrics; exit 1
 fi
-pass "Bob signer wallet: $BOB_SIGNER_ADDR"
-
-step "Bob: fund remote-signer with real OBOL from BOB_FUNDING_PRIVATE_KEY"
-# The buy.py path signs Permit2 auths from the remote-signer key, not the
-# operator-supplied funding key. So we transfer real OBOL from the operator-
-# funded BOB_FUNDING_ADDR into the in-cluster signer wallet via a normal ERC20
-# transfer on live Base Sepolia. No mint(), no fork tricks.
-five_units=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
-FUNDING_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
-fund_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
-    "transfer(address,uint256)" "$BOB_SIGNER_ADDR" "$five_units" \
-    --rpc-url "$BASE_SEPOLIA_RPC" --private-key "$BOB_FUNDING_PRIVATE_KEY" 2>&1 || true)
-FUNDING_TX=$(echo "$fund_out" | python3 -c 'import json,sys
-try:
-    d=json.loads(sys.stdin.read())
-    print(d.get("transactionHash",""))
-except Exception:
-    pass' || true)
-if [ -n "$FUNDING_TX" ] && archive_receipt funding "$FUNDING_TX" 30 4; then
-    pass "Funding receipt archived: $FUNDING_TX"
-else
-    # Fallback: confirm balance even if tx-hash extraction or receipt poll failed.
-    bob_signer_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-        "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-    if [ -n "$bob_signer_bal" ] && [ "$bob_signer_bal" != "0" ]; then
-        pass "Bob signer OBOL balance: $bob_signer_bal (transfer succeeded; receipt extraction skipped)"
-    else
-        fail "Could not archive Bob signer funding receipt and balance check returned 0 — ${fund_out:0:300}"
-        emit_metrics; exit 1
-    fi
+if [ "$(lower_addr "$BOB_SIGNER_ADDR")" != "$(lower_addr "$BOB_WALLET")" ]; then
+    fail "Bob remote-signer wallet mismatch — signer=$BOB_SIGNER_ADDR expected=$BOB_WALLET"
+    emit_metrics; exit 1
 fi
+pass "Bob remote-signer uses funded derived wallet: $BOB_SIGNER_ADDR"
 
-step "Bob: signer holds funded OBOL balance (live on-chain, poll up to 24s)"
-# Poll the public RPC because Base Sepolia public endpoints fan out to read
-# replicas that can be a block or two behind the writer. Same pattern flow-11
-# uses for USDC. Without this, a single-shot balanceOf right after a fresh
-# transfer often returns 0 even when the tx is mined.
-got_balance="0"
-for _ in $(seq 1 12); do
-    got_balance=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
-        "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || echo 0)
-    [ -n "$got_balance" ] && [ "$got_balance" != "0" ] && \
-        python3 -c "import sys; sys.exit(0 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 1)" && break
-    sleep 2
-done
+step "Bob: signer holds pre-funded OBOL balance"
+got_balance=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
+    "$BOB_SIGNER_ADDR" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || echo 0)
 if [ -n "$got_balance" ] && python3 -c "import sys; sys.exit(0 if int('$got_balance') >= int('$OBOL_PRICE_WEI') else 1)"; then
     pass "Bob signer OBOL balance: $got_balance wei (>= 1 OBOL_PRICE_WEI)"
 else
-    fail "Bob signer OBOL balance $got_balance wei is below $OBOL_PRICE_WEI after 24s of polling"
+    fail "Bob signer OBOL balance $got_balance wei is below $OBOL_PRICE_WEI"
     emit_metrics; exit 1
 fi
 
-# Now wait for Bob's in-cluster eRPC view to reflect the funding too. The
-# buyer sidecar reads through eRPC (10s eth_call cache TTL); without this
-# poll the next step's AI-agent-driven buy often runs against a stale view
-# and short-circuits with no PurchaseRequest CR. We probe OBOL balanceOf
-# directly via JSON-RPC against eRPC because buy.py's `balance` subcommand
-# is hardcoded to USDC.
-step "Bob: eRPC reflects funding (direct OBOL balanceOf eth_call >= price)"
+# The buyer sidecar reads through eRPC. Probe OBOL balanceOf directly via
+# JSON-RPC against eRPC because buy.py's `balance` subcommand is hardcoded to
+# USDC.
+step "Bob: eRPC reflects pre-funded signer balance (direct OBOL balanceOf eth_call >= price)"
 erpc_balance_output=""
 erpc_balance_wei=""
 for attempt in $(seq 1 18); do
@@ -1038,7 +1051,7 @@ for attempt in $(seq 1 18); do
     if echo "$erpc_balance_output" | grep -qE '^[0-9]+$'; then
         erpc_balance_wei="$erpc_balance_output"
         if python3 -c "import sys; sys.exit(0 if int('$erpc_balance_wei') >= int('$OBOL_PRICE_WEI') else 1)"; then
-            pass "Bob: eRPC reflects funding (attempt $attempt, balance $erpc_balance_wei wei)"
+            pass "Bob: eRPC reflects signer balance (attempt $attempt, balance $erpc_balance_wei wei)"
             break
         fi
     fi
@@ -1059,11 +1072,11 @@ ALICE_BAL_BEFORE_PAID=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: get $BOB_AGENT_RUNTIME API server token"
-BOB_TOKEN=$(bob "$BOB_AGENT_RUNTIME" token obol-agent 2>/dev/null || true)
-if [ -z "$BOB_TOKEN" ]; then
-    fail "Could not get Bob's gateway token"
+if ! BOB_TOKEN_OUT=$(agent_auth_token bob "$BOB_AGENT_RUNTIME" obol-agent 2>&1); then
+    fail "Could not get Bob's gateway token: ${BOB_TOKEN_OUT:0:200}"
     emit_metrics; exit 1
 fi
+BOB_TOKEN="$BOB_TOKEN_OUT"
 pass "Token: ${BOB_TOKEN:0:10}..."
 
 step "Bob: $BOB_AGENT_RUNTIME API port-forward"
@@ -1237,20 +1250,7 @@ fi
 if [ "$BOB_SIGNER_BAL_AFTER" = "$expected_bob_after" ]; then
     pass "Bob signer balance decreased by exactly $OBOL_PRICE_WEI wei"
 else
-    # The Bob-signer-side delta is informational. Alice's delta + the on-chain
-    # settlement Transfer event (asserted strictly above) are the canonical
-    # proofs that settlement happened correctly. The Bob-signer-side check
-    # can drift if the funding tx in step 35 races the public RPC's read
-    # replicas — step 36's polled "before" reading can land a block before
-    # the funding has propagated, and the "after" reading later sees the
-    # post-funding total minus the settlement, looking like the signer
-    # gained funds. Mathematically this is consistent with funding +
-    # settle, just not with a strict pre/post diff. Don't fail the flow on
-    # it; surface the discrepancy and move on.
-    bob_diff=$(python3 -c "
-got = int('${BOB_SIGNER_BAL_AFTER:-0}'); want = int('$expected_bob_after')
-print(got - want)" 2>/dev/null)
-    pass "Bob signer balance differs from naive delta by $bob_diff wei (race with funding tx; settlement correctness already asserted via Alice delta + Transfer event)"
+    fail "Bob signer balance delta wrong (expected $expected_bob_after, got ${BOB_SIGNER_BAL_AFTER:-unknown})"
 fi
 
 # ═════════════════════════════════════════════════════════════════
@@ -1288,13 +1288,11 @@ if FLOW14_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR" \
    FLOW14_COMMIT="$(git -C "$OBOL_ROOT" rev-parse HEAD 2>/dev/null || true)" \
    FLOW14_AGENT_ID="${AGENT_ID:-}" \
    FLOW14_ALICE="$ALICE_WALLET" \
-   FLOW14_BOB="${BOB_SIGNER_ADDR:-}" \
+   FLOW14_BOB="${BOB_WALLET:-}" \
    FLOW14_BOB_SIGNER="${BOB_SIGNER_ADDR:-}" \
-   FLOW14_BOB_FUNDING="${BOB_FUNDING_ADDR:-}" \
    FLOW14_TUNNEL="${TUNNEL_URL:-}" \
    FLOW14_REGISTRATION_TX="${REGISTRATION_TX:-}" \
    FLOW14_METADATA_TX="${METADATA_TX:-}" \
-   FLOW14_FUNDING_TX="${FUNDING_TX:-}" \
    FLOW14_SETTLEMENT_TX="${SETTLEMENT_TX:-}" \
    FLOW14_OBOL_TOKEN="${OBOL_TOKEN:-}" \
    FLOW14_OBOL_TOKEN_NAME="${OBOL_TOKEN_NAME:-}" \
@@ -1312,7 +1310,6 @@ summary = {
     "alice": os.environ.get("FLOW14_ALICE", ""),
     "bob": os.environ.get("FLOW14_BOB", ""),
     "bobSigner": os.environ.get("FLOW14_BOB_SIGNER", ""),
-    "bobFunding": os.environ.get("FLOW14_BOB_FUNDING", ""),
     "tunnel": os.environ.get("FLOW14_TUNNEL", ""),
     "obolToken": os.environ.get("FLOW14_OBOL_TOKEN", ""),
     "obolTokenName": os.environ.get("FLOW14_OBOL_TOKEN_NAME", ""),
@@ -1323,7 +1320,6 @@ summary = {
     "transactions": {
         "registration": os.environ.get("FLOW14_REGISTRATION_TX", ""),
         "metadata": os.environ.get("FLOW14_METADATA_TX", ""),
-        "funding": os.environ.get("FLOW14_FUNDING_TX", ""),
         "settlement": os.environ.get("FLOW14_SETTLEMENT_TX", ""),
     },
 }
