@@ -26,6 +26,13 @@ OBOL_TOKEN_BASE_SEPOLIA=0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
 
 Bob is the deterministic second-derived key from `REMOTE_SIGNER_PRIVATE_KEY`; it must already hold Base Sepolia OBOL. `flow-14` pre-seeds Bob's remote-signer with this key before `stack up`. Do not fund a generated signer inside the flow.
 
+Current canonical live QA pair:
+
+- Alice/register key address: `0xC0De030F6C37f490594F93fB99e2756703c4297E`
+- Bob/buyer derived address: `0x57b0eF875DeB5A37301F1640E469a2129Da9490E`
+
+Keep live OBOL funding on the canonical Bob address. Do not maintain a second live QA key set unless a test explicitly needs an isolated wallet pair.
+
 Derive/check Bob:
 
 ```bash
@@ -63,4 +70,3 @@ helm lint internal/embed/infrastructure/cloudflared
 helm template cloudflared internal/embed/infrastructure/cloudflared | rg 'cloudflare/cloudflared:'
 go test ./cmd/obol ./internal/tunnel ./internal/stack -count=1
 ```
-
