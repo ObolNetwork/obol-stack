@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -622,6 +623,17 @@ func devPreloadImages() []string {
 	return images
 }
 
+func forceRebuildLocalImages() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_IMAGES")), "true")
+}
+
+func dockerImageAvailableLocally(tag string) bool {
+	inspectCmd := exec.Command("docker", "image", "inspect", tag)
+	inspectCmd.Stdout = io.Discard
+	inspectCmd.Stderr = io.Discard
+	return inspectCmd.Run() == nil
+}
+
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
@@ -640,6 +652,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+	forceRebuild := forceRebuildLocalImages()
 
 	for _, img := range baseLocalImages {
 		contextDir := projectRoot
@@ -657,6 +670,14 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		}
 		if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 			continue // Dockerfile not present (production install without source)
+		}
+
+		if !forceRebuild && dockerImageAvailableLocally(img.tag) {
+			fmt.Printf("Reusing existing local image %s (set OBOL_FORCE_REBUILD_LOCAL_IMAGES=true to rebuild from source)...\n", img.tag)
+			if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
+				fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+			}
+			continue
 		}
 
 		fmt.Printf("Building %s from %s...\n", img.tag, img.dockerfile)
@@ -679,6 +700,14 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	}
 
 	for _, ref := range devPreloadImages() {
+		if dockerImageAvailableLocally(ref) {
+			fmt.Printf("Reusing cached image %s for cluster %s...\n", ref, clusterName)
+			if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
+				fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)
+			}
+			continue
+		}
+
 		fmt.Printf("Preloading %s into cluster %s...\n", ref, clusterName)
 		pullCmd := exec.Command("docker", "pull", ref)
 		pullCmd.Stdout = os.Stdout
