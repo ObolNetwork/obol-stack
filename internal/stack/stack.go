@@ -623,8 +623,8 @@ func devPreloadImages() []string {
 	return images
 }
 
-func forceRebuildLocalImages() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_IMAGES")), "true")
+func reuseLocalDevImages() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_REUSE_LOCAL_DEV_IMAGES")), "true")
 }
 
 func dockerImageAvailableLocally(tag string) bool {
@@ -652,7 +652,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
-	forceRebuild := forceRebuildLocalImages()
+	reuseCachedImages := reuseLocalDevImages()
 
 	for _, img := range baseLocalImages {
 		contextDir := projectRoot
@@ -672,8 +672,8 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			continue // Dockerfile not present (production install without source)
 		}
 
-		if !forceRebuild && dockerImageAvailableLocally(img.tag) {
-			fmt.Printf("Reusing existing local image %s (set OBOL_FORCE_REBUILD_LOCAL_IMAGES=true to rebuild from source)...\n", img.tag)
+		if reuseCachedImages && dockerImageAvailableLocally(img.tag) {
+			fmt.Printf("Reusing existing local image %s (set OBOL_REUSE_LOCAL_DEV_IMAGES=true to opt into cache reuse)...\n", img.tag)
 			if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 				fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
 			}
@@ -700,7 +700,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	}
 
 	for _, ref := range devPreloadImages() {
-		if dockerImageAvailableLocally(ref) {
+		if reuseCachedImages && dockerImageAvailableLocally(ref) {
 			fmt.Printf("Reusing cached image %s for cluster %s...\n", ref, clusterName)
 			if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
 				fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)

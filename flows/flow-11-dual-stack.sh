@@ -35,6 +35,11 @@
 #   FLOW11_BOB_HTTPS_PORT  FLOW11_BOB_HTTPS_ALT_PORT
 source "$(dirname "$0")/lib.sh"
 
+# This flow is a smoke/validation harness, not a source-editing loop. Reuse
+# already-cached local dev images when available so repeated runs don't block on
+# unnecessary rebuilds or cold pulls during `obol stack up`.
+export OBOL_REUSE_LOCAL_DEV_IMAGES="${OBOL_REUSE_LOCAL_DEV_IMAGES:-true}"
+
 # ═════════════════════════════════════════════════════════════════
 # PREFLIGHT
 # ═════════════════════════════════════════════════════════════════
