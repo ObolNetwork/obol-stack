@@ -581,11 +581,10 @@ func TestBuildServiceCatalogJSON_SortOrder(t *testing.T) {
 	}
 }
 
-// TestBuildServiceCatalogJSON_PerMTokPricing verifies that per-mtok-only
-// offers render a non-empty Price string (via describeOfferPrice) but leave
-// PriceRaw empty — PriceRaw is only populated from PerRequest. Without this
-// test, a per-mtok seller could show up on the storefront with an empty
-// price label on refactor.
+// TestBuildServiceCatalogJSON_PerMTokPricing verifies that per-mtok offers
+// render a non-empty Price string AND a populated PriceRaw + PriceUnit so
+// agents can disambiguate the unit. Without this test a refactor could
+// silently drop the unit metadata.
 func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "mtok-svc", Namespace: "llm"},
@@ -613,8 +612,11 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
 	got := services[0]
-	if got.PriceRaw != "" {
-		t.Errorf("PriceRaw = %q, want empty for per-mtok pricing", got.PriceRaw)
+	if got.PriceRaw != "5.00" {
+		t.Errorf("PriceRaw = %q, want %q", got.PriceRaw, "5.00")
+	}
+	if got.PriceUnit != "perMTok" {
+		t.Errorf("PriceUnit = %q, want perMTok", got.PriceUnit)
 	}
 	if got.Price == "" {
 		t.Error("Price must not be empty for per-mtok pricing")
@@ -688,6 +690,140 @@ func TestBuildServiceCatalogJSON_BaseURLTrailingSlash(t *testing.T) {
 	}
 	if services[0].Endpoint != "https://example.com/services/trim-svc" {
 		t.Errorf("endpoint = %q, want https://example.com/services/trim-svc", services[0].Endpoint)
+	}
+}
+
+// TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults locks in the wire schema
+// agents rely on: when the seller did not specify --token, the controller
+// must backfill the chain's default USDC asset block (address, decimals,
+// transferMethod, signing-domain), the CAIP-2 network, the chain id, and
+// the price in atomic units. Buyers (buy.py and external agents) construct
+// EIP-712 typed data straight from these fields without re-deriving them.
+func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hello", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0xabc",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	got := services[0]
+
+	if got.CAIP2Network != "eip155:84532" {
+		t.Errorf("CAIP2Network = %q, want eip155:84532", got.CAIP2Network)
+	}
+	if got.ChainID != 84532 {
+		t.Errorf("ChainID = %d, want 84532", got.ChainID)
+	}
+	if got.PriceMicroUnits != "1000" {
+		t.Errorf("PriceMicroUnits = %q, want 1000 (0.001 USDC × 1e6)", got.PriceMicroUnits)
+	}
+	if got.PriceUnit != "perRequest" {
+		t.Errorf("PriceUnit = %q, want perRequest", got.PriceUnit)
+	}
+	if got.Asset == nil {
+		t.Fatalf("Asset is nil; expected USDC default backfill for base-sepolia")
+	}
+	if got.Asset.Address != "0x036CbD53842c5426634e7929541eC2318f3dCF7e" {
+		t.Errorf("Asset.Address = %q, want base-sepolia USDC", got.Asset.Address)
+	}
+	if got.Asset.Symbol != "USDC" {
+		t.Errorf("Asset.Symbol = %q, want USDC", got.Asset.Symbol)
+	}
+	if got.Asset.Decimals != 6 {
+		t.Errorf("Asset.Decimals = %d, want 6", got.Asset.Decimals)
+	}
+	if got.Asset.TransferMethod != "eip3009" {
+		t.Errorf("Asset.TransferMethod = %q, want eip3009", got.Asset.TransferMethod)
+	}
+	if got.Asset.EIP712Domain == nil {
+		t.Fatalf("Asset.EIP712Domain is nil")
+	}
+	// Base Sepolia USDC empirically signs with domain name "USDC", not
+	// "USD Coin" (the contract's name() getter). Locking in that the
+	// catalog publishes the SIGNING domain, not the display name.
+	if got.Asset.EIP712Domain.Name != "USDC" {
+		t.Errorf("EIP712Domain.Name = %q, want USDC (signing domain on Base Sepolia)", got.Asset.EIP712Domain.Name)
+	}
+	if got.Asset.EIP712Domain.Version != "2" {
+		t.Errorf("EIP712Domain.Version = %q, want 2", got.Asset.EIP712Domain.Version)
+	}
+}
+
+// TestBuildServiceCatalogJSON_ExplicitOBOLToken verifies that a seller who
+// chose --token OBOL (Permit2 transfer method) sees their explicit asset
+// fields preserved on the storefront, not silently overwritten by USDC
+// defaults.
+func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "obol-svc", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "ethereum",
+				PayTo:   "0xabc",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.5"},
+				Asset: monetizeapi.ServiceOfferAsset{
+					Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+					Symbol:         "OBOL",
+					Decimals:       18,
+					TransferMethod: "permit2",
+					EIP712Name:     "Obol Network",
+					EIP712Version:  "1",
+				},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+
+	var services []ServiceJSON
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	got := services[0]
+
+	if got.CAIP2Network != "eip155:1" || got.ChainID != 1 {
+		t.Errorf("CAIP-2/chainID = %s/%d, want eip155:1/1", got.CAIP2Network, got.ChainID)
+	}
+	if got.Asset == nil {
+		t.Fatalf("Asset must be present for OBOL")
+	}
+	if got.Asset.Symbol != "OBOL" || got.Asset.TransferMethod != "permit2" {
+		t.Errorf("OBOL fields drifted: symbol=%q transfer=%q", got.Asset.Symbol, got.Asset.TransferMethod)
+	}
+	if got.Asset.Decimals != 18 {
+		t.Errorf("OBOL decimals = %d, want 18", got.Asset.Decimals)
+	}
+	if got.Asset.EIP712Domain == nil || got.Asset.EIP712Domain.Name != "Obol Network" {
+		t.Errorf("OBOL signing domain dropped, got %+v", got.Asset.EIP712Domain)
+	}
+	// 0.5 OBOL × 1e18 = 500_000_000_000_000_000.
+	if got.PriceMicroUnits != "500000000000000000" {
+		t.Errorf("PriceMicroUnits = %q, want 500000000000000000", got.PriceMicroUnits)
 	}
 }
 

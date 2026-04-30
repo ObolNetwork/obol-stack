@@ -43,6 +43,25 @@
 | IdentityRegistry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 | ReputationRegistry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` |
 
+## Base Mainnet (Chain ID: 8453)
+
+### Tokens
+
+| Token | Address | Decimals |
+|-------|---------|----------|
+| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
+| WETH | `0x4200000000000000000000000000000000000006` | 18 |
+
+## Base Sepolia Testnet (Chain ID: 84532)
+
+### Tokens
+
+| Token | Address | Decimals |
+|-------|---------|----------|
+| USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` | 6 |
+
+> **EIP-712 signing pitfall** (USDC, all chains): the `name` used in the EIP-712 domain separator is **not** always equal to what the contract's `name()` view returns. On Base Sepolia USDC, the EIP-712 domain `name` is `"USDC"` while `name()` returns `"USD Coin"`. The x402 verifier echoes `name()` back as `extra.name` in the 402 response — that field is for human display. For signing, prefer the domain advertised in the seller's 402 response under `extra.eip712Domain` (when present) or read the contract's EIP-712 separator on-chain. Do not feed the human-readable token name into the signing domain.
+
 ## Hoodi Testnet (Chain ID: 560048)
 
 Hoodi is a newer testnet. Contract addresses may differ from mainnet. Use `eth_chainId` to confirm you're on the right network before querying.

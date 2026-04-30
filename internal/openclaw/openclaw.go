@@ -648,7 +648,7 @@ func copyWorkspaceToVolume(cfg *config.Config, id, workspaceDir string, u *ui.UI
 // ConfigMap during doSync — no pod readiness required.
 //
 // Always re-stages embedded skills so that new skills added to the binary
-// (e.g. buy-inference, discovery) reach existing deployments on the next
+// (e.g. buy-x402, discovery) reach existing deployments on the next
 // sync. CopySkills only writes files from the embedded FS — user-added
 // skills with different names are preserved.
 func stageDefaultSkills(deploymentDir string, u *ui.UI) {

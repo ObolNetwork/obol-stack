@@ -17,7 +17,7 @@ Step-by-step guide to expose local GPU resources or HTTP services as x402 paymen
 ## When NOT to Use
 
 - Managing existing offers (list/status/delete) — use `sell` directly
-- Buying inference from others — use `buy-inference`
+- Buying inference from others — use `buy-x402`
 - Cluster diagnostics — use `obol-stack`
 
 ## Workflow

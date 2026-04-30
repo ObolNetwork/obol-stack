@@ -290,7 +290,7 @@ except Exception as e:
 bob_buy_skill_balance() {
     bob kubectl exec \
         -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
-        python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
+        python3 "$BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py" balance 2>&1 || true
 }
 
 bob_remote_signer_address() {
@@ -1214,7 +1214,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-x402 skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false

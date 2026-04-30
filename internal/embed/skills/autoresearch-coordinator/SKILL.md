@@ -20,7 +20,7 @@ Coordinate distributed autoresearch experiments across GPU workers discovered on
 ## When NOT to Use
 
 - Selling your own GPU as a worker -- use `autoresearch-worker` (then monetize it with `obol sell http`)
-- Buying generic inference (chat completions) -- use `buy-inference`
+- Buying generic inference (chat completions) -- use `buy-x402`
 - Discovering agents without running experiments -- use `discovery`
 - Signing transactions directly -- use `ethereum-local-wallet`
 - Cluster diagnostics -- use `obol-stack`
@@ -96,7 +96,7 @@ From the registration document it extracts:
 
 ## How Payment Works
 
-Experiment submission uses the same x402 payment flow as `buy-inference`:
+Experiment submission uses the same x402 payment flow as `buy-x402`:
 
 1. **Probe** -- Send unauthenticated POST to worker endpoint, receive `402 Payment Required` with pricing
 2. **Sign** -- Pre-sign an ERC-3009 `TransferWithAuthorization` voucher via the current remote-signer API (`GET /api/v1/keys`, `POST /api/v1/sign/<address>/typed-data`)
@@ -167,7 +167,7 @@ coordinate.py
 - **Requires remote-signer** -- must have agent wallet provisioned via `obol openclaw onboard`
 - **Requires network access** -- 8004scan API and worker endpoints must be reachable
 - **Python stdlib only** -- uses `urllib`; no third-party Python dependencies required
-- **Per-experiment payment** -- each submission costs one x402 payment; monitor balance via `buy-inference balance`
+- **Per-experiment payment** -- each submission costs one x402 payment; monitor balance via `buy-x402 balance`
 - **Worker availability** -- workers may go offline between discovery and submission; coordinator retries automatically
 - **Result storage is local** -- provenance metadata stored on-disk, not on-chain (future: IPFS/on-chain attestations)
 
@@ -175,5 +175,5 @@ coordinate.py
 
 - `references/coordination-protocol.md` -- Ensue-to-obol mapping, discovery flow, payment flow, leaderboard format
 - See also: `discovery` skill for raw ERC-8004 registry queries
-- See also: `buy-inference` skill for the x402 buyer sidecar architecture
+- See also: `buy-x402` skill for the x402 buyer sidecar architecture
 - See also: `sell` skill for running a GPU worker (sell-side)

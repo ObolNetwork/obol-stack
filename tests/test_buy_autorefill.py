@@ -7,11 +7,11 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "internal" / "embed" / "skills" / "buy-inference" / "scripts" / "buy.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "internal" / "embed" / "skills" / "buy-x402" / "scripts" / "buy.py"
 
 
 def load_buy_module():
-    spec = importlib.util.spec_from_file_location("buy_inference_buy", MODULE_PATH)
+    spec = importlib.util.spec_from_file_location("buy_x402", MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module
@@ -596,6 +596,34 @@ class BuyLifecycleCommandTest(unittest.TestCase):
         rendered = out.getvalue()
         self.assertIn("Auths remaining: 4", rendered)
         self.assertIn("Auths spent:     9", rendered)
+
+
+class SignerCompatRegressionTest(unittest.TestCase):
+    """Locks in the contract between buy.py and the remote-signer chart pin.
+
+    From remote-signer chart 0.3.2 (image v0.2.1) onward, /sign/.../typed-data
+    returns canonical Ethereum signatures with v in {0x1b, 0x1c}. buy.py used
+    to defensively renormalize v=0/1 → v=27/28 via
+    _normalize_signature_recovery, but that workaround was removed once the
+    signer started emitting canonical v at the source.
+
+    Re-introducing the workaround on top of a v0.2.1+ signer would double-add
+    27 (producing v=54) and corrupt every payment authorization. If this test
+    fires, either:
+      a) the workaround was reintroduced — delete it; or
+      b) the remote-signer chart pin in internal/agentruntime/charts.go was
+         downgraded below 0.3.2 — in that case, restore both the chart pin
+         AND the workaround as a single atomic change.
+    """
+
+    def test_no_signature_normalization_workaround(self):
+        mod = load_buy_module()
+        self.assertFalse(
+            hasattr(mod, "_normalize_signature_recovery"),
+            "buy.py must not define _normalize_signature_recovery; the "
+            "remote-signer chart 0.3.2+ emits canonical v=27/28 and a second "
+            "+27 would produce v=54.",
+        )
 
 
 if __name__ == "__main__":
