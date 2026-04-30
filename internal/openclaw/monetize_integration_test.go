@@ -610,7 +610,7 @@ func waitForBuyerReportedBalance(t *testing.T, cfg *config.Config, want *big.Int
 	var last string
 	for time.Now().Before(deadline) {
 		out, err := execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 			"balance", "--chain", "base-sepolia")
 		last = out
 		if err == nil {
@@ -662,7 +662,7 @@ func waitForBuyerAuthCount(t *testing.T, cfg *config.Config, name string, want i
 	var last string
 	for time.Now().Before(deadline) {
 		out, err := execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 			"status", name)
 		last = out
 		if err == nil && parseAuthsRemaining(t, out) == want {
@@ -681,7 +681,7 @@ func waitForBuyerLiveAuthCount(t *testing.T, cfg *config.Config, name string, wa
 	script := `
 import json
 import sys
-sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+sys.path.insert(0, "/data/.openclaw/skills/buy-x402/scripts")
 import buy
 print(json.dumps(buy._buyer_status() or {}))
 `
@@ -735,7 +735,7 @@ func waitForBuyerProbePricing(t *testing.T, cfg *config.Config, timeout time.Dur
 	var lastOut string
 	for time.Now().Before(deadline) {
 		out, _ := execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 			"probe", endpointURL, "--model", model)
 		lastOut = out
 		if strings.Contains(out, "402") && strings.Contains(out, "payTo:") {
@@ -791,7 +791,7 @@ func waitForBuyerUpstreamMissing(t *testing.T, cfg *config.Config, name string, 
 	script := `
 import json
 import sys
-sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+sys.path.insert(0, "/data/.openclaw/skills/buy-x402/scripts")
 import buy
 print(json.dumps(buy._buyer_status() or {}))
 `
@@ -885,7 +885,7 @@ func waitForNoBuySideArtifacts(t *testing.T, cfg *config.Config, timeout time.Du
 		out, err := execInAgentErr(cfg, "python3", "-c", `
 import json
 import sys
-sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+sys.path.insert(0, "/data/.openclaw/skills/buy-x402/scripts")
 import buy
 print(json.dumps(buy._buyer_status() or {}))
 `)
@@ -919,7 +919,7 @@ func syncAgentSkillsForBuySideTests(t *testing.T, cfg *config.Config) {
 		t.Fatal("runtime.Caller failed for monetize integration test")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	sourcePath := filepath.Join(repoRoot, "internal", "embed", "skills", "buy-inference", "scripts", "buy.py")
+	sourcePath := filepath.Join(repoRoot, "internal", "embed", "skills", "buy-x402", "scripts", "buy.py")
 	data, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatalf("read current buy.py: %v", err)
@@ -930,7 +930,7 @@ func syncAgentSkillsForBuySideTests(t *testing.T, cfg *config.Config) {
 import base64
 import pathlib
 
-target = pathlib.Path("/data/.openclaw/skills/buy-inference/scripts/buy.py")
+target = pathlib.Path("/data/.openclaw/skills/buy-x402/scripts/buy.py")
 target.write_bytes(base64.b64decode(%q))
 `, encoded))
 	if err != nil {
@@ -975,7 +975,7 @@ func bestEffortDrainDeletingPurchase(t *testing.T, cfg *config.Config, buyerName
 		out, err := execInAgentErr(cfg, "python3", "-c", `
 import json
 import sys
-sys.path.insert(0, "/data/.openclaw/skills/buy-inference/scripts")
+sys.path.insert(0, "/data/.openclaw/skills/buy-x402/scripts")
 import buy
 print(json.dumps(buy._buyer_status() or {}))
 `)
@@ -3548,7 +3548,7 @@ spec:
 	serviceURL := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s/v1/chat/completions", name)
 
 	probeOut, probeErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"probe", serviceURL)
 	t.Logf("probe output:\n%s", probeOut)
 	if probeErr != nil {
@@ -3563,7 +3563,7 @@ spec:
 	// Buy: pre-sign auths + deploy sidecar + wire LiteLLM
 	sellerEndpoint := fmt.Sprintf("http://traefik.traefik.svc.cluster.local/services/%s", name)
 	buyOut, buyErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", "self-loop",
 		"--endpoint", sellerEndpoint,
 		"--model", "claude-sonnet-4-5-20250929",
@@ -3686,7 +3686,7 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	applyServiceOffer(t, cfg, offerYAML)
 	t.Cleanup(func() {
 		_, _ = execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 			"remove", buyerName)
 		_, _ = execInAgentErr(cfg, "python3",
 			monetizePy,
@@ -3741,7 +3741,7 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	}
 
 	buyOut, buyErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", buyerName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -3761,7 +3761,7 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 		t.Fatalf("buyer live status spent=%d before inference, want 0:\n%s", liveBeforeStatus.Spent, liveBefore)
 	}
 	statusBefore := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"status", buyerName)
 	t.Logf("buyer status before inference:\n%s", statusBefore)
 	if !strings.Contains(statusBefore, "Alias:    paid/"+model) {
@@ -3772,7 +3772,7 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 	}
 
 	balanceBeforeOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"balance", "--chain", "base-sepolia")
 	t.Logf("buyer balance before:\n%s", balanceBeforeOut)
 	if !strings.Contains(balanceBeforeOut, agentWallet) {
@@ -3811,12 +3811,12 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 		t.Fatalf("buyer live status spent=%d after one inference, want 1:\n%s", liveAfterStatus.Spent, liveAfter)
 	}
 	statusAfter := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"status", buyerName)
 	t.Logf("buyer status after inference:\n%s", statusAfter)
 
 	balanceAfterOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"balance", "--chain", "base-sepolia")
 	t.Logf("buyer balance after:\n%s", balanceAfterOut)
 
@@ -3935,7 +3935,7 @@ spec:
 	applyServiceOffer(t, cfg, offerYAML)
 	t.Cleanup(func() {
 		_, _ = execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+			"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 			"remove", buyerName)
 		_, _ = execInAgentErr(cfg, "python3",
 			monetizePy,
@@ -3969,7 +3969,7 @@ spec:
 	}
 
 	buyOut, buyErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", buyerName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -4123,7 +4123,7 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	t.Logf("probe output:\n%s", probeOut)
 
 	buyOut, buyErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", buyerName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -4152,7 +4152,7 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	waitForPurchaseRequestState(t, cfg, buyerName, 3, 1, 2, 90*time.Second)
 
 	processBuyOut, processBuyErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"process", "--all")
 	t.Logf("buy-side process --all output:\n%s", processBuyOut)
 	if processBuyErr != nil {
@@ -4168,7 +4168,7 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	waitForPurchaseRequestState(t, cfg, buyerName, 3, 3, 2, 90*time.Second)
 
 	topUpOut, topUpErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", buyerName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -4187,7 +4187,7 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	waitForPurchaseRequestState(t, cfg, buyerName, 5, 5, 2, 90*time.Second)
 
 	conflictOut, conflictErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", conflictName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -4205,14 +4205,14 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	liveWhileDeleting := waitForBuyerLiveAuthCount(t, cfg, buyerName, 5, 90*time.Second)
 	t.Logf("buyer live status after delete request:\n%s", liveWhileDeleting)
 	listDuringDrain := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"list")
 	t.Logf("buyer list while draining:\n%s", listDuringDrain)
 	if !strings.Contains(listDuringDrain, buyerName) {
 		t.Fatalf("draining purchase disappeared from user-facing list too early:\n%s", listDuringDrain)
 	}
 	statusDuringDrain := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"status", buyerName)
 	t.Logf("buyer status while draining:\n%s", statusDuringDrain)
 	if !strings.Contains(statusDuringDrain, "Auths remaining: 5") {
@@ -4220,7 +4220,7 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 	}
 
 	drainingConflictOut, drainingConflictErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"buy", conflictName,
 		"--endpoint", localBaseURL,
 		"--model", model,
@@ -4253,14 +4253,14 @@ func TestIntegration_BuySideLifecycle_AutorefillTopUpDuplicateAndDelete(t *testi
 
 	waitForBuyerUpstreamMissing(t, cfg, buyerName, 90*time.Second)
 	listAfterDrain := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"list")
 	t.Logf("buyer list after drain:\n%s", listAfterDrain)
 	if strings.Contains(listAfterDrain, buyerName) {
 		t.Fatalf("drained purchase still present in user-facing list:\n%s", listAfterDrain)
 	}
 	statusAfterDrain, statusAfterDrainErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/buy-inference/scripts/buy.py",
+		"/data/.openclaw/skills/buy-x402/scripts/buy.py",
 		"status", buyerName)
 	t.Logf("buyer status after drain:\n%s", statusAfterDrain)
 	if statusAfterDrainErr == nil {

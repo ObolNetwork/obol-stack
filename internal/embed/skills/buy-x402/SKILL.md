@@ -1,25 +1,73 @@
 ---
-name: buy-inference
-description: "Buy remote inference from x402-gated endpoints via a risk-isolated payment sidecar. Pre-signs bounded payment authorizations, declares them through `PurchaseRequest`, and exposes purchased models through the static LiteLLM namespace `paid/<remote-model>`. Zero signer access at runtime — spending is capped by design."
+name: buy-x402
+description: "Buy from any x402-gated endpoint. Two flows: `pay` for one-shot HTTP services (single auth, no sidecar), and `buy` for long-running paid inference budgets (pre-signed batch via PurchaseRequest, exposed as `paid/<remote-model>`). Supports USDC (EIP-3009) and OBOL (Permit2). Zero signer access at runtime — spending is capped by design."
 metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["python3"] } } }
 ---
 
-# Buy Inference
+# Buy x402
 
-Purchase access to remote x402-gated inference endpoints using a risk-isolated sidecar architecture. The agent pre-signs a bounded batch of payment authorizations (USDC via EIP-3009 or OBOL via Permit2, auto-detected from the seller's 402 response), embeds them in a `PurchaseRequest` CR in its own namespace, and lets the controller publish buyer config/auth files into `llm`. A lean Go proxy (`x402-buyer`) handles payments at runtime with zero signer access — max loss = N x price. The buyer validates the token contract exists on-chain before signing.
+Purchase access to remote x402-gated services. There are two flows, picked by usage shape:
+
+- **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request.
+- **`buy <name>`** — pre-payment budget. Pre-sign **N** authorizations, declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar spend them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price; runtime path holds zero signer access.
+
+Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum) and **OBOL via Permit2** (Ethereum Mainnet).
+
+## Gasless Payments
+
+x402 payments do **NOT** require ETH for gas. The agent signs an EIP-3009
+`TransferWithAuthorization` (or Permit2 witness) off-chain. The seller's
+**facilitator** submits the on-chain settlement transaction and pays gas.
+The agent only needs a balance of the settlement token (USDC or OBOL). Zero
+ETH is fine.
+
+## Facilitator (server-side, agents do not call it)
+
+The facilitator is the seller-side service that settles payments on-chain.
+The agent does **not** call it directly — there is no facilitator URI flag
+in any of these commands. The seller's `x402-verifier` middleware
+coordinates with the facilitator after verifying your `X-PAYMENT` header.
+The default Obol-operated facilitator at `https://x402.gcp.obol.tech`
+covers `eip155:1`, `eip155:8453`, and `eip155:84532`.
+
+## Pitfalls
+
+- **`extra.name` is NOT the EIP-712 signing domain name.** The 402 response
+  echoes the token contract's on-chain `name()` getter as `extra.name`. For
+  Base Sepolia USDC this is `"USD Coin"`, but the EIP-712 domain `name`
+  baked into the contract's domain separator is `"USDC"`. Sign with the
+  value advertised in `extra.eip712Domain.name` (or read the canonical
+  signing domain from `<seller-base>/api/services.json`). Treat
+  `extra.name`/`extra.version` as human-readable display only. `buy.py
+  probe` prints both fields; `buy` and `pay` resolve the signing domain
+  automatically.
+- **Endpoint shape differs by service type.** Inference services expect
+  `POST /v1/chat/completions`; HTTP services typically expect `GET /` (or
+  a service-specific path). Pass `--type http` to `probe` for HTTP services
+  so the CLI does not append `/v1/chat/completions` to the URL. `pay`
+  defaults to `--type http` and `--method GET`.
+- **`pay` is stateless; `buy` is persistent.** Do not use `buy` for a
+  `type:http` endpoint — its pipeline is inference-shaped (creates a
+  PurchaseRequest, expects a model name, publishes a `paid/<model>`
+  route). Use `pay` instead.
+- **Prefer `/api/services.json` over parsing markdown.** The seller's
+  storefront publishes machine-readable metadata at
+  `<base>/api/services.json` with full asset, EIP-712 signing domain,
+  transfer method, and atomic-unit price for every offered service.
 
 ## When to Use
 
-- Probing an endpoint to check pricing before buying
-- Purchasing access to a remote model (pre-signs auths, creates a `PurchaseRequest`, exposes `paid/<remote-model>`)
-- Manually topping up an existing purchase by re-running `buy <same-name>`
-- Listing purchased providers and remaining auth counts
-- Checking token balance before buying
-- Inspecting the live sidecar status for remaining/spent auths
+- Probing an endpoint to check pricing before buying — `probe`
+- One-shot paid HTTP request (e.g. `demo-hello`, sponsored API endpoints) — `pay`
+- Long-running paid model access (pre-signed batch) — `buy`
+- Manually topping up an existing inference purchase by re-running `buy <same-name>`
+- Listing purchased providers and remaining auth counts — `list`
+- Checking token balance before buying — `balance`
+- Inspecting the live sidecar status for remaining/spent auths — `status`
 
 ## When NOT to Use
 
-- Selling your own services — use `monetize`
+- Selling your own services — use `sell`
 - Discovering agents without buying — use `discovery`
 - Signing transactions directly — use `ethereum-local-wallet`
 - Cluster diagnostics — use `obol-stack`
@@ -27,19 +75,28 @@ Purchase access to remote x402-gated inference endpoints using a risk-isolated s
 ## Quick Start
 
 ```bash
-# Probe an endpoint to see its pricing
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
+# Probe an inference endpoint to see its pricing (default --type inference)
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
+
+# Probe an HTTP service (no /v1/chat/completions append, GET by default)
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/demo-hello --type http
+
+# One-shot paid HTTP request (sign 1 auth, attach X-PAYMENT, send GET, print response)
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/demo-hello
+
+# One-shot paid POST with a JSON body
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/echo --method POST --data '{"hello":"world"}'
 
 # Probe with the concrete remote model when the seller validates model IDs
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
 
 # Buy access (probes, pre-signs auths, creates/updates a PurchaseRequest)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
 
 # Buy with agent-managed auto-refill intent
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 100 \
@@ -48,34 +105,35 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py 
   --refill-count 50
 
 # Manual top-up on the same purchase name
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 25
 
 # List purchased providers + remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py list
 
 # Check sidecar health + remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py status remote-qwen
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py status remote-qwen
 
 # Reconcile auto-refill policies (heartbeat / cron entrypoint)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
 
 # Check your USDC balance
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py balance
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py balance
 
 # Compatibility alias for the same reconcile loop
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py maintain
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maintain
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `probe <endpoint-url> [--model <id>]` | Send request without payment, parse 402 response for pricing |
+| `probe <url> [--model <id>] [--type http\|inference] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
+| `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send |
 | `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>` |
-| `process <name> | --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |
+| `process <name> \| --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |
 | `list` | List purchased providers + remaining auth counts |
 | `status <name>` | Check sidecar pod status + remaining auths |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
@@ -116,7 +174,7 @@ Use the absolute script path inside the pod. Do not rely on `cd ... && ...`
 shell wrapping.
 
 ```bash
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
 ```
 
 Tell the agent to schedule that as its maintenance loop only when at least one
@@ -125,15 +183,15 @@ Tell the agent to schedule that as its maintenance loop only when at least one
 ### Hermes cron recipe
 
 Hermes already has a cron scheduler. The maintenance job should load the
-buy-inference skill and run the same reconcile primitive on a schedule.
+buy-x402 skill and run the same reconcile primitive on a schedule.
 
 CLI example:
 
 ```bash
 hermes cron create "every 5m" \
-  "Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all. Report only errors or state changes." \
+  "Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes." \
   --name "x402 buy reconcile" \
-  --skill buy-inference
+  --skill buy-x402
 ```
 
 Python API example:
@@ -142,10 +200,10 @@ Python API example:
 from cron.jobs import create_job
 
 create_job(
-    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-inference skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all. Report only errors or state changes.",
+    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes.",
     schedule="every 5m",
     name="x402 buy reconcile",
-    skills=["buy-inference"],
+    skills=["buy-x402"],
 )
 ```
 
@@ -309,7 +367,7 @@ Look for agents with `"x402Support": true` and a `"web"` service endpoint.
 
 ```bash
 # Send an unauthenticated request to get 402 pricing
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe <service-endpoint> --model <model-name>
 ```
 
 This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USDC contract).
@@ -318,10 +376,10 @@ This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USD
 
 ```bash
 # Check USDC balance
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py balance --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py balance --chain base-sepolia
 
 # Buy access (pre-sign auths, create PurchaseRequest, wait for controller reconciliation)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy <friendly-name> \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy <friendly-name> \
   --endpoint <service-endpoint> \
   --model <model-name> \
   --count 20
@@ -344,13 +402,13 @@ The `paid/` prefix routes through the x402-buyer sidecar, which transparently at
 
 ```bash
 # Check remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py list
 
 # Check one purchased upstream in detail
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py status <friendly-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py status <friendly-name>
 
 # Reconcile auto-refill intent (what the heartbeat should run)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
 ```
 
 Manual `refill` and `remove` commands are still not available in the current

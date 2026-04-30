@@ -84,7 +84,7 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traef
 
 **Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` validates the token contract exists on-chain → pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
 
-**buy.py** lives at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py` inside the agent pod (skill name: `buy-inference`, not `buy`). Commands:
+**buy.py** lives at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py` inside the agent pod (skill name: `buy-x402`, not `buy`). Commands:
 ```
 probe <endpoint-url> [--model <id>]          Probe x402 pricing from a 402 endpoint
 buy <name> --endpoint <url> --model <id>     Pre-sign ERC-3009 auths + create PurchaseRequest
