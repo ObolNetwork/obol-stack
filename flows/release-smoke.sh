@@ -59,7 +59,8 @@ append_report_footer() {
 - The runner uses the real \`obol\` CLI and the flow scripts as black-box release checks.
 - Any \`FAIL:\` line is release-gating, even when a child script exits zero.
 - \`flow-11-dual-stack.sh\` writes on-chain receipt artifacts under \`$ARTIFACT_DIR/flow-11-receipts\`.
-- Set \`RELEASE_SMOKE_INCLUDE_OBOL=true\` to run \`flow-12-obol-payment.sh\`, which requires a current x402-rs facilitator binary.
+- Set \`RELEASE_SMOKE_INCLUDE_OBOL=true\` to run \`flow-14-live-obol-base-sepolia.sh\`.
+- Set \`RELEASE_SMOKE_INCLUDE_OBOL_FORK=true\` to run \`flow-13-dual-stack-obol.sh\`.
 EOF
 }
 
@@ -98,6 +99,10 @@ run_flow() {
     set +e
     if [ "$name" = "flow-11-dual-stack" ]; then
         FLOW11_ARTIFACT_DIR="$ARTIFACT_DIR/flow-11-receipts" bash "$flow" 2>&1 | tee "$log"
+    elif [ "$name" = "flow-13-dual-stack-obol" ]; then
+        FLOW13_ARTIFACT_DIR="$ARTIFACT_DIR/flow-13-receipts" bash "$flow" 2>&1 | tee "$log"
+    elif [ "$name" = "flow-14-live-obol-base-sepolia" ]; then
+        FLOW14_ARTIFACT_DIR="$ARTIFACT_DIR/flow-14-receipts" bash "$flow" 2>&1 | tee "$log"
     else
         bash "$flow" 2>&1 | tee "$log"
     fi
@@ -157,7 +162,13 @@ main() {
     fi
 
     if [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]; then
-        if ! run_flow "$SCRIPT_DIR/flow-12-obol-payment.sh"; then
+        if ! run_flow "$SCRIPT_DIR/flow-14-live-obol-base-sepolia.sh"; then
+            failed=$((failed + 1))
+        fi
+    fi
+
+    if [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ]; then
+        if ! run_flow "$SCRIPT_DIR/flow-13-dual-stack-obol.sh"; then
             failed=$((failed + 1))
         fi
     fi

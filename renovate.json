@@ -71,6 +71,19 @@
     },
     {
       "customType": "regex",
+      "description": "Update cloudflared image tag",
+      "matchStrings": [
+        "repository:\\s*cloudflare/cloudflared\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[\\w.-]+)[\"']?"
+      ],
+      "fileMatch": [
+        "^internal/embed/infrastructure/cloudflared/values\\.yaml$"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "cloudflare/cloudflared",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
       "description": "Update pinned tool versions in obolup.sh",
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\nreadonly\\s+\\w+=\"(?<currentValue>[^\"]+)\""
@@ -260,6 +273,22 @@
         "before 6am on monday"
       ],
       "groupName": "LiteLLM updates"
+    },
+    {
+      "description": "Group cloudflared updates",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "cloudflare/cloudflared"
+      ],
+      "labels": [
+        "renovate/cloudflared"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "cloudflared updates"
     },
     {
       "description": "Batch obolup.sh tool version updates into a single PR",

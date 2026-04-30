@@ -1050,11 +1050,11 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: get $BOB_AGENT_RUNTIME API server token"
-BOB_TOKEN=$(bob "$BOB_AGENT_RUNTIME" token obol-agent 2>/dev/null || true)
-if [ -z "$BOB_TOKEN" ]; then
-    fail "Could not get Bob's gateway token"
+if ! BOB_TOKEN_OUT=$(agent_auth_token bob "$BOB_AGENT_RUNTIME" obol-agent 2>&1); then
+    fail "Could not get Bob's gateway token: ${BOB_TOKEN_OUT:0:200}"
     emit_metrics; exit 1
 fi
+BOB_TOKEN="$BOB_TOKEN_OUT"
 pass "Token: ${BOB_TOKEN:0:10}..."
 
 step "Bob: $BOB_AGENT_RUNTIME API port-forward"

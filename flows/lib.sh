@@ -192,6 +192,32 @@ fail() {
     return 0
 }
 
+agent_auth_token() {
+    local obol_cmd="$1"
+    local runtime="$2"
+    local agent="${3:-obol-agent}"
+    local out rc token had_errexit=0
+
+    case $- in
+        *e*) had_errexit=1 ;;
+    esac
+
+    set +e
+    out=$("$obol_cmd" agent auth --runtime "$runtime" "$agent" 2>&1)
+    rc=$?
+    if [ "$had_errexit" -eq 1 ]; then
+        set -e
+    fi
+
+    token=$(printf '%s\n' "$out" | tail -1 | tr -d '\r')
+    if [ "$rc" -ne 0 ] || [ -z "$token" ] || printf '%s' "$token" | grep -qi '^usage:'; then
+        printf '%s\n' "$out"
+        return 1
+    fi
+
+    printf '%s\n' "$token"
+}
+
 # Run a command; pass if exit 0, fail otherwise. Captures output.
 run_step() {
     local desc="$1"; shift
