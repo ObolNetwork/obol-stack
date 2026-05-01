@@ -16,11 +16,11 @@
 #     OBOL-Permit2-aware and signs Permit2 payloads against the local facilitator.
 #
 # Requires:
-#   - .env with REMOTE_SIGNER_PRIVATE_KEY (used as Alice's seller key + funded EOA)
+#   - .env with REMOTE_SIGNER_PRIVATE_KEY (used as Alice's seller key + Bob seed)
 #   - cast + anvil (Foundry) on PATH
 #   - forge on PATH (used to compile ForkObolToken.sol)
 #   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
-#   - Ollama running (Alice serves local model inference)
+#   - OpenAI-compatible QA LLM endpoint via OBOL_LLM_ENDPOINT
 #   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 #
 # Use this flow when you want to validate the OBOL Permit2 path end-to-end
@@ -35,6 +35,8 @@
 #   FLOW13_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW13_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW13_ARTIFACT_DIR           where receipts + logs land
+#   OBOL_LLM_ENDPOINT             required vLLM/llama.cpp/OpenAI-compatible endpoint
+#   OBOL_LLM_MODEL                endpoint model name (default: qwen36-fast)
 #
 source "$(dirname "$0")/lib.sh"
 
@@ -55,6 +57,9 @@ BOB_HTTP_ALT_PORT="${FLOW13_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
 BOB_HTTPS_PORT="${FLOW13_BOB_HTTPS_PORT:-$(pick_free_port)}"
 BOB_HTTPS_ALT_PORT="${FLOW13_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+export OBOL_LLM_MODEL
+
 ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
 FACILITATOR_PORT="${FLOW13_FACILITATOR_PORT:-$(pick_free_port)}"
 
@@ -74,6 +79,12 @@ FLOW13_ARTIFACT_DIR="${FLOW13_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-13-$(date +%Y%m
 mkdir -p "$FLOW13_ARTIFACT_DIR"
 ANVIL_LOG="$FLOW13_ARTIFACT_DIR/anvil.log"
 FACILITATOR_LOG="$FLOW13_ARTIFACT_DIR/facilitator.log"
+
+if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+    fail "Flow 13 requires OBOL_LLM_ENDPOINT for a QA vLLM/llama.cpp/OpenAI-compatible endpoint; local qwen3.5:9b via Ollama is not accepted for full QA"
+    emit_metrics
+    exit 1
+fi
 
 # Receipt helpers in lib.sh expect FLOW11_ARTIFACT_DIR + USDC_ADDRESS_BASE_SEPOLIA +
 # BASE_SEPOLIA_RPC. We point them at the OBOL token + Anvil; their ERC-20 transfer
@@ -163,6 +174,10 @@ bob() {
     OBOL_BIN_DIR="$BOB_DIR/bin" \
     OBOL_DATA_DIR="$BOB_DIR/data" \
     "$BOB_DIR/bin/obol" "$@"
+}
+
+lower_addr() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
 # Pin a chain to a single eRPC upstream by mutating the eRPC ConfigMap. Mirrors
@@ -271,6 +286,7 @@ stack_init_and_up_with_retry() {
     local label="$1"
     local runner="$2"
     local dir="$3"
+    local pre_up_hook="${4:-}"
     local attempt out rc
 
     for attempt in 1 2 3; do
@@ -284,6 +300,9 @@ stack_init_and_up_with_retry() {
             rewrite_k3d_ports "$dir/config/k3d.yaml" \
                 "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
             pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
+        fi
+        if [ -n "$pre_up_hook" ]; then
+            "$pre_up_hook"
         fi
 
         step "$label: stack up"
@@ -314,6 +333,56 @@ stack_init_and_up_with_retry() {
     done
 }
 
+preseed_bob_wallet() {
+    local deploy_dir existing import_out key_file onboard_out rc
+
+    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
+    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
+        step "Bob: scaffold default agent before stack up"
+        set +e
+        onboard_out=$(bob agent new --runtime hermes --id obol-agent --no-sync 2>&1)
+        rc=$?
+        set -e
+        echo "$onboard_out" | tail -8
+        if [ "$rc" -ne 0 ]; then
+            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
+            emit_metrics; exit "$rc"
+        fi
+        pass "Bob default agent scaffolded"
+    fi
+
+    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
+        pass "Bob wallet preseeded: $existing"
+        return 0
+    fi
+
+    step "Bob: import derived buyer wallet before stack up"
+    key_file=$(mktemp)
+    chmod 600 "$key_file"
+    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
+    set +e
+    import_out=$(bob wallet import \
+        --instance obol-agent \
+        --private-key-file "$key_file" \
+        --force 2>&1)
+    rc=$?
+    set -e
+    rm -f "$key_file"
+    echo "$import_out" | tail -8
+    if [ "$rc" -ne 0 ]; then
+        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
+        emit_metrics; exit "$rc"
+    fi
+
+    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
+    if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
+        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
+        emit_metrics; exit 1
+    fi
+    pass "Bob wallet preseeded: $existing"
+}
+
 tunnel_hostname() {
     python3 - "$1" <<'PY'
 from urllib.parse import urlparse
@@ -340,11 +409,11 @@ curl_tunnel_402_code() {
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             --resolve "$host:443:$ip" -X POST "$url" \
             -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     else
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$url" -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     fi
 }
 
@@ -352,11 +421,17 @@ ensure_bob_tunnel_dns() {
     local host="$1"; local ip="$2"; local nodehosts patch_file
     [ -n "$host" ] || return 0
     if [ -z "$ip" ]; then ip=$(resolve_public_ipv4 "$host" || true); fi
-    if [ -z "$ip" ]; then fail "Could not resolve public IPv4 for tunnel host $host"; return 0; fi
+    if [ -z "$ip" ]; then
+        echo "  ! Could not resolve public IPv4 for tunnel host $host; continuing without CoreDNS override"
+        return 0
+    fi
 
     step "Bob: tunnel DNS override"
     nodehosts=$(bob kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}' 2>/dev/null || true)
-    if [ -z "$nodehosts" ]; then fail "Could not read Bob CoreDNS NodeHosts"; return 0; fi
+    if [ -z "$nodehosts" ]; then
+        echo "  ! Could not read Bob CoreDNS NodeHosts; continuing without tunnel DNS override"
+        return 0
+    fi
     if echo "$nodehosts" | grep -Fq "$host"; then
         pass "Bob CoreDNS NodeHosts already maps $host"
         return 0
@@ -376,7 +451,7 @@ PY
         bob kubectl rollout status deployment/coredns -n kube-system --timeout=60s >/dev/null 2>&1 || true
         pass "Bob CoreDNS NodeHosts maps $host -> $ip"
     else
-        fail "Could not patch Bob CoreDNS for $host"
+        echo "  ! Could not patch Bob CoreDNS for $host; continuing with regular DNS"
     fi
     rm -f "$patch_file"
 }
@@ -386,7 +461,7 @@ bob_tunnel_402_code() {
         python3 -c "
 import json, urllib.error, urllib.request
 req = urllib.request.Request('$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions',
-    data=json.dumps({'model':'qwen3.5:9b','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
+    data=json.dumps({'model':'$OBOL_LLM_MODEL','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
     headers={'Content-Type':'application/json'})
 try:
     resp = urllib.request.urlopen(req, timeout=20); print(resp.status)
@@ -484,11 +559,16 @@ pass "Facilitator image available: $FACILITATOR_IMAGE"
 step "Preflight: .env signer key (Alice/Bob seed)"
 SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
-    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
+    SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
+fi
+if [ -z "$SIGNER_KEY" ]; then
+    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
     emit_metrics; exit 1
 fi
 ALICE_WALLET=$(env -u CHAIN cast wallet address --private-key "$SIGNER_KEY" 2>/dev/null)
-pass "Alice (seller payTo + funded EOA): $ALICE_WALLET"
+BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
+BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
+pass "Alice (seller payTo + funded EOA): $ALICE_WALLET, Bob (derived buyer): $BOB_WALLET"
 
 step "Preflight: host ports free (Alice/Bob ingress + Anvil + facilitator)"
 busy=$(require_ports_free \
@@ -525,12 +605,17 @@ nohup anvil --fork-url https://sepolia.base.org --port "$ANVIL_PORT" \
     --host 0.0.0.0 \
     > "$ANVIL_LOG" 2>&1 &
 ANVIL_PID=$!
-# Poll readiness for up to 20s.
+# Public Base Sepolia RPC sometimes takes more than 20s to serve the first fork
+# response on remote QA hosts, even when Anvil is healthy. Poll long enough to
+# cover that cold-start path, and fail early if the process exits.
 ready=0
-for _ in $(seq 1 20); do
+for _ in $(seq 1 60); do
     if curl -sf "$ANVIL_RPC_HOST" -X POST -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
         ready=1; break
+    fi
+    if ! kill -0 "$ANVIL_PID" 2>/dev/null; then
+        break
     fi
     sleep 1
 done
@@ -738,6 +823,8 @@ pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 
+route_llm_via_obol_cli alice
+
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
@@ -899,7 +986,9 @@ for tool in kubectl helm helmfile k3d k9s openclaw; do
 done
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
+
+route_llm_via_obol_cli bob
 
 # detect_buyer_runtime re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE /
 # REMOTE_PORT / OBOL_SKILLS_DIR / LABEL / RUNTIME based on Bob's actual namespace.
@@ -979,7 +1068,11 @@ if [ -z "$BOB_SIGNER_ADDR" ]; then
     fail "Could not determine Bob's remote-signer address"
     emit_metrics; exit 1
 fi
-pass "Bob signer wallet: $BOB_SIGNER_ADDR"
+if [ "$(lower_addr "$BOB_SIGNER_ADDR")" != "$(lower_addr "$BOB_WALLET")" ]; then
+    fail "Bob remote-signer wallet mismatch — signer=$BOB_SIGNER_ADDR expected=$BOB_WALLET"
+    emit_metrics; exit 1
+fi
+pass "Bob remote-signer uses derived buyer wallet: $BOB_SIGNER_ADDR"
 
 step "Bob: mint 10 OBOL to remote-signer ($BOB_SIGNER_ADDR)"
 FUNDING_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d ' ' || true)
@@ -1102,7 +1195,8 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Dual-Stack OBOL Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
+            {\"role\": \"assistant\", \"content\": \"I found the service endpoint and the relevant skill is buy-x402.\"},
+            {\"role\": \"user\", \"content\": \"Load the buy-x402 skill, then use your terminal tool to buy the tokens. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -1111,11 +1205,15 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
 # Don't grep buy_content for natural-language confirmation; structural success
 # is the PurchaseRequest CR Ready=True poll below.
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py"
+if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
+    fail "Agent buy returned no final assistant content: ${buy_response:0:500}"
     emit_metrics; exit 1
 fi
-pass "Agent accepted buy request (success confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py: ${buy_content:0:500}"
+    emit_metrics; exit 1
+fi
+pass "Agent buy prompt completed (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
 # 36-39. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -1127,6 +1225,7 @@ if echo "$pr_status" | grep -q "True"; then
     pass "PurchaseRequest CR ready: $pr_status"
 else
     fail "PurchaseRequest CR not ready: $pr_status"
+    emit_metrics; exit 1
 fi
 
 step "Bob: LiteLLM rollout settled"
@@ -1137,7 +1236,7 @@ poll_step_grep "Bob: buyer sidecar has auths (remaining=5)" "remaining=[1-9]" 24
 buyer_status=$(buyer_sidecar_status)
 pass "Sidecar auths: $buyer_status"
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
-[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/qwen3.5:9b"
+[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/$OBOL_LLM_MODEL"
 
 step "Bob's agent: paid inference via $PAID_MODEL"
 BOB_MASTER_KEY=$(bob kubectl get secret litellm-secrets -n llm \

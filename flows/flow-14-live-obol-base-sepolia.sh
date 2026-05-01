@@ -39,6 +39,8 @@
 #   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
+#   OBOL_LLM_ENDPOINT                         required vLLM/llama.cpp/OpenAI-compatible endpoint
+#   OBOL_LLM_MODEL                            endpoint model name (default: qwen36-fast)
 #
 # Usage:
 #   ./flows/flow-14-live-obol-base-sepolia.sh
@@ -65,6 +67,9 @@ BOB_HTTP_ALT_PORT="${FLOW14_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
 BOB_HTTPS_PORT="${FLOW14_BOB_HTTPS_PORT:-$(pick_free_port)}"
 BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+export OBOL_LLM_MODEL
+
 # Live Base Sepolia RPC + public Obol facilitator. No host.k3d.internal pin.
 BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 FACILITATOR_URL="https://x402.gcp.obol.tech"
@@ -79,6 +84,12 @@ OBOL_PRICE_WEI="1000000000000000"
 
 FLOW14_ARTIFACT_DIR="${FLOW14_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-14-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$FLOW14_ARTIFACT_DIR"
+
+if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+    fail "Flow 14 requires OBOL_LLM_ENDPOINT for a QA vLLM/llama.cpp/OpenAI-compatible endpoint; local qwen3.5:9b via Ollama is not accepted for full QA"
+    emit_metrics
+    exit 1
+fi
 
 # Receipt helpers in lib.sh expect FLOW11_ARTIFACT_DIR + USDC_ADDRESS_BASE_SEPOLIA +
 # BASE_SEPOLIA_RPC. The "USDC" naming is legacy — the helpers are generic
@@ -329,11 +340,11 @@ curl_tunnel_402_code() {
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             --resolve "$host:443:$ip" -X POST "$url" \
             -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     else
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$url" -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     fi
 }
 
@@ -375,7 +386,7 @@ bob_tunnel_402_code() {
         python3 -c "
 import json, urllib.error, urllib.request
 req = urllib.request.Request('$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions',
-    data=json.dumps({'model':'qwen3.5:9b','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
+    data=json.dumps({'model':'$OBOL_LLM_MODEL','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
     headers={'Content-Type':'application/json'})
 try:
     resp = urllib.request.urlopen(req, timeout=20); print(resp.status)
@@ -666,10 +677,7 @@ pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 
-# Repoint Alice's LiteLLM at an external GPU LLM via the canonical CLI when
-# OBOL_LLM_ENDPOINT is set. Real-world recipe: Alice already has vLLM/sglang
-# running on her GPU box — `obol model remove` + `obol model setup custom`
-# wires that endpoint in and re-syncs the default agent.
+# Repoint Alice's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli alice
 
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
@@ -964,11 +972,7 @@ pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
 
-# Repoint Bob's LiteLLM at the external GPU LLM via the canonical CLI when
-# OBOL_LLM_ENDPOINT is set. Critical for the agent's autonomous discover+buy
-# chat completions — qwen3.5:9b on host CPU blows past the gateway's 180s
-# per-call envelope, the agent never runs buy.py, no PurchaseRequest CR
-# materializes. With the GPU endpoint wired in, the agent reasons fast.
+# Repoint Bob's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli bob
 
 # detect_buyer_runtime re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE /
@@ -1151,18 +1155,22 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Live OBOL Base Sepolia Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count 5\"}
+            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
     }" 2>&1 || true)
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py"
+if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
+    fail "Agent buy returned no final assistant content: ${buy_response:0:500}"
     emit_metrics; exit 1
 fi
-pass "Agent accepted buy request (success confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py: ${buy_content:0:500}"
+    emit_metrics; exit 1
+fi
+pass "Agent buy prompt completed (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
 # 31-34. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -1174,6 +1182,7 @@ if echo "$pr_status" | grep -q "True"; then
     pass "PurchaseRequest CR ready: $pr_status"
 else
     fail "PurchaseRequest CR not ready: $pr_status"
+    emit_metrics; exit 1
 fi
 
 step "Bob: LiteLLM rollout settled"
@@ -1184,7 +1193,7 @@ poll_step_grep "Bob: buyer sidecar has auths (remaining=5)" "remaining=[1-9]" 24
 buyer_status=$(buyer_sidecar_status)
 pass "Sidecar auths: $buyer_status"
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
-[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/${OBOL_LLM_MODEL:-qwen3.5:9b}"
+[ -z "$PAID_MODEL" ] && PAID_MODEL="paid/$OBOL_LLM_MODEL"
 
 step "Bob's agent: paid inference via $PAID_MODEL"
 BOB_MASTER_KEY=$(bob kubectl get secret litellm-secrets -n llm \

@@ -65,7 +65,7 @@ OBOL_TOKEN_BASE_SEPOLIA=0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
 
 Buyer wallet invariant:
 
-- `flow-11` and `flow-14` derive Bob from `.env` `REMOTE_SIGNER_PRIVATE_KEY`.
+- `flow-11`, `flow-13`, and `flow-14` derive Bob from `.env` `REMOTE_SIGNER_PRIVATE_KEY`.
 - Bob is the second deterministic derived key.
 - The flow must pre-seed Bob's remote-signer before Bob `stack up`.
 - The flow must assert `bobSigner == BOB_WALLET`.
@@ -78,8 +78,17 @@ Token/auth invariant:
 
 Payment assertion invariant:
 
+- Do not bypass the agent/LLM buy step with a direct script exec.
+- If the agent refuses, times out, or claims tools/skills are unavailable, diagnose Hermes/LiteLLM/model routing.
 - Do not rely on agent wording.
 - Assert `PurchaseRequest Ready=True`, paid inference HTTP 200, settlement `Transfer`, and exact balance deltas.
+
+QA LLM invariant:
+
+- Full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT`.
+- Use an OpenAI-compatible vLLM or llama.cpp endpoint on the QA machine.
+- Default `OBOL_LLM_MODEL` is `qwen36-fast`; override only when the endpoint advertises a different model.
+- Do not treat local Ollama `qwen3.5:9b` or cloud-provider fallback as a green full-flow QA substitute.
 
 ## Remote QA Rules
 

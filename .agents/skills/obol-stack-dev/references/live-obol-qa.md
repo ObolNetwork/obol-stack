@@ -50,7 +50,7 @@ cast call "$OBOL_TOKEN_BASE_SEPOLIA" "balanceOf(address)(uint256)" "$BOB_WALLET"
 - Bob remote-signer equals the deterministic `BOB_WALLET`.
 - Bob in-cluster eRPC sees Bob's OBOL balance.
 - Bob buys auths; `PurchaseRequest` reaches `Ready=True`.
-- LiteLLM exposes `paid/qwen3.5:9b`.
+- LiteLLM exposes `paid/<OBOL_LLM_MODEL>`; default QA model is `qwen36-fast`.
 - Paid inference returns HTTP 200.
 - A Base Sepolia OBOL `Transfer(Bob signer -> Alice, 1000000000000000)` receipt is archived.
 - Alice balance increases and Bob signer balance decreases by exactly `1000000000000000` wei.
