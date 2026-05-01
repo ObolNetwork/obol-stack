@@ -816,12 +816,31 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   install_dir=%s
                   repo_url=%s
                   mkdir -p /data/.hermes/home /data/.hermes/workspace
-                  if [ ! -d "$install_dir/.git" ]; then
+                  lock_dir="${install_dir}.lock"
+                  got_lock=0
+                  for _ in $(seq 1 120); do
+                    if mkdir "$lock_dir" 2>/dev/null; then
+                      got_lock=1
+                      break
+                    fi
+                    sleep 1
+                  done
+                  if [ "$got_lock" != 1 ]; then
+                    echo "Timed out waiting for Hermes install lock: $lock_dir" >&2
+                    exit 1
+                  fi
+                  cleanup_lock() {
+                    rmdir "$lock_dir" 2>/dev/null || true
+                  }
+                  trap cleanup_lock EXIT
+
+                  if [ ! -d "$install_dir/.git" ] || { [ ! -f "$install_dir/pyproject.toml" ] && [ ! -f "$install_dir/setup.py" ]; }; then
                     rm -rf "${install_dir}.tmp"
                     if [ -e "$install_dir" ]; then
                       mv "$install_dir" "${install_dir}.backup.$(date +%%s)"
                     fi
-                    git clone --depth 1 "$repo_url" "$install_dir"
+                    git clone --depth 1 "$repo_url" "${install_dir}.tmp"
+                    mv "${install_dir}.tmp" "$install_dir"
                   fi
                   cd "$install_dir"
                   # Reinstall when the venv is missing the hermes binary OR
@@ -852,6 +871,8 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                       echo "Backed up malformed Hermes state DB to $backup_dir"
                     fi
                   fi
+                  cleanup_lock
+                  trap - EXIT
               volumeMounts:
                 - name: data
                   mountPath: /data

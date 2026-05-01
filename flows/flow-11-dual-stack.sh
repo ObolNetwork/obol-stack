@@ -13,7 +13,7 @@
 #   - .env with REMOTE_SIGNER_PRIVATE_KEY funded with Base Sepolia ETH for Alice
 #   - second deterministic derived key funded with Base Sepolia USDC for Bob
 #   - Docker running, with the configured Alice/Bob ingress ports free
-#   - Ollama running (Alice serves local model inference)
+#   - OpenAI-compatible QA LLM endpoint via OBOL_LLM_ENDPOINT
 #   - cast (Foundry) for balance checks
 #
 # Usage:
@@ -33,6 +33,8 @@
 #   FLOW11_ALICE_HTTPS_PORT FLOW11_ALICE_HTTPS_ALT_PORT
 #   FLOW11_BOB_HTTP_PORT   FLOW11_BOB_HTTP_ALT_PORT
 #   FLOW11_BOB_HTTPS_PORT  FLOW11_BOB_HTTPS_ALT_PORT
+#   OBOL_LLM_ENDPOINT      required vLLM/llama.cpp/OpenAI-compatible endpoint
+#   OBOL_LLM_MODEL         endpoint model name (default: qwen36-fast)
 source "$(dirname "$0")/lib.sh"
 
 # This flow is a smoke/validation harness, not a source-editing loop. Reuse
@@ -61,6 +63,8 @@ BOB_HTTP_ALT_PORT="${FLOW11_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
 BOB_HTTPS_PORT="${FLOW11_BOB_HTTPS_PORT:-$(pick_free_port)}"
 BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 FACILITATOR_URL="${FLOW11_FACILITATOR_URL:-https://x402.gcp.obol.tech}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+export OBOL_LLM_MODEL
 FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m%d-%H%M%S)}"
 BASE_SEPOLIA_RPC="${FLOW11_BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
@@ -84,6 +88,12 @@ FLOW11_BUY_COUNT="${FLOW11_BUY_COUNT:-5}"
 FLOW11_PRICE_MICRO_USDC=1000
 FLOW11_REQUIRED_BOB_USDC=$((FLOW11_BUY_COUNT * FLOW11_PRICE_MICRO_USDC))
 mkdir -p "$FLOW11_ARTIFACT_DIR"
+
+if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+    fail "Flow 11 requires OBOL_LLM_ENDPOINT for a QA vLLM/llama.cpp/OpenAI-compatible endpoint; local qwen3.5:9b via Ollama is not accepted for full QA"
+    emit_metrics
+    exit 1
+fi
 
 # Always reclaim leaked Docker networks on exit so the next run doesn't run
 # into "all predefined address pools have been fully subnetted". If the flow
@@ -185,12 +195,12 @@ curl_tunnel_402_code() {
             --resolve "$host:443:$ip" \
             -X POST "$url" \
             -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     else
         curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$url" \
             -H "Content-Type: application/json" \
-            -d '{"model":"qwen3.5:9b","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null || true
+            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
     fi
 }
 
@@ -285,7 +295,7 @@ import urllib.request
 
 req = urllib.request.Request('$TUNNEL_URL/services/alice-inference/v1/chat/completions',
     data=json.dumps({
-        'model': 'qwen3.5:9b',
+        'model': '$OBOL_LLM_MODEL',
         'messages': [{'role': 'user', 'content': 'hi'}],
         'max_tokens': 5
     }).encode(),
@@ -846,9 +856,7 @@ pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
 
-# Repoint Alice's LiteLLM at an external GPU LLM via the canonical CLI when
-# OBOL_LLM_ENDPOINT is set. See flow-14 / lib.sh for the full rationale —
-# avoids burning host CPU on qwen3.5:9b for paid inference responses.
+# Repoint Alice's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli alice
 
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
@@ -1043,9 +1051,7 @@ pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
 
-# Repoint Bob's LiteLLM at the external GPU LLM via the canonical CLI when
-# OBOL_LLM_ENDPOINT is set. See flow-14 / lib.sh for the full rationale —
-# the agent's autonomous discover+buy reasoning depends on responsive LLM.
+# Repoint Bob's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli bob
 
 # Detect which buyer-agent runtime (Hermes or OpenClaw) Bob's cluster actually deployed.
@@ -1227,7 +1233,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-x402 skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-x402 skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false
@@ -1238,11 +1244,15 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 # structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
 # matching has been brittle across runtime versions (OpenClaw vs Hermes).
 echo "${buy_content:0:500}"
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py"
+if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
+    fail "Agent buy returned no final assistant content: ${buy_response:0:500}"
     emit_metrics; exit 1
 fi
-pass "Agent accepted buy request (success will be confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py: ${buy_content:0:500}"
+    emit_metrics; exit 1
+fi
+pass "Agent buy prompt completed (success will be confirmed by PurchaseRequest CR)"
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)
@@ -1266,7 +1276,7 @@ pass "Sidecar has auths: $buyer_status"
 # Extract the paid model name from sidecar status
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
 if [ -z "$PAID_MODEL" ]; then
-    PAID_MODEL="paid/${OBOL_LLM_MODEL:-qwen3.5:9b}"  # fallback
+    PAID_MODEL="paid/$OBOL_LLM_MODEL"
 fi
 
 step "Bob's agent: use paid model for inference"

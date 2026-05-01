@@ -15,11 +15,11 @@ import "testing"
 func TestRankModels_HermesWrapper_PrefersLargerLocalModel(t *testing.T) {
 	primary, fallbacks := rankModels([]string{
 		"llama3.2:1b",
-		"qwen3.5:9b",
+		"llama3.1:8b",
 		"llama3.2:3b",
 	})
-	if primary != "qwen3.5:9b" {
-		t.Fatalf("primary: got %q, want qwen3.5:9b", primary)
+	if primary != "llama3.1:8b" {
+		t.Fatalf("primary: got %q, want llama3.1:8b", primary)
 	}
 	if len(fallbacks) != 2 || fallbacks[0] != "llama3.2:3b" || fallbacks[1] != "llama3.2:1b" {
 		t.Fatalf("fallbacks: got %v, want [llama3.2:3b llama3.2:1b]", fallbacks)
@@ -32,7 +32,7 @@ func TestRankModels_HermesWrapper_PrefersLargerLocalModel(t *testing.T) {
 // preserve that.
 func TestRankModels_HermesWrapper_PrefersClaudeOverLocal(t *testing.T) {
 	primary, _ := rankModels([]string{
-		"qwen3.5:9b",
+		"llama3.1:8b",
 		"claude-opus-4-7",
 		"llama3.2:1b",
 	})
@@ -52,7 +52,7 @@ func TestRankModels_HermesWrapper_PreservesProviderPrefixIfPresent(t *testing.T)
 	primary, _ := rankModels([]string{
 		"anthropic/claude-opus-4-7",
 		"openai/gpt-4o",
-		"qwen3.5:9b",
+		"llama3.1:8b",
 	})
 	if primary != "anthropic/claude-opus-4-7" {
 		t.Fatalf("primary: got %q, want anthropic/claude-opus-4-7 (unstripped)", primary)
@@ -64,7 +64,7 @@ func TestRankModels_HermesWrapper_PreservesProviderPrefixIfPresent(t *testing.T)
 // that double-stripping would mangle to `<model>`, leaving the agent calling
 // LiteLLM with a key that no longer matched the registered route.
 func TestRankModels_HermesWrapper_CustomNamespacedEntryRoundTrips(t *testing.T) {
-	in := []string{"custom/spark1-vllm/qwen36-fast"}
+	in := []string{"custom/qa-vllm/qwen36-fast"}
 	primary, _ := rankModels(in)
 	if primary != in[0] {
 		t.Fatalf("primary: got %q, want %q (must round-trip unchanged)", primary, in[0])

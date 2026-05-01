@@ -73,7 +73,8 @@ export USDC_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 export CHAIN="base-sepolia"
 export ANVIL_RPC="http://localhost:8545"
 
-# Model used for flow tests (small, fast, local Ollama)
+# Legacy model used by older local-Ollama flows. Full seller/buyer QA flows
+# should set OBOL_LLM_ENDPOINT and OBOL_LLM_MODEL instead.
 export FLOW_MODEL="${FLOW_MODEL:-qwen3.5:9b}"
 OBOL_INGRESS_URL_OVERRIDE="${OBOL_INGRESS_URL:-}"
 
@@ -298,7 +299,7 @@ cleanup_pid() {
 # and `docker network rm` refuses to remove it. After ~16 such leaks
 # Docker's predefined CIDR pool (172.16.0.0/12 carved into /16s) is
 # exhausted and every new cluster fails with "all predefined address
-# pools have been fully subnetted" — which has bitten us on spark2
+# pools have been fully subnetted" — which has bitten remote QA hosts
 # repeatedly.
 #
 # Workaround: for every k3d-obol-stack-* network, force-disconnect every
@@ -326,11 +327,11 @@ cleanup_k3d_obol_networks() {
     done
 }
 
-# Repoint a stack at an external OpenAI-compatible LLM endpoint via the
-# canonical `obol model` CLI — same path a real operator with a GPU box
-# would use ("Alice has her own vLLM, point her stack at it").
+# Repoint a stack at a QA LLM via the canonical `obol model` CLI.
 #
-# Activated when OBOL_LLM_ENDPOINT is set (e.g. http://192.168.18.23:8000/v1).
+# Activated when OBOL_LLM_ENDPOINT is set (for example,
+# http://127.0.0.1:8000/v1 on a QA machine). The endpoint must be
+# OpenAI-compatible, such as vLLM or llama.cpp.
 # OBOL_LLM_MODEL is the upstream model id (default qwen36-fast).
 # OBOL_LLM_NAME is the LiteLLM short name registered for the endpoint (default
 # external-llm).
@@ -349,32 +350,36 @@ cleanup_k3d_obol_networks() {
 # Each peer (alice/bob) routes independently — caller passes the runner.
 route_llm_via_obol_cli() {
     local runner=$1
-    if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+    local model name
+
+    if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+        model="${OBOL_LLM_MODEL:-qwen36-fast}"
+        name="${OBOL_LLM_NAME:-external-llm}"
+
+        # `obol model list` lists every entry currently in LiteLLM. Only remove
+        # entries that actually exist so we don't burn rollouts on no-ops.
+        local existing
+        existing=$($runner model list 2>/dev/null || true)
+        local entry
+        for entry in qwen3.5:9b qwen3.5:4b; do
+            if printf '%s' "$existing" | grep -Fq "$entry"; then
+                $runner model remove "$entry" --no-sync >/dev/null 2>&1 || true
+            fi
+        done
+
+        local args=(model setup custom --no-sync --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
+        if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
+            args+=(--api-key "$OBOL_LLM_API_KEY")
+        fi
+        $runner "${args[@]}"
+
+        # Single sync at the end — batches all preceding edits into ONE
+        # Hermes deployment revision instead of one per CLI call.
+        $runner model sync
         return 0
     fi
-    local model="${OBOL_LLM_MODEL:-qwen36-fast}"
-    local name="${OBOL_LLM_NAME:-external-llm}"
 
-    # `obol model list` lists every entry currently in LiteLLM. Only remove
-    # entries that actually exist so we don't burn rollouts on no-ops.
-    local existing
-    existing=$($runner model list 2>/dev/null || true)
-    local entry
-    for entry in qwen3.5:9b qwen3.5:4b; do
-        if printf '%s' "$existing" | grep -Fq "$entry"; then
-            $runner model remove "$entry" --no-sync >/dev/null 2>&1 || true
-        fi
-    done
-
-    local args=(model setup custom --no-sync --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
-    if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
-        args+=(--api-key "$OBOL_LLM_API_KEY")
-    fi
-    $runner "${args[@]}"
-
-    # Single sync at the end — batches all preceding edits into ONE
-    # Hermes deployment revision instead of one per CLI call.
-    $runner model sync
+    return 0
 }
 
 emit_metrics() {
@@ -452,7 +457,7 @@ write_x402_facilitator_logs() {
 }
 
 agent_response_refused() {
-    grep -qiE "cannot execute|can't execute|cannot run|can't run|do not have the ability|don't have the ability|not able to run arbitrary|as an AI model|I don't have access|I do not have access"
+    grep -qiE "cannot execute|can't execute|cannot run|can't run|do not have the ability|don't have the ability|not able to run arbitrary|as an AI model|I don't have access|I do not have access|terminal unavailable|tool unavailable|cannot use.*tool"
 }
 
 assert_obol_kubeconfig() {

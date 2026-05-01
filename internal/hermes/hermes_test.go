@@ -36,7 +36,7 @@ func TestGenerateConfig_PrimaryIsRoundTrippable(t *testing.T) {
 		name    string
 		primary string
 	}{
-		{"bare ollama tag", "qwen3.5:9b"},
+		{"bare ollama tag", "llama3.1:8b"},
 		{"bare claude id", "claude-opus-4-7"},
 		{"bare openai id", "gpt-5.4"},
 		// Wildcard-expanded entries can carry the provider prefix; the
@@ -146,6 +146,9 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"bootstrap-hermes-install",
 		`install_dir="/data/.hermes/hermes-agent"`,
 		`repo_url="https://github.com/NousResearch/hermes-agent.git"`,
+		`lock_dir="${install_dir}.lock"`,
+		`Timed out waiting for Hermes install lock`,
+		`git clone --depth 1 "$repo_url" "${install_dir}.tmp"`,
 		"uv venv --python python3 --system-site-packages venv",
 		`uv pip install -e ".[web]"`,
 		`import fastapi, uvicorn`,
