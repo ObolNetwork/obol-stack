@@ -217,9 +217,9 @@ func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unst
 				},
 			},
 			"data": map[string]any{
-				"skill.md":       content,
-				"services.json":  servicesJSON,
-				"httpd.conf":     ".md:text/markdown\n.json:application/json\n",
+				"skill.md":      content,
+				"services.json": servicesJSON,
+				"httpd.conf":    ".md:text/markdown\n.json:application/json\n",
 			},
 		},
 	}
@@ -776,22 +776,22 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 // `asset.eip712Domain.version` to construct ERC-3009 / Permit2 signatures.
 // Do not rename fields without coordinating with buy.py + downstream agents.
 type ServiceJSON struct {
-	Name            string            `json:"name"`
-	Namespace       string            `json:"namespace"`
-	Type            string            `json:"type"`
-	Model           string            `json:"model,omitempty"`
-	Endpoint        string            `json:"endpoint"`
-	Price           string            `json:"price"`                     // human-readable, e.g. "0.001 USDC/request"
-	PriceRaw        string            `json:"priceRaw,omitempty"`        // decimal string as authored, e.g. "0.001"
-	PriceUnit       string            `json:"priceUnit,omitempty"`       // perRequest|perMTok|perHour
-	PriceMicroUnits string            `json:"priceMicroUnits,omitempty"` // atomic units of asset, e.g. "1000"
-	PayTo           string            `json:"payTo"`
-	Network         string            `json:"network"`                   // human-friendly, e.g. "base-sepolia"
-	CAIP2Network    string            `json:"caip2Network,omitempty"`    // e.g. "eip155:84532"
-	ChainID         int64             `json:"chainId,omitempty"`
-	Asset           *ServiceAssetJSON `json:"asset,omitempty"`
-	Description     string            `json:"description"`
-	IsDemo          bool              `json:"isDemo"`
+	Name             string            `json:"name"`
+	Namespace        string            `json:"namespace"`
+	Type             string            `json:"type"`
+	Model            string            `json:"model,omitempty"`
+	Endpoint         string            `json:"endpoint"`
+	Price            string            `json:"price"`                      // human-readable, e.g. "0.001 USDC/request"
+	PriceRaw         string            `json:"priceRaw,omitempty"`         // decimal string as authored, e.g. "0.001"
+	PriceUnit        string            `json:"priceUnit,omitempty"`        // perRequest|perMTok|perHour
+	PriceAtomicUnits string            `json:"priceAtomicUnits,omitempty"` // atomic units of asset, e.g. "1000"
+	PayTo            string            `json:"payTo"`
+	Network          string            `json:"network"`                // human-friendly, e.g. "base-sepolia"
+	CAIP2Network     string            `json:"caip2Network,omitempty"` // e.g. "eip155:84532"
+	ChainID          int64             `json:"chainId,omitempty"`
+	Asset            *ServiceAssetJSON `json:"asset,omitempty"`
+	Description      string            `json:"description"`
+	IsDemo           bool              `json:"isDemo"`
 }
 
 // ServiceAssetJSON describes the settlement token. Mirrors
@@ -862,7 +862,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		if asset != nil {
 			svc.Asset = asset
 			if raw != "" && asset.Decimals > 0 {
-				svc.PriceMicroUnits = decimalToAtomicString(raw, int(asset.Decimals))
+				svc.PriceAtomicUnits = decimalToAtomicString(raw, int(asset.Decimals))
 			}
 		}
 
