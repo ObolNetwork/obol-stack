@@ -125,6 +125,14 @@ flow14_cleanup() {
         OBOL_DATA_DIR="$BOB_DIR/data" \
         "$BOB_DIR/bin/obol" network remove base-sepolia >/dev/null 2>&1 || true
     fi
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
     # Reclaim leaked Docker networks from k3d clusters that crashed mid-
     # create. Targeted to k3d-obol-stack-* and skips networks with active
     # endpoints, so it never kills a live cluster's network.

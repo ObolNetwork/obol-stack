@@ -116,6 +116,14 @@ flow13_cleanup() {
     if [ -d "$BOB_DIR/config" ]; then
         bob network remove base-sepolia >/dev/null 2>&1 || true
     fi
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
     if [ -n "$FACILITATOR_CONTAINER" ]; then
         write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
         docker rm -f "$FACILITATOR_CONTAINER" >/dev/null 2>&1 || true
