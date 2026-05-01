@@ -86,6 +86,42 @@ func TestBuildModelEntries(t *testing.T) {
 			t.Errorf("expected nil for empty ollama, got %v", entries)
 		}
 	})
+
+	t.Run("anthropic entries inject system-message cache breakpoint", func(t *testing.T) {
+		entries := buildModelEntries("anthropic", []string{"claude-sonnet-4-5-20250929", "claude-opus-4-7"})
+		if len(entries) != 3 {
+			t.Fatalf("got %d entries, want 3 (wildcard + 2 explicit)", len(entries))
+		}
+
+		for i, e := range entries {
+			points := e.LiteLLMParams.CacheControlInjectionPoints
+			if len(points) != 1 {
+				t.Fatalf("entries[%d] (%s): got %d cache points, want 1", i, e.ModelName, len(points))
+			}
+			if points[0].Location != "message" {
+				t.Errorf("entries[%d] (%s): Location = %q, want \"message\"", i, e.ModelName, points[0].Location)
+			}
+			if points[0].Role != "system" {
+				t.Errorf("entries[%d] (%s): Role = %q, want \"system\"", i, e.ModelName, points[0].Role)
+			}
+		}
+	})
+
+	t.Run("non-anthropic entries do not inject cache control", func(t *testing.T) {
+		openaiEntries := buildModelEntries("openai", []string{"gpt-4o"})
+		for i, e := range openaiEntries {
+			if len(e.LiteLLMParams.CacheControlInjectionPoints) != 0 {
+				t.Errorf("openai entries[%d] (%s): unexpected cache points %+v", i, e.ModelName, e.LiteLLMParams.CacheControlInjectionPoints)
+			}
+		}
+
+		ollamaEntries := buildModelEntries("ollama", []string{"qwen3.5:9b"})
+		for i, e := range ollamaEntries {
+			if len(e.LiteLLMParams.CacheControlInjectionPoints) != 0 {
+				t.Errorf("ollama entries[%d] (%s): unexpected cache points %+v", i, e.ModelName, e.LiteLLMParams.CacheControlInjectionPoints)
+			}
+		}
+	})
 }
 
 // TestBuildCustomEndpointEntry encodes the LiteLLM `model_name` contract for
