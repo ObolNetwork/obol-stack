@@ -86,12 +86,25 @@ FLOW11_REQUIRED_BOB_USDC=$((FLOW11_BUY_COUNT * FLOW11_PRICE_MICRO_USDC))
 mkdir -p "$FLOW11_ARTIFACT_DIR"
 
 # Always reclaim leaked Docker networks on exit so the next run doesn't run
-# into "all predefined address pools have been fully subnetted". Each k3d
-# cluster create reserves a /16 from Docker's 172.16/12 pool; if a cluster
-# crashes mid-create or is force-removed without `obol stack down`, the
-# network is orphaned. Targeted to k3d-obol-stack-* and skips networks
-# with active endpoints, so it never disturbs a live cluster.
-trap cleanup_k3d_obol_networks EXIT
+# into "all predefined address pools have been fully subnetted". If the flow
+# exits after creating Alice/Bob stacks but before the explicit cleanup section,
+# tear those scoped stacks down as well.
+flow11_cleanup() {
+    local ec=$?
+    set +e
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
+    cleanup_k3d_obol_networks
+    set -e
+    return $ec
+}
+trap flow11_cleanup EXIT
 # Proactive: also reclaim leaked networks at start so the new cluster can
 # allocate even if a prior aborted run left orphans behind.
 cleanup_k3d_obol_networks
