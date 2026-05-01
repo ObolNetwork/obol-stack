@@ -8,41 +8,10 @@
 #
 # Requires:
 #   - A running obol stack with the agent initialized.
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing to a current x402-rs build
-#     with eip2612GasSponsoring support.
+#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing to a current x402-rs tree
+#     with eip2612GasSponsoring support. If only X402_RS_DIR is set, the flow
+#     builds the facilitator binary when needed.
 source "$(dirname "$0")/lib.sh"
-
-resolve_facilitator_bin() {
-    if [ -n "${X402_FACILITATOR_BIN:-}" ] && [ -x "$X402_FACILITATOR_BIN" ]; then
-        if [ -z "${X402_RS_DIR:-}" ]; then
-            case "$X402_FACILITATOR_BIN" in
-                */target/release/*)
-                    X402_RS_DIR=$(cd "$(dirname "$X402_FACILITATOR_BIN")/../.." && pwd)
-                    ;;
-            esac
-        fi
-        printf '%s\n' "$X402_FACILITATOR_BIN"
-        return 0
-    fi
-
-    local rs_dir="${X402_RS_DIR:-}"
-    if [ -z "$rs_dir" ] && [ -d "$HOME/Development/R&D/x402-rs" ]; then
-        rs_dir="$HOME/Development/R&D/x402-rs"
-    fi
-    if [ -n "$rs_dir" ]; then
-        for candidate in \
-            "$rs_dir/target/release/x402-facilitator" \
-            "$rs_dir/target/release/facilitator"; do
-            if [ -x "$candidate" ]; then
-                X402_RS_DIR="$rs_dir"
-                printf '%s\n' "$candidate"
-                return 0
-            fi
-        done
-    fi
-
-    return 1
-}
 
 validate_x402_rs_source() {
     local rs_dir="${X402_RS_DIR:-}"
@@ -166,7 +135,7 @@ else
 fi
 
 step "x402-rs facilitator binary available for OBOL Permit2"
-FACILITATOR_BIN=$(resolve_facilitator_bin || true)
+FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
 if [ -n "$FACILITATOR_BIN" ]; then
     export X402_FACILITATOR_BIN="$FACILITATOR_BIN"
     pass "X402_FACILITATOR_BIN=$X402_FACILITATOR_BIN"

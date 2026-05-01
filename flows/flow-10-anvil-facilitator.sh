@@ -136,19 +136,9 @@ else
         rm -f "$FACILITATOR_PID_FILE"
     fi
 
-    # Binary discovery: X402_FACILITATOR_BIN env → ~/Development/R&D/x402-rs
-    FACILITATOR_BIN="${X402_FACILITATOR_BIN:-}"
+    FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
     if [ -z "$FACILITATOR_BIN" ]; then
-        X402_RS_DIR="${X402_RS_DIR:-$HOME/Development/R&D/x402-rs}"
-        for candidate in \
-            "$X402_RS_DIR/target/release/x402-facilitator" \
-            "$X402_RS_DIR/target/release/facilitator"; do
-            [ -f "$candidate" ] && FACILITATOR_BIN="$candidate" && break
-        done
-    fi
-
-    if [ -z "$FACILITATOR_BIN" ]; then
-        fail "x402-facilitator binary not found — set X402_FACILITATOR_BIN or build from x402-rs repo"
+        fail "x402-facilitator binary not found — set X402_FACILITATOR_BIN or X402_RS_DIR"
         emit_metrics; exit 0
     fi
 
