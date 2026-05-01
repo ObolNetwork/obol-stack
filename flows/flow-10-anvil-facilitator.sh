@@ -136,9 +136,9 @@ else
         rm -f "$FACILITATOR_PID_FILE"
     fi
 
-    FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
+    FACILITATOR_BIN=$(x402_facilitator_bin || true)
     if [ -z "$FACILITATOR_BIN" ]; then
-        fail "x402-facilitator binary not found — set X402_FACILITATOR_BIN or X402_RS_DIR"
+        fail "x402-facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
         emit_metrics; exit 0
     fi
 

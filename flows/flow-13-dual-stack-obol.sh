@@ -7,8 +7,8 @@
 #
 #   - One Anvil fork of Base Sepolia (chain 84532) shared by Alice's and Bob's
 #     obol stacks via the Docker-managed alias `host.k3d.internal:$ANVIL_PORT`.
-#   - One x402-rs facilitator process pointing at that Anvil. We require an
-#     ObolNetwork/x402-rs build with eip2612GasSponsoring support.
+#   - One x402-rs facilitator process pointing at that Anvil. By default the
+#     flow extracts the facilitator binary from the published image.
 #   - A fork-local OBOL ERC20Permit contract (contracts/fork-obol/src/ForkObolToken.sol)
 #     deployed via `forge create` against the same Anvil. The same address is
 #     visible from both clusters because they share the fork.
@@ -22,10 +22,7 @@
 #   - forge on PATH (used to compile ForkObolToken.sol)
 #   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
 #   - Ollama running (Alice serves local model inference)
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing at an x402-rs tree with
-#     eip2612GasSponsoring. If only X402_RS_DIR is set, the flow builds the
-#     facilitator binary when needed. If neither is available, the flow reports
-#     SKIP rather than PASS.
+#   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 #
 # Use this flow when you want to validate the OBOL Permit2 path end-to-end
 # without depending on the public Obol facilitator or any USDC contract.
@@ -34,8 +31,6 @@
 #   ./flows/flow-13-dual-stack-obol.sh
 #
 # Override defaults via shell env or repo-root .env:
-#   X402_FACILITATOR_BIN          path to x402-facilitator (preferred)
-#   X402_RS_DIR                   directory of an x402-rs checkout (fallback)
 #   FLOW13_ANVIL_PORT             host port for Anvil (default: auto-pick)
 #   FLOW13_FACILITATOR_PORT       host port for x402-rs (default: auto-pick)
 #   FLOW13_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
@@ -471,14 +466,13 @@ fi
 pass "Foundry tools available"
 
 step "Preflight: x402-rs facilitator binary resolvable"
-FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
+FACILITATOR_BIN=$(x402_facilitator_bin || true)
 if [ -z "$FACILITATOR_BIN" ]; then
-    skip "flow-13 requires X402_FACILITATOR_BIN or X402_RS_DIR pointing at a current x402-rs checkout"
+    skip "flow-13 requires Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7"
     emit_metrics
     exit 0
 fi
-export X402_FACILITATOR_BIN="$FACILITATOR_BIN"
-pass "X402_FACILITATOR_BIN=$X402_FACILITATOR_BIN"
+pass "Facilitator binary extracted from ghcr.io/x402-rs/x402-facilitator:1.4.7"
 
 step "Preflight: .env signer key (Alice/Bob seed)"
 SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)

@@ -8,94 +8,8 @@
 #
 # Requires:
 #   - A running obol stack with the agent initialized.
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing to a current x402-rs tree
-#     with eip2612GasSponsoring support. If only X402_RS_DIR is set, the flow
-#     builds the facilitator binary when needed.
+#   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7.
 source "$(dirname "$0")/lib.sh"
-
-validate_x402_rs_source() {
-    local rs_dir="${X402_RS_DIR:-}"
-    local expect_remote="${FLOW12_EXPECT_X402_RS_REMOTE:-x402-rs/x402-rs}"
-    local expect_version="${FLOW12_EXPECT_X402_RS_VERSION:-1.4.7}"
-    local remote version
-
-    [ -n "$rs_dir" ] || return 0
-    [ -d "$rs_dir/.git" ] || return 0
-
-    remote=$(git -C "$rs_dir" remote get-url origin 2>/dev/null || true)
-    if [ -n "$expect_remote" ] && [ "$expect_remote" != "any" ]; then
-        case "$remote" in
-            *"$expect_remote"*)
-                ;;
-            *)
-                fail "x402-rs origin mismatch: expected remote containing '$expect_remote', got '${remote:-unknown}'"
-                emit_metrics
-                exit 1
-                ;;
-        esac
-    fi
-
-    if [ -n "$expect_version" ] && [ "$expect_version" != "any" ]; then
-        version=$(python3 - "$rs_dir" <<'PY'
-import pathlib
-import re
-import sys
-
-root = pathlib.Path(sys.argv[1])
-workspace_version = ""
-root_manifest = root / "Cargo.toml"
-if root_manifest.exists():
-    in_workspace_package = False
-    for line in root_manifest.read_text().splitlines():
-        stripped = line.strip()
-        if stripped == "[workspace.package]":
-            in_workspace_package = True
-            continue
-        if stripped.startswith("[") and stripped != "[workspace.package]":
-            in_workspace_package = False
-        if in_workspace_package:
-            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
-            if match:
-                workspace_version = match.group(1)
-                break
-
-for path in (root / "facilitator" / "Cargo.toml", root / "crates" / "x402-facilitator-local" / "Cargo.toml"):
-    if path.exists():
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            if re.match(r'version\s*\.workspace\s*=\s*true', stripped) and workspace_version:
-                print(workspace_version)
-                raise SystemExit(0)
-            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
-            if match:
-                print(match.group(1))
-                raise SystemExit(0)
-
-for path in (root / "crates" / "x402-facilitator" / "Cargo.toml",):
-    if path.exists():
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            match = re.match(r'version\s*=\s*"([^"]+)"', stripped)
-            if match:
-                print(match.group(1))
-                raise SystemExit(0)
-if workspace_version:
-    print(workspace_version)
-    raise SystemExit(0)
-raise SystemExit(1)
-PY
-        ) || version=""
-        if [ "$version" != "$expect_version" ]; then
-            fail "x402-rs facilitator version mismatch: expected $expect_version, got ${version:-unknown}"
-            emit_metrics
-            exit 1
-        fi
-    fi
-
-    echo "  x402-rs origin: ${remote:-unknown}"
-    echo "  x402-rs head: $(git -C "$rs_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    echo "  x402-rs facilitator version: ${version:-not-checked}"
-}
 
 step "local stack context is isolated"
 assert_local_stack_context
@@ -135,26 +49,21 @@ else
 fi
 
 step "x402-rs facilitator binary available for OBOL Permit2"
-FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
+FACILITATOR_BIN=$(x402_facilitator_bin || true)
 if [ -n "$FACILITATOR_BIN" ]; then
-    export X402_FACILITATOR_BIN="$FACILITATOR_BIN"
-    pass "X402_FACILITATOR_BIN=$X402_FACILITATOR_BIN"
+    pass "Facilitator binary extracted from ghcr.io/x402-rs/x402-facilitator:1.4.7"
 else
-    fail "x402-rs facilitator binary not found — set X402_FACILITATOR_BIN or X402_RS_DIR"
+    fail "x402-rs facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
     emit_metrics
     exit 1
 fi
-
-step "x402-rs facilitator source matches expected release line"
-validate_x402_rs_source
-pass "x402-rs facilitator source validated"
 
 step "OBOL Permit2 sell->buy->settle integration test"
 ARTIFACT_DIR="${FLOW12_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-12-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$ARTIFACT_DIR"
 LOG="$ARTIFACT_DIR/test-output.log"
 set +e
-go test -tags integration -v \
+X402_FACILITATOR_BIN="$FACILITATOR_BIN" go test -tags integration -v \
     -run '^TestIntegration_SellBuySidecar_OBOLPermit2$' \
     -timeout "${FLOW12_TIMEOUT:-30m}" \
     ./internal/openclaw/ 2>&1 | tee "$LOG"

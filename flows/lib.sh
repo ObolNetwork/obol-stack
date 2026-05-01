@@ -402,80 +402,31 @@ require_tool() {
     fi
 }
 
-x402_rs_candidate_dirs() {
-    if [ -n "${X402_RS_DIR:-}" ]; then
-        printf '%s\n' "$X402_RS_DIR"
-    fi
+x402_facilitator_bin() {
+    local image="ghcr.io/x402-rs/x402-facilitator:1.4.7"
+    local target cid
 
-    printf '%s\n' \
-        "$HOME/Development/R&D/x402-rs" \
-        "$HOME/Development/x402-rs" \
-        "$OBOL_ROOT/../x402-rs"
-}
+    command -v docker >/dev/null 2>&1 || {
+        echo "docker is required to fetch $image" >&2
+        return 1
+    }
 
-x402_facilitator_prebuilt_bin() {
-    local rs_dir="$1"
-    local candidate
+    mkdir -p "$OBOL_BIN_DIR"
+    target="$OBOL_BIN_DIR/x402-facilitator-1.4.7"
 
-    for candidate in \
-        "$rs_dir/target/release/x402-facilitator" \
-        "$rs_dir/target/release/facilitator"; do
-        if [ -x "$candidate" ]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-resolve_or_build_x402_facilitator() {
-    local bin rs_dir pkg candidate
-
-    if [ -n "${X402_FACILITATOR_BIN:-}" ]; then
-        if [ -x "$X402_FACILITATOR_BIN" ]; then
-            case "$X402_FACILITATOR_BIN" in
-                */target/release/*)
-                    X402_RS_DIR="$(cd "$(dirname "$X402_FACILITATOR_BIN")/../.." && pwd)"
-                    export X402_RS_DIR
-                    ;;
-            esac
-            printf '%s\n' "$X402_FACILITATOR_BIN"
-            return 0
-        fi
-        echo "X402_FACILITATOR_BIN is set but not executable: $X402_FACILITATOR_BIN" >&2
+    if ! docker pull "$image" >/dev/null 2>&1; then
+        echo "x402 facilitator image not available: $image" >&2
         return 1
     fi
 
-    while IFS= read -r candidate; do
-        [ -n "$candidate" ] || continue
-        [ -d "$candidate" ] || continue
-        rs_dir="$(cd "$candidate" && pwd)"
-
-        if bin="$(x402_facilitator_prebuilt_bin "$rs_dir")"; then
-            X402_RS_DIR="$rs_dir"
-            export X402_RS_DIR
-            printf '%s\n' "$bin"
-            return 0
-        fi
-
-        [ -f "$rs_dir/Cargo.toml" ] || continue
-        command -v cargo >/dev/null 2>&1 || continue
-
-        echo "Building x402-rs facilitator from $rs_dir" >&2
-        for pkg in x402-facilitator facilitator; do
-            if (cd "$rs_dir" && cargo build --release -p "$pkg" >&2); then
-                if bin="$(x402_facilitator_prebuilt_bin "$rs_dir")"; then
-                    X402_RS_DIR="$rs_dir"
-                    export X402_RS_DIR
-                    printf '%s\n' "$bin"
-                    return 0
-                fi
-            fi
-        done
-    done < <(x402_rs_candidate_dirs | awk 'NF && !seen[$0]++')
-
-    return 1
+    cid="$(docker create "$image")" || return 1
+    if ! docker cp "$cid:/usr/local/bin/x402-facilitator" "$target"; then
+        docker rm "$cid" >/dev/null 2>&1 || true
+        return 1
+    fi
+    docker rm "$cid" >/dev/null 2>&1 || true
+    chmod +x "$target"
+    printf '%s\n' "$target"
 }
 
 assert_obol_kubeconfig() {
