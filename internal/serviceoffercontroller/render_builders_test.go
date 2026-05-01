@@ -271,6 +271,45 @@ func TestDescribeOfferPrice(t *testing.T) {
 			spec: monetizeapi.ServiceOfferSpec{},
 			want: "—",
 		},
+		{
+			name: "OBOL symbol surfaces in per-request label",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"},
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			want: "0.001 OBOL/request",
+		},
+		{
+			name: "OBOL symbol surfaces in per-mtok label",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"},
+					Price: monetizeapi.ServiceOfferPriceTable{PerMTok: "5.00"},
+				},
+			},
+			want: "5.00 OBOL/MTok",
+		},
+		{
+			name: "OBOL symbol surfaces in per-hour label",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"},
+					Price: monetizeapi.ServiceOfferPriceTable{PerHour: "2.5"},
+				},
+			},
+			want: "2.5 OBOL/hour",
+		},
+		{
+			name: "empty asset symbol falls back to USDC",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			want: "0.001 USDC/request",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

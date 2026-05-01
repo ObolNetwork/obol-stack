@@ -991,13 +991,17 @@ func decimalToAtomicString(amount string, decimals int) string {
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
+	symbol := offer.Spec.Payment.Asset.Symbol
+	if symbol == "" {
+		symbol = "USDC"
+	}
 	switch {
 	case offer.Spec.Payment.Price.PerRequest != "":
-		return offer.Spec.Payment.Price.PerRequest + " USDC/request"
+		return offer.Spec.Payment.Price.PerRequest + " " + symbol + "/request"
 	case offer.Spec.Payment.Price.PerMTok != "":
-		return offer.Spec.Payment.Price.PerMTok + " USDC/MTok"
+		return offer.Spec.Payment.Price.PerMTok + " " + symbol + "/MTok"
 	case offer.Spec.Payment.Price.PerHour != "":
-		return offer.Spec.Payment.Price.PerHour + " USDC/hour"
+		return offer.Spec.Payment.Price.PerHour + " " + symbol + "/hour"
 	default:
 		return "—"
 	}

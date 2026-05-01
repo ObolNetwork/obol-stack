@@ -7,6 +7,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 )
@@ -276,8 +277,9 @@ func TestSellDemo_Flags(t *testing.T) {
 	demo := findSubcommand(t, cmd, "demo")
 	flags := flagMap(demo)
 
-	requireFlags(t, flags, "wallet", "chain", "price", "name")
+	requireFlags(t, flags, "wallet", "chain", "token", "price", "name")
 	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "token", "USDC")
 }
 
 func TestSellStop_Structure(t *testing.T) {
@@ -424,6 +426,59 @@ func TestDemoRPCNetwork(t *testing.T) {
 				t.Fatalf("demoRPCNetwork(%q) = %q, want %q", tt.paymentChain, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildDemoServiceOffer_USDCOmitsAssetBlock(t *testing.T) {
+	// USDC is the chain default; AssetTerms is zero, so the manifest must NOT
+	// include a payment.asset block (the verifier falls back to chain default).
+	manifest := buildDemoServiceOffer(
+		"demo-hello", "demo", "base-sepolia",
+		"0x1111111111111111111111111111111111111111",
+		"0.00001",
+		demoSpec{Type: "hello", Description: "echo"},
+		schemas.AssetTerms{},
+	)
+	payment := manifest["spec"].(map[string]any)["payment"].(map[string]any)
+	if _, ok := payment["asset"]; ok {
+		t.Fatalf("expected no payment.asset block when asset is zero, got: %v", payment["asset"])
+	}
+	if payment["network"] != "base-sepolia" {
+		t.Errorf("network = %v, want base-sepolia", payment["network"])
+	}
+}
+
+func TestBuildDemoServiceOffer_OBOLIncludesAssetBlock(t *testing.T) {
+	// Selling for OBOL on Ethereum mainnet must populate the full asset block
+	// so the verifier and storefront know which token to enforce.
+	asset := schemas.AssetTerms{
+		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		Symbol:         "OBOL",
+		Decimals:       18,
+		TransferMethod: schemas.AssetTransferMethodPermit2,
+		EIP712Name:     "Obol Network",
+		EIP712Version:  "1",
+	}
+	manifest := buildDemoServiceOffer(
+		"demo-oracle", "demo", "ethereum",
+		"0x2222222222222222222222222222222222222222",
+		"0.001",
+		demoSpec{Type: "oracle", Description: "chain analysis"},
+		asset,
+	)
+	payment := manifest["spec"].(map[string]any)["payment"].(map[string]any)
+	got, ok := payment["asset"].(schemas.AssetTerms)
+	if !ok {
+		t.Fatalf("payment.asset missing or wrong type: %T %v", payment["asset"], payment["asset"])
+	}
+	if got.Symbol != "OBOL" {
+		t.Errorf("asset.Symbol = %q, want OBOL", got.Symbol)
+	}
+	if got.TransferMethod != schemas.AssetTransferMethodPermit2 {
+		t.Errorf("asset.TransferMethod = %q, want %q", got.TransferMethod, schemas.AssetTransferMethodPermit2)
+	}
+	if payment["network"] != "ethereum" {
+		t.Errorf("network = %v, want ethereum", payment["network"])
 	}
 }
 
