@@ -1225,7 +1225,11 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 # structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
 # matching has been brittle across runtime versions (OpenClaw vs Hermes).
 echo "${buy_content:0:500}"
-pass "Agent buy command issued (success will be confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py"
+    emit_metrics; exit 1
+fi
+pass "Agent accepted buy request (success will be confirmed by PurchaseRequest CR)"
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)
@@ -1411,3 +1415,4 @@ echo "  Bob:   $BOB_WALLET"
 echo "  Tunnel: $TUNNEL_URL"
 echo "  Artifacts: $FLOW11_ARTIFACT_DIR"
 echo "════════════════════════════════════════════════════════════"
+exit_if_failed

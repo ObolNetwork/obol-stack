@@ -1150,7 +1150,11 @@ buy_response=$(curl -sf --max-time 300 \
     }" 2>&1 || true)
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
-pass "Agent buy command issued (success confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py"
+    emit_metrics; exit 1
+fi
+pass "Agent accepted buy request (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
 # 31-34. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -1335,3 +1339,4 @@ fi
 emit_metrics
 echo ""
 echo "════════════════════════════════════════════════════════════"
+exit_if_failed

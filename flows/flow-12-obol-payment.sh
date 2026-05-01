@@ -48,10 +48,10 @@ else
     exit 1
 fi
 
-step "x402-rs facilitator binary available for OBOL Permit2"
-FACILITATOR_BIN=$(x402_facilitator_bin || true)
-if [ -n "$FACILITATOR_BIN" ]; then
-    pass "Facilitator binary extracted from ghcr.io/x402-rs/x402-facilitator:1.4.7"
+step "x402-rs facilitator image available for OBOL Permit2"
+FACILITATOR_IMAGE=$(x402_facilitator_image || true)
+if [ -n "$FACILITATOR_IMAGE" ]; then
+    pass "Facilitator image available: $FACILITATOR_IMAGE"
 else
     fail "x402-rs facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
     emit_metrics
@@ -63,9 +63,7 @@ ARTIFACT_DIR="${FLOW12_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-12-$(date +%Y%m%d-%H%M
 mkdir -p "$ARTIFACT_DIR"
 LOG="$ARTIFACT_DIR/test-output.log"
 set +e
-# internal/testutil.StartRealFacilitator consumes X402_FACILITATOR_BIN; the
-# value is the pinned-image binary extracted above, not a user-facing switch.
-X402_FACILITATOR_BIN="$FACILITATOR_BIN" go test -tags integration -v \
+go test -tags integration -v \
     -run '^TestIntegration_SellBuySidecar_OBOLPermit2$' \
     -timeout "${FLOW12_TIMEOUT:-30m}" \
     ./internal/openclaw/ 2>&1 | tee "$LOG"
@@ -109,3 +107,4 @@ else
 fi
 
 emit_metrics
+exit_if_failed
