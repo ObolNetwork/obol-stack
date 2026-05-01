@@ -384,6 +384,12 @@ emit_metrics() {
     echo "METRIC total_steps=$STEP_COUNT"
 }
 
+exit_if_failed() {
+    if [ "${FAIL_COUNT:-0}" -gt 0 ]; then
+        exit 1
+    fi
+}
+
 canonical_path() {
     python3 - "$1" <<'PY'
 import os
@@ -402,31 +408,51 @@ require_tool() {
     fi
 }
 
-x402_facilitator_bin() {
+x402_facilitator_image() {
     local image="ghcr.io/x402-rs/x402-facilitator:1.4.7"
-    local target cid
 
     command -v docker >/dev/null 2>&1 || {
         echo "docker is required to fetch $image" >&2
         return 1
     }
 
-    mkdir -p "$OBOL_BIN_DIR"
-    target="$OBOL_BIN_DIR/x402-facilitator-1.4.7"
-
     if ! docker pull "$image" >/dev/null 2>&1; then
         echo "x402 facilitator image not available: $image" >&2
         return 1
     fi
 
-    cid="$(docker create "$image")" || return 1
-    if ! docker cp "$cid:/usr/local/bin/x402-facilitator" "$target"; then
-        docker rm "$cid" >/dev/null 2>&1 || true
-        return 1
-    fi
-    docker rm "$cid" >/dev/null 2>&1 || true
-    chmod +x "$target"
-    printf '%s\n' "$target"
+    printf '%s\n' "$image"
+}
+
+start_x402_facilitator_container() {
+    local name="$1"
+    local config="$2"
+    local log="$3"
+    local image config_abs
+
+    image=$(x402_facilitator_image) || return 1
+    config_abs=$(canonical_path "$config")
+
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    : > "$log"
+    docker run -d \
+        --name "$name" \
+        --network host \
+        -v "$config_abs:/config.json:ro" \
+        "$image" \
+        --config /config.json >/dev/null
+}
+
+write_x402_facilitator_logs() {
+    local name="$1"
+    local log="$2"
+
+    [ -n "$name" ] || return 0
+    docker logs "$name" > "$log" 2>&1 || true
+}
+
+agent_response_refused() {
+    grep -qiE "cannot execute|can't execute|cannot run|can't run|do not have the ability|don't have the ability|not able to run arbitrary|as an AI model|I don't have access|I do not have access"
 }
 
 assert_obol_kubeconfig() {

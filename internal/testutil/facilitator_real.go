@@ -9,11 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 )
+
+const x402FacilitatorImage = "ghcr.io/x402-rs/x402-facilitator:1.4.7"
 
 // RealFacilitator wraps a running x402-rs facilitator process.
 // Unlike MockFacilitator, this validates real EIP-712 signatures against
@@ -22,25 +23,18 @@ type RealFacilitator struct {
 	Port       int
 	ClusterURL string // e.g. "http://host.docker.internal:4040"
 
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
+	cmd           *exec.Cmd
+	cancel        context.CancelFunc
+	containerName string
 }
 
 type RealFacilitatorOptions struct {
 	EnableEIP2612GasSponsoring bool
 }
 
-// StartRealFacilitator discovers/builds the x402-rs facilitator binary,
+// StartRealFacilitator runs the pinned x402-rs facilitator image,
 // generates a config pointing at the given Anvil fork, starts the facilitator
 // on a free port, and waits for it to become ready.
-//
-// Binary discovery order:
-//  1. X402_FACILITATOR_BIN env var (explicit path to binary)
-//  2. Pre-built binary at $X402_RS_DIR/target/release/x402-facilitator
-//     (or the legacy $X402_RS_DIR/target/release/facilitator)
-//  3. cargo build --release in $X402_RS_DIR (if Cargo.toml exists)
-//  4. Skip test
-//
 // Registers t.Cleanup to kill the process and remove temp config.
 func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 	return StartRealFacilitatorWithOptions(t, anvil, RealFacilitatorOptions{})
@@ -49,7 +43,7 @@ func StartRealFacilitator(t *testing.T, anvil *AnvilFork) *RealFacilitator {
 func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFacilitatorOptions) *RealFacilitator {
 	t.Helper()
 
-	bin := discoverFacilitatorBinary(t)
+	requireFacilitatorImage(t)
 
 	// Find a free port.
 	l, err := net.Listen("tcp", "0.0.0.0:0")
@@ -68,8 +62,16 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	configPath := writeRealFacilitatorConfig(t, port, anvilLocalURL, anvil.Accounts[0].PrivateKey, opts)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	containerName := fmt.Sprintf("obol-test-x402-facilitator-%d", time.Now().UnixNano())
 
-	cmd := exec.CommandContext(ctx, bin, "--config", configPath)
+	cmd := exec.CommandContext(ctx,
+		"docker", "run", "--rm",
+		"--name", containerName,
+		"--network", "host",
+		"-v", configPath+":/config.json:ro",
+		x402FacilitatorImage,
+		"--config", "/config.json",
+	)
 
 	var stderr bytes.Buffer
 
@@ -82,14 +84,16 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	}
 
 	rf := &RealFacilitator{
-		Port:       port,
-		ClusterURL: "http://" + net.JoinHostPort(clusterHostURL(), strconv.Itoa(port)),
-		cmd:        cmd,
-		cancel:     cancel,
+		Port:          port,
+		ClusterURL:    "http://" + net.JoinHostPort(clusterHostURL(), strconv.Itoa(port)),
+		cmd:           cmd,
+		cancel:        cancel,
+		containerName: containerName,
 	}
 
 	t.Cleanup(func() {
 		cancel()
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
 
 		_ = cmd.Wait()
 
@@ -106,87 +110,21 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	return rf
 }
 
-// discoverFacilitatorBinary finds or builds the x402-rs facilitator binary.
-func discoverFacilitatorBinary(t *testing.T) string {
+// requireFacilitatorImage verifies the pinned facilitator image is available.
+// Local facilitator experiments should be packaged as a Docker image instead of
+// depending on host checkout paths.
+func requireFacilitatorImage(t *testing.T) {
 	t.Helper()
 
-	// 1. Explicit binary path.
-	if bin := os.Getenv("X402_FACILITATOR_BIN"); bin != "" {
-		if _, err := os.Stat(bin); err == nil {
-			t.Logf("using X402_FACILITATOR_BIN=%s", bin)
-			return bin
-		}
-
-		t.Fatalf("X402_FACILITATOR_BIN=%s does not exist", bin)
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Fatalf("docker not installed; cannot run %s", x402FacilitatorImage)
 	}
 
-	// Resolve x402-rs directory.
-	rsDir := os.Getenv("X402_RS_DIR")
-	if rsDir == "" {
-		// Default local checkout path.
-		home, _ := os.UserHomeDir()
-		rsDir = filepath.Join(home, "Development", "R&D", "x402-rs")
+	pull := exec.Command("docker", "pull", x402FacilitatorImage)
+	if out, err := pull.CombinedOutput(); err != nil {
+		t.Fatalf("pull %s: %v\n%s", x402FacilitatorImage, err, out)
 	}
-
-	// 2. Pre-built binary.
-	prebuiltCandidates := []string{
-		filepath.Join(rsDir, "target", "release", "x402-facilitator"),
-		filepath.Join(rsDir, "target", "release", "facilitator"),
-	}
-	for _, prebuilt := range prebuiltCandidates {
-		if _, err := os.Stat(prebuilt); err == nil {
-			t.Logf("using pre-built facilitator at %s", prebuilt)
-			return prebuilt
-		}
-	}
-
-	// 3. Build from source.
-	cargoToml := filepath.Join(rsDir, "Cargo.toml")
-	if _, err := os.Stat(cargoToml); err == nil {
-		if _, err := exec.LookPath("cargo"); err != nil {
-			t.Skip("x402-rs source found but cargo not installed")
-		}
-
-		t.Logf("building x402-rs facilitator from %s (this may take a while)...", rsDir)
-
-		buildCommands := [][]string{
-			{"build", "--release", "-p", "x402-facilitator"},
-			{"build", "--release", "-p", "facilitator"},
-		}
-
-		var buildErr error
-
-		for _, args := range buildCommands {
-			build := exec.Command("cargo", args...)
-			build.Dir = rsDir
-			build.Stdout = os.Stderr
-
-			build.Stderr = os.Stderr
-			if err := build.Run(); err == nil {
-				buildErr = nil
-				break
-			} else {
-				buildErr = err
-			}
-		}
-
-		if buildErr != nil {
-			t.Fatalf("cargo build --release failed: %v", buildErr)
-		}
-
-		for _, prebuilt := range prebuiltCandidates {
-			if _, err := os.Stat(prebuilt); err == nil {
-				return prebuilt
-			}
-		}
-
-		t.Fatalf("cargo build succeeded but binary not found at any expected path: %v", prebuiltCandidates)
-	}
-
-	t.Skip("x402-rs facilitator not available — set X402_FACILITATOR_BIN or X402_RS_DIR, " +
-		"or clone https://github.com/x402-rs/x402-rs to ~/Development/R&D/x402-rs")
-
-	return ""
+	t.Logf("using x402 facilitator image %s", x402FacilitatorImage)
 }
 
 // writeRealFacilitatorConfig writes a temporary config-test.json for the facilitator.

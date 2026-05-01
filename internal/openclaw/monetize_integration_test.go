@@ -2735,7 +2735,7 @@ spec:
 //
 // Unlike TestIntegration_Fork_FullPaymentFlow (which uses a mock facilitator
 // that always returns isValid:true), this test:
-//  1. Starts the real x402-rs facilitator binary
+//  1. Starts the real x402-rs facilitator container
 //  2. Funds a buyer wallet with USDC on the Anvil fork
 //  3. Signs a real EIP-712 TransferWithAuthorization (ERC-3009)
 //  4. Proves the facilitator validates the real signature
@@ -2744,7 +2744,7 @@ spec:
 // Prerequisites:
 //   - Running k3d cluster with CRD, agent, and x402-verifier
 //   - Anvil (Foundry) installed
-//   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
+//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -2892,7 +2892,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 //   - Running k3d cluster with CRD, agent, x402-verifier, CF quick tunnel
 //   - Ollama with a cached model (any model — qwen3.5:4b, qwen3.5:9b, etc.)
 //   - Anvil (Foundry) installed
-//   - x402-rs source or binary (set X402_RS_DIR or X402_FACILITATOR_BIN)
+//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -3402,7 +3402,7 @@ func verifyOwnerRef(t *testing.T, resource map[string]interface{}, ownerName, ow
 //   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
 //   - Anthropic API key configured in LiteLLM (for agent tool calling)
 //   - Anvil (Foundry) installed
-//   - x402-rs facilitator binary (set X402_FACILITATOR_BIN or X402_RS_DIR)
+//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 // ---------------------------------------------------------------------------
 
 func TestIntegration_SellDiscoverBuySettle(t *testing.T) {
@@ -3850,10 +3850,6 @@ func TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance(t *testing.T)
 //   - automatic EIP-2612 gas sponsoring attachment
 //   - x402-buyer replay of a full signed x402 payload
 func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
-	if os.Getenv("X402_FACILITATOR_BIN") == "" {
-		t.Skip("set X402_FACILITATOR_BIN to an ObolNetwork/x402-rs main build with eip2612GasSponsoring support")
-	}
-
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
 	requireAgent(t, cfg)
@@ -4388,7 +4384,7 @@ const monetizePy = "/data/.openclaw/skills/sell/scripts/monetize.py"
 //   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
 //   - Ollama with qwen3.5:9b available locally
 //   - Anvil (Foundry) installed
-//   - x402-rs facilitator binary (set X402_FACILITATOR_BIN or X402_RS_DIR)
+//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
