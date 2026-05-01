@@ -1001,13 +1001,13 @@ Types:
 
 Example:
   obol sell demo hello
-  obol sell demo blocks --chain base
-  obol sell demo oracle --price 0.01`,
+  obol sell demo blocks --chain base-sepolia
+  obol sell demo oracle --token OBOL --chain ethereum --price 0.01`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "wallet",
 				Aliases: []string{"w"},
-				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
+				Usage:   "Token recipient wallet address (auto-detected from remote-signer)",
 				Sources: cli.EnvVars("X402_WALLET"),
 			},
 			&cli.StringFlag{
@@ -1016,8 +1016,13 @@ Example:
 				Value: "base",
 			},
 			&cli.StringFlag{
+				Name:  "token",
+				Usage: "Payment token (USDC, OBOL)",
+				Value: "USDC",
+			},
+			&cli.StringFlag{
 				Name:  "price",
-				Usage: "Override default per-request price in USDC",
+				Usage: "Override default per-request price (in token units)",
 			},
 			&cli.StringFlag{
 				Name:  "name",
@@ -1068,6 +1073,17 @@ Example:
 
 			chain := cmd.String("chain")
 
+			// Resolve token metadata. resolveAssetTerms may flip chain to ethereum
+			// for non-USDC tokens when --chain wasn't explicitly set.
+			assetTerms, err := resolveAssetTerms(cmd, &chain)
+			if err != nil {
+				return err
+			}
+			symbol := assetTerms.Symbol
+			if symbol == "" {
+				symbol = "USDC"
+			}
+
 			u.Infof("Deploying demo %q (%s)", typeName, spec.Description)
 
 			// 1. Deploy demo backend (namespace + Deployment + Service).
@@ -1076,7 +1092,7 @@ Example:
 			}
 
 			// 2. Create ServiceOffer.
-			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, spec)
+			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, spec, assetTerms)
 			applyOut, err := kubectlApplyOutput(cfg, soManifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
@@ -1085,7 +1101,7 @@ Example:
 			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
 				action = "updated"
 			}
-			u.Successf("ServiceOffer %s/%s %s (type: http, price: %s USDC/req)", demoNamespace, name, action, price)
+			u.Successf("ServiceOffer %s/%s %s (type: http, price: %s %s/req)", demoNamespace, name, action, price, symbol)
 			u.Infof("The controller will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, demoNamespace)
 
@@ -1104,7 +1120,7 @@ Example:
 
 			// 4. Print try-it instructions.
 			u.Blank()
-			printDemoTryIt(u, name, typeName, price, chain, tunnelURL)
+			printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL)
 
 			return nil
 		},
@@ -1263,7 +1279,20 @@ func demoRPCNetwork(paymentChain string) string {
 }
 
 // buildDemoServiceOffer returns a ServiceOffer manifest for a demo service.
-func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec) map[string]any {
+func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec, asset schemas.AssetTerms) map[string]any {
+	payment := map[string]any{
+		"scheme":            "exact",
+		"network":           chain,
+		"payTo":             wallet,
+		"maxTimeoutSeconds": 300,
+		"price": map[string]any{
+			"perRequest": price,
+		},
+	}
+	if !asset.IsZero() {
+		payment["asset"] = asset
+	}
+
 	return map[string]any{
 		"apiVersion": "obol.org/v1alpha1",
 		"kind":       "ServiceOffer",
@@ -1279,16 +1308,8 @@ func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec)
 				"port":       8080,
 				"healthPath": "/health",
 			},
-			"payment": map[string]any{
-				"scheme":            "exact",
-				"network":           chain,
-				"payTo":             wallet,
-				"maxTimeoutSeconds": 300,
-				"price": map[string]any{
-					"perRequest": price,
-				},
-			},
-			"path": "/services/" + name,
+			"payment": payment,
+			"path":    "/services/" + name,
 			"registration": map[string]any{
 				"enabled":     true,
 				"name":        name,
@@ -1300,16 +1321,24 @@ func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec)
 }
 
 // printDemoTryIt prints copy-paste instructions for calling the demo service.
-func printDemoTryIt(u *ui.UI, name, typeName, price, chain, tunnelURL string) {
+func printDemoTryIt(u *ui.UI, name, typeName, price, symbol, chain, tunnelURL string) {
 	endpoint := "<tunnel-url>/services/" + name
 	if tunnelURL != "" {
 		endpoint = tunnelURL + "/services/" + name
+	}
+
+	// EIP-3009-native tokens (USDC, EURC) use TransferWithAuthorization.
+	// Other ERC-20s (e.g. OBOL) settle through Permit2.
+	transferMethod := "ERC-3009 TransferWithAuthorization"
+	if symbol != "USDC" && symbol != "EURC" {
+		transferMethod = "Permit2 (ERC-20 with off-chain authorization)"
 	}
 
 	u.Bold("── Try it ──────────────────────────────────────────────")
 	u.Blank()
 
 	u.Printf("  Demo %q is live at: %s", typeName, endpoint)
+	u.Printf("  Price: %s %s/request on %s", price, symbol, chain)
 	u.Blank()
 
 	u.Printf("  1. Probe for pricing (see the 402 response):")
@@ -1324,7 +1353,7 @@ func printDemoTryIt(u *ui.UI, name, typeName, price, chain, tunnelURL string) {
 	u.Dim("")
 	u.Dim("     client = x402_client(")
 	u.Dim("         httpx.Client(),")
-	u.Dim(`         private_key="<your-private-key>",  # USDC holder on ` + chain)
+	u.Dim(fmt.Sprintf(`         private_key="<your-private-key>",  # %s holder on %s`, symbol, chain))
 	u.Dim("     )")
 	u.Dim(fmt.Sprintf(`     resp = client.get("%s")`, endpoint))
 	u.Dim("     print(resp.json())")
@@ -1334,8 +1363,8 @@ func printDemoTryIt(u *ui.UI, name, typeName, price, chain, tunnelURL string) {
 	u.Blank()
 	u.Dim("     • A request without payment returns HTTP 402 with pricing details")
 	u.Dim("     • The 402 body contains an 'accepts' array with payment requirements:")
-	u.Dim("       scheme, network (CAIP-2), amount (atomic USDC), asset, payTo address")
-	u.Dim("     • The buyer signs an ERC-3009 TransferWithAuthorization off-chain")
+	u.Dim("       scheme, network (CAIP-2), amount (atomic units), asset, payTo address")
+	u.Dim(fmt.Sprintf("     • The buyer signs a %s off-chain", transferMethod))
 	u.Dim("     • The signed authorization is base64-encoded and sent as X-PAYMENT header")
 	u.Dim("     • The x402 facilitator verifies the signature and settles on-chain")
 	u.Dim("     • See https://www.x402.org for the full protocol specification")
@@ -1344,7 +1373,7 @@ func printDemoTryIt(u *ui.UI, name, typeName, price, chain, tunnelURL string) {
 	u.Printf("  4. Ask your AI agent:")
 	u.Blank()
 	u.Dim(fmt.Sprintf(`     "Call the paid service at %s`, endpoint))
-	u.Dim(fmt.Sprintf(`      using x402 payment. It costs %s USDC per request on %s.`, price, chain))
+	u.Dim(fmt.Sprintf(`      using x402 payment. It costs %s %s per request on %s.`, price, symbol, chain))
 	u.Dim(`      Report what it returns."`)
 	u.Blank()
 
