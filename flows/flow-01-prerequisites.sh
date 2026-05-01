@@ -53,7 +53,7 @@ fi
 step "remote-signer Helm chart version is published"
 rs_version=$(remote_signer_chart_version)
 if [ -z "$rs_version" ]; then
-    fail "Could not parse remoteSignerChartVersion from internal/openclaw/openclaw.go"
+    fail "Could not parse RemoteSignerChartVersion from internal/agentruntime/charts.go"
 elif remote_signer_chart_available "$rs_version"; then
     pass "obol/remote-signer $rs_version is available"
 else
