@@ -63,6 +63,8 @@ ARTIFACT_DIR="${FLOW12_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-12-$(date +%Y%m%d-%H%M
 mkdir -p "$ARTIFACT_DIR"
 LOG="$ARTIFACT_DIR/test-output.log"
 set +e
+# internal/testutil.StartRealFacilitator consumes X402_FACILITATOR_BIN; the
+# value is the pinned-image binary extracted above, not a user-facing switch.
 X402_FACILITATOR_BIN="$FACILITATOR_BIN" go test -tags integration -v \
     -run '^TestIntegration_SellBuySidecar_OBOLPermit2$' \
     -timeout "${FLOW12_TIMEOUT:-30m}" \
