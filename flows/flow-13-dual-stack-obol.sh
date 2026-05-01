@@ -7,8 +7,7 @@
 #
 #   - One Anvil fork of Base Sepolia (chain 84532) shared by Alice's and Bob's
 #     obol stacks via the Docker-managed alias `host.k3d.internal:$ANVIL_PORT`.
-#   - One x402-rs facilitator process pointing at that Anvil. We require an
-#     ObolNetwork/x402-rs build with eip2612GasSponsoring support.
+#   - One x402-rs facilitator container pointing at that Anvil.
 #   - A fork-local OBOL ERC20Permit contract (contracts/fork-obol/src/ForkObolToken.sol)
 #     deployed via `forge create` against the same Anvil. The same address is
 #     visible from both clusters because they share the fork.
@@ -22,8 +21,7 @@
 #   - forge on PATH (used to compile ForkObolToken.sol)
 #   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
 #   - Ollama running (Alice serves local model inference)
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing at an x402-rs build with
-#     eip2612GasSponsoring; the flow skips with a single PASS if neither is set.
+#   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
 #
 # Use this flow when you want to validate the OBOL Permit2 path end-to-end
 # without depending on the public Obol facilitator or any USDC contract.
@@ -32,8 +30,6 @@
 #   ./flows/flow-13-dual-stack-obol.sh
 #
 # Override defaults via shell env or repo-root .env:
-#   X402_FACILITATOR_BIN          path to x402-facilitator (preferred)
-#   X402_RS_DIR                   directory of an x402-rs checkout (fallback)
 #   FLOW13_ANVIL_PORT             host port for Anvil (default: auto-pick)
 #   FLOW13_FACILITATOR_PORT       host port for x402-rs (default: auto-pick)
 #   FLOW13_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
@@ -97,7 +93,7 @@ BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
 BOB_AGENT_RUNTIME="hermes"
 
 ANVIL_PID=""
-FACILITATOR_PID=""
+FACILITATOR_CONTAINER=""
 PF_AGENT=""
 PF_AGENT_LOG=""
 
@@ -120,9 +116,17 @@ flow13_cleanup() {
     if [ -d "$BOB_DIR/config" ]; then
         bob network remove base-sepolia >/dev/null 2>&1 || true
     fi
-    if [ -n "$FACILITATOR_PID" ] && kill -0 "$FACILITATOR_PID" 2>/dev/null; then
-        kill "$FACILITATOR_PID" 2>/dev/null || true
-        wait "$FACILITATOR_PID" 2>/dev/null || true
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
+    if [ -n "$FACILITATOR_CONTAINER" ]; then
+        write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
+        docker rm -f "$FACILITATOR_CONTAINER" >/dev/null 2>&1 || true
     fi
     if [ -n "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
         kill "$ANVIL_PID" 2>/dev/null || true
@@ -453,24 +457,6 @@ except Exception as e:
 " 2>&1 || true
 }
 
-resolve_facilitator_bin() {
-    if [ -n "${X402_FACILITATOR_BIN:-}" ] && [ -x "$X402_FACILITATOR_BIN" ]; then
-        printf '%s\n' "$X402_FACILITATOR_BIN"; return 0
-    fi
-    local rs_dir="${X402_RS_DIR:-}"
-    if [ -z "$rs_dir" ] && [ -d "$HOME/Development/R&D/x402-rs" ]; then
-        rs_dir="$HOME/Development/R&D/x402-rs"
-    fi
-    if [ -n "$rs_dir" ]; then
-        for candidate in \
-            "$rs_dir/target/release/x402-facilitator" \
-            "$rs_dir/target/release/facilitator"; do
-            if [ -x "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
-        done
-    fi
-    return 1
-}
-
 # ═════════════════════════════════════════════════════════════════
 # 1-5. PREFLIGHT
 # ═════════════════════════════════════════════════════════════════
@@ -486,15 +472,14 @@ if [ -n "$missing" ]; then
 fi
 pass "Foundry tools available"
 
-step "Preflight: x402-rs facilitator binary resolvable"
-FACILITATOR_BIN=$(resolve_facilitator_bin || true)
-if [ -z "$FACILITATOR_BIN" ]; then
-    pass "Skipping flow-13 — set X402_FACILITATOR_BIN or X402_RS_DIR to a current x402-rs build"
+step "Preflight: x402-rs facilitator image available"
+FACILITATOR_IMAGE=$(x402_facilitator_image || true)
+if [ -z "$FACILITATOR_IMAGE" ]; then
+    skip "flow-13 requires Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7"
     emit_metrics
     exit 0
 fi
-export X402_FACILITATOR_BIN="$FACILITATOR_BIN"
-pass "X402_FACILITATOR_BIN=$X402_FACILITATOR_BIN"
+pass "Facilitator image available: $FACILITATOR_IMAGE"
 
 step "Preflight: .env signer key (Alice/Bob seed)"
 SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
@@ -579,7 +564,7 @@ fi
 # 9-10. x402-rs FACILITATOR
 # ═════════════════════════════════════════════════════════════════
 
-step "Facilitator: start x402-rs pointing at Anvil"
+step "Facilitator: start x402-rs container pointing at Anvil"
 FACILITATOR_CONFIG="$FLOW13_ARTIFACT_DIR/facilitator-config.json"
 FAC_SIGNER_KEY=$(hh_key 0)
 FAC_SIGNER_KEY="${FAC_SIGNER_KEY#0x}"
@@ -596,16 +581,11 @@ cat > "$FACILITATOR_CONFIG" << FEOF
   ]
 }
 FEOF
-FACILITATOR_PID=$(FAC_LOG="$FACILITATOR_LOG" FAC_BIN="$FACILITATOR_BIN" FAC_CFG="$FACILITATOR_CONFIG" python3 - <<'PY'
-import os, subprocess
-log = open(os.environ["FAC_LOG"], "ab", buffering=0)
-p = subprocess.Popen(
-    [os.environ["FAC_BIN"], "--config", os.environ["FAC_CFG"]],
-    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-    start_new_session=True, close_fds=True)
-print(p.pid)
-PY
-)
+FACILITATOR_CONTAINER="obol-flow13-x402-facilitator-$$"
+if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG"; then
+    fail "Facilitator container failed to start — see $FACILITATOR_LOG"
+    emit_metrics; exit 1
+fi
 fac_ready=0
 for _ in $(seq 1 30); do
     if curl -sf "$FACILITATOR_URL_HOST/supported" >/dev/null 2>&1; then
@@ -614,8 +594,9 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 if [ "$fac_ready" -eq 1 ]; then
-    pass "Facilitator up at $FACILITATOR_URL_HOST (pid $FACILITATOR_PID)"
+    pass "Facilitator container up at $FACILITATOR_URL_HOST ($FACILITATOR_CONTAINER)"
 else
+    write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
     fail "Facilitator did not become reachable — see $FACILITATOR_LOG"
     emit_metrics; exit 1
 fi
@@ -1121,7 +1102,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Dual-Stack OBOL Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
+            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model qwen3.5:9b --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -1130,7 +1111,11 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
 # Don't grep buy_content for natural-language confirmation; structural success
 # is the PurchaseRequest CR Ready=True poll below.
-pass "Agent buy command issued (success confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py"
+    emit_metrics; exit 1
+fi
+pass "Agent accepted buy request (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
 # 36-39. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -1239,11 +1224,11 @@ pass "Alice stack down issued"
 
 step "Cleanup: Bob stack down + kill anvil + facilitator"
 bob stack down 2>&1 | tail -1 || true
-if [ -n "$FACILITATOR_PID" ] && kill -0 "$FACILITATOR_PID" 2>/dev/null; then
-    kill "$FACILITATOR_PID" 2>/dev/null || true
-    wait "$FACILITATOR_PID" 2>/dev/null || true
+if [ -n "$FACILITATOR_CONTAINER" ]; then
+    write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
+    docker rm -f "$FACILITATOR_CONTAINER" >/dev/null 2>&1 || true
 fi
-FACILITATOR_PID=""
+FACILITATOR_CONTAINER=""
 if [ -n "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
     kill "$ANVIL_PID" 2>/dev/null || true
     wait "$ANVIL_PID" 2>/dev/null || true
@@ -1310,3 +1295,4 @@ echo "  Anvil:          $ANVIL_RPC_HOST"
 echo "  Facilitator:    $FACILITATOR_URL_HOST"
 echo "  Artifacts:      $FLOW13_ARTIFACT_DIR"
 echo "════════════════════════════════════════════════════════════"
+exit_if_failed

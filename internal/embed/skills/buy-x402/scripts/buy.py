@@ -28,6 +28,7 @@ Commands:
     remove <name>                                 Not yet available in controller mode
 """
 
+import base64
 import json
 import os
 import secrets
@@ -108,19 +109,6 @@ def _normalize_endpoint(url):
             base = base[:-len(suffix)]
             break
     return base
-
-
-def _normalize_signature_recovery(sig):
-    """Convert 65-byte signatures from v=0/1 to Ethereum v=27/28."""
-    if not isinstance(sig, str) or not sig.startswith("0x") or len(sig) != 132:
-        return sig
-    try:
-        v = int(sig[-2:], 16)
-    except ValueError:
-        return sig
-    if v in (0, 1):
-        return sig[:-2] + f"{v + 27:02x}"
-    return sig
 
 
 def _normalize_chain_name(network):
@@ -783,7 +771,6 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                 print(f"Error: remote-signer returned no signature for auth {i+1}",
                       file=sys.stderr)
                 sys.exit(1)
-            sig = _normalize_signature_recovery(sig)
 
             payload = {
                 "x402Version": 2,
@@ -957,23 +944,30 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_endpoint(endpoint_url, model_id="test"):
-    """Probe an endpoint for x402 pricing. Returns parsed 402 body or None."""
-    base = _normalize_endpoint(endpoint_url)
-    chat_url = f"{base}/v1/chat/completions"
+def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None):
+    """Probe an endpoint for x402 pricing. Returns parsed 402 body or None.
 
-    payload = json.dumps({
-        "model": model_id or "test",
-        "messages": [{"role": "user", "content": "ping"}],
-    }).encode()
-
-    req = urllib.request.Request(
-        chat_url, data=payload, method="POST",
-        headers={"Content-Type": "application/json"},
-    )
+    kind="inference" appends /v1/chat/completions and POSTs a chat-completions
+    body (the inference contract). kind="http" sends the URL as-is using `method`
+    (default GET) with no body — appropriate for `type:http` ServiceOffers.
+    """
+    if kind == "http":
+        url = endpoint_url.rstrip("/")
+        request = urllib.request.Request(url, method=(method or "GET").upper())
+    else:
+        base = _normalize_endpoint(endpoint_url)
+        url = f"{base}/v1/chat/completions"
+        body = json.dumps({
+            "model": model_id or "test",
+            "messages": [{"role": "user", "content": "ping"}],
+        }).encode()
+        request = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(request, timeout=15) as resp:
             return None
     except urllib.error.HTTPError as e:
         if e.code != 402:
@@ -1000,17 +994,21 @@ def _probe_endpoint(endpoint_url, model_id="test"):
         return None
 
 
-def cmd_probe(endpoint_url, model_id=None):
+def cmd_probe(endpoint_url, model_id=None, kind="inference", method=None):
     """Probe an endpoint for x402 pricing and print results."""
-    pricing = _probe_endpoint(endpoint_url, model_id)
+    pricing = _probe_endpoint(endpoint_url, model_id, kind=kind, method=method)
     if not pricing:
         print("Endpoint did not return valid x402 pricing.")
         return None
 
-    base = _normalize_endpoint(endpoint_url)
-    chat_url = f"{base}/v1/chat/completions"
+    if kind == "http":
+        printed_url = endpoint_url.rstrip("/")
+    else:
+        base = _normalize_endpoint(endpoint_url)
+        printed_url = f"{base}/v1/chat/completions"
 
-    print(f"Endpoint: {chat_url}")
+    print(f"Endpoint: {printed_url}")
+    print(f"Type:     {kind}")
     print(f"x402 Version: {pricing.get('x402Version', '?')}")
     print()
     for i, acc in enumerate(pricing.get("accepts", [])):
@@ -1029,7 +1027,15 @@ def cmd_probe(endpoint_url, model_id=None):
         if extra.get("assetTransferMethod"):
             print(f"    transfer:{extra.get('assetTransferMethod')}")
         if extra.get("name") or extra.get("version"):
-            print(f"    eip712:  {extra.get('name', '?')} / {extra.get('version', '?')}")
+            # NOTE: extra.name is the token's human-readable display name from
+            # the contract's name() getter, NOT the EIP-712 signing domain
+            # name. For USDC on Base Sepolia these differ ("USD Coin" vs
+            # "USDC"). Use extra.eip712Domain when present; otherwise read the
+            # canonical domain from the contract on-chain.
+            print(f"    token:   {extra.get('name', '?')} / version {extra.get('version', '?')}  (display only)")
+        if extra.get("eip712Domain"):
+            domain = extra.get("eip712Domain") or {}
+            print(f"    eip712:  {domain.get('name', '?')} / {domain.get('version', '?')}  (signing domain)")
         print()
 
     return pricing
@@ -1365,6 +1371,88 @@ def cmd_balance(chain=None):
 
 
 # ---------------------------------------------------------------------------
+# Pay (single-shot HTTP/x402 purchase)
+# ---------------------------------------------------------------------------
+
+def cmd_pay(url, method="GET", data=None, kind="http"):
+    """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
+
+    Stateless. Does not create a PurchaseRequest, does not touch the buyer
+    sidecar, and is bounded to one auth (max loss = price). Use this for
+    `type:http` services and any one-off purchase that doesn't need persistent
+    pre-payment. For long-running paid inference budgets, use `buy`.
+    """
+    method = (method or "GET").upper()
+
+    print(f"Probing {url} ...")
+    pricing = _probe_endpoint(url, kind=kind, method=method)
+    if not pricing:
+        print("Failed to get x402 pricing.", file=sys.stderr)
+        sys.exit(1)
+
+    accepts = pricing.get("accepts", [])
+    if not accepts:
+        print("No payment options in 402 response.", file=sys.stderr)
+        sys.exit(1)
+
+    payment = accepts[0]
+    pay_to = payment.get("payTo", "")
+    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
+    asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
+
+    if not pay_to:
+        print("Error: 402 response missing payTo.", file=sys.stderr)
+        sys.exit(1)
+
+    print("Getting agent wallet ...")
+    signer_address = _get_signer_address()
+    print(f"  Wallet: {signer_address}")
+
+    usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    if not _validate_contract_exists(usdc_addr, chain):
+        print(f"Error: token contract {usdc_addr} not found on {chain}.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Pre-signing 1 payment authorization for {price} micro-units on {chain} ...")
+    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)
+    if not auths:
+        print("Failed to pre-sign payment.", file=sys.stderr)
+        sys.exit(1)
+
+    envelope = auths[0]["payment"]
+    x_payment_header = base64.b64encode(json.dumps(envelope).encode()).decode()
+
+    request_data = data.encode() if data else None
+    headers = {"X-PAYMENT": x_payment_header}
+    if request_data:
+        headers.setdefault("Content-Type", "application/json")
+
+    target_url = url.rstrip("/") if kind == "http" else f"{_normalize_endpoint(url)}/v1/chat/completions"
+    print(f"Sending paid {method} {target_url} ...")
+    req = urllib.request.Request(target_url, data=request_data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode(errors="replace")
+            print(f"HTTP {resp.status}")
+            settle = resp.headers.get("X-PAYMENT-RESPONSE")
+            if settle:
+                print(f"X-PAYMENT-RESPONSE: {settle}")
+            print()
+            print(body)
+            return 0
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace") if e.fp else ""
+        print(f"HTTP {e.code}", file=sys.stderr)
+        if body:
+            print(body, file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"Connection error: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Remove
 # ---------------------------------------------------------------------------
 
@@ -1415,7 +1503,10 @@ def usage():
     print("Usage: python3 scripts/buy.py <command> [args]")
     print()
     print("Commands:")
-    print("  probe <endpoint-url> [--model <id>]          Probe x402 pricing")
+    print("  probe <endpoint-url> [--model <id>] [--type http|inference] [--method GET|POST]")
+    print("                                               Probe x402 pricing (default --type inference)")
+    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>']")
+    print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
@@ -1441,9 +1532,24 @@ if __name__ == "__main__":
     if cmd == "probe":
         positional, opts = parse_flags(rest)
         if not positional:
-            print("Usage: probe <endpoint-url> [--model <id>]", file=sys.stderr)
+            print("Usage: probe <endpoint-url> [--model <id>] [--type http|inference]", file=sys.stderr)
             sys.exit(1)
-        cmd_probe(positional[0], opts.get("model"))
+        kind = opts.get("type", "inference")
+        if kind not in ("http", "inference"):
+            print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
+            sys.exit(1)
+        cmd_probe(positional[0], opts.get("model"), kind=kind, method=opts.get("method"))
+
+    elif cmd == "pay":
+        positional, opts = parse_flags(rest)
+        if not positional:
+            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>']", file=sys.stderr)
+            sys.exit(1)
+        kind = opts.get("type", "http")
+        if kind not in ("http", "inference"):
+            print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
+            sys.exit(1)
+        cmd_pay(positional[0], method=opts.get("method", "GET"), data=opts.get("data"), kind=kind)
 
     elif cmd == "buy":
         positional, opts = parse_flags(rest)

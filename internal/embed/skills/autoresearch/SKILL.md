@@ -18,7 +18,7 @@ Autonomous LLM optimization: the agent iterates on `train.py`, runs 5-minute GPU
 ## When NOT to Use
 
 - Selling an existing model without optimization — use `sell`
-- Buying remote inference — use `buy-inference`
+- Buying remote inference — use `buy-x402`
 - Cluster diagnostics — use `obol-stack`
 
 ## Quick Start

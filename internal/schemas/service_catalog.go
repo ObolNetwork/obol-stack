@@ -1,0 +1,52 @@
+package schemas
+
+import _ "embed"
+
+// ServiceCatalogJSONSchema is the JSON Schema for the public
+// /api/services.json catalog served by sellers.
+//
+//go:embed service-catalog.schema.json
+var ServiceCatalogJSONSchema string
+
+// ServiceCatalogEntry is the JSON representation of a ServiceOffer for the
+// public storefront and for machine consumers constructing x402 payments.
+//
+// Stable wire schema: agents rely on asset.eip712Domain.name and
+// asset.eip712Domain.version to construct ERC-3009 or Permit2 signatures.
+// Do not rename fields without coordinating with buy.py and downstream agents.
+type ServiceCatalogEntry struct {
+	Name             string               `json:"name"`
+	Namespace        string               `json:"namespace"`
+	Type             string               `json:"type"`
+	Model            string               `json:"model,omitempty"`
+	Endpoint         string               `json:"endpoint"`
+	Price            string               `json:"price"`
+	PriceRaw         string               `json:"priceRaw,omitempty"`
+	PriceUnit        string               `json:"priceUnit,omitempty"`
+	PriceAtomicUnits string               `json:"priceAtomicUnits,omitempty"`
+	PayTo            string               `json:"payTo"`
+	Network          string               `json:"network"`
+	CAIP2Network     string               `json:"caip2Network,omitempty"`
+	ChainID          int64                `json:"chainId,omitempty"`
+	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
+	Description      string               `json:"description"`
+	IsDemo           bool                 `json:"isDemo"`
+}
+
+// ServiceCatalogAsset describes the settlement token resolved for a catalog
+// entry. It mirrors the x402 asset metadata consumers need for signing.
+type ServiceCatalogAsset struct {
+	Address        string                      `json:"address,omitempty"`
+	Symbol         string                      `json:"symbol,omitempty"`
+	Decimals       int64                       `json:"decimals,omitempty"`
+	TransferMethod string                      `json:"transferMethod,omitempty"`
+	EIP712Domain   *ServiceCatalogEIP712Domain `json:"eip712Domain,omitempty"`
+}
+
+// ServiceCatalogEIP712Domain is the signing domain agents must use when
+// pre-signing payment authorizations. This is not always the same as the
+// human-readable token name returned by the token contract.
+type ServiceCatalogEIP712Domain struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}

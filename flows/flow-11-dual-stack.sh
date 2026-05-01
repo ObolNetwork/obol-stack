@@ -86,12 +86,25 @@ FLOW11_REQUIRED_BOB_USDC=$((FLOW11_BUY_COUNT * FLOW11_PRICE_MICRO_USDC))
 mkdir -p "$FLOW11_ARTIFACT_DIR"
 
 # Always reclaim leaked Docker networks on exit so the next run doesn't run
-# into "all predefined address pools have been fully subnetted". Each k3d
-# cluster create reserves a /16 from Docker's 172.16/12 pool; if a cluster
-# crashes mid-create or is force-removed without `obol stack down`, the
-# network is orphaned. Targeted to k3d-obol-stack-* and skips networks
-# with active endpoints, so it never disturbs a live cluster.
-trap cleanup_k3d_obol_networks EXIT
+# into "all predefined address pools have been fully subnetted". If the flow
+# exits after creating Alice/Bob stacks but before the explicit cleanup section,
+# tear those scoped stacks down as well.
+flow11_cleanup() {
+    local ec=$?
+    set +e
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
+    cleanup_k3d_obol_networks
+    set -e
+    return $ec
+}
+trap flow11_cleanup EXIT
 # Proactive: also reclaim leaked networks at start so the new cluster can
 # allocate even if a prior aborted run left orphans behind.
 cleanup_k3d_obol_networks
@@ -290,7 +303,7 @@ except Exception as e:
 bob_buy_skill_balance() {
     bob kubectl exec \
         -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
-        python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
+        python3 "$BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py" balance 2>&1 || true
 }
 
 bob_remote_signer_address() {
@@ -1214,7 +1227,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"messages\": [
             {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
             {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-inference skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
+            {\"role\": \"user\", \"content\": \"Now use the buy-x402 skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count $FLOW11_BUY_COUNT\"}
         ],
         \"max_tokens\": 4000,
 	        \"stream\": false
@@ -1225,7 +1238,11 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 # structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
 # matching has been brittle across runtime versions (OpenClaw vs Hermes).
 echo "${buy_content:0:500}"
-pass "Agent buy command issued (success will be confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py"
+    emit_metrics; exit 1
+fi
+pass "Agent accepted buy request (success will be confirmed by PurchaseRequest CR)"
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)
@@ -1411,3 +1428,4 @@ echo "  Bob:   $BOB_WALLET"
 echo "  Tunnel: $TUNNEL_URL"
 echo "  Artifacts: $FLOW11_ARTIFACT_DIR"
 echo "════════════════════════════════════════════════════════════"
+exit_if_failed

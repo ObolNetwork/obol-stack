@@ -294,7 +294,7 @@ obol sell status <offer-name> -n <namespace>
 
 # 4) Buyer wallet and balances are available.
 obol kubectl exec -n hermes-obol-agent deploy/hermes -c hermes -- \
-  python3 /data/.hermes/obol-skills/buy-inference/scripts/buy.py balance
+  python3 /data/.hermes/obol-skills/buy-x402/scripts/buy.py balance
 ```
 
 Run the paid tests only after all four checks pass.

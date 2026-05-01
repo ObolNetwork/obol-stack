@@ -119,20 +119,20 @@ When you fetch an agent's URI, the registration JSON follows this schema:
 
 ## After Discovery: Buying Inference
 
-Once you find an agent with `"x402Support": true` and a service endpoint, use the `buy-inference` skill to purchase access:
+Once you find an agent with `"x402Support": true` and a service endpoint, use the `buy-x402` skill to purchase access:
 
 ```bash
 # 1. Probe the endpoint for pricing
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe <service-endpoint> --model <model-name>
 
 # 2. Buy access (pre-signs payment auths, configures sidecar)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-inference/scripts/buy.py buy <name> \
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy <name> \
   --endpoint <service-endpoint> --model <model-name>
 
 # 3. Use via LiteLLM as paid/<model-name>
 ```
 
-See the `buy-inference` skill for the full buy flow.
+See the `buy-x402` skill for the full buy flow.
 
 ## Constraints
 

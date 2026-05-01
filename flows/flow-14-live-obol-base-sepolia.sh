@@ -125,6 +125,14 @@ flow14_cleanup() {
         OBOL_DATA_DIR="$BOB_DIR/data" \
         "$BOB_DIR/bin/obol" network remove base-sepolia >/dev/null 2>&1 || true
     fi
+    if [ "$ec" -ne 0 ]; then
+        if type alice >/dev/null 2>&1; then
+            alice stack down >/dev/null 2>&1 || true
+        fi
+        if type bob >/dev/null 2>&1; then
+            bob stack down >/dev/null 2>&1 || true
+        fi
+    fi
     # Reclaim leaked Docker networks from k3d clusters that crashed mid-
     # create. Targeted to k3d-obol-stack-* and skips networks with active
     # endpoints, so it never kills a live cluster's network.
@@ -413,7 +421,7 @@ PY
 bob_buy_skill_balance() {
     bob kubectl exec \
         -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
-        python3 "$BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py" balance 2>&1 || true
+        python3 "$BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py" balance 2>&1 || true
 }
 
 # bob_obol_balance_via_erpc directly queries OBOL `balanceOf(signer)` against
@@ -1143,14 +1151,18 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [
             {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Live OBOL Base Sepolia Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-inference/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count 5\"}
+            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model ${OBOL_LLM_MODEL:-qwen3.5:9b} --count 5\"}
         ],
         \"max_tokens\": 4000,
         \"stream\": false
     }" 2>&1 || true)
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
-pass "Agent buy command issued (success confirmed by PurchaseRequest CR)"
+if printf '%s' "$buy_content" | agent_response_refused; then
+    fail "Agent refused to run buy.py"
+    emit_metrics; exit 1
+fi
+pass "Agent accepted buy request (success confirmed by PurchaseRequest CR)"
 
 # ═════════════════════════════════════════════════════════════════
 # 31-34. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -1335,3 +1347,4 @@ fi
 emit_metrics
 echo ""
 echo "════════════════════════════════════════════════════════════"
+exit_if_failed

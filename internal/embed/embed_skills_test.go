@@ -17,7 +17,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 
 	// Core skills that must always be present
 	coreSkills := []string{
-		"addresses", "building-blocks", "buy-inference", "concepts", "discovery",
+		"addresses", "building-blocks", "buy-x402", "concepts", "discovery",
 		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
 		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "wallets", "why",
 	}
@@ -101,10 +101,10 @@ func TestCopySkills(t *testing.T) {
 		}
 	}
 
-	// buy-inference must have references/
+	// buy-x402 must have references/
 	for _, sub := range []string{
-		"buy-inference/references/purchase-request-spec.md",
-		"buy-inference/references/x402-buyer-api.md",
+		"buy-x402/references/purchase-request-spec.md",
+		"buy-x402/references/x402-buyer-api.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)

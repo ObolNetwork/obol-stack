@@ -30,9 +30,48 @@ Content-Type: application/json
 | `accepts` | array | List of payment options (usually one) |
 | `accepts[].scheme` | string | Payment scheme (always "exact") |
 | `accepts[].network` | string | CAIP-2 chain id, e.g. `eip155:84532` for Base Sepolia |
-| `accepts[].amount` | string | Price in USDC micro-units (6 decimals). `"1000000"` = 1.0 USDC |
-| `accepts[].asset` | address | USDC contract address on the chain |
-| `accepts[].payTo` | address | Seller's USDC receiving address |
+| `accepts[].amount` | string | Price in atomic units of `asset` (6 decimals for USDC, 18 for OBOL). `"1000000"` = 1.0 USDC |
+| `accepts[].asset` | address | Token contract address on the chain |
+| `accepts[].payTo` | address | Seller's receiving address |
+| `accepts[].extra` | object | Asset metadata. Includes `name`, `version`, `assetTransferMethod`, and (when set) `eip712Domain`. See pitfall below. |
+
+> **Pitfall — `extra.name` is NOT the EIP-712 signing domain name.** The
+> verifier echoes the token contract's on-chain `name()` getter as
+> `extra.name`. For Base Sepolia USDC that is `"USD Coin"`, but the
+> EIP-712 domain `name` baked into the contract's domain separator is
+> `"USDC"`. Signing with `"USD Coin"` produces a signature the facilitator
+> rejects. **Always** read the signing domain from
+> `accepts[].extra.eip712Domain` (when the seller publishes it) or from
+> `/api/services.json → services[].asset.eip712Domain`. Treat
+> `extra.name` / `extra.version` as human-readable display only.
+
+> **Tip — prefer `/api/services.json` for machine-readable metadata.**
+> The seller's Traefik storefront exposes a stable JSON catalog at
+> `<base>/api/services.json`. Each entry carries the full
+> `asset.eip712Domain`, `asset.transferMethod`, `asset.decimals`,
+> `priceAtomicUnits`, `chainId`, and `caip2Network` — agents do not need
+> to parse the markdown `/skill.md` table to discover these.
+
+## Facilitator (server-side, agents do not call it)
+
+> **An agent never calls the facilitator directly.** The facilitator is the
+> server-side component that submits the on-chain settlement transaction
+> on the seller's behalf and pays gas — it is what makes x402 payments
+> gasless for buyers. The buyer signs an EIP-3009 (or Permit2) auth
+> off-chain, attaches it as `X-PAYMENT`, and the seller's `x402-verifier`
+> middleware coordinates with the facilitator. There is no
+> facilitator-URI flag for the agent.
+
+Default Obol-operated facilitator: `https://x402.gcp.obol.tech`.
+
+| CAIP-2 chain | Network | EIP-3009 settlement | Permit2 (incl. `eip2612GasSponsoring`) |
+|--------------|---------|---------------------|----------------------------------------|
+| `eip155:1` | Ethereum Mainnet | yes | yes |
+| `eip155:8453` | Base Mainnet | yes | yes |
+| `eip155:84532` | Base Sepolia | yes | yes |
+
+(See the in-cluster facilitator config for chain-specific RPC and signer
+wiring; that is operator-side state, not buyer-side.)
 
 ## Sidecar Config Format (`x402-buyer-config` ConfigMap)
 

@@ -13,7 +13,7 @@ mkdir -p "$FLOW_STATE_DIR"
 ANVIL_LOG="$FLOW_STATE_DIR/anvil.log"
 ANVIL_PID_FILE="$FLOW_STATE_DIR/anvil.pid"
 FACILITATOR_LOG="$FLOW_STATE_DIR/facilitator.log"
-FACILITATOR_PID_FILE="$FLOW_STATE_DIR/facilitator.pid"
+FACILITATOR_CONTAINER_FILE="$FLOW_STATE_DIR/facilitator.container"
 
 cluster_facilitator_host() {
     if [ -n "${CLUSTER_FACILITATOR_HOST:-}" ]; then
@@ -131,24 +131,12 @@ if curl -sf http://localhost:4040/supported >/dev/null 2>&1; then
     pass "Facilitator already running on port 4040"
     FACILITATOR_PORT=4040
 else
-    old_pid=$(cat "$FACILITATOR_PID_FILE" 2>/dev/null || true)
-    if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
-        rm -f "$FACILITATOR_PID_FILE"
-    fi
+    old_container=$(cat "$FACILITATOR_CONTAINER_FILE" 2>/dev/null || true)
+    [ -n "$old_container" ] && docker rm -f "$old_container" >/dev/null 2>&1 || true
 
-    # Binary discovery: X402_FACILITATOR_BIN env → ~/Development/R&D/x402-rs
-    FACILITATOR_BIN="${X402_FACILITATOR_BIN:-}"
-    if [ -z "$FACILITATOR_BIN" ]; then
-        X402_RS_DIR="${X402_RS_DIR:-$HOME/Development/R&D/x402-rs}"
-        for candidate in \
-            "$X402_RS_DIR/target/release/x402-facilitator" \
-            "$X402_RS_DIR/target/release/facilitator"; do
-            [ -f "$candidate" ] && FACILITATOR_BIN="$candidate" && break
-        done
-    fi
-
-    if [ -z "$FACILITATOR_BIN" ]; then
-        fail "x402-facilitator binary not found — set X402_FACILITATOR_BIN or build from x402-rs repo"
+    FACILITATOR_IMAGE=$(x402_facilitator_image || true)
+    if [ -z "$FACILITATOR_IMAGE" ]; then
+        fail "x402-facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
         emit_metrics; exit 0
     fi
 
@@ -165,37 +153,24 @@ else
   "schemes": [{"id": "v1-eip155-exact","chains":"eip155:*"},{"id":"v2-eip155-exact","chains":"eip155:*"}]
 }
 FEOF
-    FACILITATOR_PID=$(FACILITATOR_LOG="$FACILITATOR_LOG" FACILITATOR_BIN="$FACILITATOR_BIN" FACILITATOR_CONFIG="$FACILITATOR_CONFIG" python3 - <<'PY'
-import os
-import subprocess
-
-log_path = os.environ["FACILITATOR_LOG"]
-bin_path = os.environ["FACILITATOR_BIN"]
-cfg_path = os.environ["FACILITATOR_CONFIG"]
-
-with open(log_path, "ab", buffering=0) as log_file:
-    proc = subprocess.Popen(
-        [bin_path, "--config", cfg_path],
-        stdin=subprocess.DEVNULL,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        close_fds=True,
-    )
-    print(proc.pid)
-PY
-)
-    echo "$FACILITATOR_PID" > "$FACILITATOR_PID_FILE"
+    FACILITATOR_CONTAINER="obol-flow10-x402-facilitator"
+    if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG"; then
+        fail "Facilitator container failed to start — inspect $FACILITATOR_LOG"
+        emit_metrics; exit 0
+    fi
+    echo "$FACILITATOR_CONTAINER" > "$FACILITATOR_CONTAINER_FILE"
     sleep 3
     if curl -sf http://localhost:$FACILITATOR_PORT/supported >/dev/null 2>&1; then
-        if kill -0 "$FACILITATOR_PID" 2>/dev/null; then
+        if docker ps --format '{{.Names}}' | grep -qx "$FACILITATOR_CONTAINER"; then
             pass "Facilitator started on port $FACILITATOR_PORT"
         else
+            write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
             fail "Facilitator exited after startup — inspect $FACILITATOR_LOG"
             emit_metrics; exit 0
         fi
     else
-        fail "Facilitator failed to start (bin: $FACILITATOR_BIN)"
+        write_x402_facilitator_logs "$FACILITATOR_CONTAINER" "$FACILITATOR_LOG"
+        fail "Facilitator failed to start (image: $FACILITATOR_IMAGE)"
         emit_metrics; exit 0
     fi
 fi

@@ -32,6 +32,7 @@ OBOL="${OBOL:-$OBOL_BIN_DIR/obol}"
 
 STEP_COUNT=0
 PASS_COUNT=0
+SKIP_COUNT=0
 FAIL_COUNT=0
 
 _flow_exit_status() {
@@ -184,6 +185,11 @@ step() {
 pass() {
     PASS_COUNT=$((PASS_COUNT + 1))
     echo "PASS: [$STEP_COUNT] $1"
+}
+
+skip() {
+    SKIP_COUNT=$((SKIP_COUNT + 1))
+    echo "SKIP: [$STEP_COUNT] $1"
 }
 
 fail() {
@@ -373,8 +379,15 @@ route_llm_via_obol_cli() {
 
 emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
+    echo "METRIC steps_skipped=$SKIP_COUNT"
     echo "METRIC steps_failed=$FAIL_COUNT"
     echo "METRIC total_steps=$STEP_COUNT"
+}
+
+exit_if_failed() {
+    if [ "${FAIL_COUNT:-0}" -gt 0 ]; then
+        exit 1
+    fi
 }
 
 canonical_path() {
@@ -393,6 +406,53 @@ require_tool() {
         emit_metrics
         exit 1
     fi
+}
+
+x402_facilitator_image() {
+    local image="ghcr.io/x402-rs/x402-facilitator:1.4.7"
+
+    command -v docker >/dev/null 2>&1 || {
+        echo "docker is required to fetch $image" >&2
+        return 1
+    }
+
+    if ! docker pull "$image" >/dev/null 2>&1; then
+        echo "x402 facilitator image not available: $image" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$image"
+}
+
+start_x402_facilitator_container() {
+    local name="$1"
+    local config="$2"
+    local log="$3"
+    local image config_abs
+
+    image=$(x402_facilitator_image) || return 1
+    config_abs=$(canonical_path "$config")
+
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    : > "$log"
+    docker run -d \
+        --name "$name" \
+        --network host \
+        -v "$config_abs:/config.json:ro" \
+        "$image" \
+        --config /config.json >/dev/null
+}
+
+write_x402_facilitator_logs() {
+    local name="$1"
+    local log="$2"
+
+    [ -n "$name" ] || return 0
+    docker logs "$name" > "$log" 2>&1 || true
+}
+
+agent_response_refused() {
+    grep -qiE "cannot execute|can't execute|cannot run|can't run|do not have the ability|don't have the ability|not able to run arbitrary|as an AI model|I don't have access|I do not have access"
 }
 
 assert_obol_kubeconfig() {
@@ -468,7 +528,12 @@ ensure_payment_python_deps() {
 }
 
 remote_signer_chart_version() {
-    awk -F'"' '/remoteSignerChartVersion =/ {print $2; exit}' \
+    awk -F'"' '
+        /RemoteSignerChartVersion =/ {print $2; found=1; exit}
+        /remoteSignerChartVersion =/ {print $2; found=1; exit}
+        END {exit found ? 0 : 1}
+    ' \
+        "$OBOL_ROOT/internal/agentruntime/charts.go" \
         "$OBOL_ROOT/internal/openclaw/openclaw.go"
 }
 
