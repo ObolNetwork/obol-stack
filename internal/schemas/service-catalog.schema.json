@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://obol.org/schemas/service-catalog.schema.json",
+  "title": "Obol Service Catalog",
+  "description": "Public /api/services.json catalog served by x402 sellers.",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/service"
+  },
+  "$defs": {
+    "evmAddress": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{40}$"
+    },
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "atomicUnits": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "eip712Domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "transferMethod": {
+          "type": "string",
+          "enum": [
+            "eip3009",
+            "permit2"
+          ]
+        },
+        "eip712Domain": {
+          "$ref": "#/$defs/eip712Domain"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "namespace",
+        "type",
+        "endpoint",
+        "price",
+        "payTo",
+        "network",
+        "description",
+        "isDemo"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "inference",
+            "fine-tuning",
+            "http"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri"
+        },
+        "price": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priceRaw": {
+          "$ref": "#/$defs/decimalString"
+        },
+        "priceUnit": {
+          "type": "string",
+          "enum": [
+            "perRequest",
+            "perMTok",
+            "perHour",
+            "perEpoch"
+          ]
+        },
+        "priceAtomicUnits": {
+          "$ref": "#/$defs/atomicUnits"
+        },
+        "payTo": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "network": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caip2Network": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+:[0-9]+$"
+        },
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "asset": {
+          "$ref": "#/$defs/asset"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isDemo": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -7,9 +7,35 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+func assertServiceCatalogSchema(t *testing.T, jsonStr string) {
+	t.Helper()
+
+	schemaDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(schemas.ServiceCatalogJSONSchema))
+	if err != nil {
+		t.Fatalf("service catalog schema is invalid JSON: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("service-catalog.schema.json", schemaDoc); err != nil {
+		t.Fatalf("failed to register service catalog schema: %v", err)
+	}
+	schema, err := compiler.Compile("service-catalog.schema.json")
+	if err != nil {
+		t.Fatalf("service catalog schema failed to compile: %v", err)
+	}
+	payload, err := jsonschema.UnmarshalJSON(strings.NewReader(jsonStr))
+	if err != nil {
+		t.Fatalf("service catalog JSON is invalid: %v\n%s", err, jsonStr)
+	}
+	if err := schema.Validate(payload); err != nil {
+		t.Fatalf("service catalog JSON violates schema: %v\n%s", err, jsonStr)
+	}
+}
 
 func TestBuildHTTPRoute(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
@@ -435,7 +461,7 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 			},
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "base",
-				PayTo:   "0xabc",
+				PayTo:   "0x1111111111111111111111111111111111111111",
 				Price: monetizeapi.ServiceOfferPriceTable{
 					PerRequest: "0.00001",
 				},
@@ -456,8 +482,9 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 	}
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
@@ -485,6 +512,7 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 
 func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
 	jsonStr := buildServiceCatalogJSON(nil, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 	if jsonStr != "[]" {
 		t.Errorf("expected empty array, got %q", jsonStr)
 	}
@@ -521,7 +549,7 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 				Type: "http",
 				Payment: monetizeapi.ServiceOfferPayment{
 					Network: "base",
-					PayTo:   "0xabc",
+					PayTo:   "0x1111111111111111111111111111111111111111",
 					Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
 				},
 			},
@@ -531,7 +559,7 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 
 	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
@@ -568,7 +596,7 @@ func TestBuildServiceCatalogJSON_SortOrder(t *testing.T) {
 
 	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -593,7 +621,7 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 			Model: monetizeapi.ServiceOfferModel{Name: "qwen3.5:9b"},
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "base",
-				PayTo:   "0xabc",
+				PayTo:   "0x1111111111111111111111111111111111111111",
 				Price:   monetizeapi.ServiceOfferPriceTable{PerMTok: "5.00"},
 			},
 		},
@@ -603,8 +631,9 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 	}
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -638,7 +667,9 @@ func TestBuildServiceCatalogJSON_FallbackDescription(t *testing.T) {
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "inference",
 			Payment: monetizeapi.ServiceOfferPayment{
-				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				Network: "base",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
 			},
 			// Spec.Registration.Description intentionally omitted.
 		},
@@ -648,8 +679,9 @@ func TestBuildServiceCatalogJSON_FallbackDescription(t *testing.T) {
 	}
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -678,7 +710,7 @@ func TestBuildServiceCatalogJSON_BaseURLTrailingSlash(t *testing.T) {
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com/")
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -706,7 +738,7 @@ func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
 			Type: "http",
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "base-sepolia",
-				PayTo:   "0xabc",
+				PayTo:   "0x1111111111111111111111111111111111111111",
 				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
 			},
 		},
@@ -716,8 +748,9 @@ func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
 	}
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
@@ -784,7 +817,7 @@ func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
 			Type: "http",
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "ethereum",
-				PayTo:   "0xabc",
+				PayTo:   "0x1111111111111111111111111111111111111111",
 				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.5"},
 				Asset: monetizeapi.ServiceOfferAsset{
 					Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
@@ -802,8 +835,9 @@ func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
 	}
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []ServiceJSON
+	var services []schemas.ServiceCatalogEntry
 	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
