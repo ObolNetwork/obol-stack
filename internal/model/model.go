@@ -78,6 +78,28 @@ type LiteLLMParams struct {
 	Model   string `yaml:"model"`
 	APIBase string `yaml:"api_base,omitempty"`
 	APIKey  string `yaml:"api_key,omitempty"`
+	// CacheControlInjectionPoints is a LiteLLM directive that tells the proxy
+	// to attach Anthropic-style `cache_control: {type: ephemeral}` markers to
+	// specific messages on every request to this model. We pin the system
+	// message for Anthropic entries so prompt caching is on by default.
+	CacheControlInjectionPoints []CacheControlInjection `yaml:"cache_control_injection_points,omitempty"`
+}
+
+// CacheControlInjection is one entry in LiteLLM's
+// cache_control_injection_points list. Either Role or Index narrows which
+// message in the request gets the cache_control marker.
+type CacheControlInjection struct {
+	Location string `yaml:"location"`
+	Role     string `yaml:"role,omitempty"`
+	Index    *int   `yaml:"index,omitempty"`
+}
+
+// anthropicCacheControlPoints is the default cache_control_injection_points
+// applied to every Anthropic model entry. Pinning the system message makes
+// LiteLLM auto-attach cache_control to the largest stable prefix of the
+// prompt — the canonical "prompt caching by default" pattern.
+func anthropicCacheControlPoints() []CacheControlInjection {
+	return []CacheControlInjection{{Location: "message", Role: "system"}}
 }
 
 // HasConfiguredModels returns true if LiteLLM has at least one non-catch-all
@@ -1100,16 +1122,25 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 			})
 		}
 	case ProviderAnthropic:
+		cachePoints := anthropicCacheControlPoints()
 		// Wildcard: routes any anthropic model without explicit registration
 		entries = append(entries, ModelEntry{
-			ModelName:     "anthropic/*",
-			LiteLLMParams: LiteLLMParams{Model: "anthropic/*", APIKey: "os.environ/ANTHROPIC_API_KEY"},
+			ModelName: "anthropic/*",
+			LiteLLMParams: LiteLLMParams{
+				Model:                       "anthropic/*",
+				APIKey:                      "os.environ/ANTHROPIC_API_KEY",
+				CacheControlInjectionPoints: cachePoints,
+			},
 		})
 		// Explicit entries for requested models (better /v1/models listing)
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
-				ModelName:     m,
-				LiteLLMParams: LiteLLMParams{Model: m, APIKey: "os.environ/ANTHROPIC_API_KEY"},
+				ModelName: m,
+				LiteLLMParams: LiteLLMParams{
+					Model:                       m,
+					APIKey:                      "os.environ/ANTHROPIC_API_KEY",
+					CacheControlInjectionPoints: cachePoints,
+				},
 			})
 		}
 	case ProviderOpenAI:
