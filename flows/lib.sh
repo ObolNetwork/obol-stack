@@ -468,7 +468,12 @@ ensure_payment_python_deps() {
 }
 
 remote_signer_chart_version() {
-    awk -F'"' '/remoteSignerChartVersion =/ {print $2; exit}' \
+    awk -F'"' '
+        /RemoteSignerChartVersion =/ {print $2; found=1; exit}
+        /remoteSignerChartVersion =/ {print $2; found=1; exit}
+        END {exit found ? 0 : 1}
+    ' \
+        "$OBOL_ROOT/internal/agentruntime/charts.go" \
         "$OBOL_ROOT/internal/openclaw/openclaw.go"
 }
 
