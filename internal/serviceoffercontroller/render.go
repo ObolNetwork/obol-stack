@@ -13,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -769,51 +770,6 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	return strings.Join(lines, "\n")
 }
 
-// ServiceJSON is the JSON representation of a ServiceOffer for the public
-// storefront and for machine consumers (agents) constructing x402 payments.
-//
-// Stable wire schema: agents rely on `asset.eip712Domain.name` /
-// `asset.eip712Domain.version` to construct ERC-3009 / Permit2 signatures.
-// Do not rename fields without coordinating with buy.py + downstream agents.
-type ServiceJSON struct {
-	Name             string            `json:"name"`
-	Namespace        string            `json:"namespace"`
-	Type             string            `json:"type"`
-	Model            string            `json:"model,omitempty"`
-	Endpoint         string            `json:"endpoint"`
-	Price            string            `json:"price"`                      // human-readable, e.g. "0.001 USDC/request"
-	PriceRaw         string            `json:"priceRaw,omitempty"`         // decimal string as authored, e.g. "0.001"
-	PriceUnit        string            `json:"priceUnit,omitempty"`        // perRequest|perMTok|perHour
-	PriceAtomicUnits string            `json:"priceAtomicUnits,omitempty"` // atomic units of asset, e.g. "1000"
-	PayTo            string            `json:"payTo"`
-	Network          string            `json:"network"`                // human-friendly, e.g. "base-sepolia"
-	CAIP2Network     string            `json:"caip2Network,omitempty"` // e.g. "eip155:84532"
-	ChainID          int64             `json:"chainId,omitempty"`
-	Asset            *ServiceAssetJSON `json:"asset,omitempty"`
-	Description      string            `json:"description"`
-	IsDemo           bool              `json:"isDemo"`
-}
-
-// ServiceAssetJSON describes the settlement token. Mirrors
-// monetizeapi.ServiceOfferAsset and resolves chain defaults when fields are
-// unset on the offer.
-type ServiceAssetJSON struct {
-	Address        string            `json:"address,omitempty"`
-	Symbol         string            `json:"symbol,omitempty"`
-	Decimals       int64             `json:"decimals,omitempty"`
-	TransferMethod string            `json:"transferMethod,omitempty"` // eip3009|permit2
-	EIP712Domain   *EIP712DomainJSON `json:"eip712Domain,omitempty"`
-}
-
-// EIP712DomainJSON is the signing domain agents must use when pre-signing
-// payment authorizations. This is NOT the same as the human-readable token
-// name returned by the contract's `name()` getter (USDC on Base Sepolia
-// signs with domain name "USDC", not "USD Coin").
-type EIP712DomainJSON struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
 // buildServiceCatalogJSON returns a JSON array of ready ServiceOffers for the public storefront.
 func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
@@ -831,13 +787,13 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		return ready[i].Name < ready[j].Name
 	})
 
-	services := make([]ServiceJSON, 0, len(ready))
+	services := make([]schemas.ServiceCatalogEntry, 0, len(ready))
 	for _, offer := range ready {
 		desc := offer.Spec.Registration.Description
 		if desc == "" {
 			desc = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
-		svc := ServiceJSON{
+		svc := schemas.ServiceCatalogEntry{
 			Name:        offer.Name,
 			Namespace:   offer.Namespace,
 			Type:        fallbackOfferType(offer),
@@ -896,7 +852,7 @@ func offerPriceRawAndUnit(offer *monetizeapi.ServiceOffer) (string, string) {
 // explicit asset, it is used verbatim. If only the network is set, defaults
 // for USDC on that chain are filled in (this matches the verifier's behavior
 // when the seller did not pass --token).
-func offerAssetJSON(offer *monetizeapi.ServiceOffer) *ServiceAssetJSON {
+func offerAssetJSON(offer *monetizeapi.ServiceOffer) *schemas.ServiceCatalogAsset {
 	a := offer.Spec.Payment.Asset
 	if a.Address == "" && a.Symbol == "" && a.EIP712Name == "" {
 		// No explicit asset — fall back to the chain's default USDC entry.
@@ -905,14 +861,14 @@ func offerAssetJSON(offer *monetizeapi.ServiceOffer) *ServiceAssetJSON {
 		}
 		return nil
 	}
-	out := &ServiceAssetJSON{
+	out := &schemas.ServiceCatalogAsset{
 		Address:        a.Address,
 		Symbol:         a.Symbol,
 		Decimals:       a.Decimals,
 		TransferMethod: a.TransferMethod,
 	}
 	if a.EIP712Name != "" || a.EIP712Version != "" {
-		out.EIP712Domain = &EIP712DomainJSON{Name: a.EIP712Name, Version: a.EIP712Version}
+		out.EIP712Domain = &schemas.ServiceCatalogEIP712Domain{Name: a.EIP712Name, Version: a.EIP712Version}
 	}
 	if def, ok := defaultUSDCForNetwork(offer.Spec.Payment.Network); ok {
 		// Backfill any unset fields from chain defaults so consumers always
@@ -977,18 +933,18 @@ func caip2ForNetwork(network string) (string, int64) {
 // chain when the seller did not specify an explicit asset. Mirrors the
 // verifier's chain → asset defaults so /api/services.json stays consistent
 // with what the 402 response advertises.
-func defaultUSDCForNetwork(network string) (ServiceAssetJSON, bool) {
+func defaultUSDCForNetwork(network string) (schemas.ServiceCatalogAsset, bool) {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "base", "base-mainnet":
-		return ServiceAssetJSON{
+		return schemas.ServiceCatalogAsset{
 			Address:        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 			Symbol:         "USDC",
 			Decimals:       6,
 			TransferMethod: "eip3009",
-			EIP712Domain:   &EIP712DomainJSON{Name: "USD Coin", Version: "2"},
+			EIP712Domain:   &schemas.ServiceCatalogEIP712Domain{Name: "USD Coin", Version: "2"},
 		}, true
 	case "base-sepolia":
-		return ServiceAssetJSON{
+		return schemas.ServiceCatalogAsset{
 			Address:        "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 			Symbol:         "USDC",
 			Decimals:       6,
@@ -996,18 +952,18 @@ func defaultUSDCForNetwork(network string) (ServiceAssetJSON, bool) {
 			// Empirically Base Sepolia USDC's signing domain name is "USDC",
 			// while the contract's name() returns "USD Coin". Keep "USDC"
 			// here — buy.py signs with this and the facilitator settles.
-			EIP712Domain: &EIP712DomainJSON{Name: "USDC", Version: "2"},
+			EIP712Domain: &schemas.ServiceCatalogEIP712Domain{Name: "USDC", Version: "2"},
 		}, true
 	case "ethereum", "ethereum-mainnet", "mainnet":
-		return ServiceAssetJSON{
+		return schemas.ServiceCatalogAsset{
 			Address:        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 			Symbol:         "USDC",
 			Decimals:       6,
 			TransferMethod: "eip3009",
-			EIP712Domain:   &EIP712DomainJSON{Name: "USD Coin", Version: "2"},
+			EIP712Domain:   &schemas.ServiceCatalogEIP712Domain{Name: "USD Coin", Version: "2"},
 		}, true
 	default:
-		return ServiceAssetJSON{}, false
+		return schemas.ServiceCatalogAsset{}, false
 	}
 }
 

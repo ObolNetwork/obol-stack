@@ -18,6 +18,7 @@ require (
 	github.com/prometheus/client_golang v1.15.0
 	github.com/prometheus/client_model v0.3.0
 	github.com/prometheus/common v0.42.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/shopspring/decimal v1.3.1
 	github.com/urfave/cli/v2 v2.27.5
 	github.com/urfave/cli/v3 v3.6.2
