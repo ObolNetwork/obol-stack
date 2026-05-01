@@ -38,8 +38,8 @@ Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 Commit: $(git -C "$OBOL_ROOT" rev-parse HEAD)
 Artifacts: $ARTIFACT_DIR
 
-| Flow | Result | FAIL lines | Exit code |
-| --- | --- | ---: | ---: |
+| Flow | Result | FAIL lines | SKIP lines | Exit code |
+| --- | --- | ---: | ---: | ---: |
 EOF
 }
 
@@ -47,8 +47,9 @@ append_report_row() {
     local flow="$1"
     local result="$2"
     local fail_count="$3"
-    local rc="$4"
-    printf '| `%s` | %s | %s | %s |\n' "$flow" "$result" "$fail_count" "$rc" >> "$REPORT"
+    local skip_count="$4"
+    local rc="$5"
+    printf '| `%s` | %s | %s | %s | %s |\n' "$flow" "$result" "$fail_count" "$skip_count" "$rc" >> "$REPORT"
 }
 
 append_report_footer() {
@@ -58,6 +59,7 @@ append_report_footer() {
 
 - The runner uses the real \`obol\` CLI and the flow scripts as black-box release checks.
 - Any \`FAIL:\` line is release-gating, even when a child script exits zero.
+- A \`SKIP:\` line records an intentionally optional prerequisite path and does not count as release-gating.
 - \`flow-11-dual-stack.sh\` writes on-chain receipt artifacts under \`$ARTIFACT_DIR/flow-11-receipts\`.
 - Set \`RELEASE_SMOKE_INCLUDE_OBOL=true\` to run \`flow-14-live-obol-base-sepolia.sh\`.
 - Set \`RELEASE_SMOKE_INCLUDE_OBOL_FORK=true\` to run \`flow-13-dual-stack-obol.sh\`.
@@ -90,7 +92,7 @@ prepare_workspace() {
 
 run_flow() {
     local flow="$1"
-    local name log rc fail_count result
+    local name log rc fail_count skip_count result
     name=$(basename "$flow" .sh)
     log="$ARTIFACT_DIR/$name.log"
 
@@ -110,15 +112,20 @@ run_flow() {
     set -e
 
     fail_count=$(grep -c '^FAIL:' "$log" 2>/dev/null || true)
+    skip_count=$(grep -c '^SKIP:' "$log" 2>/dev/null || true)
     if [ "$rc" -eq 0 ] && [ "$fail_count" -eq 0 ]; then
-        result="PASS"
+        if [ "$skip_count" -gt 0 ]; then
+            result="SKIP"
+        else
+            result="PASS"
+        fi
     else
         result="FAIL"
     fi
-    append_report_row "$name" "$result" "$fail_count" "$rc"
-    echo "===== END $name result=$result rc=$rc fails=$fail_count ====="
+    append_report_row "$name" "$result" "$fail_count" "$skip_count" "$rc"
+    echo "===== END $name result=$result rc=$rc fails=$fail_count skips=$skip_count ====="
 
-    [ "$result" = "PASS" ]
+    [ "$result" != "FAIL" ]
 }
 
 cleanup_default_stack_before_dual() {

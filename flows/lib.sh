@@ -32,6 +32,7 @@ OBOL="${OBOL:-$OBOL_BIN_DIR/obol}"
 
 STEP_COUNT=0
 PASS_COUNT=0
+SKIP_COUNT=0
 FAIL_COUNT=0
 
 _flow_exit_status() {
@@ -184,6 +185,11 @@ step() {
 pass() {
     PASS_COUNT=$((PASS_COUNT + 1))
     echo "PASS: [$STEP_COUNT] $1"
+}
+
+skip() {
+    SKIP_COUNT=$((SKIP_COUNT + 1))
+    echo "SKIP: [$STEP_COUNT] $1"
 }
 
 fail() {
@@ -373,6 +379,7 @@ route_llm_via_obol_cli() {
 
 emit_metrics() {
     echo "METRIC steps_passed=$PASS_COUNT"
+    echo "METRIC steps_skipped=$SKIP_COUNT"
     echo "METRIC steps_failed=$FAIL_COUNT"
     echo "METRIC total_steps=$STEP_COUNT"
 }
@@ -393,6 +400,82 @@ require_tool() {
         emit_metrics
         exit 1
     fi
+}
+
+x402_rs_candidate_dirs() {
+    if [ -n "${X402_RS_DIR:-}" ]; then
+        printf '%s\n' "$X402_RS_DIR"
+    fi
+
+    printf '%s\n' \
+        "$HOME/Development/R&D/x402-rs" \
+        "$HOME/Development/x402-rs" \
+        "$OBOL_ROOT/../x402-rs"
+}
+
+x402_facilitator_prebuilt_bin() {
+    local rs_dir="$1"
+    local candidate
+
+    for candidate in \
+        "$rs_dir/target/release/x402-facilitator" \
+        "$rs_dir/target/release/facilitator"; do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+resolve_or_build_x402_facilitator() {
+    local bin rs_dir pkg candidate
+
+    if [ -n "${X402_FACILITATOR_BIN:-}" ]; then
+        if [ -x "$X402_FACILITATOR_BIN" ]; then
+            case "$X402_FACILITATOR_BIN" in
+                */target/release/*)
+                    X402_RS_DIR="$(cd "$(dirname "$X402_FACILITATOR_BIN")/../.." && pwd)"
+                    export X402_RS_DIR
+                    ;;
+            esac
+            printf '%s\n' "$X402_FACILITATOR_BIN"
+            return 0
+        fi
+        echo "X402_FACILITATOR_BIN is set but not executable: $X402_FACILITATOR_BIN" >&2
+        return 1
+    fi
+
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        [ -d "$candidate" ] || continue
+        rs_dir="$(cd "$candidate" && pwd)"
+
+        if bin="$(x402_facilitator_prebuilt_bin "$rs_dir")"; then
+            X402_RS_DIR="$rs_dir"
+            export X402_RS_DIR
+            printf '%s\n' "$bin"
+            return 0
+        fi
+
+        [ -f "$rs_dir/Cargo.toml" ] || continue
+        command -v cargo >/dev/null 2>&1 || continue
+
+        echo "Building x402-rs facilitator from $rs_dir" >&2
+        for pkg in x402-facilitator facilitator; do
+            if (cd "$rs_dir" && cargo build --release -p "$pkg" >&2); then
+                if bin="$(x402_facilitator_prebuilt_bin "$rs_dir")"; then
+                    X402_RS_DIR="$rs_dir"
+                    export X402_RS_DIR
+                    printf '%s\n' "$bin"
+                    return 0
+                fi
+            fi
+        done
+    done < <(x402_rs_candidate_dirs | awk 'NF && !seen[$0]++')
+
+    return 1
 }
 
 assert_obol_kubeconfig() {

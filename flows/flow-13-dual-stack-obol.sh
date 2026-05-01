@@ -22,8 +22,10 @@
 #   - forge on PATH (used to compile ForkObolToken.sol)
 #   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
 #   - Ollama running (Alice serves local model inference)
-#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing at an x402-rs build with
-#     eip2612GasSponsoring; the flow skips with a single PASS if neither is set.
+#   - X402_FACILITATOR_BIN or X402_RS_DIR pointing at an x402-rs tree with
+#     eip2612GasSponsoring. If only X402_RS_DIR is set, the flow builds the
+#     facilitator binary when needed. If neither is available, the flow reports
+#     SKIP rather than PASS.
 #
 # Use this flow when you want to validate the OBOL Permit2 path end-to-end
 # without depending on the public Obol facilitator or any USDC contract.
@@ -453,24 +455,6 @@ except Exception as e:
 " 2>&1 || true
 }
 
-resolve_facilitator_bin() {
-    if [ -n "${X402_FACILITATOR_BIN:-}" ] && [ -x "$X402_FACILITATOR_BIN" ]; then
-        printf '%s\n' "$X402_FACILITATOR_BIN"; return 0
-    fi
-    local rs_dir="${X402_RS_DIR:-}"
-    if [ -z "$rs_dir" ] && [ -d "$HOME/Development/R&D/x402-rs" ]; then
-        rs_dir="$HOME/Development/R&D/x402-rs"
-    fi
-    if [ -n "$rs_dir" ]; then
-        for candidate in \
-            "$rs_dir/target/release/x402-facilitator" \
-            "$rs_dir/target/release/facilitator"; do
-            if [ -x "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
-        done
-    fi
-    return 1
-}
-
 # ═════════════════════════════════════════════════════════════════
 # 1-5. PREFLIGHT
 # ═════════════════════════════════════════════════════════════════
@@ -487,9 +471,9 @@ fi
 pass "Foundry tools available"
 
 step "Preflight: x402-rs facilitator binary resolvable"
-FACILITATOR_BIN=$(resolve_facilitator_bin || true)
+FACILITATOR_BIN=$(resolve_or_build_x402_facilitator || true)
 if [ -z "$FACILITATOR_BIN" ]; then
-    pass "Skipping flow-13 — set X402_FACILITATOR_BIN or X402_RS_DIR to a current x402-rs build"
+    skip "flow-13 requires X402_FACILITATOR_BIN or X402_RS_DIR pointing at a current x402-rs checkout"
     emit_metrics
     exit 0
 fi
