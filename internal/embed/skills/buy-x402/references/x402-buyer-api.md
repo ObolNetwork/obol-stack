@@ -49,7 +49,7 @@ Content-Type: application/json
 > The seller's Traefik storefront exposes a stable JSON catalog at
 > `<base>/api/services.json`. Each entry carries the full
 > `asset.eip712Domain`, `asset.transferMethod`, `asset.decimals`,
-> `priceMicroUnits`, `chainId`, and `caip2Network` — agents do not need
+> `priceAtomicUnits`, `chainId`, and `caip2Network` — agents do not need
 > to parse the markdown `/skill.md` table to discover these.
 
 ## Facilitator (server-side, agents do not call it)

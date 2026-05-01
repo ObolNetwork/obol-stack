@@ -589,7 +589,7 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "mtok-svc", Namespace: "llm"},
 		Spec: monetizeapi.ServiceOfferSpec{
-			Type: "inference",
+			Type:  "inference",
 			Model: monetizeapi.ServiceOfferModel{Name: "qwen3.5:9b"},
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "base",
@@ -732,8 +732,14 @@ func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
 	if got.ChainID != 84532 {
 		t.Errorf("ChainID = %d, want 84532", got.ChainID)
 	}
-	if got.PriceMicroUnits != "1000" {
-		t.Errorf("PriceMicroUnits = %q, want 1000 (0.001 USDC × 1e6)", got.PriceMicroUnits)
+	if got.PriceAtomicUnits != "1000" {
+		t.Errorf("PriceAtomicUnits = %q, want 1000 (0.001 USDC × 1e6)", got.PriceAtomicUnits)
+	}
+	if strings.Contains(jsonStr, "priceMicroUnits") {
+		t.Fatalf("services.json must not expose legacy priceMicroUnits field: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"priceAtomicUnits"`) {
+		t.Fatalf("services.json missing priceAtomicUnits field: %s", jsonStr)
 	}
 	if got.PriceUnit != "perRequest" {
 		t.Errorf("PriceUnit = %q, want perRequest", got.PriceUnit)
@@ -822,8 +828,8 @@ func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
 		t.Errorf("OBOL signing domain dropped, got %+v", got.Asset.EIP712Domain)
 	}
 	// 0.5 OBOL × 1e18 = 500_000_000_000_000_000.
-	if got.PriceMicroUnits != "500000000000000000" {
-		t.Errorf("PriceMicroUnits = %q, want 500000000000000000", got.PriceMicroUnits)
+	if got.PriceAtomicUnits != "500000000000000000" {
+		t.Errorf("PriceAtomicUnits = %q, want 500000000000000000", got.PriceAtomicUnits)
 	}
 }
 
