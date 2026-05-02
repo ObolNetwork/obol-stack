@@ -278,8 +278,50 @@ func TestSellDemo_Flags(t *testing.T) {
 	flags := flagMap(demo)
 
 	requireFlags(t, flags, "wallet", "chain", "token", "price", "name")
-	assertStringDefault(t, flags, "chain", "base")
-	assertStringDefault(t, flags, "token", "USDC")
+	// chain and token deliberately have no flag-level defaults so the action
+	// can apply per-type defaults from demoTypes (e.g. hello → OBOL/ethereum,
+	// quant → USDC/base-sepolia).
+	assertStringDefault(t, flags, "chain", "")
+	assertStringDefault(t, flags, "token", "")
+}
+
+// TestDemoTypes_PerTypeDefaults locks in the canonical defaults for each demo
+// type. These are the prices/chains/tokens users see when running `obol sell
+// demo` with no flags — changing them changes onboarding behavior.
+func TestDemoTypes_PerTypeDefaults(t *testing.T) {
+	tests := []struct {
+		demo  string
+		chain string
+		token string
+		price string
+	}{
+		{"hello", "ethereum", "OBOL", "1"},
+		{"blocks", "base-sepolia", "USDC", "0.0001"},
+		{"quant", "base-sepolia", "USDC", "0.01"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.demo, func(t *testing.T) {
+			spec, ok := demoTypes[tt.demo]
+			if !ok {
+				t.Fatalf("demoTypes[%q] missing", tt.demo)
+			}
+			if spec.DefaultChain != tt.chain {
+				t.Errorf("DefaultChain = %q, want %q", spec.DefaultChain, tt.chain)
+			}
+			if spec.DefaultToken != tt.token {
+				t.Errorf("DefaultToken = %q, want %q", spec.DefaultToken, tt.token)
+			}
+			if spec.Price != tt.price {
+				t.Errorf("Price = %q, want %q", spec.Price, tt.price)
+			}
+		})
+	}
+
+	// The bare `obol sell demo` (no args) defaults to hello — onboarding's
+	// canonical "earn 1 OBOL on mainnet" experience.
+	if defaultDemoType != "hello" {
+		t.Errorf("defaultDemoType = %q, want hello", defaultDemoType)
+	}
 }
 
 func TestSellStop_Structure(t *testing.T) {
@@ -460,10 +502,10 @@ func TestBuildDemoServiceOffer_OBOLIncludesAssetBlock(t *testing.T) {
 		EIP712Version:  "1",
 	}
 	manifest := buildDemoServiceOffer(
-		"demo-oracle", "demo", "ethereum",
+		"demo-quant", "demo", "ethereum",
 		"0x2222222222222222222222222222222222222222",
 		"0.001",
-		demoSpec{Type: "oracle", Description: "chain analysis"},
+		demoSpec{Type: "quant", Description: "agent driven analysis"},
 		asset,
 	)
 	payment := manifest["spec"].(map[string]any)["payment"].(map[string]any)

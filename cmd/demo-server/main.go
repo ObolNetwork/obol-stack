@@ -3,7 +3,7 @@
 // The demo type is selected by the DEMO_TYPE environment variable:
 //   - hello:  proof-of-payment echo (no external dependencies)
 //   - blocks: basic chain data from eRPC
-//   - oracle: chain analysis with gas statistics from eRPC
+//   - quant:  agent-driven analysis report from eRPC (gas stats, tx volume)
 package main
 
 import (
@@ -31,10 +31,10 @@ func main() {
 		handler = demo.HelloHandler()
 	case "blocks":
 		handler = demo.BlocksHandler(erpcURL)
-	case "oracle":
-		handler = demo.OracleHandler(erpcURL)
+	case "quant":
+		handler = demo.QuantHandler(erpcURL)
 	default:
-		log.Fatalf("unknown DEMO_TYPE: %q (expected hello, blocks, or oracle)", demoType)
+		log.Fatalf("unknown DEMO_TYPE: %q (expected hello, blocks, or quant)", demoType)
 	}
 
 	mux := http.NewServeMux()

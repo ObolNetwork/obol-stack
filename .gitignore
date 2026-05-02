@@ -38,6 +38,10 @@ build/
 node_modules/
 /vendor/
 
+# Next.js build artifacts
+.next/
+next-env.d.ts
+
 # Environment variables
 .env
 *.env

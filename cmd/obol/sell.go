@@ -958,29 +958,39 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 
 // demoSpec describes a built-in demo type with default pricing and config.
 type demoSpec struct {
-	Type        string // DEMO_TYPE env value
-	Price       string // default per-request USDC price
-	Description string // human-readable one-liner
-	NeedsERPC   bool   // whether the demo queries eRPC
+	Type         string // DEMO_TYPE env value
+	Price        string // default per-request price (in DefaultToken units)
+	Description  string // human-readable one-liner
+	NeedsERPC    bool   // whether the demo queries eRPC
+	DefaultChain string // default --chain when not explicitly set
+	DefaultToken string // default --token when not explicitly set
 }
+
+const defaultDemoType = "hello"
 
 var demoTypes = map[string]demoSpec{
 	"hello": {
-		Type:        "hello",
-		Price:       "0.00001",
-		Description: "Proof-of-payment echo service — confirms you got through the x402 gate",
+		Type:         "hello",
+		Price:        "1",
+		Description:  "Proof-of-payment echo service — confirms you got through the x402 gate",
+		DefaultChain: "ethereum",
+		DefaultToken: "OBOL",
 	},
 	"blocks": {
-		Type:        "blocks",
-		Price:       "0.0001",
-		Description: "Live blockchain data from a local full node (block, gas, chain ID)",
-		NeedsERPC:   true,
+		Type:         "blocks",
+		Price:        "0.0001",
+		Description:  "Live blockchain data from a local full node (block, gas, chain ID)",
+		NeedsERPC:    true,
+		DefaultChain: "base-sepolia",
+		DefaultToken: "USDC",
 	},
-	"oracle": {
-		Type:        "oracle",
-		Price:       "0.001",
-		Description: "Chain analysis — gas statistics, tx volume, and utilization across recent blocks",
-		NeedsERPC:   true,
+	"quant": {
+		Type:         "quant",
+		Price:        "0.01",
+		Description:  "Agent driven analysis report",
+		NeedsERPC:    true,
+		DefaultChain: "base-sepolia",
+		DefaultToken: "USDC",
 	},
 }
 
@@ -990,19 +1000,22 @@ func sellDemoCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "demo",
 		Usage:     "Deploy a demo service behind x402 payment gate",
-		ArgsUsage: "<type>",
+		ArgsUsage: "[type]",
 		Description: `Deploys a demo HTTP server and creates a ServiceOffer to payment-gate it.
 The demo proves the full sell→discover→pay→receive flow works end-to-end.
 
 Types:
-  hello    Proof-of-payment echo ($0.00001/req)   — simplest, no dependencies
-  blocks   Live blockchain data   ($0.0001/req)    — queries local full node via eRPC
-  oracle   Chain analysis report  ($0.001/req)     — gas stats, tx volume, utilization
+  hello    Proof-of-payment echo  (default: 1 OBOL on ethereum)
+  blocks   Live blockchain data   (default: 0.0001 USDC on base-sepolia)
+  quant    Agent driven analysis  (default: 0.01 USDC on base-sepolia)
+
+Run with no arguments to deploy the canonical hello demo on mainnet.
 
 Example:
-  obol sell demo hello
-  obol sell demo blocks --chain base-sepolia
-  obol sell demo oracle --token OBOL --chain ethereum --price 0.01`,
+  obol sell demo                                # hello @ 1 OBOL on ethereum
+  obol sell demo blocks                         # blocks @ 0.0001 USDC on base-sepolia
+  obol sell demo quant --price 0.05             # quant @ 0.05 USDC on base-sepolia
+  obol sell demo hello --token USDC --chain base --price 0.001`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "wallet",
@@ -1012,13 +1025,11 @@ Example:
 			},
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Usage: "Payment chain (defaults to demo type's default chain)",
 			},
 			&cli.StringFlag{
 				Name:  "token",
-				Usage: "Payment token (USDC, OBOL)",
-				Value: "USDC",
+				Usage: "Payment token (defaults to demo type's default token)",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -1032,18 +1043,37 @@ Example:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
-			if cmd.NArg() < 1 {
-				return fmt.Errorf("demo type required: obol sell demo <hello|blocks|oracle>")
+			// Stack must be running to deploy a demo (we apply K8s resources).
+			if err := kubectl.EnsureCluster(cfg); err != nil {
+				return fmt.Errorf("Obol Stack is not running. Start it with `obol stack up` first")
 			}
-			typeName := cmd.Args().First()
+
+			// Default to canonical hello demo when no type is given.
+			typeName := defaultDemoType
+			if cmd.NArg() >= 1 {
+				typeName = cmd.Args().First()
+			}
 			spec, ok := demoTypes[typeName]
 			if !ok {
-				return fmt.Errorf("unknown demo type %q — choose: hello, blocks, oracle", typeName)
+				return fmt.Errorf("unknown demo type %q — choose: hello, blocks, quant", typeName)
 			}
 
 			name := cmd.String("name")
 			if name == "" {
 				name = "demo-" + typeName
+			}
+
+			// Apply per-type defaults when the user didn't explicitly set chain/token.
+			// This lets bare `obol sell demo` pick OBOL/ethereum (hello),
+			// `obol sell demo quant` pick USDC/base-sepolia, etc.
+			chain := cmd.String("chain")
+			chainExplicit := cmd.IsSet("chain")
+			if chain == "" {
+				chain = spec.DefaultChain
+			}
+			tokenName := cmd.String("token")
+			if tokenName == "" {
+				tokenName = spec.DefaultToken
 			}
 
 			// Resolve wallet.
@@ -1054,7 +1084,7 @@ Example:
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
 					var inputErr error
-					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					wallet, inputErr = u.Input("Wallet address (token recipient)", "")
 					if inputErr != nil || wallet == "" {
 						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
 					}
@@ -1071,11 +1101,9 @@ Example:
 				price = spec.Price
 			}
 
-			chain := cmd.String("chain")
-
-			// Resolve token metadata. resolveAssetTerms may flip chain to ethereum
+			// Resolve token metadata. resolveAssetTermsFor may flip chain to ethereum
 			// for non-USDC tokens when --chain wasn't explicitly set.
-			assetTerms, err := resolveAssetTerms(cmd, &chain)
+			assetTerms, err := resolveAssetTermsFor(tokenName, &chain, chainExplicit)
 			if err != nil {
 				return err
 			}
@@ -1118,13 +1146,49 @@ Example:
 				u.Successf("Tunnel active: %s", tunnelURL)
 			}
 
-			// 4. Print try-it instructions.
+			// 4. Wait up to 60s for the ServiceOffer to reach Ready=True so the
+			// /skill.md catalog and storefront pick up the offer before we tell
+			// the user to try it. If it times out we still print the try-it
+			// block with a propagation note.
+			ready := waitForOfferReady(cfg, u, name, demoNamespace, 60*time.Second)
+
+			// 5. Print try-it instructions.
 			u.Blank()
-			printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL)
+			printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, ready)
 
 			return nil
 		},
 	}
+}
+
+// waitForOfferReady polls a ServiceOffer's Ready condition for up to `timeout`.
+// Returns true if Ready=True observed, false otherwise. Uses a spinner.
+func waitForOfferReady(cfg *config.Config, u *ui.UI, name, ns string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	bin, kc := kubectl.Paths(cfg)
+
+	check := func() bool {
+		out, err := kubectl.Output(bin, kc, "get", "serviceoffers.obol.org", name, "-n", ns,
+			"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+		return err == nil && strings.TrimSpace(out) == "True"
+	}
+
+	if check() {
+		return true
+	}
+
+	var ready bool
+	_ = u.RunWithSpinner("Waiting for service to be Ready (up to 60s)", func() error {
+		for time.Now().Before(deadline) {
+			if check() {
+				ready = true
+				return nil
+			}
+			time.Sleep(2 * time.Second)
+		}
+		return nil
+	})
+	return ready
 }
 
 // deployDemoBackend creates the demo namespace, Deployment, and Service.
@@ -1321,17 +1385,12 @@ func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec,
 }
 
 // printDemoTryIt prints copy-paste instructions for calling the demo service.
-func printDemoTryIt(u *ui.UI, name, typeName, price, symbol, chain, tunnelURL string) {
+// `ready` indicates whether the ServiceOffer reached Ready=True before the
+// caller's poll deadline; when false, we add a "may take a moment" note.
+func printDemoTryIt(u *ui.UI, name, typeName, price, symbol, chain, tunnelURL string, ready bool) {
 	endpoint := "<tunnel-url>/services/" + name
 	if tunnelURL != "" {
 		endpoint = tunnelURL + "/services/" + name
-	}
-
-	// EIP-3009-native tokens (USDC, EURC) use TransferWithAuthorization.
-	// Other ERC-20s (e.g. OBOL) settle through Permit2.
-	transferMethod := "ERC-3009 TransferWithAuthorization"
-	if symbol != "USDC" && symbol != "EURC" {
-		transferMethod = "Permit2 (ERC-20 with off-chain authorization)"
 	}
 
 	u.Bold("── Try it ──────────────────────────────────────────────")
@@ -1339,42 +1398,45 @@ func printDemoTryIt(u *ui.UI, name, typeName, price, symbol, chain, tunnelURL st
 
 	u.Printf("  Demo %q is live at: %s", typeName, endpoint)
 	u.Printf("  Price: %s %s/request on %s", price, symbol, chain)
+	if !ready {
+		u.Dim("  (still propagating — service may take a moment to appear in /skill.md)")
+	}
 	u.Blank()
 
-	u.Printf("  1. Probe for pricing (see the 402 response):")
+	// 1. Ask your agent — primary, recommended path.
+	u.Printf("  Ask your agent")
 	u.Blank()
-	u.Dim(fmt.Sprintf("     curl -s %s | jq .", endpoint))
+	u.Dim(fmt.Sprintf(`     "Use the buy-x402 skill to call the paid service at %s.`, endpoint))
+	u.Dim(fmt.Sprintf(`      It costs %s %s per request on %s. Report what it returns."`, price, symbol, chain))
 	u.Blank()
 
-	u.Printf("  2. Make a paid request (Python — pip install x402 httpx):")
+	// 2. Or check it out manually — pricing probe + paid request.
+	u.Printf("  Or check it out manually")
 	u.Blank()
-	u.Dim("     import httpx")
-	u.Dim("     from x402.client import x402_client")
+	u.Dim("     Check the API pricing — terminal:")
+	u.Dim(fmt.Sprintf("       curl -s %s | jq .", endpoint))
+	u.Dim("     ...or browser:")
+	u.Dim(fmt.Sprintf("       %s", endpoint))
+	u.Blank()
+	u.Dim("     Pay for the API call (Python — pip install x402 httpx):")
+	u.Dim("       import httpx")
+	u.Dim("       from x402.client import x402_client")
 	u.Dim("")
-	u.Dim("     client = x402_client(")
-	u.Dim("         httpx.Client(),")
-	u.Dim(fmt.Sprintf(`         private_key="<your-private-key>",  # %s holder on %s`, symbol, chain))
-	u.Dim("     )")
-	u.Dim(fmt.Sprintf(`     resp = client.get("%s")`, endpoint))
-	u.Dim("     print(resp.json())")
+	u.Dim(fmt.Sprintf(`       client = x402_client(httpx.Client(), private_key="<%s holder on %s>")`, symbol, chain))
+	u.Dim(fmt.Sprintf(`       resp = client.get("%s")`, endpoint))
+	u.Dim("       print(resp.json())")
 	u.Blank()
 
-	u.Printf("  3. How x402 payment works:")
+	// 3. How x402 works — short prose paragraph (not numbered).
+	u.Printf("  How x402 works")
 	u.Blank()
-	u.Dim("     • A request without payment returns HTTP 402 with pricing details")
-	u.Dim("     • The 402 body contains an 'accepts' array with payment requirements:")
-	u.Dim("       scheme, network (CAIP-2), amount (atomic units), asset, payTo address")
-	u.Dim(fmt.Sprintf("     • The buyer signs a %s off-chain", transferMethod))
-	u.Dim("     • The signed authorization is base64-encoded and sent as X-PAYMENT header")
-	u.Dim("     • The x402 facilitator verifies the signature and settles on-chain")
-	u.Dim("     • See https://www.x402.org for the full protocol specification")
-	u.Blank()
-
-	u.Printf("  4. Ask your AI agent:")
-	u.Blank()
-	u.Dim(fmt.Sprintf(`     "Call the paid service at %s`, endpoint))
-	u.Dim(fmt.Sprintf(`      using x402 payment. It costs %s %s per request on %s.`, price, symbol, chain))
-	u.Dim(`      Report what it returns."`)
+	u.Dim("     A request without payment returns HTTP 402 with the price and a")
+	u.Dim("     payment recipe. The buyer (or library) signs an off-chain")
+	u.Dim("     authorization, retries the request with an X-PAYMENT header, and")
+	u.Dim("     the seller's facilitator settles on-chain. No gas needed — the")
+	u.Dim("     seller covers settlement. Useful for: data feeds, AI inference,")
+	u.Dim("     subscriptions, digital purchases, and agent-to-agent commerce.")
+	u.Dim("     Spec: https://www.x402.org")
 	u.Blank()
 
 	u.Bold("─────────────────────────────────────────────────────────")
@@ -2741,7 +2803,14 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 }
 
 func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms, error) {
-	tokenName := strings.ToUpper(strings.TrimSpace(cmd.String("token")))
+	return resolveAssetTermsFor(strings.TrimSpace(cmd.String("token")), chainName, cmd.IsSet("chain"))
+}
+
+// resolveAssetTermsFor is the cmd-free core of resolveAssetTerms — takes the
+// already-resolved token and chain explicitly. Used by sell demo where chain
+// and token come from per-type defaults rather than CLI flags.
+func resolveAssetTermsFor(tokenName string, chainName *string, chainExplicit bool) (schemas.AssetTerms, error) {
+	tokenName = strings.ToUpper(tokenName)
 
 	// USDC = chain default — no asset override needed.
 	if tokenName == "USDC" {
@@ -2752,11 +2821,11 @@ func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms,
 		return schemas.AssetTerms{}, fmt.Errorf("internal error: chain name pointer is nil")
 	}
 
-	// For non-default tokens, default to ethereum when --chain is not explicit.
-	if !cmd.IsSet("chain") {
+	// For non-default tokens, default to ethereum when chain is not explicit.
+	if !chainExplicit {
 		if envChain := strings.TrimSpace(os.Getenv("OBOL_TOKEN_CHAIN")); envChain != "" {
 			*chainName = envChain
-		} else {
+		} else if *chainName == "" {
 			*chainName = "ethereum"
 		}
 	}
