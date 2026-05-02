@@ -257,7 +257,7 @@ func TestServiceOfferStatusLines(t *testing.T) {
 			},
 		},
 	}
-	lines := serviceOfferStatusLines("llm", "demo", offer)
+	lines := serviceOfferStatusLines("llm", "demo", offer, "")
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"ServiceOffer:    llm/demo",
@@ -268,6 +268,47 @@ func TestServiceOfferStatusLines(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("status lines missing %q\n%s", want, joined)
 		}
+	}
+}
+
+// TestServiceOfferStatusLines_FullURL verifies that when the tunnel URL is
+// passed as baseURL, the Endpoint line shows the full https://… URL buyers
+// would actually hit (not just the path). Trailing slashes on the base URL
+// must not produce double-slashes.
+func TestServiceOfferStatusLines_FullURL(t *testing.T) {
+	offer := monetizeapi.ServiceOffer{
+		Status: monetizeapi.ServiceOfferStatus{
+			Endpoint: "/services/demo-hello",
+		},
+	}
+	tests := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{
+			name:    "with tunnel URL",
+			baseURL: "https://records-vast-insert-gear.trycloudflare.com",
+			want:    "Endpoint:        https://records-vast-insert-gear.trycloudflare.com/services/demo-hello",
+		},
+		{
+			name:    "trailing slash trimmed",
+			baseURL: "https://records-vast-insert-gear.trycloudflare.com/",
+			want:    "Endpoint:        https://records-vast-insert-gear.trycloudflare.com/services/demo-hello",
+		},
+		{
+			name:    "no tunnel URL falls back to path",
+			baseURL: "",
+			want:    "Endpoint:        /services/demo-hello",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			joined := strings.Join(serviceOfferStatusLines("demo", "demo-hello", offer, tt.baseURL), "\n")
+			if !strings.Contains(joined, tt.want) {
+				t.Errorf("expected %q in:\n%s", tt.want, joined)
+			}
+		})
 	}
 }
 

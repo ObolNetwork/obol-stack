@@ -930,10 +930,14 @@ func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistration
 	return reg, true, nil
 }
 
-func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOffer) []string {
+func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOffer, baseURL string) []string {
+	endpoint := valueOrNone(offer.Status.Endpoint)
+	if baseURL != "" && offer.Status.Endpoint != "" {
+		endpoint = strings.TrimRight(baseURL, "/") + offer.Status.Endpoint
+	}
 	lines := []string{
 		fmt.Sprintf("ServiceOffer:    %s/%s", namespace, name),
-		fmt.Sprintf("Endpoint:        %s", valueOrNone(offer.Status.Endpoint)),
+		fmt.Sprintf("Endpoint:        %s", endpoint),
 		fmt.Sprintf("Agent ID:        %s", valueOrNone(offer.Status.AgentID)),
 		fmt.Sprintf("Registration Tx: %s", valueOrNone(offer.Status.RegistrationTxHash)),
 		"",
@@ -1534,7 +1538,11 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 					return fmt.Errorf("parse ServiceOffer: %w", err)
 				}
 
-				for _, line := range serviceOfferStatusLines(ns, name, offer) {
+				// Best-effort: pull the public tunnel URL so the Endpoint line
+				// shows the full URL buyers should hit, not just the path.
+				baseURL, _ := tunnel.GetTunnelURL(cfg)
+
+				for _, line := range serviceOfferStatusLines(ns, name, offer, baseURL) {
 					if line == "" {
 						u.Blank()
 						continue
