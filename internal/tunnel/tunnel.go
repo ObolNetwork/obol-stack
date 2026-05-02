@@ -284,7 +284,15 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 	return WaitReady(cfg, u)
 }
 
-// Restart restarts the cloudflared deployment.
+// Restart restarts the cloudflared deployment and propagates the new tunnel
+// URL to dependent resources (obol-stack-config ConfigMap, agent overlay,
+// storefront HTTPRoute hostname pin). Quick tunnels get a new URL on every
+// restart, so dependents must be refreshed or sell flows break:
+//   - skill.md / services.json embed the stale base URL until the controller
+//     observes the ConfigMap change
+//   - the storefront HTTPRoute is hostname-pinned; without an update it points
+//     at the old tunnel hostname and traffic to the new hostname's `/` falls
+//     through to the frontend catch-all
 func Restart(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -306,9 +314,37 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to restart tunnel: %w", err)
 	}
 
+	// Wait for the rollout to complete BEFORE asking for the URL. Otherwise
+	// WaitReady's fast path may pick up the OLD pod's logs (still running
+	// during the rolling update) and return the stale URL.
+	rolloutCmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"rollout", "status", "deployment/cloudflared",
+		"-n", tunnelNamespace,
+		"--timeout=120s",
+	)
+	if err := u.Exec(ui.ExecConfig{
+		Name: "Waiting for new cloudflared pod",
+		Cmd:  rolloutCmd,
+	}); err != nil {
+		return fmt.Errorf("rollout did not complete: %w", err)
+	}
+
+	// Capture the new URL and update everything that needs the base URL.
+	// WaitReady also calls InjectBaseURL + SyncTunnelConfigMap.
+	newURL, err := WaitReady(cfg, u)
+	if err != nil {
+		return fmt.Errorf("tunnel restarted but new URL not captured: %w", err)
+	}
+
+	// Refresh the storefront HTTPRoute (hostname-pinned to the tunnel domain).
+	if err := CreateStorefront(cfg, newURL); err != nil {
+		u.Warnf("could not refresh storefront for new URL: %v", err)
+	}
+
 	u.Blank()
-	u.Print("Tunnel restarting...")
-	u.Print("Run 'obol tunnel status' to see the URL once ready (may take 10-30 seconds).")
+	u.Successf("Tunnel restarted: %s", newURL)
+	u.Dim("  /skill.md, /api/services.json, and the storefront now reflect the new URL.")
 
 	return nil
 }
