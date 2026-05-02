@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// TestOracleHandler_ChainIDFailure verifies that a failing eth_chainId call is
+// TestQuantHandler_ChainIDFailure verifies that a failing eth_chainId call is
 // captured in the "errors" array but does not short-circuit the handler —
 // downstream computations (recentBlocks, gasAnalysis, etc.) should still run.
-func TestOracleHandler_ChainIDFailure(t *testing.T) {
+func TestQuantHandler_ChainIDFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Method string `json:"method"`
@@ -33,7 +33,7 @@ func TestOracleHandler_ChainIDFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	handler := OracleHandler(srv.URL)
+	handler := QuantHandler(srv.URL)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
@@ -75,11 +75,11 @@ func TestOracleHandler_ChainIDFailure(t *testing.T) {
 	}
 }
 
-// TestOracleHandler_PerBlockFetchError exercises the "continue" branch inside
+// TestQuantHandler_PerBlockFetchError exercises the "continue" branch inside
 // the per-block loop: some block fetches succeed, one returns an RPC error.
 // The successful blocks must still be included; the failed block must show up
 // in errors[].
-func TestOracleHandler_PerBlockFetchError(t *testing.T) {
+func TestQuantHandler_PerBlockFetchError(t *testing.T) {
 	var blockCallCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -108,7 +108,7 @@ func TestOracleHandler_PerBlockFetchError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	handler := OracleHandler(srv.URL)
+	handler := QuantHandler(srv.URL)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
@@ -147,10 +147,10 @@ func TestOracleHandler_PerBlockFetchError(t *testing.T) {
 	}
 }
 
-// TestOracleHandler_MalformedBlockJSON exercises the json.Unmarshal error
+// TestQuantHandler_MalformedBlockJSON exercises the json.Unmarshal error
 // branch in the per-block loop: the RPC returns valid JSON-RPC framing but
 // the inner "result" field doesn't match the expected block struct shape.
-func TestOracleHandler_MalformedBlockJSON(t *testing.T) {
+func TestQuantHandler_MalformedBlockJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Method string `json:"method"`
@@ -172,7 +172,7 @@ func TestOracleHandler_MalformedBlockJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	handler := OracleHandler(srv.URL)
+	handler := QuantHandler(srv.URL)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)

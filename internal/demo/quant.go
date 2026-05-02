@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// OracleHandler returns a handler that performs chain analysis using eRPC data.
+// QuantHandler returns a handler that performs chain analysis using eRPC data.
 // Unlike a simple RPC passthrough, it fetches multiple data points, computes
 // derived metrics (gas statistics, tx volume), and formats a structured report.
-func OracleHandler(erpcURL string) http.HandlerFunc {
+func QuantHandler(erpcURL string) http.HandlerFunc {
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +30,7 @@ func OracleHandler(erpcURL string) http.HandlerFunc {
 		blockNumRaw, err := rpcCall(client, erpcURL, "eth_blockNumber", "[]")
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("blockNumber: %v", err))
-			respond(w, r, "oracle", map[string]any{"errors": errs})
+			respond(w, r, "quant", map[string]any{"errors": errs})
 			return
 		}
 		report["latestBlockNumber"] = blockNumRaw
@@ -124,7 +124,7 @@ func OracleHandler(erpcURL string) http.HandlerFunc {
 			report["errors"] = errs
 		}
 
-		respond(w, r, "oracle", report)
+		respond(w, r, "quant", report)
 	}
 }
 

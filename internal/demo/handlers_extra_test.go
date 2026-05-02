@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// TestOracleHandler_BlockNumberFailureEarlyReturn verifies that when
+// TestQuantHandler_BlockNumberFailureEarlyReturn verifies that when
 // eth_blockNumber fails the handler returns an errors-only body and does
 // NOT attempt to compute recentBlocks/gasAnalysis/txVolume from a zero
 // blockNum — that would produce nonsense output for paying customers.
-func TestOracleHandler_BlockNumberFailureEarlyReturn(t *testing.T) {
+func TestQuantHandler_BlockNumberFailureEarlyReturn(t *testing.T) {
 	var blockNumberCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -35,7 +35,7 @@ func TestOracleHandler_BlockNumberFailureEarlyReturn(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	handler := OracleHandler(srv.URL)
+	handler := QuantHandler(srv.URL)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)

@@ -3,27 +3,24 @@
 import { useState } from "react";
 import type { Service } from "@/types";
 
-const typeLabels: Record<string, string> = {
-  inference: "Inference",
-  http: "HTTP Service",
-  "fine-tuning": "Fine-tuning",
+const typeColors: Record<string, string> = {
+  inference: "bg-obol-green/15 text-obol-green border border-obol-green/30",
+  http: "bg-bg03 text-text-body border border-stroke",
+  "fine-tuning": "bg-amber/15 text-amber border border-amber/30",
 };
 
-const typeColors: Record<string, string> = {
-  inference: "bg-obol-green/20 text-obol-green",
-  http: "bg-obol-blue/40 text-obol-text",
-  "fine-tuning": "bg-amber-900/30 text-obol-amber",
-};
+type Tab = "agent" | "other-ai" | "code";
 
 export function ServiceCard({ service }: { service: Service }) {
-  const [showSnippet, setShowSnippet] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("agent");
 
   return (
-    <div className="rounded-lg border border-obol-border bg-obol-bg-card p-5 transition-colors hover:border-obol-green/40">
+    <div className="rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="text-lg font-semibold text-obol-text truncate">
+            <h3 className="text-lg font-semibold text-text-light truncate">
               {service.name}
             </h3>
             {service.isDemo && (
@@ -32,34 +29,32 @@ export function ServiceCard({ service }: { service: Service }) {
               </span>
             )}
           </div>
-          <p className="text-sm text-obol-muted mb-3">{service.description}</p>
+          <p className="text-sm text-text-body mb-3">{service.description}</p>
         </div>
         <span
           className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${typeColors[service.type] ?? typeColors.http}`}
         >
-          {typeLabels[service.type] ?? service.type}
+          {service.type}
         </span>
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">
         <div>
-          <span className="text-obol-muted">Price</span>
-          <p className="text-obol-text font-mono text-xs">{service.price}</p>
+          <span className="text-text-muted">Price</span>
+          <p className="text-text-light font-mono text-xs">{service.price}</p>
         </div>
         <div>
-          <span className="text-obol-muted">Network</span>
-          <p className="text-obol-text font-mono text-xs">{service.network}</p>
+          <span className="text-text-muted">Network</span>
+          <p className="text-text-light font-mono text-xs">{service.network}</p>
         </div>
         {service.model && (
           <div className="col-span-2">
-            <span className="text-obol-muted">Model</span>
-            <p className="text-obol-text font-mono text-xs">
-              {service.model}
-            </p>
+            <span className="text-text-muted">Model</span>
+            <p className="text-text-light font-mono text-xs">{service.model}</p>
           </div>
         )}
         <div className="col-span-2">
-          <span className="text-obol-muted">Endpoint</span>
+          <span className="text-text-muted">Endpoint</span>
           <p className="text-obol-green font-mono text-xs break-all">
             {service.endpoint}
           </p>
@@ -67,41 +62,154 @@ export function ServiceCard({ service }: { service: Service }) {
       </div>
 
       <button
-        onClick={() => setShowSnippet(!showSnippet)}
-        className="text-xs text-obol-green hover:text-obol-green/80 font-medium cursor-pointer"
+        onClick={() => setOpen(!open)}
+        className="text-sm text-obol-green hover:text-obol-green/80 font-medium cursor-pointer"
       >
-        {showSnippet ? "Hide" : "Show"} code snippet
+        {open ? "Hide options ↑" : "Buy this service ↓"}
       </button>
 
-      {showSnippet && (
-        <div className="mt-3 space-y-3">
-          <SnippetBlock
-            title="Probe pricing (curl)"
-            code={`curl -s ${service.endpoint} | jq .`}
-          />
-          <SnippetBlock
-            title="Paid request (Python)"
-            code={`import httpx
-from x402.client import x402_client
+      {open && (
+        <div className="mt-4 space-y-4">
+          <TabBar tab={tab} onChange={setTab} />
 
-client = x402_client(
-    httpx.Client(),
-    private_key="<your-private-key>",
-)
-resp = client.get("${service.endpoint}")
-print(resp.json())`}
-          />
-          <SnippetBlock
-            title="Agent prompt"
-            code={`Call the paid service at ${service.endpoint} using x402 payment. It costs ${service.price} on ${service.network}. Report what it returns.`}
-          />
+          {tab === "agent" && <BuyViaObolAgent service={service} />}
+          {tab === "other-ai" && <BuyViaOtherAgent service={service} />}
+          {tab === "code" && <BuyWithCode service={service} />}
         </div>
       )}
     </div>
   );
 }
 
-function SnippetBlock({ title, code }: { title: string; code: string }) {
+function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  const tabs: { id: Tab; label: string }[] = [
+    { id: "agent", label: "Ask your Obol agent" },
+    { id: "other-ai", label: "Ask another AI agent" },
+    { id: "code", label: "Buy with code" },
+  ];
+  return (
+    <div className="flex gap-1 border-b border-stroke">
+      {tabs.map((t) => {
+        const active = t.id === tab;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors cursor-pointer ${
+              active
+                ? "border-obol-green text-obol-green"
+                : "border-transparent text-text-body hover:text-text-light"
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BuyViaObolAgent({ service }: { service: Service }) {
+  const prompt = `Use the buy-x402 skill to call the paid service at ${service.endpoint}. It costs ${service.price} on ${service.network}. Report what it returns.`;
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-text-muted">
+        Paste this into your Obol agent. The agent uses the built-in{" "}
+        <code className="font-mono text-obol-green">buy-x402</code> skill to
+        sign and send the payment.
+      </p>
+      <Snippet code={prompt} />
+    </div>
+  );
+}
+
+function BuyViaOtherAgent({ service }: { service: Service }) {
+  const prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-text-muted">
+        Don&apos;t have an Obol agent yet? Any AI agent can purchase this
+        service after installing the{" "}
+        <code className="font-mono text-obol-green">run-obol-stack</code> skill
+        from{" "}
+        <a
+          href="https://github.com/ObolNetwork/skills"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-obol-green hover:underline"
+        >
+          ObolNetwork/skills
+        </a>
+        . The skill bootstraps the stack and asks for your permission before
+        spending.
+      </p>
+      <Snippet code={prompt} />
+    </div>
+  );
+}
+
+function BuyWithCode({ service }: { service: Service }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h4 className="text-xs font-semibold text-text-light mb-2">
+          1. Check the API pricing
+        </h4>
+        <div className="space-y-2">
+          <Snippet code={`curl -s ${service.endpoint} | jq .`} />
+          <a
+            href={service.endpoint}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-obol-green hover:underline"
+          >
+            ↗ View in browser
+          </a>
+        </div>
+      </div>
+
+      <div>
+        <h4 className="text-xs font-semibold text-text-light mb-2">
+          2. Pay for the service
+        </h4>
+        <LanguageTabs service={service} />
+      </div>
+    </div>
+  );
+}
+
+function LanguageTabs({ service }: { service: Service }) {
+  // Layout reserves a language selector slot for future JS/TS additions —
+  // Python is the only currently-supported snippet.
+  const [lang] = useState<"python">("python");
+
+  const tokenName = service.network === "ethereum" ? "OBOL" : "USDC";
+  const python = `import httpx
+from x402.client import x402_client
+
+client = x402_client(
+    httpx.Client(),
+    private_key="<your-${tokenName}-holder-private-key>",
+)
+resp = client.get("${service.endpoint}")
+print(resp.json())`;
+
+  return (
+    <div>
+      <div className="flex gap-1 mb-2 text-xs">
+        <span className="px-2 py-1 rounded bg-bg03 text-obol-green border border-obol-green/30">
+          Python
+        </span>
+        <span className="px-2 py-1 rounded text-text-muted" title="Coming soon">
+          JS/TS (soon)
+        </span>
+      </div>
+      {lang === "python" && <Snippet code={python} />}
+    </div>
+  );
+}
+
+function Snippet({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -111,19 +219,16 @@ function SnippetBlock({ title, code }: { title: string; code: string }) {
   };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-obol-muted">{title}</span>
-        <button
-          onClick={copy}
-          className="text-xs text-obol-muted hover:text-obol-green cursor-pointer"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <pre className="rounded bg-obol-bg p-3 text-xs font-mono text-obol-text overflow-x-auto border border-obol-border">
+    <div className="relative">
+      <pre className="rounded bg-bg01 p-3 pr-12 text-xs font-mono text-text-light overflow-x-auto border border-stroke whitespace-pre-wrap">
         {code}
       </pre>
+      <button
+        onClick={copy}
+        className="absolute top-2 right-2 text-xs text-text-muted hover:text-obol-green cursor-pointer"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
     </div>
   );
 }

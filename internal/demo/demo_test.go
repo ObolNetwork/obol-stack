@@ -150,7 +150,7 @@ func TestBlocksHandler_MockRPC(t *testing.T) {
 	}
 }
 
-func TestOracleHandler_MockRPC(t *testing.T) {
+func TestQuantHandler_MockRPC(t *testing.T) {
 	callCount := 0
 	mockRPC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -180,7 +180,7 @@ func TestOracleHandler_MockRPC(t *testing.T) {
 	}))
 	defer mockRPC.Close()
 
-	handler := OracleHandler(mockRPC.URL)
+	handler := QuantHandler(mockRPC.URL)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
@@ -194,8 +194,8 @@ func TestOracleHandler_MockRPC(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Demo != "oracle" {
-		t.Errorf("expected demo=oracle, got %q", resp.Demo)
+	if resp.Demo != "quant" {
+		t.Errorf("expected demo=quant, got %q", resp.Demo)
 	}
 
 	data, ok := resp.Data.(map[string]any)

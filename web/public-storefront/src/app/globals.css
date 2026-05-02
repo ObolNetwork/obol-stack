@@ -1,23 +1,41 @@
 @import "tailwindcss";
 
 @theme {
-  --color-obol-bg: #091011;
-  --color-obol-bg-card: #0f1c1e;
-  --color-obol-bg-hover: #162a2e;
-  --color-obol-border: #1e3a3f;
+  /* Background scale (dark theme) — mirrors obol-ui stitches.config.ts */
+  --color-bg01: #091011;
+  --color-bg02: #111f22;
+  --color-bg03: #182d32;
+  --color-bg04: #243d42;
+  --color-bg05: #2d4d53;
+
+  /* Brand */
   --color-obol-green: #2fe4ab;
   --color-obol-green-dim: #1a7a5c;
   --color-obol-blue: #162a40;
-  --color-obol-text: #e0e8ea;
-  --color-obol-muted: #7a9a9f;
-  --color-obol-amber: #e89e30;
-  --color-obol-red: #dd603c;
+  --color-obol-purple: #9167e4;
 
-  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+  /* Text */
+  --color-text-light: #d9eef3;
+  --color-text-body: #9cc2c9;
+  --color-text-muted: #475e64;
+
+  /* Stroke / border */
+  --color-stroke: #1e3a3f;
+
+  /* Status */
+  --color-amber: #e89e30;
+  --color-red: #dd603c;
+
+  --font-sans: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 }
 
 body {
-  background-color: var(--color-obol-bg);
-  color: var(--color-obol-text);
+  background-color: var(--color-bg01);
+  color: var(--color-text-light);
+}
+
+/* Subtle scrollbars on dark bg */
+* {
+  scrollbar-color: var(--color-bg04) var(--color-bg01);
 }
