@@ -227,14 +227,22 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					if target.Runtime != agentruntime.OpenClaw {
-						return errors.New("Hermes wallet backup needs a Hermes-native product decision; use OpenClaw backup only for OpenClaw instances")
+					switch target.Runtime {
+					case agentruntime.Hermes:
+						return hermes.BackupWalletCmd(cfg, target.ID, hermes.BackupWalletOptions{
+							Output:      cmd.String("output"),
+							Passphrase:  cmd.String("passphrase"),
+							HasPassFlag: cmd.IsSet("passphrase"),
+						}, getUI(cmd))
+					case agentruntime.OpenClaw:
+						return openclaw.BackupWalletCmd(cfg, target.ID, openclaw.BackupWalletOptions{
+							Output:      cmd.String("output"),
+							Passphrase:  cmd.String("passphrase"),
+							HasPassFlag: cmd.IsSet("passphrase"),
+						}, getUI(cmd))
+					default:
+						return fmt.Errorf("unsupported runtime %q", target.Runtime)
 					}
-					return openclaw.BackupWalletCmd(cfg, target.ID, openclaw.BackupWalletOptions{
-						Output:      cmd.String("output"),
-						Passphrase:  cmd.String("passphrase"),
-						HasPassFlag: cmd.IsSet("passphrase"),
-					}, getUI(cmd))
 				},
 			},
 			{
@@ -266,15 +274,25 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
-					if target.Runtime != agentruntime.OpenClaw {
-						return errors.New("Hermes wallet restore needs a Hermes-native product decision; use OpenClaw restore only for OpenClaw instances")
+					switch target.Runtime {
+					case agentruntime.Hermes:
+						return hermes.RestoreWalletCmd(cfg, target.ID, hermes.RestoreWalletOptions{
+							Input:        cmd.String("input"),
+							Passphrase:   cmd.String("passphrase"),
+							HasPassFlag:  cmd.IsSet("passphrase"),
+							Force:        cmd.Bool("force"),
+							ApplyCluster: true,
+						}, getUI(cmd))
+					case agentruntime.OpenClaw:
+						return openclaw.RestoreWalletCmd(cfg, target.ID, openclaw.RestoreWalletOptions{
+							Input:       cmd.String("input"),
+							Passphrase:  cmd.String("passphrase"),
+							HasPassFlag: cmd.IsSet("passphrase"),
+							Force:       cmd.Bool("force"),
+						}, getUI(cmd))
+					default:
+						return fmt.Errorf("unsupported runtime %q", target.Runtime)
 					}
-					return openclaw.RestoreWalletCmd(cfg, target.ID, openclaw.RestoreWalletOptions{
-						Input:       cmd.String("input"),
-						Passphrase:  cmd.String("passphrase"),
-						HasPassFlag: cmd.IsSet("passphrase"),
-						Force:       cmd.Bool("force"),
-					}, getUI(cmd))
 				},
 			},
 		},
