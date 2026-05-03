@@ -362,6 +362,18 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
 	}
 
+	// Release runtime field ownership of litellm-config.data.config.yaml so the
+	// upcoming helm upgrade can reclaim it without an SSA conflict. Without
+	// this step, the second `obol stack up` after autoConfigureLLM/restore has
+	// claimed the field via SSA (manager=helm, op=Apply) fails with
+	// "conflict with helm using v1: .data.config.yaml" because helm registers
+	// a separate managedFields entry (manager=helm, op=Update) for the same
+	// field. The data is already snapshotted in previousLiteLLMConfig and gets
+	// re-applied by restoreLiteLLMConfig after helm runs.
+	if err := releaseLiteLLMConfigOwnership(cfg, kubeconfigPath); err != nil {
+		u.Warnf("Failed to release LiteLLM config field ownership: %v", err)
+	}
+
 	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
@@ -905,6 +917,37 @@ func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (st
 		return "", nil
 	}
 	return raw, nil
+}
+
+// releaseLiteLLMConfigOwnership strips managedFields from the litellm-config
+// ConfigMap so the next helm upgrade can claim ownership of every field
+// without an SSA conflict. Helm tracks release ownership via the
+// meta.helm.sh/release-name annotation, not managedFields, so clearing
+// managedFields does not detach the resource from its release.
+//
+// The single empty entry [{}] is the documented apiserver idiom for clearing
+// all field-ownership claims on a resource. See:
+// https://kubernetes.io/docs/reference/using-api/server-side-apply/#clearing-managedfields
+func releaseLiteLLMConfigOwnership(cfg *config.Config, kubeconfigPath string) error {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	// Skip if the configmap doesn't exist (first install).
+	if _, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "name"); err != nil {
+		return nil
+	}
+
+	cmd := exec.Command(kubectlBinary,
+		"patch", "configmap", "litellm-config",
+		"-n", "llm",
+		"--type=merge",
+		"--patch", `{"metadata":{"managedFields":[{}]}}`,
+	)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("kubectl patch managedFields: %w\n%s", err, string(out))
+	}
+	return nil
 }
 
 func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
