@@ -26,6 +26,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
@@ -1270,7 +1271,7 @@ func buildDemoResources(name string, spec demoSpec, paymentChain string) []map[s
 						"containers": []map[string]any{
 							{
 								"name":            "demo",
-								"image":           "ghcr.io/obolnetwork/demo-server:latest",
+								"image":           images.Resolve("ghcr.io/obolnetwork/demo-server"),
 								"imagePullPolicy": "IfNotPresent",
 								"env":             env,
 								"ports": []map[string]any{

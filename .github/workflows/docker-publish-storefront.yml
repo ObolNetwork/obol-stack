@@ -51,7 +51,15 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
+            # Long SHA: needed by the security-scan step which references
+            # ${{ github.sha }} (40-char). Without it Trivy fails with
+            # MANIFEST_UNKNOWN. Same bug the x402 workflow used to have.
+            type=sha,format=long,prefix=
+            # Short SHA: matches the obol binary's version.GitCommit (set via
+            # ldflags from `git rev-parse --short HEAD`). internal/images.Resolve
+            # uses it to commit-pin the storefront deployment so binary upgrades
+            # actually roll the pod.
+            type=sha,format=short,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
             org.opencontainers.image.title=obol-stack-public-storefront

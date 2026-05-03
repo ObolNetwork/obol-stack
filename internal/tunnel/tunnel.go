@@ -15,6 +15,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -532,7 +533,7 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 						"containers": []map[string]any{
 								{
 									"name":            "storefront",
-									"image":           "ghcr.io/obolnetwork/obol-stack-public-storefront:latest",
+									"image":           images.Resolve("ghcr.io/obolnetwork/obol-stack-public-storefront"),
 									"imagePullPolicy": "IfNotPresent",
 									"ports": []map[string]any{
 										{"containerPort": 3000, "name": "http"},
