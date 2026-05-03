@@ -243,6 +243,9 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
+	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
+	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
+
 	u.Blank()
 	u.Success("Hermes installed successfully!")
 	u.Detail("Namespace", agentruntime.Namespace(agentruntime.Hermes, id))
