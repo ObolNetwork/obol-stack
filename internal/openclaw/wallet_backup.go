@@ -2,9 +2,6 @@ package openclaw
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,31 +14,16 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
-	"golang.org/x/crypto/scrypt"
-	"gopkg.in/yaml.v3"
+	"github.com/ObolNetwork/obol-stack/internal/walletbackup"
 )
 
-// backupMagic is the first 4 bytes of an encrypted backup file.
-var backupMagic = []byte("OBOL")
+// BackupFile is re-exported from walletbackup for backwards-compatibility
+// with existing OpenClaw callers. Both runtimes share the same on-disk shape.
+type BackupFile = walletbackup.File
 
-const backupVersion byte = 1
-
-// BackupFile is the JSON structure of a wallet backup.
-type BackupFile struct {
-	Version  int            `json:"version"`
-	Instance string         `json:"instance"`
-	Wallets  []BackupWallet `json:"wallets"`
-}
-
-// BackupWallet holds a single wallet's backup data.
-type BackupWallet struct {
-	Address          string          `json:"address"`
-	PublicKey        string          `json:"publicKey"`
-	KeystoreUUID     string          `json:"keystoreUUID"`
-	CreatedAt        string          `json:"createdAt"`
-	Keystore         json.RawMessage `json:"keystore"`
-	KeystorePassword string          `json:"keystorePassword"`
-}
+// BackupWallet is re-exported from walletbackup so the OpenClaw subcommand
+// surface stays unchanged.
+type BackupWallet = walletbackup.Wallet
 
 // BackupWalletOptions holds options for the backup command.
 type BackupWalletOptions struct {
@@ -90,76 +72,55 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 		return fmt.Errorf("failed to read keystore password: %w", err)
 	}
 
-	// Build backup structure.
-	backup := BackupFile{
-		Version:  1,
+	backup := &walletbackup.File{
+		Version:  walletbackup.Version,
 		Instance: id,
-		Wallets: []BackupWallet{
-			{
-				Address:          wallet.Address,
-				PublicKey:        wallet.PublicKey,
-				KeystoreUUID:     wallet.KeystoreUUID,
-				CreatedAt:        wallet.CreatedAt,
-				Keystore:         json.RawMessage(keystoreData),
-				KeystorePassword: password,
-			},
-		},
+		Wallets: []walletbackup.Wallet{{
+			Address:          wallet.Address,
+			PublicKey:        wallet.PublicKey,
+			KeystoreUUID:     wallet.KeystoreUUID,
+			CreatedAt:        wallet.CreatedAt,
+			Keystore:         json.RawMessage(keystoreData),
+			KeystorePassword: password,
+		}},
 	}
 
-	backupJSON, err := json.MarshalIndent(backup, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup: %w", err)
-	}
-
-	// Determine passphrase.
-	passphrase, err := resolvePassphrase(opts.Passphrase, opts.HasPassFlag, u)
+	passphrase, err := walletbackup.PromptPassphrase(opts.Passphrase, opts.HasPassFlag, u)
 	if err != nil {
 		return err
 	}
 
-	// Determine output path and write.
+	payload, encrypted, err := walletbackup.Encode(backup, passphrase)
+	if err != nil {
+		return err
+	}
+
 	addrSuffix := wallet.Address
 	if len(addrSuffix) > 8 {
 		addrSuffix = addrSuffix[len(addrSuffix)-8:]
 	}
-
 	outputPath := opts.Output
-	encrypted := passphrase != ""
-
 	if outputPath == "" {
+		ext := "json"
 		if encrypted {
-			outputPath = fmt.Sprintf("obol-wallet-backup-%s.enc", addrSuffix)
-		} else {
-			outputPath = fmt.Sprintf("obol-wallet-backup-%s.json", addrSuffix)
+			ext = "enc"
 		}
+		outputPath = fmt.Sprintf("obol-wallet-backup-%s.%s", addrSuffix, ext)
 	}
 
-	if encrypted {
-		ciphertext, err := encryptBackup(backupJSON, passphrase)
-		if err != nil {
-			return fmt.Errorf("encryption failed: %w", err)
-		}
-
-		if err := os.WriteFile(outputPath, ciphertext, 0o600); err != nil {
-			return fmt.Errorf("failed to write backup: %w", err)
-		}
-	} else {
-		if err := os.WriteFile(outputPath, backupJSON, 0o600); err != nil {
-			return fmt.Errorf("failed to write backup: %w", err)
-		}
+	if err := os.WriteFile(outputPath, payload, 0o600); err != nil {
+		return fmt.Errorf("failed to write backup: %w", err)
 	}
 
 	u.Success("Wallet backup created")
 	u.Detail("Address", wallet.Address)
 	u.Detail("Output", outputPath)
-
 	if encrypted {
 		u.Detail("Encrypted", "yes (AES-256-GCM)")
 	} else {
 		u.Detail("Encrypted", "no")
 		u.Warn("Backup contains unencrypted keystore password — store securely")
 	}
-
 	return nil
 }
 
@@ -204,53 +165,26 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 
 // RestoreWalletCmd restores a wallet from a backup file.
 func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, u *ui.UI) error {
-	// Read backup file.
 	raw, err := os.ReadFile(opts.Input)
 	if err != nil {
 		return fmt.Errorf("failed to read backup file: %w", err)
 	}
 
-	// Detect format and decrypt if needed.
-	var backupJSON []byte
-
-	if isEncryptedBackup(raw) {
-		passphrase := opts.Passphrase
-		if !opts.HasPassFlag {
-			passphrase, err = u.SecretInput("Backup passphrase")
-			if err != nil {
-				return fmt.Errorf("failed to read passphrase: %w", err)
-			}
-		}
-
-		if passphrase == "" {
-			return errors.New("passphrase required for encrypted backup")
-		}
-
-		backupJSON, err = decryptBackup(raw, passphrase)
+	passphrase := opts.Passphrase
+	if walletbackup.IsEncrypted(raw) && !opts.HasPassFlag {
+		passphrase, err = u.SecretInput("Backup passphrase")
 		if err != nil {
-			return fmt.Errorf("decryption failed (wrong passphrase?): %w", err)
+			return fmt.Errorf("failed to read passphrase: %w", err)
 		}
-	} else {
-		backupJSON = raw
 	}
 
-	// Parse backup.
-	var backup BackupFile
-	if err := json.Unmarshal(backupJSON, &backup); err != nil {
-		return fmt.Errorf("invalid backup file: %w", err)
-	}
-
-	if backup.Version != 1 {
-		return fmt.Errorf("unsupported backup version %d (expected 1)", backup.Version)
-	}
-
-	if len(backup.Wallets) == 0 {
-		return errors.New("backup contains no wallets")
+	backup, err := walletbackup.Decode(raw, passphrase)
+	if err != nil {
+		return err
 	}
 
 	w := backup.Wallets[0]
 
-	// Verify deployment dir exists.
 	deployDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deployDir); os.IsNotExist(err) {
 		return fmt.Errorf("instance %q not found — run 'obol openclaw onboard --id %s' first", id, id)
@@ -477,172 +411,34 @@ func keystorePasswordSecretManifest(id, password string) ([]byte, error) {
 	return json.Marshal(manifest)
 }
 
-// resolvePassphrase determines the passphrase via flag or interactive prompt.
+// resolvePassphrase delegates to walletbackup.PromptPassphrase. Kept as a
+// package-private wrapper so existing OpenClaw call sites stay compact.
 func resolvePassphrase(flagValue string, hasFlag bool, u *ui.UI) (string, error) {
-	if hasFlag {
-		return flagValue, nil
-	}
-
-	passphrase, err := u.SecretInput("Backup passphrase (empty for no encryption)")
-	if err != nil {
-		return "", fmt.Errorf("failed to read passphrase: %w", err)
-	}
-
-	if passphrase != "" {
-		confirm, err := u.SecretInput("Confirm passphrase")
-		if err != nil {
-			return "", fmt.Errorf("failed to read confirmation: %w", err)
-		}
-
-		if passphrase != confirm {
-			return "", errors.New("passphrases do not match")
-		}
-	}
-
-	return passphrase, nil
+	return walletbackup.PromptPassphrase(flagValue, hasFlag, u)
 }
 
-// readKeystorePassword extracts the keystore password from values-remote-signer.yaml.
+// readKeystorePassword delegates to walletbackup.ReadKeystorePassword.
 func readKeystorePassword(deployDir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(deployDir, "values-remote-signer.yaml"))
-	if err != nil {
-		return "", err
-	}
-
-	var values struct {
-		KeystorePassword struct {
-			Value string `yaml:"value"`
-		} `yaml:"keystorePassword"`
-	}
-	if err := yaml.Unmarshal(data, &values); err != nil {
-		return "", fmt.Errorf("failed to parse values-remote-signer.yaml: %w", err)
-	}
-
-	if values.KeystorePassword.Value == "" {
-		return "", errors.New("keystorePassword.value not found in values-remote-signer.yaml")
-	}
-
-	return values.KeystorePassword.Value, nil
+	return walletbackup.ReadKeystorePassword(deployDir)
 }
 
-// writeKeystorePassword writes the remote-signer values YAML with the given password.
+// writeKeystorePassword renders the remote-signer values YAML for the given
+// password and writes it under deployDir.
 func writeKeystorePassword(deployDir, password string) error {
 	content := generateRemoteSignerValues(&WalletInfo{Password: password})
-	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o600)
+	return walletbackup.WriteValuesRemoteSigner(deployDir, content)
 }
 
-// encryptBackup encrypts plaintext using AES-256-GCM with a scrypt-derived key.
-// Format: magic(4) || version(1) || salt(32) || nonce(12) || ciphertext+tag
+// Compat shims for tests in this package that exercise the crypto envelope
+// directly. New code should call walletbackup.Encrypt/Decrypt/IsEncrypted.
+func isEncryptedBackup(data []byte) bool { return walletbackup.IsEncrypted(data) }
+
 func encryptBackup(plaintext []byte, passphrase string) ([]byte, error) {
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("salt generation: %w", err)
-	}
-
-	key, err := scrypt.Key([]byte(passphrase), salt, scryptN, scryptR, scryptP, scryptDKLen)
-	if err != nil {
-		return nil, fmt.Errorf("scrypt key derivation: %w", err)
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("gcm: %w", err)
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("nonce generation: %w", err)
-	}
-
-	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
-
-	// Assemble: magic || version || salt || nonce || ciphertext
-	result := make([]byte, 0, len(backupMagic)+1+len(salt)+len(nonce)+len(ciphertext))
-	result = append(result, backupMagic...)
-	result = append(result, backupVersion)
-	result = append(result, salt...)
-	result = append(result, nonce...)
-	result = append(result, ciphertext...)
-
-	return result, nil
+	return walletbackup.Encrypt(plaintext, passphrase)
 }
 
-// decryptBackup decrypts an encrypted backup file.
 func decryptBackup(data []byte, passphrase string) ([]byte, error) {
-	minLen := len(backupMagic) + 1 + 32 + 12 // magic + version + salt + nonce
-	if len(data) < minLen {
-		return nil, errors.New("encrypted file too short")
-	}
-
-	offset := 0
-
-	// Verify magic.
-	if string(data[offset:offset+len(backupMagic)]) != string(backupMagic) {
-		return nil, errors.New("not an encrypted backup file")
-	}
-
-	offset += len(backupMagic)
-
-	// Check version.
-	version := data[offset]
-	offset++
-
-	if version != backupVersion {
-		return nil, fmt.Errorf("unsupported encryption version %d", version)
-	}
-
-	// Extract salt.
-	salt := data[offset : offset+32]
-	offset += 32
-
-	// Derive key.
-	key, err := scrypt.Key([]byte(passphrase), salt, scryptN, scryptR, scryptP, scryptDKLen)
-	if err != nil {
-		return nil, fmt.Errorf("scrypt key derivation: %w", err)
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("gcm: %w", err)
-	}
-
-	// Extract nonce.
-	nonceSize := gcm.NonceSize()
-	if len(data) < offset+nonceSize {
-		return nil, errors.New("encrypted file too short for nonce")
-	}
-
-	nonce := data[offset : offset+nonceSize]
-	offset += nonceSize
-
-	// Decrypt.
-	ciphertext := data[offset:]
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, nil
-}
-
-// isEncryptedBackup checks if data starts with the OBOL magic bytes.
-func isEncryptedBackup(data []byte) bool {
-	if len(data) < len(backupMagic) {
-		return false
-	}
-
-	return string(data[:len(backupMagic)]) == string(backupMagic)
+	return walletbackup.Decrypt(data, passphrase)
 }
 
 // walletAddressesForPurgeWarning returns addresses of wallets that would be lost.
