@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -270,6 +272,74 @@ func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 		return nil, fmt.Errorf("unmarshal wallet metadata: %w", err)
 	}
 	return &wallet, nil
+}
+
+// applyWalletMetadataConfigMap creates or updates a wallet-metadata ConfigMap
+// in the instance namespace. The frontend reads this to display wallet
+// addresses on the agent card. Mirrors the OpenClaw helper at
+// internal/openclaw/wallet.go so the frontend's getWalletMetadata works
+// identically for either runtime. Must be called after helmfile sync (the
+// namespace must exist).
+func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) {
+	wallet, err := ReadWalletMetadata(deploymentDir)
+	if err != nil {
+		return
+	}
+
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+
+	addressesJSON := map[string]any{
+		"instanceId": id,
+		"addresses": []map[string]string{
+			{
+				"address":   wallet.Address,
+				"publicKey": wallet.PublicKey,
+				"createdAt": wallet.CreatedAt,
+				"label":     "hermes-" + id,
+			},
+		},
+		"count": 1,
+	}
+
+	addressesData, err := json.Marshal(addressesJSON)
+	if err != nil {
+		fmt.Printf("Warning: could not marshal wallet metadata: %v\n", err)
+		return
+	}
+
+	manifest := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "wallet-metadata",
+			"namespace": namespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/component":  "remote-signer",
+				"app.kubernetes.io/managed-by": "obol",
+			},
+		},
+		"data": map[string]string{
+			"addresses.json": string(addressesData),
+		},
+	}
+
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		fmt.Printf("Warning: could not marshal ConfigMap: %v\n", err)
+		return
+	}
+
+	cmd := exec.Command(kubectlBinary, "apply", "-f", "-")
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	cmd.Stdin = bytes.NewReader(raw)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: could not apply wallet-metadata ConfigMap: %v\n%s", err, stderr.String())
+	}
 }
 
 func ResolveWalletAddress(cfg *config.Config) (string, error) {
