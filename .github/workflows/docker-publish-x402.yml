@@ -91,6 +91,11 @@ jobs:
             # Previously `type=sha,prefix=` produced the 7-char short SHA,
             # causing Trivy to fail with MANIFEST_UNKNOWN on every run.
             type=sha,format=long,prefix=
+            # Also publish the 7-char short SHA as a separate tag. The obol
+            # binary embeds version.GitCommit (short SHA) via ldflags and uses
+            # it through internal/images.Resolve to commit-pin the deployments
+            # it manages. Without this, binary upgrades wouldn't roll the pods.
+            type=sha,format=short,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.component }}
