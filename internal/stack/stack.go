@@ -2,6 +2,7 @@ package stack
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
@@ -514,6 +516,8 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 		}
 	}
 
+	configured = append(configured, autoDetectLocalProviders(cfg, u)...)
+
 	// --- Cloud provider from ~/.openclaw ---
 	if cloudProvider := autoDetectCloudProvider(cfg, u); cloudProvider != "" {
 		configured = append(configured, cloudProvider)
@@ -527,6 +531,48 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 			u.Dim("  Run 'obol model setup' to configure manually.")
 		}
 	}
+}
+
+// autoDetectLocalProviders scans well-known local inference ports
+// (vLLM, llama.cpp server, LM Studio, sglang, mlx-lm, ...) and registers
+// each discovered server's models with LiteLLM without restarting. Ollama
+// and LiteLLM itself are skipped (handled by the Ollama branch above and
+// would be circular respectively). Returns the list of registered
+// provider labels for inclusion in the single-restart summary line.
+//
+// Set OBOL_DISABLE_LOCAL_DISCOVERY=1 to skip this step entirely.
+func autoDetectLocalProviders(cfg *config.Config, u *ui.UI) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	discovered, err := model.DiscoverLocalProviders(ctx)
+	if err != nil {
+		u.Dim(fmt.Sprintf("Local inference discovery skipped: %v", err))
+		return nil
+	}
+	if len(discovered) == 0 {
+		return nil
+	}
+
+	// Batch all discovered entries into a single ConfigMap PATCH so we
+	// avoid N read-modify-write round-trips (and the TOCTOU window
+	// between them) when more than one local server is detected.
+	var (
+		labels  []string
+		entries []model.ModelEntry
+	)
+	for _, p := range discovered {
+		u.Blank()
+		u.Infof("Detected %s at %s with %d model(s)", p.ServerType, p.HostEndpoint, len(p.Entries))
+		entries = append(entries, p.Entries...)
+		labels = append(labels, p.Label)
+	}
+
+	if err := model.PatchLiteLLMEntries(cfg, u, entries); err != nil {
+		u.Warnf("Auto-configure local providers failed: %v", err)
+		return nil
+	}
+	return labels
 }
 
 // autoDetectCloudProvider reads ~/.openclaw config, resolves the cloud

@@ -258,12 +258,30 @@ func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string,
 	}
 
 	// 3. Patch ConfigMap with new model_list entries
+	return PatchLiteLLMEntries(cfg, u, entries)
+}
+
+// PatchLiteLLMEntries merges precomputed ModelEntry values into the
+// LiteLLM ConfigMap without touching Secrets and without restarting.
+// Caller is responsible for restarting LiteLLM once after batching all
+// patches when an upstream Secret/ConfigMap value actually changed.
+func PatchLiteLLMEntries(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return errors.New("cluster not running. Run 'obol stack up' first")
+	}
+
 	u.Infof("Adding %d model(s) to LiteLLM config", len(entries))
 
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, entries); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
 	}
-
 	return nil
 }
 
