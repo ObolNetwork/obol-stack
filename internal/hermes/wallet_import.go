@@ -28,10 +28,11 @@ type ImportPrivateKeyWalletOptions struct {
 // without standing up a real k3d cluster. Production wires them to the real
 // helmfile-sync + kubectl rollout helpers.
 var (
-	syncFn                      = Sync
-	restartHermesRemoteSignerFn = restartHermesRemoteSigner
-	ensureVolumeWritableFn      = ensureVolumeWritable
-	fixRuntimeVolumeOwnershipFn = fixRuntimeVolumeOwnership
+	syncFn                         = Sync
+	restartHermesRemoteSignerFn    = restartHermesRemoteSigner
+	ensureVolumeWritableFn         = ensureVolumeWritable
+	fixRuntimeVolumeOwnershipFn    = fixRuntimeVolumeOwnership
+	applyWalletMetadataConfigMapFn = applyWalletMetadataConfigMap
 )
 
 // ImportPrivateKeyWalletCmd imports an existing private key as the
