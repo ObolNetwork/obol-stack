@@ -1242,14 +1242,13 @@ buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 # matching has been brittle across runtime versions (OpenClaw vs Hermes).
 echo "${buy_content:0:500}"
 if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
-    fail "Agent buy returned no final assistant content: ${buy_response:0:500}"
-    emit_metrics; exit 1
+    echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
 fi
 if printf '%s' "$buy_content" | agent_response_refused; then
     fail "Agent refused to run buy.py: ${buy_content:0:500}"
     emit_metrics; exit 1
 fi
-pass "Agent buy prompt completed (success will be confirmed by PurchaseRequest CR)"
+pass "Agent buy prompt issued (success will be confirmed by PurchaseRequest CR)"
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)
