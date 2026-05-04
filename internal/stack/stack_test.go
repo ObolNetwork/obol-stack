@@ -463,6 +463,25 @@ func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
 	}
 }
 
+func TestHelmfile_DoesNotUseHelm4OnlyServerSideFlags(t *testing.T) {
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Fatal("project root not found")
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/infrastructure/helmfile.yaml"))
+	if err != nil {
+		t.Fatalf("read helmfile: %v", err)
+	}
+
+	out := string(data)
+	for _, flag := range []string{"--server-side", "--force-conflicts"} {
+		if strings.Contains(out, flag) {
+			t.Fatalf("embedded helmfile contains Helm-version-sensitive flag %s", flag)
+		}
+	}
+}
+
 func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
