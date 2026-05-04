@@ -31,41 +31,42 @@ func TestBuildModelEntries(t *testing.T) {
 		}
 	})
 
-	t.Run("anthropic gets wildcard plus explicit entries", func(t *testing.T) {
+	t.Run("anthropic puts explicit before the wildcard", func(t *testing.T) {
 		entries := buildModelEntries("anthropic", []string{"claude-sonnet-4-5-20250929"})
 		if len(entries) != 2 {
-			t.Fatalf("got %d entries, want 2 (wildcard + explicit)", len(entries))
+			t.Fatalf("got %d entries, want 2 (explicit + wildcard)", len(entries))
 		}
-		// First entry is the wildcard
-		if entries[0].ModelName != "anthropic/*" {
-			t.Errorf("entries[0].ModelName = %q, want anthropic/*", entries[0].ModelName)
+		// Explicit first so model.Rank picks it as primary; Hermes can't
+		// send `model: anthropic/*` literally.
+		if entries[0].ModelName != "claude-sonnet-4-5-20250929" {
+			t.Errorf("entries[0].ModelName = %q, want explicit model", entries[0].ModelName)
 		}
-
-		if entries[0].LiteLLMParams.Model != "anthropic/*" {
-			t.Errorf("entries[0].Model = %q, want anthropic/*", entries[0].LiteLLMParams.Model)
+		if entries[0].LiteLLMParams.Model != "claude-sonnet-4-5-20250929" {
+			t.Errorf("entries[0].Model = %q", entries[0].LiteLLMParams.Model)
 		}
-		// Second entry is the explicit model
-		if entries[1].ModelName != "claude-sonnet-4-5-20250929" {
-			t.Errorf("entries[1].ModelName = %q", entries[1].ModelName)
+		if entries[0].LiteLLMParams.APIKey != "os.environ/ANTHROPIC_API_KEY" {
+			t.Errorf("api_key = %q, want os.environ/ANTHROPIC_API_KEY", entries[0].LiteLLMParams.APIKey)
 		}
-
-		if entries[1].LiteLLMParams.APIKey != "os.environ/ANTHROPIC_API_KEY" {
-			t.Errorf("api_key = %q, want os.environ/ANTHROPIC_API_KEY", entries[1].LiteLLMParams.APIKey)
+		// Wildcard appended last as catch-all.
+		if entries[1].ModelName != "anthropic/*" {
+			t.Errorf("entries[1].ModelName = %q, want anthropic/*", entries[1].ModelName)
 		}
 	})
 
-	t.Run("openai gets wildcard plus explicit entries", func(t *testing.T) {
+	t.Run("openai puts explicit before the wildcard", func(t *testing.T) {
 		entries := buildModelEntries("openai", []string{"gpt-4o"})
 		if len(entries) != 2 {
-			t.Fatalf("got %d entries, want 2 (wildcard + explicit)", len(entries))
+			t.Fatalf("got %d entries, want 2 (explicit + wildcard)", len(entries))
 		}
 
-		if entries[0].ModelName != "openai/*" {
-			t.Errorf("entries[0].ModelName = %q, want openai/*", entries[0].ModelName)
+		if entries[0].ModelName != "gpt-4o" {
+			t.Errorf("entries[0].ModelName = %q, want gpt-4o", entries[0].ModelName)
 		}
-
-		if entries[1].LiteLLMParams.Model != "openai/gpt-4o" {
-			t.Errorf("entries[1].Model = %q, want openai/gpt-4o", entries[1].LiteLLMParams.Model)
+		if entries[0].LiteLLMParams.Model != "openai/gpt-4o" {
+			t.Errorf("entries[0].Model = %q, want openai/gpt-4o", entries[0].LiteLLMParams.Model)
+		}
+		if entries[1].ModelName != "openai/*" {
+			t.Errorf("entries[1].ModelName = %q, want openai/*", entries[1].ModelName)
 		}
 	})
 
@@ -749,4 +750,123 @@ func TestPullOllamaModel_MockServer(t *testing.T) {
 			t.Fatal("expected error when server is not running")
 		}
 	})
+}
+
+func TestReorderModelList(t *testing.T) {
+	entries := []ModelEntry{
+		{ModelName: "anthropic/*"},
+		{ModelName: "claude-sonnet-4-6"},
+		{ModelName: "claude-opus-4-7"},
+		{ModelName: "openai/*"},
+		{ModelName: "gpt-5.5"},
+	}
+
+	t.Run("pulls a single model to the head", func(t *testing.T) {
+		got, already, err := reorderModelList(entries, []string{"claude-opus-4-7"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		if already {
+			t.Fatalf("expected alreadyAtHead = false")
+		}
+		want := []string{"claude-opus-4-7", "anthropic/*", "claude-sonnet-4-6", "openai/*", "gpt-5.5"}
+		assertOrder(t, got, want)
+	})
+
+	t.Run("pulls multiple models to the head in the given order", func(t *testing.T) {
+		got, _, err := reorderModelList(entries, []string{"gpt-5.5", "claude-opus-4-7"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		want := []string{"gpt-5.5", "claude-opus-4-7", "anthropic/*", "claude-sonnet-4-6", "openai/*"}
+		assertOrder(t, got, want)
+	})
+
+	t.Run("preserves relative order of unselected entries", func(t *testing.T) {
+		got, _, err := reorderModelList(entries, []string{"claude-opus-4-7"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		// anthropic/*, claude-sonnet-4-6, openai/*, gpt-5.5 should stay in
+		// that relative order behind the promoted entry.
+		want := []string{"claude-opus-4-7", "anthropic/*", "claude-sonnet-4-6", "openai/*", "gpt-5.5"}
+		assertOrder(t, got, want)
+	})
+
+	t.Run("flags already-at-head as no-op", func(t *testing.T) {
+		_, already, err := reorderModelList(entries, []string{"anthropic/*"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		if !already {
+			t.Fatalf("expected alreadyAtHead = true when first entry is requested")
+		}
+	})
+
+	t.Run("flags multi-arg already-at-head as no-op", func(t *testing.T) {
+		_, already, err := reorderModelList(entries, []string{"anthropic/*", "claude-sonnet-4-6"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		if !already {
+			t.Fatalf("expected alreadyAtHead = true when first two requested entries already lead")
+		}
+	})
+
+	t.Run("errors on missing names with full list", func(t *testing.T) {
+		_, _, err := reorderModelList(entries, []string{"claude-opus-4-7", "typo-1", "typo-2"})
+		if err == nil {
+			t.Fatal("expected error for missing names")
+		}
+		if !strings.Contains(err.Error(), "typo-1") || !strings.Contains(err.Error(), "typo-2") {
+			t.Fatalf("error should list every missing name, got: %v", err)
+		}
+	})
+
+	t.Run("errors on duplicate args", func(t *testing.T) {
+		_, _, err := reorderModelList(entries, []string{"claude-opus-4-7", "claude-opus-4-7"})
+		if err == nil {
+			t.Fatal("expected error for duplicate names")
+		}
+		if !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("error should mention duplicate, got: %v", err)
+		}
+	})
+
+	t.Run("preserves ModelEntry contents not just names", func(t *testing.T) {
+		entriesWithParams := []ModelEntry{
+			{ModelName: "a", LiteLLMParams: LiteLLMParams{Model: "openai/a", APIKey: "key-a"}},
+			{ModelName: "b", LiteLLMParams: LiteLLMParams{Model: "openai/b", APIKey: "key-b"}},
+		}
+		got, _, err := reorderModelList(entriesWithParams, []string{"b"})
+		if err != nil {
+			t.Fatalf("reorderModelList: %v", err)
+		}
+		if got[0].LiteLLMParams.APIKey != "key-b" {
+			t.Fatalf("promoted entry lost its params: got %+v", got[0])
+		}
+		if got[1].LiteLLMParams.APIKey != "key-a" {
+			t.Fatalf("trailing entry lost its params: got %+v", got[1])
+		}
+	})
+}
+
+func assertOrder(t *testing.T, got []ModelEntry, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (got %v)", len(got), len(want), modelNames(got))
+	}
+	for i, w := range want {
+		if got[i].ModelName != w {
+			t.Fatalf("entry[%d] = %q, want %q (full order: %v)", i, got[i].ModelName, w, modelNames(got))
+		}
+	}
+}
+
+func modelNames(entries []ModelEntry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.ModelName
+	}
+	return out
 }
