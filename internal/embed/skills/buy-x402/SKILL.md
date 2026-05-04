@@ -11,7 +11,9 @@ Purchase access to remote x402-gated services. There are two flows, picked by us
 - **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request.
 - **`buy <name>`** — pre-payment budget. Pre-sign **N** authorizations, declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar spend them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price; runtime path holds zero signer access.
 
-Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum) and **OBOL via Permit2** (Ethereum Mainnet).
+Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
+
+Chain names follow the eRPC project aliases: `mainnet`, `base`, `base-sepolia`. CAIP-2 strings (`eip155:1`, `eip155:8453`, `eip155:84532`) and the alias `ethereum` are accepted on input and normalized internally. Unknown chains fail loudly with the supported list — buy.py will not silently sign against base-sepolia when the seller is on mainnet.
 
 ## Gasless Payments
 
@@ -29,6 +31,20 @@ in any of these commands. The seller's `x402-verifier` middleware
 coordinates with the facilitator after verifying your `X-PAYMENT` header.
 The default Obol-operated facilitator at `https://x402.gcp.obol.tech`
 covers `eip155:1`, `eip155:8453`, and `eip155:84532`.
+
+## First-Time Permit2 Approval (one-time per token+wallet)
+
+Permit2-based x402 payments (e.g. OBOL, USDC on chains where the seller selects `assetTransferMethod=permit2`) require the agent's wallet to have approved the Permit2 router on the token *before any payment can settle*. Without it, `buy.py pay`/`buy` pre-signs a valid voucher, the seller's facilitator submits the on-chain `transferFrom`, and it reverts with no clear error — usually surfacing as an opaque HTTP 503 from the seller.
+
+`buy.py` now pre-flights this check and aborts with the exact remediation command. If you see the error, run:
+
+```bash
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \
+    --from <agent-wallet> --to <token-address> \
+    --data <approve-calldata-printed-by-buy.py> --network <chain>
+```
+
+This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-3009 flows (USDC `TransferWithAuthorization`) do **not** need this approval. Sellers that advertise `eip2612GasSponsoring` in their 402 extensions also bypass it (per-request signed permits).
 
 ## Pitfalls
 

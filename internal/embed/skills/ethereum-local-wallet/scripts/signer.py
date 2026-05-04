@@ -20,13 +20,88 @@ SIGNER_URL = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000")
 ERPC_BASE = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local/rpc")
 NETWORK = os.environ.get("ERPC_NETWORK", "mainnet")
 
-# Chain IDs for known networks.
+# Canonical chain names match eRPC project aliases (see
+# internal/embed/infrastructure/values/erpc.yaml.gotmpl).
 CHAIN_IDS = {
-    "mainnet": 1,
-    "hoodi": 560048,
-    "sepolia": 11155111,
+    "mainnet":      1,
+    "base":         8453,
     "base-sepolia": 84532,
+    "sepolia":      11155111,
+    "hoodi":        560048,
 }
+
+# Friendly aliases that resolve to canonical eRPC names.
+CHAIN_ALIASES = {
+    "ethereum":         "mainnet",
+    "eth":              "mainnet",
+    "eip155:1":         "mainnet",
+    "eip155:8453":      "base",
+    "eip155:84532":     "base-sepolia",
+    "eip155:11155111":  "sepolia",
+    "eip155:560048":    "hoodi",
+}
+
+_GWEI = 1_000_000_000
+
+# Per-chain fee bounds in wei. Keep mainnet tips tight enough to avoid
+# overpaying during quiet periods (Feb 2026: base ~0.05 gwei, tip 0.01-0.05
+# gwei) but with enough ceiling for a moderate spike. L2 base fees are
+# essentially zero, so tips can be near-zero too.
+FEE_BOUNDS = {
+    "mainnet": {
+        "min_tip":       10_000_000,        # 0.01 gwei
+        "max_tip":        2 * _GWEI,         # 2 gwei (cap during spike)
+        "fallback_base": 100_000_000,        # 0.1 gwei  (safe-ish guess if RPC is down)
+        "fallback_tip":   50_000_000,        # 0.05 gwei
+        "fallback_max":   2 * _GWEI,
+        "min_max_fee":   100_000_000,
+    },
+    "base": {
+        "min_tip":        1_000_000,         # 0.001 gwei
+        "max_tip":       50_000_000,         # 0.05 gwei
+        "fallback_base":  5_000_000,
+        "fallback_tip":   1_000_000,
+        "fallback_max":  50_000_000,
+        "min_max_fee":    5_000_000,
+    },
+    "base-sepolia": {
+        "min_tip":        1_000_000,
+        "max_tip":       50_000_000,
+        "fallback_base":  5_000_000,
+        "fallback_tip":   1_000_000,
+        "fallback_max":  50_000_000,
+        "min_max_fee":    5_000_000,
+    },
+    "sepolia": {
+        "min_tip":         1 * _GWEI,
+        "max_tip":         5 * _GWEI,
+        "fallback_base":   5 * _GWEI,
+        "fallback_tip":    1 * _GWEI,
+        "fallback_max":   20 * _GWEI,
+        "min_max_fee":     5 * _GWEI,
+    },
+    "hoodi": {
+        "min_tip":         1 * _GWEI,
+        "max_tip":         5 * _GWEI,
+        "fallback_base":   5 * _GWEI,
+        "fallback_tip":    1 * _GWEI,
+        "fallback_max":   20 * _GWEI,
+        "min_max_fee":     5 * _GWEI,
+    },
+}
+
+
+def _resolve_chain(value):
+    """Map any chain label (canonical, alias, CAIP-2) to a canonical eRPC name."""
+    if value is None:
+        raise ValueError("network is required")
+    label = str(value).strip()
+    if label in CHAIN_IDS:
+        return label
+    if label in CHAIN_ALIASES:
+        return CHAIN_ALIASES[label]
+    supported = ", ".join(sorted(CHAIN_IDS.keys()))
+    raise ValueError(f"Unknown network {value!r}. Supported: {supported}")
 
 
 def _signer_get(path):
@@ -131,11 +206,67 @@ def cmd_sign_typed(address, typed_data_json):
     print(data.get("signature", ""))
 
 
+def _suggest_fees(network):
+    """Suggest (base_fee, tip, max_fee) in wei using eth_feeHistory.
+
+    base_fee is the predicted next-block base fee (last entry of
+    baseFeePerGas, which feeHistory pads with one extra forward-looking
+    value). tip is the median 50th-percentile reward across the window.
+    max_fee = 2*base_fee + tip leaves headroom for a base-fee bump.
+
+    Per-chain min/max bounds clip the tip so quiet mainnet stays ~0.01 gwei
+    instead of 1 gwei, and L2 stays near-zero. If feeHistory is unavailable
+    the function returns the per-chain fallback values.
+    """
+    canonical = _resolve_chain(network)
+    bounds = FEE_BOUNDS[canonical]
+
+    try:
+        history = _rpc_call(
+            "eth_feeHistory",
+            [hex(20), "latest", [50]],
+            canonical,
+        )
+    except SystemExit:
+        return bounds["fallback_base"], bounds["fallback_tip"], bounds["fallback_max"]
+
+    base_list = (history or {}).get("baseFeePerGas", []) or []
+    rewards = (history or {}).get("reward", []) or []
+
+    if not base_list:
+        return bounds["fallback_base"], bounds["fallback_tip"], bounds["fallback_max"]
+
+    base_fee = int(base_list[-1], 16)
+
+    tips = []
+    for row in rewards:
+        if not row:
+            continue
+        try:
+            tips.append(int(row[0], 16))
+        except (TypeError, ValueError):
+            continue
+    if tips:
+        tips.sort()
+        tip = tips[len(tips) // 2]
+    else:
+        tip = bounds["fallback_tip"]
+
+    tip = max(bounds["min_tip"], min(bounds["max_tip"], tip))
+    max_fee = base_fee * 2 + tip
+    max_fee = max(bounds["min_max_fee"], max_fee)
+    return base_fee, tip, max_fee
+
+
 def cmd_sign_tx(args):
     """Sign an EIP-1559 transaction. Auto-fills nonce, gas, and fees from eRPC."""
     opts = _parse_tx_flags(args)
-    network = opts.get("network", NETWORK)
-    chain_id = CHAIN_IDS.get(network, 1)
+    try:
+        network = _resolve_chain(opts.get("network", NETWORK))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    chain_id = CHAIN_IDS[network]
     from_addr = opts["from"]
     to_addr = opts["to"]
     value = opts.get("value", "0x0")
@@ -149,24 +280,19 @@ def cmd_sign_tx(args):
     else:
         nonce = int(nonce)
 
-    # Auto-fill gas fees.
-    max_fee = opts.get("max_fee")
-    max_priority = opts.get("max_priority")
-    if max_fee is None or max_priority is None:
-        base_fee_hex = _rpc_call("eth_gasPrice", [], network)
-        base_fee = int(base_fee_hex, 16)
-        if max_priority is None:
-            try:
-                priority_hex = _rpc_call("eth_maxPriorityFeePerGas", [], network)
-                max_priority = int(priority_hex, 16)
-            except SystemExit:
-                max_priority = 1_000_000_000  # 1 gwei fallback
+    # Auto-fill gas fees via percentile-based fee oracle.
+    max_fee_opt = opts.get("max_fee")
+    max_priority_opt = opts.get("max_priority")
+    if max_fee_opt is None or max_priority_opt is None:
+        base_fee, suggested_tip, suggested_max = _suggest_fees(network)
+        max_priority = int(max_priority_opt) if max_priority_opt is not None else suggested_tip
+        if max_fee_opt is not None:
+            max_fee = int(max_fee_opt)
         else:
-            max_priority = int(max_priority)
-        if max_fee is None:
-            max_fee = base_fee * 2 + max_priority
-        else:
-            max_fee = int(max_fee)
+            max_fee = max(suggested_max, base_fee * 2 + max_priority)
+    else:
+        max_priority = int(max_priority_opt)
+        max_fee = int(max_fee_opt)
 
     # Auto-fill gas limit.
     gas_limit = opts.get("gas")
@@ -214,6 +340,24 @@ def cmd_sign_tx(args):
     return signed_tx
 
 
+def cmd_gas_info(args):
+    """Print recommended fee values for a network so the agent doesn't have to guess."""
+    opts = _parse_tx_flags(args)
+    try:
+        network = _resolve_chain(opts.get("network", NETWORK))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    base_fee, tip, max_fee = _suggest_fees(network)
+    print(f"Network:           {network} (chain_id={CHAIN_IDS[network]})")
+    print(f"Base fee:          {base_fee} wei  ({base_fee / 1e9:.6f} gwei)")
+    print(f"Suggested tip:     {tip} wei  ({tip / 1e9:.6f} gwei)")
+    print(f"Suggested max fee: {max_fee} wei  ({max_fee / 1e9:.6f} gwei)")
+    print()
+    print("Pass these to send-tx as --max-priority and --max-fee, or omit them")
+    print("and send-tx will compute the same values automatically.")
+
+
 def cmd_send_tx(args):
     """Sign and broadcast a transaction."""
     signed_tx = cmd_sign_tx(args)
@@ -221,7 +365,11 @@ def cmd_send_tx(args):
         sys.exit(1)
 
     opts = _parse_tx_flags(args)
-    network = opts.get("network", NETWORK)
+    try:
+        network = _resolve_chain(opts.get("network", NETWORK))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"\nBroadcasting to {network}...")
     tx_hash = _rpc_call("eth_sendRawTransaction", [signed_tx], network)
@@ -272,6 +420,7 @@ def usage():
     print("                                       Sign an EIP-1559 transaction")
     print("  send-tx [same flags as sign-tx]      Sign AND broadcast via eRPC")
     print("  sign-typed <address> <typed-data-json>  Sign EIP-712 typed data")
+    print("  gas-info [--network <name>]          Print recommended base/tip/max fees")
 
 
 if __name__ == "__main__":
@@ -318,6 +467,8 @@ if __name__ == "__main__":
             print("Usage: sign-typed <address> <typed-data-json>")
             sys.exit(1)
         cmd_sign_typed(args[0], args[1])
+    elif cmd == "gas-info":
+        cmd_gas_info(args)
     else:
         print(f"Unknown command: {cmd}")
         usage()

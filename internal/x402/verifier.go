@@ -88,7 +88,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	cfg := v.config.Load()
 
-	rule, requirement, _, ok := v.matchPaidRoute(cfg, uri)
+	rule, requirement, extensions, _, ok := v.matchPaidRoute(cfg, uri)
 	if !ok {
 		// No pricing rule matches — route is free.
 		w.WriteHeader(http.StatusOK)
@@ -118,6 +118,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		VerifyOnly:     cfg.VerifyOnly,
+		Extensions:     extensions,
 	}, []x402types.PaymentRequirements{requirement})
 
 	upstreamAuth := rule.UpstreamAuth
@@ -149,7 +150,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	rule, requirement, labels, ok := v.matchPaidRoute(cfg, r.URL.Path)
+	rule, requirement, extensions, labels, ok := v.matchPaidRoute(cfg, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -167,6 +168,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		VerifyOnly:     false,
+		Extensions:     extensions,
 	}, []x402types.PaymentRequirements{requirement})
 
 	hadPayment := r.Header.Get("X-PAYMENT") != ""
@@ -208,10 +210,10 @@ func (v *Verifier) MetricsHandler() http.Handler {
 	return v.metrics.handler()
 }
 
-func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, prometheus.Labels, bool) {
+func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, map[string]any, prometheus.Labels, bool) {
 	rule := matchRoute(cfg.Routes, uri)
 	if rule == nil {
-		return nil, x402types.PaymentRequirements{}, nil, false
+		return nil, x402types.PaymentRequirements{}, nil, nil, false
 	}
 
 	wallet := cfg.Wallet
@@ -228,12 +230,13 @@ func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x
 	chain, ok := (*chains)[chainName]
 	if !ok {
 		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
-		return nil, x402types.PaymentRequirements{}, nil, false
+		return nil, x402types.PaymentRequirements{}, nil, nil, false
 	}
 
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
-	return rule, requirement, prometheusLabels(rule), true
+	extensions := BuildExtensionsForAsset(asset)
+	return rule, requirement, extensions, prometheusLabels(rule), true
 }
 
 func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
