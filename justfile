@@ -37,37 +37,38 @@ down:
 
 # Path to the frontend repo (override with FRONTEND_DIR=../path just dev-frontend)
 frontend_dir := env("FRONTEND_DIR", justfile_directory() / "../obol-stack-front-end")
-dev_image    := "obolnetwork/obol-stack-front-end:dev"
+# Push target = the obol-local k3d registry mirror set up during `obol stack up`
+# (see internal/stack/dev_registry.go). Pushing only transfers changed layers,
+# which is much faster than `k3d image import`'s full-tarball round-trip.
+dev_image    := "localhost:54103/obol-stack-front-end:dev"
 
-# Build frontend from local source, import into k3d, and restart the pod
+# Build frontend from local source, push to local registry, and restart the pod
 dev-frontend:
     #!/usr/bin/env bash
     set -e
-    CLUSTER_ID=$(cat .workspace/config/.stack-id 2>/dev/null || cat ~/.config/obol/.stack-id)
     echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
     docker build -t {{ dev_image }} {{ frontend_dir }}
-    echo "→ Importing image into k3d cluster obol-stack-${CLUSTER_ID}"
-    k3d image import {{ dev_image }} -c "obol-stack-${CLUSTER_ID}"
+    echo "→ Pushing {{ dev_image }} to local registry"
+    docker push {{ dev_image }}
     echo "→ Restarting frontend deployment"
     obol kubectl set image deployment/obol-frontend-obol-app \
         obol-app={{ dev_image }} -n obol-frontend
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
-    echo "✓ Frontend dev build live at http://obol.stack"
+    echo "✓ Frontend dev build live at http://obol.stack:8080"
 
 # Rebuild and hot-swap frontend (skip docker cache for faster iteration)
 dev-frontend-rebuild:
     #!/usr/bin/env bash
     set -e
-    CLUSTER_ID=$(cat .workspace/config/.stack-id 2>/dev/null || cat ~/.config/obol/.stack-id)
     echo "→ Rebuilding {{ dev_image }} (no cache)"
     docker build --no-cache -t {{ dev_image }} {{ frontend_dir }}
-    echo "→ Importing image into k3d cluster obol-stack-${CLUSTER_ID}"
-    k3d image import {{ dev_image }} -c "obol-stack-${CLUSTER_ID}"
+    echo "→ Pushing {{ dev_image }} to local registry"
+    docker push {{ dev_image }}
     echo "→ Restarting frontend deployment"
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
-    echo "✓ Frontend dev build live at http://obol.stack"
+    echo "✓ Frontend dev build live at http://obol.stack:8080"
 
 # Reset frontend back to the released image
 dev-frontend-reset:

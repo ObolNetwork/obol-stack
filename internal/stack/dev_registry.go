@@ -33,6 +33,12 @@ var devRegistryMirrors = []registryMirror{
 	{upstreamHost: "docker.io", remoteURL: "https://registry-1.docker.io", name: "obol-docker-io.localhost", port: 54100},
 	{upstreamHost: "ghcr.io", remoteURL: "https://ghcr.io", name: "obol-ghcr-io.localhost", port: 54101},
 	{upstreamHost: "quay.io", remoteURL: "https://quay.io", name: "obol-quay-io.localhost", port: 54102},
+	// Local push target (no upstream proxy). Lets `just dev-frontend` swap
+	// layered diffs into the cluster via `docker push localhost:54103/...`
+	// instead of `k3d image import`'s full-tarball round-trip. The host
+	// reaches it on localhost:54103; the k3d node sees the same image name
+	// resolved via this mirror to http://k3d-obol-local.localhost:5000.
+	{upstreamHost: "localhost:54103", name: "obol-local.localhost", port: 54103},
 }
 
 func ensureDevRegistries(cfg *config.Config, u *ui.UI) (*devRegistrySetup, error) {
@@ -95,15 +101,16 @@ func ensureDevRegistry(cfg *config.Config, k3dBinary string, mirror registryMirr
 		_ = runCommand(exec.Command("docker", "rm", "-f", containerName))
 	}
 
-	createCmd := exec.Command(
-		k3dBinary,
+	createArgs := []string{
 		"registry", "create", mirror.name,
 		"--port", strconv.Itoa(mirror.port),
-		"--proxy-remote-url", mirror.remoteURL,
 		"--volume", fmt.Sprintf("%s:/var/lib/registry", registryCacheDir(mirror)),
 		"--no-help",
-	)
-	if err := runCommand(createCmd); err != nil {
+	}
+	if mirror.remoteURL != "" {
+		createArgs = append(createArgs, "--proxy-remote-url", mirror.remoteURL)
+	}
+	if err := runCommand(exec.Command(k3dBinary, createArgs...)); err != nil {
 		return fmt.Errorf("create registry %s: %w", mirror.name, err)
 	}
 
@@ -160,7 +167,12 @@ func registryContainerName(mirror registryMirror) string {
 }
 
 func registryCacheDir(mirror registryMirror) string {
-	return filepath.Join(devRegistryCacheRoot(), mirror.upstreamHost)
+	// Colons in the upstream host (e.g. "localhost:54103" for the local push
+	// registry) would land in the on-disk path; replace with underscore so the
+	// dir name is plain ASCII. Existing entries (docker.io, ghcr.io, quay.io)
+	// have no colons so their cache paths are unchanged.
+	safe := strings.ReplaceAll(mirror.upstreamHost, ":", "_")
+	return filepath.Join(devRegistryCacheRoot(), safe)
 }
 
 func devRegistryCacheRoot() string {
