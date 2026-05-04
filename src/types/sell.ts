@@ -1,9 +1,70 @@
+export type ServiceOfferType = 'inference' | 'fine-tuning' | 'http';
+
+export interface ServiceOfferModel {
+  name?: string;
+  runtime?: string;
+}
+
+export interface ServiceOfferAsset {
+  symbol?: string;
+  decimals?: number;
+  address?: string;
+}
+
+export interface ServiceOfferPrice {
+  perRequest?: string;
+  perMTok?: string;
+  perHour?: string;
+  perEpoch?: string;
+}
+
+export interface ServiceOfferPayment {
+  scheme?: string;
+  network?: string;
+  payTo?: string;
+  asset?: ServiceOfferAsset;
+  price: ServiceOfferPrice;
+}
+
+export interface ServiceOfferRegistration {
+  enabled?: boolean;
+  name?: string;
+  description?: string;
+  image?: string;
+  skills?: string[];
+  domains?: string[];
+}
+
+export interface ServiceOfferUpstream {
+  service?: string;
+  namespace?: string;
+  port?: number;
+  healthPath?: string;
+}
+
+export interface ServiceOfferAgentLink {
+  runtime: 'hermes' | 'openclaw';
+  id: string;
+  namespace: string;
+}
+
+export interface ServiceOfferUsage {
+  chargedRequests: number | null;
+}
+
 export interface ServiceOffer {
   name: string;
   namespace: string;
+  type: ServiceOfferType;
   status?: string;
   endpoint?: string;
   conditions?: ServiceOfferCondition[];
+  model?: ServiceOfferModel;
+  upstream?: ServiceOfferUpstream;
+  payment?: ServiceOfferPayment;
+  registration?: ServiceOfferRegistration;
+  agentLink?: ServiceOfferAgentLink | null;
+  usage?: ServiceOfferUsage;
 }
 
 export interface ServiceOfferCondition {

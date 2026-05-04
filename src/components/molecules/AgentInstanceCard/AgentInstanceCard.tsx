@@ -374,7 +374,7 @@ export function AgentInstanceCard({
     Boolean(tokenError) && instance.runtime === 'openclaw';
 
   return (
-    <CardContainer>
+    <CardContainer id={`agent-${instance.runtime}-${instance.id}`}>
       <TopRow>
         <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
           <InstanceName>{displayInstanceName(instance)}</InstanceName>

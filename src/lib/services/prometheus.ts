@@ -2,6 +2,8 @@
  * Prometheus API client for fetching metrics
  */
 
+import { config } from '@/lib/config/environment';
+
 interface PrometheusResponse {
   status: string;
   data: {
@@ -17,9 +19,7 @@ interface PrometheusResponse {
 export class PrometheusClient {
   private baseUrl: string;
 
-  constructor(
-    baseUrl: string = process.env.PROMETHEUS_URL || 'http://localhost:9090'
-  ) {
+  constructor(baseUrl: string = config.prometheusUrl) {
     this.baseUrl = baseUrl;
   }
 
@@ -41,6 +41,32 @@ export class PrometheusClient {
     }
 
     return response.json();
+  }
+
+  /**
+   * Map of "<namespace>/<offer-name>" -> charged-request count, summed across
+   * x402-verifier replicas. Returns an empty Map if Prometheus is unavailable
+   * or the metric hasn't been scraped yet — callers render a "—" rather than
+   * surface an error to the user.
+   */
+  async chargedSalesByOffer(): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    try {
+      const response = await this.query(
+        'sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
+      );
+      for (const row of response.data.result) {
+        const ns = row.metric.offer_namespace;
+        const name = row.metric.offer_name;
+        if (!ns || !name) continue;
+        const value = parseFloat(row.value?.[1] ?? '0');
+        if (!Number.isFinite(value)) continue;
+        result.set(`${ns}/${name}`, value);
+      }
+    } catch (error) {
+      console.warn('[Prometheus] chargedSalesByOffer failed:', error);
+    }
+    return result;
   }
 
   /**

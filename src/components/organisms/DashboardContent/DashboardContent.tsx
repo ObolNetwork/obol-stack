@@ -2,6 +2,7 @@ import { Box, styled } from '@obolnetwork/obol-ui';
 import { NetworksSection } from '../NetworksSection/NetworksSection';
 import { NodeOverview } from '../NodeOverview';
 import { AgentList } from '../AgentList';
+import { ServiceList } from '../ServiceList';
 import { AgentRegistry } from '../AgentRegistry';
 import { DashboardData } from '../../../types/dashboard';
 import { AgentChatSidebar } from '../../molecules/AgentChatSidebar';
@@ -77,6 +78,7 @@ export function DashboardContent({
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
           <AgentList onInstanceSelect={handleInstanceSelect} />
+          <ServiceList />
           <AgentRegistry />
           {error && <ErrorState onRetry={onRetry} />}
           {data && (data.localNodes.length > 0 || data.erpcData) && (
