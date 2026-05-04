@@ -32,6 +32,25 @@ done
 
 If the source checkout is not `$HOME/obol-stack-src`, set `OBOL_QA_BASE`.
 
+## Refresh Existing Worktree
+
+When syncing a local integration branch into an existing QA worktree, preserve
+per-worktree secrets and runtime state. Do not use a raw `rsync --delete` that
+can remove `.env`.
+
+```bash
+rsync -az --delete \
+  --exclude '.git' \
+  --exclude '.env' \
+  --exclude '.envB' \
+  --exclude '.workspace*' \
+  --exclude '.tmp' \
+  ./ "$QA/"
+
+test -s "$QA/.env" || cp "$BASE/.env" "$QA/.env"
+chmod 600 "$QA/.env"
+```
+
 ## Launch Live OBOL Smoke
 
 Full seller/buyer QA needs an OpenAI-compatible endpoint on the QA machine.
