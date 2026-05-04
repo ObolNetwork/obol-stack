@@ -1669,10 +1669,7 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 // current LiteLLM model list. For each LiteLLM-routed instance it:
 //  1. Patches the overlay YAML model list (for helm consistency)
 //  2. Writes a clean per-agent models.json to the host PVC
-//  3. Patches the openclaw-config ConfigMap with the best primary model
-//
-// Cloud models are promoted to primary (they're added because they're better
-// than local defaults). The previous primary becomes a fallback.
+//  3. Patches the openclaw-config ConfigMap with the configured primary model
 func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	ids, err := ListInstanceIDs(cfg)
 	if err != nil || len(ids) == 0 {
@@ -1721,10 +1718,9 @@ func SyncOverlayModels(cfg *config.Config, models []string, u *ui.UI) error {
 	return nil
 }
 
-// rankModels delegates to model.Rank for capability-aware ranking, then
-// prefixes every entry with `openai/` for LiteLLM routing. Both runtimes used
-// to roll their own ranker that picked `local[0]` (whatever Ollama listed
-// first), which produced the llama3.2:1b regression — see internal/model/rank.go.
+// rankModels delegates to model.Rank for configured-order selection, then
+// prefixes every entry with `openai/` for LiteLLM routing through OpenClaw's
+// openai-compatible provider slot.
 func rankModels(models []string) (primary string, fallbacks []string) {
 	primary, fallbacks = model.Rank(models)
 	if primary != "" {
