@@ -205,7 +205,7 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "backup",
-				Usage:     "Back up wallet keys for an OpenClaw agent instance",
+				Usage:     "Back up wallet keys for an agent instance",
 				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					agentRuntimeFlag(""),
@@ -247,7 +247,7 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:      "restore",
-				Usage:     "Restore wallet keys for an OpenClaw agent instance",
+				Usage:     "Restore wallet keys for an agent instance",
 				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					agentRuntimeFlag(""),

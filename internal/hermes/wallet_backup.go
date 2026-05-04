@@ -172,6 +172,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	}
 
 	if opts.ApplyCluster {
+		applyWalletMetadataConfigMapFn(cfg, id, deployDir)
 		applyHermesKeystorePasswordSecret(cfg, id, w.KeystorePassword, u)
 		restartHermesRemoteSignerFn(cfg, id, u)
 	}
