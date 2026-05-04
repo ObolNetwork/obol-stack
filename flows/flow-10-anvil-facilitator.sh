@@ -61,12 +61,24 @@ if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
 else
     nohup anvil --fork-url https://sepolia.base.org --port 8545 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
-    sleep 3
-    if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
+    anvil_ready=0
+    for _ in $(seq 1 30); do
+        if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
+            anvil_ready=1
+            break
+        fi
+        if ! kill -0 "$(cat "$ANVIL_PID_FILE")" 2>/dev/null; then
+            break
+        fi
+        sleep 2
+    done
+    if [ "$anvil_ready" = "1" ]; then
         pass "Anvil started on port 8545"
     else
+        cleanup_pid "$(cat "$ANVIL_PID_FILE" 2>/dev/null || true)"
         fail "Anvil failed to start"
+        tail -n 40 "$ANVIL_LOG" 2>/dev/null || true
         emit_metrics; exit 0
     fi
     ANVIL_RPC="http://localhost:8545"
