@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
@@ -28,6 +29,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			modelPullCommand(),
 			modelListCommand(cfg),
 			modelPreferCommand(cfg),
+			modelDiscoverCommand(),
 			modelRemoveCommand(cfg),
 		},
 	}
@@ -289,7 +291,8 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 
 // modelStatusResult is the JSON-serialisable result for `model status`.
 type modelStatusResult struct {
-	Providers []modelStatusProvider `json:"providers"`
+	Providers  []modelStatusProvider `json:"providers"`
+	Discovered []discoverProvider    `json:"discovered,omitempty"`
 }
 
 type modelStatusProvider struct {
@@ -319,8 +322,14 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 
 			sort.Strings(providers)
 
+			scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			discovered, _ := model.DiscoverLocalProviders(scanCtx)
+
 			if u.IsJSON() {
-				result := modelStatusResult{}
+				result := modelStatusResult{
+					Discovered: discoveredProvidersToJSON(discovered),
+				}
 				for _, name := range providers {
 					s := status[name]
 					key := "n/a"
@@ -364,6 +373,19 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 				}
 
 				u.Printf("  %-20s %-8t %-10s %-10s %s", name, s.Enabled, key, modelCount, s.EnvVar)
+			}
+
+			if len(discovered) > 0 {
+				u.Blank()
+				u.Bold(fmt.Sprintf("Discovered local inference servers (%d):", len(discovered)))
+				for _, p := range discovered {
+					noun := "models"
+					if len(p.Entries) == 1 {
+						noun = "model"
+					}
+					u.Printf("  %-20s %s  (%d %s)", p.Label, p.HostEndpoint, len(p.Entries), noun)
+				}
+				u.Dim("Run 'obol model discover' for the full model list.")
 			}
 
 			u.Blank()
@@ -661,4 +683,82 @@ func promptModelPull(u *ui.UI) (string, error) {
 	}
 
 	return name, nil
+}
+
+type discoverProvider struct {
+	Label           string   `json:"label"`
+	ServerType      string   `json:"server_type"`
+	HostEndpoint    string   `json:"host_endpoint"`
+	ClusterEndpoint string   `json:"cluster_endpoint"`
+	Models          []string `json:"models"`
+}
+
+type discoverResult struct {
+	Providers []discoverProvider `json:"providers"`
+}
+
+func discoveredProvidersToJSON(discovered []model.DiscoveredProvider) []discoverProvider {
+	if len(discovered) == 0 {
+		return nil
+	}
+	out := make([]discoverProvider, 0, len(discovered))
+	for _, p := range discovered {
+		names := make([]string, 0, len(p.Entries))
+		for _, e := range p.Entries {
+			names = append(names, e.ModelName)
+		}
+		out = append(out, discoverProvider{
+			Label:           p.Label,
+			ServerType:      p.ServerType,
+			HostEndpoint:    p.HostEndpoint,
+			ClusterEndpoint: p.ClusterEndpoint,
+			Models:          names,
+		})
+	}
+	return out
+}
+
+func modelDiscoverCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "discover",
+		Usage: "Probe well-known local inference ports (vLLM, llama.cpp, LM Studio, ...) and report what auto-config would register",
+		Description: "Read-only — does not modify the cluster. The same scan runs implicitly on `obol stack up`.\n" +
+			"Set OBOL_DISABLE_LOCAL_DISCOVERY=1 to skip the auto-config scan.\n" +
+			"Set OBOL_LOCAL_DISCOVERY_PORTS=port[:label],... to add custom ports.",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			scanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			discovered, err := model.DiscoverLocalProviders(scanCtx)
+			if err != nil {
+				return fmt.Errorf("discovery scan failed: %w", err)
+			}
+
+			if u.IsJSON() {
+				return u.JSON(discoverResult{Providers: discoveredProvidersToJSON(discovered)})
+			}
+
+			if len(discovered) == 0 {
+				u.Info("No local OpenAI-compatible inference servers detected on well-known ports.")
+				u.Blank()
+				u.Dim("  Hint: start vLLM/sglang on :8000, llama.cpp on :8080, LM Studio on :1234,")
+				u.Dim("  or add a custom port via OBOL_LOCAL_DISCOVERY_PORTS=9000:vllm")
+				return nil
+			}
+
+			u.Infof("Discovered %d local inference server(s):", len(discovered))
+			for _, p := range discovered {
+				u.Blank()
+				u.Bold(fmt.Sprintf("  %s  (%s → %s)", p.Label, p.HostEndpoint, p.ClusterEndpoint))
+				for _, e := range p.Entries {
+					u.Print(fmt.Sprintf("    - %s", e.ModelName))
+				}
+			}
+			u.Blank()
+			u.Dim("  These are registered automatically on `obol stack up`. Disable with OBOL_DISABLE_LOCAL_DISCOVERY=1.")
+			return nil
+		},
+	}
 }

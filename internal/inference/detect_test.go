@@ -244,3 +244,65 @@ func TestProbeEndpointContext_ContextCancelled(t *testing.T) {
 		t.Fatal("expected error with cancelled context, got nil")
 	}
 }
+
+func TestExtraPortsFromEnv(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want []portProbe
+	}{
+		{name: "empty", env: "", want: nil},
+		{name: "single port no label", env: "9000", want: []portProbe{{Port: 9000, ServerType: "openai-compat"}}},
+		{name: "single port with label", env: "9000:vllm", want: []portProbe{{Port: 9000, ServerType: "vllm"}}},
+		{
+			name: "multiple",
+			env:  "9000:vllm,5001:custom,7000",
+			want: []portProbe{
+				{Port: 9000, ServerType: "vllm"},
+				{Port: 5001, ServerType: "custom"},
+				{Port: 7000, ServerType: "openai-compat"},
+			},
+		},
+		{name: "ignores garbage", env: "abc,9000:vllm,99999,-1,", want: []portProbe{{Port: 9000, ServerType: "vllm"}}},
+		{name: "trims whitespace", env: " 9000 : vllm , 5001 ", want: []portProbe{
+			{Port: 9000, ServerType: "vllm"},
+			{Port: 5001, ServerType: "openai-compat"},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(LocalDiscoveryPortsEnv, tc.env)
+			got := extraPortsFromEnv()
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d entries, want %d (%+v vs %+v)", len(got), len(tc.want), got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("entry %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestResolvedProbePorts_DedupsAndKeepsDefaultLabels(t *testing.T) {
+	// Env entry whose port collides with a default (8080) must not
+	// overwrite the default label — the default wins for predictable
+	// detection priority.
+	t.Setenv(LocalDiscoveryPortsEnv, "8080:overridden,9999:custom")
+
+	got := resolvedProbePorts()
+
+	// First N entries should match defaults exactly.
+	for i, def := range commonPorts {
+		if got[i] != def {
+			t.Errorf("got[%d] = %+v, want default %+v", i, got[i], def)
+		}
+	}
+	// Tail should include the unique extra.
+	tail := got[len(commonPorts):]
+	if len(tail) != 1 || tail[0] != (portProbe{Port: 9999, ServerType: "custom"}) {
+		t.Errorf("tail = %+v, want [{9999 custom}]", tail)
+	}
+}

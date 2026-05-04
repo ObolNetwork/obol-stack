@@ -13,10 +13,35 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// LocalDiscoveryPortsEnv lets operators add to (or override) the default
+// list of probed local inference ports. Format: comma-separated
+// "port[:label]" pairs, e.g. "9000:vllm,5001:custom". Labels are
+// informational; the actual server type is still detected by probing.
+const LocalDiscoveryPortsEnv = "OBOL_LOCAL_DISCOVERY_PORTS"
+
+// Server-type identifiers returned by DetectServerType / set as the
+// expected label on probe entries. Centralised here so callers
+// (internal/model/discover.go, status output) match by constant.
+const (
+	ServerTypeOllama       = "ollama"
+	ServerTypeLlamaServer  = "llama-server"
+	ServerTypeVLLM         = "vllm"
+	ServerTypeLMStudio     = "lm-studio"
+	ServerTypeLiteLLM      = "litellm"
+	ServerTypeOpenAICompat = "openai-compat"
+)
+
+// LiteLLMPort is LiteLLM's default listen port — exposed so callers like
+// internal/model can skip it during discovery without redefining the
+// constant.
+const LiteLLMPort = 4000
 
 // ModelInfo describes a single model exposed by an inference server.
 type ModelInfo struct {
@@ -44,15 +69,74 @@ type modelsResponse struct {
 	Data []ModelInfo `json:"data"`
 }
 
-// commonPorts maps well-known ports to their expected server type.
-var commonPorts = []struct {
+// portProbe is one entry in the well-known port list. The actual server
+// type is still determined by probing (see detectServerTypeWithClient).
+type portProbe struct {
 	Port       int
 	ServerType string
-}{
-	{8080, "llama-server"},
-	{11434, "ollama"},
-	{8000, "vllm"},
-	{4000, "litellm"},
+}
+
+// commonPorts maps well-known ports to their expected server type. sglang,
+// mlx-lm, and exllamav3 default to 8000 like vLLM, so they share that
+// probe. LM Studio defaults to 1234.
+var commonPorts = []portProbe{
+	{8080, ServerTypeLlamaServer},
+	{11434, ServerTypeOllama},
+	{8000, ServerTypeVLLM},
+	{1234, ServerTypeLMStudio},
+	{LiteLLMPort, ServerTypeLiteLLM},
+}
+
+// extraPortsFromEnv parses LocalDiscoveryPortsEnv into additional probes.
+// Format: "port[:label],port[:label],...". Invalid entries are skipped
+// silently — the env var is a power-user knob and we don't want
+// `obol stack up` to fail because of a typo.
+func extraPortsFromEnv() []portProbe {
+	raw := strings.TrimSpace(os.Getenv(LocalDiscoveryPortsEnv))
+	if raw == "" {
+		return nil
+	}
+	var out []portProbe
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		portStr, label, _ := strings.Cut(item, ":")
+		port, err := strconv.Atoi(strings.TrimSpace(portStr))
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		label = strings.TrimSpace(label)
+		if label == "" {
+			label = ServerTypeOpenAICompat
+		}
+		out = append(out, portProbe{Port: port, ServerType: label})
+	}
+	return out
+}
+
+// resolvedProbePorts returns the effective port list for a scan: defaults
+// plus any extras from LocalDiscoveryPortsEnv, deduplicated by port (the
+// default entry wins so detection priority stays predictable).
+func resolvedProbePorts() []portProbe {
+	seen := make(map[int]bool, len(commonPorts))
+	out := make([]portProbe, 0, len(commonPorts))
+	for _, p := range commonPorts {
+		if seen[p.Port] {
+			continue
+		}
+		seen[p.Port] = true
+		out = append(out, p)
+	}
+	for _, p := range extraPortsFromEnv() {
+		if seen[p.Port] {
+			continue
+		}
+		seen[p.Port] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // probeTimeout is the per-endpoint HTTP timeout.
@@ -95,8 +179,11 @@ func ScanLocalEndpoints() ([]EndpointInfo, error) {
 
 // ScanLocalEndpointsContext probes common ports concurrently with context support.
 // All ports are probed in parallel using goroutines; results are collected
-// and returned in the same order as commonPorts.
+// and returned in stable port order. The probed port list is the union of
+// the built-in defaults and any extras from LocalDiscoveryPortsEnv.
 func ScanLocalEndpointsContext(ctx context.Context) ([]EndpointInfo, error) {
+	ports := resolvedProbePorts()
+
 	type result struct {
 		idx int
 		ep  *EndpointInfo
@@ -108,7 +195,7 @@ func ScanLocalEndpointsContext(ctx context.Context) ([]EndpointInfo, error) {
 		results []result
 	)
 
-	for i, cp := range commonPorts {
+	for i, cp := range ports {
 		// Check context before launching goroutine.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -133,7 +220,7 @@ func ScanLocalEndpointsContext(ctx context.Context) ([]EndpointInfo, error) {
 	}
 
 	// Sort results by original port order.
-	sorted := make([]*EndpointInfo, len(commonPorts))
+	sorted := make([]*EndpointInfo, len(ports))
 	for _, r := range results {
 		sorted[r.idx] = r.ep
 	}
@@ -163,17 +250,14 @@ func DetectServerType(ctx context.Context, baseURL string) string {
 // Ollama is checked before the generic OpenAI-compatible endpoint because
 // ollama also serves /v1/models, so we need the more specific check first.
 func detectServerTypeWithClient(ctx context.Context, client *http.Client, baseURL string) string {
-	// Check ollama-specific /api/tags first.
-	if ok := probeURL(ctx, client, baseURL+"/api/tags"); ok {
-		return "ollama"
+	if probeURL(ctx, client, baseURL+"/api/tags") {
+		return ServerTypeOllama
 	}
-	// Check llama-server /health endpoint.
-	if ok := probeURL(ctx, client, baseURL+"/health"); ok {
-		return "llama-server"
+	if probeURL(ctx, client, baseURL+"/health") {
+		return ServerTypeLlamaServer
 	}
-	// Generic OpenAI-compatible /v1/models.
-	if ok := probeURL(ctx, client, baseURL+"/v1/models"); ok {
-		return "openai-compat"
+	if probeURL(ctx, client, baseURL+"/v1/models") {
+		return ServerTypeOpenAICompat
 	}
 	return ""
 }
