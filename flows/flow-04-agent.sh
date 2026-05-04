@@ -5,6 +5,9 @@ source "$(dirname "$0")/lib.sh"
 
 # §4: Deploy AI Agent (idempotent)
 run_step "obol agent init" "$OBOL" agent init
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+    run_step "Route default agent through QA LLM endpoint" route_llm_via_obol_cli "$OBOL"
+fi
 
 # List agent instances — verify name AND URL are shown (getting-started §4)
 run_step_grep "agent list shows instances" "obol-agent" "$OBOL" agent list
@@ -71,21 +74,48 @@ fi
 # Determine the namespace for port-forward
 NS=$("$OBOL" agent list --runtime hermes 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
 
+step "Hermes deployment ready"
+rollout_timeout="${FLOW04_HERMES_READY_TIMEOUT:-900s}"
+rollout_out=$("$OBOL" kubectl rollout status deployment/hermes -n "$NS" --timeout="$rollout_timeout" 2>&1) || true
+if echo "$rollout_out" | grep -qi "successfully rolled out"; then
+    pass "Hermes deployment ready"
+else
+    fail "Hermes deployment not ready after $rollout_timeout — ${rollout_out:0:200}"
+    "$OBOL" kubectl get pods -n "$NS" 2>/dev/null || true
+    "$OBOL" kubectl get events -n "$NS" --sort-by=.lastTimestamp 2>/dev/null | tail -n 30 || true
+    emit_metrics
+    exit 0
+fi
+
 step "Agent inference via port-forward"
 AGENT_PF_PORT="${FLOW04_AGENT_PORT:-$(pick_free_port)}"
 "$OBOL" kubectl port-forward -n "$NS" "svc/hermes" "${AGENT_PF_PORT}:8642" &>/dev/null &
 PF_PID=$!
 
-# Poll until the selected local port is accepting connections
-for i in $(seq 1 15); do
-    if curl -sf --max-time 2 "http://localhost:${AGENT_PF_PORT}/health" >/dev/null 2>&1; then
+# Poll until the selected local port reaches the Hermes health endpoint.
+agent_health=""
+for i in $(seq 1 60); do
+    agent_health=$(curl -sf --max-time 2 "http://localhost:${AGENT_PF_PORT}/health" 2>&1) || true
+    if echo "$agent_health" | grep -q "ok\\|status"; then
         break
     fi
     sleep 2
 done
+if ! echo "$agent_health" | grep -q "ok\\|status"; then
+    fail "Hermes port-forward health failed — ${agent_health:0:200}"
+    cleanup_pid "$PF_PID"
+    emit_metrics
+    exit 0
+fi
 
 model_name=$("$OBOL" kubectl get cm hermes-config -n "$NS" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^[[:space:]]*default: //p' | tr -d '"' | head -1)
 [ -n "$model_name" ] || model_name="qwen3.5:35b"
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ "$model_name" != "${OBOL_LLM_MODEL:-qwen36-fast}" ]; then
+    fail "Hermes default model $model_name does not match QA LLM model ${OBOL_LLM_MODEL:-qwen36-fast}"
+    cleanup_pid "$PF_PID"
+    emit_metrics
+    exit 0
+fi
 
 out=$(curl -sf --max-time 120 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
@@ -178,7 +208,7 @@ else
 fi
 
 step "Hermes native dashboard UI via deeplink"
-HERMES_DASHBOARD_HOST="hermes-obol-agent-ui.obol.stack"
+HERMES_DASHBOARD_HOST="obol-agent.obol.stack"
 if [ "$ingress_port" = "80" ]; then
     HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}"
 else

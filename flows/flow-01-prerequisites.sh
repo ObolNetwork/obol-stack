@@ -1,13 +1,19 @@
 #!/bin/bash
 # Flow 01: Prerequisites — validate environment before any cluster work.
-# No cluster needed. Checks: Docker, Ollama, obol binary.
+# No cluster needed. Checks: Docker, LLM endpoint, obol binary.
 source "$(dirname "$0")/lib.sh"
 
 # Docker must be running
 run_step "Docker daemon running" docker info
 
-# Ollama must be serving
-run_step_grep "Ollama serving models" "models" curl -sf http://localhost:11434/api/tags
+# LLM endpoint must be serving. Full QA uses an OpenAI-compatible
+# vLLM/llama.cpp endpoint; local development can still use Ollama.
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+    run_step_grep "OpenAI-compatible LLM endpoint serving models" "data\\|id" \
+        curl -sf "${OBOL_LLM_ENDPOINT%/}/models"
+else
+    run_step_grep "Ollama serving models" "models" curl -sf http://localhost:11434/api/tags
+fi
 
 # obol binary must exist and be executable
 step "obol binary exists"

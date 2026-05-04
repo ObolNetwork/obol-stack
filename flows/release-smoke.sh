@@ -19,13 +19,9 @@ cleanup_stacks() {
         return 0
     fi
 
-    local config_dir stack_id cluster
-    for config_dir in "$OBOL_CONFIG_DIR" "$OBOL_ROOT/.workspace-alice/config" "$OBOL_ROOT/.workspace-bob/config"; do
-        [ -f "$config_dir/.stack-id" ] || continue
-        stack_id=$(cat "$config_dir/.stack-id" 2>/dev/null || true)
-        [ -n "$stack_id" ] || continue
-        cluster="obol-stack-$stack_id"
-        k3d cluster delete "$cluster" >/dev/null 2>&1 || true
+    local workspace
+    for workspace in "$OBOL_ROOT/.workspace" "$OBOL_ROOT/.workspace-alice" "$OBOL_ROOT/.workspace-bob"; do
+        reset_flow_workspace "$workspace"
     done
 }
 trap cleanup_stacks EXIT
@@ -131,14 +127,12 @@ run_flow() {
 cleanup_default_stack_before_dual() {
     echo
     echo "==> Cleaning default stack before dual-stack flow"
-    "$OBOL" stack down >/dev/null 2>&1 || true
-    if [ -f "$OBOL_CONFIG_DIR/.stack-id" ]; then
-        k3d cluster delete "obol-stack-$(cat "$OBOL_CONFIG_DIR/.stack-id")" >/dev/null 2>&1 || true
-    fi
+    reset_flow_workspace "$OBOL_ROOT/.workspace"
 }
 
 main() {
     write_report_header
+    reset_flow_workspace "$OBOL_ROOT/.workspace"
     prepare_workspace
 
     local failed=0
