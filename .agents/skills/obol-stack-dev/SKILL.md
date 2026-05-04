@@ -2,7 +2,7 @@
 name: obol-stack-dev
 description: Obol Stack development and QA runbook. Use when working on obol-stack flows, x402 seller/buyer tests, live Base Sepolia OBOL smoke tests, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   domain: infrastructure
   role: specialist
   scope: development-and-testing
@@ -25,6 +25,7 @@ Treat this skill as an operational router. Load only the reference needed for th
 | Need | Read |
 |------|------|
 | Live OBOL smoke, flow choice, token, Bob pre-funded wallet, release smoke | `references/live-obol-qa.md` |
+| QA model/provider setup, Ollama vs vLLM/llama.cpp, model routing receipts | `references/qa-model-envs.md` |
 | Remote QA worktrees, tmux launch, scoped cleanup | `references/remote-qa.md` |
 | x402 paid routing, ERC-8004, token additions, flow gotchas | `references/paid-commerce.md` |
 | LiteLLM routing architecture | `references/litellm-routing.md` |
@@ -88,6 +89,7 @@ QA LLM invariant:
 - Full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT`.
 - Use an OpenAI-compatible vLLM or llama.cpp endpoint on the QA machine.
 - Default `OBOL_LLM_MODEL` is `qwen36-fast`; override only when the endpoint advertises a different model.
+- The flow adds the endpoint with `obol model setup custom`, promotes it with `obol model prefer`, then runs one `obol model sync`.
 - Do not treat local Ollama `qwen3.5:9b` or cloud-provider fallback as a green full-flow QA substitute.
 
 ## Remote QA Rules

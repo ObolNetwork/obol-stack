@@ -14,7 +14,9 @@ func multiDoc(raw []byte) []map[string]any {
 	// Strip Helm template lines ({{- ... }}).
 	var cleaned []string
 
-	for line := range strings.SplitSeq(string(raw), "\n") {
+	text := strings.ReplaceAll(string(raw), "{{ .Values.id }}", "test-id")
+
+	for line := range strings.SplitSeq(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "{{") {
 			continue
@@ -404,27 +406,27 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("read ClusterRole missing core API group")
 	}
 
-	// ── Write Role ──────────────────────────────────────────────────────
-	writeRole := findDocByName(docs, "Role", "openclaw-monetize-write")
+	// ── Write ClusterRole ───────────────────────────────────────────────
+	writeRole := findDocByName(docs, "ClusterRole", "openclaw-monetize-write")
 	if writeRole == nil {
-		t.Fatal("no Role 'openclaw-monetize-write' found")
+		t.Fatal("no ClusterRole 'openclaw-monetize-write' found")
 	}
-	if ns := nested(writeRole, "metadata", "namespace"); ns != "hermes-obol-agent" {
-		t.Errorf("write Role namespace = %v, want hermes-obol-agent", ns)
-	}
-	writeRules, ok := writeRole["rules"].([]interface{})
+	writeRules, ok := writeRole["rules"].([]any)
 	if !ok || len(writeRules) == 0 {
-		t.Fatal("write Role has no rules")
+		t.Fatal("write ClusterRole has no rules")
 	}
 
 	if !hasVerbOnResource(writeRules, "obol.org", "serviceoffers", "create") {
-		t.Error("write Role missing 'create' on obol.org/serviceoffers")
+		t.Error("write ClusterRole missing 'create' on obol.org/serviceoffers")
+	}
+	if !hasVerbOnResource(writeRules, "obol.org", "purchaserequests", "create") {
+		t.Error("write ClusterRole missing 'create' on obol.org/purchaserequests")
 	}
 	if hasVerbOnResource(writeRules, "traefik.io", "middlewares", "create") {
-		t.Error("write Role should not grant child-resource access")
+		t.Error("write ClusterRole should not grant child-resource access")
 	}
 	if hasVerbOnResource(writeRules, "", "secrets", "create") {
-		t.Error("write Role should not grant Secret writes")
+		t.Error("write ClusterRole should not grant Secret writes")
 	}
 
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
@@ -436,17 +438,176 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if ref := nested(readCRB, "roleRef", "name"); ref != "openclaw-monetize-read" {
 		t.Errorf("read binding roleRef.name = %v, want openclaw-monetize-read", ref)
 	}
+	if !bindingHasSubject(readCRB, "hermes", "hermes-obol-agent") {
+		t.Error("read binding missing hermes-obol-agent/hermes subject")
+	}
+	if !bindingHasSubject(readCRB, "openclaw", "openclaw-obol-agent") {
+		t.Error("read binding missing openclaw-obol-agent/openclaw subject")
+	}
 
-	writeRB := findDocByName(docs, "RoleBinding", "openclaw-monetize-write-binding")
+	writeRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-write-binding")
 	if writeRB == nil {
-		t.Fatal("no RoleBinding 'openclaw-monetize-write-binding' found")
+		t.Fatal("no ClusterRoleBinding 'openclaw-monetize-write-binding' found")
 	}
 	if ref := nested(writeRB, "roleRef", "name"); ref != "openclaw-monetize-write" {
 		t.Errorf("write binding roleRef.name = %v, want openclaw-monetize-write", ref)
 	}
-	if ref := nested(writeRB, "roleRef", "kind"); ref != "Role" {
-		t.Errorf("write binding roleRef.kind = %v, want Role", ref)
+	if ref := nested(writeRB, "roleRef", "kind"); ref != "ClusterRole" {
+		t.Errorf("write binding roleRef.kind = %v, want ClusterRole", ref)
 	}
+	if !bindingHasSubject(writeRB, "hermes", "hermes-obol-agent") {
+		t.Error("write binding missing hermes-obol-agent/hermes subject")
+	}
+	if !bindingHasSubject(writeRB, "openclaw", "openclaw-obol-agent") {
+		t.Error("write binding missing openclaw-obol-agent/openclaw subject")
+	}
+}
+
+func bindingHasSubject(doc map[string]any, name, namespace string) bool {
+	subjects, ok := doc["subjects"].([]any)
+	if !ok {
+		return false
+	}
+	for _, subject := range subjects {
+		sm, ok := subject.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sm["name"] == name && sm["namespace"] == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAgentRBAC_NoOverlyBroadPermissions(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/obol-agent-monetize-rbac.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		docs []map[string]any
+	}{
+		{
+			name: "base monetize RBAC",
+			docs: multiDoc(data),
+		},
+	}
+
+	for _, networkName := range []string{"ethereum", "aztec"} {
+		data, err := ReadEmbeddedNetworkFile(networkName, "templates/agent-rbac.yaml")
+		if err != nil {
+			t.Fatalf("ReadEmbeddedNetworkFile(%s): %v", networkName, err)
+		}
+
+		cases = append(cases, struct {
+			name string
+			docs []map[string]any
+		}{
+			name: networkName + " agent RBAC",
+			docs: multiDoc(data),
+		})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			found := false
+
+			for _, doc := range tc.docs {
+				kind, _ := doc["kind"].(string)
+				if kind != "Role" && kind != "ClusterRole" {
+					continue
+				}
+
+				name, _ := nested(doc, "metadata", "name").(string)
+				if name != "openclaw-monetize-read" && name != "openclaw-monetize-write" && name != "obol-agent-network-role" {
+					continue
+				}
+
+				found = true
+				assertAgentRBACRulesTight(t, name, doc)
+			}
+
+			if !found {
+				t.Fatal("no agent RBAC Role or ClusterRole found")
+			}
+		})
+	}
+}
+
+func assertAgentRBACRulesTight(t *testing.T, roleName string, role map[string]any) {
+	t.Helper()
+
+	rules, ok := role["rules"].([]any)
+	if !ok || len(rules) == 0 {
+		t.Fatalf("%s has no rules", roleName)
+	}
+
+	mutateVerbs := map[string]bool{
+		"create":           true,
+		"update":           true,
+		"patch":            true,
+		"delete":           true,
+		"deletecollection": true,
+	}
+
+	for _, rule := range rules {
+		rm, ok := rule.(map[string]any)
+		if !ok {
+			t.Fatalf("%s has malformed rule %T", roleName, rule)
+		}
+
+		groups := stringSet(rm["apiGroups"])
+		resources := stringSet(rm["resources"])
+		verbs := stringSet(rm["verbs"])
+
+		if groups["*"] || resources["*"] || verbs["*"] {
+			t.Errorf("%s grants wildcard RBAC rule: apiGroups=%v resources=%v verbs=%v", roleName, groups, resources, verbs)
+		}
+
+		hasMutate := false
+		for verb := range verbs {
+			if mutateVerbs[verb] {
+				hasMutate = true
+				break
+			}
+		}
+		if !hasMutate {
+			continue
+		}
+
+		for _, resource := range []string{"secrets", "configmaps"} {
+			if groups[""] && resources[resource] {
+				t.Errorf("%s grants write access to core/%s: verbs=%v", roleName, resource, verbs)
+			}
+		}
+
+		for _, resource := range []string{"middlewares", "httproutes", "referencegrants"} {
+			if (groups["traefik.io"] || groups["gateway.networking.k8s.io"]) && resources[resource] {
+				t.Errorf("%s grants child-resource write access to %s: apiGroups=%v verbs=%v", roleName, resource, groups, verbs)
+			}
+		}
+	}
+}
+
+func stringSet(v any) map[string]bool {
+	out := make(map[string]bool)
+
+	items, ok := v.([]any)
+	if !ok {
+		return out
+	}
+
+	for _, item := range items {
+		s, ok := item.(string)
+		if ok {
+			out[s] = true
+		}
+	}
+
+	return out
 }
 
 // collectAPIGroups extracts all unique apiGroup strings from a list of rules.

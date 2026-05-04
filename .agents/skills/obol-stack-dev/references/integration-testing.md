@@ -2,7 +2,7 @@
 
 ## Overview
 
-Integration tests live primarily in `internal/openclaw/integration_test.go` and `internal/openclaw/monetize_integration_test.go` with build tag `//go:build integration`. Older local integration tests still use host Ollama; full seller/buyer QA flows should use `OBOL_LLM_ENDPOINT` against vLLM or llama.cpp.
+Integration tests live primarily in `internal/openclaw/integration_test.go` and `internal/openclaw/monetize_integration_test.go` with build tag `//go:build integration`. Older local integration tests still use host Ollama; full seller/buyer QA flows must use `OBOL_LLM_ENDPOINT` against vLLM or llama.cpp and should be reported separately from legacy Ollama coverage.
 
 Tests exercise the full deployment path through `obol` CLI verbs: `obol openclaw sync`, `obol model setup`, `obol openclaw token`, `obol openclaw delete`.
 
@@ -11,7 +11,7 @@ Tests exercise the full deployment path through `obol` CLI verbs: `obol openclaw
 ```bash
 # Prerequisites
 # 1. Cluster running: obol stack up
-# 2. Ollama running with at least one model
+# 2. Ollama running with at least one model for legacy integration tests
 # 3. API keys in .env (for cloud tests)
 
 # Set environment
@@ -33,7 +33,8 @@ go test -tags integration -v -run 'TestIntegration_OllamaInference' -timeout 10m
 # Run only inference tests (all 3 providers)
 go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Inference' -timeout 15m ./internal/openclaw/
 
-# Run the legacy local paid commerce loop (requires qwen3.5:9b and a running obol-agent)
+# Run the legacy local paid commerce loop.
+# This does not replace release-gate flows 11/13/14 with OBOL_LLM_ENDPOINT.
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 ```
 

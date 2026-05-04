@@ -249,48 +249,58 @@ else
     fail "Hermes not routing through LiteLLM — base URL: ${litellm_base:-empty}"
 fi
 
-# §4 RBAC: controller design keeps read cluster-wide, but write namespace-scoped.
-step "RBAC: monetize read ClusterRole and write Role exist"
+# §4 RBAC: controller design keeps writes limited to Obol CRDs; the controller
+# owns routing, configmaps, secrets, and registration side effects.
+step "RBAC: monetize read/write ClusterRoles exist"
 cr_read=$("$OBOL" kubectl get clusterrole openclaw-monetize-read 2>&1) || true
-role_write=$("$OBOL" kubectl get role openclaw-monetize-write -n hermes-obol-agent 2>&1) || true
+cr_write=$("$OBOL" kubectl get clusterrole openclaw-monetize-write 2>&1) || true
 if echo "$cr_read" | grep -q "openclaw-monetize-read" && \
-   echo "$role_write" | grep -q "openclaw-monetize-write"; then
-    pass "RBAC: read ClusterRole + write Role"
+   echo "$cr_write" | grep -q "openclaw-monetize-write"; then
+    pass "RBAC: read/write ClusterRoles"
 else
-    fail "Missing monetize RBAC — read: ${cr_read:0:80} write: ${role_write:0:80}"
+    fail "Missing monetize RBAC — read: ${cr_read:0:80} write: ${cr_write:0:80}"
 fi
 
-# §4 RBAC: write Role allows CRUD on ServiceOffers (obol.org) only in the agent namespace.
-step "RBAC: openclaw-monetize-write can CRUD ServiceOffers"
-write_rules=$("$OBOL" kubectl get role openclaw-monetize-write -n hermes-obol-agent \
+# §4 RBAC: write ClusterRole allows Obol CRD lifecycle but not child resources.
+step "RBAC: openclaw-monetize-write can CRUD Obol CRDs only"
+write_rules=$("$OBOL" kubectl get clusterrole openclaw-monetize-write \
     -o jsonpath='{.rules}' 2>&1) || true
 if echo "$write_rules" | python3 -c "
 import sys, json
 rules = json.load(sys.stdin)
+seen = set()
 for r in rules:
-    if 'serviceoffers' in r.get('resources', []) and 'obol.org' in r.get('apiGroups', []):
-        verbs = r.get('verbs', [])
-        assert 'create' in verbs and 'delete' in verbs, f'missing CRUD verbs: {verbs}'
-        print(f'ServiceOffer CRUD: {verbs}')
-        break
-else:
-    raise AssertionError('no ServiceOffer rule found')
+    groups = set(r.get('apiGroups', []))
+    resources = set(r.get('resources', []))
+    verbs = set(r.get('verbs', []))
+    if '*' in groups or '*' in resources or '*' in verbs:
+        raise AssertionError(f'wildcard rule: {r}')
+    if (groups & {'', 'traefik.io', 'gateway.networking.k8s.io'}) and (verbs & {'create','update','patch','delete'}):
+        raise AssertionError(f'non-Obol write rule: {r}')
+    for resource in ('serviceoffers', 'purchaserequests'):
+        if 'obol.org' in groups and resource in resources:
+            assert {'create','delete'} <= verbs, f'missing CRUD verbs for {resource}: {verbs}'
+            seen.add(resource)
+missing = {'serviceoffers', 'purchaserequests'} - seen
+if missing:
+    raise AssertionError(f'missing Obol CRD rule(s): {sorted(missing)}')
 " 2>&1; then
-    pass "openclaw-monetize-write can CRUD ServiceOffers (obol.org)"
+    pass "openclaw-monetize-write can CRUD Obol CRDs and avoids broad child-resource writes"
 else
-    fail "RBAC write rule missing ServiceOffer CRUD — ${write_rules:0:100}"
+    fail "RBAC write rule is too broad or missing Obol CRD CRUD — ${write_rules:0:100}"
 fi
 
-# §4: Read ClusterRoleBinding and write RoleBinding must include hermes SA as subject.
-step "RBAC: openclaw-monetize bindings have hermes SA as subject"
+# §4: Read/write ClusterRoleBindings must include default Hermes and OpenClaw SAs.
+step "RBAC: openclaw-monetize bindings have agent SAs as subjects"
 rbac_out=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-read-binding \
     -o jsonpath='{.subjects}' 2>&1) || true
-rbac_write=$("$OBOL" kubectl get rolebinding openclaw-monetize-write-binding -n hermes-obol-agent \
+rbac_write=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-write-binding \
     -o jsonpath='{.subjects}' 2>&1) || true
-if echo "$rbac_out" | grep -q "hermes" && echo "$rbac_write" | grep -q "hermes"; then
-    pass "Read ClusterRoleBinding and write RoleBinding have hermes SA"
+if echo "$rbac_out" | grep -q "hermes" && echo "$rbac_out" | grep -q "openclaw" && \
+   echo "$rbac_write" | grep -q "hermes" && echo "$rbac_write" | grep -q "openclaw"; then
+    pass "Read/write ClusterRoleBindings have Hermes and OpenClaw SAs"
 else
-    fail "RBAC binding missing hermes SA — read: ${rbac_out:0:50} write: ${rbac_write:0:50}"
+    fail "RBAC binding missing agent SA — read: ${rbac_out:0:80} write: ${rbac_write:0:80}"
 fi
 
 # §2 component table: Remote Signer running (getting-started §2 lists it as a component)

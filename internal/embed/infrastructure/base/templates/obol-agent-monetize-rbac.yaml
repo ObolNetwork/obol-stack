@@ -7,9 +7,9 @@
 
 ---
 #------------------------------------------------------------------------------
-# Namespace - pre-create the default obol-agent namespace so base-stack RBAC can
-# use namespace-scoped Role/RoleBinding resources without widening writes back
-# to a ClusterRole.
+# Namespace - pre-create the default Hermes obol-agent namespace. ClusterRole
+# bindings below also include the default OpenClaw namespace so either runtime
+# can use the same sell/buy compatibility skills.
 #------------------------------------------------------------------------------
 apiVersion: v1
 kind: Namespace
@@ -40,17 +40,20 @@ rules:
 
 ---
 #------------------------------------------------------------------------------
-# Role - Minimal write permissions in the agent namespace only
+# ClusterRole - Minimal Obol CRD write permissions
+#
+# ServiceOffers live in the upstream workload namespace (for example "llm"),
+# while PurchaseRequests live in the buyer agent namespace. The controller owns
+# all child resources, so the agent only needs Obol CRD lifecycle permissions.
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: openclaw-monetize-write
-  namespace: hermes-obol-agent
 rules:
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
-    verbs: ["create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["obol.org"]
     resources: ["purchaserequests"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -74,21 +77,26 @@ subjects:
   - kind: ServiceAccount
     name: hermes
     namespace: hermes-obol-agent
+  - kind: ServiceAccount
+    name: openclaw
+    namespace: openclaw-obol-agent
 
 ---
 #------------------------------------------------------------------------------
-# RoleBinding - Minimal write permissions in the agent namespace
+# ClusterRoleBinding - Minimal Obol CRD write permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: openclaw-monetize-write-binding
-  namespace: hermes-obol-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: openclaw-monetize-write
 subjects:
   - kind: ServiceAccount
     name: hermes
     namespace: hermes-obol-agent
+  - kind: ServiceAccount
+    name: openclaw
+    namespace: openclaw-obol-agent
