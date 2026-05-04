@@ -18,7 +18,7 @@ Query Ethereum blockchain data through the local eRPC gateway. Supports any JSON
 
 ## When NOT to Use
 
-- Sending transactions, signing, or deploying contracts — wallet support coming soon
+- Sending transactions, signing, or deploying contracts — use `ethereum-local-wallet`
 - Validator monitoring — use `distributed-validators`
 - Kubernetes pod diagnostics — use `obol-stack`
 
@@ -37,6 +37,37 @@ To see which networks are connected:
 ```bash
 curl -s http://erpc.erpc.svc.cluster.local/ | python3 -m json.tool
 ```
+
+## Write Transactions: Protected Routing & Revert Protection
+
+When a signed tx is broadcast (via `ethereum-local-wallet`'s `send-tx`, or
+directly via `eth_sendRawTransaction`), eRPC pins the call to Obol's protected
+upstream — `obol-rpc-mainnet` for chain 1, `obol-rpc-base` for chain 8453. Read
+methods still fan out across all configured upstreams; only writes are pinned.
+
+Two consequences worth knowing:
+
+1. **No front-running on the way to the mempool.** Writes don't hit a public
+   transaction pool first, so searchers cannot reorder them around your trade.
+2. **Revert protection is on.** The protected upstream refuses to include
+   transactions that would revert at the head block. This saves callers from
+   wasting gas on a guaranteed failure, but it also means a "transaction that
+   vanished" may simply have been rejected upstream as known-to-revert.
+
+If a tx you broadcast never lands and `eth_getTransactionByHash` keeps returning
+`null`, **simulate before retrying** — bumping gas or nonce won't help when the
+upstream is filtering on simulation outcome:
+
+```bash
+# Dry-run the call against current state with the same args you'd send
+sh scripts/rpc.sh call <to> "<sig>" <args...>
+
+# Or estimate gas — also reverts when the call would revert
+sh scripts/rpc.sh estimate <to> "<sig>" <args...>
+```
+
+If either reverts, fix the inputs (allowance, deadline, slippage, etc.) before
+re-broadcasting.
 
 ## Quick Start (cast)
 

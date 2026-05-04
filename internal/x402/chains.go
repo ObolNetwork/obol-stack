@@ -43,6 +43,13 @@ type AssetInfo struct {
 	TransferMethod string
 	EIP712Name     string
 	EIP712Version  string
+
+	// EIP2612GasSponsoring is true when the token supports ERC20Permit and
+	// the facilitator can batch permit() with transferFrom on settle, letting
+	// buyers skip the one-time approve(Permit2, max) tx. Surfaced to buyers
+	// via the top-level `extensions.eip2612GasSponsoring` field on the 402
+	// response.
+	EIP2612GasSponsoring bool
 }
 
 // Chain constants — USDC addresses verified against coinbase/x402/go v2.7.0
@@ -251,7 +258,32 @@ func ResolveAssetInfo(chain ChainInfo, rule *RouteRule) AssetInfo {
 	if rule.EIP712Version != "" {
 		asset.EIP712Version = rule.EIP712Version
 	}
+
+	// Re-derive registry-driven flags (gasless approve, etc.) from the token
+	// registry. The CR doesn't carry these — the token registry is the source
+	// of truth — so we look up by (symbol, chain) and require the resolved
+	// address to match before honoring the flag, to avoid a malicious offer
+	// claiming a known symbol with a foreign contract address.
+	if entry, ok := ResolveToken(asset.Symbol, chain.Name); ok {
+		if strings.EqualFold(entry.Address, asset.Address) {
+			asset.EIP2612GasSponsoring = entry.EIP2612GasSponsoring
+		}
+	}
 	return asset
+}
+
+// BuildExtensionsForAsset returns the top-level x402 extensions that should be
+// advertised on the 402 response for a given asset. Currently sets
+// `eip2612GasSponsoring` when the asset supports gasless approve via Permit2
+// + ERC20Permit (e.g. OBOL on mainnet). Returns nil when no extensions apply
+// — the caller's `omitempty` JSON tag drops the field entirely.
+func BuildExtensionsForAsset(asset AssetInfo) map[string]any {
+	if !asset.EIP2612GasSponsoring {
+		return nil
+	}
+	return map[string]any{
+		"eip2612GasSponsoring": map[string]any{},
+	}
 }
 
 // BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on

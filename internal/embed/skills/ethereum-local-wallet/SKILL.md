@@ -56,6 +56,7 @@ python3 scripts/signer.py send-tx \
 | `sign-tx --from --to [--value] [--data] [--gas] [--nonce] [--network]` | Sign an EIP-1559 transaction |
 | `send-tx --from --to [--value] [--data] [--network]` | Sign AND broadcast a transaction via eRPC |
 | `sign-typed <address> <json>` | Sign EIP-712 typed data |
+| `gas-info [--network]` | Print recommended base/tip/max fees from `eth_feeHistory` |
 
 ## Transaction Submission Flow
 
@@ -80,7 +81,20 @@ python3 scripts/signer.py send-tx --network hoodi \
   --from 0x... --to 0x... --value 1000000000000000000
 ```
 
-Supported networks: `mainnet`, `hoodi`, `sepolia`, `base-sepolia` (depends on eRPC configuration).
+Supported networks: `mainnet`, `base`, `base-sepolia`, `hoodi`, `sepolia` (depends on eRPC configuration). The aliases `ethereum` and `eip155:<id>` resolve to the canonical name. Unknown values fail with an explicit error rather than silently signing against chain id 1.
+
+## Gas & Tip Selection
+
+`sign-tx` and `send-tx` auto-fill `maxPriorityFeePerGas` and `maxFeePerGas` using `eth_feeHistory(20, latest, [50])` — the median 50th-percentile tip across the last 20 blocks, plus a base-fee headroom of `2*baseFee`. Per-chain bounds clip the tip so quiet mainnet stays at ~0.05 gwei (instead of overpaying 1 gwei) and L2 stays sub-gwei.
+
+To inspect what the oracle would choose without signing:
+
+```bash
+python3 scripts/signer.py gas-info --network mainnet
+python3 scripts/signer.py gas-info --network base
+```
+
+If `eth_feeHistory` is unavailable, the oracle falls back to per-chain safe defaults rather than failing the transaction outright. Override with `--max-fee` and `--max-priority` only when you have a specific reason (e.g. cancelling a stuck tx).
 
 ## Environment Variables
 
