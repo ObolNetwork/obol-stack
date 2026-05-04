@@ -182,18 +182,21 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 ### Dev Registry Cache
 
-When `OBOL_DEVELOPMENT=true`, `obol stack up` creates pull-through k3d registry caches and wires new clusters to use them on image pulls:
+When `OBOL_DEVELOPMENT=true`, `obol stack up` creates pull-through k3d registry caches and a local push target, and wires new clusters to use them:
 
-- `docker.io` -> `k3d-obol-docker-io.localhost:54100`
-- `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101`
-- `quay.io` -> `k3d-obol-quay-io.localhost:54102`
+- `docker.io` -> `k3d-obol-docker-io.localhost:54100` (pull-through)
+- `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101` (pull-through)
+- `quay.io` -> `k3d-obol-quay-io.localhost:54102` (pull-through)
+- `localhost:54103` -> `k3d-obol-local.localhost:54103` (local push target, no upstream proxy)
 
 The generated k3d registry config is written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data is stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
 
+The local push target lets `just dev-frontend` swap layered diffs into the cluster via `docker push localhost:54103/...` (and a deployment image of `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip.
+
 Important caveats:
 
-- This is a pull-through cache for upstream registries, not a first-class local build registry workflow.
-- It is only set up during cluster creation. If `obol stack up` is just starting an existing k3d cluster, registry setup is skipped.
+- The pull-through caches do not help local-build flows like `just dev-frontend` because `docker build` runs on the host daemon and `k3d image import` bypasses registries entirely. The local push target above is what speeds up local-build redeploys.
+- Registries are only set up during cluster creation. If `obol stack up` is just starting an existing k3d cluster, registry setup is skipped — recreate the cluster (`obol stack down && obol stack up`) once to pick up new registry entries.
 
 ## LLM Routing
 
