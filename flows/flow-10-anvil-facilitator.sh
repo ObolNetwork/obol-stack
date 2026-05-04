@@ -14,6 +14,7 @@ ANVIL_LOG="$FLOW_STATE_DIR/anvil.log"
 ANVIL_PID_FILE="$FLOW_STATE_DIR/anvil.pid"
 FACILITATOR_LOG="$FLOW_STATE_DIR/facilitator.log"
 FACILITATOR_CONTAINER_FILE="$FLOW_STATE_DIR/facilitator.container"
+BASE_SEPOLIA_FORK_RPC="${FLOW10_BASE_SEPOLIA_RPC:-${BASE_SEPOLIA_RPC:-}}"
 
 cluster_facilitator_host() {
     if [ -n "${CLUSTER_FACILITATOR_HOST:-}" ]; then
@@ -59,10 +60,14 @@ if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
     pass "Anvil already running on port 8545"
     ANVIL_RPC="http://localhost:8545"
 else
-    nohup anvil --fork-url https://sepolia.base.org --port 8545 >"$ANVIL_LOG" 2>&1 &
+    if ! BASE_SEPOLIA_FORK_RPC="$(resolve_base_sepolia_rpc "$BASE_SEPOLIA_FORK_RPC")"; then
+        fail "Could not find a reachable Base Sepolia RPC for Anvil fork"
+        emit_metrics; exit 0
+    fi
+    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
     anvil_ready=0
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 60); do
         if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
             anvil_ready=1
@@ -74,7 +79,7 @@ else
         sleep 2
     done
     if [ "$anvil_ready" = "1" ]; then
-        pass "Anvil started on port 8545"
+        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC"
     else
         cleanup_pid "$(cat "$ANVIL_PID_FILE" 2>/dev/null || true)"
         fail "Anvil failed to start"
