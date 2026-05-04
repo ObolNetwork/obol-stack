@@ -119,6 +119,15 @@ func TestGenerateConfig_UsesLiteLLMCustomProvider(t *testing.T) {
 	}
 }
 
+func TestGenerateHelmfile_DoesNotUseHelm4OnlyServerSideFlags(t *testing.T) {
+	out := generateHelmfile("hermes-obol-agent")
+	for _, flag := range []string{"--server-side", "--force-conflicts"} {
+		if strings.Contains(out, flag) {
+			t.Fatalf("generated Hermes helmfile contains Helm-version-sensitive flag %s", flag)
+		}
+	}
+}
+
 func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	values := generateValues(
 		"hermes-obol-agent",

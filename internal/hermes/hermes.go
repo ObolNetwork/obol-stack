@@ -690,19 +690,6 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 func generateHelmfile(namespace string) string {
 	return fmt.Sprintf(`# Managed by obol agent
 
-# Force helm to use Server-Side Apply with --force-conflicts on every
-# release. Without this, every Hermes resync after a fresh install hits SSA
-# ownership conflicts on shared fields — most often
-# remote-signer-keystore-password.metadata.labels, where helm's pre-SSA
-# install left field ownership under "kubectl-client-side-apply" and a
-# subsequent helm upgrade with SSA can't reclaim them. =true is required
-# because helm's --server-side flag takes a value (auto|true|false); a bare
-# --server-side would consume the next arg and reject --force-conflicts.
-helmDefaults:
-  args:
-    - "--server-side=true"
-    - "--force-conflicts"
-
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/

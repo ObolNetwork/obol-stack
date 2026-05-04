@@ -2,24 +2,6 @@
 # Orchestrates core infrastructure components deployed with every stack
 # Uses Traefik with Gateway API for routing (replaces nginx-ingress)
 
-# Force helm to use Server-Side Apply with --force-conflicts on every release.
-# Without this, every `obol stack down`/`up` cycle hits a different SSA
-# ownership conflict on resources helm shares with other writers — for example
-# litellm-config.data["config.yaml"] (touched by `obol model setup` patches),
-# remote-signer-keystore-password.metadata.labels (helm 3 pre-SSA default
-# manager was kubectl-client-side-apply), or fields the apiserver synthesises
-# under "before-first-apply" when an Update-managed object first sees an
-# Apply call. --server-side=true switches helm to SSA semantics so it can
-# reason about field ownership at all; --force-conflicts tells it to take
-# ownership when it disagrees with another manager rather than aborting the
-# upgrade. The `=true` form is required: helm's --server-side flag takes a
-# value (auto|true|false), so a bare --server-side would consume the next
-# arg as its value and reject --force-conflicts as an unknown apply method.
-helmDefaults:
-  args:
-    - "--server-side=true"
-    - "--force-conflicts"
-
 repositories:
   - name: traefik
     url: https://traefik.github.io/charts
