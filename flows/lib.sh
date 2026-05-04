@@ -10,6 +10,7 @@ set -euo pipefail
 export PATH="$HOME/.foundry/bin:$HOME/.local/bin:/usr/local/go/bin:$PATH"
 
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+OBOL_INGRESS_URL_CALLER_OVERRIDE="${OBOL_INGRESS_URL:-}"
 
 # Auto-load .env so flow scripts can read REMOTE_SIGNER_PRIVATE_KEY and any
 # FLOW*_PORT / FLOW*_URL overrides without re-exporting them every run.
@@ -76,7 +77,7 @@ export ANVIL_RPC="http://localhost:8545"
 # Legacy model used by older local-Ollama flows. Full seller/buyer QA flows
 # should set OBOL_LLM_ENDPOINT and OBOL_LLM_MODEL instead.
 export FLOW_MODEL="${FLOW_MODEL:-qwen3.5:9b}"
-OBOL_INGRESS_URL_OVERRIDE="${OBOL_INGRESS_URL:-}"
+OBOL_INGRESS_URL_OVERRIDE="$OBOL_INGRESS_URL_CALLER_OVERRIDE"
 
 # macOS mDNS can be slow resolving .stack TLD from /etc/hosts.
 # Use --resolve to bypass DNS and go straight to 127.0.0.1.
