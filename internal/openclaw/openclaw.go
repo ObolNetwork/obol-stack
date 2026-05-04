@@ -24,6 +24,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -438,7 +439,8 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Infof("Syncing OpenClaw: %s/%s", appName, id)
 	u.Detail("Deployment directory", deploymentDir)
 
-	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync")
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	cmd := exec.Command(helmfileBinary, syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(),
