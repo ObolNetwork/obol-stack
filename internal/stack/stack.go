@@ -18,6 +18,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
@@ -362,25 +363,18 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
 	}
 
-	// Release runtime field ownership of litellm-config.data.config.yaml so the
-	// upcoming Helm upgrade can reclaim it without an SSA conflict. This keeps
-	// Helm 3 compatible; do not rely on Helm 4-only --server-side flags in
-	// embedded helmfiles.
-	if err := releaseLiteLLMConfigOwnership(cfg, kubeconfigPath); err != nil {
-		u.Warnf("Failed to release LiteLLM config field ownership: %v", err)
-	}
-
 	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
 	}
 
-	helmfileCmd := exec.Command(
-		filepath.Join(cfg.BinDir, "helmfile"),
+	helmfileArgs := []string{
 		"--file", helmfilePath,
 		"--kubeconfig", kubeconfigPath,
 		"sync",
-	)
+	}
+	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	helmfileCmd := exec.Command(filepath.Join(cfg.BinDir, "helmfile"), helmfileArgs...)
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,
@@ -913,33 +907,6 @@ func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (st
 		return "", nil
 	}
 	return raw, nil
-}
-
-// releaseLiteLLMConfigOwnership strips managedFields from the litellm-config
-// ConfigMap so the next helm upgrade can claim ownership of every field
-// without an SSA conflict. Helm tracks release ownership via the
-// meta.helm.sh/release-name annotation, not managedFields, so clearing
-// managedFields does not detach the resource from its release.
-func releaseLiteLLMConfigOwnership(cfg *config.Config, kubeconfigPath string) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-
-	// Skip if the configmap doesn't exist (first install).
-	if _, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", "litellm-config", "-n", "llm", "-o", "name"); err != nil {
-		return nil
-	}
-
-	cmd := exec.Command(kubectlBinary,
-		"patch", "configmap", "litellm-config",
-		"-n", "llm",
-		"--type=merge",
-		"--patch", `{"metadata":{"managedFields":[{}]}}`,
-	)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kubectl patch managedFields: %w\n%s", err, string(out))
-	}
-	return nil
 }
 
 func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
