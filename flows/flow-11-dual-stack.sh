@@ -66,7 +66,11 @@ FACILITATOR_URL="${FLOW11_FACILITATOR_URL:-https://x402.gcp.obol.tech}"
 OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
 export OBOL_LLM_MODEL
 FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m%d-%H%M%S)}"
-BASE_SEPOLIA_RPC="${FLOW11_BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
+if ! BASE_SEPOLIA_RPC="$(resolve_base_sepolia_rpc "${FLOW11_BASE_SEPOLIA_RPC:-${BASE_SEPOLIA_RPC:-}}")"; then
+    fail "Could not find a reachable Base Sepolia RPC"
+    emit_metrics
+    exit 1
+fi
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
 # Initial Hermes defaults for Bob's buyer agent. These are replaced at runtime by
@@ -547,8 +551,12 @@ t0 = time.time()
 req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
     data=json.dumps({
         'model': '$PAID_MODEL',
-        'messages': [{'role': 'user', 'content': 'What is the meaning of life? Answer in one sentence.'}],
-        'max_tokens': 100, 'stream': False
+        'messages': [
+            {'role': 'system', 'content': 'Return only the final answer. Do not include reasoning, analysis, markdown, lists, or preambles.'},
+            {'role': 'user', 'content': 'Reply with exactly this sentence: OBOL payment smoke test passed.'}
+        ],
+        'max_tokens': 60, 'temperature': 0, 'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False}
     }).encode(),
     headers={'Content-Type': 'application/json', 'Authorization': 'Bearer $BOB_MASTER_KEY'})
 try:
@@ -556,9 +564,12 @@ try:
     elapsed = time.time() - t0
     body = json.loads(resp.read())
     c = body['choices'][0]['message']
-    content = c.get('content', '') or c.get('reasoning_content', '')
+    content = ' '.join((c.get('content') or '').split())
+    reasoning = c.get('reasoning_content') or c.get('reasoning') or ''
     print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
     print('MODEL=%s' % body.get('model', '?'))
+    if reasoning:
+        print('REASONING_PRESENT=1')
     print('CONTENT=%s' % content[:300])
 except urllib.error.HTTPError as e:
     print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
@@ -844,14 +855,7 @@ go build -o "$OBOL_ROOT/.build/obol" ./cmd/obol 2>&1 || { fail "build failed"; e
 pass "Binary built"
 
 step "Alice: bootstrap workspace"
-mkdir -p "$ALICE_DIR"/{bin,config,data}
-cp "$OBOL_ROOT/.build/obol" "$ALICE_DIR/bin/obol"
-chmod +x "$ALICE_DIR/bin/obol"
-# Copy deps from obolup (assumes obolup was run previously for the shared tools)
-for tool in kubectl helm helmfile k3d k9s openclaw; do
-    src=$(which "$tool" 2>/dev/null || echo "$OBOL_ROOT/.workspace/bin/$tool")
-    [ -f "$src" ] && ln -sf "$src" "$ALICE_DIR/bin/$tool" 2>/dev/null
-done
+bootstrap_flow_workspace "$ALICE_DIR" "$OBOL_ROOT/.build/obol"
 pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
@@ -890,7 +894,7 @@ wait_erpc_chain_id "Alice" alice base-sepolia 0x14a34
 pass "Base Sepolia RPC added to eRPC (with write access)"
 
 step "Alice: create ServiceOffer"
-REG_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
+REG_START_BLOCK=$(base_sepolia_block_number "$BASE_SEPOLIA_RPC" || true)
 if [ -z "$REG_START_BLOCK" ]; then
     fail "Could not read Base Sepolia block number before registration"
     emit_metrics; exit 1
@@ -1040,13 +1044,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: bootstrap workspace"
-mkdir -p "$BOB_DIR"/{bin,config,data}
-cp "$OBOL_ROOT/.build/obol" "$BOB_DIR/bin/obol"
-chmod +x "$BOB_DIR/bin/obol"
-for tool in kubectl helm helmfile k3d k9s openclaw; do
-    src=$(which "$tool" 2>/dev/null || echo "$OBOL_ROOT/.workspace/bin/$tool")
-    [ -f "$src" ] && ln -sf "$src" "$BOB_DIR/bin/$tool" 2>/dev/null
-done
+bootstrap_flow_workspace "$BOB_DIR" "$OBOL_ROOT/.build/obol"
 pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
@@ -1230,11 +1228,10 @@ buy_response=$(curl -sf --max-time 300 \
     -H "Content-Type: application/json" \
     -d "{
         \"model\": \"hermes-agent\",
-        \"messages\": [
-            {\"role\": \"user\", \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Dual-Stack Test Inference'. Report its endpoint.\"},
-            {\"role\": \"assistant\", \"content\": \"I found the agent. Its endpoint is $TUNNEL_URL/services/alice-inference\"},
-            {\"role\": \"user\", \"content\": \"Now use the buy-x402 skill to buy $FLOW11_BUY_COUNT inference tokens from Alice. Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"}
-        ],
+        \"messages\": [{
+            \"role\": \"user\",
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"
+        }],
         \"max_tokens\": 4000,
 	        \"stream\": false
 	    }" 2>&1 || true)
@@ -1269,9 +1266,16 @@ step "Bob: LiteLLM rollout settled"
 bob kubectl rollout status deployment/litellm -n llm --timeout=180s 2>&1 | tail -2
 pass "LiteLLM rollout settled"
 
-poll_step_grep "Bob: verify buyer sidecar has auths" "remaining=[1-9]" 24 5 buyer_sidecar_status
+poll_step_grep "Bob: verify buyer sidecar has exactly $FLOW11_BUY_COUNT auths" "remaining=$FLOW11_BUY_COUNT" 24 5 buyer_sidecar_status
 buyer_status=$(buyer_sidecar_status)
-pass "Sidecar has auths: $buyer_status"
+if echo "$buyer_status" | grep -q "remaining=$FLOW11_BUY_COUNT"; then
+    pass "Sidecar has exactly $FLOW11_BUY_COUNT auths: $buyer_status"
+else
+    fail "Sidecar auth count mismatch; expected remaining=$FLOW11_BUY_COUNT, got: $buyer_status"
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
+    emit_metrics; exit 1
+fi
 
 # Extract the paid model name from sidecar status
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
@@ -1288,7 +1292,7 @@ if [ -z "$BOB_MASTER_KEY" ]; then
     rm -f "$PF_AGENT_LOG"
     emit_metrics; exit 1
 fi
-BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
+BUY_START_BLOCK=$(base_sepolia_block_number "$BASE_SEPOLIA_RPC" || true)
 if [ -z "$BUY_START_BLOCK" ]; then
     fail "Could not read Base Sepolia block number before paid inference"
     cleanup_pid "$PF_AGENT"
@@ -1314,11 +1318,16 @@ fi
 # question; the answer should be a single short sentence and must not parrot
 # the agent's tool catalogue.
 step "Paid inference: response content is a coherent answer"
-PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p')
+EXPECTED_PAID_CONTENT="OBOL payment smoke test passed."
+PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p' | head -1)
 if [ -z "$PAID_CONTENT" ]; then
     fail "Paid inference response had no CONTENT line: ${inference_response:0:300}"
-elif echo "$PAID_CONTENT" | grep -qiE "\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"; then
-    fail "Paid inference reply parroted tool catalogue: ${PAID_CONTENT:0:300}"
+elif echo "$inference_response" | grep -q '^REASONING_PRESENT=1'; then
+    fail "Paid inference returned reasoning metadata instead of only final content: ${inference_response:0:300}"
+elif echo "$PAID_CONTENT" | paid_inference_content_invalid; then
+    fail "Paid inference reply contained reasoning or tool-catalogue text: ${PAID_CONTENT:0:300}"
+elif ! printf '%s' "$PAID_CONTENT" | grep -Fq "$EXPECTED_PAID_CONTENT"; then
+    fail "Paid inference reply missed expected smoke sentence; got: ${PAID_CONTENT:0:300}"
 elif [ "${#PAID_CONTENT}" -lt 5 ]; then
     fail "Paid inference reply is suspiciously short (${#PAID_CONTENT} chars): $PAID_CONTENT"
 else

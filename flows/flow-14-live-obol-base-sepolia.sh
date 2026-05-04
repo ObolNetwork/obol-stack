@@ -71,7 +71,11 @@ OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
 export OBOL_LLM_MODEL
 
 # Live Base Sepolia RPC + public Obol facilitator. No host.k3d.internal pin.
-BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
+if ! BASE_SEPOLIA_RPC="$(resolve_base_sepolia_rpc "${BASE_SEPOLIA_RPC:-}")"; then
+    fail "Could not find a reachable Base Sepolia RPC"
+    emit_metrics
+    exit 1
+fi
 FACILITATOR_URL="https://x402.gcp.obol.tech"
 
 DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4"
@@ -471,8 +475,12 @@ t0 = time.time()
 req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
     data=json.dumps({
         'model': '$PAID_MODEL',
-        'messages': [{'role':'user','content':'What is the meaning of life? Answer in one sentence.'}],
-        'max_tokens': 100, 'stream': False
+        'messages': [
+            {'role':'system','content':'Return only the final answer. Do not include reasoning, analysis, markdown, lists, or preambles.'},
+            {'role':'user','content':'Reply with exactly this sentence: OBOL payment smoke test passed.'}
+        ],
+        'max_tokens': 60, 'temperature': 0, 'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False}
     }).encode(),
     headers={'Content-Type':'application/json','Authorization':'Bearer $BOB_MASTER_KEY'})
 try:
@@ -480,9 +488,12 @@ try:
     elapsed = time.time() - t0
     body = json.loads(resp.read())
     c = body['choices'][0]['message']
-    content = c.get('content','') or c.get('reasoning_content','')
+    content = ' '.join((c.get('content') or '').split())
+    reasoning = c.get('reasoning_content') or c.get('reasoning') or ''
     print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
     print('MODEL=%s' % body.get('model','?'))
+    if reasoning:
+        print('REASONING_PRESENT=1')
     print('CONTENT=%s' % content[:300])
 except urllib.error.HTTPError as e:
     print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
@@ -595,20 +606,20 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "OBOL token: confirm reachable + capture metadata"
-OBOL_TOKEN_NAME=$(env -u CHAIN cast call "$OBOL_TOKEN" "name()(string)" \
+OBOL_TOKEN_NAME=$(cast_with_retries call "$OBOL_TOKEN" "name()(string)" \
     --rpc-url "$BASE_SEPOLIA_RPC" 2>&1) || true
 OBOL_TOKEN_NAME=${OBOL_TOKEN_NAME%$'\n'}
 # `cast call` for a string returns a quoted display string; strip enclosing quotes.
 OBOL_TOKEN_NAME=$(printf '%s' "$OBOL_TOKEN_NAME" | sed -e 's/^"//' -e 's/"$//')
-OBOL_TOKEN_SYMBOL=$(env -u CHAIN cast call "$OBOL_TOKEN" "symbol()(string)" \
+OBOL_TOKEN_SYMBOL=$(cast_with_retries call "$OBOL_TOKEN" "symbol()(string)" \
     --rpc-url "$BASE_SEPOLIA_RPC" 2>&1) || true
 OBOL_TOKEN_SYMBOL=$(printf '%s' "$OBOL_TOKEN_SYMBOL" | sed -e 's/^"//' -e 's/"$//')
-OBOL_TOKEN_DECIMALS_RAW=$(env -u CHAIN cast call "$OBOL_TOKEN" "decimals()(uint8)" \
+OBOL_TOKEN_DECIMALS_RAW=$(cast_with_retries call "$OBOL_TOKEN" "decimals()(uint8)" \
     --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
-OBOL_TOKEN_DECIMALS=$(echo "$OBOL_TOKEN_DECIMALS_RAW" | grep -oE '^[0-9]+' | head -1)
-OBOL_TOKEN_DOMAIN_SEPARATOR=$(env -u CHAIN cast call "$OBOL_TOKEN" "DOMAIN_SEPARATOR()(bytes32)" \
+OBOL_TOKEN_DECIMALS=$(echo "$OBOL_TOKEN_DECIMALS_RAW" | grep -oE '^[0-9]+' | head -1 || true)
+OBOL_TOKEN_DOMAIN_SEPARATOR=$(cast_with_retries call "$OBOL_TOKEN" "DOMAIN_SEPARATOR()(bytes32)" \
     --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
-OBOL_TOKEN_DOMAIN_SEPARATOR=$(echo "$OBOL_TOKEN_DOMAIN_SEPARATOR" | grep -oE '0x[0-9a-fA-F]+' | head -1)
+OBOL_TOKEN_DOMAIN_SEPARATOR=$(echo "$OBOL_TOKEN_DOMAIN_SEPARATOR" | grep -oE '0x[0-9a-fA-F]+' | head -1 || true)
 
 if [ -z "$OBOL_TOKEN_NAME" ] || [ -z "$OBOL_TOKEN_SYMBOL" ] || [ -z "$OBOL_TOKEN_DECIMALS" ]; then
     fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC (name/symbol/decimals all empty)"
@@ -666,13 +677,7 @@ go build -o "$OBOL_ROOT/.build/obol" ./cmd/obol 2>&1 || { fail "build failed"; e
 pass "Binary built"
 
 step "Alice: bootstrap workspace"
-mkdir -p "$ALICE_DIR"/{bin,config,data}
-cp "$OBOL_ROOT/.build/obol" "$ALICE_DIR/bin/obol"
-chmod +x "$ALICE_DIR/bin/obol"
-for tool in kubectl helm helmfile k3d k9s openclaw; do
-    src=$(which "$tool" 2>/dev/null || echo "$OBOL_ROOT/.workspace/bin/$tool")
-    [ -f "$src" ] && ln -sf "$src" "$ALICE_DIR/bin/$tool" 2>/dev/null
-done
+bootstrap_flow_workspace "$ALICE_DIR" "$OBOL_ROOT/.build/obol"
 pass "Alice workspace ready"
 
 stack_init_and_up_with_retry "Alice" alice "$ALICE_DIR"
@@ -709,7 +714,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: create OBOL-priced ServiceOffer (transferMethod=permit2, registration enabled)"
-REG_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
+REG_START_BLOCK=$(base_sepolia_block_number "$BASE_SEPOLIA_RPC" || true)
 if [ -z "$REG_START_BLOCK" ]; then
     fail "Could not read Base Sepolia block number before registration"
     emit_metrics; exit 1
@@ -961,13 +966,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: bootstrap workspace"
-mkdir -p "$BOB_DIR"/{bin,config,data}
-cp "$OBOL_ROOT/.build/obol" "$BOB_DIR/bin/obol"
-chmod +x "$BOB_DIR/bin/obol"
-for tool in kubectl helm helmfile k3d k9s openclaw; do
-    src=$(which "$tool" 2>/dev/null || echo "$OBOL_ROOT/.workspace/bin/$tool")
-    [ -f "$src" ] && ln -sf "$src" "$BOB_DIR/bin/$tool" 2>/dev/null
-done
+bootstrap_flow_workspace "$BOB_DIR" "$OBOL_ROOT/.build/obol"
 pass "Bob workspace ready"
 
 stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
@@ -1153,10 +1152,10 @@ buy_response=$(curl -sf --max-time 300 \
     -H "Content-Type: application/json" \
     -d "{
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [
-            {\"role\": \"user\", \"content\": \"I need to buy 5 inference tokens from the OBOL-priced agent 'Live OBOL Base Sepolia Test Inference'. Its endpoint is $TUNNEL_URL/services/alice-obol-inference\"},
-            {\"role\": \"user\", \"content\": \"Run exactly: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"}
-        ],
+        \"messages\": [{
+            \"role\": \"user\",
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+        }],
         \"max_tokens\": 4000,
         \"stream\": false
     }" 2>&1 || true)
@@ -1189,9 +1188,14 @@ step "Bob: LiteLLM rollout settled"
 bob kubectl rollout status deployment/litellm -n llm --timeout=180s 2>&1 | tail -2
 pass "LiteLLM rollout settled"
 
-poll_step_grep "Bob: buyer sidecar has auths (remaining=5)" "remaining=[1-9]" 24 5 buyer_sidecar_status
+poll_step_grep "Bob: buyer sidecar has exactly 5 auths" "remaining=5" 24 5 buyer_sidecar_status
 buyer_status=$(buyer_sidecar_status)
-pass "Sidecar auths: $buyer_status"
+if echo "$buyer_status" | grep -q "remaining=5"; then
+    pass "Sidecar has exactly 5 auths: $buyer_status"
+else
+    fail "Sidecar auth count mismatch; expected remaining=5, got: $buyer_status"
+    emit_metrics; exit 1
+fi
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
 [ -z "$PAID_MODEL" ] && PAID_MODEL="paid/$OBOL_LLM_MODEL"
 
@@ -1202,7 +1206,7 @@ if [ -z "$BOB_MASTER_KEY" ]; then
     fail "Could not read Bob LiteLLM master key"
     emit_metrics; exit 1
 fi
-BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | tr -d ' ' || true)
+BUY_START_BLOCK=$(base_sepolia_block_number "$BASE_SEPOLIA_RPC" || true)
 inference_response=$(litellm_paid_inference)
 if echo "$inference_response" | grep -q "STATUS=200"; then
     pass "Paid inference succeeded"
@@ -1215,11 +1219,16 @@ fi
 # to come back with a real answer, not the tool-catalogue parrot we saw on
 # the colleague's screenshot.
 step "Paid OBOL inference: response content is a coherent answer"
-PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p')
+EXPECTED_PAID_CONTENT="OBOL payment smoke test passed."
+PAID_CONTENT=$(echo "$inference_response" | sed -n 's/^CONTENT=//p' | head -1)
 if [ -z "$PAID_CONTENT" ]; then
     fail "Paid inference response had no CONTENT line: ${inference_response:0:300}"
-elif echo "$PAID_CONTENT" | grep -qiE "\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"; then
-    fail "Paid inference reply parroted tool catalogue: ${PAID_CONTENT:0:300}"
+elif echo "$inference_response" | grep -q '^REASONING_PRESENT=1'; then
+    fail "Paid inference returned reasoning metadata instead of only final content: ${inference_response:0:300}"
+elif echo "$PAID_CONTENT" | paid_inference_content_invalid; then
+    fail "Paid inference reply contained reasoning or tool-catalogue text: ${PAID_CONTENT:0:300}"
+elif ! printf '%s' "$PAID_CONTENT" | grep -Fq "$EXPECTED_PAID_CONTENT"; then
+    fail "Paid inference reply missed expected smoke sentence; got: ${PAID_CONTENT:0:300}"
 elif [ "${#PAID_CONTENT}" -lt 5 ]; then
     fail "Paid inference reply is suspiciously short (${#PAID_CONTENT} chars): $PAID_CONTENT"
 else

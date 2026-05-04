@@ -3,23 +3,30 @@
 # Tests: host Ollama, in-cluster connectivity, LiteLLM inference, tool-calls.
 source "$(dirname "$0")/lib.sh"
 
-# §3a: Verify Ollama has models
-run_step_grep "Ollama has models on host" "models" \
-    curl -sf http://localhost:11434/api/tags
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+    run_step "Route LiteLLM through QA LLM endpoint" route_llm_via_obol_cli "$OBOL"
+    LITELLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+else
+    LITELLM_MODEL="$FLOW_MODEL"
 
-# §3b: In-cluster Ollama connectivity — exec into litellm pod using python3
-# (wget/curl are not available in the litellm container)
-step "In-cluster Ollama reachable from litellm pod"
-out=$("$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
-    python3 -c "
+    # §3a: Verify Ollama has models
+    run_step_grep "Ollama has models on host" "models" \
+        curl -sf http://localhost:11434/api/tags
+
+    # §3b: In-cluster Ollama connectivity — exec into litellm pod using python3
+    # (wget/curl are not available in the litellm container)
+    step "In-cluster Ollama reachable from litellm pod"
+    out=$("$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
 import urllib.request
 r = urllib.request.urlopen('http://ollama.llm.svc.cluster.local:11434/api/tags', timeout=10)
 print(r.read()[:100].decode())
 " 2>&1) || true
-if echo "$out" | grep -q "models"; then
-    pass "In-cluster Ollama reachable"
-else
-    fail "In-cluster Ollama unreachable — ${out:0:200}"
+    if echo "$out" | grep -q "models"; then
+        pass "In-cluster Ollama reachable"
+    else
+        fail "In-cluster Ollama unreachable — ${out:0:200}"
+    fi
 fi
 
 # §3c: Inference through LiteLLM (port-forward is the documented user path)
@@ -41,9 +48,6 @@ for i in $(seq 1 15); do
     sleep 2
 done
 
-# Use qwen3.5:9b — it is configured in LiteLLM's model_list (FLOW_MODEL is the
-# default in flows/lib.sh; the x402 sell/buy flows route through it directly)
-LITELLM_MODEL="qwen3.5:9b"
 out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $LITELLM_KEY" \
@@ -105,33 +109,50 @@ else
     fail "LiteLLM models endpoint failed — ${models_out:0:200}"
 fi
 
-# §3: LiteLLM config includes qwen3.5:9b (default agent model, auto-configured by obol stack up)
-step "LiteLLM config has qwen3.5:9b (default agent model)"
+# §3: LiteLLM config includes the model under test.
+step "LiteLLM config has $LITELLM_MODEL"
 llm_config=$("$OBOL" kubectl get cm litellm-config -n llm \
     -o jsonpath='{.data.config\.yaml}' 2>&1) || true
-if echo "$llm_config" | grep -q "qwen3.5:9b"; then
+if echo "$llm_config" | grep -Fq "$LITELLM_MODEL"; then
     model_count=$(echo "$llm_config" | grep -c "model_name:" || echo 0)
-    pass "LiteLLM config has qwen3.5:9b ($model_count total models configured)"
+    pass "LiteLLM config has $LITELLM_MODEL ($model_count total models configured)"
 else
-    fail "LiteLLM config missing qwen3.5:9b — check obol stack up auto-configure"
+    fail "LiteLLM config missing $LITELLM_MODEL — check model setup"
 fi
 
-# §3b: LiteLLM config points to in-cluster Ollama service (auto-configured routing)
-# The api_base should be http://ollama.llm.svc.cluster.local:11434 for Ollama models.
-step "LiteLLM config routes to in-cluster Ollama"
-if echo "$llm_config" | grep -q "ollama.llm.svc.cluster.local"; then
-    pass "LiteLLM api_base = ollama.llm.svc.cluster.local:11434"
-else
-    fail "LiteLLM config missing ollama.llm.svc.cluster.local base URL"
-fi
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+    step "LiteLLM config routes through QA LLM endpoint"
+    if echo "$llm_config" | grep -Fq "openai/$LITELLM_MODEL"; then
+        pass "LiteLLM routes $LITELLM_MODEL via OpenAI-compatible adapter"
+    else
+        fail "LiteLLM config missing OpenAI-compatible route for $LITELLM_MODEL"
+    fi
 
-# §3: obol model status shows configured LiteLLM providers (getting-started §3)
-step "obol model status shows ollama provider"
-model_out=$("$OBOL" model status 2>&1) || true
-if echo "$model_out" | grep -q "ollama.*true\|ollama.*n/a"; then
-    pass "model status: ollama provider enabled"
+    step "obol model list shows QA LLM model"
+    model_out=$("$OBOL" model list 2>&1) || true
+    if echo "$model_out" | grep -Fq "$LITELLM_MODEL"; then
+        pass "model list includes $LITELLM_MODEL"
+    else
+        fail "model list missing $LITELLM_MODEL — ${model_out:0:200}"
+    fi
 else
-    fail "model status missing ollama provider — ${model_out:0:200}"
+    # §3b: LiteLLM config points to in-cluster Ollama service (auto-configured routing)
+    # The api_base should be http://ollama.llm.svc.cluster.local:11434 for Ollama models.
+    step "LiteLLM config routes to in-cluster Ollama"
+    if echo "$llm_config" | grep -q "ollama.llm.svc.cluster.local"; then
+        pass "LiteLLM api_base = ollama.llm.svc.cluster.local:11434"
+    else
+        fail "LiteLLM config missing ollama.llm.svc.cluster.local base URL"
+    fi
+
+    # §3: obol model status shows configured LiteLLM providers (getting-started §3)
+    step "obol model status shows ollama provider"
+    model_out=$("$OBOL" model status 2>&1) || true
+    if echo "$model_out" | grep -q "ollama.*true\|ollama.*n/a"; then
+        pass "model status: ollama provider enabled"
+    else
+        fail "model status missing ollama provider — ${model_out:0:200}"
+    fi
 fi
 
 emit_metrics

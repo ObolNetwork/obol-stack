@@ -65,6 +65,11 @@ type facilitatorSettleResponse struct {
 	Payer        string `json:"payer,omitempty"`
 }
 
+var (
+	facilitatorVerifyTimeout = 5 * time.Second
+	facilitatorSettleTimeout = 60 * time.Second
+)
+
 // NewForwardAuthMiddleware creates an x402 payment-gating middleware compatible
 // with the v1 wire format. It checks the X-PAYMENT header, verifies the payment
 // with the facilitator, and optionally settles after a successful downstream
@@ -74,11 +79,10 @@ type facilitatorSettleResponse struct {
 // When VerifyOnly is false (standalone gateway path), settlement runs only
 // after the inner handler returns a success status (< 400).
 func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.PaymentRequirements) func(http.Handler) http.Handler {
-	// 5s timeout (not 30s) so a slow facilitator does not block every paid
-	// request for half a minute. The facilitator does a cheap signature
-	// check; anything taking longer is a network issue the client should
-	// see quickly.
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Verification is a cheap signature check and should fail fast. Settlement
+	// can wait on live-chain confirmation, so it gets a separate budget.
+	verifyClient := &http.Client{Timeout: facilitatorVerifyTimeout}
+	settleClient := &http.Client{Timeout: facilitatorSettleTimeout}
 
 	if !cfg.VerifyOnly {
 		log.Printf("x402: WARNING verifyOnly=false — settlement will run after upstream success. " +
@@ -119,7 +123,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			}
 
 			// Verify with facilitator.
-			verifyResp, err := facilitatorVerify(r.Context(), client, cfg.FacilitatorURL, payloadBytes, matchedReq)
+			verifyResp, err := facilitatorVerify(r.Context(), verifyClient, cfg.FacilitatorURL, payloadBytes, matchedReq)
 			if err != nil {
 				log.Printf("x402: facilitator verify error: %v", err)
 				http.Error(w, "Payment verification failed", http.StatusServiceUnavailable)
@@ -140,7 +144,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						return true
 					}
 
-					settleResp, err := facilitatorSettle(r.Context(), client, cfg.FacilitatorURL, payloadBytes, matchedReq)
+					settleResp, err := facilitatorSettle(r.Context(), settleClient, cfg.FacilitatorURL, payloadBytes, matchedReq)
 					if err != nil {
 						log.Printf("x402: settlement failed: %v", err)
 						http.Error(w, "Payment settlement failed", http.StatusServiceUnavailable)

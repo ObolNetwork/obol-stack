@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
@@ -218,6 +219,62 @@ func TestForwardAuth_SettleOnSuccess(t *testing.T) {
 	body, _ := io.ReadAll(rec.Body)
 	if string(body) != `{"result":"ok"}` {
 		t.Errorf("body = %q, want %q", string(body), `{"result":"ok"}`)
+	}
+}
+
+func TestForwardAuth_SettleUsesLiveChainTimeoutBudget(t *testing.T) {
+	origVerifyTimeout := facilitatorVerifyTimeout
+	origSettleTimeout := facilitatorSettleTimeout
+	facilitatorVerifyTimeout = 30 * time.Millisecond
+	facilitatorSettleTimeout = 150 * time.Millisecond
+	t.Cleanup(func() {
+		facilitatorVerifyTimeout = origVerifyTimeout
+		facilitatorSettleTimeout = origSettleTimeout
+	})
+
+	var verifyCalled, settleCalled atomic.Int32
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/verify":
+			verifyCalled.Add(1)
+			_, _ = w.Write([]byte(`{"isValid":true,"payer":"0xPayer"}`))
+		case "/settle":
+			settleCalled.Add(1)
+			time.Sleep(75 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"success":true,"transaction":"0xTxHash","network":"base-sepolia","payer":"0xPayer"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     false,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if verifyCalled.Load() != 1 {
+		t.Fatalf("verify called %d times, want 1", verifyCalled.Load())
+	}
+	if settleCalled.Load() != 1 {
+		t.Fatalf("settle called %d times, want 1", settleCalled.Load())
+	}
+	if rec.Header().Get("X-PAYMENT-RESPONSE") == "" {
+		t.Fatal("X-PAYMENT-RESPONSE header not set after delayed settlement")
 	}
 }
 

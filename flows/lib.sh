@@ -302,18 +302,21 @@ cleanup_pid() {
 # pools have been fully subnetted" — which has bitten remote QA hosts
 # repeatedly.
 #
-# Workaround: for every k3d-obol-stack-* network, force-disconnect every
-# attached container before attempting removal. Live clusters survive
-# because k3d auto-reconnects its server/serverlb on reconcile; the
-# mirror containers also auto-rejoin when the next cluster claims them.
-# Narrowed to `k3d-obol-stack-` so we never touch user/other-app
-# networks.
+# Workaround: for every k3d-obol-stack-* network that does not belong to a
+# registered k3d cluster, force-disconnect every attached mirror container
+# before attempting removal. Narrowed to `k3d-obol-stack-` so we never touch
+# user/other-app networks.
 cleanup_k3d_obol_networks() {
     if ! command -v docker >/dev/null 2>&1; then
         return 0
     fi
-    local net attached c
+    local net attached c cluster
     for net in $(docker network ls --filter "name=k3d-obol-stack-" --format "{{.Name}}" 2>/dev/null); do
+        cluster="${net#k3d-}"
+        if command -v k3d >/dev/null 2>&1 && k3d cluster list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$cluster"; then
+            continue
+        fi
+
         attached=$(docker network inspect "$net" --format '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}' 2>/dev/null || true)
         # Skip live clusters: any *-server-N or *-serverlb container means k3d
         # is still using this network. Mirror-only attachments are the leak.
@@ -324,6 +327,44 @@ cleanup_k3d_obol_networks() {
             docker network disconnect -f "$net" "$c" >/dev/null 2>&1 || true
         done
         docker network rm "$net" >/dev/null 2>&1 || true
+    done
+}
+
+reset_flow_workspace() {
+    local dir="$1"
+    local stale_root="$OBOL_ROOT/.tmp/stale-workspaces"
+    local stack_id name
+
+    if [ -f "$dir/config/.stack-id" ]; then
+        stack_id="$(tr -d '[:space:]' < "$dir/config/.stack-id" 2>/dev/null || true)"
+        if [ -n "$stack_id" ] && command -v k3d >/dev/null 2>&1; then
+            k3d cluster delete "obol-stack-$stack_id" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    mkdir -p "$stale_root"
+    for name in config data; do
+        if [ -e "$dir/$name" ]; then
+            mv "$dir/$name" "$stale_root/$(basename "$dir")-$name-$(date +%Y%m%d-%H%M%S)-$$" 2>/dev/null || rm -rf "$dir/$name" 2>/dev/null || true
+        fi
+    done
+    rm -rf "$dir/bin" 2>/dev/null || true
+    mkdir -p "$dir"/{bin,config,data}
+
+    cleanup_k3d_obol_networks
+}
+
+bootstrap_flow_workspace() {
+    local dir="$1"
+    local obol_bin="$2"
+    local tool src
+
+    reset_flow_workspace "$dir"
+    cp "$obol_bin" "$dir/bin/obol"
+    chmod +x "$dir/bin/obol"
+    for tool in kubectl helm helmfile k3d k9s openclaw; do
+        src=$(command -v "$tool" 2>/dev/null || printf '%s\n' "$OBOL_ROOT/.workspace/bin/$tool")
+        [ -f "$src" ] && ln -sf "$src" "$dir/bin/$tool" 2>/dev/null
     done
 }
 
@@ -371,11 +412,11 @@ route_llm_via_obol_cli() {
         if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
             args+=(--api-key "$OBOL_LLM_API_KEY")
         fi
-        $runner "${args[@]}"
+        $runner "${args[@]}" || return 1
 
         # Single sync at the end — batches all preceding edits into ONE
         # Hermes deployment revision instead of one per CLI call.
-        $runner model sync
+        $runner model sync || return 1
         return 0
     fi
 
@@ -456,8 +497,71 @@ write_x402_facilitator_logs() {
     docker logs "$name" > "$log" 2>&1 || true
 }
 
+base_sepolia_rpc_candidates() {
+    if [ -n "${1:-}" ]; then
+        printf '%s\n' "$1"
+    fi
+    if [ -n "${BASE_SEPOLIA_RPC:-}" ]; then
+        printf '%s\n' "$BASE_SEPOLIA_RPC"
+    fi
+
+    printf '%s\n' \
+        "https://base-sepolia-rpc.publicnode.com" \
+        "https://base-sepolia.drpc.org" \
+        "https://sepolia.base.org" \
+        "https://base-sepolia.gateway.tenderly.co"
+}
+
+resolve_base_sepolia_rpc() {
+    local preferred="${1:-}"
+    local rpc resp
+
+    while IFS= read -r rpc; do
+        [ -n "$rpc" ] || continue
+        for _ in $(seq 1 3); do
+            resp=$(curl -sf --max-time 10 "$rpc" -X POST -H "Content-Type: application/json" \
+                -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1) || true
+            if echo "$resp" | grep -qi '"result":"0x14a34"'; then
+                printf '%s\n' "$rpc"
+                return 0
+            fi
+            sleep 1
+        done
+    done < <(base_sepolia_rpc_candidates "$preferred" | awk 'NF && !seen[$0]++')
+
+    return 1
+}
+
+cast_with_retries() {
+    local attempts="${CAST_RETRY_ATTEMPTS:-5}"
+    local interval="${CAST_RETRY_INTERVAL:-2}"
+    local out rc
+
+    for _ in $(seq 1 "$attempts"); do
+        out=$(env -u CHAIN cast "$@" 2>&1)
+        rc=$?
+        if [ "$rc" -eq 0 ]; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        sleep "$interval"
+    done
+
+    printf '%s\n' "$out" >&2
+    return "$rc"
+}
+
+base_sepolia_block_number() {
+    local rpc="$1"
+    cast_with_retries block-number --rpc-url "$rpc" 2>/dev/null | tr -d ' '
+}
+
 agent_response_refused() {
     grep -qiE "cannot execute|can't execute|cannot run|can't run|do not have the ability|don't have the ability|not able to run arbitrary|as an AI model|I don't have access|I do not have access|terminal unavailable|tool unavailable|cannot use.*tool"
+}
+
+paid_inference_content_invalid() {
+    grep -qiE "thinking process|analy[sz]e the (user )?(input|request)|chain[- ]of[- ]thought|step[- ]by[- ]step|\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"
 }
 
 assert_obol_kubeconfig() {
@@ -609,15 +713,27 @@ detect_buyer_runtime() {
 }
 
 # Receipt + USDC transfer helpers — promoted from flow-11 so flow-08 and
-# flow-12 can reuse them. They expect the caller to set BASE_SEPOLIA_RPC,
-# USDC_ADDRESS_BASE_SEPOLIA, and FLOW11_ARTIFACT_DIR before invocation.
+# flow-12 can reuse them. They expect the caller to set BASE_SEPOLIA_RPC and
+# USDC_ADDRESS_BASE_SEPOLIA before invocation. Receipt JSON is written to the
+# flow-specific artifact directory when available.
 if ! declare -F find_usdc_transfer >/dev/null; then
+    receipt_artifact_dir() {
+        local dir="${FLOW11_ARTIFACT_DIR:-${ARTIFACT_DIR:-}}"
+        if [ -z "$dir" ]; then
+            dir="$OBOL_ROOT/.tmp/receipts-$(date +%Y%m%d-%H%M%S)"
+        fi
+        mkdir -p "$dir"
+        printf '%s\n' "$dir"
+    }
+
     write_receipt() {
         local name="$1"
         local tx="$2"
+        local dir
         [ -n "$tx" ] || return 0
+        dir="$(receipt_artifact_dir)"
         env -u CHAIN cast receipt --json "$tx" --rpc-url "$BASE_SEPOLIA_RPC" \
-            > "$FLOW11_ARTIFACT_DIR/${name}-receipt.json" 2>/dev/null || true
+            > "$dir/${name}-receipt.json" 2>/dev/null || true
     }
 
     receipt_status_ok() {
@@ -637,7 +753,8 @@ sys.exit(0 if d.get("status") in ("0x1", 1, "1") else 1)' 2>/dev/null
         local tx="$2"
         local attempts="${3:-12}"
         local interval="${4:-2}"
-        local receipt_file="$FLOW11_ARTIFACT_DIR/${name}-receipt.json"
+        local receipt_file
+        receipt_file="$(receipt_artifact_dir)/${name}-receipt.json"
 
         [ -n "$tx" ] || return 1
         for _ in $(seq 1 "$attempts"); do
