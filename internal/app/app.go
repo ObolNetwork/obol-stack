@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -302,7 +303,8 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	u.Detail("Deployment ID", id)
 
 	// Execute helmfile sync
-	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync")
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	cmd := exec.Command(helmfileBinary, syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(),

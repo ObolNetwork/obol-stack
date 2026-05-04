@@ -10,6 +10,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -189,6 +190,7 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 	}
 
 	helmfileArgs = append(helmfileArgs, "sync")
+	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
 	helmfileCmd := exec.Command(
 		filepath.Join(cfg.BinDir, "helmfile"),
 		helmfileArgs...,
