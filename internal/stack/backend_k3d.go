@@ -103,6 +103,21 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		return nil, err
 	}
 
+	// Ensure the dev registry caches are started in BOTH branches. `k3d
+	// cluster start` does not auto-restart registry containers attached via
+	// `--registry-use` at create time — it only starts the cluster's own
+	// nodes. Without this call, every retry after a `cluster stop` falls
+	// back to direct upstream pulls and re-fetches every image, costing
+	// minutes per attempt.
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		setup, setupErr := ensureDevRegistries(cfg, u)
+		if setupErr != nil {
+			u.Warnf("Dev registry cache unavailable, falling back to direct upstream pulls: %v", setupErr)
+		} else {
+			registrySetup = setup
+		}
+	}
+
 	if running {
 		u.Warn("Cluster already exists, starting it")
 
@@ -127,15 +142,6 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		// Re-check port availability — port state may have changed since
 		// 'obol stack init' wrote the k3d config.
 		ensureK3dPortsAvailable(k3dConfigPath, u)
-
-		if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-			setup, setupErr := ensureDevRegistries(cfg, u)
-			if setupErr != nil {
-				u.Warnf("Dev registry cache unavailable, falling back to direct upstream pulls: %v", setupErr)
-			} else {
-				registrySetup = setup
-			}
-		}
 
 		createCmd := exec.Command(
 			filepath.Join(cfg.BinDir, "k3d"),
