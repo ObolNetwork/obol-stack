@@ -29,6 +29,7 @@ A cluster-wide OpenAI-compatible proxy that routes LLM traffic to actual provide
 obol model setup --provider anthropic --api-key sk-ant-...
 obol model setup --provider openai --api-key sk-proj-...
 obol model setup custom --name my-model --endpoint http://example.com --model model-id
+obol model prefer model-id
 obol model status  # Show which providers are enabled
 ```
 
@@ -101,6 +102,14 @@ baseUrl: litellm:4000/v1        (enabled via obol model setup)
 **Setup**: Same as Anthropic but with `--provider openai`.
 
 ## Model Detection
+
+Configured LiteLLM model order is the selection contract. Hermes/OpenClaw use
+the first chat-capable configured model as primary and keep the rest as
+fallbacks. Use `obol model prefer <model>` to make the primary explicit instead
+of relying on hidden ranking by provider name or size tag.
+
+Full QA flows use `obol model setup custom`, `obol model prefer`, and one
+`obol model sync` to route Alice and Bob through `OBOL_LLM_ENDPOINT`.
 
 The function `detectOllama()` checks if Ollama is running on the host:
 ```go

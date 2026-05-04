@@ -34,16 +34,28 @@ If the source checkout is not `$HOME/obol-stack-src`, set `OBOL_QA_BASE`.
 
 ## Launch Live OBOL Smoke
 
+Full seller/buyer QA needs an OpenAI-compatible endpoint on the QA machine.
+Set `OBOL_LLM_MODEL` to an id returned by `/models`.
+
 ```bash
 cd "$QA"
 export PATH="$QA/.workspace/bin:$FOUNDRY_BIN:$TOOL_ROOT:$PATH"
+export OBOL_LLM_ENDPOINT=${OBOL_LLM_ENDPOINT:-http://127.0.0.1:8000/v1}
+export OBOL_LLM_MODEL=${OBOL_LLM_MODEL:-qwen36-fast}
 ts=$(date +%Y%m%d-%H%M%S)
 log="$QA/.tmp/flow-14-$ts.log"
 art="$QA/.tmp/flow-14-$ts-artifacts"
 mkdir -p "$art"
 
 tmux new-session -d -s "qa-flow14-$ts" \
-  "cd $QA && PATH=$PATH OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true OBOL_REUSE_LOCAL_DEV_IMAGES=true FLOW14_ARTIFACT_DIR=$art bash flows/flow-14-live-obol-base-sepolia.sh > $log 2>&1; rc=\$?; printf '\n__FLOW14_DONE_RC__=%s\n' \"\$rc\" >> $log"
+  "cd $QA && PATH=$PATH OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true OBOL_REUSE_LOCAL_DEV_IMAGES=true OBOL_LLM_ENDPOINT=$OBOL_LLM_ENDPOINT OBOL_LLM_MODEL=$OBOL_LLM_MODEL FLOW14_ARTIFACT_DIR=$art bash flows/flow-14-live-obol-base-sepolia.sh > $log 2>&1; rc=\$?; printf '\n__FLOW14_DONE_RC__=%s\n' \"\$rc\" >> $log"
+```
+
+For full release smoke, use the same env plus:
+
+```bash
+RELEASE_SMOKE_INCLUDE_OBOL=true
+RELEASE_SMOKE_INCLUDE_OBOL_FORK=true
 ```
 
 Monitor:
@@ -79,4 +91,3 @@ fi
 ```
 
 Root-owned runtime files can block deletion. Move stale worktrees aside instead of deleting arbitrary host paths.
-

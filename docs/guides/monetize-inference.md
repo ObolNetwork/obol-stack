@@ -777,23 +777,20 @@ Missing any of these fields causes the facilitator to reject the payment before 
 
 ### RBAC: forbidden
 
-If the default Hermes agent cannot create or patch Obol resources, the RBAC bindings may have empty `subjects` lists. Patch them manually:
+The default agent should be able to create and patch Obol resources without a
+manual RBAC patch. Verify the installed read and write bindings include the
+default Hermes/OpenClaw service accounts:
 
 ```bash
-# Patch the read ClusterRoleBinding
-for BINDING in openclaw-monetize-read-binding; do
-  kubectl patch clusterrolebinding "$BINDING" \
-      --type=json \
-      -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
-done
-
-# Patch the default-agent write RoleBinding
-kubectl patch rolebinding openclaw-monetize-write-binding -n hermes-obol-agent \
-    --type=json \
-    -p '[{"op":"add","path":"/subjects","value":[{"kind":"ServiceAccount","name":"hermes","namespace":"hermes-obol-agent"}]}]'
+kubectl get clusterrolebinding openclaw-monetize-read-binding \
+  -o jsonpath='{.subjects}'
+kubectl get clusterrolebinding openclaw-monetize-write-binding \
+  -o jsonpath='{.subjects}'
 ```
 
-Replace `hermes-obol-agent` with your actual Hermes namespace if different.
+If either binding is missing the expected subjects, treat it as a stack
+installation bug and rerun the smoke flow after fixing the embedded RBAC
+manifest. Do not paper over smoke-test failures with an ad hoc patch.
 
 ---
 

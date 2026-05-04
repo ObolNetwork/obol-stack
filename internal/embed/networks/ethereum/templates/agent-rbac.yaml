@@ -16,16 +16,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch"]
-  # Write access to CRDs and routing for monetization
+  # Write access to Obol CRDs only. The serviceoffer-controller owns routing
+  # and registration child resources.
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["traefik.io"]
-    resources: ["middlewares"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["httproutes"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
