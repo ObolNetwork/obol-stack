@@ -2168,15 +2168,15 @@ Uses the remote-signer wallet by default. Supports sponsored (zero-gas)
 registration on networks that offer it (e.g. ethereum mainnet).
 
 Examples:
-  obol sell register                                    # interactive, defaults to base
+  obol sell register                                    # interactive, defaults to mainnet
   obol sell register --chain base                       # register on base
   obol sell register --chain mainnet,base               # register on multiple chains
   obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Registration chain(s), comma-separated (base, base-sepolia, mainnet)",
-				Value: "base",
+				Usage: "Registration chain(s), comma-separated (mainnet, base, base-sepolia)",
+				Value: "mainnet",
 			},
 			&cli.BoolFlag{
 				Name:  "sponsored",

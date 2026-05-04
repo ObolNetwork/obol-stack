@@ -15,8 +15,12 @@ const (
 	// ValidationRegistryBaseSepolia is the ERC-8004 Validation Registry on Base Sepolia.
 	ValidationRegistryBaseSepolia = "0x8004CB39f29c09145F24Ad9dDe2A108C1A2cdfC5"
 
-	// DefaultRPCURL is the default JSON-RPC endpoint for Base Sepolia.
-	DefaultRPCURL = "https://sepolia.base.org"
+	// DefaultRPCBase is the default JSON-RPC base URL the controller uses to
+	// build per-chain ERC-8004 clients. It points at the in-cluster eRPC
+	// service; per-chain endpoints are derived as
+	//   <base>/<NetworkConfig.ERPCNetwork>
+	// (see erc8004.NewClientForNetwork). Override with ERC8004_RPC_BASE.
+	DefaultRPCBase = "http://erpc.erpc.svc.cluster.local/rpc"
 
 	// BaseSepoliaChainID is the EIP-155 chain ID for Base Sepolia.
 	BaseSepoliaChainID = 84532

@@ -77,9 +77,11 @@ type Controller struct {
 	// instead of the in-cluster litellm Service DNS. Empty in production.
 	litellmURLOverride string
 
-	registrationRPCURL string
-	baseURLOverride    string
-	defaultBaseURL     string
+	// registrationRPCBase is the eRPC base URL; per-chain clients dial
+	// <base>/<NetworkConfig.ERPCNetwork>. Override with ERC8004_RPC_BASE.
+	registrationRPCBase string
+	baseURLOverride     string
+	defaultBaseURL      string
 }
 
 func New(cfg *rest.Config) (*Controller, error) {
@@ -122,7 +124,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		httpClient:           &http.Client{Timeout: 3 * time.Second},
-		registrationRPCURL:   getenvDefault("ERC8004_RPC_URL", erc8004.DefaultRPCURL),
+		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
 		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
 		defaultBaseURL:       "http://obol.stack:8080",
 	}
@@ -742,13 +744,20 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	// `obol sell http`) via the agent's remote-signer — never by the
 	// controller. The controller only publishes the registration document
 	// and watches for the registration tx to land on-chain so it can mark
-	// the request Ready=True.
+	// the request Ready=True. Each offer's payment.network selects which
+	// chain to watch; the client dials <eRPC base>/<network alias>.
 	var client *erc8004.Client
 	if agentID == "" {
-		client, err = erc8004.NewClient(ctx, c.registrationRPCURL)
+		network, lookupErr := erc8004.ResolveNetwork(offer.Spec.Payment.Network)
+		if lookupErr != nil {
+			status.Phase = registrationPhaseAwaitingExternal
+			status.Message = truncateMessage(fmt.Sprintf("Unsupported registration chain %q: %v", offer.Spec.Payment.Network, lookupErr))
+			return c.updateRegistrationStatus(ctx, raw, status)
+		}
+		client, err = erc8004.NewClientForNetwork(ctx, c.registrationRPCBase, network)
 		if err != nil {
 			status.Phase = registrationPhaseAwaitingExternal
-			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity: %v", err))
+			status.Message = truncateMessage(fmt.Sprintf("Waiting for ERC-8004 RPC connectivity on %s: %v", network.Name, err))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 		defer client.Close()
