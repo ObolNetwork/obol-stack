@@ -60,25 +60,27 @@ BUYER_NS = "llm"
 LITELLM_DEPLOY = "litellm"
 BUYER_PORT = 8402
 
-USDC_CONTRACTS = {
-    "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "ethereum": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+# Canonical chain names match eRPC project aliases (see
+# internal/embed/infrastructure/values/erpc.yaml.gotmpl). Any other label
+# (CAIP-2, "ethereum", chain-id string) is normalized via _resolve_chain
+# before it reaches an eRPC URL or an EIP-712 domain.
+CHAIN_INFO = {
+    "mainnet":      {"chain_id": 1,        "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"},
+    "base":         {"chain_id": 8453,     "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
+    "base-sepolia": {"chain_id": 84532,    "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"},
+    "sepolia":      {"chain_id": 11155111, "usdc": None},
+    "hoodi":        {"chain_id": 560048,   "usdc": None},
 }
 
-CHAIN_IDS = {
-    "base-sepolia": 84532,
-    "base": 8453,
-    "ethereum": 1,
-    "mainnet": 1,
-    "sepolia": 11155111,
-}
-
-CAIP2_TO_CHAIN = {
-    "eip155:84532": "base-sepolia",
-    "eip155:8453": "base",
-    "eip155:1": "ethereum",
-    "eip155:11155111": "sepolia",
+CHAIN_ALIASES = {
+    # Friendly aliases that resolve to canonical eRPC names.
+    "ethereum":         "mainnet",
+    "eth":              "mainnet",
+    "eip155:1":         "mainnet",
+    "eip155:8453":      "base",
+    "eip155:84532":     "base-sepolia",
+    "eip155:11155111":  "sepolia",
+    "eip155:560048":    "hoodi",
 }
 
 # EIP-712 domain for USDC TransferWithAuthorization
@@ -89,6 +91,8 @@ X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001"
 
 SEL_BALANCE_OF = "70a08231"
 SEL_NONCES = "7ecebe00"
+SEL_ALLOWANCE = "dd62ed3e"
+SEL_APPROVE = "095ea7b3"
 
 DEFAULT_BUDGET = "100000000"  # 100 USDC in micro-units
 DEFAULT_AUTH_COUNT = 100      # Pre-sign 100 auths by default
@@ -111,16 +115,44 @@ def _normalize_endpoint(url):
     return base
 
 
+def _resolve_chain(value):
+    """Map any chain label (canonical, alias, CAIP-2) to a canonical eRPC name.
+
+    Raises ValueError on unknown chains so callers fail loudly instead of
+    silently signing against the wrong chain. Use this everywhere a chain
+    string crosses an eRPC URL or an EIP-712 domain.
+    """
+    if value is None:
+        raise ValueError("chain is required")
+    label = str(value).strip()
+    if label in CHAIN_INFO:
+        return label
+    if label in CHAIN_ALIASES:
+        return CHAIN_ALIASES[label]
+    supported = ", ".join(sorted(CHAIN_INFO.keys()))
+    raise ValueError(f"Unknown chain {value!r}. Supported: {supported}")
+
+
 def _normalize_chain_name(network):
-    """Map facilitator/network identifiers to the local eRPC network name."""
-    return CAIP2_TO_CHAIN.get(network, network)
+    """Map facilitator/network identifiers to the canonical eRPC name."""
+    return _resolve_chain(network)
+
+
+def _chain_id(chain):
+    return CHAIN_INFO[_resolve_chain(chain)]["chain_id"]
+
+
+def _canonical_usdc(chain):
+    """Return the canonical USDC address for a chain, or None if not defined."""
+    return CHAIN_INFO[_resolve_chain(chain)].get("usdc")
 
 
 def _asset_display_meta(asset, extra=None):
     """Best-effort display metadata for user-facing balance/price output."""
     extra = extra or {}
     asset_lower = (asset or "").lower()
-    if asset_lower in {addr.lower() for addr in USDC_CONTRACTS.values()}:
+    known_usdcs = {info["usdc"].lower() for info in CHAIN_INFO.values() if info.get("usdc")}
+    if asset_lower in known_usdcs:
         return ("USDC", 6, "micro-units")
     if extra.get("name") == "Obol Network":
         return ("OBOL", 18, "base-units")
@@ -557,6 +589,67 @@ def _supports_erc20_permit(address, token_contract, chain=None):
         return False
 
 
+def _get_token_allowance(owner, token_contract, spender, chain=None):
+    """ERC20.allowance(owner, spender) via eth_call. Returns int or None on RPC failure."""
+    owner_hex = owner.lower().replace("0x", "").zfill(64)
+    spender_hex = spender.lower().replace("0x", "").zfill(64)
+    calldata = f"0x{SEL_ALLOWANCE}{owner_hex}{spender_hex}"
+    try:
+        result = _rpc_call("eth_call", [{"to": token_contract, "data": calldata}, "latest"], chain)
+    except SystemExit:
+        return None
+    if not result or result == "0x":
+        return 0
+    return int(result, 16)
+
+
+def _approve_max_calldata(spender):
+    """ERC20 approve(spender, max_uint256) calldata."""
+    spender_hex = spender.lower().replace("0x", "").zfill(64)
+    return f"0x{SEL_APPROVE}{spender_hex}{'f' * 64}"
+
+
+def _ensure_permit2_allowance(signer_address, asset, chain, transfer_method, extensions=None):
+    """Pre-flight: confirm Permit2 has an allowance on the asset.
+
+    Permit2 pulls tokens via transferFrom, which requires a one-time
+    `approve(Permit2, max)` from the owner. EIP-3009 / direct-transfer flows
+    don't need this. EIP-2612 gas-sponsoring extensions cover it per-request.
+    Without this check, a missing allowance surfaces as an opaque 503 from the
+    seller after the agent has already pre-signed.
+    """
+    if transfer_method != "permit2":
+        return
+    if extensions and "eip2612GasSponsoring" in extensions:
+        return
+    allowance = _get_token_allowance(signer_address, asset, PERMIT2_ADDRESS, chain)
+    if allowance is None:
+        return  # RPC unavailable — let downstream surface the real error
+    if allowance > 0:
+        return
+
+    approve_data = _approve_max_calldata(PERMIT2_ADDRESS)
+    print(
+        "\nError: Permit2 has no allowance on this token for your wallet.\n"
+        "Permit2-based x402 payments require a one-time approve(Permit2, max)\n"
+        "from the owner before any payment can settle.\n",
+        file=sys.stderr,
+    )
+    print(f"  Wallet:   {signer_address}", file=sys.stderr)
+    print(f"  Token:    {asset}", file=sys.stderr)
+    print(f"  Permit2:  {PERMIT2_ADDRESS}", file=sys.stderr)
+    print(f"  Chain:    {chain}", file=sys.stderr)
+    print("\nFix this with one transaction (one-time per token+wallet, ~46k gas):\n", file=sys.stderr)
+    print(
+        "  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
+        f"    --from {signer_address} --to {asset} \\\n"
+        f"    --data {approve_data} --network {chain}",
+        file=sys.stderr,
+    )
+    print("\nThen re-run this command.", file=sys.stderr)
+    sys.exit(1)
+
+
 def _validate_contract_exists(contract_address, chain=None):
     """Verify that a contract exists at the given address via eth_getCode.
 
@@ -576,7 +669,8 @@ def _validate_contract_exists(contract_address, chain=None):
 
 def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
     """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
-    chain_id = CHAIN_IDS.get(chain, 84532)
+    chain = _resolve_chain(chain)
+    chain_id = _chain_id(chain)
     auths = []
     payment = payment or {}
     extensions = extensions or {}
@@ -877,10 +971,20 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
         return False
 
     payment = spec.get("payment") or {}
-    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    try:
+        chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    except ValueError as exc:
+        print(f"{name}: {exc}; skipping", file=sys.stderr)
+        return False
     pay_to = payment.get("payTo", "")
     price = str(payment.get("price", "0"))
-    asset = payment.get("asset") or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    asset = payment.get("asset") or _canonical_usdc(chain)
+    if not asset:
+        print(
+            f"{name}: payment.asset missing and no canonical USDC for {chain}; skipping",
+            file=sys.stderr,
+        )
+        return False
     if not pay_to or not price:
         print(f"{name}: incomplete payment config; skipping")
         return False
@@ -1062,9 +1166,13 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
 
     payment = accepts[0]
     pay_to = payment.get("payTo", "")
-    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    try:
+        chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
-    asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
+    asset = payment.get("asset") or _canonical_usdc(chain)
     extra = payment.get("extra", {}) or {}
     payment_meta = {
         "assetTransferMethod": extra.get("assetTransferMethod", ""),
@@ -1082,7 +1190,14 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     print(f"  Wallet: {signer_address}")
 
     # 3. Validate token contract and check balance.
-    usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    usdc_addr = asset or _canonical_usdc(chain)
+    if not usdc_addr:
+        print(
+            f"Error: 402 response did not include payment.asset and no canonical "
+            f"USDC contract is configured for chain {chain}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if not _validate_contract_exists(usdc_addr, chain):
         print(f"Error: no contract at {usdc_addr} on chain {chain}.", file=sys.stderr)
         print(f"The token may not be deployed on this chain.", file=sys.stderr)
@@ -1156,7 +1271,16 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         print(f"  Warning: balance ({balance}) < total cost ({total_cost}). "
               "Proceeding with --force — some auths may fail on-chain.", file=sys.stderr)
 
-    # 5. Pre-sign authorizations locally (via remote-signer in same namespace).
+    # 5. Pre-flight: verify Permit2 allowance for permit2-based payments.
+    _ensure_permit2_allowance(
+        signer_address,
+        usdc_addr,
+        chain,
+        extra.get("assetTransferMethod", "eip3009"),
+        extensions=pricing.get("extensions", {}) or {},
+    )
+
+    # 6. Pre-sign authorizations locally (via remote-signer in same namespace).
     auths = _presign_auths(
         signer_address,
         pay_to,
@@ -1352,8 +1476,19 @@ def cmd_status(name):
 
 def cmd_balance(chain=None):
     """Check USDC balance for the agent wallet."""
-    net = chain or DEFAULT_CHAIN
-    usdc_addr = USDC_CONTRACTS.get(net, USDC_CONTRACTS.get("base-sepolia"))
+    try:
+        net = _resolve_chain(chain or DEFAULT_CHAIN)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    usdc_addr = _canonical_usdc(net)
+    if not usdc_addr:
+        print(
+            f"Error: no canonical USDC contract for chain {net}. "
+            "Pass --chain mainnet|base|base-sepolia.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     keys_data = _signer_get("/api/v1/keys")
     keys = keys_data.get("keys", [])
@@ -1397,9 +1532,13 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
 
     payment = accepts[0]
     pay_to = payment.get("payTo", "")
-    chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    try:
+        chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
-    asset = payment.get("asset", USDC_CONTRACTS.get(chain, ""))
+    asset = payment.get("asset") or _canonical_usdc(chain)
 
     if not pay_to:
         print("Error: 402 response missing payTo.", file=sys.stderr)
@@ -1409,10 +1548,26 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
     signer_address = _get_signer_address()
     print(f"  Wallet: {signer_address}")
 
-    usdc_addr = asset or USDC_CONTRACTS.get(chain, USDC_CONTRACTS["base-sepolia"])
+    if not asset:
+        print(
+            f"Error: 402 response did not include payment.asset and no canonical "
+            f"USDC contract is configured for chain {chain}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    usdc_addr = asset
     if not _validate_contract_exists(usdc_addr, chain):
         print(f"Error: token contract {usdc_addr} not found on {chain}.", file=sys.stderr)
         sys.exit(1)
+
+    extra = payment.get("extra", {}) or {}
+    _ensure_permit2_allowance(
+        signer_address,
+        usdc_addr,
+        chain,
+        extra.get("assetTransferMethod", "eip3009"),
+        extensions=pricing.get("extensions", {}) or {},
+    )
 
     print(f"Pre-signing 1 payment authorization for {price} micro-units on {chain} ...")
     auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)

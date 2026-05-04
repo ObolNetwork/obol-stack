@@ -83,7 +83,7 @@ func testRequirements() []x402types.PaymentRequirements {
 	}
 }
 
-func TestForwardAuth_NoPayment_Returns402(t *testing.T) {
+func TestForwardAuth_NoPayment_Returns402_AdvertisesExtensions(t *testing.T) {
 	var verifyCalled, settleCalled atomic.Int32
 	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
 	defer fac.Close()
@@ -91,6 +91,9 @@ func TestForwardAuth_NoPayment_Returns402(t *testing.T) {
 	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: fac.URL,
 		VerifyOnly:     true,
+		Extensions: map[string]any{
+			"eip2612GasSponsoring": map[string]any{},
+		},
 	}, testRequirements())
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +115,9 @@ func TestForwardAuth_NoPayment_Returns402(t *testing.T) {
 	}
 	if len(body.Accepts) == 0 {
 		t.Error("402 body has no accepts")
+	}
+	if _, ok := body.Extensions["eip2612GasSponsoring"]; !ok {
+		t.Errorf("402 body extensions missing eip2612GasSponsoring, got %v", body.Extensions)
 	}
 	if verifyCalled.Load() != 0 {
 		t.Error("facilitator.Verify should not be called when no payment header")

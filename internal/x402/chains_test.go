@@ -103,6 +103,37 @@ func TestResolveAssetInfo_Override(t *testing.T) {
 	if asset.EIP712Name != "Obol Network" || asset.EIP712Version != "1" {
 		t.Fatalf("asset EIP-712 metadata = %q/%q", asset.EIP712Name, asset.EIP712Version)
 	}
+	if !asset.EIP2612GasSponsoring {
+		t.Fatalf("EIP2612GasSponsoring = false, want true (re-derived from registry for OBOL on mainnet)")
+	}
+}
+
+// A ServiceOffer that claims symbol OBOL with a foreign contract address must
+// NOT inherit the gasless-approve flag from the registry, otherwise a buyer
+// would skip the on-chain approve and the payment would fail at settlement.
+func TestResolveAssetInfo_RejectAddressMismatch(t *testing.T) {
+	asset := ResolveAssetInfo(ChainEthereumMainnet, &RouteRule{
+		AssetAddress:        "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		AssetSymbol:         "OBOL",
+		AssetDecimals:       18,
+		AssetTransferMethod: "permit2",
+		EIP712Name:          "Obol Network",
+		EIP712Version:       "1",
+	})
+
+	if asset.EIP2612GasSponsoring {
+		t.Fatal("EIP2612GasSponsoring leaked to a foreign address claiming the OBOL symbol")
+	}
+}
+
+func TestBuildExtensionsForAsset(t *testing.T) {
+	if got := BuildExtensionsForAsset(AssetInfo{EIP2612GasSponsoring: false}); got != nil {
+		t.Errorf("expected nil extensions when flag is false, got %v", got)
+	}
+	got := BuildExtensionsForAsset(AssetInfo{EIP2612GasSponsoring: true})
+	if _, ok := got["eip2612GasSponsoring"]; !ok {
+		t.Errorf("expected eip2612GasSponsoring key, got %v", got)
+	}
 }
 
 func TestBuildV2RequirementWithAsset(t *testing.T) {

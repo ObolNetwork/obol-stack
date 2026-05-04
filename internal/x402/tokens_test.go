@@ -59,6 +59,24 @@ func TestResolveToken_OBOL_Ethereum(t *testing.T) {
 	if entry.EIP712Version != "1" {
 		t.Errorf("EIP712Version = %q", entry.EIP712Version)
 	}
+	if !entry.EIP2612GasSponsoring {
+		t.Error("EIP2612GasSponsoring = false, want true (OBOL implements ERC20Permit and the Obol facilitator batches permit() with transferFrom)")
+	}
+}
+
+func TestResolveToken_USDC_NoGasSponsoring(t *testing.T) {
+	// USDC settles via EIP-3009 (transferWithAuthorization), not Permit2,
+	// so EIP2612GasSponsoring is irrelevant and must stay false to avoid
+	// advertising a no-op extension on USDC routes.
+	for _, chain := range []string{"ethereum", "base", "base-sepolia"} {
+		entry, ok := ResolveToken("USDC", chain)
+		if !ok {
+			t.Fatalf("ResolveToken(USDC, %s) not found", chain)
+		}
+		if entry.EIP2612GasSponsoring {
+			t.Errorf("USDC on %s: EIP2612GasSponsoring = true, want false", chain)
+		}
+	}
 }
 
 func TestResolveToken_OBOL_NotOnBase(t *testing.T) {

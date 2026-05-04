@@ -87,6 +87,21 @@ Spikes (10-50 gwei) happen during major events but last minutes to hours, not da
 
 ## Checking Gas Programmatically
 
+If you're about to sign a transaction, the deterministic fee oracle in
+`ethereum-local-wallet` is the simplest path — no inference required:
+
+```bash
+python3 scripts/signer.py gas-info --network mainnet
+python3 scripts/signer.py gas-info --network base
+```
+
+It samples `eth_feeHistory` (median 50th-percentile tip across the last 20
+blocks) and clamps to per-chain bounds, so quiet mainnet stays around 0.05 gwei
+and L2s stay sub-gwei. `sign-tx` / `send-tx` apply the same logic
+automatically; `gas-info` is for inspection.
+
+For ad-hoc reads:
+
 `cast` is available inside OpenClaw pods. Use the `ethereum-networks` skill for convenience:
 
 ```bash

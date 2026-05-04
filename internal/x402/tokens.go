@@ -28,6 +28,14 @@ type TokenEntry struct {
 
 	// EIP712Version is the EIP-712 domain version for signing.
 	EIP712Version string
+
+	// EIP2612GasSponsoring is true when the token implements EIP-2612
+	// (ERC20Permit) and the configured facilitator can batch the permit() call
+	// with the on-chain transferFrom during settlement, sponsoring gas. When
+	// true, the seller's 402 advertises `eip2612GasSponsoring` in extensions
+	// so buyers skip the one-time approve(Permit2, max) step. Only relevant
+	// for permit2 transfer methods.
+	EIP2612GasSponsoring bool
 }
 
 // tokenRegistry maps (uppercased token symbol, canonical chain name) → TokenEntry.
@@ -46,7 +54,10 @@ var tokenRegistry = map[string]map[string]TokenEntry{
 		"arbitrum-sepolia": {Address: ChainArbitrumSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
 	},
 	"OBOL": {
-		"ethereum": {Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1"},
+		// OBOL implements ERC20Permit ("Obol Network", v1). The Obol-operated
+		// facilitator at https://x402.gcp.obol.tech batches permit() with
+		// transferFrom on settle, so buyers don't need a one-time approve.
+		"ethereum": {Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1", EIP2612GasSponsoring: true},
 	},
 }
 

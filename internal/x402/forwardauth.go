@@ -34,6 +34,12 @@ type ForwardAuthConfig struct {
 	// NewForwardAuthMiddleware logs a loud warning when VerifyOnly is false
 	// so operators who flip this in x402-pricing.yaml notice in logs.
 	VerifyOnly bool
+
+	// Extensions, if non-nil, is emitted as the top-level `extensions` field
+	// on 402 responses. Used to advertise capabilities like
+	// `eip2612GasSponsoring` (gasless Permit2 approve) so buyers take the
+	// matching flow. See BuildExtensionsForAsset for how this is populated.
+	Extensions map[string]any
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -96,7 +102,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			paymentHeader := r.Header.Get("X-PAYMENT")
 			if paymentHeader == "" {
-				sendPaymentRequired(w, r, requirements)
+				sendPaymentRequired(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -118,7 +124,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 			matchedReq, found := findMatchingRequirementV1(payload, requirements)
 			if !found {
-				sendPaymentRequired(w, r, requirements)
+				sendPaymentRequired(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -132,7 +138,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 			if !verifyResp.IsValid {
 				log.Printf("x402: payment invalid: %s", verifyResp.InvalidReason)
-				sendPaymentRequired(w, r, requirements)
+				sendPaymentRequired(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -153,7 +159,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 					if !settleResp.Success {
 						log.Printf("x402: settlement unsuccessful: %s", settleResp.ErrorReason)
-						sendPaymentRequired(w, r, requirements)
+						sendPaymentRequired(w, r, requirements, cfg.Extensions)
 						return false
 					}
 
@@ -173,7 +179,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 }
 
 // sendPaymentRequired writes a 402 response with v2 payment requirements.
-func sendPaymentRequired(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements) {
+func sendPaymentRequired(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
 	resource := &x402types.ResourceInfo{
 		URL:         buildResourceURL(r),
 		Description: "Payment required for " + r.URL.Path,
@@ -183,6 +189,7 @@ func sendPaymentRequired(w http.ResponseWriter, r *http.Request, requirements []
 		Error:       "Payment required for this resource",
 		Resource:    resource,
 		Accepts:     requirements,
+		Extensions:  extensions,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
