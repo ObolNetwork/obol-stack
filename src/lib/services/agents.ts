@@ -239,10 +239,6 @@ export class AgentClient {
   public async getWalletMetadata(
     instance: AgentInstance
   ): Promise<WalletMetadata> {
-    if (instance.runtime !== 'openclaw') {
-      return { instanceId: instance.id, addresses: [], count: 0 };
-    }
-
     try {
       const response = await this.coreV1Api.readNamespacedConfigMap({
         name: 'wallet-metadata',

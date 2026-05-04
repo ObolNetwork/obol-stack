@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Box,
   Flex,
@@ -9,6 +10,7 @@ import {
   styled,
   OpenInNew,
 } from '@obolnetwork/obol-ui';
+import { ChevronDownIcon } from '@radix-ui/react-icons';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellInferenceModal } from '../SellInferenceModal';
@@ -18,7 +20,11 @@ import {
   useAgentWalletMetadata,
   useTunnelURL,
 } from '../../../hooks/useAgents';
-import { useAddressBalance } from '../../../hooks/useAddressBalance';
+import {
+  useWalletAssetBalances,
+  type AssetBalance,
+} from '../../../hooks/useWalletAssetBalances';
+import { explorerUrlFor } from '../../../lib/config/agent-balance-tokens';
 import type { AgentInstance } from '@/types/agent';
 
 function displayModelName(raw: string): string {
@@ -92,7 +98,7 @@ const CardContainer = styled(Box, {
 const TopRow = styled(Flex, {
   alignItems: 'center',
   justifyContent: 'space-between',
-  marginBottom: '$lg',
+  marginBottom: '$md',
 });
 
 const InstanceName = styled(Text, {
@@ -114,36 +120,22 @@ const RuntimeBadge = styled(Text, {
   textTransform: 'uppercase',
 });
 
-const MetaItem = styled(Flex, {
+const WalletHeaderRow = styled(Flex, {
   alignItems: 'center',
   gap: '$xxxs',
-  marginBottom: '$xxs',
-  marginTop: '$xs',
   flexWrap: 'wrap',
+  marginTop: '$xs',
 });
 
-const MetaLabel = styled(Text, {
+const WalletLabel = styled(Text, {
   fontSize: '$1',
   color: '$body',
 });
 
-const MetaValue = styled(Text, {
+const WalletAddressText = styled(Text, {
   fontSize: '$1',
   color: '$light',
   fontFamily: 'monospace',
-});
-
-const ActionsRow = styled(Flex, {
-  paddingTop: '$lg',
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-});
-
-const BalanceText = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
-  whiteSpace: 'nowrap',
 });
 
 const KeysBadge = styled(Text, {
@@ -156,6 +148,119 @@ const KeysBadge = styled(Text, {
   padding: '1px 5px',
   lineHeight: 1.4,
   whiteSpace: 'nowrap',
+});
+
+const BalancesList = styled(Flex, {
+  flexDirection: 'column',
+  gap: '$xxxs',
+  marginTop: '$xs',
+});
+
+const BalanceRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xs',
+  fontSize: '$1',
+});
+
+const BalanceSymbol = styled(Text, {
+  fontSize: '11px',
+  fontWeight: '$semibold',
+  color: '$light',
+  fontFamily: 'monospace',
+  minWidth: '38px',
+});
+
+const BalanceAmount = styled(Text, {
+  fontSize: '$1',
+  color: '$light',
+  fontFamily: 'monospace',
+  flex: 1,
+});
+
+const ChainHint = styled(Text, {
+  fontSize: '10px',
+  color: '$body',
+  textTransform: 'lowercase',
+  whiteSpace: 'nowrap',
+});
+
+const ExplorerLink = styled('a', {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  width: 22,
+  height: 22,
+  borderRadius: '$2',
+  border: '1px solid $stroke',
+  background: 'transparent',
+  color: '$body',
+  cursor: 'pointer',
+  transition:
+    'color 150ms ease, border-color 150ms ease, background 150ms ease',
+  '&:hover': {
+    color: '$light',
+    borderColor: '$body',
+    background: '$bg05',
+  },
+});
+
+const ActionsRow = styled(Flex, {
+  paddingTop: '$md',
+  alignItems: 'center',
+  gap: '$xs',
+  flexWrap: 'wrap',
+});
+
+const DetailsToggle = styled('button', {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '$xxxs',
+  marginTop: '$md',
+  padding: 0,
+  background: 'transparent',
+  border: 'none',
+  color: '$body',
+  fontSize: '$1',
+  cursor: 'pointer',
+  transition: 'color 150ms ease',
+  '&:hover': { color: '$light' },
+
+  '& svg': {
+    transition: 'transform 150ms ease',
+  },
+
+  variants: {
+    expanded: {
+      true: {
+        '& svg': { transform: 'rotate(180deg)' },
+      },
+    },
+  },
+});
+
+const DetailsBlock = styled(Box, {
+  marginTop: '$xs',
+  paddingTop: '$xs',
+  borderTop: '1px dashed $stroke',
+});
+
+const DetailRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxxs',
+  marginTop: '$xxs',
+  flexWrap: 'wrap',
+});
+
+const DetailLabel = styled(Text, {
+  fontSize: '$1',
+  color: '$body',
+});
+
+const DetailValue = styled(Text, {
+  fontSize: '$1',
+  color: '$light',
+  fontFamily: 'monospace',
 });
 
 const SellDivider = styled(Box, {
@@ -202,6 +307,23 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+function sortBalances(balances: AssetBalance[]): AssetBalance[] {
+  const symbolOrder: Record<string, number> = {
+    ETH: 0,
+    WETH: 1,
+    OBOL: 2,
+    USDC: 3,
+  };
+  return [...balances].sort((a, b) => {
+    if (a.chain.chainId !== b.chain.chainId) {
+      return a.chain.chainId - b.chain.chainId;
+    }
+    return (
+      (symbolOrder[a.token.symbol] ?? 99) - (symbolOrder[b.token.symbol] ?? 99)
+    );
+  });
+}
+
 export function AgentInstanceCard({
   instance,
   onSelect,
@@ -214,7 +336,10 @@ export function AgentInstanceCard({
   const { tunnelURL } = useTunnelURL();
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
-  const { balance: balanceInfo } = useAddressBalance(primaryAddress);
+  const { balances } = useWalletAssetBalances(primaryAddress);
+  const sortedBalances = sortBalances(balances);
+
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const displayStatus = loading
     ? 'pending'
@@ -244,6 +369,10 @@ export function AgentInstanceCard({
     instance.id === 'default' &&
     displayStatus === 'running';
 
+  const provider = status?.model ? inferProvider(status.model) : null;
+  const showOpenclawTokenError =
+    Boolean(tokenError) && instance.runtime === 'openclaw';
+
   return (
     <CardContainer>
       <TopRow>
@@ -265,59 +394,49 @@ export function AgentInstanceCard({
         />
       </TopRow>
 
-      <MetaItem>
-        <MetaLabel>Host:</MetaLabel>
-        <MetaValue>{instance.hostname}</MetaValue>
-      </MetaItem>
+      {primaryAddress && (
+        <>
+          <WalletHeaderRow>
+            <WalletLabel>Wallet:</WalletLabel>
+            <WalletAddressText>
+              {truncateAddress(primaryAddress)}
+            </WalletAddressText>
+            <CopyButton text={primaryAddress} title="Copy address" />
+            {metadata && metadata.count > 1 && (
+              <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
+            )}
+          </WalletHeaderRow>
 
-      {!loading && status?.model && (
-        <MetaItem>
-          <MetaLabel>Model:</MetaLabel>
-          <MetaValue>{displayModelName(status.model)}</MetaValue>
-        </MetaItem>
-      )}
-
-      {!loading && status && (
-        <MetaItem>
-          <MetaLabel>API:</MetaLabel>
-          <MetaValue>
-            {status.apiConnected === undefined
-              ? 'Checking...'
-              : status.apiConnected
-                ? `Connected${status.model ? ` (${inferProvider(status.model)})` : ''}`
-                : `Error${status.apiError ? ` — ${status.apiError}` : ''}`}
-          </MetaValue>
-        </MetaItem>
-      )}
-
-      {metadata && metadata.addresses.length > 0 && (
-        <MetaItem>
-          <MetaLabel>Wallet:</MetaLabel>
-          <MetaValue>
-            {truncateAddress(metadata.addresses[0].address)}
-          </MetaValue>
-          <CopyButton
-            text={metadata.addresses[0].address}
-            title="Copy address"
-          />
-          {metadata.count > 1 && (
-            <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
+          {sortedBalances.length > 0 && (
+            <BalancesList>
+              {sortedBalances.map(b => {
+                const key = `${b.chain.chainId}-${b.token.symbol}`;
+                const url = explorerUrlFor(b.chain, b.token, primaryAddress);
+                return (
+                  <BalanceRow key={key}>
+                    <BalanceSymbol>{b.token.symbol}</BalanceSymbol>
+                    <BalanceAmount>{b.formatted}</BalanceAmount>
+                    <ChainHint>{b.chain.shortName}</ChainHint>
+                    {b.token.address && (
+                      <CopyButton
+                        text={b.token.address}
+                        title={`Copy ${b.token.symbol} contract`}
+                      />
+                    )}
+                    <ExplorerLink
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`View on ${b.chain.chainName} explorer`}
+                    >
+                      <OpenInNew size="sm" />
+                    </ExplorerLink>
+                  </BalanceRow>
+                );
+              })}
+            </BalancesList>
           )}
-          {balanceInfo && (
-            <BalanceText>
-              {balanceInfo.balance} ETH ({balanceInfo.network})
-            </BalanceText>
-          )}
-        </MetaItem>
-      )}
-
-      {tokenError && instance.runtime === 'openclaw' && (
-        <MetaItem>
-          <MetaLabel css={{ color: '$error' }}>Token:</MetaLabel>
-          <MetaValue css={{ color: '$error' }}>
-            {tokenError} — run: obol openclaw token --regenerate
-          </MetaValue>
-        </MetaItem>
+        </>
       )}
 
       <ActionsRow>
@@ -343,6 +462,56 @@ export function AgentInstanceCard({
           </Link>
         ) : null}
       </ActionsRow>
+
+      <DetailsToggle
+        type="button"
+        onClick={() => setDetailsOpen(o => !o)}
+        expanded={detailsOpen}
+        aria-expanded={detailsOpen}
+      >
+        <ChevronDownIcon width={14} height={14} />
+        {detailsOpen ? 'Hide details' : 'Details'}
+      </DetailsToggle>
+
+      {detailsOpen && (
+        <DetailsBlock>
+          <DetailRow>
+            <DetailLabel>Host:</DetailLabel>
+            <DetailValue>{instance.hostname}</DetailValue>
+          </DetailRow>
+
+          {!loading && status?.model && (
+            <DetailRow>
+              <DetailLabel>Model:</DetailLabel>
+              <DetailValue>{displayModelName(status.model)}</DetailValue>
+            </DetailRow>
+          )}
+
+          {!loading && status && (
+            <DetailRow>
+              <DetailLabel>Provider:</DetailLabel>
+              <DetailValue>
+                {status.apiConnected === undefined
+                  ? 'Checking...'
+                  : status.apiConnected
+                    ? `${provider ?? 'Unknown'} · connected`
+                    : `${provider ?? 'Unknown'} · unreachable${
+                        status.apiError ? ` — ${status.apiError}` : ''
+                      }`}
+              </DetailValue>
+            </DetailRow>
+          )}
+
+          {showOpenclawTokenError && (
+            <DetailRow>
+              <DetailLabel css={{ color: '$error' }}>Token:</DetailLabel>
+              <DetailValue css={{ color: '$error' }}>
+                {tokenError} — run: obol openclaw token --regenerate
+              </DetailValue>
+            </DetailRow>
+          )}
+        </DetailsBlock>
+      )}
 
       {showSellCta && (
         <>

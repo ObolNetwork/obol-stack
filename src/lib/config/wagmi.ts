@@ -9,7 +9,7 @@ import {
 } from '@rainbow-me/rainbowkit/wallets';
 import { defineChain } from 'viem';
 import { createConfig, http } from 'wagmi';
-import { mainnet, sepolia } from 'wagmi/chains';
+import { mainnet, sepolia, base, baseSepolia } from 'wagmi/chains';
 
 // Route RPC calls through the local eRPC gateway where available to avoid
 // CORS issues with public RPCs (e.g. eth.merkle.io).
@@ -48,6 +48,8 @@ export const hoodi = defineChain({
 const transports = {
   [mainnet.id]: http(`${ERPC_URL}/mainnet`, rpcOpts),
   [sepolia.id]: http(undefined, rpcOpts), // chain default (no eRPC upstream)
+  [base.id]: http(`${ERPC_URL}/base`, rpcOpts),
+  [baseSepolia.id]: http(`${ERPC_URL}/base-sepolia`, rpcOpts),
   [hoodi.id]: http(`${ERPC_URL}/hoodi`, rpcOpts),
 } as const;
 
