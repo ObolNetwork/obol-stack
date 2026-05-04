@@ -2,30 +2,24 @@ package openclaw
 
 import "testing"
 
-// TestRankModels_OpenClawWrapper_PrefersLargerLocalModel — same regression
-// guard as the Hermes side, but exercising the openai/-prefix that OpenClaw
-// adds for LiteLLM routing through the openai-compatible provider slot.
-func TestRankModels_OpenClawWrapper_PrefersLargerLocalModel(t *testing.T) {
+func TestRankModels_OpenClawWrapper_PreservesConfiguredOrder(t *testing.T) {
 	primary, fallbacks := rankModels([]string{
 		"llama3.2:1b",
 		"qwen3.5:9b",
-		"llama3.2:3b",
+		"claude-opus-4-7",
 	})
-	if primary != "openai/qwen3.5:9b" {
-		t.Fatalf("primary: got %q, want openai/qwen3.5:9b", primary)
+	if primary != "openai/llama3.2:1b" {
+		t.Fatalf("primary: got %q, want openai/llama3.2:1b", primary)
 	}
-	if len(fallbacks) != 2 || fallbacks[0] != "openai/llama3.2:3b" || fallbacks[1] != "openai/llama3.2:1b" {
+	if len(fallbacks) != 2 || fallbacks[0] != "openai/qwen3.5:9b" || fallbacks[1] != "openai/claude-opus-4-7" {
 		t.Fatalf("fallbacks: got %v", fallbacks)
 	}
 }
 
-func TestRankModels_OpenClawWrapper_KeepsOpenAIPrefixOnCloudPicks(t *testing.T) {
-	// Cloud models also get the openai/ prefix in OpenClaw because LiteLLM
-	// routes them through its openai-compatible adapter slot. The wrapper
-	// must wrap regardless of whether the underlying pick is cloud or local.
+func TestRankModels_OpenClawWrapper_PrefixesConfiguredCloudPrimary(t *testing.T) {
 	primary, _ := rankModels([]string{
-		"qwen3.5:9b",
 		"claude-opus-4-7",
+		"qwen3.5:9b",
 	})
 	if primary != "openai/claude-opus-4-7" {
 		t.Fatalf("primary: got %q, want openai/claude-opus-4-7", primary)
