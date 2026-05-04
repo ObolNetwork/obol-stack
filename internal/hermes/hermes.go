@@ -1273,15 +1273,14 @@ func litellmMasterKey(cfg *config.Config) string {
 	return "sk-obol-" + strings.TrimSpace(string(data))
 }
 
-// rankModels delegates to model.Rank, which knows how to prefer larger local
-// models and frontier cloud models. Kept as a thin wrapper so call sites
-// don't need to import internal/model directly.
+// rankModels delegates to model.Rank, which preserves configured LiteLLM model
+// order and keeps known embedding-only models behind chat-capable models. Kept
+// as a thin wrapper so call sites don't need to import internal/model directly.
 //
-// IMPORTANT: do NOT pre-strip provider prefixes here. model.Rank strips
-// internally for ranking heuristics but returns the ORIGINAL strings so the
-// agent can round-trip them back to LiteLLM. Stripping at this layer would
-// break that round-trip — that's exactly the double-strip bug that
-// ca820c9 worked around for custom endpoints.
+// IMPORTANT: do NOT strip provider prefixes here. model.Rank returns the
+// original strings so the agent can round-trip them back to LiteLLM. Stripping
+// at this layer would break that round-trip — that's exactly the double-strip
+// bug that ca820c9 worked around for custom endpoints.
 func rankModels(models []string) (primary string, fallbacks []string) {
 	return model.Rank(models)
 }

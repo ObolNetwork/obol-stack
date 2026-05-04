@@ -27,6 +27,7 @@ func modelCommand(cfg *config.Config) *cli.Command {
 			modelSyncCommand(cfg),
 			modelPullCommand(),
 			modelListCommand(cfg),
+			modelPreferCommand(cfg),
 			modelRemoveCommand(cfg),
 		},
 	}
@@ -194,12 +195,33 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	}
 
 	if len(models) == 0 {
-		// Sensible defaults
+		// Per-provider defaults — kept in sync with what the providers
+		// document as their current chat-tuned flagship. Bumping these is a
+		// small follow-up PR when frontier models drop, and it isolates the
+		// "what's good today" maintenance to one place.
+		var defaultModel string
 		switch provider {
 		case "anthropic":
-			models = []string{"claude-sonnet-4-6"}
+			defaultModel = "claude-sonnet-4-6"
 		case "openai":
-			models = []string{"gpt-4.1"}
+			defaultModel = "gpt-5.5"
+		}
+
+		// Interactive: let the user override the default with a free-text
+		// entry. Non-interactive (no TTY): silently use the default — the
+		// caller can always pass --model to be explicit.
+		chosen := defaultModel
+		if defaultModel != "" && u.IsTTY() && !u.IsJSON() {
+			input, err := u.Input(fmt.Sprintf("Model for %s", provider), defaultModel)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(input) != "" {
+				chosen = strings.TrimSpace(input)
+			}
+		}
+		if chosen != "" {
+			models = []string{chosen}
 		}
 	}
 
@@ -489,6 +511,34 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 			}
 
 			return nil
+		},
+	}
+}
+
+func modelPreferCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "prefer",
+		Usage:     "Pull one or more models to the head of the LiteLLM model_list (the head becomes the agent's primary)",
+		ArgsUsage: "<model-name> [<model-name> ...]",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			names := cmd.Args().Slice()
+			if len(names) == 0 {
+				return errors.New("at least one model name is required\n\nUsage: obol model prefer <model-name> [<model-name> ...]\n\nList configured models with: obol model list")
+			}
+
+			if err := model.PreferModels(cfg, u, names); err != nil {
+				return err
+			}
+
+			if cmd.Bool("no-sync") {
+				return nil
+			}
+			return syncAgentModels(cfg, u)
 		},
 	}
 }

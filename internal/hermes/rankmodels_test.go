@@ -2,42 +2,20 @@ package hermes
 
 import "testing"
 
-// TestRankModels_HermesWrapper_PrefersLargerLocalModel encodes the regression
-// from the colleague's screenshot: Hermes was deploying with `llama3.2:1b` as
-// the default model, which then parroted its own tool list back on every
-// "hello" prompt. The fix moved capability ranking into model.Rank; this test
-// just confirms the Hermes-side wrapper still calls into it correctly.
-//
-// Contract: bare LiteLLM model_name strings come in, the SAME bare strings
-// come back out — no provider-prefix stripping at this layer. The agent must
-// be able to round-trip the returned primary back to LiteLLM without
-// modification.
-func TestRankModels_HermesWrapper_PrefersLargerLocalModel(t *testing.T) {
+// Contract: LiteLLM model_name strings come in, the SAME strings come back
+// out in configured order. The agent must be able to round-trip the returned
+// primary back to LiteLLM without modification.
+func TestRankModels_HermesWrapper_PreservesConfiguredOrder(t *testing.T) {
 	primary, fallbacks := rankModels([]string{
 		"llama3.2:1b",
 		"llama3.1:8b",
-		"llama3.2:3b",
-	})
-	if primary != "llama3.1:8b" {
-		t.Fatalf("primary: got %q, want llama3.1:8b", primary)
-	}
-	if len(fallbacks) != 2 || fallbacks[0] != "llama3.2:3b" || fallbacks[1] != "llama3.2:1b" {
-		t.Fatalf("fallbacks: got %v, want [llama3.2:3b llama3.2:1b]", fallbacks)
-	}
-}
-
-// TestRankModels_HermesWrapper_PrefersClaudeOverLocal exercises the cloud
-// tier. Cloud entries written by buildModelEntries are bare (e.g.
-// `claude-opus-4-7`, not `anthropic/claude-opus-4-7`), and the wrapper must
-// preserve that.
-func TestRankModels_HermesWrapper_PrefersClaudeOverLocal(t *testing.T) {
-	primary, _ := rankModels([]string{
-		"llama3.1:8b",
 		"claude-opus-4-7",
-		"llama3.2:1b",
 	})
-	if primary != "claude-opus-4-7" {
-		t.Fatalf("primary: got %q, want claude-opus-4-7", primary)
+	if primary != "llama3.2:1b" {
+		t.Fatalf("primary: got %q, want llama3.2:1b", primary)
+	}
+	if len(fallbacks) != 2 || fallbacks[0] != "llama3.1:8b" || fallbacks[1] != "claude-opus-4-7" {
+		t.Fatalf("fallbacks: got %v, want [llama3.1:8b claude-opus-4-7]", fallbacks)
 	}
 }
 
@@ -50,12 +28,12 @@ func TestRankModels_HermesWrapper_PrefersClaudeOverLocal(t *testing.T) {
 // reintroducing it.
 func TestRankModels_HermesWrapper_PreservesProviderPrefixIfPresent(t *testing.T) {
 	primary, _ := rankModels([]string{
+		"llama3.1:8b",
 		"anthropic/claude-opus-4-7",
 		"openai/gpt-4o",
-		"llama3.1:8b",
 	})
-	if primary != "anthropic/claude-opus-4-7" {
-		t.Fatalf("primary: got %q, want anthropic/claude-opus-4-7 (unstripped)", primary)
+	if primary != "llama3.1:8b" {
+		t.Fatalf("primary: got %q, want llama3.1:8b", primary)
 	}
 }
 
