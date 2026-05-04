@@ -2,6 +2,17 @@
 # Orchestrates core infrastructure components deployed with every stack
 # Uses Traefik with Gateway API for routing (replaces nginx-ingress)
 
+# Force helm to use SSA with --force-conflicts on every release so that
+# upgrades take ownership of fields written by other field managers
+# (kubectl-client-side-apply from helm's pre-3.13 default, "before-first-apply"
+# synthesised by the apiserver, or runtime writers like obol's auto-config
+# patches). Without this, every `obol stack down`/`up` cycle hits whack-a-mole
+# SSA conflicts on resources helm shares with other writers.
+helmDefaults:
+  args:
+    - "--server-side"
+    - "--force-conflicts"
+
 repositories:
   - name: traefik
     url: https://traefik.github.io/charts

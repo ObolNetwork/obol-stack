@@ -692,6 +692,17 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 func generateHelmfile(namespace string) string {
 	return fmt.Sprintf(`# Managed by obol agent
 
+# --server-side --force-conflicts on every helm release so upgrades take
+# ownership of fields previously written by other managers (e.g. helm's
+# pre-3.13 client-side-apply default, the apiserver's synthesised
+# "before-first-apply", or runtime kubectl applies). Without this, every
+# subsequent `+"`obol agent sync`"+` after a fresh install hits whack-a-mole
+# SSA conflicts on the remote-signer Secret labels and similar shared fields.
+helmDefaults:
+  args:
+    - "--server-side"
+    - "--force-conflicts"
+
 repositories:
   - name: obol
     url: https://obolnetwork.github.io/helm-charts/

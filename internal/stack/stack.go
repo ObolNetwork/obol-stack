@@ -362,16 +362,6 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
 	}
 
-	// Establish field manager "helm" as the SSA owner of
-	// litellm-config.data["config.yaml"] before helmfile sync runs, so the
-	// upcoming helm upgrade's SSA merges in place instead of conflicting
-	// with the synthesised "before-first-apply" or a previous "helm" Apply
-	// entry. The data is already snapshotted in previousLiteLLMConfig and
-	// gets re-applied by restoreLiteLLMConfig after helm runs.
-	if err := releaseLiteLLMConfigOwnership(cfg, kubeconfigPath, previousLiteLLMConfig); err != nil {
-		u.Warnf("Failed to claim LiteLLM config field ownership: %v", err)
-	}
-
 	// Compatibility migration
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
@@ -915,54 +905,6 @@ func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (st
 		return "", nil
 	}
 	return raw, nil
-}
-
-// releaseLiteLLMConfigOwnership deletes the litellm-config ConfigMap (if it
-// exists) before the next helmfile sync runs, so helm's upgrade creates a
-// fresh ConfigMap and becomes the sole SSA owner of every field — no
-// pre-existing field-ownership entries, no synthesised "before-first-apply"
-// manager, no conflict on `.data.config.yaml`.
-//
-// Why deletion rather than re-applying with manager "helm" or clearing
-// managedFields:
-//   - clearing managedFields ([{}]) leaves data fields with no SSA owner;
-//     Kubernetes synthesises "before-first-apply" on the next SSA call to
-//     track them, and helm's apply then conflicts on `.data.config.yaml`
-//     against that synthesised manager.
-//   - re-applying with manager "helm" via SSA only claims the fields in our
-//     manifest. Adjacent fields (labels, annotations, other data keys) stay
-//     under their original Update manager, and synthesised
-//     "before-first-apply" still appears on helm's SSA call.
-//
-// Helm tracks release ownership via the meta.helm.sh/release-name annotation
-// on the resource — not via managedFields — but those annotations ride along
-// with the ConfigMap content. Helm reconstructs them from its release
-// secret on the next upgrade, so deleting the ConfigMap does not orphan it
-// from the release.
-//
-// The window where the ConfigMap is missing is bounded by helmfile sync
-// (seconds). Running LiteLLM pods are unaffected because volume projections
-// happen at pod start, not on ConfigMap mutation. The user data (custom
-// providers, paid model routes) is already snapshotted in
-// previousLiteLLMConfig and re-applied by restoreLiteLLMConfig after helm
-// finishes.
-func releaseLiteLLMConfigOwnership(cfg *config.Config, kubeconfigPath, snapshot string) error {
-	if strings.TrimSpace(snapshot) == "" {
-		// No existing ConfigMap to delete (first install or earlier failure).
-		return nil
-	}
-
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	cmd := exec.Command(kubectlBinary,
-		"delete", "configmap", "litellm-config",
-		"-n", "llm",
-		"--ignore-not-found",
-	)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kubectl delete configmap litellm-config: %w\n%s", err, string(out))
-	}
-	return nil
 }
 
 func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
