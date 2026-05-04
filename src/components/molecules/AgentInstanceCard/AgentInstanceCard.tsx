@@ -10,7 +10,7 @@ import {
   styled,
   OpenInNew,
 } from '@obolnetwork/obol-ui';
-import { ChevronDownIcon } from '@radix-ui/react-icons';
+import { ChevronRightIcon } from '@radix-ui/react-icons';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellInferenceModal } from '../SellInferenceModal';
@@ -233,7 +233,7 @@ const DetailsToggle = styled('button', {
   variants: {
     expanded: {
       true: {
-        '& svg': { transform: 'rotate(180deg)' },
+        '& svg': { transform: 'rotate(90deg)' },
       },
     },
   },
@@ -402,6 +402,14 @@ export function AgentInstanceCard({
               {truncateAddress(primaryAddress)}
             </WalletAddressText>
             <CopyButton text={primaryAddress} title="Copy address" />
+            <ExplorerLink
+              href={`https://etherscan.io/address/${primaryAddress}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="View on Etherscan"
+            >
+              <OpenInNew size="sm" />
+            </ExplorerLink>
             {metadata && metadata.count > 1 && (
               <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
             )}
@@ -469,8 +477,8 @@ export function AgentInstanceCard({
         expanded={detailsOpen}
         aria-expanded={detailsOpen}
       >
-        <ChevronDownIcon width={14} height={14} />
-        {detailsOpen ? 'Hide details' : 'Details'}
+        <ChevronRightIcon width={14} height={14} />
+        Model Details
       </DetailsToggle>
 
       {detailsOpen && (
