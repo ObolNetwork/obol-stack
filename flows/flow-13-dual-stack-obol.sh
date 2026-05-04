@@ -63,12 +63,13 @@ export OBOL_LLM_MODEL
 ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
 FACILITATOR_PORT="${FLOW13_FACILITATOR_PORT:-$(pick_free_port)}"
 
-# Both clusters speak to Anvil through the docker-managed alias `host.k3d.internal`,
-# which k3d auto-resolves inside the cluster network. From the host we use 127.0.0.1.
+# Both clusters speak to host processes through a Docker-managed host alias.
+# From the host we use 127.0.0.1.
+CLUSTER_HOST="${FLOW13_CLUSTER_HOST:-host.k3d.internal}"
 ANVIL_RPC_HOST="http://127.0.0.1:$ANVIL_PORT"
-ANVIL_RPC_CLUSTER="http://host.k3d.internal:$ANVIL_PORT"
+ANVIL_RPC_CLUSTER="http://$CLUSTER_HOST:$ANVIL_PORT"
 FACILITATOR_URL_HOST="http://127.0.0.1:$FACILITATOR_PORT"
-FACILITATOR_URL_CLUSTER="http://host.k3d.internal:$FACILITATOR_PORT"
+FACILITATOR_URL_CLUSTER="http://$CLUSTER_HOST:$FACILITATOR_PORT"
 BASE_SEPOLIA_FORK_RPC="${FLOW13_BASE_SEPOLIA_RPC:-${BASE_SEPOLIA_RPC:-}}"
 
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
@@ -175,6 +176,58 @@ bob() {
     OBOL_BIN_DIR="$BOB_DIR/bin" \
     OBOL_DATA_DIR="$BOB_DIR/data" \
     "$BOB_DIR/bin/obol" "$@"
+}
+
+cluster_json_rpc_probe() {
+    local runner="$1"
+    local url="$2"
+
+    "$runner" kubectl exec -i -n llm deployment/litellm -c litellm -- \
+        python3 - "$url" <<'PY'
+import sys
+import urllib.request
+
+url = sys.argv[1]
+payload = b'{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req, timeout=8) as resp:
+    sys.stdout.write(resp.read().decode())
+PY
+}
+
+detect_cluster_host_for_anvil() {
+    local runner="$1"
+    local host out
+    LAST_CLUSTER_PROBE_OUT=""
+
+    for host in ${FLOW13_CLUSTER_HOST:-} host.k3d.internal host.docker.internal; do
+        [ -n "$host" ] || continue
+        out=$(cluster_json_rpc_probe "$runner" "http://$host:$ANVIL_PORT" 2>&1 || true)
+        if echo "$out" | grep -q '"result":"0x14a34"'; then
+            printf '%s\n' "$host"
+            return 0
+        fi
+        LAST_CLUSTER_PROBE_OUT="host=$host output=${out:0:300}"
+    done
+
+    return 1
+}
+
+wait_cluster_anvil() {
+    local runner="$1"
+    local out
+    LAST_CLUSTER_PROBE_OUT=""
+
+    for _ in $(seq 1 12); do
+        out=$(cluster_json_rpc_probe "$runner" "$ANVIL_RPC_CLUSTER" 2>&1 || true)
+        if echo "$out" | grep -q '"result":"0x14a34"'; then
+            return 0
+        fi
+        LAST_CLUSTER_PROBE_OUT="${out:0:300}"
+        sleep 5
+    done
+
+    return 1
 }
 
 lower_addr() {
@@ -834,18 +887,14 @@ route_llm_via_obol_cli alice
 poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
-step "Alice: anvil reachable from inside cluster via host.k3d.internal"
-# Use a transient busybox pod for the probe — the eRPC container is distroless
-# and has no wget/curl. busybox's wget is enough to POST a JSON-RPC request.
-probe_out=$(alice kubectl run flow13-probe-alice-$RANDOM \
-    --rm -i --restart=Never --image=busybox:1.36 --quiet \
-    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
-        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
-        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
-if echo "$probe_out" | grep -q '0x14a34'; then
+step "Alice: anvil reachable from inside cluster"
+if detected_host=$(detect_cluster_host_for_anvil alice); then
+    CLUSTER_HOST="$detected_host"
+    ANVIL_RPC_CLUSTER="http://$CLUSTER_HOST:$ANVIL_PORT"
+    FACILITATOR_URL_CLUSTER="http://$CLUSTER_HOST:$FACILITATOR_PORT"
     pass "Alice cluster can reach $ANVIL_RPC_CLUSTER"
 else
-    fail "Alice cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
+    fail "Alice cluster cannot reach Anvil via Docker host aliases — probe: ${LAST_CLUSTER_PROBE_OUT:0:300}"
     emit_metrics; exit 1
 fi
 
@@ -998,15 +1047,10 @@ poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
 step "Bob: anvil reachable from inside cluster"
-probe_out=$(bob kubectl run flow13-probe-bob-$RANDOM \
-    --rm -i --restart=Never --image=busybox:1.36 --quiet \
-    -- sh -c "wget -qO- --timeout=8 '$ANVIL_RPC_CLUSTER' \
-        --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}' \
-        --header='Content-Type: application/json' || echo PROBE_FAILED" 2>&1 || true)
-if echo "$probe_out" | grep -q '0x14a34'; then
+if wait_cluster_anvil bob; then
     pass "Bob cluster can reach $ANVIL_RPC_CLUSTER"
 else
-    fail "Bob cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${probe_out:0:300}"
+    fail "Bob cluster cannot reach Anvil at $ANVIL_RPC_CLUSTER — probe: ${LAST_CLUSTER_PROBE_OUT:0:300}"
     emit_metrics; exit 1
 fi
 
