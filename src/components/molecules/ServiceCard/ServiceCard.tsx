@@ -13,6 +13,7 @@ import type {
 
 interface ServiceCardProps {
   offer: ServiceOffer;
+  tunnelURL: string | null;
 }
 
 const CardContainer = styled(Box, {
@@ -76,26 +77,6 @@ const InfoValue = styled(Text, {
   fontSize: '$1',
   color: '$light',
   fontFamily: 'monospace',
-});
-
-const PriceChipBox = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xxxs',
-  padding: '1px 6px',
-  borderRadius: '4px',
-  border: '1px solid rgba(47, 228, 171, 0.3)',
-  background: 'rgba(47, 228, 171, 0.08)',
-  fontSize: '11px',
-  fontWeight: '$semibold',
-  color: '$obolGreen',
-  whiteSpace: 'nowrap',
-  fontFamily: 'monospace',
-});
-
-const ChainHint = styled(Text, {
-  fontSize: '10px',
-  color: '$body',
-  textTransform: 'lowercase',
 });
 
 const SkillsRow = styled(Flex, {
@@ -233,7 +214,30 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
   }
 }
 
-export function ServiceCard({ offer }: ServiceCardProps) {
+/**
+ * Rewrite the controller-published endpoint (which uses the local
+ * `obol.stack` hostname) to use the public Cloudflare tunnel hostname.
+ * Preserves path, query, and protocol from the tunnel URL. Falls back
+ * to the original endpoint if the tunnel URL hasn't loaded yet.
+ */
+function publicEndpoint(
+  endpoint: string | undefined,
+  tunnelURL: string | null
+): string | null {
+  if (!endpoint) return null;
+  if (!tunnelURL) return endpoint;
+  try {
+    const ep = new URL(endpoint);
+    const tunnel = new URL(tunnelURL);
+    ep.protocol = tunnel.protocol;
+    ep.host = tunnel.host;
+    return ep.toString();
+  } catch {
+    return endpoint;
+  }
+}
+
+export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const displayName = offer.registration?.name || offer.name;
   const isReady = offer.status === 'Ready';
   const price = formatPrice(offer);
@@ -243,6 +247,7 @@ export function ServiceCard({ offer }: ServiceCardProps) {
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
   const charged = offer.usage?.chargedRequests;
+  const endpoint = publicEndpoint(offer.endpoint, tunnelURL);
 
   return (
     <CardContainer>
@@ -275,26 +280,27 @@ export function ServiceCard({ offer }: ServiceCardProps) {
       {price && (
         <InfoRow>
           <InfoLabel>Price:</InfoLabel>
-          <PriceChipBox>
-            <Text
-              css={{
-                fontSize: '11px',
-                fontWeight: '$semibold',
-                color: 'inherit',
-              }}
-            >
-              {price}
-            </Text>
-            <Text css={{ fontSize: '10px', color: 'inherit', opacity: 0.85 }}>
-              {symbol}
-            </Text>
-          </PriceChipBox>
-          {network && <ChainHint>{network}</ChainHint>}
+          <InfoValue>
+            {price} {symbol}
+            {network && (
+              <Text
+                as="span"
+                css={{
+                  fontSize: '$1',
+                  color: '$body',
+                  fontFamily: 'inherit',
+                  marginLeft: '4px',
+                }}
+              >
+                on {network}
+              </Text>
+            )}
+          </InfoValue>
         </InfoRow>
       )}
 
       <InfoRow>
-        <InfoLabel>Earned by:</InfoLabel>
+        <InfoLabel>Fee recipient:</InfoLabel>
         {offer.agentLink ? (
           <AgentLinkText
             href={`#agent-${offer.agentLink.runtime}-${offer.agentLink.id}`}
@@ -320,18 +326,12 @@ export function ServiceCard({ offer }: ServiceCardProps) {
         )}
       </InfoRow>
 
-      {offer.endpoint && (
+      {endpoint && (
         <InfoRow>
           <InfoLabel>Endpoint:</InfoLabel>
-          <InfoValue css={{ wordBreak: 'break-all' }}>
-            {offer.endpoint}
-          </InfoValue>
-          <CopyButton text={offer.endpoint} title="Copy endpoint" />
-          <Link
-            href={offer.endpoint}
-            target="_blank"
-            css={{ fontSize: '13px' }}
-          >
+          <InfoValue css={{ wordBreak: 'break-all' }}>{endpoint}</InfoValue>
+          <CopyButton text={endpoint} title="Copy endpoint" />
+          <Link href={endpoint} target="_blank" css={{ fontSize: '13px' }}>
             <OpenInNew size="sm" />
           </Link>
         </InfoRow>

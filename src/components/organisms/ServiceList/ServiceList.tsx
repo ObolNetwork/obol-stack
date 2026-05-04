@@ -10,6 +10,7 @@ import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
 import { ServiceCard } from '../../molecules/ServiceCard';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
+import { useTunnelURL } from '../../../hooks/useAgents';
 import type { ServiceOffer } from '@/types/sell';
 
 const SubSection = styled(Box, {
@@ -58,6 +59,7 @@ function partitionOffers(offers: ServiceOffer[]) {
 
 export function ServiceList() {
   const { offers, loading, error } = useServiceOffers();
+  const { tunnelURL } = useTunnelURL();
   const { agentOffers, httpOffers } = partitionOffers(offers);
 
   const headerContent = (
@@ -99,6 +101,7 @@ export function ServiceList() {
                     <ServiceCard
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
+                      tunnelURL={tunnelURL}
                     />
                   ))
                 )}
@@ -119,6 +122,7 @@ export function ServiceList() {
                     <ServiceCard
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
+                      tunnelURL={tunnelURL}
                     />
                   ))
                 )}
