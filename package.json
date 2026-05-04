@@ -1,6 +1,6 @@
 {
   "name": "obol-stack-front-end",
-  "version": "0.1.17-rc.5",
+  "version": "0.1.18",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
