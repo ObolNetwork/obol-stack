@@ -700,7 +700,10 @@ func generateHelmfile(namespace string) string {
 # SSA conflicts on the remote-signer Secret labels and similar shared fields.
 helmDefaults:
   args:
-    - "--server-side"
+    # =true form is required: helm's --server-side takes a value
+    # (auto|true|false), so without =true helm consumes the next arg as the
+    # value and rejects --force-conflicts as an unknown apply method.
+    - "--server-side=true"
     - "--force-conflicts"
 
 repositories:

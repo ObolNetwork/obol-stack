@@ -10,7 +10,10 @@
 # SSA conflicts on resources helm shares with other writers.
 helmDefaults:
   args:
-    - "--server-side"
+    # `=true` form is required: helm's `--server-side` takes a value
+    # (auto|true|false). Without `=true`, helm consumes the next arg as the
+    # value and rejects `--force-conflicts` as an unknown apply method.
+    - "--server-side=true"
     - "--force-conflicts"
 
 repositories:
