@@ -72,6 +72,23 @@ func TestAgentWalletCommand_Structure(t *testing.T) {
 	}
 }
 
+func TestAgentWalletCommand_UsageIsRuntimeNeutral(t *testing.T) {
+	cfg := newTestConfig(t)
+	wallet := findSubcommand(t, agentCommand(cfg), "wallet")
+
+	for _, name := range []string{"backup", "restore"} {
+		t.Run(name, func(t *testing.T) {
+			sub := findSubcommand(t, wallet, name)
+			if strings.Contains(sub.Usage, "OpenClaw") {
+				t.Fatalf("%s usage still says OpenClaw-only: %q", name, sub.Usage)
+			}
+			if !strings.Contains(sub.Usage, "agent instance") {
+				t.Fatalf("%s usage = %q, want generic agent instance wording", name, sub.Usage)
+			}
+		})
+	}
+}
+
 func TestResolveAgentTarget(t *testing.T) {
 	tests := []struct {
 		name        string
