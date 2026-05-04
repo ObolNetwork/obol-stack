@@ -213,6 +213,14 @@ else
     fail "x402-pricing missing facilitatorURL — ${pricing_yaml:0:200}"
 fi
 
+step "x402 verifier rollout after pricing change"
+"$OBOL" kubectl rollout restart deployment/x402-verifier -n x402 >/dev/null 2>&1 || true
+if "$OBOL" kubectl rollout status deployment/x402-verifier -n x402 --timeout=180s >/dev/null 2>&1; then
+    pass "x402 verifier rollout settled"
+else
+    fail "x402 verifier rollout did not settle after pricing change"
+fi
+
 cat > /tmp/m1-infra.env <<EOF
 export ANVIL_RPC="$ANVIL_RPC"
 export FACILITATOR_PORT="$FACILITATOR_PORT"
