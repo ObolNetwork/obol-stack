@@ -399,7 +399,7 @@ func TestSellRegister_Flags(t *testing.T) {
 		"endpoint", "name", "description", "image",
 	)
 
-	assertStringDefault(t, flags, "chain", "base")
+	assertStringDefault(t, flags, "chain", "mainnet")
 	assertStringDefault(t, flags, "name", "Obol Agent")
 	assertStringDefault(t, flags, "description", "Obol Stack AI agent with x402 payment-gated services")
 }

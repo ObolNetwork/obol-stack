@@ -155,7 +155,7 @@ obol sell delete ollama-gated -n llm
 
 **serviceoffer-controller** (`internal/serviceoffercontroller/`): Watches ServiceOffers and RegistrationRequests, adds finalizers, creates Middleware + HTTPRoute, publishes registration resources, and drives tombstone cleanup on delete.
 
-**ERC-8004**: Registration publication is isolated behind `RegistrationRequest`. The controller serves `/.well-known/agent-registration.json` from dedicated child resources and optionally registers/tombstones on Base Sepolia when an ERC-8004 signing key is configured.
+**ERC-8004**: Registration publication is isolated behind `RegistrationRequest`. The controller serves `/.well-known/agent-registration.json` from dedicated child resources and watches the chain selected by the offer's `payment.network` (`mainnet`, `base`, `base-sepolia`) for the matching registration tx — submitted by the operator via `obol sell register`, never by the controller. Per-chain RPC is routed through the in-cluster eRPC at `http://erpc.erpc.svc.cluster.local/rpc/<alias>` (override base via `ERC8004_RPC_BASE` env on the controller). The CLI `--chain` default is `mainnet`.
 
 **RBAC**: The controller owns child-resource and registration write access. The agent retains read access plus minimal ServiceOffer CRUD for compatibility commands only.
 
