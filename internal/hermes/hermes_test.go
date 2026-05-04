@@ -143,18 +143,9 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"containerPort: 8642",
 		"containerPort: 9119",
 		"init-hermes-data",
-		"bootstrap-hermes-install",
-		`install_dir="/data/.hermes/hermes-agent"`,
-		`repo_url="https://github.com/NousResearch/hermes-agent.git"`,
-		`lock_dir="${install_dir}.lock"`,
-		`Timed out waiting for Hermes install lock`,
-		`git clone --depth 1 "$repo_url" "${install_dir}.tmp"`,
-		"uv venv --python python3 --system-site-packages venv",
-		`uv pip install -e ".[web,messaging,mcp,pty,cli,acp,google]"`,
-		`import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient`,
 		`PRAGMA quick_check`,
 		`state-db-corrupt-$ts`,
-		`- "/data/.hermes/hermes-agent/venv/bin/hermes"`,
+		`- "/opt/hermes/.venv/bin/hermes"`,
 		`- "hermes-obol-agent.obol.stack"`,
 		`- "obol-agent.obol.stack"`,
 		"name: hermes-dashboard",
@@ -162,6 +153,17 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	} {
 		if !strings.Contains(values, needle) {
 			t.Fatalf("generateValues() missing %q:\n%s", needle, values)
+		}
+	}
+
+	for _, banned := range []string{
+		"bootstrap-hermes-install",
+		"git clone",
+		"uv pip install",
+		"/data/.hermes/hermes-agent",
+	} {
+		if strings.Contains(values, banned) {
+			t.Fatalf("generateValues() should no longer reference %q (the in-pod git clone + venv build); use the upstream image's /opt/hermes/.venv instead:\n%s", banned, values)
 		}
 	}
 
@@ -203,7 +205,7 @@ func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {
 		"-n", "hermes-obol-agent",
 		"deploy/hermes",
 		"--",
-		"/data/.hermes/hermes-agent/venv/bin/hermes",
+		"/opt/hermes/.venv/bin/hermes",
 		"skills",
 		"audit",
 	}

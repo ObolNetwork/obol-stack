@@ -33,10 +33,13 @@ const (
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
 
-	defaultImage     = "nousresearch/hermes-agent:v2026.4.23"
-	hermesInstallDir = "/data/.hermes/hermes-agent"
-	hermesRepoURL    = "https://github.com/NousResearch/hermes-agent.git"
-	hermesBinary     = hermesInstallDir + "/venv/bin/hermes"
+	defaultImage = "nousresearch/hermes-agent:v2026.4.23"
+	// hermesBinary points at the venv that the upstream image preinstalls at
+	// build time via `uv pip install -e ".[all]"`. Using the in-image venv
+	// avoids cloning the repo + rebuilding a venv on every cold start, and
+	// keeps the persistent PVC free of the read-only git pack files that
+	// poison subsequent local-path-provisioner chowns on macOS virtiofs.
+	hermesBinary = "/opt/hermes/.venv/bin/hermes"
 
 	containerUID  = 10000
 	containerGID  = 10000
@@ -798,68 +801,24 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             runAsGroup: %d
             fsGroup: %d
           initContainers:
+            # Single init container that runs the same Hermes image used by
+            # the runtime. The upstream image already ships /opt/hermes/.venv
+            # with all dependencies preinstalled, so there is no clone or pip
+            # install at pod start. fsGroup on the pod makes the PVC mount
+            # group-writable to the hermes user (uid 10000), so we don't need
+            # a recursive chown — which is the operation that fails on macOS
+            # virtiofs once the volume has read-only files like git pack
+            # files left from any previous install.
             - name: init-hermes-data
-              image: busybox:1.36
-              command:
-                - sh
-                - -c
-                - mkdir -p /data/.hermes && chown -R %d:%d /data/.hermes
-              securityContext:
-                runAsUser: 0
-              volumeMounts:
-                - name: data
-                  mountPath: /data
-            - name: bootstrap-hermes-install
               image: %s
               imagePullPolicy: IfNotPresent
               command:
                 - sh
                 - -ec
                 - |
-                  install_dir=%s
-                  repo_url=%s
                   mkdir -p /data/.hermes/home /data/.hermes/workspace
-                  lock_dir="${install_dir}.lock"
-                  got_lock=0
-                  for _ in $(seq 1 120); do
-                    if mkdir "$lock_dir" 2>/dev/null; then
-                      got_lock=1
-                      break
-                    fi
-                    sleep 1
-                  done
-                  if [ "$got_lock" != 1 ]; then
-                    echo "Timed out waiting for Hermes install lock: $lock_dir" >&2
-                    exit 1
-                  fi
-                  cleanup_lock() {
-                    rmdir "$lock_dir" 2>/dev/null || true
-                  }
-                  trap cleanup_lock EXIT
-
-                  if [ ! -d "$install_dir/.git" ] || { [ ! -f "$install_dir/pyproject.toml" ] && [ ! -f "$install_dir/setup.py" ]; }; then
-                    rm -rf "${install_dir}.tmp"
-                    if [ -e "$install_dir" ]; then
-                      mv "$install_dir" "${install_dir}.backup.$(date +%%s)"
-                    fi
-                    git clone --depth 1 "$repo_url" "${install_dir}.tmp"
-                    mv "${install_dir}.tmp" "$install_dir"
-                  fi
-                  cd "$install_dir"
-                  # Reinstall when the venv is missing the hermes binary OR
-                  # any selected extra is absent. The upstream image installs
-                  # ".[all]"; we re-create the venv from a fresh clone, so the
-                  # extras must be re-requested explicitly. The import check
-                  # picks one module per extra so existing PVCs trigger a
-                  # rebuild when we add a new extra to the install line.
-                  if [ ! -x "$install_dir/venv/bin/hermes" ] || \
-                     ! "$install_dir/venv/bin/python3" -c "import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient" >/dev/null 2>&1; then
-                    rm -rf "$install_dir/venv"
-                    uv venv --python python3 --system-site-packages venv
-                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e ".[web,messaging,mcp,pty,cli,acp,google]"
-                  fi
                   if [ -f /data/.hermes/state.db ]; then
-                    if ! python3 - <<'PY'
+                    if ! /opt/hermes/.venv/bin/python3 - <<'PY'
                   import sqlite3
                   conn = sqlite3.connect('/data/.hermes/state.db')
                   row = conn.execute('PRAGMA quick_check').fetchone()
@@ -875,8 +834,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                       echo "Backed up malformed Hermes state DB to $backup_dir"
                     fi
                   fi
-                  cleanup_lock
-                  trap - EXIT
               volumeMounts:
                 - name: data
                   mountPath: /data
@@ -917,7 +874,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, containerUID, containerGID, quoteYAML(image()), quoteYAML(hermesInstallDir), quoteYAML(hermesRepoURL), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
