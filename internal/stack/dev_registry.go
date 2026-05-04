@@ -79,11 +79,20 @@ func ensureDevRegistry(cfg *config.Config, k3dBinary string, mirror registryMirr
 			return nil
 		}
 
-		if err := runCommand(exec.Command("docker", "start", containerName)); err != nil {
-			return fmt.Errorf("start registry %s: %w", containerName, err)
+		// Container exists but is stopped. Try to start it.
+		if startErr := runCommand(exec.Command("docker", "start", containerName)); startErr == nil {
+			return nil
 		}
 
-		return nil
+		// Start failed — most commonly because the k3d-obol-stack-* Docker
+		// network the registry was attached to has been removed (cluster
+		// purge or reclaimLeakedDevK3dNetworks). The container's stored
+		// network reference is now a dangling ID and `docker start` aborts
+		// with "network ... not found". Force-remove the container and
+		// fall through to recreate it. The cache content lives on the host
+		// bind-mount under registryCacheDir(mirror), so the new container
+		// picks up exactly the layers the old one had — no re-pull.
+		_ = runCommand(exec.Command("docker", "rm", "-f", containerName))
 	}
 
 	createCmd := exec.Command(
