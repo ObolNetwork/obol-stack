@@ -577,6 +577,130 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	return nil
 }
 
+// reorderModelList is the pure-function core of PreferModels. It moves the
+// named entries to the head of the list (in the order given) and returns
+// the new slice, plus a boolean indicating whether the input was already in
+// the requested order (the caller should treat that as a no-op so it can
+// skip the kubectl patch + LiteLLM rollout). Unknown or duplicate names
+// produce an error so typos surface loudly.
+func reorderModelList(entries []ModelEntry, names []string) ([]ModelEntry, bool, error) {
+	indexByName := make(map[string]int, len(entries))
+	for i, entry := range entries {
+		indexByName[entry.ModelName] = i
+	}
+
+	var missing []string
+	picked := make(map[string]bool, len(names))
+	for _, name := range names {
+		if _, ok := indexByName[name]; !ok {
+			missing = append(missing, name)
+			continue
+		}
+		if picked[name] {
+			return nil, false, fmt.Errorf("duplicate model in prefer args: %q", name)
+		}
+		picked[name] = true
+	}
+	if len(missing) > 0 {
+		return nil, false, fmt.Errorf("model(s) not found in LiteLLM config: %s\n  Run 'obol model list' to see available entries", strings.Join(missing, ", "))
+	}
+
+	alreadyAtHead := true
+	for i, name := range names {
+		if i >= len(entries) || entries[i].ModelName != name {
+			alreadyAtHead = false
+			break
+		}
+	}
+
+	reordered := make([]ModelEntry, 0, len(entries))
+	for _, name := range names {
+		reordered = append(reordered, entries[indexByName[name]])
+	}
+	for _, entry := range entries {
+		if picked[entry.ModelName] {
+			continue
+		}
+		reordered = append(reordered, entry)
+	}
+	return reordered, alreadyAtHead, nil
+}
+
+// PreferModels reorders LiteLLM's model_list so the named entries appear at
+// the head, in the order given. Remaining entries keep their original
+// relative order. This is the operator-facing primitive that lets
+// model.Rank's "first chat-capable wins" rule pick a specific primary
+// without a remove/re-add cycle.
+//
+// Returns an error if any of the requested names is not present in the
+// current model_list — typos should be loud, not silent no-ops.
+//
+// LiteLLM has no model_list reorder API, so after the ConfigMap patch this
+// rolls the LiteLLM Deployment so the new order takes effect (the
+// /v1/models listing follows model_list order, and hermes/openclaw read
+// the ConfigMap directly via GetConfiguredModels for the agent primary).
+func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
+	if len(names) == 0 {
+		return errors.New("at least one model name is required")
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return errors.New("cluster not running. Run 'obol stack up' first")
+	}
+
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
+	if err != nil {
+		return fmt.Errorf("failed to read LiteLLM config: %w", err)
+	}
+
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+
+	reordered, alreadyAtHead, err := reorderModelList(litellmConfig.ModelList, names)
+	if err != nil {
+		return err
+	}
+	if alreadyAtHead {
+		u.Infof("Model(s) already at the head of the model_list, no change")
+		return nil
+	}
+	litellmConfig.ModelList = reordered
+
+	updated, err := yaml.Marshal(&litellmConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	escapedYAML, err := json.Marshal(string(updated))
+	if err != nil {
+		return fmt.Errorf("failed to escape YAML: %w", err)
+	}
+	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
+
+	u.Infof("Promoting %s to head of LiteLLM model_list", strings.Join(names, ", "))
+	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		"patch", "configmap", configMapName, "-n", namespace,
+		"-p", patchJSON, "--type=merge", "--field-manager=helm"); err != nil {
+		return fmt.Errorf("failed to patch ConfigMap: %w", err)
+	}
+
+	// LiteLLM has no reorder API; restart the deployment so the new order
+	// takes effect (mostly cosmetic for /v1/models listings — agent primary
+	// is read from the ConfigMap directly via GetConfiguredModels, which is
+	// already correct after the patch above).
+	if err := RestartLiteLLM(cfg, u, "prefer"); err != nil {
+		u.Warnf("LiteLLM rollout failed: %v", err)
+		u.Dim("  The ConfigMap is updated; agent will pick up the new primary on next sync.")
+	}
+
+	return nil
+}
+
 // RemoveModel removes a model entry from the LiteLLM ConfigMap (persistence)
 // and hot-deletes it from the running router via the API (immediate effect).
 // No pod restart is required.
@@ -1123,16 +1247,10 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 		}
 	case ProviderAnthropic:
 		cachePoints := anthropicCacheControlPoints()
-		// Wildcard: routes any anthropic model without explicit registration
-		entries = append(entries, ModelEntry{
-			ModelName: "anthropic/*",
-			LiteLLMParams: LiteLLMParams{
-				Model:                       "anthropic/*",
-				APIKey:                      "os.environ/ANTHROPIC_API_KEY",
-				CacheControlInjectionPoints: cachePoints,
-			},
-		})
-		// Explicit entries for requested models (better /v1/models listing)
+		// Explicit entries first so the user-selected model is the primary
+		// under model.Rank's "first chat-capable wins" rule. Hermes cannot
+		// send `model: anthropic/*` literally (LiteLLM doesn't resolve a
+		// wildcard to a default), so the wildcard must never sit at index 0.
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
 				ModelName: m,
@@ -1143,17 +1261,27 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				},
 			})
 		}
-	case ProviderOpenAI:
+		// Wildcard: routes any anthropic model without explicit registration.
 		entries = append(entries, ModelEntry{
-			ModelName:     "openai/*",
-			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
+			ModelName: "anthropic/*",
+			LiteLLMParams: LiteLLMParams{
+				Model:                       "anthropic/*",
+				APIKey:                      "os.environ/ANTHROPIC_API_KEY",
+				CacheControlInjectionPoints: cachePoints,
+			},
 		})
+	case ProviderOpenAI:
+		// Explicit-before-wildcard, same rationale as Anthropic above.
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
 				ModelName:     m,
 				LiteLLMParams: LiteLLMParams{Model: "openai/" + m, APIKey: "os.environ/OPENAI_API_KEY"},
 			})
 		}
+		entries = append(entries, ModelEntry{
+			ModelName:     "openai/*",
+			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
+		})
 	default:
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
