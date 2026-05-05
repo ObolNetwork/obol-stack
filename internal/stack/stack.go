@@ -925,6 +925,12 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 			u.Successf("Local dev images ready (%d built, %d pulled, %d imported, %d cached) (%s)",
 				built, pulled, imported, cached, elapsed)
 		}
+		// Surface the rebuild escape hatch on the warm path. When `built == 0`
+		// the dev may be wondering whether their latest source change actually
+		// landed in the running pods; the hint tells them how to force it.
+		if built == 0 && reuseCachedImages {
+			u.Dim("  Re-run with OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true to rebuild from source.")
+		}
 	}
 }
 

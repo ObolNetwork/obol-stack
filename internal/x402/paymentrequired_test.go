@@ -1,0 +1,231 @@
+package x402
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	x402types "github.com/coinbase/x402/go/types"
+)
+
+const (
+	testAmount = "1000"
+	testAsset  = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+	testPayTo  = "0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8f9c0"
+)
+
+func sampleRequirement() x402types.PaymentRequirements {
+	return x402types.PaymentRequirements{
+		Scheme:  "exact",
+		Network: "base-sepolia",
+		Asset:   testAsset,
+		Amount:  testAmount,
+		PayTo:   testPayTo,
+	}
+}
+
+func sampleDisplay() PaymentDisplay {
+	return PaymentDisplay{
+		Endpoint:     "/services/agent-quant",
+		Network:      "base-sepolia",
+		NetworkLabel: "Base Sepolia",
+		AssetSymbol:  "USDC",
+		AssetAddress: testAsset,
+		PriceDisplay: "0.001 USDC per request",
+		PriceAtomic:  testAmount,
+		PayToFull:    testPayTo,
+	}
+}
+
+func TestPrefersHTML(t *testing.T) {
+	cases := []struct {
+		accept string
+		want   bool
+	}{
+		// Defaults to JSON when Accept is unset (curl, x402 buyer, agents).
+		{"", false},
+		{"*/*", false},
+		{"application/json", false},
+		{"application/json, */*", false},
+
+		// Browsers and link-preview scrapers advertise text/html.
+		{"text/html", true},
+		{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", true},
+		{"text/html;q=0.9,application/json;q=0.8", true},
+		{"application/xhtml+xml", true},
+
+		// Whitespace and case insensitivity.
+		{"  TEXT/HTML  ", true},
+	}
+	for _, tc := range cases {
+		if got := prefersHTML(tc.accept); got != tc.want {
+			t.Errorf("prefersHTML(%q) = %v, want %v", tc.accept, got, tc.want)
+		}
+	}
+}
+
+// JSON is the default when Accept is unset — agents and the existing wire
+// contract must keep working byte-for-byte.
+func TestHTMLAware_DefaultsToJSONWhenAcceptMissing(t *testing.T) {
+	render := NewHTMLAwarePaymentRequired(sampleDisplay())
+	r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+	w := httptest.NewRecorder()
+
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var parsed x402types.PaymentRequired
+	if err := json.Unmarshal(w.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("body is not valid JSON: %v\n%s", err, w.Body.String())
+	}
+	if parsed.X402Version != 2 {
+		t.Errorf("x402Version = %d, want 2", parsed.X402Version)
+	}
+	if len(parsed.Accepts) != 1 || parsed.Accepts[0].Amount != testAmount {
+		t.Errorf("accepts mismatch: %+v", parsed.Accepts)
+	}
+}
+
+// HTML rendered when Accept advertises text/html — but status is still 402.
+func TestHTMLAware_RendersHTMLOnTextHTML(t *testing.T) {
+	render := NewHTMLAwarePaymentRequired(sampleDisplay())
+	r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+	r.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	r.Header.Set("X-Forwarded-Host", "agent.example.tunnel.dev")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402 (status must stay 402 even with HTML body)", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html...", ct)
+	}
+
+	body := w.Body.String()
+
+	// OG metadata must be present, with absolute URLs derived from forwarded host.
+	mustContain(t, body, `<title>Payment required — Obol Stack</title>`)
+	mustContain(t, body, `property="og:title"`)
+	mustContain(t, body, `property="og:image" content="https://agent.example.tunnel.dev/og-payment-required.png"`)
+	mustContain(t, body, `property="og:url" content="https://agent.example.tunnel.dev/services/agent-quant"`)
+	mustContain(t, body, `name="twitter:card" content="summary_large_image"`)
+
+	// Service-info card must render the dynamic display values.
+	mustContain(t, body, "/services/agent-quant")
+	mustContain(t, body, "Base Sepolia")
+	mustContain(t, body, "0.001 USDC per request")
+	// The service-info card shows a truncated address; the embedded raw
+	// JSON necessarily still contains the full one.
+	mustContain(t, body, "0xa1b2…f9c0")
+
+	// All three "ways to pay" prompts must be present, including the agent
+	// instructions referencing the buy-x402 skill, llms.txt, and the public
+	// skills repo.
+	mustContain(t, body, "Pay with your Obol Agent")
+	mustContain(t, body, "buy-x402 skill")
+	mustContain(t, body, "Pay with another AI agent")
+	mustContain(t, body, "https://obol.org/llms.txt")
+	mustContain(t, body, "https://github.com/ObolNetwork/skills")
+	mustContain(t, body, "Pay manually (raw HTTP 402)")
+
+	// Footer link back to the same tunnel root (storefront).
+	mustContain(t, body, `href="https://agent.example.tunnel.dev"`)
+	// "What is x402?" link.
+	mustContain(t, body, "https://x402.org")
+
+	// Raw JSON body embedded for x402-aware tools.
+	mustContain(t, body, `&#34;x402Version&#34;: 2`)
+}
+
+// When the rule context is empty (e.g. in-process gateway with no display
+// data), the renderer must still produce HTML and not crash.
+func TestHTMLAware_DegradeWithoutDisplay(t *testing.T) {
+	render := NewHTMLAwarePaymentRequired(PaymentDisplay{})
+	r := httptest.NewRequest("GET", "/anything", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402", w.Code)
+	}
+	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", w.Header().Get("Content-Type"))
+	}
+	body := w.Body.String()
+	mustContain(t, body, "Payment required")
+	mustContain(t, body, "/anything") // endpoint falls back to URL.Path
+	mustContain(t, body, "1000 (atomic units)") // price falls back to atomic units
+}
+
+func TestFormatAmount(t *testing.T) {
+	cases := []struct {
+		atomic   string
+		decimals int
+		symbol   string
+		want     string
+	}{
+		{"1000", 6, "USDC", "0.001 USDC"},
+		{"1000000", 6, "USDC", "1 USDC"},
+		{"1500000", 6, "USDC", "1.5 USDC"},
+		{"1234567", 6, "USDC", "1.234567 USDC"},
+		{"100", 0, "WEI", "100 WEI"},
+		{"", 6, "USDC", ""},
+		{"abc", 6, "USDC", "abc USDC (atomic)"},
+	}
+	for _, tc := range cases {
+		if got := formatAmount(tc.atomic, tc.decimals, tc.symbol); got != tc.want {
+			t.Errorf("formatAmount(%q, %d, %q) = %q, want %q", tc.atomic, tc.decimals, tc.symbol, got, tc.want)
+		}
+	}
+}
+
+func TestTruncateAddress(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8f9c0", "0xa1b2…f9c0"},
+		{"0xshort", "0xshort"}, // too short, returned as-is
+		{"not-an-address", "not-an-address"},
+	}
+	for _, tc := range cases {
+		if got := truncateAddress(tc.in); got != tc.want {
+			t.Errorf("truncateAddress(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestHumanizeNetwork(t *testing.T) {
+	cases := map[string]string{
+		"base":             "Base",
+		"base-sepolia":     "Base Sepolia",
+		"polygon-amoy":     "Polygon Amoy",
+		"arbitrum-sepolia": "Arbitrum Sepolia",
+		"unknown-chain":    "Unknown Chain", // best-effort title-case
+		"":                 "",
+	}
+	for in, want := range cases {
+		if got := humanizeNetwork(in); got != want {
+			t.Errorf("humanizeNetwork(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func mustContain(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if !strings.Contains(haystack, needle) {
+		t.Errorf("body does not contain %q", needle)
+	}
+}

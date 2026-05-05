@@ -40,6 +40,13 @@ type ForwardAuthConfig struct {
 	// `eip2612GasSponsoring` (gasless Permit2 approve) so buyers take the
 	// matching flow. See BuildExtensionsForAsset for how this is populated.
 	Extensions map[string]any
+
+	// SendPaymentRequired, if non-nil, replaces the default JSON 402 renderer.
+	// The verifier injects NewHTMLAwarePaymentRequired here so browsers and
+	// link-preview scrapers receive an HTML page (with OG metadata + copyable
+	// "ways to pay" prompts) while x402-aware clients keep getting JSON.
+	// Nil keeps today's behaviour: every 402 is JSON.
+	SendPaymentRequired SendPaymentRequiredFunc
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -98,11 +105,16 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			"cluster verifier.")
 	}
 
+	send := cfg.SendPaymentRequired
+	if send == nil {
+		send = sendPaymentRequiredJSON
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			paymentHeader := r.Header.Get("X-PAYMENT")
 			if paymentHeader == "" {
-				sendPaymentRequired(w, r, requirements, cfg.Extensions)
+				send(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -124,7 +136,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 			matchedReq, found := findMatchingRequirementV1(payload, requirements)
 			if !found {
-				sendPaymentRequired(w, r, requirements, cfg.Extensions)
+				send(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -138,7 +150,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 			if !verifyResp.IsValid {
 				log.Printf("x402: payment invalid: %s", verifyResp.InvalidReason)
-				sendPaymentRequired(w, r, requirements, cfg.Extensions)
+				send(w, r, requirements, cfg.Extensions)
 				return
 			}
 
@@ -159,7 +171,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 					if !settleResp.Success {
 						log.Printf("x402: settlement unsuccessful: %s", settleResp.ErrorReason)
-						sendPaymentRequired(w, r, requirements, cfg.Extensions)
+						send(w, r, requirements, cfg.Extensions)
 						return false
 					}
 
@@ -178,8 +190,11 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 	}
 }
 
-// sendPaymentRequired writes a 402 response with v2 payment requirements.
-func sendPaymentRequired(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
+// sendPaymentRequiredJSON writes a 402 response with v2 payment requirements
+// as a JSON body. This is the wire-level x402 contract that all buyer agents
+// understand; it remains the default when ForwardAuthConfig.SendPaymentRequired
+// is unset and the fallback when the renderer has nothing else to do.
+func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
 	resource := &x402types.ResourceInfo{
 		URL:         buildResourceURL(r),
 		Description: "Payment required for " + r.URL.Path,

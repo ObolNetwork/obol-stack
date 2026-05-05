@@ -88,7 +88,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	cfg := v.config.Load()
 
-	rule, requirement, extensions, _, ok := v.matchPaidRoute(cfg, uri)
+	rule, requirement, extensions, _, chain, asset, ok := v.matchPaidRouteFull(cfg, uri)
 	if !ok {
 		// No pricing rule matches — route is free.
 		w.WriteHeader(http.StatusOK)
@@ -115,10 +115,17 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	labels := prometheusLabels(rule)
 	v.metrics.requestsTotal.With(labels).Inc()
 
+	wallet := cfg.Wallet
+	if rule.PayTo != "" {
+		wallet = rule.PayTo
+	}
+	display := buildPaymentDisplay(rule, chain, asset, wallet)
+
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL: cfg.FacilitatorURL,
-		VerifyOnly:     cfg.VerifyOnly,
-		Extensions:     extensions,
+		FacilitatorURL:      cfg.FacilitatorURL,
+		VerifyOnly:          cfg.VerifyOnly,
+		Extensions:          extensions,
+		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 	}, []x402types.PaymentRequirements{requirement})
 
 	upstreamAuth := rule.UpstreamAuth
@@ -150,7 +157,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	rule, requirement, extensions, labels, ok := v.matchPaidRoute(cfg, r.URL.Path)
+	rule, requirement, extensions, labels, chain, asset, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -165,10 +172,17 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wallet := cfg.Wallet
+	if rule.PayTo != "" {
+		wallet = rule.PayTo
+	}
+	display := buildPaymentDisplay(rule, chain, asset, wallet)
+
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL: cfg.FacilitatorURL,
-		VerifyOnly:     false,
-		Extensions:     extensions,
+		FacilitatorURL:      cfg.FacilitatorURL,
+		VerifyOnly:          false,
+		Extensions:          extensions,
+		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 	}, []x402types.PaymentRequirements{requirement})
 
 	hadPayment := r.Header.Get("X-PAYMENT") != ""
@@ -211,9 +225,16 @@ func (v *Verifier) MetricsHandler() http.Handler {
 }
 
 func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, map[string]any, prometheus.Labels, bool) {
+	rule, req, ext, labels, _, _, ok := v.matchPaidRouteFull(cfg, uri)
+	return rule, req, ext, labels, ok
+}
+
+// matchPaidRouteFull is matchPaidRoute plus the resolved chain and asset,
+// which the HTML 402 renderer needs for display copy. Internal-only.
+func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, map[string]any, prometheus.Labels, ChainInfo, AssetInfo, bool) {
 	rule := matchRoute(cfg.Routes, uri)
 	if rule == nil {
-		return nil, x402types.PaymentRequirements{}, nil, nil, false
+		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
 	}
 
 	wallet := cfg.Wallet
@@ -230,13 +251,63 @@ func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x
 	chain, ok := (*chains)[chainName]
 	if !ok {
 		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
-		return nil, x402types.PaymentRequirements{}, nil, nil, false
+		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
 	}
 
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
 	extensions := BuildExtensionsForAsset(asset)
-	return rule, requirement, extensions, prometheusLabels(rule), true
+	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
+}
+
+// buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted
+// strings for the HTML 402 page. Atomic-units conversion happens here so the
+// renderer needs no math.
+func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payTo string) PaymentDisplay {
+	return PaymentDisplay{
+		Endpoint:     rule.Pattern,
+		Network:      chain.Name,
+		NetworkLabel: humanizeNetwork(chain.Name),
+		AssetSymbol:  asset.Symbol,
+		AssetAddress: asset.Address,
+		PriceDisplay: FormatPriceDisplay(rule.Price, asset.Decimals, asset.Symbol),
+		PriceAtomic:  rule.Price,
+		PayToFull:    payTo,
+	}
+}
+
+// humanizeNetwork converts an internal chain name ("base-sepolia") to the
+// display label users actually recognise ("Base Sepolia"). Anything not in
+// the table is returned title-cased best-effort.
+func humanizeNetwork(name string) string {
+	switch name {
+	case "base":
+		return "Base"
+	case "base-sepolia":
+		return "Base Sepolia"
+	case "ethereum", "mainnet":
+		return "Ethereum"
+	case "polygon":
+		return "Polygon"
+	case "polygon-amoy":
+		return "Polygon Amoy"
+	case "avalanche":
+		return "Avalanche"
+	case "avalanche-fuji":
+		return "Avalanche Fuji"
+	case "arbitrum":
+		return "Arbitrum One"
+	case "arbitrum-sepolia":
+		return "Arbitrum Sepolia"
+	}
+	parts := strings.Split(name, "-")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {

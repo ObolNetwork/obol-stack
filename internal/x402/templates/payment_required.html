@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{.Title}}</title>
+    <meta name="description" content="{{.Description}}" />
+    <meta name="theme-color" content="#091011" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{.Title}}" />
+    <meta property="og:description" content="{{.Description}}" />
+    <meta property="og:site_name" content="Obol Stack" />
+    <meta property="og:url" content="{{.PageURL}}" />
+    <meta property="og:image" content="{{.OGImageURL}}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Payment required — Obol Stack" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{.Title}}" />
+    <meta name="twitter:description" content="{{.Description}}" />
+    <meta name="twitter:image" content="{{.OGImageURL}}" />
+    <link rel="icon" href="{{.StorefrontURL}}/favicon.png" type="image/png" />
+    <style>
+      :root {
+        --bg01: #091011;
+        --bg02: #111f22;
+        --bg03: #182d32;
+        --stroke: #1d5249;
+        --green: #2fe4ab;
+        --light: #dfeaed;
+        --body: #9cc2c9;
+        --muted: #475e64;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: linear-gradient(135deg, var(--bg01) 0%, #162a40 100%);
+        color: var(--light);
+        font-family: "DM Sans", system-ui, -apple-system, Segoe UI, sans-serif;
+        min-height: 100vh;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
+      header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 56px; }
+      header img { height: 28px; width: auto; }
+      .pill {
+        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--green);
+        border: 1px solid var(--green);
+        border-radius: 999px;
+        padding: 6px 14px;
+      }
+      h1 { font-size: 44px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; margin: 0 0 12px; }
+      .lede { color: var(--body); font-size: 18px; margin: 0 0 40px; }
+      .card {
+        background: var(--bg02);
+        border: 1px solid var(--stroke);
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 24px;
+      }
+      .card h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--body); margin: 0 0 16px; }
+      .grid { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; column-gap: 16px; font-size: 15px; }
+      .grid dt { color: var(--muted); }
+      .grid dd { margin: 0; font-family: ui-monospace, SF Mono, Menlo, monospace; word-break: break-all; }
+      .grid dd.green { color: var(--green); }
+      .prompt {
+        position: relative;
+        background: var(--bg01);
+        border: 1px solid var(--stroke);
+        border-radius: 8px;
+        padding: 16px 56px 16px 16px;
+        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-size: 13px;
+        color: var(--light);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .prompt + .prompt { margin-top: 12px; }
+      pre.json {
+        margin: 0;
+        background: var(--bg01);
+        border: 1px solid var(--stroke);
+        border-radius: 8px;
+        padding: 16px 56px 16px 16px;
+        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-size: 12px;
+        color: var(--body);
+        overflow-x: auto;
+        position: relative;
+        white-space: pre;
+      }
+      .copy-wrap { position: relative; }
+      .copy {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: var(--bg03);
+        border: 1px solid var(--stroke);
+        color: var(--body);
+        font: 600 11px/1 "DM Sans", system-ui, sans-serif;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        border-radius: 6px;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+      .copy:hover { color: var(--green); border-color: var(--green); }
+      .copy.copied { color: var(--green); border-color: var(--green); }
+      footer { margin-top: 40px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; }
+      footer a { color: var(--green); text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
+      noscript .copy { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <a href="{{.StorefrontURL}}" aria-label="Obol Stack home"><img src="{{.WordmarkURL}}" alt="Obol Stack" /></a>
+        <span class="pill">HTTP 402</span>
+      </header>
+
+      <h1>Payment required</h1>
+      <p class="lede">This Obol Agent service requires a payment to access.</p>
+
+      <div class="card">
+        <h2>Service</h2>
+        <dl class="grid">
+          <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
+          <dt>Network</dt><dd>{{.NetworkLabel}}</dd>
+          <dt>Price</dt><dd class="green">{{.PriceDisplay}}</dd>
+          <dt>Pay to</dt><dd>{{.PayToDisplay}}</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>Pay with your Obol Agent</h2>
+        <p class="lede" style="margin-bottom:12px">Send this to your Obol Agent (it has the <code>buy-x402</code> skill pre-loaded):</p>
+        <div class="copy-wrap">
+          <div class="prompt" id="p-obol">{{.PromptObol}}</div>
+          <button class="copy" data-target="p-obol" type="button">Copy</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Pay with another AI agent</h2>
+        <p class="lede" style="margin-bottom:12px">Paste this into Claude, ChatGPT, Gemini, or any agent with internet access:</p>
+        <div class="copy-wrap">
+          <div class="prompt" id="p-other">{{.PromptOther}}</div>
+          <button class="copy" data-target="p-other" type="button">Copy</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Pay manually (raw HTTP 402)</h2>
+        <p class="lede" style="margin-bottom:12px">For x402-aware tools that consume the wire format directly:</p>
+        <div class="copy-wrap">
+          <pre class="json" id="p-json">{{.JSONBody}}</pre>
+          <button class="copy" data-target="p-json" type="button">Copy JSON</button>
+        </div>
+      </div>
+
+      <footer>
+        <a href="https://x402.org" target="_blank" rel="noreferrer">What is x402? →</a>
+        <a href="{{.StorefrontURL}}">View seller storefront →</a>
+      </footer>
+    </div>
+
+    <script>
+      document.querySelectorAll(".copy").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var target = document.getElementById(btn.getAttribute("data-target"));
+          if (!target) return;
+          var text = target.innerText;
+          navigator.clipboard.writeText(text).then(function () {
+            var prev = btn.textContent;
+            btn.textContent = "Copied";
+            btn.classList.add("copied");
+            setTimeout(function () {
+              btn.textContent = prev;
+              btn.classList.remove("copied");
+            }, 1400);
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
