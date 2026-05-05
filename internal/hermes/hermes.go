@@ -1078,17 +1078,7 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 		return nil, "", errors.New("no LiteLLM models configured")
 	}
 
-	var names []string
-	for _, m := range ollamaModels {
-		name := m.Name
-		if before, ok := strings.CutSuffix(name, ":latest"); ok {
-			name = before
-		}
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-
+	names := model.AutoConfigOllamaModelNames(ollamaModels)
 	if len(names) == 0 {
 		return nil, "", errors.New("no LiteLLM models configured")
 	}

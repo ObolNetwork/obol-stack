@@ -1480,6 +1480,58 @@ type OllamaModel struct {
 	ModifiedAt string `json:"modified_at"`
 }
 
+// AutoConfigOllamaModelNames converts the raw /api/tags inventory into the
+// ordered model-name list we auto-write into LiteLLM and agent configs.
+//
+// Policy:
+//   - strip the cosmetic `:latest` tag suffix
+//   - ignore empty names
+//   - keep local chat-capable models ahead of Ollama cloud aliases that would
+//     require extra credentials to work
+//   - keep embedding-only models last so they never become the default chat model
+//
+// This only affects auto-generated defaults. Operators can still reorder the
+// resulting LiteLLM model_list later with `obol model prefer ...`.
+func AutoConfigOllamaModelNames(models []OllamaModel) []string {
+	localChat := make([]string, 0, len(models))
+	credentialRequired := make([]string, 0)
+	embeddingOnly := make([]string, 0)
+
+	for _, m := range models {
+		name := normalizeOllamaModelName(m.Name)
+		if name == "" {
+			continue
+		}
+		if isEmbeddingOnlyModel(name) {
+			embeddingOnly = append(embeddingOnly, name)
+			continue
+		}
+		if isCredentialRequiringOllamaModel(name) {
+			credentialRequired = append(credentialRequired, name)
+			continue
+		}
+		localChat = append(localChat, name)
+	}
+
+	ordered := make([]string, 0, len(localChat)+len(credentialRequired)+len(embeddingOnly))
+	ordered = append(ordered, localChat...)
+	ordered = append(ordered, credentialRequired...)
+	ordered = append(ordered, embeddingOnly...)
+	return ordered
+}
+
+func normalizeOllamaModelName(name string) string {
+	name = strings.TrimSpace(name)
+	if before, ok := strings.CutSuffix(name, ":latest"); ok {
+		name = before
+	}
+	return strings.TrimSpace(name)
+}
+
+func isCredentialRequiringOllamaModel(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ":cloud")
+}
+
 // ListOllamaModels queries the local Ollama server for pulled models.
 // Returns nil and an error if Ollama is not reachable.
 func ListOllamaModels() ([]OllamaModel, error) {

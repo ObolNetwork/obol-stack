@@ -672,6 +672,65 @@ func TestListOllamaModels_MockServer(t *testing.T) {
 	})
 }
 
+func TestAutoConfigOllamaModelNames(t *testing.T) {
+	t.Run("demotes credential-requiring cloud aliases behind local chat models", func(t *testing.T) {
+		models := []OllamaModel{
+			{Name: "deepseek-v4-pro:cloud", Size: 9_000_000_000},
+			{Name: "llama3.2:1b", Size: 1_300_000_000},
+			{Name: "nomic-embed-text:latest", Size: 274_000_000},
+			{Name: "qwen3.5:9b", Size: 5_400_000_000},
+			{Name: "", Size: 1},
+		}
+
+		got := AutoConfigOllamaModelNames(models)
+		want := []string{"llama3.2:1b", "qwen3.5:9b", "deepseek-v4-pro:cloud", "nomic-embed-text"}
+		if len(got) != len(want) {
+			t.Fatalf("len(got) = %d, want %d (got %v)", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+			}
+		}
+	})
+
+	t.Run("preserves cloud-only order when no local chat models exist", func(t *testing.T) {
+		models := []OllamaModel{
+			{Name: "deepseek-v4-pro:cloud", Size: 9_000_000_000},
+			{Name: "qwen3-coder:cloud", Size: 7_000_000_000},
+		}
+
+		got := AutoConfigOllamaModelNames(models)
+		want := []string{"deepseek-v4-pro:cloud", "qwen3-coder:cloud"}
+		if len(got) != len(want) {
+			t.Fatalf("len(got) = %d, want %d (got %v)", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+			}
+		}
+	})
+
+	t.Run("trims whitespace and only removes a terminal latest tag", func(t *testing.T) {
+		models := []OllamaModel{
+			{Name: "   custom/qa-vllm/qwen36-fast:latest   ", Size: 1},
+			{Name: "   ", Size: 2},
+		}
+
+		got := AutoConfigOllamaModelNames(models)
+		want := []string{"custom/qa-vllm/qwen36-fast"}
+		if len(got) != len(want) {
+			t.Fatalf("len(got) = %d, want %d (got %v)", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+			}
+		}
+	})
+}
+
 func TestPullOllamaModel_MockServer(t *testing.T) {
 	t.Run("successful pull", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
