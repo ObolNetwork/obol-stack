@@ -505,7 +505,7 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 		// concrete next step instead of silently moving on.
 		u.Blank()
 		u.Warn("Ollama is running but has no models pulled.")
-		u.Dim("  Hermes will not have a local chat model until one is pulled.")
+		u.Dim("  The Obol Agent may not have a local model until one is pulled.")
 		u.Dim("  Quick fix:  ollama pull " + model.PreferredDefaultOllamaModel)
 		u.Dim("  Or pick interactively:  obol model pull")
 	case !model.HasConfiguredModels(cfg):
