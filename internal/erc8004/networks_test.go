@@ -61,18 +61,6 @@ func TestResolveNetworks(t *testing.T) {
 	}
 }
 
-func TestNetworkConfig_HasSponsor(t *testing.T) {
-	if BaseSepolia.HasSponsor() {
-		t.Error("BaseSepolia should not have a sponsor")
-	}
-	if Base.HasSponsor() {
-		t.Error("Base should not have a sponsor")
-	}
-	if !Ethereum.HasSponsor() {
-		t.Error("Ethereum should have a sponsor")
-	}
-}
-
 func TestNetworkConfig_CAIP10Registry(t *testing.T) {
 	got := BaseSepolia.CAIP10Registry()
 	want := "eip155:84532:" + IdentityRegistryBaseSepolia

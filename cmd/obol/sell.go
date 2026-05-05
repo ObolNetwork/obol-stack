@@ -1044,6 +1044,10 @@ Example:
 				Name:  "name",
 				Usage: "Override service name (default: demo-<type>)",
 			},
+			&cli.BoolFlag{
+				Name:  "no-register",
+				Usage: "Skip the on-chain ERC-8004 registration step at the end (you can run `obol sell register` later)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -1125,7 +1129,8 @@ Example:
 			}
 
 			// 2. Create ServiceOffer.
-			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, spec, assetTerms)
+			register := !cmd.Bool("no-register")
+			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, register, spec, assetTerms)
 			applyOut, err := kubectlApplyOutput(cfg, soManifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
@@ -1157,13 +1162,69 @@ Example:
 			// block with a propagation note.
 			ready := waitForOfferReady(cfg, u, name, demoNamespace, 60*time.Second)
 
-			// 5. Print try-it instructions.
+			// 5. Auto-register on ERC-8004. With registration enabled the
+			// controller publishes the .well-known doc and waits for the
+			// on-chain Registered event before flipping the offer Ready;
+			// auto-submitting the tx here closes that gap so `sell demo` is
+			// a one-shot path to a discoverable service. With --no-register
+			// we skip both the spec flag (so Ready unblocks via Disabled) and
+			// the on-chain submit — useful when the user doesn't want the
+			// wallet to need any ETH balance.
+			if register {
+				autoRegisterDemo(ctx, cfg, u, chain, tunnelURL)
+			} else {
+				u.Info("Registration skipped (--no-register). The offer will still reach Ready.")
+			}
+
+			// 6. Print try-it instructions.
 			u.Blank()
 			printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, ready)
 
 			return nil
 		},
 	}
+}
+
+// autoRegisterDemo submits the ERC-8004 registration on the demo's chain using
+// the Hermes remote-signer. Pays gas from the agent's wallet — pass
+// --no-register on `sell demo` to skip this entirely. Best-effort: every
+// failure path prints a "run `obol sell register` later" hint and returns
+// without aborting the demo.
+func autoRegisterDemo(ctx context.Context, cfg *config.Config, u *ui.UI, chain, tunnelURL string) {
+	u.Blank()
+	u.Info("Registering agent on ERC-8004 (auto)...")
+
+	skipHint := func(reason string) {
+		u.Warnf("Skipping auto-register: %s", reason)
+		u.Dim("  You can run it manually later: obol sell register --chain " + chain)
+	}
+
+	if tunnelURL == "" {
+		skipHint("no tunnel URL — service must be publicly reachable for the registration document")
+		return
+	}
+	net, err := erc8004.ResolveNetwork(chain)
+	if err != nil {
+		skipHint(fmt.Sprintf("chain %q is not an ERC-8004 registration target", chain))
+		return
+	}
+	if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
+		skipHint("no Hermes remote-signer wallet found (run `obol agent init` first)")
+		return
+	}
+	signerNS, err := hermes.ResolveInstanceNamespace(cfg)
+	if err != nil {
+		skipHint(fmt.Sprintf("resolve Hermes namespace: %v", err))
+		return
+	}
+
+	agentURI := strings.TrimRight(tunnelURL, "/") + "/.well-known/agent-registration.json"
+	if registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, []erc8004.NetworkConfig{net}) == 0 {
+		u.Warn("Auto-register did not succeed.")
+		u.Dim("  Retry with: obol sell register --chain " + chain)
+		return
+	}
+	u.Successf("Agent registered on %s.", net.Name)
 }
 
 // waitForOfferReady polls a ServiceOffer's Ready condition for up to `timeout`.
@@ -1348,7 +1409,11 @@ func demoRPCNetwork(paymentChain string) string {
 }
 
 // buildDemoServiceOffer returns a ServiceOffer manifest for a demo service.
-func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec, asset schemas.AssetTerms) map[string]any {
+// When register is false, registration.enabled is false on the offer; the
+// controller short-circuits the Registered condition to True/Disabled so the
+// offer can still reach Ready without a wallet ETH balance for the on-chain
+// registration tx.
+func buildDemoServiceOffer(name, ns, chain, wallet, price string, register bool, spec demoSpec, asset schemas.AssetTerms) map[string]any {
 	payment := map[string]any{
 		"scheme":            "exact",
 		"network":           chain,
@@ -1380,7 +1445,7 @@ func buildDemoServiceOffer(name, ns, chain, wallet, price string, spec demoSpec,
 			"payment": payment,
 			"path":    "/services/" + name,
 			"registration": map[string]any{
-				"enabled":     true,
+				"enabled":     register,
 				"name":        name,
 				"description": spec.Description,
 				"skills":      []string{"x402-demo", spec.Type},
@@ -2164,23 +2229,19 @@ func sellRegisterCommand(cfg *config.Config) *cli.Command {
 		Name:  "register",
 		Usage: "Register a service on the ERC-8004 Agent Registry",
 		Description: `Registers an agent on the ERC-8004 Agent Registry on one or more chains.
-Uses the remote-signer wallet by default. Supports sponsored (zero-gas)
-registration on networks that offer it (e.g. ethereum mainnet).
+The on-chain register tx is signed and broadcast by the Hermes remote-signer
+and pays gas from the agent's wallet — make sure it has a small balance on
+each target chain (~$0.20–$0.50 of native gas typically suffices).
 
 Examples:
-  obol sell register                                    # interactive, defaults to mainnet
+  obol sell register                                    # defaults to mainnet
   obol sell register --chain base                       # register on base
-  obol sell register --chain mainnet,base               # register on multiple chains
-  obol sell register --chain mainnet --sponsored        # zero-gas on ethereum mainnet`,
+  obol sell register --chain mainnet,base               # register on multiple chains`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Registration chain(s), comma-separated (mainnet, base, base-sepolia)",
 				Value: "mainnet",
-			},
-			&cli.BoolFlag{
-				Name:  "sponsored",
-				Usage: "Use sponsored (zero-gas) registration when available",
 			},
 			&cli.StringFlag{
 				Name:  "endpoint",
@@ -2210,11 +2271,7 @@ Examples:
 				nets := erc8004.SupportedNetworks()
 				options := make([]string, len(nets))
 				for i, n := range nets {
-					label := n.Name
-					if n.HasSponsor() {
-						label += " (sponsored, zero gas)"
-					}
-					options[i] = label
+					options[i] = n.Name
 				}
 				idx, err := u.Select("Registration network", options, 0)
 				if err != nil {
@@ -2279,30 +2336,7 @@ Examples:
 			u.Printf("  Agent URI: %s", agentURI)
 			u.Printf("  Networks:  %s", chainCSV)
 
-			var successes int
-			for _, net := range networks {
-				u.Blank()
-				u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
-				u.Printf("    Registry: %s", net.RegistryAddress)
-
-				sponsored := net.HasSponsor() && (cmd.Bool("sponsored") || !cmd.IsSet("sponsored"))
-
-				if sponsored {
-					if err := registerSponsored(ctx, cfg, u, net, agentURI, signerNS); err != nil {
-						u.Warnf("sponsored registration failed: %v", err)
-						continue
-					}
-				} else {
-					if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
-						u.Warnf("direct registration failed: %v", err)
-						continue
-					}
-				}
-
-				u.Printf("    CAIP-10:  %s", net.CAIP10Registry())
-				successes++
-			}
-
+			successes := registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, networks)
 			if successes == 0 {
 				return fmt.Errorf("registration failed on all networks")
 			}
@@ -2314,28 +2348,29 @@ Examples:
 	}
 }
 
-// registerSponsored performs a sponsored (zero-gas) registration via the remote-signer.
-func registerSponsored(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {
-	u.Printf("    Using sponsored registration (zero gas)...")
+// registerAgentOnNetworks runs the per-network ERC-8004 registration loop used
+// by both `obol sell register` and the auto-register step of `obol sell demo`.
+// Each registration is signed by the Hermes remote-signer and pays gas from
+// the agent's wallet. Returns the number of networks that registered
+// successfully.
+func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, agentURI, signerNS string, networks []erc8004.NetworkConfig) int {
+	var successes int
+	for _, net := range networks {
+		u.Blank()
+		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
+		u.Printf("    Registry: %s", net.RegistryAddress)
 
-	// Port-forward to remote-signer.
-	pf, err := startSignerPortForward(cfg, namespace)
-	if err != nil {
-		return fmt.Errorf("port-forward to remote-signer: %w", err)
+		if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+			u.Warnf("registration failed: %v", err)
+			continue
+		}
+
+		u.Printf("    CAIP-10:  %s", net.CAIP10Registry())
+		successes++
 	}
-	defer pf.Stop()
-
-	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
-
-	agentID, txHash, err := erc8004.SponsoredRegister(ctx, signer, agentURI, net)
-	if err != nil {
-		return err
-	}
-
-	u.Printf("    Agent ID: %s", agentID.String())
-	u.Printf("    Tx hash:  %s", txHash)
-	return nil
+	return successes
 }
+
 
 // registerDirectViaSigner performs a direct on-chain registration via the remote-signer.
 func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {

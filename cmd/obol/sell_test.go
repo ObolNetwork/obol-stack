@@ -318,7 +318,7 @@ func TestSellDemo_Flags(t *testing.T) {
 	demo := findSubcommand(t, cmd, "demo")
 	flags := flagMap(demo)
 
-	requireFlags(t, flags, "wallet", "chain", "token", "price", "name")
+	requireFlags(t, flags, "wallet", "chain", "token", "price", "name", "no-register")
 	// chain and token deliberately have no flag-level defaults so the action
 	// can apply per-type defaults from demoTypes (e.g. hello → OBOL/ethereum,
 	// quant → USDC/base-sepolia).
@@ -395,9 +395,12 @@ func TestSellRegister_Flags(t *testing.T) {
 	flags := flagMap(reg)
 
 	requireFlags(t, flags,
-		"chain", "sponsored",
+		"chain",
 		"endpoint", "name", "description", "image",
 	)
+	if _, has := flags["sponsored"]; has {
+		t.Errorf("--sponsored flag should be removed (sponsored registration was scrapped)")
+	}
 
 	assertStringDefault(t, flags, "chain", "mainnet")
 	assertStringDefault(t, flags, "name", "Obol Agent")
@@ -512,6 +515,23 @@ func TestDemoRPCNetwork(t *testing.T) {
 	}
 }
 
+func TestBuildDemoServiceOffer_RegisterFlagDrivesEnabled(t *testing.T) {
+	for _, register := range []bool{true, false} {
+		manifest := buildDemoServiceOffer(
+			"demo-hello", "demo", "base-sepolia",
+			"0x1111111111111111111111111111111111111111",
+			"0.00001",
+			register,
+			demoSpec{Type: "hello", Description: "echo"},
+			schemas.AssetTerms{},
+		)
+		registration := manifest["spec"].(map[string]any)["registration"].(map[string]any)
+		if registration["enabled"] != register {
+			t.Errorf("register=%v: registration.enabled = %v, want %v", register, registration["enabled"], register)
+		}
+	}
+}
+
 func TestBuildDemoServiceOffer_USDCOmitsAssetBlock(t *testing.T) {
 	// USDC is the chain default; AssetTerms is zero, so the manifest must NOT
 	// include a payment.asset block (the verifier falls back to chain default).
@@ -519,6 +539,7 @@ func TestBuildDemoServiceOffer_USDCOmitsAssetBlock(t *testing.T) {
 		"demo-hello", "demo", "base-sepolia",
 		"0x1111111111111111111111111111111111111111",
 		"0.00001",
+		true,
 		demoSpec{Type: "hello", Description: "echo"},
 		schemas.AssetTerms{},
 	)
@@ -546,6 +567,7 @@ func TestBuildDemoServiceOffer_OBOLIncludesAssetBlock(t *testing.T) {
 		"demo-quant", "demo", "ethereum",
 		"0x2222222222222222222222222222222222222222",
 		"0.001",
+		true,
 		demoSpec{Type: "quant", Description: "agent driven analysis"},
 		asset,
 	)
