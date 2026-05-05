@@ -2261,9 +2261,24 @@ Examples:
 				Name:  "image",
 				Usage: "Agent image URL for registration",
 			},
+			&cli.BoolFlag{
+				Name:  "sponsored",
+				Usage: "(disabled) Sponsored zero-gas registration is currently unavailable. Re-run without --sponsored to register with the agent's own wallet (ETH for transaction fees required on the network).",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+
+			// Sponsored gasless registration was removed in a6cd2c2 because the
+			// EIP-7702 sponsor was returning silent zero-event txs (rc7/rc8 had
+			// `--sponsored` quietly produce Agent ID 0). Surface that loudly to
+			// anyone with the old muscle memory rather than ignoring the flag.
+			if cmd.Bool("sponsored") {
+				u.Warn("Sponsored zero-gas registration is currently disabled.")
+				u.Dim("  Re-run without --sponsored to register with the agent's own wallet.")
+				u.Dim("  (ETH for transaction fees required on the network)")
+				return errors.New("--sponsored is disabled; re-run without the flag to register with the agent's own wallet (ETH for transaction fees required on the network)")
+			}
 
 			// Resolve networks.
 			chainCSV := cmd.String("chain")

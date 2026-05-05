@@ -397,10 +397,11 @@ func TestSellRegister_Flags(t *testing.T) {
 	requireFlags(t, flags,
 		"chain",
 		"endpoint", "name", "description", "image",
+		// --sponsored is intentionally retained as a deprecated flag that
+		// errors with a clear message; users with old muscle memory or stale
+		// docs need a louder signal than "unknown flag".
+		"sponsored",
 	)
-	if _, has := flags["sponsored"]; has {
-		t.Errorf("--sponsored flag should be removed (sponsored registration was scrapped)")
-	}
 
 	assertStringDefault(t, flags, "chain", "mainnet")
 	assertStringDefault(t, flags, "name", "Obol Agent")
