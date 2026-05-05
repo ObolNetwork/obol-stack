@@ -183,7 +183,11 @@ function LanguageTabs({ service }: { service: Service }) {
   // Python is the only currently-supported snippet.
   const [lang] = useState<"python">("python");
 
-  const tokenName = service.network === "ethereum" ? "OBOL" : "USDC";
+  // Prefer the resolved asset symbol from the catalog. The previous
+  // network-based heuristic mislabeled OBOL on base-sepolia as USDC and
+  // any non-mainnet USDC deployment as OBOL.
+  const tokenName =
+    service.asset?.symbol ?? (service.network === "ethereum" ? "OBOL" : "USDC");
   const python = `import httpx
 from x402.client import x402_client
 

@@ -1,3 +1,10 @@
+export interface ServiceAsset {
+  address?: string;
+  symbol?: string;
+  decimals?: number;
+  transferMethod?: string;
+}
+
 export interface Service {
   name: string;
   namespace: string;
@@ -8,6 +15,12 @@ export interface Service {
   priceRaw?: string;
   payTo: string;
   network: string;
+  // asset is the resolved settlement token. Mirrors the controller's
+  // ServiceCatalogAsset payload — when present, .symbol is the source of
+  // truth for "what does this offer charge in" (e.g. "OBOL", "USDC"). The
+  // legacy `network === "ethereum" ? "OBOL" : "USDC"` heuristic was wrong
+  // for OBOL on base-sepolia and any non-mainnet OBOL deployment.
+  asset?: ServiceAsset;
   description: string;
   isDemo: boolean;
 }
