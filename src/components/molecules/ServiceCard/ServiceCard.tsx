@@ -68,6 +68,14 @@ const InfoRow = styled(Flex, {
   marginTop: '$xs',
 });
 
+const PriceRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxxs',
+  flexWrap: 'nowrap',
+  marginTop: '$xs',
+  width: '100%',
+});
+
 const InfoLabel = styled(Text, {
   fontSize: '$1',
   color: '$body',
@@ -77,6 +85,14 @@ const InfoValue = styled(Text, {
   fontSize: '$1',
   color: '$light',
   fontFamily: 'monospace',
+});
+
+const PriceValue = styled(Text, {
+  fontSize: '$1',
+  color: '$light',
+  fontFamily: 'monospace',
+  flex: 1,
+  minWidth: 0,
 });
 
 const SkillsRow = styled(Flex, {
@@ -168,13 +184,16 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
-function formatPrice(offer: ServiceOffer): string | null {
+function formatPrice(
+  offer: ServiceOffer
+): { count: string; unit: string } | null {
   const price = offer.payment?.price;
   if (!price) return null;
-  if (price.perRequest) return `${price.perRequest} / req`;
-  if (price.perMTok) return `${price.perMTok} / Mtok`;
-  if (price.perHour) return `${price.perHour} / hr`;
-  if (price.perEpoch) return `${price.perEpoch} / epoch`;
+  if (price.perRequest)
+    return { count: String(price.perRequest), unit: 'request' };
+  if (price.perMTok) return { count: String(price.perMTok), unit: 'Mtok' };
+  if (price.perHour) return { count: String(price.perHour), unit: 'hour' };
+  if (price.perEpoch) return { count: String(price.perEpoch), unit: 'epoch' };
   return null;
 }
 
@@ -216,24 +235,25 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
 
 /**
  * Rewrite the controller-published endpoint (which uses the local
- * `obol.stack` hostname) to use the public Cloudflare tunnel hostname.
- * Preserves path, query, and protocol from the tunnel URL. Falls back
- * to the original endpoint if the tunnel URL hasn't loaded yet.
+ * `obol.stack` hostname) to use the public Cloudflare tunnel as the base.
+ * Returns null when the tunnel URL is unavailable so the local-only
+ * `obol.stack` URL is never surfaced as a clickable link.
  */
 function publicEndpoint(
   endpoint: string | undefined,
   tunnelURL: string | null
 ): string | null {
-  if (!endpoint) return null;
-  if (!tunnelURL) return endpoint;
+  if (!tunnelURL) return null;
   try {
-    const ep = new URL(endpoint);
     const tunnel = new URL(tunnelURL);
-    ep.protocol = tunnel.protocol;
-    ep.host = tunnel.host;
-    return ep.toString();
+    const tunnelPath = tunnel.pathname.replace(/\/$/, '');
+    if (!endpoint) {
+      return `${tunnel.origin}${tunnelPath}` || tunnel.toString();
+    }
+    const ep = new URL(endpoint);
+    return `${tunnel.origin}${tunnelPath}${ep.pathname}${ep.search}${ep.hash}`;
   } catch {
-    return endpoint;
+    return null;
   }
 }
 
@@ -278,25 +298,17 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
       )}
 
       {price && (
-        <InfoRow>
+        <PriceRow>
           <InfoLabel>Price:</InfoLabel>
-          <InfoValue>
-            {price} {symbol}
+          <PriceValue>
+            {price.count} {symbol} / {price.unit}
             {network && (
-              <Text
-                as="span"
-                css={{
-                  fontSize: '$1',
-                  color: '$body',
-                  fontFamily: 'inherit',
-                  marginLeft: '4px',
-                }}
-              >
+              <span style={{ marginLeft: '4px', color: 'inherit' }}>
                 on {network}
-              </Text>
+              </span>
             )}
-          </InfoValue>
-        </InfoRow>
+          </PriceValue>
+        </PriceRow>
       )}
 
       <InfoRow>
