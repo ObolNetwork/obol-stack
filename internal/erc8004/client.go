@@ -1,6 +1,7 @@
 package erc8004
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"errors"
@@ -245,7 +246,19 @@ func (c *Client) parseRegisteredLog(vLog *types.Log) (*big.Int, string, common.A
 }
 
 // SetMetadataWithOpts stores key-value metadata using the provided TransactOpts.
+//
+// Read-before-write: registries we've integrated with (the canonical ERC-8004
+// reference impl among others) revert on `setMetadata` when the new value
+// equals the current value — observed in the field as "execution reverted"
+// on every subsequent ServiceOffer apply once the first one has set the
+// `x402` key. The contract revert costs gas and looks scary in the CLI for
+// what is logically a no-op, so we skip the write when the on-chain value
+// already matches.
 func (c *Client) SetMetadataWithOpts(ctx context.Context, opts *bind.TransactOpts, agentID *big.Int, k string, v []byte) error {
+	if existing, err := c.GetMetadata(ctx, agentID, k); err == nil && bytes.Equal(existing, v) {
+		return nil
+	}
+
 	tx, err := c.contract.Transact(opts, "setMetadata", agentID, k, v)
 	if err != nil {
 		return fmt.Errorf("erc8004: setMetadata tx: %w", err)
@@ -277,7 +290,12 @@ func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID
 }
 
 // SetMetadata stores arbitrary key-value metadata on the agent NFT.
+// Read-before-write — see SetMetadataWithOpts for the rationale.
 func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID *big.Int, k string, v []byte) error {
+	if existing, err := c.GetMetadata(ctx, agentID, k); err == nil && bytes.Equal(existing, v) {
+		return nil
+	}
+
 	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
 	if err != nil {
 		return fmt.Errorf("erc8004: transactor: %w", err)

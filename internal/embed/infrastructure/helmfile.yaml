@@ -20,6 +20,11 @@ repositories:
 values:
   - network: mainnet
   - gatewayApiVersion: v1.4.1
+  # Default the cloudflared release to enabled. `obol stack up` overrides via
+  # `--state-values-set cloudflared.enabled=false` when it detects a running
+  # quick tunnel that should be preserved across the sync.
+  - cloudflared:
+      enabled: true
 
 releases:
   # Local storage provisioner (raw manifests wrapped as chart)
@@ -130,10 +135,16 @@ releases:
           dashboard:
             enabled: false
 
-  # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision)
+  # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision).
+  # `condition: cloudflared.enabled` lets `obol stack up` flip this off when an
+  # active quick tunnel is already serving — re-syncing the chart kills the
+  # running pod (chart renders replicas: 0 in quick-tunnel mode), and that
+  # invalidates the *.trycloudflare.com URL anyone bookmarked. Default true so
+  # fresh installs and `helmfile sync` outside of stack-up keep working.
   - name: cloudflared
     namespace: traefik
     chart: ./cloudflared
+    condition: cloudflared.enabled
     needs:
       - traefik/traefik
 

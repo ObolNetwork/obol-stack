@@ -285,6 +285,39 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 	return WaitReady(cfg, u)
 }
 
+// IsQuickTunnelHealthy reports whether a quick (anonymous *.trycloudflare.com)
+// tunnel is currently serving — pod is Running and a URL has been captured
+// from its logs. Returns false for persistent (DNS) tunnels and for any
+// failure mode (no kubeconfig, no pod, no URL).
+//
+// Used by `obol stack up` to skip the cloudflared chart sync when the URL
+// would otherwise be invalidated. Persistent tunnels survive helmfile sync
+// because the chart renders replicas: 1 for them; quick tunnels do not, so
+// re-syncing the chart kills the running pod and rotates the URL.
+func IsQuickTunnelHealthy(cfg *config.Config) bool {
+	st, _ := loadTunnelState(cfg)
+	if st != nil && st.Hostname != "" {
+		return false // persistent (DNS) tunnel — chart already keeps it alive
+	}
+
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return false
+	}
+
+	if status, err := getPodStatus(kubectlPath, kubeconfigPath); err != nil || status != "running" {
+		return false
+	}
+
+	url, err := GetTunnelURL(cfg)
+	if err != nil || !strings.HasPrefix(url, "https://") {
+		return false
+	}
+
+	return true
+}
+
 // ConfirmQuickTunnelLoss warns the user when a destructive action is about to
 // invalidate an active quick tunnel URL, and asks whether to proceed. Returns
 // true when the caller should continue.

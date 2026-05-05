@@ -383,8 +383,19 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	helmfileArgs := []string{
 		"--file", helmfilePath,
 		"--kubeconfig", kubeconfigPath,
-		"sync",
 	}
+	// Preserve a healthy quick tunnel across stack-up. The cloudflared chart
+	// renders replicas: 0 in quick-tunnel mode; re-syncing it would terminate
+	// the running pod and invalidate the *.trycloudflare.com URL anyone
+	// bookmarked. The release has `condition: cloudflared.enabled` in
+	// helmfile.yaml — flipping that to false skips the release entirely so
+	// the pod and URL survive. Persistent (DNS) tunnels render replicas: 1,
+	// so they sync cleanly and we don't skip them.
+	if tunnel.IsQuickTunnelHealthy(cfg) {
+		helmfileArgs = append(helmfileArgs, "--state-values-set", "cloudflared.enabled=false")
+		u.Dim("Active quick tunnel detected — skipping cloudflared chart to preserve the URL")
+	}
+	helmfileArgs = append(helmfileArgs, "sync")
 	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
 	helmfileCmd := exec.Command(filepath.Join(cfg.BinDir, "helmfile"), helmfileArgs...)
 	helmfileCmd.Env = append(os.Environ(),

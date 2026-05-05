@@ -991,7 +991,17 @@ func decimalToAtomicString(amount string, decimals int) string {
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
+	// Source the symbol from (in order): explicit asset metadata on the offer,
+	// the resolved chain-default settlement asset, hard-coded "USDC" only as
+	// the last-resort fallback for unknown chains. Mislabeling OBOL-priced
+	// services as "USDC" on the discovery surfaces (storefront / skill.md)
+	// caused buyers to queue up the wrong asset on rc7-rc9.
 	symbol := offer.Spec.Payment.Asset.Symbol
+	if symbol == "" {
+		if a := offerAssetJSON(offer); a != nil && a.Symbol != "" {
+			symbol = a.Symbol
+		}
+	}
 	if symbol == "" {
 		symbol = "USDC"
 	}

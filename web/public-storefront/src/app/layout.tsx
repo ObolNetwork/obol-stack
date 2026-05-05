@@ -140,7 +140,7 @@ function JsonLd({
       description: s.description,
       url: `${siteUrl}${s.endpoint.startsWith("/") ? "" : "/"}${s.endpoint}`,
       price: s.priceRaw ?? s.price,
-      priceCurrency: "USDC",
+      priceCurrency: s.asset?.symbol ?? "USDC",
       eligibleTransactionVolume: {
         "@type": "PriceSpecification",
         price: s.price,

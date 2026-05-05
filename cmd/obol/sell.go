@@ -1045,8 +1045,12 @@ Example:
 				Usage: "Override service name (default: demo-<type>)",
 			},
 			&cli.BoolFlag{
-				Name:  "no-register",
-				Usage: "Skip the on-chain ERC-8004 registration step at the end (you can run `obol sell register` later)",
+				Name:  "register",
+				Usage: "Auto-register the demo on the ERC-8004 Agent Registry. Default: skip (avoid double-register reverts and ETH-for-gas requirement; run `obol sell register` later if you want on-chain discovery).",
+			},
+			&cli.BoolFlag{
+				Name:   "no-register",
+				Hidden: true, // back-compat: no-op now that skipping is the default
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -1128,8 +1132,13 @@ Example:
 				return fmt.Errorf("deploy demo backend: %w", err)
 			}
 
-			// 2. Create ServiceOffer.
-			register := !cmd.Bool("no-register")
+			// 2. Create ServiceOffer. Auto-registration is opt-in for demos —
+			// the previous default (auto-register on every demo) caused
+			// repeated `setMetadata` calls to revert at the contract once the
+			// agent already had x402 metadata, and required the demo wallet
+			// to hold ETH for gas. Operators run `obol sell register --chain ...`
+			// when they actually want on-chain discovery.
+			register := cmd.Bool("register")
 			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, register, spec, assetTerms)
 			applyOut, err := kubectlApplyOutput(cfg, soManifest)
 			if err != nil {
@@ -1173,7 +1182,8 @@ Example:
 			if register {
 				autoRegisterDemo(ctx, cfg, u, chain, tunnelURL)
 			} else {
-				u.Info("Registration skipped (--no-register). The offer will still reach Ready.")
+				u.Info("Registration skipped (default for demos). The offer will still reach Ready.")
+				u.Dim("  Run on-chain discovery later: obol sell register --chain " + chain)
 			}
 
 			// 6. Print try-it instructions.
