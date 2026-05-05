@@ -263,6 +263,15 @@ func Down(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("failed to load backend: %w", err)
 	}
 
+	// Cluster delete invalidates any active quick tunnel URL. Warn first so
+	// users with sellers registered against the URL aren't blindsided.
+	currentURL, _ := tunnel.GetTunnelURL(cfg)
+	if !tunnel.ConfirmQuickTunnelLoss(cfg, u, currentURL, "obol stack down") {
+		u.Info("Aborted.")
+
+		return nil
+	}
+
 	// Stop the DNS resolver container
 	dns.Stop()
 

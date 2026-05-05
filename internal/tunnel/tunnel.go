@@ -285,6 +285,36 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 	return WaitReady(cfg, u)
 }
 
+// ConfirmQuickTunnelLoss warns the user when a destructive action is about to
+// invalidate an active quick tunnel URL, and asks whether to proceed. Returns
+// true when the caller should continue.
+//
+// Quick tunnels get a fresh *.trycloudflare.com URL on every cluster recreate
+// or `obol tunnel restart`, so anyone who bookmarked or registered the old URL
+// will see 530 errors until they re-discover via /skill.md. Persistent (DNS)
+// tunnels are stable across these events and skip the warning.
+//
+// Pass currentURL as discovered from the running cloudflared pod (or "" when
+// none). In non-interactive sessions, Confirm returns its default (true), so
+// automation and CI flows print the warning but do not block.
+func ConfirmQuickTunnelLoss(cfg *config.Config, u *ui.UI, currentURL, action string) bool {
+	if st, _ := loadTunnelState(cfg); st != nil && st.Hostname != "" {
+		return true
+	}
+
+	if currentURL == "" {
+		return true
+	}
+
+	u.Blank()
+	u.Warnf("Quick tunnel URL will be invalidated: %s", currentURL)
+	u.Dim(fmt.Sprintf("  After `%s`, the next `obol sell http` brings up a fresh URL.", action))
+	u.Dim("  Buyers using the old URL will see 530 errors.")
+	u.Dim("  For a permanent URL: obol tunnel login --hostname stack.example.com")
+
+	return u.Confirm("Continue?", true)
+}
+
 // Restart restarts the cloudflared deployment and propagates the new tunnel
 // URL to dependent resources (obol-stack-config ConfigMap, agent overlay,
 // storefront HTTPRoute hostname pin). Quick tunnels get a new URL on every
@@ -301,6 +331,13 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return errors.New("stack not running, use 'obol stack up' first")
+	}
+
+	currentURL, _ := GetTunnelURL(cfg)
+	if !ConfirmQuickTunnelLoss(cfg, u, currentURL, "obol tunnel restart") {
+		u.Info("Aborted.")
+
+		return nil
 	}
 
 	cmd := exec.Command(kubectlPath,
@@ -531,13 +568,13 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 					},
 					"spec": map[string]any{
 						"containers": []map[string]any{
-								{
-									"name":            "storefront",
-									"image":           images.Resolve("ghcr.io/obolnetwork/obol-stack-public-storefront"),
-									"imagePullPolicy": "IfNotPresent",
-									"ports": []map[string]any{
-										{"containerPort": 3000, "name": "http"},
-									},
+							{
+								"name":            "storefront",
+								"image":           images.Resolve("ghcr.io/obolnetwork/obol-stack-public-storefront"),
+								"imagePullPolicy": "IfNotPresent",
+								"ports": []map[string]any{
+									{"containerPort": 3000, "name": "http"},
+								},
 								"env": []map[string]string{
 									{"name": "SERVICES_URL", "value": "http://obol-skill-md.x402.svc:8080"},
 								},
