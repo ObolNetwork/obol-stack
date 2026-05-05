@@ -1,88 +1,136 @@
 # Multi-node design notes
 
-Open questions blocking real multi-node usage of obol-stack. The
-`cluster-bootstrap` skill ships flag stubs (`--storage-primary`, `--edge-node`)
-so the CLI surface doesn't have to change once these are decided.
+Decisions for the multi-node behavior of obol-stack. The `cluster-bootstrap`
+skill carries the bootstrap-time flags; the actual chart changes that consume
+them live in a separate ticket (see "Implementation status" at the bottom).
 
-## Storage
+## Storage — DECIDED: Option A (storage-primary node)
 
 Today: `internal/embed/infrastructure/base/templates/local-path.yaml` installs
 the rancher local-path provisioner with `volumeBindingMode: WaitForFirstConsumer`
 and `pathPattern: "{{ .PVC.Namespace }}/{{ .PVC.Name }}"` under
-`{{ .Values.dataDir }}`. PVCs are pinned to whichever node first schedules a
-pod that consumes them. If the pod reschedules to a different node, it cannot
-re-mount the PVC.
+`{{ .Values.dataDir }}`. PVCs pin to whichever node first schedules a consumer
+pod; reschedule to a different node breaks the mount.
 
-### Option A — single storage-primary node (proposed default)
+### Decision: A — single storage-primary node
 
-- Apply `obol.org/storage=primary` label to one node (the bootstrap node).
-- Add `nodeAffinity` to every Deployment that owns a PVC: LiteLLM, Hermes,
-  default obol-agent, OpenClaw instances, eRPC if it persists state, monitoring
-  PVCs.
-- Storage failure mode is identical to today's single-host k3d: lose the
-  storage node, restore from PVC backup.
+- One node carries `obol.org/storage=primary`. By default this is the
+  bootstrap (server) node.
+- Every Deployment that owns a PVC adds a soft `nodeAffinity` preferring the
+  primary, hard `nodeAffinity` requiring it for true single-writer state
+  (LiteLLM, Hermes, default obol-agent, OpenClaw instances).
+- Failure mode is identical to today's single-host k3d: lose the primary,
+  restore from PVC backup. Single-node-of-failure for state is acceptable
+  given our LAN/cloud-small topologies.
+- Helm values gain `storage.primaryLabel` (default `obol.org/storage=primary`)
+  so charts can opt in via a shared values key.
 
-Surface:
-- `--storage-primary <host>` on `bootstrap.py server` records the label intent.
-- Helm values gain `storage.primaryLabel` so charts can opt-in.
+### Rejected
 
-### Option B — Longhorn or OpenEBS Mayastor
+- **B — Longhorn / OpenEBS Mayastor.** Real PVC migration but ≥3 nodes,
+  ~500MiB RAM/node baseline, new failure modes (stuck volumes, replica
+  rebalance IO). Reconsider if a deployment actually needs HA state.
+- **C — NFS export + dual StorageClass.** SPOF on NFS host; fsync/lease
+  semantics differ from local disk and would silently break SQLite-style state
+  (LiteLLM logs DB, BoltDB-backed services). Reconsider if a deployment
+  centralizes only on bulk read-mostly storage.
 
-- Replace `local-path` as the default StorageClass.
-- Need ≥3 nodes for replication. Each node runs a per-node agent
-  (~500MiB RAM, plus disk overhead per replica).
-- New failure modes: stuck volumes during node loss, replica rebalancing IO
-  pressure.
+### Bootstrap surface
 
-### Option C — single NFS export + dual StorageClass
+- `bootstrap.py server --storage-primary` records `obol.org/storage=primary`
+  on the server node in topology.json. Apply with `kubectl label node …`
+  printed by `bootstrap.py label`.
+- `bootstrap.py server --no-storage-primary` opts out (e.g. when a separate
+  storage node will be added later).
 
-- Bootstrap host exports `$OBOL_DATA_DIR` over NFS.
-- Install `nfs-subdir-external-provisioner` with StorageClass `obol-shared`.
-- Keep `local-path` as the default for ephemeral data.
-- Stateful charts opt into `obol-shared` only when migration matters.
-- SPOF on NFS host; fsync and lease semantics differ from local disk and may
-  break SQLite-style state (LiteLLM logs DB, anything using BoltDB).
-
-### Decision criteria
-
-- Cluster size 2: Option A is the only sane choice.
-- Cluster size 3+, mostly stateless workloads: Option A still wins.
-- Cluster size 3+, real HA requirement: Option B.
-- Mixed where one host has bulk storage: Option C, but audit every workload's
-  fsync expectations first.
-
-## Cloudflared
+## Cloudflared — DECIDED: Shape 2 (pools)
 
 Today: `internal/embed/infrastructure/cloudflared/templates/deployment.yaml`
-runs `replicas: 1` (or 0 when no token/credentials). Modes: `quickTunnel`,
-`remoteManaged` (token), `localManaged` (credentials + config).
+renders one Deployment with `replicas: 1` (or 0 when no token/credentials).
+Modes: `quickTunnel`, `remoteManaged` (token), `localManaged` (credentials +
+config).
 
-### Option A — multi-replica HA (proposed default for `replicas >= 2`)
+### Decision: Shape 2 — `cloudflared.pools` list
 
-- Cloudflared natively supports multiple replicas — each registers as a tunnel
-  connection and Cloudflare load-balances.
-- Set `replicas: 2`, `topologySpreadConstraints` (or hard PodAntiAffinity) by
-  hostname so replicas land on different nodes.
-- Only valid in `remote` and `local` managed modes. `quickTunnel` mints a fresh
-  trycloudflare URL per replica, so quick mode caps at `replicas: 1`.
+Values gain a `pools` list. Each pool is its own Deployment with hostname
+PodAntiAffinity so within a pool there is at most one replica per node, and
+each pool gets its own Cloudflare credentials (edge vs cloud usually map to
+different zones / accounts).
 
-### Option B — pin to single edge node
+```yaml
+# Default values.yaml — single pool, backwards compatible with today.
+pools:
+  - name: default
+    replicas: 1
+    # nodeSelector omitted -> any schedulable node
+    mode: auto                   # auto | local | remote | quick
+    quickTunnel:
+      url: "http://traefik.traefik.svc.cluster.local:80"
+    remoteManaged:
+      tokenSecretName: cloudflared-tunnel-token
+      tokenSecretKey: TUNNEL_TOKEN
+    localManaged:
+      secretName: cloudflared-local-credentials
+      configMapName: cloudflared-local-config
+      tunnelIDKey: tunnel_id
+```
 
-- Apply `obol.org/edge=true` label to whichever node has the best uplink.
-- `nodeSelector: { obol.org/edge: "true" }`, `replicas: 1`.
-- Right call when LAN topology is asymmetric (one wired box, others on Wi-Fi).
-- Not HA; tunnel dies with the edge node.
+Per-pool example for an edge+cloud topology:
 
-### Option C — DaemonSet on edge-labeled nodes
+```yaml
+pools:
+  - name: edge
+    replicas: 2
+    nodeSelector:
+      obol.org/cloudflared-pool: edge
+    mode: remote
+    remoteManaged:
+      tokenSecretName: cloudflared-edge-token
+      tokenSecretKey: TUNNEL_TOKEN
+  - name: cloud
+    replicas: 1
+    nodeSelector:
+      obol.org/cloudflared-pool: cloud
+    mode: local
+    localManaged:
+      secretName: cloudflared-cloud-credentials
+      configMapName: cloudflared-cloud-config
+      tunnelIDKey: tunnel_id
+```
 
-Past ~4 connections Cloudflare gains nothing, and managing tunnel limits
-becomes painful. Don't recommend.
+Invariants the chart must enforce:
+- Per-pool `requiredDuringSchedulingIgnoredDuringExecution` PodAntiAffinity by
+  `kubernetes.io/hostname` — at most one replica per node within a pool.
+- `quickTunnel` mode caps at `replicas: 1` (per-replica trycloudflare URL).
+- Resource names get a per-pool suffix: `cloudflared-<pool>` for the
+  Deployment, default suffix omitted only when the single pool is named
+  `default` and no migration is in flight.
+- Validation: each pool must have exactly one of `quickTunnel` (when
+  `mode=quick`), `remoteManaged` (`mode=remote`), `localManaged`
+  (`mode=local`), or any of the three when `mode=auto`.
 
-### Decision criteria
+Footgun documented for users: if `replicas` exceeds the count of nodes
+matching `nodeSelector`, the surplus pods stay Pending. The chart NOTES.txt
+should print a warning at install time.
 
-- Symmetric uplinks, ≥2 nodes: Option A. Free HA, no extra config required.
-- Asymmetric uplinks (one node = the gateway): Option B with `--edge-node`.
-- quickTunnel: always `replicas: 1`.
+### Rejected
+
+- **Shape 1 — DaemonSet per labeled pool.** Hard-caps at one tunnel per
+  labeled node, which means "more tunnels on edge" requires labeling more
+  nodes. Doesn't compose when one beefy edge box wants two tunnels.
+- **Shape 3 — single Deployment, hostname antiaffinity, replicas knob.** No
+  way to differentiate edge vs cloud tunnels (different Cloudflare
+  credentials, different zones). Replicas-exceeds-nodes footgun is the same
+  but with no value to offset it.
+
+### Bootstrap surface
+
+- `bootstrap.py server --cloudflared-pool <name>` records the pool label on
+  the server. Default is `default`.
+- `bootstrap.py join --cloudflared-pool <name>` records the pool label on
+  the agent. Repeat with different pool names to build edge/cloud topology.
+- The recorded labels are written into `topology.json` so the chart-rewrite
+  ticket can read them when generating per-pool values.
 
 ## Other multi-node concerns (out of scope for this skill, tracked here)
 
@@ -94,3 +142,14 @@ becomes painful. Don't recommend.
   this (require `obol model setup custom`) or aggregate across nodes.
 - **Traefik / Gateway**: single Service IP works fine multi-node out of the
   box; nothing to do unless we want active-active ingress per region.
+
+## Implementation status
+
+| Piece                                                      | Status |
+|------------------------------------------------------------|--------|
+| `bootstrap.py` records storage-primary + cloudflared-pool  | done (this PR) |
+| `local-path.yaml` chart honors `storage.primaryLabel`      | next ticket |
+| Stateful Deployments add `nodeAffinity` to primary label   | next ticket |
+| `cloudflared` chart `range` over `pools`                   | next ticket |
+| `obol stack up` consumes `topology.json` for chart values  | next ticket |
+| End-to-end multi-node smoke test                           | follow-up |

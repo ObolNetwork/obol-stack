@@ -9,10 +9,11 @@ metadata: { "openclaw": { "emoji": "🪴", "requires": { "bins": ["k3sup", "ssh"
 Bootstrap a k3s cluster across one or more hosts (LAN or cloud) and prepare it
 to run obol-stack. Wraps [k3sup](https://github.com/alexellis/k3sup) over SSH.
 
-This skill is a **scaffold**. The single-host and LAN-join flows are wired up;
-multi-node storage and tunnel behavior are still being designed
-(see `references/multi-node-design.md`). Don't run this against a production
-cluster yet.
+This skill is a **scaffold**. The single-host and LAN-join flows are wired up
+and the multi-node design is decided (storage-primary node label, cloudflared
+pools — see `references/multi-node-design.md`), but the chart changes that
+consume the bootstrap output are tracked in a follow-up ticket. Don't run this
+against a production cluster yet.
 
 ## When to Use
 
@@ -67,63 +68,56 @@ obol stack up
 
 ```
 single   --host --user --ssh-key [--k3s-channel stable]
-            Install k3s on one host. Equivalent to running `server` with no
-            expected agents.
+            [--storage-primary] [--cloudflared-pool <name>]
+            Install k3s on one host. Equivalent to `server` with no agents.
 
 server   --host --user --ssh-key [--k3s-channel stable] [--cluster-cidr]
+            [--storage-primary] [--no-storage-primary]
+            [--cloudflared-pool <name>]
             Install k3s server on the target host. Writes kubeconfig to
             $OBOL_CONFIG_DIR/kubeconfig.yaml with API rewritten to --host.
+            Records `obol.org/storage=primary` on the server by default and
+            `obol.org/cloudflared-pool=<name>` (default `default`) into
+            topology.json.
 
 join     --server-host --host --user --ssh-key
-            Install k3s agent on --host and join it to --server-host. Server
-            node-token is fetched over SSH from the server host.
+            [--cloudflared-pool <name>]
+            Install k3s agent on --host and join to --server-host. Records
+            `obol.org/cloudflared-pool=<name>` (default `default`).
 
 kubeconfig-path
             Print the absolute path of the kubeconfig this skill writes to.
 
 label    --host <name> --label key=value [--label key=value ...]
-            Apply node labels (used by storage/tunnel placement — see Design
-            Notes below).
+            Apply ad-hoc node labels (used when storage/tunnel placement
+            needs more than the bootstrap conveniences cover).
 
 status   List nodes, their roles, and the labels relevant to obol-stack.
 ```
 
-## Design Notes (in progress)
+## Design Notes (decided)
 
-These two areas are NOT yet implemented by this skill. They block real
-multi-node usage. Captured in `references/multi-node-design.md`; high-level
-proposals here so the skill's flags can be designed against them.
+Full rationale and rejected alternatives in `references/multi-node-design.md`.
 
-### Storage placement
+### Storage — single primary node
 
-Default `local-path` provisioner pins PVCs to one node. Three candidate paths:
+One node carries `obol.org/storage=primary` (the bootstrap server by default).
+Stateful Deployments — LiteLLM, Hermes, default obol-agent, OpenClaw — add
+`nodeAffinity` to that label so PVCs always land on the same node. Lose the
+primary, restore from PVC backup. This is `--storage-primary` (default on)
+on `bootstrap.py server` / `single`.
 
-1. **Storage-primary node label (proposed default).** Designate one node with
-   `obol.org/storage=primary`. Stateful workloads add nodeAffinity to that
-   label. State is single-node; failure is recoverable from PVC backup.
-2. **Longhorn / OpenEBS replicated block storage.** Real PVC migration. Costs
-   ≥3 nodes and ~500MiB RAM/node baseline.
-3. **NFS export + dual StorageClass.** Add `obol-shared` on top of an NFS
-   export from the bootstrap host; keep `local-path` for ephemeral work.
+### Cloudflared — `pools` list
 
-This skill exposes `--storage-primary <host>` so the choice can be deferred
-without changing the CLI surface.
+The cloudflared chart will render one Deployment per entry in
+`cloudflared.pools`. Each pool has its own `replicas`, `nodeSelector`, and
+Cloudflare credentials, with hostname `PodAntiAffinity` ensuring at most one
+replica per node within a pool. Default values ship a single `default` pool
+preserving today's behavior; advanced topologies opt in by adding more pools
+(e.g. `edge` + `cloud` with separate tunnel tokens).
 
-### Cloudflared placement
-
-Cloudflared has native HA (each replica = a tunnel connection,
-Cloudflare-side load-balanced). Three candidate paths:
-
-1. **Multi-replica + PodAntiAffinity (proposed default for `replicas >= 2`).**
-   Free HA; only viable in `remote` / `local` managed mode (quickTunnel mints
-   per-replica URLs).
-2. **Pin to a single edge-labeled node.** Right when one node has the only
-   good uplink. `obol.org/edge=true` node selector, `replicas: 1`.
-3. **DaemonSet on edge-labeled nodes.** Don't.
-
-This skill exposes `--edge-node <host>` to pin (option 2). Default behavior is
-to leave the cloudflared chart at replicas=1 until the chart learns to scale
-based on `obol.org/topology=multi`.
+`bootstrap.py server --cloudflared-pool <name>` and `bootstrap.py join
+--cloudflared-pool <name>` record per-node pool labels into `topology.json`.
 
 ## Files Written by the Skill
 

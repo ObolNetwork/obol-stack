@@ -87,6 +87,10 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True)
 
 
+STORAGE_PRIMARY_LABEL = "obol.org/storage"
+CLOUDFLARED_POOL_LABEL = "obol.org/cloudflared-pool"
+
+
 def cmd_install_server(args: argparse.Namespace) -> int:
     require_k3sup()
     kc = kubeconfig_path()
@@ -116,8 +120,15 @@ def cmd_install_server(args: argparse.Namespace) -> int:
     p.write_text(token)
     p.chmod(0o600)
 
-    upsert_node(Node(host=args.host, role="server", user=args.user, labels={}))
+    labels: dict[str, str] = {}
+    if args.storage_primary:
+        labels[STORAGE_PRIMARY_LABEL] = "primary"
+    labels[CLOUDFLARED_POOL_LABEL] = args.cloudflared_pool
+    upsert_node(Node(host=args.host, role="server", user=args.user, labels=labels))
     print(f"server installed; kubeconfig at {kc}")
+    if labels:
+        print("recorded labels:", ", ".join(f"{k}={v}" for k, v in labels.items()))
+        print("apply with: bootstrap.py status   # then run the printed kubectl label commands")
     return 0
 
 
@@ -134,8 +145,10 @@ def cmd_join(args: argparse.Namespace) -> int:
         "--server-ip", args.server_host,
         "--server-user", args.user,
     ])
-    upsert_node(Node(host=args.host, role="agent", user=args.user, labels={}))
+    labels = {CLOUDFLARED_POOL_LABEL: args.cloudflared_pool}
+    upsert_node(Node(host=args.host, role="agent", user=args.user, labels=labels))
     print(f"agent {args.host} joined to server {args.server_host}")
+    print("recorded labels:", ", ".join(f"{k}={v}" for k, v in labels.items()))
     return 0
 
 
@@ -189,21 +202,38 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.add_argument("--user", required=True)
         parser.add_argument("--ssh-key", required=True)
 
+    def add_server_topology(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--k3s-channel", default="stable")
+        parser.add_argument("--cluster-cidr", default=None)
+        # storage-primary defaults on; --no-storage-primary opts out.
+        parser.add_argument(
+            "--storage-primary", dest="storage_primary",
+            action=argparse.BooleanOptionalAction, default=True,
+            help="record obol.org/storage=primary on this node (default on)",
+        )
+        parser.add_argument(
+            "--cloudflared-pool", default="default",
+            help="cloudflared pool name (label obol.org/cloudflared-pool); "
+                 "default 'default'",
+        )
+
     s = sub.add_parser("single", help="install k3s on one host")
     add_ssh(s)
-    s.add_argument("--k3s-channel", default="stable")
-    s.add_argument("--cluster-cidr", default=None)
+    add_server_topology(s)
     s.set_defaults(func=cmd_install_server)
 
     s = sub.add_parser("server", help="install k3s server")
     add_ssh(s)
-    s.add_argument("--k3s-channel", default="stable")
-    s.add_argument("--cluster-cidr", default=None)
+    add_server_topology(s)
     s.set_defaults(func=cmd_install_server)
 
     s = sub.add_parser("join", help="join an agent node to the server")
     add_ssh(s)
     s.add_argument("--server-host", required=True)
+    s.add_argument(
+        "--cloudflared-pool", default="default",
+        help="cloudflared pool name for this agent (default 'default')",
+    )
     s.set_defaults(func=cmd_join)
 
     s = sub.add_parser("kubeconfig-path", help="print kubeconfig path")
