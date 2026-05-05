@@ -127,6 +127,18 @@ go test ./cmd/obol ./internal/tunnel ./internal/stack -count=1
 go test ./cmd/obol ./internal/stack ./internal/hermes -count=1
 ```
 
+Force a fresh local image build (otherwise `obol stack up` reuses any
+locally-tagged `ghcr.io/obolnetwork/<name>:latest` and your source change
+won't reach the running pod):
+
+```bash
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true obol stack up
+```
+
+Applies to every image in `baseLocalImages` (x402-verifier,
+serviceoffer-controller, x402-buyer, demo-server, public-storefront).
+The warm-path summary line surfaces this hint when nothing was rebuilt.
+
 Integration checks:
 
 ```bash
