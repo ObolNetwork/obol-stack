@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 func testConfig(t *testing.T) *config.Config {
@@ -301,5 +302,34 @@ func TestTunnelState_UpdatedAtRefreshed(t *testing.T) {
 	got, _ := loadTunnelState(cfg)
 	if got.UpdatedAt.Before(before) {
 		t.Errorf("UpdatedAt %v should be after %v", got.UpdatedAt, before)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ConfirmQuickTunnelLoss
+// ---------------------------------------------------------------------------
+
+func TestConfirmQuickTunnelLoss_PersistentSkipsWarning(t *testing.T) {
+	cfg := testConfig(t)
+	if err := saveTunnelState(cfg, &tunnelState{Mode: "dns", Hostname: "stack.example.com"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if !ConfirmQuickTunnelLoss(cfg, ui.New(false), "https://old.trycloudflare.com", "test") {
+		t.Error("persistent DNS tunnel should skip the warning and return true")
+	}
+}
+
+func TestConfirmQuickTunnelLoss_EmptyURLSkips(t *testing.T) {
+	if !ConfirmQuickTunnelLoss(testConfig(t), ui.New(false), "", "test") {
+		t.Error("empty currentURL should skip the warning and return true")
+	}
+}
+
+func TestConfirmQuickTunnelLoss_NonInteractivePassesThrough(t *testing.T) {
+	// Tests run without a TTY, so Confirm short-circuits to its default (true).
+	// The helper still prints the warning; here we just verify it does not block.
+	if !ConfirmQuickTunnelLoss(testConfig(t), ui.New(false), "https://old.trycloudflare.com", "test") {
+		t.Error("non-interactive Confirm should pass through with default-yes")
 	}
 }
