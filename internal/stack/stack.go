@@ -498,21 +498,13 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 		u.Blank()
 		u.Infof("Ollama detected with %d model(s)", len(ollamaModels))
 
-		var names []string
-
-		for _, m := range ollamaModels {
-			name := m.Name
-			if before, ok := strings.CutSuffix(name, ":latest"); ok {
-				name = before
+		names := model.AutoConfigOllamaModelNames(ollamaModels)
+		if len(names) > 0 {
+			if err := model.PatchLiteLLMProvider(cfg, u, "ollama", "", names); err != nil {
+				u.Warnf("Auto-configure Ollama failed: %v", err)
+			} else {
+				configured = append(configured, "ollama")
 			}
-
-			names = append(names, name)
-		}
-
-		if err := model.PatchLiteLLMProvider(cfg, u, "ollama", "", names); err != nil {
-			u.Warnf("Auto-configure Ollama failed: %v", err)
-		} else {
-			configured = append(configured, "ollama")
 		}
 	}
 
