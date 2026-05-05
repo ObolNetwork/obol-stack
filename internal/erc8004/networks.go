@@ -16,20 +16,9 @@ type NetworkConfig struct {
 	// RegistryAddress is the ERC-8004 Identity Registry contract address on this chain.
 	RegistryAddress string
 
-	// SponsorURL is the sponsored registration API endpoint (empty if not available).
-	SponsorURL string
-
-	// DelegateAddress is the EIP-7702 delegation contract used by the sponsor.
-	DelegateAddress string
-
 	// ERPCNetwork is the path segment used by eRPC to route to this chain
 	// (e.g. "base-sepolia", "base", "mainnet").
 	ERPCNetwork string
-}
-
-// HasSponsor returns true if this network supports sponsored (zero-gas) registration.
-func (n NetworkConfig) HasSponsor() bool {
-	return n.SponsorURL != ""
 }
 
 // CAIP10Registry returns the CAIP-10 formatted registry identifier.
@@ -57,8 +46,6 @@ var (
 		Name:            "ethereum",
 		ChainID:         1,
 		RegistryAddress: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
-		SponsorURL:      "https://sponsored.howto8004.com/api/register",
-		DelegateAddress: "0x77fb3D2ff6dB9dcbF1b7E0693b3c746B30499eE8",
 		ERPCNetwork:     "mainnet",
 	}
 )

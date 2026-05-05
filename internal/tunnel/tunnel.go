@@ -541,13 +541,29 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 								"env": []map[string]string{
 									{"name": "SERVICES_URL", "value": "http://obol-skill-md.x402.svc:8080"},
 								},
+								// Next.js SSR `/` cold renders can take >1s (the
+								// implicit livenessProbe timeoutSeconds default).
+								// Use a startupProbe to absorb the warm-up window
+								// and only flip liveness on once the app is up,
+								// then keep liveness loose enough that a slow SSR
+								// doesn't kill an otherwise-healthy pod.
+								"startupProbe": map[string]any{
+									"httpGet": map[string]any{
+										"path": "/",
+										"port": "http",
+									},
+									"periodSeconds":    5,
+									"failureThreshold": 30, // up to 150s to warm
+									"timeoutSeconds":   5,
+								},
 								"livenessProbe": map[string]any{
 									"httpGet": map[string]any{
 										"path": "/",
 										"port": "http",
 									},
-									"initialDelaySeconds": 5,
-									"periodSeconds":       30,
+									"periodSeconds":    30,
+									"timeoutSeconds":   5,
+									"failureThreshold": 3,
 								},
 								"resources": map[string]any{
 									"requests": map[string]string{"cpu": "10m", "memory": "32Mi"},
