@@ -532,7 +532,7 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 // would be circular respectively). Returns the list of registered
 // provider labels for inclusion in the single-restart summary line.
 //
-// Set OBOL_DISABLE_LOCAL_DISCOVERY=1 to skip this step entirely.
+// Set OBOL_DISABLE_LOCAL_MODEL_DISCOVERY=true to skip this step entirely.
 func autoDetectLocalProviders(cfg *config.Config, u *ui.UI) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -673,7 +673,7 @@ func devPreloadImages() []string {
 }
 
 func reuseLocalDevImages() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_REUSE_LOCAL_DEV_IMAGES")), "true")
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES")), "true")
 }
 
 func dockerImageAvailableLocally(tag string) bool {
@@ -722,7 +722,7 @@ func buildAndImportLocalImages(cfg *config.Config) {
 		}
 
 		if reuseCachedImages && dockerImageAvailableLocally(img.tag) {
-			fmt.Printf("Reusing existing local image %s (set OBOL_REUSE_LOCAL_DEV_IMAGES=true to opt into cache reuse)...\n", img.tag)
+			fmt.Printf("Reusing existing local image %s (set OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true to force a rebuild)...\n", img.tag)
 			if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
 				fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
 			}
