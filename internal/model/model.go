@@ -1480,6 +1480,20 @@ type OllamaModel struct {
 	ModifiedAt string `json:"modified_at"`
 }
 
+// PreferredDefaultOllamaModel is the model we *recommend* operators pull when
+// they're starting from an empty Ollama inventory or have only cloud-aliased
+// entries. Picked as a reasonable balance between capability and CPU footprint
+// on developer machines without a discrete GPU.
+//
+// Note: we do NOT bump this to the front of an existing `/api/tags` ordering.
+// On hosts that already have local chat models, the ordering Ollama returns
+// (modified-time) is treated as the operator's preference signal — overriding
+// it would silently demote a model the user just pulled and intends to use.
+// The stack-up auto-config only suggests this name when Ollama has nothing
+// usable; once any local chat model is configured, `obol model prefer ...`
+// is the explicit reorder path.
+const PreferredDefaultOllamaModel = "qwen3.5:4b"
+
 // AutoConfigOllamaModelNames converts the raw /api/tags inventory into the
 // ordered model-name list we auto-write into LiteLLM and agent configs.
 //
@@ -1487,8 +1501,12 @@ type OllamaModel struct {
 //   - strip the cosmetic `:latest` tag suffix
 //   - ignore empty names
 //   - keep local chat-capable models ahead of Ollama cloud aliases that would
-//     require extra credentials to work
+//     require extra credentials to work (mitigates the rc8 regression where a
+//     `:cloud` alias landed at index 0 and became Hermes' unusable default)
 //   - keep embedding-only models last so they never become the default chat model
+//   - within each tier, preserve Ollama's own ordering — that's the operator's
+//     pull-history preference signal, and overriding it would silently demote
+//     a model the user just pulled
 //
 // This only affects auto-generated defaults. Operators can still reorder the
 // resulting LiteLLM model_list later with `obol model prefer ...`.
@@ -1530,6 +1548,14 @@ func normalizeOllamaModelName(name string) string {
 
 func isCredentialRequiringOllamaModel(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ":cloud")
+}
+
+// IsCredentialRequiringOllamaModel reports whether an Ollama model name is one
+// of the cloud-aliased entries that needs an API key to actually serve
+// requests (e.g. `deepseek-v4-pro:cloud`). Exported so stack-up can warn when
+// the auto-picked primary would land on one of these.
+func IsCredentialRequiringOllamaModel(name string) bool {
+	return isCredentialRequiringOllamaModel(name)
 }
 
 // ListOllamaModels queries the local Ollama server for pulled models.

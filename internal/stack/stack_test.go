@@ -695,7 +695,7 @@ func TestBuildAndImportLocalImages_DefaultReusesExistingImage(t *testing.T) {
 	defer os.Chdir(oldWD)
 	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "")
 
-	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir})
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
 
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
@@ -769,7 +769,7 @@ func TestBuildAndImportLocalImages_ForceRebuildEvenWhenImageExists(t *testing.T)
 	defer os.Chdir(oldWD)
 	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "true")
 
-	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir})
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
 
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
@@ -781,5 +781,98 @@ func TestBuildAndImportLocalImages_ForceRebuildEvenWhenImageExists(t *testing.T)
 	}
 	if strings.Contains(log, "Reusing existing local image ghcr.io/obolnetwork/x402-verifier:latest") {
 		t.Fatalf("expected force-rebuild env var to rebuild instead of reusing cache, log:\n%s", log)
+	}
+}
+
+func TestBuildAndImportLocalImages_SkipsK3dImportWhenCacheIsValid(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, "config")
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	for _, d := range []string{cfgDir, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, stackIDFile), []byte("test-stack"), 0o600); err != nil {
+		t.Fatalf("write stack id: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile.x402-verifier"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile: %v", err)
+	}
+
+	const (
+		fakeDigest = "sha256:cafef00d"
+		fakeCID    = "k3d-server-cid-fake"
+	)
+
+	// Pre-seed the cache so the verifier image is treated as already imported.
+	cachePath := filepath.Join(cfgDir, importedImagesCacheFile)
+	cacheJSON := `{"entries":{"obol-stack-test-stack|ghcr.io/obolnetwork/x402-verifier:latest":{"digest":"` + fakeDigest + `","cluster_cid":"` + fakeCID + `"}}}`
+	if err := os.WriteFile(cachePath, []byte(cacheJSON), 0o600); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		// `docker image inspect <tag>` (no --format) — used by dockerImageAvailableLocally.
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ] && [ \"${3:-}\" = \"ghcr.io/obolnetwork/x402-verifier:latest\" ]; then\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		// `docker image inspect --format {{.Id}} <tag>` — dockerImageDigest.
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ] && [ \"${3:-}\" = \"--format\" ]; then\n" +
+		"  printf '" + fakeDigest + "\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		// `docker inspect --format {{.Id}} k3d-<cluster>-server-0` — k3dServerContainerID.
+		"if [ \"${1:-}\" = \"inspect\" ] && [ \"${2:-}\" = \"--format\" ]; then\n" +
+		"  printf '" + fakeCID + "\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ]; then\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"build\" ] || [ \"${1:-}\" = \"pull\" ]; then\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exit 0\n"
+	k3dScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'k3d %s\\n' \"$*\" >> \"" + logPath + "\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "k3d"), []byte(k3dScript), 0o755); err != nil {
+		t.Fatalf("write k3d stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "")
+
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	if strings.Contains(log, "k3d image import ghcr.io/obolnetwork/x402-verifier:latest") {
+		t.Fatalf("expected cache hit to skip k3d import for verifier, log:\n%s", log)
+	}
+	if strings.Contains(log, "docker build -f") {
+		t.Fatalf("expected cache hit to skip docker build, log:\n%s", log)
 	}
 }

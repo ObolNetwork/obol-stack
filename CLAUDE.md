@@ -172,7 +172,7 @@ Two-stage templating: `values.yaml.gotmpl` with `@enum/@default/@description` an
 | Command | Action |
 |---------|--------|
 | `obol stack init` | Generate cluster ID, resolve absolute paths, write k3d.yaml, copy infrastructure |
-| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models, deploys obol-agent, starts Cloudflare tunnel (default agent model: `qwen3.5:9b`) |
+| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama's modified-time order; `:cloud` aliases demoted behind local chat models; warns + suggests `ollama pull qwen3.5:4b` when Ollama is empty or all-`:cloud`), deploys obol-agent, starts Cloudflare tunnel |
 | `obol stack down` | `k3d cluster delete` (preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs |
 

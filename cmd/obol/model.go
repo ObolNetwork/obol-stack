@@ -151,7 +151,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 		if len(ollamaModels) == 0 {
 			u.Warn("No models pulled in Ollama")
 			u.Print("")
-			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:9b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
+			u.Print("  Hint: Pull a model with: ollama pull qwen3.5:4b  (or qwen3.6:27b on hosts with ≥32GB RAM)")
 			u.Print("  Hint: Or run: obol model pull")
 
 			return errors.New("ollama is running but has no models")

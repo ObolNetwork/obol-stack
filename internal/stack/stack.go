@@ -3,6 +3,7 @@ package stack
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -395,7 +396,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// public registry yet. Third-party images use the k3d registry-mirror path
 	// configured during cluster creation.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		buildAndImportLocalImages(cfg)
+		buildAndImportLocalImages(cfg, u)
 	}
 
 	if err := u.Exec(ui.ExecConfig{
@@ -494,7 +495,20 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 
 	// --- Ollama ---
 	ollamaModels, err := model.ListOllamaModels()
-	if err == nil && len(ollamaModels) > 0 && !model.HasConfiguredModels(cfg) {
+	switch {
+	case err != nil:
+		// Ollama unreachable. Not auto-configurable here; obolup.sh covers
+		// install hints, and `obol model setup` covers the manual path.
+	case len(ollamaModels) == 0:
+		// Ollama is up but the user hasn't pulled anything yet — the agent
+		// will boot with no local model to chat with. Warn loudly with a
+		// concrete next step instead of silently moving on.
+		u.Blank()
+		u.Warn("Ollama is running but has no models pulled.")
+		u.Dim("  Hermes will not have a local chat model until one is pulled.")
+		u.Dim("  Quick fix:  ollama pull " + model.PreferredDefaultOllamaModel)
+		u.Dim("  Or pick interactively:  obol model pull")
+	case !model.HasConfiguredModels(cfg):
 		u.Blank()
 		u.Infof("Ollama detected with %d model(s)", len(ollamaModels))
 
@@ -504,6 +518,15 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 				u.Warnf("Auto-configure Ollama failed: %v", err)
 			} else {
 				configured = append(configured, "ollama")
+				// Auto-pick lands on names[0] via Rank(); flag the case
+				// where every model needs unconfigured credentials so the
+				// operator isn't surprised by an unusable default. The
+				// PreferredDefaultOllamaModel bump in AutoConfigOllamaModelNames
+				// already handles the typical "many local models" case.
+				if model.IsCredentialRequiringOllamaModel(names[0]) {
+					u.Warnf("Auto-picked default %q is an Ollama cloud alias that needs an API key.", names[0])
+					u.Dim("  Pull a local model to take over as default: ollama pull " + model.PreferredDefaultOllamaModel)
+				}
 			}
 		}
 	}
@@ -683,10 +706,109 @@ func dockerImageAvailableLocally(tag string) bool {
 	return inspectCmd.Run() == nil
 }
 
+// dockerImageDigest returns the local image's content ID (e.g.
+// "sha256:abcd…") for use as a cache key. Empty string on any failure;
+// callers must treat that as "do not cache".
+func dockerImageDigest(tag string) string {
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", tag).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// k3dServerContainerID returns the docker container ID of the k3d cluster's
+// server-0 node. Used as the second half of the import-cache key so that a
+// destroy+recreate of the cluster (new container ID, fresh containerd state)
+// invalidates cache entries from the previous incarnation. Empty string on
+// any failure.
+func k3dServerContainerID(clusterName string) string {
+	out, err := exec.Command("docker", "inspect", "--format", "{{.Id}}", "k3d-"+clusterName+"-server-0").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+const importedImagesCacheFile = ".imported-images.json"
+
+type importedImageEntry struct {
+	Digest     string `json:"digest"`
+	ClusterCID string `json:"cluster_cid"`
+}
+
+type importedImageCache struct {
+	Entries map[string]importedImageEntry `json:"entries"`
+}
+
+func loadImportedImageCache(cfg *config.Config) importedImageCache {
+	cache := importedImageCache{Entries: map[string]importedImageEntry{}}
+	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, importedImagesCacheFile))
+	if err != nil {
+		return cache
+	}
+	if err := json.Unmarshal(data, &cache); err != nil || cache.Entries == nil {
+		return importedImageCache{Entries: map[string]importedImageEntry{}}
+	}
+	return cache
+}
+
+func saveImportedImageCache(cfg *config.Config, cache importedImageCache) {
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(cfg.ConfigDir, importedImagesCacheFile), data, 0o600)
+}
+
+func importedImageCacheKey(clusterName, tag string) string {
+	return clusterName + "|" + tag
+}
+
+// importImageWithCache wraps `k3d image import` with a digest+cluster cache so
+// repeated `obol stack up` runs skip the multi-second tarball round-trip when
+// the same image was already loaded into the same cluster instance. Returns
+// true if the image was actually imported (so the caller can count it for the
+// summary), false if the cache hit short-circuited the import or the import
+// failed.
+func importImageWithCache(k3dBinary, clusterName, tag, serverCID string, cache *importedImageCache, u *ui.UI) bool {
+	digest := dockerImageDigest(tag)
+	key := importedImageCacheKey(clusterName, tag)
+	if digest != "" && serverCID != "" {
+		if entry, ok := cache.Entries[key]; ok && entry.Digest == digest && entry.ClusterCID == serverCID {
+			return false
+		}
+	}
+
+	if u != nil {
+		u.Infof("Importing %s into cluster %s", tag, clusterName)
+	}
+	if err := importImageToCluster(k3dBinary, clusterName, tag); err != nil {
+		if u != nil {
+			u.Warnf("Failed to import %s into k3d: %v", tag, err)
+		}
+		return false
+	}
+
+	if digest != "" && serverCID != "" {
+		cache.Entries[key] = importedImageEntry{Digest: digest, ClusterCID: serverCID}
+	}
+	return true
+}
+
 // buildAndImportLocalImages builds Docker images from source and imports them
 // into the k3d cluster. This ensures images are available even when the GHCR
 // publish workflow hasn't run. Non-fatal: logs warnings on failure.
-func buildAndImportLocalImages(cfg *config.Config) {
+//
+// Output policy: stay quiet on the warm path. When every image is already
+// built and already loaded into the running cluster (the common case after
+// our reuse/cache fixes), we emit a single "  ✓ Local dev images ready"
+// summary line so the surrounding spinner-flanked output stays clean. Only
+// real work — actual `docker build`, `docker pull`, and tarball imports —
+// gets per-image lines, and those go through the UI for consistent styling.
+func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
+	start := time.Now()
+
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return
@@ -695,13 +817,19 @@ func buildAndImportLocalImages(cfg *config.Config) {
 	// Find the project root (where go.mod lives).
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
-		fmt.Println("Warning: could not find project root, skipping local image build")
+		if u != nil {
+			u.Warn("Could not find project root, skipping local image build")
+		}
 		return
 	}
 
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
 	reuseCachedImages := reuseLocalDevImages()
+	serverCID := k3dServerContainerID(clusterName)
+	cache := loadImportedImageCache(cfg)
+
+	var built, pulled, imported, total int
 
 	for _, img := range baseLocalImages {
 		contextDir := projectRoot
@@ -721,58 +849,75 @@ func buildAndImportLocalImages(cfg *config.Config) {
 			continue // Dockerfile not present (production install without source)
 		}
 
-		if reuseCachedImages && dockerImageAvailableLocally(img.tag) {
-			fmt.Printf("Reusing existing local image %s (set OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true to force a rebuild)...\n", img.tag)
-			if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
-				fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+		total++
+
+		if !(reuseCachedImages && dockerImageAvailableLocally(img.tag)) {
+			if u != nil {
+				u.Infof("Building %s from %s", img.tag, img.dockerfile)
 			}
-			continue
+			buildCmd := exec.Command("docker", "build",
+				"-f", dockerfilePath,
+				"-t", img.tag,
+				contextDir,
+			)
+			buildCmd.Stdout = os.Stdout
+			buildCmd.Stderr = os.Stderr
+			if err := buildCmd.Run(); err != nil {
+				if u != nil {
+					u.Warnf("Failed to build %s: %v", img.tag, err)
+				}
+				continue
+			}
+			built++
 		}
 
-		fmt.Printf("Building %s from %s...\n", img.tag, img.dockerfile)
-		buildCmd := exec.Command("docker", "build",
-			"-f", dockerfilePath,
-			"-t", img.tag,
-			contextDir,
-		)
-		buildCmd.Stdout = os.Stdout
-
-		buildCmd.Stderr = os.Stderr
-		if err := buildCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to build %s: %v\n", img.tag, err)
-			continue
-		}
-
-		if err := importImageToCluster(k3dBinary, clusterName, img.tag); err != nil {
-			fmt.Printf("Warning: failed to import %s into k3d: %v\n", img.tag, err)
+		if importImageWithCache(k3dBinary, clusterName, img.tag, serverCID, &cache, u) {
+			imported++
 		}
 	}
 
 	for _, ref := range devPreloadImages() {
-		if reuseCachedImages && dockerImageAvailableLocally(ref) {
-			fmt.Printf("Reusing cached image %s for cluster %s...\n", ref, clusterName)
-			if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
-				fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)
+		total++
+
+		if !(reuseCachedImages && dockerImageAvailableLocally(ref)) {
+			if u != nil {
+				u.Infof("Pulling %s", ref)
 			}
-			continue
+			pullCmd := exec.Command("docker", "pull", ref)
+			pullCmd.Stdout = os.Stdout
+			pullCmd.Stderr = os.Stderr
+			if err := pullCmd.Run(); err != nil {
+				if u != nil {
+					u.Warnf("Failed to pull %s: %v", ref, err)
+				}
+				continue
+			}
+			pulled++
 		}
 
-		fmt.Printf("Preloading %s into cluster %s...\n", ref, clusterName)
-		pullCmd := exec.Command("docker", "pull", ref)
-		pullCmd.Stdout = os.Stdout
-		pullCmd.Stderr = os.Stderr
-		if err := pullCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to pull %s: %v\n", ref, err)
-			continue
+		if importImageWithCache(k3dBinary, clusterName, ref, serverCID, &cache, u) {
+			imported++
 		}
-		if err := importImageToCluster(k3dBinary, clusterName, ref); err != nil {
-			fmt.Printf("Warning: failed to import %s into k3d: %v\n", ref, err)
+	}
+
+	saveImportedImageCache(cfg, cache)
+
+	if u != nil && total > 0 {
+		cached := total - built - pulled
+		elapsed := time.Since(start).Round(time.Second)
+		switch {
+		case built == 0 && pulled == 0 && imported == 0:
+			u.Successf("Local dev images ready (%d cached) (%s)", total, elapsed)
+		case built == 0 && pulled == 0:
+			u.Successf("Local dev images ready (%d imported, %d cached) (%s)", imported, cached, elapsed)
+		default:
+			u.Successf("Local dev images ready (%d built, %d pulled, %d imported, %d cached) (%s)",
+				built, pulled, imported, cached, elapsed)
 		}
 	}
 }
 
 func importImageToCluster(k3dBinary, clusterName, tag string) error {
-	fmt.Printf("Importing %s into cluster %s...\n", tag, clusterName)
 	importCmd := exec.Command(k3dBinary, "image", "import", tag, "-c", clusterName)
 	importCmd.Stdout = os.Stdout
 	importCmd.Stderr = os.Stderr
