@@ -54,5 +54,5 @@ Wallet is auto-discovered from the remote-signer when available. Override with `
 
 - Cluster commands require a running stack (`obol stack up`)
 - Wallet auto-discovery requires `obol agent init` (creates remote-signer)
-- ERC-8004 registration uses the remote-signer for signing (port-forward on demand)
-- Sponsored (zero-gas) registration available on ethereum mainnet via `--sponsored`
+- ERC-8004 registration uses the remote-signer for signing (port-forward on demand) and pays gas from the agent's wallet
+- `obol sell demo --no-register` skips the on-chain register step (offer still reaches Ready via the controller's `registration.enabled=false` short-circuit)
