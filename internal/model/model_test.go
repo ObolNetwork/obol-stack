@@ -729,6 +729,50 @@ func TestAutoConfigOllamaModelNames(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("preserves the operator's ollama pull order even when the recommended default is present", func(t *testing.T) {
+		// Don't override the user's preference signal: the order Ollama
+		// returns is modified-time, which is the closest thing we have to
+		// "the operator's choice." A fresh `ollama pull llama3.2:1b` should
+		// still be index 0 even with qwen3.5:4b sitting in the inventory.
+		models := []OllamaModel{
+			{Name: "llama3.2:1b", Size: 1_300_000_000},
+			{Name: "qwen3.5:9b", Size: 5_400_000_000},
+			{Name: PreferredDefaultOllamaModel, Size: 3_400_000_000},
+			{Name: "deepseek-v4-pro:cloud", Size: 9_000_000_000},
+		}
+
+		got := AutoConfigOllamaModelNames(models)
+		want := []string{"llama3.2:1b", "qwen3.5:9b", PreferredDefaultOllamaModel, "deepseek-v4-pro:cloud"}
+		if len(got) != len(want) {
+			t.Fatalf("len(got) = %d, want %d (got %v)", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+			}
+		}
+	})
+}
+
+func TestIsCredentialRequiringOllamaModel(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"deepseek-v4-pro:cloud", true},
+		{"qwen3-coder:cloud", true},
+		{"  qwen3-coder:CLOUD  ", true},
+		{"qwen3.5:4b", false},
+		{"llama3.2:1b", false},
+		{"qwen3.5", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsCredentialRequiringOllamaModel(tt.name); got != tt.want {
+			t.Errorf("IsCredentialRequiringOllamaModel(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
 }
 
 func TestPullOllamaModel_MockServer(t *testing.T) {
