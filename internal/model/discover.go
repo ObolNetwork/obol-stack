@@ -18,7 +18,7 @@ import (
 // DiscoverDisabledEnv is the env var that disables local-server discovery.
 // Set to "1" or "true" to skip the scan entirely (useful when an unrelated
 // service binds one of the well-known inference ports).
-const DiscoverDisabledEnv = "OBOL_DISABLE_LOCAL_DISCOVERY"
+const DiscoverDisabledEnv = "OBOL_DISABLE_LOCAL_MODEL_DISCOVERY"
 
 // DiscoveredProvider is one local OpenAI-compatible inference server that
 // auto-config can register with LiteLLM.
@@ -33,7 +33,7 @@ type DiscoveredProvider struct {
 // DiscoverLocalProviders probes well-known local inference ports and
 // returns one DiscoveredProvider per host endpoint that exposes at least
 // one model. Returns an empty slice (not an error) when discovery is
-// disabled or nothing is reachable. Honors OBOL_DISABLE_LOCAL_DISCOVERY.
+// disabled or nothing is reachable. Honors OBOL_DISABLE_LOCAL_MODEL_DISCOVERY.
 func DiscoverLocalProviders(ctx context.Context) ([]DiscoveredProvider, error) {
 	if v := os.Getenv(DiscoverDisabledEnv); v == "1" || v == "true" {
 		return nil, nil

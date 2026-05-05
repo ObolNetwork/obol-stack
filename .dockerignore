@@ -4,6 +4,15 @@
 .git/
 .gitignore
 .worktrees/
+.claude/
+.agents/
+.github/
+bin/
+docs/
+flows/
+tests/
+plansold/
+plans/
 node_modules/
 coverage/
 *.log

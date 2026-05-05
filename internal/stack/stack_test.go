@@ -636,7 +636,7 @@ func TestHasLiveK3dCluster(t *testing.T) {
 	}
 }
 
-func TestBuildAndImportLocalImages_DefaultBuildsEvenWhenImageExists(t *testing.T) {
+func TestBuildAndImportLocalImages_DefaultReusesExistingImage(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := filepath.Join(root, "config")
 	binDir := filepath.Join(root, "bin")
@@ -693,7 +693,7 @@ func TestBuildAndImportLocalImages_DefaultBuildsEvenWhenImageExists(t *testing.T
 		t.Fatalf("chdir: %v", err)
 	}
 	defer os.Chdir(oldWD)
-	t.Setenv("OBOL_REUSE_LOCAL_DEV_IMAGES", "false")
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "")
 
 	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir})
 
@@ -702,15 +702,15 @@ func TestBuildAndImportLocalImages_DefaultBuildsEvenWhenImageExists(t *testing.T
 		t.Fatalf("read log: %v", err)
 	}
 	log := string(logData)
-	if !strings.Contains(log, "docker build -f ") || !strings.Contains(log, "Dockerfile.x402-verifier -t ghcr.io/obolnetwork/x402-verifier:latest") {
-		t.Fatalf("expected default dev path to rebuild even when the local image exists, log:\n%s", log)
+	if strings.Contains(log, "docker build -f") {
+		t.Fatalf("expected default dev path to skip docker build when the local image exists, log:\n%s", log)
 	}
-	if strings.Contains(log, "Reusing existing local image ghcr.io/obolnetwork/x402-verifier:latest") {
-		t.Fatalf("expected default dev path to rebuild instead of reusing cache, log:\n%s", log)
+	if !strings.Contains(log, "k3d image import ghcr.io/obolnetwork/x402-verifier:latest -c obol-stack-test-stack") {
+		t.Fatalf("expected k3d import for cached x402 verifier image, log:\n%s", log)
 	}
 }
 
-func TestBuildAndImportLocalImages_ReusesExistingImageWhenOptedIn(t *testing.T) {
+func TestBuildAndImportLocalImages_ForceRebuildEvenWhenImageExists(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := filepath.Join(root, "config")
 	binDir := filepath.Join(root, "bin")
@@ -767,7 +767,7 @@ func TestBuildAndImportLocalImages_ReusesExistingImageWhenOptedIn(t *testing.T) 
 		t.Fatalf("chdir: %v", err)
 	}
 	defer os.Chdir(oldWD)
-	t.Setenv("OBOL_REUSE_LOCAL_DEV_IMAGES", "true")
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "true")
 
 	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir})
 
@@ -776,10 +776,10 @@ func TestBuildAndImportLocalImages_ReusesExistingImageWhenOptedIn(t *testing.T) 
 		t.Fatalf("read log: %v", err)
 	}
 	log := string(logData)
-	if strings.Contains(log, "docker build -f") {
-		t.Fatalf("expected opt-in cache reuse to skip docker build, log:\n%s", log)
+	if !strings.Contains(log, "docker build -f ") || !strings.Contains(log, "Dockerfile.x402-verifier -t ghcr.io/obolnetwork/x402-verifier:latest") {
+		t.Fatalf("expected force-rebuild env var to rebuild even when the local image exists, log:\n%s", log)
 	}
-	if !strings.Contains(log, "k3d image import ghcr.io/obolnetwork/x402-verifier:latest -c obol-stack-test-stack") {
-		t.Fatalf("expected k3d import for cached x402 verifier image, log:\n%s", log)
+	if strings.Contains(log, "Reusing existing local image ghcr.io/obolnetwork/x402-verifier:latest") {
+		t.Fatalf("expected force-rebuild env var to rebuild instead of reusing cache, log:\n%s", log)
 	}
 }
