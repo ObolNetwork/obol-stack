@@ -721,10 +721,10 @@ func discoveredProvidersToJSON(discovered []model.DiscoveredProvider) []discover
 func modelDiscoverCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "discover",
-		Usage: "Probe well-known local inference ports (vLLM, llama.cpp, LM Studio, ...) and report what auto-config would register",
-		Description: "Read-only — does not modify the cluster. The same scan runs implicitly on `obol stack up`.\n" +
-			"Set OBOL_DISABLE_LOCAL_DISCOVERY=1 to skip the auto-config scan.\n" +
-			"Set OBOL_LOCAL_DISCOVERY_PORTS=port[:label],... to add custom ports.",
+		Usage: "Detect other local inference servers (LM Studio, llama.cpp, vLLM, etc) and their models.",
+		Description: "Read-only. Does not modify the existing cluster. This discovery runs every `obol stack up`.\n" +
+			"Set OBOL_DISABLE_LOCAL_MODEL_DISCOVERY=true to skip local inference server auto-detection every startup.\n" +
+			"Set OBOL_LOCAL_MODEL_DISCOVERY_PORTS=port[:label],... to manually add custom local inference servers.",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
@@ -744,7 +744,7 @@ func modelDiscoverCommand() *cli.Command {
 				u.Info("No local OpenAI-compatible inference servers detected on well-known ports.")
 				u.Blank()
 				u.Dim("  Hint: start vLLM/sglang on :8000, llama.cpp on :8080, LM Studio on :1234,")
-				u.Dim("  or add a custom port via OBOL_LOCAL_DISCOVERY_PORTS=9000:vllm")
+				u.Dim("  or add a custom port via OBOL_LOCAL_MODEL_DISCOVERY_PORTS=9000:vllm")
 				return nil
 			}
 
@@ -757,7 +757,7 @@ func modelDiscoverCommand() *cli.Command {
 				}
 			}
 			u.Blank()
-			u.Dim("  These are registered automatically on `obol stack up`. Disable with OBOL_DISABLE_LOCAL_DISCOVERY=1.")
+			u.Dim("  These are registered automatically on `obol stack up`. Disable with OBOL_DISABLE_LOCAL_MODEL_DISCOVERY=true.")
 			return nil
 		},
 	}

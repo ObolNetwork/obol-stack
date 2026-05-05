@@ -24,7 +24,7 @@ import (
 // list of probed local inference ports. Format: comma-separated
 // "port[:label]" pairs, e.g. "9000:vllm,5001:custom". Labels are
 // informational; the actual server type is still detected by probing.
-const LocalDiscoveryPortsEnv = "OBOL_LOCAL_DISCOVERY_PORTS"
+const LocalDiscoveryPortsEnv = "OBOL_LOCAL_MODEL_DISCOVERY_PORTS"
 
 // Server-type identifiers returned by DetectServerType / set as the
 // expected label on probe entries. Centralised here so callers

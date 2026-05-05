@@ -67,7 +67,7 @@ art="$QA/.tmp/flow-14-$ts-artifacts"
 mkdir -p "$art"
 
 tmux new-session -d -s "qa-flow14-$ts" \
-  "cd $QA && PATH=$PATH OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true OBOL_REUSE_LOCAL_DEV_IMAGES=true OBOL_LLM_ENDPOINT=$OBOL_LLM_ENDPOINT OBOL_LLM_MODEL=$OBOL_LLM_MODEL FLOW14_ARTIFACT_DIR=$art bash flows/flow-14-live-obol-base-sepolia.sh > $log 2>&1; rc=\$?; printf '\n__FLOW14_DONE_RC__=%s\n' \"\$rc\" >> $log"
+  "cd $QA && PATH=$PATH OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true OBOL_LLM_ENDPOINT=$OBOL_LLM_ENDPOINT OBOL_LLM_MODEL=$OBOL_LLM_MODEL FLOW14_ARTIFACT_DIR=$art bash flows/flow-14-live-obol-base-sepolia.sh > $log 2>&1; rc=\$?; printf '\n__FLOW14_DONE_RC__=%s\n' \"\$rc\" >> $log"
 ```
 
 For full release smoke, use the same env plus:
