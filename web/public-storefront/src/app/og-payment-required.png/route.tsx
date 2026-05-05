@@ -54,22 +54,9 @@ export async function GET() {
           display: "flex",
           flexDirection: "column",
           padding: 80,
-          background: `linear-gradient(135deg, ${BG01} 0%, #162A40 100%)`,
+          background: BG01,
         }}
       >
-        <div
-          style={{
-            position: "absolute",
-            top: -200,
-            right: -200,
-            width: 800,
-            height: 800,
-            borderRadius: 400,
-            background:
-              "radial-gradient(circle, rgba(29,82,73,0.45) 0%, rgba(9,16,17,0) 70%)",
-          }}
-        />
-
         <div
           style={{
             display: "flex",

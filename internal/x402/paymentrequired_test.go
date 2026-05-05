@@ -36,6 +36,7 @@ func sampleDisplay() PaymentDisplay {
 		PriceDisplay: "0.001 USDC per request",
 		PriceAtomic:  testAmount,
 		PayToFull:    testPayTo,
+		ExplorerURL:  "https://sepolia.basescan.org/address/" + testPayTo,
 	}
 }
 
@@ -129,6 +130,12 @@ func TestHTMLAware_RendersHTMLOnTextHTML(t *testing.T) {
 	// JSON necessarily still contains the full one.
 	mustContain(t, body, "0xa1b2…f9c0")
 
+	// Copy + explorer-link buttons on the Pay-To row, with the full address
+	// only delivered to the JS clipboard handler (not the visible truncated text).
+	mustContain(t, body, `data-copy="`+testPayTo+`"`)
+	mustContain(t, body, `href="https://sepolia.basescan.org/address/`+testPayTo+`"`)
+	mustContain(t, body, "View on block explorer")
+
 	// All three "ways to pay" prompts must be present, including the agent
 	// instructions referencing the buy-x402 skill, llms.txt, and the public
 	// skills repo.
@@ -204,6 +211,41 @@ func TestTruncateAddress(t *testing.T) {
 		if got := truncateAddress(tc.in); got != tc.want {
 			t.Errorf("truncateAddress(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// Regression: previously buildPaymentDisplay passed the decimal rule.Price
+// into formatAmount (which expects atomic), so 1 OBOL with 18 decimals
+// rendered as "0.000000000000000001 OBOL per request" while the JSON
+// correctly showed 1e18 atomic. Display must mirror the wire amount.
+func TestFormatPriceDisplay_HighDecimals(t *testing.T) {
+	got := FormatPriceDisplay("1000000000000000000", 18, "OBOL")
+	want := "1 OBOL per request"
+	if got != want {
+		t.Errorf("FormatPriceDisplay(1e18, 18, OBOL) = %q, want %q", got, want)
+	}
+}
+
+func TestExplorerAddressURL(t *testing.T) {
+	addr := "0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8f9c0"
+	cases := []struct {
+		network, want string
+	}{
+		{"base", "https://basescan.org/address/" + addr},
+		{"base-sepolia", "https://sepolia.basescan.org/address/" + addr},
+		{"ethereum", "https://etherscan.io/address/" + addr},
+		{"mainnet", "https://etherscan.io/address/" + addr},
+		{"polygon", "https://polygonscan.com/address/" + addr},
+		{"arbitrum", "https://arbiscan.io/address/" + addr},
+		{"unknown-chain", ""},
+	}
+	for _, tc := range cases {
+		if got := explorerAddressURL(tc.network, addr); got != tc.want {
+			t.Errorf("explorerAddressURL(%q) = %q, want %q", tc.network, got, tc.want)
+		}
+	}
+	if got := explorerAddressURL("base", "not-an-address"); got != "" {
+		t.Errorf("explorerAddressURL with bad address = %q, want empty", got)
 	}
 }
 

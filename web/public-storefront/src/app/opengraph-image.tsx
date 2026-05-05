@@ -50,23 +50,9 @@ export default async function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           padding: 80,
-          background: `linear-gradient(135deg, ${BG01} 0%, #162A40 100%)`,
+          background: BG01,
         }}
       >
-        {/* Soft glow, top-right */}
-        <div
-          style={{
-            position: "absolute",
-            top: -200,
-            right: -200,
-            width: 800,
-            height: 800,
-            borderRadius: 400,
-            background:
-              "radial-gradient(circle, rgba(29,82,73,0.45) 0%, rgba(9,16,17,0) 70%)",
-          }}
-        />
-
         {/* Wordmark, top-left */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img

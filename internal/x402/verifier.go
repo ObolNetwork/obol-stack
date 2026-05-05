@@ -119,7 +119,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	if rule.PayTo != "" {
 		wallet = rule.PayTo
 	}
-	display := buildPaymentDisplay(rule, chain, asset, wallet)
+	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
 
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL:      cfg.FacilitatorURL,
@@ -176,7 +176,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	if rule.PayTo != "" {
 		wallet = rule.PayTo
 	}
-	display := buildPaymentDisplay(rule, chain, asset, wallet)
+	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
 
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL:      cfg.FacilitatorURL,
@@ -261,19 +261,57 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted
-// strings for the HTML 402 page. Atomic-units conversion happens here so the
-// renderer needs no math.
-func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payTo string) PaymentDisplay {
+// strings for the HTML 402 page. The atomic-amount input is the value already
+// computed for the wire requirement (rule.Price * 10^decimals), so passing
+// requirement.Amount keeps display and JSON in lockstep — the previous version
+// fed the decimal rule.Price into formatAmount and produced the inverse
+// (1 OBOL → 0.000000000000000001 OBOL).
+func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payTo, atomicAmount string) PaymentDisplay {
 	return PaymentDisplay{
 		Endpoint:     rule.Pattern,
 		Network:      chain.Name,
 		NetworkLabel: humanizeNetwork(chain.Name),
 		AssetSymbol:  asset.Symbol,
 		AssetAddress: asset.Address,
-		PriceDisplay: FormatPriceDisplay(rule.Price, asset.Decimals, asset.Symbol),
-		PriceAtomic:  rule.Price,
+		PriceDisplay: FormatPriceDisplay(atomicAmount, asset.Decimals, asset.Symbol),
+		PriceAtomic:  atomicAmount,
 		PayToFull:    payTo,
+		ExplorerURL:  explorerAddressURL(chain.Name, payTo),
 	}
+}
+
+// explorerAddressURL returns the canonical block-explorer URL for the given
+// recipient address on the given chain. Empty string when the chain isn't in
+// the known set or the address looks malformed — callers must treat empty as
+// "no explorer link, just show plain text".
+func explorerAddressURL(network, addr string) string {
+	if !strings.HasPrefix(addr, "0x") || len(addr) < 10 {
+		return ""
+	}
+	base := ""
+	switch network {
+	case "base":
+		base = "https://basescan.org"
+	case "base-sepolia":
+		base = "https://sepolia.basescan.org"
+	case "ethereum", "mainnet":
+		base = "https://etherscan.io"
+	case "polygon":
+		base = "https://polygonscan.com"
+	case "polygon-amoy":
+		base = "https://amoy.polygonscan.com"
+	case "avalanche":
+		base = "https://snowtrace.io"
+	case "avalanche-fuji":
+		base = "https://testnet.snowtrace.io"
+	case "arbitrum":
+		base = "https://arbiscan.io"
+	case "arbitrum-sepolia":
+		base = "https://sepolia.arbiscan.io"
+	default:
+		return ""
+	}
+	return base + "/address/" + addr
 }
 
 // humanizeNetwork converts an internal chain name ("base-sepolia") to the
