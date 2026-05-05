@@ -22,19 +22,24 @@
     <link rel="icon" href="{{.StorefrontURL}}/favicon.png" type="image/png" />
     <style>
       :root {
+        /* Mirrors web/public-storefront/src/app/globals.css token names */
         --bg01: #091011;
         --bg02: #111f22;
         --bg03: #182d32;
-        --stroke: #1d5249;
+        --bg04: #243d42;
+        --stroke: #1e3a3f;
         --green: #2fe4ab;
-        --light: #dfeaed;
+        --green-dim: #1a7a5c;
+        --light: #d9eef3;
         --body: #9cc2c9;
         --muted: #475e64;
       }
       * { box-sizing: border-box; }
+      /* Solid match to the storefront / page; also covers iOS/Safari overscroll
+         bounce so the white default body never peeks through. */
+      html, body { background-color: var(--bg01); }
       body {
         margin: 0;
-        background: linear-gradient(135deg, var(--bg01) 0%, #162a40 100%);
         color: var(--light);
         font-family: "DM Sans", system-ui, -apple-system, Segoe UI, sans-serif;
         min-height: 100vh;
@@ -64,8 +69,30 @@
       .card h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--body); margin: 0 0 16px; }
       .grid { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; column-gap: 16px; font-size: 15px; }
       .grid dt { color: var(--muted); }
-      .grid dd { margin: 0; font-family: ui-monospace, SF Mono, Menlo, monospace; word-break: break-all; }
+      .grid dd { margin: 0; font-family: ui-monospace, SF Mono, Menlo, monospace; word-break: break-all; display: flex; align-items: center; gap: 10px; }
       .grid dd.green { color: var(--green); }
+
+      /* Inline icon buttons next to the Pay To address: copy + open in
+         block explorer. Sized to match the surrounding monospace text. */
+      .icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        background: var(--bg03);
+        border: 1px solid var(--stroke);
+        color: var(--body);
+        cursor: pointer;
+        text-decoration: none;
+        transition: color 120ms, border-color 120ms, background 120ms;
+        flex: none;
+      }
+      .icon-btn:hover { color: var(--green); border-color: var(--green); background: var(--bg04); }
+      .icon-btn svg { width: 14px; height: 14px; display: block; }
+      .icon-btn.copied { color: var(--green); border-color: var(--green); }
+
       .prompt {
         position: relative;
         background: var(--bg01);
@@ -112,7 +139,7 @@
       footer { margin-top: 40px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; }
       footer a { color: var(--green); text-decoration: none; }
       footer a:hover { text-decoration: underline; }
-      noscript .copy { display: none; }
+      noscript .copy, noscript .icon-btn[data-copy] { display: none; }
     </style>
   </head>
   <body>
@@ -131,7 +158,20 @@
           <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
           <dt>Network</dt><dd>{{.NetworkLabel}}</dd>
           <dt>Price</dt><dd class="green">{{.PriceDisplay}}</dd>
-          <dt>Pay to</dt><dd>{{.PayToDisplay}}</dd>
+          <dt>Pay to</dt>
+          <dd>
+            <span>{{.PayToDisplay}}</span>
+            <button class="icon-btn" type="button" data-copy="{{.PayToFull}}" aria-label="Copy address" title="Copy address">
+              <!-- clipboard glyph -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            {{if .ExplorerURL}}
+            <a class="icon-btn" href="{{.ExplorerURL}}" target="_blank" rel="noreferrer" aria-label="View on block explorer" title="View on block explorer">
+              <!-- external-link glyph -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </a>
+            {{end}}
+          </dd>
         </dl>
       </div>
 
@@ -169,20 +209,37 @@
     </div>
 
     <script>
+      function flashCopied(btn) {
+        var prevAria = btn.getAttribute("aria-label");
+        var prevTitle = btn.getAttribute("title");
+        var hadText = btn.firstChild && btn.firstChild.nodeType === 3;
+        var prevText = hadText ? btn.textContent : null;
+        btn.classList.add("copied");
+        if (prevText !== null) btn.textContent = "Copied";
+        btn.setAttribute("title", "Copied");
+        setTimeout(function () {
+          btn.classList.remove("copied");
+          if (prevText !== null) btn.textContent = prevText;
+          if (prevTitle !== null) btn.setAttribute("title", prevTitle); else btn.removeAttribute("title");
+          if (prevAria !== null) btn.setAttribute("aria-label", prevAria);
+        }, 1400);
+      }
+
+      // Copy buttons that target an element by id (the Obol/Other/JSON cards).
       document.querySelectorAll(".copy").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var target = document.getElementById(btn.getAttribute("data-target"));
           if (!target) return;
-          var text = target.innerText;
-          navigator.clipboard.writeText(text).then(function () {
-            var prev = btn.textContent;
-            btn.textContent = "Copied";
-            btn.classList.add("copied");
-            setTimeout(function () {
-              btn.textContent = prev;
-              btn.classList.remove("copied");
-            }, 1400);
-          });
+          navigator.clipboard.writeText(target.innerText).then(function () { flashCopied(btn); });
+        });
+      });
+
+      // Inline icon buttons that copy a literal string (the Pay To address).
+      document.querySelectorAll(".icon-btn[data-copy]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var v = btn.getAttribute("data-copy");
+          if (!v) return;
+          navigator.clipboard.writeText(v).then(function () { flashCopied(btn); });
         });
       });
     </script>

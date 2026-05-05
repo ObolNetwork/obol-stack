@@ -48,6 +48,11 @@ type PaymentDisplay struct {
 
 	// PayToFull is the full recipient wallet address (lowercased 0x...).
 	PayToFull string
+
+	// ExplorerURL is the block-explorer link for PayToFull on the matched
+	// chain (e.g. https://basescan.org/address/0x...). Empty when the chain
+	// isn't in the explorer registry.
+	ExplorerURL string
 }
 
 // SendPaymentRequiredFunc is the renderer signature compatible with the
@@ -166,6 +171,8 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		NetworkLabel  string
 		PriceDisplay  string
 		PayToDisplay  string
+		PayToFull     string
+		ExplorerURL   string
 		PromptObol    string
 		PromptOther   string
 		JSONBody      string
@@ -180,6 +187,8 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		NetworkLabel:  networkLabel,
 		PriceDisplay:  priceDisplay,
 		PayToDisplay:  payToDisplay,
+		PayToFull:     payToFull,
+		ExplorerURL:   display.ExplorerURL,
 		PromptObol:    promptObol,
 		PromptOther:   promptOther,
 		JSONBody:      string(indented),
