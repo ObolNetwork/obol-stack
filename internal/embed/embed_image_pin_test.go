@@ -33,9 +33,7 @@ func TestEmbeddedImages_NoNewLatestTags(t *testing.T) {
 	// Known unpinned images as of PR #343 follow-up. Each entry MUST have a
 	// TODO in the template body explaining the pin-by-digest policy.
 	allowed := map[string]string{
-		"base/templates/llm.yaml:ghcr.io/obolnetwork/x402-buyer:latest":               "x402-buyer: pin by digest once CI publishes a stable tag",
-		"base/templates/x402.yaml:ghcr.io/obolnetwork/x402-verifier:latest":           "x402-verifier: pin by digest once CI publishes a stable tag",
-		"base/templates/x402.yaml:ghcr.io/obolnetwork/serviceoffer-controller:latest": "serviceoffer-controller: pin by digest once CI publishes a stable tag",
+		"base/templates/llm.yaml:ghcr.io/obolnetwork/x402-buyer:latest": "x402-buyer: pin by digest once CI publishes a stable tag",
 	}
 
 	files := []string{
