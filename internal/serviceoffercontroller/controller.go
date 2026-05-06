@@ -883,13 +883,22 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 // deleteSkillCatalogDeploymentIfStale deletes the obol-skill-md Deployment when
 // it contains volumes that are not part of the desired spec.
 //
-// Background: older controller versions created the skill catalog Deployment
-// via kubectl patch (not SSA), leaving "kubectl-patch" as the field manager for
-// the volumes array. When the new controller took over with SSA, it could not
-// remove the stale "api-content" volume (which mounted a now-deleted
-// obol-skill-md-api ConfigMap) because SSA respects field-manager ownership and
-// refuses to drop fields it does not own — even with Force: true. The pod got
-// stuck in ContainerCreating indefinitely with no automated recovery path.
+// Background — layout change: the old controller split skill.md and
+// services.json across two separate ConfigMaps (obol-skill-md and
+// obol-skill-md-api), each mounted as its own volume. That required a second
+// container or nginx to serve both paths from one pod. The new controller puts
+// both files in a single ConfigMap and projects them into one volume, so a
+// plain busybox httpd pod serves /skill.md and /api/services.json with no proxy
+// layer. Nginx is no longer needed.
+//
+// Background — SSA ownership problem: to wire up the two-volume layout, the
+// old controller used kubectl patch (not SSA), leaving "kubectl-patch" as the
+// field manager for the Deployment's volumes array. When the new controller
+// took over with SSA, it could not remove the stale "api-content" volume
+// because SSA respects field-manager ownership and refuses to drop fields it
+// does not own — even with Force: true. The pod got stuck in ContainerCreating
+// indefinitely (mounting a ConfigMap that no longer exists) with no automated
+// recovery path.
 //
 // The only clean escape is delete + recreate: once the Deployment is gone, the
 // next applyObject call recreates it from scratch under the controller's own
