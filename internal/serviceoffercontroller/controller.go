@@ -905,7 +905,6 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 // volumes owned by a foreign field manager, so we delete the Deployment to let
 // applyObject recreate it with the correct single-volume layout.
 func (c *Controller) deleteSkillCatalogDeploymentIfStale(ctx context.Context) error {
-	desired := map[string]bool{"content": true, "httpdconf": true}
 	existing, err := c.deployments.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil // nothing to do — applyObject will create it
@@ -920,7 +919,7 @@ func (c *Controller) deleteSkillCatalogDeploymentIfStale(ctx context.Context) er
 			continue
 		}
 		name, _, _ := unstructured.NestedString(vol, "name")
-		if name != "" && !desired[name] {
+		if name != "" && !skillCatalogDesiredVolumes[name] {
 			log.Printf("serviceoffer-controller: deleting stale skill catalog deployment (unexpected volume %q)", name)
 			return c.deployments.Namespace(skillCatalogNamespace).Delete(ctx, skillCatalogConfigMapName, metav1.DeleteOptions{})
 		}
@@ -1110,6 +1109,7 @@ func (c *Controller) registrationOffers(excludeNamespace, excludeName string) ([
 		// Skip offers whose upstream is not healthy — an unhealthy service must
 		// not become the registration owner and block newly created ones.
 		if !isConditionTrue(offer.Status, "UpstreamHealthy") {
+			log.Printf("serviceoffer-controller: skipping %s/%s as registration candidate: upstream not healthy", offer.Namespace, offer.Name)
 			continue
 		}
 		candidates = append(candidates, offer)

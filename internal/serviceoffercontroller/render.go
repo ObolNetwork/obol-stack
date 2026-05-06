@@ -26,6 +26,14 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
+// skillCatalogDesiredVolumes is the canonical set of volume names used by
+// buildSkillCatalogDeployment. deleteSkillCatalogDeploymentIfStale references
+// this so the stale-volume check never drifts out of sync with the builder.
+var skillCatalogDesiredVolumes = map[string]bool{
+	"content":   true,
+	"httpdconf": true,
+}
+
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
