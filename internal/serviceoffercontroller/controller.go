@@ -880,60 +880,6 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 	return nil
 }
 
-// deleteSkillCatalogDeploymentIfStale deletes the obol-skill-md Deployment when
-// it contains volumes that are not part of the desired spec.
-//
-// Background — layout change: the old controller split skill.md and
-// services.json across two separate ConfigMaps (obol-skill-md and
-// obol-skill-md-api), each mounted as its own volume. That required a second
-// container or nginx to serve both paths from one pod. The new controller puts
-// both files in a single ConfigMap and projects them into one volume, so a
-// plain busybox httpd pod serves /skill.md and /api/services.json with no proxy
-// layer. Nginx is no longer needed.
-//
-// Background — SSA ownership problem: to wire up the two-volume layout, the
-// old controller used kubectl patch (not SSA), leaving "kubectl-patch" as the
-// field manager for the Deployment's volumes array. When the new controller
-// took over with SSA, it could not remove the stale "api-content" volume
-// because SSA respects field-manager ownership and refuses to drop fields it
-// does not own — even with Force: true. The pod got stuck in ContainerCreating
-// indefinitely (mounting a ConfigMap that no longer exists) with no automated
-// recovery path.
-//
-// The only clean escape is delete + recreate: once the Deployment is gone, the
-// next applyObject call recreates it from scratch under the controller's own
-// field manager, with the correct single-volume layout (content + httpdconf).
-//
-// This function is a no-op after a successful migration — it performs one GET,
-// finds no unexpected volumes, and returns immediately. It does NOT delete on
-// every call; the delete fires at most once per cluster lifetime, on the first
-// reconcile after upgrading from an affected version.
-//
-// TODO: remove this once Helm 4 field-ownership semantics are integrated and
-// all clusters have been upgraded past the affected version.
-func (c *Controller) deleteSkillCatalogDeploymentIfStale(ctx context.Context) error {
-	existing, err := c.deployments.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil // nothing to do — applyObject will create it
-	}
-	if err != nil {
-		return err
-	}
-	vols, _, _ := unstructured.NestedSlice(existing.Object, "spec", "template", "spec", "volumes")
-	for _, v := range vols {
-		vol, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _, _ := unstructured.NestedString(vol, "name")
-		if name != "" && !skillCatalogDesiredVolumes[name] {
-			log.Printf("serviceoffer-controller: deleting stale skill catalog deployment (unexpected volume %q)", name)
-			return c.deployments.Namespace(skillCatalogNamespace).Delete(ctx, skillCatalogConfigMapName, metav1.DeleteOptions{})
-		}
-	}
-	return nil
-}
-
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of Ready ServiceOffers. If `override` is
 // non-nil, that offer replaces (or is appended to) the informer-cached copy
@@ -979,13 +925,6 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON))[:8]
 
 	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON)); err != nil {
-		return err
-	}
-	// Before applying the Deployment, check for stale volumes from old controller
-	// versions that used a separate obol-skill-md-api ConfigMap. SSA cannot remove
-	// volumes owned by a different field manager, so we delete the Deployment and
-	// let the apply below recreate it cleanly.
-	if err := c.deleteSkillCatalogDeploymentIfStale(ctx); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
