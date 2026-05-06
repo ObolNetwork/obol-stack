@@ -496,6 +496,20 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	if strings.Contains(out, "custom_provider_map") {
 		t.Fatalf("llm template should not require a custom provider:\n%s", out)
 	}
+
+	// Regression guard: provider API keys must not be pre-declared as
+	// empty placeholders in the bootstrap Secret. If they are, every
+	// `obol stack up` re-applies the manifest and overwrites whatever
+	// `obol model setup` (or autoConfigureLLM) patched in, leaving the
+	// user with `obol model status` reporting `enabled: true, api_key: false`.
+	for _, forbidden := range []string{
+		`ANTHROPIC_API_KEY: ""`,
+		`OPENAI_API_KEY: ""`,
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("llm template must not pre-declare empty provider API keys (found %q) — these get clobbered on every `obol stack up`", forbidden)
+		}
+	}
 }
 
 func TestMergeLiteLLMConfigPreservesChartDefaultsAndPreviousModels(t *testing.T) {
