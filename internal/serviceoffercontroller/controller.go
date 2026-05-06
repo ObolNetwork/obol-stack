@@ -1113,11 +1113,8 @@ func (c *Controller) registrationOffers(excludeNamespace, excludeName string) ([
 		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
 			continue
 		}
-		// Skip offers whose upstream is not healthy — an unhealthy service must
-		// not become the registration owner and block newly created ones.
 		if !isConditionTrue(offer.Status, "UpstreamHealthy") {
-			log.Printf("serviceoffer-controller: skipping %s/%s as registration candidate: upstream not healthy", offer.Namespace, offer.Name)
-			continue
+			log.Printf("serviceoffer-controller: registration candidate %s/%s has unhealthy upstream", offer.Namespace, offer.Name)
 		}
 		candidates = append(candidates, offer)
 	}
