@@ -189,6 +189,24 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		}()
 	}
 
+	// Periodically re-reconcile the skill catalog so the controller self-heals
+	// if managed resources (Deployment, Service, HTTPRoutes) are externally
+	// deleted or modified, without waiting for an offer event to trigger it.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
+					log.Printf("serviceoffer-controller: periodic skill catalog sync: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	<-ctx.Done()
 	return nil
 }
@@ -880,6 +898,36 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 	return nil
 }
 
+// deleteSkillCatalogDeploymentIfStale deletes the obol-skill-md Deployment when
+// it contains volumes that are not part of the desired spec. This handles the
+// upgrade path from older controller versions that mounted services.json via a
+// separate obol-skill-md-api ConfigMap volume ("api-content"): SSA cannot remove
+// volumes owned by a foreign field manager, so we delete the Deployment to let
+// applyObject recreate it with the correct single-volume layout.
+func (c *Controller) deleteSkillCatalogDeploymentIfStale(ctx context.Context) error {
+	desired := map[string]bool{"content": true, "httpdconf": true}
+	existing, err := c.deployments.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil // nothing to do — applyObject will create it
+	}
+	if err != nil {
+		return err
+	}
+	vols, _, _ := unstructured.NestedSlice(existing.Object, "spec", "template", "spec", "volumes")
+	for _, v := range vols {
+		vol, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(vol, "name")
+		if name != "" && !desired[name] {
+			log.Printf("serviceoffer-controller: deleting stale skill catalog deployment (unexpected volume %q)", name)
+			return c.deployments.Namespace(skillCatalogNamespace).Delete(ctx, skillCatalogConfigMapName, metav1.DeleteOptions{})
+		}
+	}
+	return nil
+}
+
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of Ready ServiceOffers. If `override` is
 // non-nil, that offer replaces (or is appended to) the informer-cached copy
@@ -925,6 +973,13 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON))[:8]
 
 	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON)); err != nil {
+		return err
+	}
+	// Before applying the Deployment, check for stale volumes from old controller
+	// versions that used a separate obol-skill-md-api ConfigMap. SSA cannot remove
+	// volumes owned by a different field manager, so we delete the Deployment and
+	// let the apply below recreate it cleanly.
+	if err := c.deleteSkillCatalogDeploymentIfStale(ctx); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
@@ -1050,6 +1105,11 @@ func (c *Controller) registrationOffers(excludeNamespace, excludeName string) ([
 			continue
 		}
 		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+			continue
+		}
+		// Skip offers whose upstream is not healthy — an unhealthy service must
+		// not become the registration owner and block newly created ones.
+		if !isConditionTrue(offer.Status, "UpstreamHealthy") {
 			continue
 		}
 		candidates = append(candidates, offer)
