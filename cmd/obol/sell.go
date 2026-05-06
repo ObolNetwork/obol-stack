@@ -2364,7 +2364,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				"-o", "jsonpath={.items}")
 			if listErr == nil && (remaining == "[]" || strings.TrimSpace(remaining) == "") {
 				st, _ := tunnel.LoadTunnelState(cfg)
-				if st == nil || st.Mode != "dns" {
+				if st == nil || !st.IsPersistent() {
 					u.Blank()
 					u.Info("No ServiceOffers remaining. Stopping quick tunnel.")
 					_ = tunnel.Stop(cfg, u)

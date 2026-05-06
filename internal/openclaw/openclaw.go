@@ -275,7 +275,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	if opts.AgentMode {
 		st, _ := tunnel.LoadTunnelState(cfg)
-		if st != nil && st.Hostname != "" {
+		if st != nil && st.IsPersistent() {
 			agentBaseURL = "https://" + st.Hostname
 		}
 		// Agent mode always needs Ollama models for local inference,

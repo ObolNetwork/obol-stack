@@ -28,99 +28,181 @@ const (
 	tunnelTokenSecretKey  = "TUNNEL_TOKEN"
 )
 
-// Status displays the current tunnel status and URL.
 // tunnelStatusResult is the JSON-serialisable result for `tunnel status`.
 type tunnelStatusResult struct {
-	Mode        string `json:"mode"`
-	Status      string `json:"status"`
-	URL         string `json:"url"`
-	LastUpdated string `json:"last_updated"`
+	Mode              string `json:"mode"`
+	ExposureMode      string `json:"exposure_mode,omitempty"`
+	ManagementMode    string `json:"management_mode,omitempty"`
+	Status            string `json:"status"`
+	URL               string `json:"url"`
+	Hostname          string `json:"hostname,omitempty"`
+	DesiredReplicas   int    `json:"desired_replicas,omitempty"`
+	ReadyReplicas     int    `json:"ready_replicas,omitempty"`
+	AvailableReplicas int    `json:"available_replicas,omitempty"`
+	PodStatus         string `json:"pod_status,omitempty"`
+	ConnectorStatus   string `json:"connector_status,omitempty"`
+	ActiveConnections int    `json:"active_connections,omitempty"`
+	LastUpdated       string `json:"last_updated"`
+}
+
+type deploymentReplicaStatus struct {
+	Spec struct {
+		Replicas *int32 `json:"replicas,omitempty"`
+	} `json:"spec"`
+	Status struct {
+		Replicas          int32 `json:"replicas,omitempty"`
+		ReadyReplicas     int32 `json:"readyReplicas,omitempty"`
+		AvailableReplicas int32 `json:"availableReplicas,omitempty"`
+	} `json:"status"`
+}
+
+type podStatusList struct {
+	Items []struct {
+		Status struct {
+			Phase      string `json:"phase"`
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	} `json:"items"`
+}
+
+type tunnelRuntimeHealth struct {
+	DesiredReplicas   int
+	ReadyReplicas     int
+	AvailableReplicas int
+	PodStatus         string
 }
 
 // Status displays the current tunnel status and URL.
 func Status(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Check if kubeconfig exists.
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
+	now := time.Now()
 	st, _ := loadTunnelState(cfg)
+	mode, url := tunnelModeAndURL(st)
+	result := tunnelStatusResult{
+		Mode:            mode,
+		ExposureMode:    tunnelExposureQuick,
+		ManagementMode:  tunnelManagementQuick,
+		URL:             url,
+		DesiredReplicas: desiredRuntimeReplicas(st),
+		LastUpdated:     now.Format(time.RFC3339),
+	}
+	if st != nil {
+		result.ExposureMode = st.ExposureMode
+		result.ManagementMode = st.Management()
+		result.Hostname = st.Hostname
+	}
+	if result.ExposureMode == "" {
+		result.ExposureMode = tunnelExposureQuick
+	}
+	if result.ManagementMode == "" {
+		result.ManagementMode = tunnelManagementQuick
+	}
 
-	// Check pod status first.
-	podStatus, err := getPodStatus(kubectlPath, kubeconfigPath)
+	runtime, err := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath)
 	if err != nil {
-		mode, url := tunnelModeAndURL(st)
-		if mode == "quick" {
-			// Quick tunnel is dormant — activates on first `obol sell`.
-			if u.IsJSON() {
-				return u.JSON(tunnelStatusResult{Mode: "quick", Status: "dormant", URL: "(activates on 'obol sell')", LastUpdated: time.Now().Format(time.RFC3339)})
-			}
-			printStatusBox(u, "quick", "dormant", "(activates on 'obol sell')", time.Now())
-			u.Blank()
-			u.Print("The tunnel will start automatically when you sell a service.")
-			u.Print("  Start manually: obol tunnel restart")
-			u.Print("  Persistent URL: obol tunnel login --hostname stack.example.com")
-
-			return nil
+		if mode == tunnelExposureQuick {
+			result.Status = "dormant"
+			result.URL = "(activates on 'obol sell')"
+		} else {
+			result.Status = "not running"
 		}
 		if u.IsJSON() {
-			return u.JSON(tunnelStatusResult{Mode: mode, Status: "not running", URL: url, LastUpdated: time.Now().Format(time.RFC3339)})
+			return u.JSON(result)
 		}
-		printStatusBox(u, mode, "not running", url, time.Now())
+		printDetailedStatusBox(u, result, now)
 		u.Blank()
-		u.Print("Troubleshooting:")
-		u.Print("  - Start the stack: obol stack up")
-
+		if mode == tunnelExposureQuick {
+			u.Print("The tunnel will start automatically when you sell a service.")
+			u.Print("  Start manually: obol tunnel restart")
+			u.Print("  Persistent URL: obol tunnel setup --hostname stack.example.com")
+		} else {
+			u.Print("Troubleshooting:")
+			u.Print("  - Start the stack: obol stack up")
+			u.Print("  - Restore persistent tunnel resources: obol tunnel restart")
+		}
 		return nil
 	}
 
-	statusLabel := podStatus
-	if podStatus == "running" {
-		statusLabel = "active"
+	result.DesiredReplicas = runtime.DesiredReplicas
+	result.ReadyReplicas = runtime.ReadyReplicas
+	result.AvailableReplicas = runtime.AvailableReplicas
+	result.PodStatus = runtime.PodStatus
+
+	if mode == tunnelExposureQuick {
+		tunnelURL, quickErr := GetTunnelURL(cfg)
+		if quickErr == nil {
+			result.URL = tunnelURL
+		} else {
+			result.URL = "(not available)"
+		}
+	} else if result.URL == "" && result.Hostname != "" {
+		result.URL = "https://" + result.Hostname
 	}
 
-	mode, url := tunnelModeAndURL(st)
-	if mode == "quick" {
-		// Quick tunnels only: try to get URL from logs.
-		tunnelURL, err := GetTunnelURL(cfg)
-		if err != nil {
-			if u.IsJSON() {
-				return u.JSON(tunnelStatusResult{Mode: mode, Status: podStatus, URL: "(not available)", LastUpdated: time.Now().Format(time.RFC3339)})
+	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID != "" && st.TunnelID != "" {
+		result.ConnectorStatus = "unknown"
+		if apiToken := strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")); apiToken != "" {
+			if tunnelInfo, tunnelErr := newCloudflareClient(apiToken).GetTunnel(st.AccountID, st.TunnelID); tunnelErr == nil {
+				result.ActiveConnections = len(tunnelInfo.Connections)
+				if result.ActiveConnections > 0 {
+					result.ConnectorStatus = "connected"
+				} else {
+					result.ConnectorStatus = "waiting_for_connections"
+				}
 			}
-			printStatusBox(u, mode, podStatus, "(not available)", time.Now())
-			u.Blank()
-			u.Print("Troubleshooting:")
-			u.Print("  - Check logs: obol tunnel logs")
-			u.Print("  - Restart tunnel: obol tunnel restart")
-
-			return nil //nolint:nilerr // URL unavailable is a display-only issue; show troubleshooting hints instead
 		}
-
-		url = tunnelURL
+	} else if st != nil && st.IsPersistent() {
+		result.ConnectorStatus = "managed-locally"
 	}
 
+	result.Status = summarizeTunnelStatus(result)
 	if u.IsJSON() {
-		return u.JSON(tunnelStatusResult{Mode: mode, Status: statusLabel, URL: url, LastUpdated: time.Now().Format(time.RFC3339)})
+		return u.JSON(result)
 	}
 
-	printStatusBox(u, mode, statusLabel, url, time.Now())
-	u.Printf("Test with: curl %s/", url)
-
-	// Auto-inject tunnel URL into obol-agent so registration JSON uses it.
-	if url != "" && url != "(not available)" {
-		if err := InjectBaseURL(cfg, url); err == nil {
-			u.Dim("Agent base URL updated to " + url)
-		}
-		// Write tunnel URL to ConfigMap so the frontend can read it.
-		if err := SyncTunnelConfigMap(cfg, url); err != nil {
-			u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
-		}
+	printDetailedStatusBox(u, result, now)
+	if result.URL != "" && result.URL != "(not available)" && result.URL != "(activates on 'obol sell')" {
+		u.Printf("Test with: curl %s/", result.URL)
+		syncTunnelDependents(cfg, u, result.URL)
+	}
+	if result.Status != "active" {
+		u.Blank()
+		u.Print("Troubleshooting:")
+		u.Print("  - Check logs: obol tunnel logs")
+		u.Print("  - Restart tunnel: obol tunnel restart")
 	}
 
 	return nil
+}
+
+func summarizeTunnelStatus(result tunnelStatusResult) string {
+	if result.DesiredReplicas == 0 {
+		if result.Mode == tunnelExposureQuick {
+			return "dormant"
+		}
+		return "stopped"
+	}
+	if result.ReadyReplicas == 0 {
+		return "starting"
+	}
+	if result.ReadyReplicas < result.DesiredReplicas || result.AvailableReplicas < result.DesiredReplicas {
+		return "degraded"
+	}
+	if result.Mode == tunnelExposureQuick && (result.URL == "" || result.URL == "(not available)") {
+		return "starting"
+	}
+	if result.ManagementMode == tunnelManagementRemote && result.ConnectorStatus == "waiting_for_connections" {
+		return "degraded"
+	}
+	return "active"
 }
 
 // InjectBaseURL sets AGENT_BASE_URL on the default Hermes deployment so that
@@ -192,37 +274,38 @@ func waitReadyTimeout() time.Duration {
 	return defaultWaitReadyTimeout
 }
 
-// WaitReady scales the cloudflared deployment up if needed, then polls until
-// BOTH the deployment rollout is complete AND a public *.trycloudflare.com URL
-// has been captured from the pod logs. The budget is bounded by
-// waitReadyTimeout (defaultWaitReadyTimeout / FLOW_TUNNEL_TIMEOUT). On timeout
-// it returns an error that names both subjects (deployment + URL) so callers
-// can distinguish a half-baked tunnel from a missing one.
+// WaitReady scales the cloudflared deployment to the desired replica count,
+// waits for the deployment rollout, and returns the active public tunnel URL.
 //
-// Side effects on success: injects AGENT_BASE_URL into the agent deployment and
-// writes the tunnel URL to the obol-frontend ConfigMap consumed by the
-// serviceoffer-controller for ERC-8004 registration metadata.
+// For quick tunnels this polls pod logs for a public *.trycloudflare.com URL.
+// For persistent tunnels this returns the configured hostname after rollout.
+//
+// Side effects on success: injects AGENT_BASE_URL into the agent deployment,
+// writes the tunnel URL to the obol-frontend ConfigMap, and refreshes the
+// storefront landing page for the public tunnel hostname.
 func WaitReady(cfg *config.Config, u *ui.UI) (string, error) {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return "", errors.New("stack not running")
 	}
 
-	// Fast path: tunnel pod is already running and exposing a URL.
-	if podStatus, err := getPodStatus(kubectlPath, kubeconfigPath); err == nil && podStatus == "running" {
-		if url, err := GetTunnelURL(cfg); err == nil {
-			return url, nil
+	st, _ := loadTunnelState(cfg)
+	desiredReplicas := desiredRuntimeReplicas(st)
+	if runtime, err := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath); err == nil && runtime.ReadyReplicas >= desiredReplicas && runtime.AvailableReplicas >= desiredReplicas {
+		tunnelURL, err := currentTunnelURL(cfg, st)
+		if err != nil {
+			return "", err
 		}
+		syncTunnelDependents(cfg, u, tunnelURL)
+		return tunnelURL, nil
 	}
 
-	// Scale to 1 replica (idempotent).
 	scaleCmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"scale", "deployment/cloudflared",
 		"-n", tunnelNamespace,
-		"--replicas=1",
+		fmt.Sprintf("--replicas=%d", desiredReplicas),
 	)
 	if err := scaleCmd.Run(); err != nil {
 		return "", fmt.Errorf("failed to scale cloudflared: %w", err)
@@ -247,35 +330,81 @@ func WaitReady(cfg *config.Config, u *ui.UI) (string, error) {
 		Cmd:  waitCmd,
 	})
 
-	// Stage 2: poll the tunnel pod logs for the trycloudflare URL until the
-	// remaining budget runs out. Even when the rollout above failed, we still
-	// give the URL probe a brief grace window in case the pod is up but the
-	// rollout watcher returned spuriously.
 	var tunnelURL string
-	for time.Now().Before(deadline) {
-		if url, err := GetTunnelURL(cfg); err == nil && strings.HasPrefix(url, "https://") {
-			tunnelURL = url
-			break
+	if st != nil && st.IsPersistent() {
+		runtime, runtimeErr := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath)
+		if runtimeErr != nil {
+			if rolloutErr != nil {
+				return "", fmt.Errorf("cloudflared rollout failed and runtime health could not be rechecked: %w", rolloutErr)
+			}
+			return "", runtimeErr
 		}
-		time.Sleep(5 * time.Second)
+		if runtime.ReadyReplicas < desiredReplicas || runtime.AvailableReplicas < desiredReplicas {
+			if rolloutErr != nil {
+				return "", fmt.Errorf("cloudflared not ready within %s: deployment rollout failed (%w)", totalBudget, rolloutErr)
+			}
+			return "", fmt.Errorf("cloudflared not ready within %s: %d/%d replicas ready", totalBudget, runtime.ReadyReplicas, desiredReplicas)
+		}
+		var err error
+		tunnelURL, err = currentTunnelURL(cfg, st)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		// Quick tunnels: poll pod logs for the public trycloudflare URL until the
+		// remaining budget runs out. Even when the rollout above failed, we still
+		// give the URL probe a brief grace window in case the pod is up but the
+		// rollout watcher returned spuriously.
+		for time.Now().Before(deadline) {
+			if url, err := currentTunnelURL(cfg, st); err == nil && strings.HasPrefix(url, "https://") {
+				tunnelURL = url
+				break
+			}
+			time.Sleep(5 * time.Second)
+		}
+		if tunnelURL == "" {
+			if rolloutErr != nil {
+				return "", fmt.Errorf("cloudflared not ready within %s: deployment rollout failed (%w) and no public *.trycloudflare.com URL captured", totalBudget, rolloutErr)
+			}
+			return "", fmt.Errorf("cloudflared not ready within %s: deployment is rolled out but no public *.trycloudflare.com URL captured from pod logs", totalBudget)
+		}
 	}
 
-	if tunnelURL == "" {
-		if rolloutErr != nil {
-			return "", fmt.Errorf("cloudflared not ready within %s: deployment rollout failed (%w) and no public *.trycloudflare.com URL captured", totalBudget, rolloutErr)
-		}
-		return "", fmt.Errorf("cloudflared not ready within %s: deployment is rolled out but no public *.trycloudflare.com URL captured from pod logs", totalBudget)
-	}
+	syncTunnelDependents(cfg, u, tunnelURL)
 
-	// URL captured: propagate to agent + frontend ConfigMap. Best-effort.
+	return tunnelURL, nil
+}
+
+func syncTunnelDependents(cfg *config.Config, u *ui.UI, tunnelURL string) {
 	if err := InjectBaseURL(cfg, tunnelURL); err == nil {
 		u.Dim("Agent base URL updated to " + tunnelURL)
 	}
 	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
 		u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
 	}
+	if err := CreateStorefront(cfg, tunnelURL); err != nil {
+		u.Dim("Could not create storefront: " + err.Error())
+	}
+}
 
-	return tunnelURL, nil
+func currentTunnelURL(cfg *config.Config, st *tunnelState) (string, error) {
+	mode, url := tunnelModeAndURL(st)
+	if mode != tunnelExposureQuick {
+		if url == "" {
+			return "", errors.New("persistent tunnel hostname is not configured")
+		}
+		return url, nil
+	}
+
+	url, err := GetTunnelURL(cfg)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(url, "https://") {
+		return "", errors.New("quick tunnel URL is not yet available")
+	}
+
+	return url, nil
 }
 
 // EnsureRunning is the historical alias for WaitReady. New callers should
@@ -296,8 +425,8 @@ func EnsureRunning(cfg *config.Config, u *ui.UI) (string, error) {
 // re-syncing the chart kills the running pod and rotates the URL.
 func IsQuickTunnelHealthy(cfg *config.Config) bool {
 	st, _ := loadTunnelState(cfg)
-	if st != nil && st.Hostname != "" {
-		return false // persistent (DNS) tunnel — chart already keeps it alive
+	if st != nil && st.IsPersistent() {
+		return false // persistent tunnel — chart already keeps it alive
 	}
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -306,11 +435,15 @@ func IsQuickTunnelHealthy(cfg *config.Config) bool {
 		return false
 	}
 
-	if status, err := getPodStatus(kubectlPath, kubeconfigPath); err != nil || status != "running" {
+	runtime, err := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath)
+	if err != nil {
+		return false
+	}
+	if runtime.ReadyReplicas < quickReplicaCount || runtime.AvailableReplicas < quickReplicaCount || runtime.PodStatus == "" {
 		return false
 	}
 
-	url, err := GetTunnelURL(cfg)
+	url, err := currentTunnelURL(cfg, st)
 	if err != nil || !strings.HasPrefix(url, "https://") {
 		return false
 	}
@@ -331,7 +464,7 @@ func IsQuickTunnelHealthy(cfg *config.Config) bool {
 // none). In non-interactive sessions, Confirm returns its default (true), so
 // automation and CI flows print the warning but do not block.
 func ConfirmQuickTunnelLoss(cfg *config.Config, u *ui.UI, currentURL, action string) bool {
-	if st, _ := loadTunnelState(cfg); st != nil && st.Hostname != "" {
+	if st, _ := loadTunnelState(cfg); st != nil && st.IsPersistent() {
 		return true
 	}
 
@@ -366,11 +499,18 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
-	currentURL, _ := GetTunnelURL(cfg)
-	if !ConfirmQuickTunnelLoss(cfg, u, currentURL, "obol tunnel restart") {
-		u.Info("Aborted.")
+	st, _ := loadTunnelState(cfg)
+	if st != nil && st.IsPersistent() {
+		if err := RestorePersistentResources(cfg, u); err != nil {
+			return fmt.Errorf("restore persistent tunnel resources: %w", err)
+		}
+	} else {
+		currentURL, _ := GetTunnelURL(cfg)
+		if !ConfirmQuickTunnelLoss(cfg, u, currentURL, "obol tunnel restart") {
+			u.Info("Aborted.")
 
-		return nil
+			return nil
+		}
 	}
 
 	cmd := exec.Command(kubectlPath,
@@ -402,20 +542,21 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 	}
 
 	// Capture the new URL and update everything that needs the base URL.
-	// WaitReady also calls InjectBaseURL + SyncTunnelConfigMap.
+	// WaitReady also refreshes AGENT_BASE_URL, the frontend tunnel ConfigMap,
+	// and the public storefront.
 	newURL, err := WaitReady(cfg, u)
 	if err != nil {
 		return fmt.Errorf("tunnel restarted but new URL not captured: %w", err)
 	}
 
-	// Refresh the storefront HTTPRoute (hostname-pinned to the tunnel domain).
-	if err := CreateStorefront(cfg, newURL); err != nil {
-		u.Warnf("could not refresh storefront for new URL: %v", err)
-	}
-
 	u.Blank()
-	u.Successf("Tunnel restarted: %s", newURL)
-	u.Dim("  /skill.md, /api/services.json, and the storefront now reflect the new URL.")
+	if st != nil && st.IsPersistent() {
+		u.Successf("Persistent tunnel active: %s", newURL)
+		u.Dim("  Resources restored and connector restarted.")
+	} else {
+		u.Successf("Tunnel restarted: %s", newURL)
+		u.Dim("  /skill.md, /api/services.json, and the storefront now reflect the new URL.")
+	}
 
 	return nil
 }
@@ -450,24 +591,103 @@ func Logs(cfg *config.Config, follow bool) error {
 
 // getPodStatus returns the status of the cloudflared pod.
 func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
-	cmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"get", "pods", "-n", tunnelNamespace,
-		"-l", tunnelLabelSelector,
-		"-o", "jsonpath={.items[0].status.phase}",
-	)
-
-	output, err := cmd.Output()
+	runtime, err := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath)
 	if err != nil {
 		return "", err
 	}
-
-	status := strings.TrimSpace(string(output))
-	if status == "" {
+	if runtime.PodStatus == "" {
 		return "", errors.New("no pods found")
 	}
+	return runtime.PodStatus, nil
+}
 
-	return strings.ToLower(status), nil
+func getTunnelRuntimeHealth(kubectlPath, kubeconfigPath string) (*tunnelRuntimeHealth, error) {
+	depCmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"get", "deployment/cloudflared",
+		"-n", tunnelNamespace,
+		"-o", "json",
+	)
+	depOut, err := depCmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var deployment deploymentReplicaStatus
+	if err := json.Unmarshal(depOut, &deployment); err != nil {
+		return nil, fmt.Errorf("parse cloudflared deployment status: %w", err)
+	}
+
+	podsCmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"get", "pods", "-n", tunnelNamespace,
+		"-l", tunnelLabelSelector,
+		"-o", "json",
+	)
+	podsOut, err := podsCmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var pods podStatusList
+	if err := json.Unmarshal(podsOut, &pods); err != nil {
+		return nil, fmt.Errorf("parse cloudflared pod status: %w", err)
+	}
+
+	desiredReplicas := int(deployment.Status.Replicas)
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = int(*deployment.Spec.Replicas)
+	}
+
+	phases := make([]string, 0, len(pods.Items))
+	for _, pod := range pods.Items {
+		phase := strings.ToLower(strings.TrimSpace(pod.Status.Phase))
+		if phase == "" {
+			phase = "unknown"
+		}
+		phases = append(phases, phase)
+	}
+	podStatus := ""
+	if len(phases) > 0 {
+		podStatus = fmt.Sprintf("%d pod(s): %s", len(phases), strings.Join(phases, ","))
+	}
+
+	return &tunnelRuntimeHealth{
+		DesiredReplicas:   desiredReplicas,
+		ReadyReplicas:     int(deployment.Status.ReadyReplicas),
+		AvailableReplicas: int(deployment.Status.AvailableReplicas),
+		PodStatus:         podStatus,
+	}, nil
+}
+
+func printDetailedStatusBox(u *ui.UI, result tunnelStatusResult, lastUpdated time.Time) {
+	u.Blank()
+	u.Bold("Cloudflare Tunnel Status")
+	u.Print(strings.Repeat("─", 50))
+	u.Detail("Mode", result.Mode)
+	if result.ManagementMode != "" {
+		u.Detail("Management", result.ManagementMode)
+	}
+	u.Detail("Status", result.Status)
+	if result.Hostname != "" {
+		u.Detail("Hostname", result.Hostname)
+	}
+	u.Detail("URL", result.URL)
+	if result.DesiredReplicas > 0 || result.ReadyReplicas > 0 {
+		u.Detail("Replicas", fmt.Sprintf("%d ready / %d desired", result.ReadyReplicas, result.DesiredReplicas))
+	}
+	if result.PodStatus != "" {
+		u.Detail("Pods", result.PodStatus)
+	}
+	if result.ConnectorStatus != "" {
+		connector := result.ConnectorStatus
+		if result.ActiveConnections > 0 {
+			connector = fmt.Sprintf("%s (%d active)", connector, result.ActiveConnections)
+		}
+		u.Detail("Connectors", connector)
+	}
+	u.Detail("Last Updated", lastUpdated.Format(time.RFC3339))
+	u.Print(strings.Repeat("─", 50))
 }
 
 // printStatusBox prints a formatted status box.

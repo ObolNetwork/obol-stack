@@ -10,6 +10,13 @@ metrics:
 quickTunnel:
   url: "http://traefik.traefik.svc.cluster.local:80"
 
+persistent:
+  replicaCount: 2
+
+management:
+  configMapName: "cloudflared-management"
+  modeKey: "management_mode"
+
 remoteManaged:
   tokenSecretName: "cloudflared-tunnel-token"
   tokenSecretKey: "TUNNEL_TOKEN"

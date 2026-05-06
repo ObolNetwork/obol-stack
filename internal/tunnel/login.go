@@ -103,6 +103,15 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
 		return err
 	}
+	if err := deleteRemoteManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
+		return err
+	}
+	if err := deleteRemoteTunnelToken(cfg); err != nil {
+		return err
+	}
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal); err != nil {
+		return err
+	}
 
 	// Re-render the chart so it flips from quick tunnel to locally-managed.
 	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
@@ -114,10 +123,12 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		st = &tunnelState{}
 	}
 
-	st.Mode = "dns"
+	st.ExposureMode = tunnelExposurePersistent
+	st.ManagementMode = tunnelManagementLocal
 	st.Hostname = hostname
+	st.AccountID = ""
+	st.ZoneID = ""
 	st.TunnelID = tunnelID
-
 	st.TunnelName = tunnelName
 	if err := saveTunnelState(cfg, st); err != nil {
 		return fmt.Errorf("tunnel created, but failed to save local state: %w", err)
