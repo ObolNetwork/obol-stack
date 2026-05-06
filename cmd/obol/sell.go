@@ -936,25 +936,128 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 	if baseURL != "" && offer.Status.Endpoint != "" {
 		endpoint = strings.TrimRight(baseURL, "/") + offer.Status.Endpoint
 	}
+
+	tx := valueOrNone(offer.Status.RegistrationTxHash)
+	if url := explorerTxURL(offer.Spec.Payment.Network, offer.Status.RegistrationTxHash); url != "" {
+		tx = url
+	}
+
+	agentID := valueOrNone(offer.Status.AgentID)
+	if url := agentRegistryNFTURL(offer.Spec.Payment.Network, offer.Status.AgentID); url != "" {
+		agentID = fmt.Sprintf("%s (%s)", offer.Status.AgentID, url)
+	}
+
 	lines := []string{
 		fmt.Sprintf("ServiceOffer:    %s/%s", namespace, name),
 		fmt.Sprintf("Endpoint:        %s", endpoint),
-		fmt.Sprintf("Agent ID:        %s", valueOrNone(offer.Status.AgentID)),
-		fmt.Sprintf("Registration Tx: %s", valueOrNone(offer.Status.RegistrationTxHash)),
+		fmt.Sprintf("Network:         %s", valueOrNone(offer.Spec.Payment.Network)),
+		fmt.Sprintf("Asset:           %s", formatOfferAsset(offer.Spec.Payment.Asset)),
+		fmt.Sprintf("Price:           %s", formatOfferPrice(offer.Spec.Payment)),
+		fmt.Sprintf("Pay To:          %s", valueOrNone(offer.Spec.Payment.PayTo)),
+		fmt.Sprintf("Agent ID:        %s", agentID),
+		fmt.Sprintf("Registration Tx: %s", tx),
 		"",
 		"Conditions:",
 	}
 	for _, cond := range offer.Status.Conditions {
-		lines = append(lines, fmt.Sprintf("  - type: %s", cond.Type))
-		lines = append(lines, fmt.Sprintf("    status: %q", cond.Status))
-		if cond.Reason != "" {
-			lines = append(lines, fmt.Sprintf("    reason: %s", cond.Reason))
-		}
-		if cond.Message != "" {
-			lines = append(lines, fmt.Sprintf("    message: %s", cond.Message))
-		}
+		lines = append(lines, formatConditionLine(cond))
 	}
 	return lines
+}
+
+// formatOfferAsset renders the payment asset as "SYMBOL" or
+// "SYMBOL (0xaddr)" when the contract address is known.
+func formatOfferAsset(asset monetizeapi.ServiceOfferAsset) string {
+	symbol := strings.TrimSpace(asset.Symbol)
+	addr := strings.TrimSpace(asset.Address)
+	switch {
+	case symbol == "" && addr == "":
+		return "(not set)"
+	case symbol == "":
+		return addr
+	case addr == "":
+		return symbol
+	default:
+		return fmt.Sprintf("%s (%s)", symbol, addr)
+	}
+}
+
+// formatOfferPrice renders the price line for a ServiceOffer payment block,
+// preferring per-request, then per-MTok, then per-hour. Asset symbol is
+// included when available.
+func formatOfferPrice(p monetizeapi.ServiceOfferPayment) string {
+	symbol := strings.TrimSpace(p.Asset.Symbol)
+	suffix := ""
+	if symbol != "" {
+		suffix = " " + symbol
+	}
+	switch {
+	case p.Price.PerRequest != "":
+		return fmt.Sprintf("%s%s per request", p.Price.PerRequest, suffix)
+	case p.Price.PerMTok != "":
+		return fmt.Sprintf("%s%s per MTok", p.Price.PerMTok, suffix)
+	case p.Price.PerHour != "":
+		return fmt.Sprintf("%s%s per hour", p.Price.PerHour, suffix)
+	default:
+		return "(not set)"
+	}
+}
+
+// explorerTxURL returns the block-explorer URL for a transaction hash on the
+// given network. Returns "" when the network is unknown or hash is empty.
+func explorerTxURL(network, txHash string) string {
+	hash := strings.TrimSpace(txHash)
+	if hash == "" {
+		return ""
+	}
+	net, err := erc8004.ResolveNetwork(network)
+	if err != nil {
+		return ""
+	}
+	base := explorerBaseURL(net.Name)
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/tx/%s", base, hash)
+}
+
+// formatConditionLine renders a single condition with a status icon followed
+// by the type, reason, and message. Icons:
+//
+//	✓  Status=True (success)              — green check
+//	ℹ  Status=True with Reason "Skipped"  — informational
+//	    or "Disabled", non-failure paths
+//	⚠  Status=False                       — failure / blocked
+//	⏳  Status=Unknown / empty             — pending
+func formatConditionLine(cond monetizeapi.Condition) string {
+	icon := conditionIcon(cond)
+	parts := []string{cond.Type}
+	if cond.Reason != "" {
+		parts = append(parts, cond.Reason)
+	}
+	header := strings.Join(parts, ": ")
+	if cond.Message != "" {
+		header = header + " — " + cond.Message
+	}
+	return fmt.Sprintf("  %s %s", icon, header)
+}
+
+// conditionIcon picks a glyph based on the condition's status + reason. The
+// glyphs are plain unicode (no lipgloss) so the function is safe to call from
+// pure unit tests; coloring is applied at print time via the ui package.
+func conditionIcon(cond monetizeapi.Condition) string {
+	switch cond.Status {
+	case "True":
+		switch cond.Reason {
+		case "Skipped", "Disabled":
+			return "ℹ"
+		}
+		return "✓"
+	case "False":
+		return "⚠"
+	default:
+		return "⏳"
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1633,16 +1736,22 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				return sellStatusGlobalJSON(cfg, u)
 			}
 
+			tunnelURL, _ := tunnel.GetTunnelURL(cfg)
+			defaultWallet, _ := hermes.ResolveWalletAddress(cfg)
+
 			pricingCfg, err := x402verifier.GetPricingConfig(cfg)
 			if err != nil {
 				u.Warnf("Payment configuration not available (%v)", err)
 			} else {
 				u.Printf("Payment Configuration:")
-				u.Printf("  Wallet:      %s", valueOrNone(pricingCfg.Wallet))
-				u.Printf("  Chain:       %s", valueOrNone(pricingCfg.Chain))
-				u.Printf("  Facilitator: %s", valueOrNone(pricingCfg.FacilitatorURL))
-				u.Printf("  Verify Only: %v", pricingCfg.VerifyOnly)
-				u.Printf("  Routes:      %d", len(pricingCfg.Routes))
+				if tunnelURL != "" {
+					u.Printf("  Tunnel URL:     %s", tunnelURL)
+				}
+				u.Printf("  Default Wallet: %s", valueOrNone(defaultWallet))
+				u.Printf("  Chain:          %s", valueOrNone(pricingCfg.Chain))
+				u.Printf("  Facilitator:    %s", valueOrNone(pricingCfg.FacilitatorURL))
+				u.Printf("  Verify Only:    %v", pricingCfg.VerifyOnly)
+				u.Printf("  Routes:         %d", len(pricingCfg.Routes))
 				for _, r := range pricingCfg.Routes {
 					desc := r.Description
 					if desc == "" {
@@ -1657,11 +1766,59 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			u.Blank()
+			offers, offersErr := listServiceOffers(cfg)
+			if offersErr != nil {
+				u.Blank()
+				u.Warnf("Could not list services (%v)", offersErr)
+			} else {
+				u.Blank()
+				u.Printf("Agent Registrations:")
+				printed := 0
+				for _, o := range offers {
+					if o.Status.AgentID == "" && o.Status.RegistrationTxHash == "" {
+						continue
+					}
+					tx := valueOrNone(o.Status.RegistrationTxHash)
+					if url := explorerTxURL(o.Spec.Payment.Network, o.Status.RegistrationTxHash); url != "" {
+						tx = url
+					}
+					line := fmt.Sprintf("  %s/%s  agent=%s  tx=%s",
+						o.Namespace, o.Name,
+						valueOrNone(o.Status.AgentID),
+						tx)
+					if url := agentRegistryNFTURL(o.Spec.Payment.Network, o.Status.AgentID); url != "" {
+						line = line + "  " + url
+					}
+					u.Printf(line)
+					printed++
+				}
+				if printed == 0 {
+					u.Printf("  (no agents registered)")
+				}
 
-			u.Printf("ERC-8004 Agent Registration:")
-			kubectlRun(cfg, "get", "serviceoffers.obol.org", "-A",
-				"-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,AGENT_ID:.status.agentId,TX:.status.registrationTxHash,REGISTERED:.status.conditions[?(@.type=='Registered')].status")
+				u.Blank()
+				u.Printf("Services:")
+				if len(offers) == 0 {
+					u.Printf("  (no services published)")
+				} else {
+					for _, o := range offers {
+						registered := isConditionTrue(o.Status.Conditions, "Registered")
+						mark := "✗"
+						if registered {
+							mark = "✓"
+						}
+						tx := valueOrNone(o.Status.RegistrationTxHash)
+						if url := explorerTxURL(o.Spec.Payment.Network, o.Status.RegistrationTxHash); url != "" {
+							tx = url
+						}
+						u.Printf("  %s/%s  registered=%s  tx=%s",
+							o.Namespace, o.Name, mark, tx)
+					}
+					u.Blank()
+					u.Dim(fmt.Sprintf("See detailed service information with e.g. `obol sell status %s -n %s`",
+						offers[0].Name, offers[0].Namespace))
+				}
+			}
 
 			// Also show local inference gateway deployments.
 			store := inference.NewStore(cfg.ConfigDir)
@@ -1679,6 +1836,68 @@ func sellStatusCommand(cfg *config.Config) *cli.Command {
 			return nil
 		},
 	}
+}
+
+// agentRegistryNFTURL returns the block-explorer URL for an ERC-8004 agent
+// registration NFT — `<explorer>/nft/<registry>/<agentId>` — on the given
+// network. The registry address is sourced from erc8004.ResolveNetwork: Base
+// mainnet and Ethereum mainnet share one address (CREATE2), Base Sepolia is
+// a separate deployment. Returns "" when the network is unknown or the
+// agent ID is empty.
+func agentRegistryNFTURL(network, agentID string) string {
+	if strings.TrimSpace(agentID) == "" {
+		return ""
+	}
+	net, err := erc8004.ResolveNetwork(network)
+	if err != nil {
+		return ""
+	}
+	base := explorerBaseURL(net.Name)
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/nft/%s/%s", base, net.RegistryAddress, agentID)
+}
+
+// explorerBaseURL maps a canonical network name to its block explorer base.
+// Returns "" for networks without a public explorer (e.g. local Anvil).
+func explorerBaseURL(canonicalName string) string {
+	switch canonicalName {
+	case "ethereum":
+		return "https://etherscan.io"
+	case "base":
+		return "https://basescan.org"
+	case "base-sepolia":
+		return "https://sepolia.basescan.org"
+	}
+	return ""
+}
+
+// isConditionTrue reports whether the named condition exists with Status=True.
+func isConditionTrue(conds []monetizeapi.Condition, name string) bool {
+	for _, c := range conds {
+		if c.Type == name {
+			return c.Status == "True"
+		}
+	}
+	return false
+}
+
+// listServiceOffers fetches all ServiceOffers across all namespaces and parses
+// them into typed structs. Returns a nil slice when the cluster is unreachable
+// or the CRD is not installed.
+func listServiceOffers(cfg *config.Config) ([]monetizeapi.ServiceOffer, error) {
+	raw, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", "-A", "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Items []monetizeapi.ServiceOffer `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, fmt.Errorf("parse ServiceOffer list: %w", err)
+	}
+	return list.Items, nil
 }
 
 // sellStatusGlobalJSON outputs the global sell status as JSON.

@@ -35,17 +35,19 @@ var (
 		ERPCNetwork:     "base-sepolia",
 	}
 
+	// Base mainnet and Ethereum mainnet share the same Identity Registry
+	// address (deployed via CREATE2). Base Sepolia is a separate deployment.
 	Base = NetworkConfig{
 		Name:            "base",
 		ChainID:         8453,
-		RegistryAddress: IdentityRegistryBaseSepolia, // CREATE2 — same address across chains
+		RegistryAddress: IdentityRegistryMainnet,
 		ERPCNetwork:     "base",
 	}
 
 	Ethereum = NetworkConfig{
 		Name:            "ethereum",
 		ChainID:         1,
-		RegistryAddress: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+		RegistryAddress: IdentityRegistryMainnet,
 		ERPCNetwork:     "mainnet",
 	}
 )
