@@ -248,6 +248,17 @@ func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
 
 func TestServiceOfferStatusLines(t *testing.T) {
 	offer := monetizeapi.ServiceOffer{
+		Spec: monetizeapi.ServiceOfferSpec{
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0xd0391eedc3268f3deef1f05fff5d7aef82f64ccf",
+				Asset: monetizeapi.ServiceOfferAsset{
+					Symbol:  "USDC",
+					Address: "0x036C...",
+				},
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
 		Status: monetizeapi.ServiceOfferStatus{
 			Endpoint:           "/services/demo",
 			AgentID:            "5008",
@@ -261,13 +272,202 @@ func TestServiceOfferStatusLines(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{
 		"ServiceOffer:    llm/demo",
-		"Agent ID:        5008",
-		"Registration Tx: 0xabc",
-		"type: Registered",
+		"Network:         base-sepolia",
+		"Asset:           USDC (0x036C...)",
+		"Price:           0.001 USDC per request",
+		"Pay To:          0xd0391eedc3268f3deef1f05fff5d7aef82f64ccf",
+		"Agent ID:        5008 (https://sepolia.basescan.org/nft/0x8004A818BFB912233c491871b3d84c89A494BD9e/5008)",
+		"Registration Tx: https://sepolia.basescan.org/tx/0xabc",
+		"✓ Registered",
+		"Published registration document and recorded agent 5008",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("status lines missing %q\n%s", want, joined)
 		}
+	}
+}
+
+func TestServiceOfferStatusLines_RawTxFallback(t *testing.T) {
+	// Unknown network: fall back to raw hash (no explorer link).
+	offer := monetizeapi.ServiceOffer{
+		Spec: monetizeapi.ServiceOfferSpec{
+			Payment: monetizeapi.ServiceOfferPayment{Network: "polygon"},
+		},
+		Status: monetizeapi.ServiceOfferStatus{RegistrationTxHash: "0xdeadbeef"},
+	}
+	lines := serviceOfferStatusLines("llm", "demo", offer, "")
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Registration Tx: 0xdeadbeef") {
+		t.Fatalf("expected raw tx fallback, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "https://") {
+		t.Fatalf("unexpected URL in tx line for unknown network:\n%s", joined)
+	}
+}
+
+func TestFormatOfferAsset(t *testing.T) {
+	tests := []struct {
+		name  string
+		asset monetizeapi.ServiceOfferAsset
+		want  string
+	}{
+		{"both", monetizeapi.ServiceOfferAsset{Symbol: "USDC", Address: "0x036C"}, "USDC (0x036C)"},
+		{"symbol only", monetizeapi.ServiceOfferAsset{Symbol: "OBOL"}, "OBOL"},
+		{"address only", monetizeapi.ServiceOfferAsset{Address: "0xabc"}, "0xabc"},
+		{"empty", monetizeapi.ServiceOfferAsset{}, "(not set)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatOfferAsset(tt.asset); got != tt.want {
+				t.Errorf("formatOfferAsset = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatOfferPrice(t *testing.T) {
+	tests := []struct {
+		name string
+		p    monetizeapi.ServiceOfferPayment
+		want string
+	}{
+		{
+			"per request with symbol",
+			monetizeapi.ServiceOfferPayment{
+				Asset: monetizeapi.ServiceOfferAsset{Symbol: "USDC"},
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+			"0.001 USDC per request",
+		},
+		{
+			"per request no symbol",
+			monetizeapi.ServiceOfferPayment{
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+			"0.001 per request",
+		},
+		{
+			"per MTok",
+			monetizeapi.ServiceOfferPayment{
+				Asset: monetizeapi.ServiceOfferAsset{Symbol: "USDC"},
+				Price: monetizeapi.ServiceOfferPriceTable{PerMTok: "5"},
+			},
+			"5 USDC per MTok",
+		},
+		{
+			"per hour",
+			monetizeapi.ServiceOfferPayment{
+				Asset: monetizeapi.ServiceOfferAsset{Symbol: "USDC"},
+				Price: monetizeapi.ServiceOfferPriceTable{PerHour: "1"},
+			},
+			"1 USDC per hour",
+		},
+		{
+			"empty",
+			monetizeapi.ServiceOfferPayment{},
+			"(not set)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatOfferPrice(tt.p); got != tt.want {
+				t.Errorf("formatOfferPrice = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExplorerTxURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		network string
+		hash    string
+		want    string
+	}{
+		{"ethereum", "ethereum", "0xabc", "https://etherscan.io/tx/0xabc"},
+		{"base", "base", "0xabc", "https://basescan.org/tx/0xabc"},
+		{"base-sepolia", "base-sepolia", "0xabc", "https://sepolia.basescan.org/tx/0xabc"},
+		{"unknown network", "polygon", "0xabc", ""},
+		{"empty hash", "ethereum", "", ""},
+		{"whitespace hash", "ethereum", "  ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := explorerTxURL(tt.network, tt.hash); got != tt.want {
+				t.Errorf("explorerTxURL(%q, %q) = %q, want %q", tt.network, tt.hash, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConditionIcon(t *testing.T) {
+	tests := []struct {
+		name string
+		cond monetizeapi.Condition
+		want string
+	}{
+		{"true succeeded", monetizeapi.Condition{Status: "True", Reason: "Reconciled"}, "✓"},
+		{"true skipped", monetizeapi.Condition{Status: "True", Reason: "Skipped"}, "ℹ"},
+		{"true disabled", monetizeapi.Condition{Status: "True", Reason: "Disabled"}, "ℹ"},
+		{"false failed", monetizeapi.Condition{Status: "False", Reason: "Unhealthy"}, "⚠"},
+		{"unknown pending", monetizeapi.Condition{Status: "Unknown"}, "⏳"},
+		{"empty pending", monetizeapi.Condition{}, "⏳"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := conditionIcon(tt.cond); got != tt.want {
+				t.Errorf("conditionIcon = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentRegistryNFTURL(t *testing.T) {
+	const (
+		mainnetReg = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+		sepoliaReg = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+	)
+	tests := []struct {
+		name    string
+		network string
+		agentID string
+		want    string
+	}{
+		{"ethereum", "ethereum", "32117", "https://etherscan.io/nft/" + mainnetReg + "/32117"},
+		{"mainnet alias", "mainnet", "32117", "https://etherscan.io/nft/" + mainnetReg + "/32117"},
+		{"base shares mainnet registry", "base", "42", "https://basescan.org/nft/" + mainnetReg + "/42"},
+		{"base-sepolia distinct registry", "base-sepolia", "1", "https://sepolia.basescan.org/nft/" + sepoliaReg + "/1"},
+		{"unknown network", "polygon", "1", ""},
+		{"empty network", "", "1", ""},
+		{"empty agent id", "ethereum", "", ""},
+		{"whitespace agent id", "ethereum", "  ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentRegistryNFTURL(tt.network, tt.agentID); got != tt.want {
+				t.Errorf("agentRegistryNFTURL(%q, %q) = %q, want %q", tt.network, tt.agentID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsConditionTrue(t *testing.T) {
+	conds := []monetizeapi.Condition{
+		{Type: "Ready", Status: "True"},
+		{Type: "Registered", Status: "False"},
+		{Type: "Pending", Status: "Unknown"},
+	}
+	if !isConditionTrue(conds, "Ready") {
+		t.Error("Ready should be true")
+	}
+	if isConditionTrue(conds, "Registered") {
+		t.Error("Registered should be false")
+	}
+	if isConditionTrue(conds, "Pending") {
+		t.Error("Pending should be false")
+	}
+	if isConditionTrue(conds, "Missing") {
+		t.Error("Missing should be false")
 	}
 }
 
