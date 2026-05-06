@@ -89,6 +89,9 @@ COMMANDS:
      sell pricing     Manage service pricing
      sell register    Register on the ERC-8004 Agent Registry (multi-chain)
 
+   Buy Services (x402):
+     buy inference    Buy paid inference from an x402-gated seller via the obol-agent
+
    App Management:
      app install     Install a Helm chart as an application
      app list        List installed applications
@@ -283,6 +286,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			hermesCommand(cfg),
 			openclawCommand(cfg),
 			sellCommand(cfg),
+			buyCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",

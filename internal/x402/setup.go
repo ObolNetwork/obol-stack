@@ -20,6 +20,22 @@ const (
 	// DefaultFacilitatorURL is the Obol-operated x402 facilitator for payment
 	// verification and settlement. Supports Base Mainnet and Base Sepolia.
 	DefaultFacilitatorURL = "https://x402.gcp.obol.tech"
+
+	// DefaultBuySellerURL is the Obol-operated demo seller used by
+	// `obol buy inference` when no --seller is given.
+	// TODO(buy): replace with the live URL once the default seller is provisioned.
+	DefaultBuySellerURL = "https://demo-seller.obol.tech/services/default-paid"
+
+	// DefaultBuySellerAgentID is the ERC-8004 tokenId the buyer expects to
+	// see in the seller's /.well-known/agent-registration.json before signing.
+	// Hard-fails on mismatch unless --no-verify-identity is passed.
+	// TODO(buy): replace with the live agentId once the default seller is registered.
+	DefaultBuySellerAgentID int64 = 0
+
+	// DefaultBuySellerChain is the chain the default seller settles on.
+	// Used only as a hint in error messages; the actual chain is taken
+	// from the seller's 402 response by buy.py.
+	DefaultBuySellerChain = "base-sepolia"
 )
 
 var x402Manifest = mustReadX402Manifest()
