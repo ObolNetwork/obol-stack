@@ -60,7 +60,15 @@
 |-------|---------|----------|
 | USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` | 6 |
 
-> **EIP-712 signing pitfall** (USDC, all chains): the `name` used in the EIP-712 domain separator is **not** always equal to what the contract's `name()` view returns. On Base Sepolia USDC, the EIP-712 domain `name` is `"USDC"` while `name()` returns `"USD Coin"`. The x402 verifier echoes `name()` back as `extra.name` in the 402 response — that field is for human display. For signing, prefer the domain advertised in the seller's 402 response under `extra.eip712Domain` (when present) or read the contract's EIP-712 separator on-chain. Do not feed the human-readable token name into the signing domain.
+> **EIP-712 signing pitfall** (USDC, varies by deployment): the `name` used in the EIP-712 domain separator is **not** always equal to what the contract's `name()` view returns. The x402 verifier echoes `name()` back as `extra.name` in the 402 response — that field is for human display. The actual EIP-712 domain `name` for USDC is:
+>
+> | Chain | `name()` | EIP-712 domain `name` |
+> |---|---|---|
+> | Ethereum mainnet | `"USD Coin"` | `"USD Coin"` (FiatTokenV2_2) |
+> | Base mainnet     | `"USD Coin"` | `"USD Coin"` (FiatTokenV2_2) |
+> | Base Sepolia     | `"USD Coin"` | `"USDC"` (older deployment) |
+>
+> For signing, prefer the domain advertised in the seller's 402 response under `extra.eip712Domain` (when present) or look it up against the per-chain table above (the `buy-x402` skill keeps an authoritative copy in `USDC_EIP712_DOMAIN`). Do not feed the human-readable token name into the signing domain.
 
 ## Hoodi Testnet (Chain ID: 560048)
 

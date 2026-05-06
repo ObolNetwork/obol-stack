@@ -103,6 +103,76 @@ class BuyAutorefillHelpersTest(unittest.TestCase):
         auths = [{"nonce": "a"}, {"nonce": "b"}, {"nonce": "c"}]
         self.assertEqual(mod._compact_active_auths(auths, 2), [{"nonce": "c"}])
 
+    def test_resolve_eip3009_domain_prefers_explicit_extra(self):
+        mod = load_buy_module()
+        extra = {"eip712Domain": {"name": "Custom", "version": "9"}}
+        self.assertEqual(mod._resolve_eip3009_domain(extra, "mainnet", "0xabc"), ("Custom", "9"))
+
+    def test_resolve_eip3009_domain_uses_per_chain_table(self):
+        mod = load_buy_module()
+        # Mainnet USDC's actual EIP-712 domain is "USD Coin", not "USDC".
+        mainnet_usdc = mod._canonical_usdc("mainnet")
+        self.assertEqual(
+            mod._resolve_eip3009_domain({}, "mainnet", mainnet_usdc),
+            ("USD Coin", "2"),
+        )
+        # Base Sepolia is the historic exception — domain stays "USDC".
+        sepolia_usdc = mod._canonical_usdc("base-sepolia")
+        self.assertEqual(
+            mod._resolve_eip3009_domain({}, "base-sepolia", sepolia_usdc),
+            ("USDC", "2"),
+        )
+
+    def test_resolve_eip3009_domain_fallback_for_unknown_asset(self):
+        mod = load_buy_module()
+        # Unknown asset on a known chain — drop to constants.
+        self.assertEqual(
+            mod._resolve_eip3009_domain({}, "mainnet", "0xdeadbeef"),
+            (mod.USDC_DOMAIN_NAME, mod.USDC_DOMAIN_VERSION),
+        )
+
+    def test_known_tokens_includes_obol_on_mainnet(self):
+        mod = load_buy_module()
+        addrs = {addr.lower() for addr, _, _ in mod.KNOWN_TOKENS["mainnet"]}
+        self.assertIn("0x0b010000b7624eb9b3dfbc279673c76e9d29d5f7", addrs)
+        # Symbol/decimals round-trip correctly through _asset_display_meta.
+        self.assertEqual(
+            mod._asset_display_meta("0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7"),
+            ("OBOL", 18, "base-units"),
+        )
+
+    def test_paid_request_failure_hint_for_permit2_allowance(self):
+        mod = load_buy_module()
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+            mod._print_paid_request_failure(
+                status=503,
+                body='{"error":"transfer amount exceeds allowance on Permit2"}',
+                settle_header=None,
+                signer_address="0xagent",
+                asset="0xtoken",
+                chain="mainnet",
+                transfer_method="permit2",
+            )
+        out = buf.getvalue()
+        self.assertIn("missing Permit2 allowance", out)
+        self.assertIn("signer.py send-tx", out)
+        self.assertIn("--from 0xagent", out)
+        self.assertIn("--to 0xtoken", out)
+
+    def test_paid_request_failure_hint_for_transient(self):
+        mod = load_buy_module()
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+            mod._print_paid_request_failure(
+                status=503,
+                body='{"error":"settlement failed: upstream timeout"}',
+                settle_header=None,
+                signer_address="0xagent",
+                asset="0xtoken",
+                chain="base-sepolia",
+                transfer_method="eip3009",
+            )
+        self.assertIn("transient error", buf.getvalue())
+
     def test_build_active_auth_pool_appends_new_auths(self):
         mod = load_buy_module()
         existing = [{"nonce": "a"}, {"nonce": "b"}, {"nonce": "c"}]

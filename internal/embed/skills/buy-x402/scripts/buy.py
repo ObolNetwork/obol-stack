@@ -72,6 +72,21 @@ CHAIN_INFO = {
     "hoodi":        {"chain_id": 560048,   "usdc": None},
 }
 
+# Per-chain ERC-20s the agent can hold and we want to surface in `balance`.
+# Values: (address, symbol, decimals).
+KNOWN_TOKENS = {
+    "mainnet": [
+        ("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "USDC", 6),
+        ("0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", "OBOL", 18),
+    ],
+    "base": [
+        ("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "USDC", 6),
+    ],
+    "base-sepolia": [
+        ("0x036CbD53842c5426634e7929541eC2318f3dCF7e", "USDC", 6),
+    ],
+}
+
 CHAIN_ALIASES = {
     # Friendly aliases that resolve to canonical eRPC names.
     "ethereum":         "mainnet",
@@ -83,9 +98,27 @@ CHAIN_ALIASES = {
     "eip155:560048":    "hoodi",
 }
 
-# EIP-712 domain for USDC TransferWithAuthorization
+# EIP-712 domain fallback for USDC TransferWithAuthorization. Used only when
+# neither the seller-advertised `extra.eip712Domain` nor `USDC_EIP712_DOMAIN`
+# below covers the (chain, asset) pair.
 USDC_DOMAIN_NAME = "USDC"
 USDC_DOMAIN_VERSION = "2"
+
+# Authoritative EIP-712 domain (`name`, `version`) per chain for the canonical
+# USDC deployment. Different USDC contract versions use different domains:
+#   mainnet/base — FiatTokenV2_2  → ("USD Coin", "2")
+#   base-sepolia — older deploy   → ("USDC",     "2")
+# The seller's 402 response sometimes carries `extra.name` populated from the
+# contract's `name()` getter — that is a HUMAN-READABLE display string and is
+# NOT always equal to the EIP-712 signing domain. Signing with the wrong name
+# produces a syntactically valid but semantically wrong signature that the
+# facilitator rejects with an opaque 503. _presign_auths uses this table only
+# when the seller has not advertised an explicit `extra.eip712Domain`.
+USDC_EIP712_DOMAIN = {
+    "mainnet":      ("USD Coin", "2"),
+    "base":         ("USD Coin", "2"),
+    "base-sepolia": ("USDC",     "2"),
+}
 PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001"
 
@@ -151,9 +184,12 @@ def _asset_display_meta(asset, extra=None):
     """Best-effort display metadata for user-facing balance/price output."""
     extra = extra or {}
     asset_lower = (asset or "").lower()
-    known_usdcs = {info["usdc"].lower() for info in CHAIN_INFO.values() if info.get("usdc")}
-    if asset_lower in known_usdcs:
-        return ("USDC", 6, "micro-units")
+    for tokens in KNOWN_TOKENS.values():
+        for addr, symbol, decimals in tokens:
+            if addr.lower() == asset_lower:
+                units_label = "micro-units" if decimals == 6 else "base-units"
+                return (symbol, decimals, units_label)
+    # Last-resort: trust the seller's display name for tokens we don't know.
     if extra.get("name") == "Obol Network":
         return ("OBOL", 18, "base-units")
     return ("asset", None, "base-units")
@@ -626,6 +662,10 @@ def _ensure_permit2_allowance(signer_address, asset, chain, transfer_method, ext
     if allowance is None:
         return  # RPC unavailable — let downstream surface the real error
     if allowance > 0:
+        # Surface success: when a 503 appears later the operator can be sure
+        # it's not the allowance and skip a remediation step.
+        symbol, _, _ = _asset_display_meta(asset)
+        print(f"  Permit2 allowance: OK ({allowance} {symbol} approved)")
         return
 
     approve_data = _approve_max_calldata(PERMIT2_ADDRESS)
@@ -666,6 +706,39 @@ def _validate_contract_exists(contract_address, chain=None):
 # ---------------------------------------------------------------------------
 # EIP-712 pre-signing
 # ---------------------------------------------------------------------------
+
+def _resolve_eip3009_domain(extra, chain, asset):
+    """Return (name, version) for an ERC-3009 EIP-712 signing domain.
+
+    Resolution order:
+      1. seller-advertised extra.eip712Domain (Obol convention; authoritative)
+      2. canonical per-chain USDC table (USDC_EIP712_DOMAIN)
+      3. USDC_DOMAIN_NAME / USDC_DOMAIN_VERSION fallback constants
+
+    Crucially: extra.name / extra.version are NOT used. They mirror the
+    contract's name() getter and routinely diverge from the on-chain EIP-712
+    domain (e.g. mainnet/base USDC: name() returns "USD Coin" — and that IS
+    the EIP-712 domain — but base-sepolia USDC's EIP-712 domain is "USDC"
+    despite name() also returning "USD Coin"). Signing with the wrong domain
+    produces a valid-looking signature that the facilitator silently rejects.
+    """
+    advertised = (extra or {}).get("eip712Domain") or {}
+    name = advertised.get("name")
+    version = advertised.get("version")
+    if name and version:
+        return name, version
+
+    try:
+        canonical_chain = _resolve_chain(chain)
+    except ValueError:
+        canonical_chain = None
+    if canonical_chain in USDC_EIP712_DOMAIN and asset:
+        canonical_usdc = _canonical_usdc(canonical_chain) or ""
+        if canonical_usdc and canonical_usdc.lower() == asset.lower():
+            return USDC_EIP712_DOMAIN[canonical_chain]
+
+    return USDC_DOMAIN_NAME, USDC_DOMAIN_VERSION
+
 
 def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
     """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
@@ -816,10 +889,13 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                 "payment": payload,
             })
         else:
-            # Keep the proven legacy USDC domain for ERC-3009/Base Sepolia.
-            # The current stack flow relies on this exact signing shape.
-            domain_name = USDC_DOMAIN_NAME
-            domain_version = USDC_DOMAIN_VERSION
+            # Resolve the EIP-712 signing domain authoritatively per chain
+            # (see _resolve_eip3009_domain). Hardcoding "USDC"/"2" here used
+            # to silently break mainnet payments because mainnet USDC's
+            # actual EIP-712 domain is "USD Coin"/"2".
+            domain_name, domain_version = _resolve_eip3009_domain(
+                extra, chain, payment.get("asset", usdc_addr),
+            )
             nonce = "0x" + secrets.token_hex(32)
 
             typed_data = {
@@ -1131,11 +1207,14 @@ def cmd_probe(endpoint_url, model_id=None, kind="inference", method=None):
         if extra.get("assetTransferMethod"):
             print(f"    transfer:{extra.get('assetTransferMethod')}")
         if extra.get("name") or extra.get("version"):
-            # NOTE: extra.name is the token's human-readable display name from
-            # the contract's name() getter, NOT the EIP-712 signing domain
-            # name. For USDC on Base Sepolia these differ ("USD Coin" vs
-            # "USDC"). Use extra.eip712Domain when present; otherwise read the
-            # canonical domain from the contract on-chain.
+            # NOTE: extra.name mirrors the token contract's name() getter and
+            # is for human display only — it is NOT always the EIP-712 signing
+            # domain. USDC's EIP-712 domain differs by deployment:
+            #   mainnet/base — name() "USD Coin" matches EIP-712 domain
+            #   base-sepolia — name() "USD Coin" but EIP-712 domain is "USDC"
+            # _resolve_eip3009_domain() picks the right domain via the
+            # USDC_EIP712_DOMAIN table; sellers may also override via
+            # extra.eip712Domain (Obol convention, not yet in the x402 spec).
             print(f"    token:   {extra.get('name', '?')} / version {extra.get('version', '?')}  (display only)")
         if extra.get("eip712Domain"):
             domain = extra.get("eip712Domain") or {}
@@ -1475,16 +1554,16 @@ def cmd_status(name):
 # ---------------------------------------------------------------------------
 
 def cmd_balance(chain=None):
-    """Check USDC balance for the agent wallet."""
+    """Print balances for every known ERC-20 the agent might hold on `chain`."""
     try:
         net = _resolve_chain(chain or DEFAULT_CHAIN)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    usdc_addr = _canonical_usdc(net)
-    if not usdc_addr:
+    tokens = KNOWN_TOKENS.get(net, [])
+    if not tokens:
         print(
-            f"Error: no canonical USDC contract for chain {net}. "
+            f"Error: no known tokens for chain {net}. "
             "Pass --chain mainnet|base|base-sepolia.",
             file=sys.stderr,
         )
@@ -1497,25 +1576,30 @@ def cmd_balance(chain=None):
         sys.exit(1)
     address = keys[0]
 
-    balance = _get_usdc_balance(address, usdc_addr, net)
-    usdc = int(balance) / 1_000_000
-
     print(f"Wallet:  {address}")
     print(f"Chain:   {net}")
-    print(f"USDC:    {usdc:.6f} ({balance} micro-units)")
+    for addr, symbol, decimals in tokens:
+        # _get_usdc_balance is a generic ERC-20 balanceOf — name is historical.
+        raw = _get_usdc_balance(address, addr, net)
+        scaled = int(raw) / (10 ** decimals)
+        units_label = "micro-units" if decimals == 6 else "base-units"
+        print(f"{symbol + ':':<8} {scaled:.6f} ({raw} {units_label})")
 
 
 # ---------------------------------------------------------------------------
 # Pay (single-shot HTTP/x402 purchase)
 # ---------------------------------------------------------------------------
 
-def cmd_pay(url, method="GET", data=None, kind="http"):
+def cmd_pay(url, method="GET", data=None, kind="http", network=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
     sidecar, and is bounded to one auth (max loss = price). Use this for
     `type:http` services and any one-off purchase that doesn't need persistent
     pre-payment. For long-running paid inference budgets, use `buy`.
+
+    `network` is an optional safety guard: when set, the seller's advertised
+    chain must match it or `pay` aborts before signing.
     """
     method = (method or "GET").upper()
 
@@ -1537,6 +1621,19 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    if network:
+        try:
+            requested = _resolve_chain(network)
+        except ValueError as exc:
+            print(f"Error: --network: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if requested != chain:
+            print(
+                f"Error: seller is on {chain} but --network {network} was requested.\n"
+                f"Drop --network to accept the seller's chain, or pick a different endpoint.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset") or _canonical_usdc(chain)
 
@@ -1560,7 +1657,22 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
         print(f"Error: token contract {usdc_addr} not found on {chain}.", file=sys.stderr)
         sys.exit(1)
 
+    # Pre-flight: confirm the wallet can cover the price. Skipping this used
+    # to surface as an opaque 503 from the facilitator on settlement.
     extra = payment.get("extra", {}) or {}
+    balance = int(_get_usdc_balance(signer_address, usdc_addr, chain))
+    price_int = int(price)
+    if balance < price_int:
+        symbol, _, _ = _asset_display_meta(usdc_addr, extra)
+        print(
+            f"Error: wallet balance {balance} < price {price_int} for "
+            f"{symbol} ({usdc_addr}) on {chain}.",
+            file=sys.stderr,
+        )
+        print(f"Fund {signer_address} with {symbol} on {chain} and re-run.", file=sys.stderr)
+        sys.exit(1)
+    print(f"  Balance: {_format_amount(balance, usdc_addr, extra)}")
+
     _ensure_permit2_allowance(
         signer_address,
         usdc_addr,
@@ -1569,7 +1681,7 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
         extensions=pricing.get("extensions", {}) or {},
     )
 
-    print(f"Pre-signing 1 payment authorization for {price} micro-units on {chain} ...")
+    print(f"Pre-signing 1 payment authorization for {price} on {chain} ...")
     auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)
     if not auths:
         print("Failed to pre-sign payment.", file=sys.stderr)
@@ -1598,13 +1710,82 @@ def cmd_pay(url, method="GET", data=None, kind="http"):
             return 0
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace") if e.fp else ""
-        print(f"HTTP {e.code}", file=sys.stderr)
-        if body:
-            print(body, file=sys.stderr)
+        _print_paid_request_failure(
+            status=e.code,
+            body=body,
+            settle_header=e.headers.get("X-PAYMENT-RESPONSE") if e.headers else None,
+            signer_address=signer_address,
+            asset=usdc_addr,
+            chain=chain,
+            transfer_method=extra.get("assetTransferMethod", "eip3009"),
+        )
         sys.exit(1)
     except urllib.error.URLError as e:
         print(f"Connection error: {e.reason}", file=sys.stderr)
         sys.exit(1)
+
+
+def _print_paid_request_failure(status, body, settle_header, signer_address, asset, chain, transfer_method):
+    """Emit a structured, actionable failure report for a non-2xx paid call.
+
+    The Obol stack's seller wraps facilitator errors in JSON; other sellers
+    return raw text. We always print the status and full body so the agent
+    sees every clue. On top of that, pattern-match the body for the common
+    failure modes so the agent gets a one-line remediation it can act on
+    without a second tool call.
+    """
+    print(f"HTTP {status}", file=sys.stderr)
+    if settle_header:
+        print(f"X-PAYMENT-RESPONSE: {settle_header}", file=sys.stderr)
+    if body:
+        print(f"Body: {body}", file=sys.stderr)
+
+    detail = body or ""
+    parsed_detail = ""
+    if body:
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                parsed_detail = " ".join(
+                    str(parsed.get(k, "")) for k in ("error", "detail", "message", "reason")
+                )
+        except (json.JSONDecodeError, ValueError):
+            pass
+    haystack = (parsed_detail + " " + detail).lower()
+
+    # Permit2 allowance / transferFrom failure → print the exact approve tx.
+    permit2_keywords = ("allowance", "transferfrom", "permit2", "erc20: transfer")
+    if transfer_method == "permit2" and any(kw in haystack for kw in permit2_keywords):
+        approve_data = _approve_max_calldata(PERMIT2_ADDRESS)
+        print("\nHint: this looks like a missing Permit2 allowance.", file=sys.stderr)
+        print("Approve once (one-time per token+wallet, ~46k gas):\n", file=sys.stderr)
+        print(
+            "  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
+            f"    --from {signer_address} --to {asset} \\\n"
+            f"    --data {approve_data} --network {chain}",
+            file=sys.stderr,
+        )
+        print("\nThen re-run the same `pay` command.", file=sys.stderr)
+        return
+
+    # Facilitator transient — most facilitators bubble these up verbatim.
+    transient_keywords = ("timeout", "temporarily unavailable", "settlement failed", "503", "upstream")
+    if status in (502, 503, 504) and any(kw in haystack for kw in transient_keywords):
+        print("\nHint: facilitator transient error — retry the same command in a few seconds.", file=sys.stderr)
+        return
+
+    # Domain / signature mismatch — surface our table for triage.
+    domain_keywords = ("invalid signature", "signature mismatch", "ecrecover", "unauthorized")
+    if any(kw in haystack for kw in domain_keywords):
+        print(
+            "\nHint: signature looks invalid. If the asset is USDC, the EIP-712 "
+            "domain may not match the on-chain contract. buy.py uses these "
+            "domains by chain:",
+            file=sys.stderr,
+        )
+        for chain_name, (name, version) in USDC_EIP712_DOMAIN.items():
+            print(f"    {chain_name}: name={name!r} version={version!r}", file=sys.stderr)
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -1660,8 +1841,9 @@ def usage():
     print("Commands:")
     print("  probe <endpoint-url> [--model <id>] [--type http|inference] [--method GET|POST]")
     print("                                               Probe x402 pricing (default --type inference)")
-    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>']")
+    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
+    print("                                               --network is a guard: aborts if seller is on a different chain")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
@@ -1698,13 +1880,19 @@ if __name__ == "__main__":
     elif cmd == "pay":
         positional, opts = parse_flags(rest)
         if not positional:
-            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>']", file=sys.stderr)
+            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>]", file=sys.stderr)
             sys.exit(1)
         kind = opts.get("type", "http")
         if kind not in ("http", "inference"):
             print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
             sys.exit(1)
-        cmd_pay(positional[0], method=opts.get("method", "GET"), data=opts.get("data"), kind=kind)
+        cmd_pay(
+            positional[0],
+            method=opts.get("method", "GET"),
+            data=opts.get("data"),
+            kind=kind,
+            network=opts.get("network"),
+        )
 
     elif cmd == "buy":
         positional, opts = parse_flags(rest)
