@@ -186,7 +186,7 @@ spec:
           # masks protocol regressions (e.g. facilitator payload format, verifyOnly
           # handling). See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-verifier:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
@@ -261,7 +261,7 @@ spec:
           # image here silently breaks the paid/* routing without a clear error.
           # See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/serviceoffer-controller:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: POD_NAMESPACE
               valueFrom:
