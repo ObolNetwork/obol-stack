@@ -630,9 +630,15 @@ func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
 		return ""
 	}
 
-	// Already configured — skip.
-	if model.HasProviderConfigured(cfg, provider) {
-		return ""
+	// Skip only when both the model entry AND the API key are present.
+	// A re-up that lost the Secret's API key (or any drift between
+	// ConfigMap and Secret) heals here by re-patching from the env var,
+	// instead of leaving `obol model status` reporting
+	// `enabled: true, api_key: false` as it did before this check.
+	if statuses, err := model.GetProviderStatus(cfg); err == nil {
+		if st, ok := statuses[provider]; ok && st.Enabled && st.HasAPIKey {
+			return ""
+		}
 	}
 
 	// Resolve API key: try primary + alt env vars, then .env in dev mode.
