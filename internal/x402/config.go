@@ -1,7 +1,9 @@
 package x402
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 
@@ -104,9 +106,22 @@ type RouteRule struct {
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.
+//
+// Missing-file is intentionally tolerated and returns a zero-valued config
+// with defaults applied (chain="base", facilitator=default). The verifier
+// is increasingly run with `--route-source=kube`, where the static
+// pricing.yaml is optional — Helm charts that don't ship one would
+// previously crashloop the pod on startup; now the in-cluster watcher gets
+// to populate routes from ServiceOffers and the file watcher quietly picks
+// up the file later if it appears. Genuinely unreadable files (permission
+// errors, IO failures) still surface as errors.
 func LoadConfig(path string) (*PricingConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			log.Printf("x402-verifier: pricing config %s not found, starting with defaults (routes will populate from --route-source)", path)
+			return defaultPricingConfig(), nil
+		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 
@@ -129,6 +144,16 @@ func LoadConfig(path string) (*PricingConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// defaultPricingConfig returns the zero-routes config used when no static
+// pricing.yaml is present. Callers must still expect routes to arrive from
+// whichever route source they configured (file watch, kube watcher, etc.).
+func defaultPricingConfig() *PricingConfig {
+	return &PricingConfig{
+		Chain:          "base",
+		FacilitatorURL: DefaultFacilitatorURL,
+	}
 }
 
 // ValidateFacilitatorURL checks that the facilitator URL uses HTTPS.
