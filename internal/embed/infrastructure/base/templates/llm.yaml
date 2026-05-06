@@ -96,9 +96,12 @@ metadata:
 data: {}
 
 ---
-# Secret for LiteLLM master key and cloud provider API keys.
-# Master key is unique per cluster ({{CLUSTER_ID}} resolved at init).
-# Provider keys start empty; patched via `obol model setup`.
+# Secret for LiteLLM master key. Provider API keys (ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, ...) are patched in by `obol model setup` and the
+# autoConfigureLLM hook on first up. We deliberately do NOT declare empty
+# placeholders here — re-applying this manifest on every `obol stack up`
+# would overwrite any keys the user has set, leaving `obol model status`
+# in the misleading state of `enabled: true, api_key: false`.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -107,8 +110,6 @@ metadata:
 type: Opaque
 stringData:
   LITELLM_MASTER_KEY: "sk-obol-{{CLUSTER_ID}}"
-  ANTHROPIC_API_KEY: ""
-  OPENAI_API_KEY: ""
 
 ---
 apiVersion: apps/v1
