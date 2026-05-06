@@ -261,7 +261,7 @@ func (c *Client) SetMetadataWithOpts(ctx context.Context, opts *bind.TransactOpt
 
 	tx, err := c.contract.Transact(opts, "setMetadata", agentID, k, v)
 	if err != nil {
-		return fmt.Errorf("erc8004: setMetadata tx: %w", err)
+		return wrapTransactError("erc8004: setMetadata tx", err)
 	}
 
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
@@ -280,7 +280,7 @@ func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID
 
 	tx, err := c.contract.Transact(opts, "setAgentURI", agentID, uri)
 	if err != nil {
-		return fmt.Errorf("erc8004: setAgentURI tx: %w", err)
+		return wrapTransactError("erc8004: setAgentURI tx", err)
 	}
 
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
@@ -304,7 +304,7 @@ func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID
 
 	tx, err := c.contract.Transact(opts, "setMetadata", agentID, k, v)
 	if err != nil {
-		return fmt.Errorf("erc8004: setMetadata tx: %w", err)
+		return wrapTransactError("erc8004: setMetadata tx", err)
 	}
 
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {

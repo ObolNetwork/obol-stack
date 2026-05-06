@@ -35,6 +35,18 @@ type jsonrpcResp struct {
 	Error   json.RawMessage `json:"error,omitempty"`
 }
 
+// rpcMockDataError is the error type test handlers return when they want
+// the mock to attach a `data` field on the JSON-RPC error envelope. Geth and
+// Reth use the same envelope shape to carry revert payloads from
+// eth_call / eth_estimateGas; go-ethereum's rpc client surfaces that as an
+// rpc.DataError, which our decodeRevertReason picks up.
+type rpcMockDataError struct {
+	msg     string
+	dataHex string // 0x-prefixed hex bytes (e.g. ABI-encoded Error(string))
+}
+
+func (e *rpcMockDataError) Error() string { return e.msg }
+
 // mockRPC creates a test HTTP server that responds to JSON-RPC calls.
 // The handler map keys are method names; values return the hex-encoded result.
 func mockRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) (json.RawMessage, error)) *httptest.Server {
@@ -64,10 +76,19 @@ func mockRPC(t *testing.T, handlers map[string]func(params []json.RawMessage) (j
 
 		result, err := handler(req.Params)
 		if err != nil {
+			// Allow handlers to attach a `data` field on the JSON-RPC error
+			// envelope (the spot Geth/Reth use to carry revert payloads). Plain
+			// errors continue to work, so existing tests are unaffected.
+			body := map[string]any{"code": -32000, "message": err.Error()}
+			var de *rpcMockDataError
+			if errors.As(err, &de) && de.dataHex != "" {
+				body["data"] = de.dataHex
+			}
+			b, _ := json.Marshal(body)
 			resp := jsonrpcResp{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Error:   json.RawMessage(fmt.Sprintf(`{"code":-32000,"message":"%s"}`, err.Error())),
+				Error:   b,
 			}
 			json.NewEncoder(w).Encode(resp)
 
@@ -515,6 +536,88 @@ func TestSetMetadata_TransactRevert(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "erc8004: setMetadata tx: execution reverted") {
 		t.Fatalf("error = %q, want setMetadata tx execution reverted", err)
+	}
+}
+
+// When the node carries a revert payload on the JSON-RPC error envelope —
+// which Geth/Reth do for both eth_call and eth_estimateGas — the wrapped
+// CLI error must surface the decoded Solidity Error(string) message so an
+// operator can see *why* the contract is rejecting (the rc10 setMetadata
+// revert was opaque before this).
+func TestSetMetadata_RevertSurfacesErrorString(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stringT, _ := abi.NewType("string", "", nil)
+	args := abi.Arguments{{Type: stringT}}
+	encoded, err := args.Pack("MetadataKeyAlreadySet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revertHex := "0x08c379a0" + hex.EncodeToString(encoded)
+
+	handlers := txMockHandlers(common.HexToHash("0x2222"))
+	handlers["eth_estimateGas"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return nil, &rpcMockDataError{msg: "execution reverted", dataHex: revertHex}
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	if err == nil {
+		t.Fatal("expected setMetadata revert error, got nil")
+	}
+	if !strings.Contains(err.Error(), "MetadataKeyAlreadySet") {
+		t.Fatalf("error = %q, want decoded revert reason in message", err)
+	}
+	if !strings.Contains(err.Error(), "erc8004: setMetadata tx") {
+		t.Fatalf("error = %q, lost the call-site prefix", err)
+	}
+}
+
+// Custom errors don't have an ABI we know in this package, so we surface the
+// 4-byte selector — enough for an operator to grep the contract source.
+func TestSetMetadata_RevertSurfacesCustomErrorSelector(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 4-byte selector for a hypothetical Forbidden() — pick anything that
+	// isn't 0x08c379a0 / 0x4e487b71 so we exercise the default branch.
+	revertHex := "0xdeadbeef"
+
+	handlers := txMockHandlers(common.HexToHash("0x2222"))
+	handlers["eth_estimateGas"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return nil, &rpcMockDataError{msg: "execution reverted", dataHex: revertHex}
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	if err == nil {
+		t.Fatal("expected setMetadata revert error, got nil")
+	}
+	if !strings.Contains(err.Error(), "custom error 0xdeadbeef") {
+		t.Fatalf("error = %q, want custom error selector in message", err)
 	}
 }
 

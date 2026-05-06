@@ -106,10 +106,45 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_FileNotFound(t *testing.T) {
-	_, err := LoadConfig("/nonexistent/path/config.yaml")
-	if err == nil {
-		t.Fatal("expected error for missing file")
+// Missing-file is intentionally tolerated: when the verifier runs with
+// `--route-source=kube` and the chart doesn't ship a static pricing.yaml,
+// LoadConfig must return a usable defaulted config so the pod starts and
+// the kube watcher can populate routes. Previously this returned an error
+// and crashlooped the verifier (rc10 reproducer).
+func TestLoadConfig_FileNotFound_ReturnsDefaultsWithoutError(t *testing.T) {
+	cfg, err := LoadConfig("/nonexistent/path/config.yaml")
+	if err != nil {
+		t.Fatalf("missing pricing.yaml must not error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("missing pricing.yaml must return a usable config, got nil")
+	}
+	if cfg.Chain != "base" {
+		t.Errorf("default chain = %q, want %q", cfg.Chain, "base")
+	}
+	if cfg.FacilitatorURL == "" {
+		t.Error("default FacilitatorURL must be set")
+	}
+	if len(cfg.Routes) != 0 {
+		t.Errorf("missing config must have no routes, got %d", len(cfg.Routes))
+	}
+}
+
+// Permission errors and other read failures must still surface — they
+// indicate a misconfigured deployment (e.g. wrong volume mount mode), not
+// "config not yet present".
+func TestLoadConfig_UnreadableFile_StillErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "noread.yaml")
+	if err := os.WriteFile(path, []byte("chain: base\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything, can't test permission denial")
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("expected error for unreadable file")
 	}
 }
 
