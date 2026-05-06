@@ -17,6 +17,7 @@ export { Tooltip } from './atoms/Tooltip';
 
 // Molecules
 export { Accordion } from './molecules/Accordion';
+export { AgentRegistrationCard } from './molecules/AgentRegistrationCard';
 export { AddNetworkButton } from './molecules/AddNetworkButton';
 export { ClientCard } from './molecules/ClientCard';
 export { ErrorState } from './molecules/ErrorState';
