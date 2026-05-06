@@ -129,7 +129,17 @@ Find charts at [Artifact Hub](https://artifacthub.io).
 
 ## Model Providers
 
-The stack runs [LiteLLM](https://github.com/BerriAI/litellm) as an in-cluster OpenAI-compatible gateway that proxies all LLM traffic. By default, Ollama on the host machine is used. To switch to a cloud provider:
+The stack runs [LiteLLM](https://github.com/BerriAI/litellm) as an in-cluster OpenAI-compatible gateway that proxies all LLM traffic. By default, Ollama on the host machine is used.
+
+**Minimum local model size**: agents in this stack rely heavily on tool calling (skills are exposed as OpenAI-style tools, the agent's identity bootstrap reads files, etc.). Models below ~7B parameters tend to either ignore the structured tool-calling channel and return raw JSON in the assistant message, or hallucinate tool failures without actually invoking the tool. Recommended local minimums for reliable agent behaviour:
+
+- `llama3.1:8b` — reference Ollama tool-calling implementation
+- `qwen3:8b` — strong tool support, modern
+- `qwen2.5:7b` (instruct) — works, slightly less disciplined under load
+
+Avoid the 1B–4B and `*-coder` variants for the agent role — they pass simple chats but break under multi-tool workflows. They remain fine for embeddings or single-turn completions exposed via `obol sell inference`.
+
+To switch to a cloud provider:
 
 ```bash
 # Interactive — prompts for provider and API key
