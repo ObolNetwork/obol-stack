@@ -9,7 +9,9 @@
 # - No in-cluster Ollama is deployed; the host is expected to run Ollama
 #   (or another OpenAI-compatible server) on port 11434.
 # - The ollama Service abstracts host resolution via ClusterIP + headless Endpoints:
-#     k3d  → host IP resolved at init (e.g. 192.168.65.254 on macOS Docker Desktop)
+#     k3d  → host IP resolved at init via Docker (host.docker.internal lookup
+#            from a transient container; works for Docker Desktop (192.168.65.254),
+#            Colima (e.g. 192.168.5.2), and Rancher Desktop)
 #     k3s  → 127.0.0.1 (k3s runs directly on the host)
 # - Using ClusterIP+Endpoints instead of ExternalName for Traefik Gateway API
 #   compatibility (ExternalName services are rejected as HTTPRoute backends).

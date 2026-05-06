@@ -1,13 +1,16 @@
 package defaults
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -133,6 +136,14 @@ func OllamaHostForBackend(backendName string) string {
 
 // OllamaHostIPForBackend resolves the Ollama host to an IP address.
 // ClusterIP+Endpoints requires an IP, not a hostname.
+//
+// Resolution order on darwin+k3d:
+//  1. Resolve host.docker.internal from inside a transient Docker container
+//     (works for Docker Desktop, Colima, Rancher Desktop — each exposes a
+//     different host gateway IP, but all expose host.docker.internal inside
+//     containers).
+//  2. Fall back to the Docker Desktop magic gateway IP (192.168.65.254) so
+//     Docker Desktop users without a working `docker` CLI still work.
 func OllamaHostIPForBackend(backendName string) (string, error) {
 	host := OllamaHostForBackend(backendName)
 
@@ -145,25 +156,74 @@ func OllamaHostIPForBackend(backendName string) (string, error) {
 		return addrs[0], nil
 	}
 
-	if runtime.GOOS == "darwin" && backendName == backendK3d {
-		return DockerDesktopGatewayIP(), nil
-	}
-
-	if runtime.GOOS == "linux" && backendName == backendK3d {
-		ip, bridgeErr := DockerBridgeGatewayIP()
-		if bridgeErr == nil {
+	if backendName == backendK3d {
+		if ip, dockerErr := ResolveHostGatewayViaDocker(); dockerErr == nil {
 			return ip, nil
 		}
 
-		return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %w", host, err, bridgeErr)
+		if runtime.GOOS == "darwin" {
+			return DockerDesktopGatewayIP(), nil
+		}
+
+		if runtime.GOOS == "linux" {
+			ip, bridgeErr := DockerBridgeGatewayIP()
+			if bridgeErr == nil {
+				return ip, nil
+			}
+
+			return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w; docker0 fallback also failed: %w", host, err, bridgeErr)
+		}
 	}
 
-	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop is running", host, err)
+	return "", fmt.Errorf("cannot resolve Ollama host %q to IP: %w\n\tEnsure Docker Desktop, Colima, or Rancher Desktop is running", host, err)
 }
 
 // DockerDesktopGatewayIP returns the Docker Desktop VM gateway IP.
+//
+// This is a hardcoded magic value valid only for Docker Desktop on macOS.
+// Colima and Rancher Desktop use different bridge IPs (e.g. 192.168.5.2 for
+// Colima's default profile), so prefer ResolveHostGatewayViaDocker which
+// works across all macOS Docker runtimes.
 func DockerDesktopGatewayIP() string {
 	return "192.168.65.254"
+}
+
+// ResolveHostGatewayViaDocker asks the local Docker daemon to resolve the
+// host gateway by running a tiny container that prints the IP of
+// host.docker.internal. This works on Docker Desktop, Colima, and Rancher
+// Desktop because all three expose host.docker.internal inside containers
+// and map it to whatever bridge gateway their VM is using.
+//
+// Falls back to --add-host=host.docker.internal:host-gateway when the bare
+// hostname is not pre-populated by the runtime.
+func ResolveHostGatewayViaDocker() (string, error) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return "", fmt.Errorf("docker CLI not found: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, args := range [][]string{
+		{"run", "--rm", "alpine:3", "getent", "hosts", "host.docker.internal"},
+		{"run", "--rm", "--add-host=host.docker.internal:host-gateway", "alpine:3", "getent", "hosts", "host.docker.internal"},
+	} {
+		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		if err != nil {
+			continue
+		}
+
+		fields := strings.Fields(strings.TrimSpace(string(out)))
+		if len(fields) < 1 {
+			continue
+		}
+
+		if ip := net.ParseIP(fields[0]); ip != nil && ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+
+	return "", errors.New("docker host gateway resolution returned no IPv4 address")
 }
 
 // DockerBridgeGatewayIP returns the IPv4 address of an active Docker bridge
