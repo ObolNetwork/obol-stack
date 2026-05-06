@@ -50,13 +50,14 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
 
 - **`extra.name` is NOT the EIP-712 signing domain name.** The 402 response
   echoes the token contract's on-chain `name()` getter as `extra.name`. For
-  Base Sepolia USDC this is `"USD Coin"`, but the EIP-712 domain `name`
-  baked into the contract's domain separator is `"USDC"`. Sign with the
-  value advertised in `extra.eip712Domain.name` (or read the canonical
-  signing domain from `<seller-base>/api/services.json`). Treat
-  `extra.name`/`extra.version` as human-readable display only. `buy.py
-  probe` prints both fields; `buy` and `pay` resolve the signing domain
-  automatically.
+  USDC the EIP-712 signing domain depends on the deployment:
+    - mainnet / base — EIP-712 `name` is `"USD Coin"` (matches `name()`).
+    - base-sepolia   — EIP-712 `name` is `"USDC"` (differs from `name()` →
+      `"USD Coin"`).
+  `buy.py` resolves the right domain automatically via an in-script
+  `USDC_EIP712_DOMAIN` table; sellers can also override per-request via
+  `extra.eip712Domain` (Obol convention). Treat `extra.name`/`extra.version`
+  as human-readable display only.
 - **Endpoint shape differs by service type.** Inference services expect
   `POST /v1/chat/completions`; HTTP services typically expect `GET /` (or
   a service-specific path). Pass `--type http` to `probe` for HTTP services
