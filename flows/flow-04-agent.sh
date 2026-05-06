@@ -63,6 +63,9 @@ fi
 # Determine the namespace for port-forward
 NS=$("$OBOL" hermes list 2>/dev/null | grep -oE 'hermes-[a-z0-9-]+' | head -1 || echo "hermes-obol-agent")
 
+poll_step_grep "Hermes pod ready" "2/2[[:space:]]*Running" 48 5 \
+    "$OBOL" kubectl get pods -n "$NS" -l app.kubernetes.io/name=hermes --no-headers
+
 step "Agent inference via port-forward"
 AGENT_PF_PORT="${FLOW04_AGENT_PORT:-$(pick_free_port)}"
 "$OBOL" kubectl port-forward -n "$NS" "svc/hermes" "${AGENT_PF_PORT}:8642" &>/dev/null &
@@ -121,16 +124,22 @@ else
     HERMES_URL="http://hermes-obol-agent.obol.stack:${ingress_port}"
 fi
 # Use --resolve to bypass DNS (obol.stack not always in /etc/hosts for subdomains)
-oc_health=$(curl --resolve "hermes-obol-agent.obol.stack:${ingress_port}:127.0.0.1" \
-    -sf --max-time 10 "$HERMES_URL/health" 2>&1) || true
-if echo "$oc_health" | grep -q "ok\\|status"; then
-    pass "Hermes gateway health: $oc_health"
-else
+oc_health=""
+for i in $(seq 1 15); do
+    oc_health=$(curl --resolve "hermes-obol-agent.obol.stack:${ingress_port}:127.0.0.1" \
+        -sf --max-time 10 "$HERMES_URL/health" 2>&1) || true
+    if echo "$oc_health" | grep -q "ok\\|status"; then
+        pass "Hermes gateway health: $oc_health"
+        break
+    fi
+    sleep 2
+done
+if ! echo "$oc_health" | grep -q "ok\\|status"; then
     fail "Hermes gateway health check failed — ${oc_health:0:100}"
 fi
 
 step "Hermes native dashboard UI via deeplink"
-HERMES_DASHBOARD_HOST="hermes-obol-agent-ui.obol.stack"
+HERMES_DASHBOARD_HOST="obol-agent.obol.stack"
 if [ "$ingress_port" = "80" ]; then
     HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}"
 else

@@ -742,10 +742,11 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                     git clone --depth 1 "$repo_url" "$install_dir"
                   fi
                   cd "$install_dir"
-                  if [ ! -x "$install_dir/venv/bin/hermes" ]; then
+                  if [ ! -x "$install_dir/venv/bin/hermes" ] || \
+                     ! "$install_dir/venv/bin/python3" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
                     rm -rf "$install_dir/venv"
                     uv venv --python python3 --system-site-packages venv
-                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e "."
+                    VIRTUAL_ENV="$install_dir/venv" uv pip install -e ".[web]"
                   fi
                   if [ -f /data/.hermes/state.db ]; then
                     if ! python3 - <<'PY'

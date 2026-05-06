@@ -9,7 +9,7 @@ if "$OBOL" kubectl cluster-info >/dev/null 2>&1; then
     pass "Cluster already running — skipping init"
 else
     pass "No running cluster — initializing"
-    run_step "obol stack init" "$OBOL" stack init
+    run_step "obol stack init" "$OBOL" stack init --force
     run_step "obol stack up" "$OBOL" stack up
 fi
 

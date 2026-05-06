@@ -452,10 +452,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// Quick tunnels are dormant by default and activate on first `obol sell`.
 	u.Blank()
 
-	if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Mode == "dns" && st.Hostname != "" {
+	if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.IsPersistent() && st.Hostname != "" {
 		u.Info("Starting persistent Cloudflare tunnel")
-
-		if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
+		if err := tunnel.RestorePersistentResources(cfg, u); err != nil {
+			u.Warnf("Tunnel resources could not be restored automatically: %v", err)
+			u.Dim("  Fix and retry with: obol tunnel restart")
+		} else if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
 			u.Warnf("Tunnel not started: %v", err)
 			u.Dim("  Start manually with: obol tunnel restart")
 		} else {

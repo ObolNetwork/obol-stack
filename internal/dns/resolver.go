@@ -310,6 +310,10 @@ func configureMacOSResolver() error {
 
 	fmt.Println("Configuring macOS DNS resolver for *.obol.stack (requires sudo)...")
 
+	if err := ensureSudoCached(); err != nil {
+		return fmt.Errorf("sudo authentication required to configure %s: %w", path, err)
+	}
+
 	mkdirCmd := exec.Command("sudo", "mkdir", "-p", macResolverDir)
 	mkdirCmd.Stdout = os.Stdout
 

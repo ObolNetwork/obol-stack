@@ -298,6 +298,26 @@ refresh_bob_ports() {
     BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 }
 
+reset_workspace() {
+    local dir="$1"
+    local stack_id_file="$dir/config/.stack-id"
+    local cluster_name=""
+
+    if [ -f "$stack_id_file" ]; then
+        cluster_name=$(tr -d '[:space:]' < "$stack_id_file" 2>/dev/null || true)
+    fi
+    if [ -n "$cluster_name" ]; then
+        local k3d_name="obol-stack-$cluster_name"
+        if k3d cluster list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -qx "$k3d_name"; then
+            echo "  Removing stale cluster: $k3d_name"
+            k3d cluster delete "$k3d_name" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    rm -rf "$dir"
+    mkdir -p "$dir"/{bin,config,data}
+}
+
 stack_init_and_up_with_retry() {
     local label="$1"
     local runner="$2"
@@ -649,7 +669,7 @@ go build -o "$OBOL_ROOT/.build/obol" ./cmd/obol 2>&1 || { fail "build failed"; e
 pass "Binary built"
 
 step "Alice: bootstrap workspace"
-mkdir -p "$ALICE_DIR"/{bin,config,data}
+reset_workspace "$ALICE_DIR"
 cp "$OBOL_ROOT/.build/obol" "$ALICE_DIR/bin/obol"
 chmod +x "$ALICE_DIR/bin/obol"
 # Copy deps from obolup (assumes obolup was run previously for the shared tools)
@@ -752,10 +772,13 @@ else
     fail "Registration not reflected in sell status: ${reg_out:0:200}"
 fi
 
-registry_logs=$(env -u CHAIN cast logs --json --rpc-url "$BASE_SEPOLIA_RPC" \
-    --address "$ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA" \
-    --from-block "$REG_START_BLOCK" --to-block latest 2>/dev/null || true)
-registry_txs=$(FLOW11_REGISTRY_LOGS="$registry_logs" FLOW11_AGENT_ID="$AGENT_ID" python3 - <<'PY'
+REGISTRATION_TX=""
+METADATA_TX=""
+for _ in $(seq 1 20); do
+    registry_logs=$(env -u CHAIN cast logs --json --rpc-url "$BASE_SEPOLIA_RPC" \
+        --address "$ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA" \
+        --from-block "$REG_START_BLOCK" --to-block latest 2>/dev/null || true)
+    registry_txs=$(FLOW11_REGISTRY_LOGS="$registry_logs" FLOW11_AGENT_ID="$AGENT_ID" python3 - <<'PY'
 import json
 import os
 
@@ -789,8 +812,13 @@ if metadata:
     print(f"metadata={metadata}")
 PY
 )
-REGISTRATION_TX=$(echo "$registry_txs" | awk -F= '$1=="registration" {print $2; exit}')
-METADATA_TX=$(echo "$registry_txs" | awk -F= '$1=="metadata" {print $2; exit}')
+    REGISTRATION_TX=$(echo "$registry_txs" | awk -F= '$1=="registration" {print $2; exit}')
+    METADATA_TX=$(echo "$registry_txs" | awk -F= '$1=="metadata" {print $2; exit}')
+    if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
+        break
+    fi
+    sleep 3
+done
 if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
     write_receipt registration "$REGISTRATION_TX"
     pass "Registration receipt archived: $REGISTRATION_TX"
@@ -807,7 +835,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob: bootstrap workspace"
-mkdir -p "$BOB_DIR"/{bin,config,data}
+reset_workspace "$BOB_DIR"
 cp "$OBOL_ROOT/.build/obol" "$BOB_DIR/bin/obol"
 chmod +x "$BOB_DIR/bin/obol"
 for tool in kubectl helm helmfile k3d k9s openclaw; do
@@ -830,7 +858,7 @@ pass "Bob eRPC configured for Base Sepolia"
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
 # Wait for Bob's Hermes agent to be ready
-poll_step_grep "Bob: Hermes agent ready" "Running" 24 5 \
+poll_step_grep "Bob: Hermes agent ready" "2/2[[:space:]]*Running" 48 5 \
     bob kubectl get pods -n "$BOB_AGENT_NS" -l app.kubernetes.io/name=hermes --no-headers
 
 step "Bob: tunnel reachable from agent pod"
@@ -985,25 +1013,32 @@ else
 fi
 
 step "Bob's agent: discover Alice via ERC-8004 registry"
-discover_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"hermes-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Search the ERC-8004 agent identity registry on Base Sepolia for recently registered AI inference services that support x402 payments. Use the discovery skill to scan for agents. Look for one named 'Dual-Stack Test Inference' or similar with natural_language_processing skills. Report what you find — the agent ID, name, endpoint URL, and whether it supports x402.\"
-        }],
-        \"max_tokens\": 4000,
-	        \"stream\": false
-	    }" 2>&1 || true)
+discover_response=""
+discover_content=""
+for _ in $(seq 1 3); do
+    discover_response=$(curl -sf --max-time 300 \
+        -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
+        -H "Authorization: Bearer $BOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"hermes-agent\",
+            \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Search the ERC-8004 agent identity registry on Base Sepolia for recently registered AI inference services that support x402 payments. Use the discovery skill to scan for agents. Look for one named 'Dual-Stack Test Inference' or similar with natural_language_processing skills. Report what you find — the agent ID, name, endpoint URL, and whether it supports x402.\"
+            }],
+            \"max_tokens\": 4000,
+	            \"stream\": false
+	        }" 2>&1 || true)
 
-discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
-echo "${discover_content:0:500}"
-if [ -n "$discover_content" ] && [ "${#discover_content}" -gt 100 ]; then
-    pass "Agent discovered Alice's service"
-else
+    discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
+    echo "${discover_content:0:500}"
+    if [ -n "$discover_content" ] && [ "${#discover_content}" -gt 100 ]; then
+        pass "Agent discovered Alice's service"
+        break
+    fi
+    sleep 2
+done
+if [ -z "$discover_content" ] || [ "${#discover_content}" -le 100 ]; then
     fail "Discovery response: ${discover_response:0:300}"
 fi
 
@@ -1025,7 +1060,7 @@ buy_response=$(curl -sf --max-time 300 \
 
 buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
 echo "${buy_content:0:500}"
-if echo "$buy_content" | grep -qiE "purchase complete|PurchaseRequest created|pre-signed|model is now accessible"; then
+if echo "$buy_content" | grep -qiE "purchase complete|PurchaseRequest created|pre-signed|model is now accessible|model is now available as"; then
     pass "Agent bought Alice's inference"
 else
     fail "Buy response: ${buy_response:0:300}"
