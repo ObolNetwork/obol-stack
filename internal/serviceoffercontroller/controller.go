@@ -189,24 +189,6 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		}()
 	}
 
-	// Periodically re-reconcile the skill catalog so the controller self-heals
-	// if managed resources (Deployment, Service, HTTPRoutes) are externally
-	// deleted or modified, without waiting for an offer event to trigger it.
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
-					log.Printf("serviceoffer-controller: periodic skill catalog sync: %v", err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	<-ctx.Done()
 	return nil
 }
@@ -899,11 +881,27 @@ func (c *Controller) publishRegistrationResources(ctx context.Context, request *
 }
 
 // deleteSkillCatalogDeploymentIfStale deletes the obol-skill-md Deployment when
-// it contains volumes that are not part of the desired spec. This handles the
-// upgrade path from older controller versions that mounted services.json via a
-// separate obol-skill-md-api ConfigMap volume ("api-content"): SSA cannot remove
-// volumes owned by a foreign field manager, so we delete the Deployment to let
-// applyObject recreate it with the correct single-volume layout.
+// it contains volumes that are not part of the desired spec.
+//
+// Background: older controller versions created the skill catalog Deployment
+// via kubectl patch (not SSA), leaving "kubectl-patch" as the field manager for
+// the volumes array. When the new controller took over with SSA, it could not
+// remove the stale "api-content" volume (which mounted a now-deleted
+// obol-skill-md-api ConfigMap) because SSA respects field-manager ownership and
+// refuses to drop fields it does not own — even with Force: true. The pod got
+// stuck in ContainerCreating indefinitely with no automated recovery path.
+//
+// The only clean escape is delete + recreate: once the Deployment is gone, the
+// next applyObject call recreates it from scratch under the controller's own
+// field manager, with the correct single-volume layout (content + httpdconf).
+//
+// This function is a no-op after a successful migration — it performs one GET,
+// finds no unexpected volumes, and returns immediately. It does NOT delete on
+// every call; the delete fires at most once per cluster lifetime, on the first
+// reconcile after upgrading from an affected version.
+//
+// TODO: remove this once Helm 4 field-ownership semantics are integrated and
+// all clusters have been upgraded past the affected version.
 func (c *Controller) deleteSkillCatalogDeploymentIfStale(ctx context.Context) error {
 	existing, err := c.deployments.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
