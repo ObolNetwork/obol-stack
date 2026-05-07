@@ -2,4 +2,4 @@
 src = "src"
 out = "out"
 libs = []
-solc_version = "0.8.24"
+solc_version = "0.8.35"

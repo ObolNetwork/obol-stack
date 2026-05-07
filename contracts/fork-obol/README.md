@@ -12,6 +12,8 @@ smokes.
 
 The faucet intentionally does not mint. Deployers should mint test OBOL to a funded holder, transfer a bounded allocation into the faucet, and top it up as needed.
 
+The Foundry profile pins `solc_version = "0.8.35"` (latest `solc` on npm when this PR was updated).
+
 ## Example deploy flow
 
 ```bash
