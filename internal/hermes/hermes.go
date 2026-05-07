@@ -801,6 +801,19 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             runAsGroup: %d
             fsGroup: %d
           initContainers:
+            - name: init-hermes-perms
+              image: %s
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+              command:
+                - sh
+                - -c
+                - chown -R %d:%d /data
+              volumeMounts:
+                - name: data
+                  mountPath: /data
             - name: init-hermes-data
               image: %s
               imagePullPolicy: IfNotPresent
@@ -874,7 +887,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), containerUID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
