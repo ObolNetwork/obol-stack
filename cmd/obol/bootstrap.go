@@ -142,7 +142,7 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 
 	// Wait for ingress to respond
 	err = u.RunWithSpinner("Waiting for ingress to respond", func() error {
-		ingressURL := "http://obol.stack:8080"
+		ingressURL := stack.LocalIngressURL(cfg)
 
 		client := &http.Client{Timeout: 5 * time.Second}
 		for time.Now().Before(deadline) {
