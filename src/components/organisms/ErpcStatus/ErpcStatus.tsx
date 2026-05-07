@@ -96,6 +96,12 @@ const UpstreamsGrid = styled(Box, {
   paddingTop: '$lg',
 });
 
+function aliasDisplay(alias: string): string {
+  if (alias === 'mainnet') return 'Ethereum';
+  if (alias === 'base-sepolia') return 'Base Sepolia';
+  return alias.charAt(0).toUpperCase() + alias.slice(1);
+}
+
 // ── ErpcStatus ────────────────────────────────────────────────────────────────
 
 export function ErpcStatus({
@@ -124,10 +130,8 @@ export function ErpcStatus({
         <Flex css={{ alignItems: 'center', gap: '$sm' }}>
           {chainName && <ChainIcon chain={chainName} size={24} />}
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
-            <CardAppType>eRPC Proxy</CardAppType>
-            <CardAppId>
-              {network.alias.charAt(0).toUpperCase() + network.alias.slice(1)}
-            </CardAppId>
+            <CardAppType>RPC</CardAppType>
+            <CardAppId>{aliasDisplay(network.alias)}</CardAppId>
           </Flex>
         </Flex>
 
