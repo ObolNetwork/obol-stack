@@ -102,6 +102,66 @@ Verify:
 curl -I https://<your-trycloudflare-domain>/
 ```
 
+### Investigation: quick tunnel hostname drift causing storefront 404
+
+Observed pattern during incident:
+
+- `obol tunnel status` reported an active quick URL.
+- `https://<quick-url>/skill.md` returned `200`.
+- `https://<quick-url>/` returned `404 page not found` (or `530` during reconnect).
+
+Root cause:
+
+- `traefik/tunnel-storefront` `HTTPRoute` was pinned to an older quick tunnel
+  hostname in `spec.hostnames`.
+- `cloudflared` rotated to a new `*.trycloudflare.com` hostname.
+- The root storefront route missed due to hostname mismatch, while other public
+  routes without hostname pinning (for example `x402/obol-skill-md-route`) kept
+  working.
+
+How to confirm quickly:
+
+```bash
+# 1) Current quick tunnel URL from status/logs
+obol tunnel status
+obol kubectl logs -n traefik deploy/cloudflared --since=10m \
+  | rg -o 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1
+
+# 2) What hostname storefront route is pinned to
+obol kubectl get httproute tunnel-storefront -n traefik -o jsonpath='{.spec.hostnames[0]}'
+
+# 3) Reproduce mismatch behavior
+curl -i https://<quick-url>/
+curl -i https://<quick-url>/skill.md
+```
+
+Immediate recovery options:
+
+```bash
+# Option A: repin to current quick hostname
+obol kubectl patch httproute tunnel-storefront -n traefik --type merge \
+  -p '{"spec":{"hostnames":["<current-quick-host>"]}}'
+
+# Option B: remove host pin (works across quick hostname rotations)
+obol kubectl patch httproute tunnel-storefront -n traefik --type json \
+  -p='[{"op":"remove","path":"/spec/hostnames"}]'
+```
+
+Post-fix verification:
+
+```bash
+curl -i https://<quick-url>/
+curl -i https://<quick-url>/skill.md
+obol kubectl run -n traefik tmp-curl --rm -i --restart=Never --image=curlimages/curl -- \
+  sh -lc "curl -i -H 'Host: <quick-host>' http://traefik.traefik.svc.cluster.local/ | sed -n '1,12p'"
+```
+
+Expected:
+
+- storefront `/` returns `200`.
+- `/skill.md` continues to return `200`.
+- internal Traefik check with explicit `Host` header returns `200`.
+
 ---
 
 ## 4) Fix demo pod scheduling timeouts

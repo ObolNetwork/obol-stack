@@ -922,7 +922,13 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 				},
 			},
 		},
-		// HTTPRoute: tunnel hostname → storefront (more specific than frontend catch-all).
+		// HTTPRoute: tunnel hostname -> storefront (more specific than frontend catch-all).
+		//
+		// NOTE: quick tunnels rotate hostnames frequently and can leave stale
+		// host-pinned routes behind during restart races. If storefront "/" starts
+		// returning 404 while "/skill.md" still works, stale host pinning is the
+		// first thing to check. A robust fix is to avoid host pinning for quick
+		// tunnels (or update hostnames from the active cloudflared pod logs).
 		{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
