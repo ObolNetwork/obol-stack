@@ -5,6 +5,9 @@ transport:
 
 image:
   repository: cloudflare/cloudflared
+  # Keep this pinned to a reviewed release for reproducible tunnel behavior.
+  # If you want "latest" cadence with safety, automate bumping this value
+  # to newer immutable versions in PRs rather than using :latest directly.
   tag: "2026.3.0"
 
 metrics:

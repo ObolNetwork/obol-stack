@@ -429,6 +429,13 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
 	}
 
+	// Non-destructive stale-resource guard.
+	// By default this only warns. Set OBOL_STACK_AUTO_CLEAN_LEGACY=true to
+	// explicitly opt in to automatic cleanup of known legacy ingress resources.
+	if err := reconcileStackInvariants(cfg, u); err != nil {
+		u.Warnf("Stack reconciliation encountered errors: %v", err)
+	}
+
 	u.Success("Default infrastructure deployed")
 
 	if previousLiteLLMConfig != "" {
@@ -595,6 +602,81 @@ func obolPluginInstalled(marketplaceName string) bool {
 		}
 	}
 	return false
+}
+
+func reconcileStackInvariants(cfg *config.Config, u *ui.UI) error {
+	hasLegacy, err := hasLegacyIngressResources(cfg)
+	if err != nil {
+		return err
+	}
+	if hasLegacy {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_STACK_AUTO_CLEAN_LEGACY")), "true") {
+			u.Dim("Found legacy ingress-nginx/default resources; auto-clean enabled")
+			if err := cleanupLegacyIngressResources(cfg); err != nil {
+				return err
+			}
+			u.Dim("Legacy ingress conflicts removed")
+			return nil
+		}
+		u.Warn("Legacy ingress resources detected from older stack layouts.")
+		u.Dim("  No resources were deleted (safe default).")
+		u.Dim("  To auto-clean on next run: OBOL_STACK_AUTO_CLEAN_LEGACY=true obol stack up")
+		u.Dim("  Or clean manually:")
+		u.Dim("    obol kubectl delete ingress obol-frontend-obol-app -n default --ignore-not-found")
+		u.Dim("    obol kubectl delete ingress erpc -n default --ignore-not-found")
+		u.Dim("    obol kubectl delete deployment ingress-nginx-controller -n default --ignore-not-found")
+		u.Dim("    obol kubectl delete service ingress-nginx-controller -n default --ignore-not-found")
+	}
+	return nil
+}
+
+// cleanupLegacyIngressResources removes obsolete ingress-nginx and default
+// namespace frontend/eRPC resources created by old stack layouts.
+// Safe/idempotent: deletes use --ignore-not-found.
+func cleanupLegacyIngressResources(cfg *config.Config) error {
+	bin, kc := kubectl.Paths(cfg)
+	resources := [][]string{
+		{"ingress", "obol-frontend-obol-app", "-n", "default"},
+		{"ingress", "erpc", "-n", "default"},
+		{"deployment", "ingress-nginx-controller", "-n", "default"},
+		{"service", "ingress-nginx-controller", "-n", "default"},
+	}
+
+	var errs []string
+	for _, r := range resources {
+		args := append([]string{"delete"}, r...)
+		args = append(args, "--ignore-not-found")
+		if err := kubectl.RunSilent(bin, kc, args...); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func hasLegacyIngressResources(cfg *config.Config) (bool, error) {
+	bin, kc := kubectl.Paths(cfg)
+	resources := [][]string{
+		{"ingress", "obol-frontend-obol-app", "-n", "default"},
+		{"ingress", "erpc", "-n", "default"},
+		{"deployment", "ingress-nginx-controller", "-n", "default"},
+		{"service", "ingress-nginx-controller", "-n", "default"},
+	}
+	for _, r := range resources {
+		args := append([]string{"get"}, r...)
+		args = append(args, "-o", "name")
+		_, err := kubectl.Output(bin, kc, args...)
+		if err == nil {
+			return true, nil
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "notfound") {
+			continue
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 // autoConfigureLLM detects host Ollama and imported cloud providers, then

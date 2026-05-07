@@ -233,6 +233,15 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 
 		return err
 	}
+	// User expectation: rerunning `obol model setup` with a new provider/model
+	// should make that model active immediately. ConfigureLiteLLM merges entries
+	// but does not guarantee head-of-list ordering, so explicitly promote the
+	// selected model (when one was provided) to become the default.
+	if len(models) > 0 && strings.TrimSpace(models[0]) != "" {
+		if err := model.PreferModels(cfg, u, []string{models[0]}); err != nil {
+			return fmt.Errorf("set default model to %s: %w", models[0], err)
+		}
+	}
 
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")

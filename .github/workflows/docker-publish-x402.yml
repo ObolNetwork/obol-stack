@@ -6,6 +6,11 @@ on:
       - main
     tags:
       - 'v*'
+    # NOTE: this path filter saves CI cost, but it also means some main commits
+    # won't publish matching short-SHA tags for these images. Any runtime path
+    # that resolves image refs from obol's GitCommit (images.Resolve) can fail to
+    # pull if that SHA tag was never published. If per-commit immutability is
+    # required for all main commits, remove this filter (like storefront workflow).
     paths:
       - 'internal/x402/**'
       - 'internal/serviceoffercontroller/**'

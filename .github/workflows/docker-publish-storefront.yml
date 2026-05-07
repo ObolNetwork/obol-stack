@@ -6,6 +6,11 @@ on:
       - main
     tags:
       - 'v*'
+    # NOTE(review): keeping this path filter saves CI cost, but it can skip
+    # publishing storefront images for some main commits. Since runtime resolves
+    # storefront refs from obol's GitCommit, missing short-SHA tags can cause
+    # ImagePullBackOff. If the team wants per-commit immutable availability,
+    # remove this paths filter.
     paths:
       - 'web/public-storefront/**'
       - 'Dockerfile.public-storefront'
