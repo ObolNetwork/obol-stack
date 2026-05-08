@@ -45,10 +45,33 @@
     uuid "^11.1.0"
     zod "^3.22.4"
 
+"@ag-ui/client@0.0.53":
+  version "0.0.53"
+  resolved "https://registry.yarnpkg.com/@ag-ui/client/-/client-0.0.53.tgz#6d4bac690b7f1e053b4820c0d6440e2c6628bff3"
+  integrity sha512-Mkup36KUp0KXy9v89QtAOWDUoh8H1s1Vgl4zvQv9HqXuAK1TkbtpXJHpbgZJXIxTqd54KT6yCurmC2UkOP7FDQ==
+  dependencies:
+    "@ag-ui/core" "0.0.53"
+    "@ag-ui/encoder" "0.0.53"
+    "@ag-ui/proto" "0.0.53"
+    "@types/uuid" "^10.0.0"
+    compare-versions "^6.1.1"
+    fast-json-patch "^3.1.1"
+    rxjs "7.8.1"
+    untruncate-json "^0.0.1"
+    uuid "^11.1.0"
+    zod "^3.22.4"
+
 "@ag-ui/core@0.0.52":
   version "0.0.52"
   resolved "https://registry.yarnpkg.com/@ag-ui/core/-/core-0.0.52.tgz#f297fd1ab5a785dbbc767dc689a347a4d757a02d"
   integrity sha512-Xo0bUaNV56EqylzcrAuhUkQX7et7+SZIrqZZtEByGwEq/I1EHny6ZMkWHLkKR7UNi0FJZwJyhKYmKJS3B2SEgA==
+  dependencies:
+    zod "^3.22.4"
+
+"@ag-ui/core@0.0.53":
+  version "0.0.53"
+  resolved "https://registry.yarnpkg.com/@ag-ui/core/-/core-0.0.53.tgz#ba47302dbe51eb100baefae70d34d8a76d4b7a3c"
+  integrity sha512-11UocR7fFdMWw503bWCX2IOK15vbWfxT11Mn9xOiPBVO/UVcn57ywGrlLL4UaBlPgmUTvuzr2yYR2ElSqiN2wQ==
   dependencies:
     zod "^3.22.4"
 
@@ -59,6 +82,14 @@
   dependencies:
     "@ag-ui/core" "0.0.52"
     "@ag-ui/proto" "0.0.52"
+
+"@ag-ui/encoder@0.0.53":
+  version "0.0.53"
+  resolved "https://registry.yarnpkg.com/@ag-ui/encoder/-/encoder-0.0.53.tgz#91583afe3fc2c8b99c71a258411cf27e950f3173"
+  integrity sha512-bAOcfVdm6U4H6G6tW+DZfwPEQm1w/snVBTwaFn9nJcEMW69M7/HZuwvEc/7Zo0rK1jRL32N/j60PwTAeky19fw==
+  dependencies:
+    "@ag-ui/core" "0.0.53"
+    "@ag-ui/proto" "0.0.53"
 
 "@ag-ui/langgraph@0.0.29":
   version "0.0.29"
@@ -85,6 +116,15 @@
   integrity sha512-+iCGzNUNL50YIoThVmsolWPjG4MJidl+R9k8QAGVwErEfHRtQ64KFyrdpeOXNVuWtM3SViJqPSgFyv7eGVS63A==
   dependencies:
     "@ag-ui/core" "0.0.52"
+    "@bufbuild/protobuf" "^2.2.5"
+    "@protobuf-ts/protoc" "^2.11.1"
+
+"@ag-ui/proto@0.0.53":
+  version "0.0.53"
+  resolved "https://registry.yarnpkg.com/@ag-ui/proto/-/proto-0.0.53.tgz#b96c801506f46b92641dcf5fcd5ba105ed1c01a6"
+  integrity sha512-swjz22xWT8YUZt5OhmUwkARDQdwt8XM1hmGZbQrhRnNPXKwrKJX9ELlbnQ4iFUQIKkMWpphzE3vA3yNKs2bbKw==
+  dependencies:
+    "@ag-ui/core" "0.0.53"
     "@bufbuild/protobuf" "^2.2.5"
     "@protobuf-ts/protoc" "^2.11.1"
 
