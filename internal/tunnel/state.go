@@ -55,6 +55,27 @@ func remoteTunnelTokenPath(cfg *config.Config) string {
 	return filepath.Join(tunnelStateDir(cfg), "cloudflared-token")
 }
 
+func defaultPersistentTunnelName(stackID, management string) string {
+	base := "obol-stack-" + strings.TrimSpace(stackID)
+	switch management {
+	case tunnelManagementLocal:
+		return base + "-local"
+	case tunnelManagementRemote:
+		return base + "-remote"
+	default:
+		return base
+	}
+}
+
+func desiredPersistentTunnelName(stackID string, st *tunnelState, management string) string {
+	normalized := normalizeTunnelState(st)
+	if normalized != nil && normalized.ManagementMode == management && strings.TrimSpace(normalized.TunnelName) != "" {
+		return normalized.TunnelName
+	}
+
+	return defaultPersistentTunnelName(stackID, management)
+}
+
 func normalizeTunnelState(st *tunnelState) *tunnelState {
 	if st == nil {
 		return nil

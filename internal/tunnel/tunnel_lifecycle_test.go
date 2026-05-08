@@ -221,6 +221,60 @@ func TestTunnelModeAndURL(t *testing.T) {
 	}
 }
 
+func TestDesiredPersistentTunnelName(t *testing.T) {
+	tests := []struct {
+		name       string
+		stackID    string
+		state      *tunnelState
+		management string
+		want       string
+	}{
+		{
+			name:       "new local tunnel gets local suffix",
+			stackID:    "sunny-otter",
+			management: tunnelManagementLocal,
+			want:       "obol-stack-sunny-otter-local",
+		},
+		{
+			name:       "new remote tunnel gets remote suffix",
+			stackID:    "sunny-otter",
+			management: tunnelManagementRemote,
+			want:       "obol-stack-sunny-otter-remote",
+		},
+		{
+			name:       "same management reuses existing tunnel name",
+			stackID:    "sunny-otter",
+			management: tunnelManagementRemote,
+			state: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementRemote,
+				TunnelName:     "obol-stack-sunny-otter",
+			},
+			want: "obol-stack-sunny-otter",
+		},
+		{
+			name:       "management handoff does not reuse opposite mode tunnel name",
+			stackID:    "sunny-otter",
+			management: tunnelManagementLocal,
+			state: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementRemote,
+				TunnelName:     "obol-stack-sunny-otter",
+			},
+			want: "obol-stack-sunny-otter-local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := desiredPersistentTunnelName(tt.stackID, tt.state, tt.management)
+			if got != tt.want {
+				t.Fatalf("desiredPersistentTunnelName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Auto-stop decision logic
 // ---------------------------------------------------------------------------

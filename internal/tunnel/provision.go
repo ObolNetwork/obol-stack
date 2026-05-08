@@ -59,9 +59,9 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 		return err
 	}
 
-	tunnelName := "obol-stack-" + stackID
 	st, _ := loadTunnelState(cfg)
-	if st != nil && st.AccountID == target.AccountID && st.TunnelID != "" && st.TunnelName != "" {
+	tunnelName := desiredPersistentTunnelName(stackID, st, tunnelManagementRemote)
+	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID == target.AccountID && st.TunnelID != "" && st.TunnelName != "" {
 		tunnelName = st.TunnelName
 	}
 
@@ -73,7 +73,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 
 	tunnelID := ""
 	tunnelToken := ""
-	if st != nil && st.AccountID == target.AccountID && st.TunnelID != "" {
+	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID == target.AccountID && st.TunnelID != "" {
 		tunnelID = st.TunnelID
 		tok, tokenErr := client.GetTunnelToken(target.AccountID, tunnelID)
 		if tokenErr != nil {
@@ -164,7 +164,11 @@ func resolveProvisionTarget(client *cloudflareClient, opts ProvisionOptions) (*r
 	if zoneID == "" {
 		zone, zoneErr := client.ResolveZoneForHostname(hostname)
 		if zoneErr != nil {
-			return nil, fmt.Errorf("could not resolve a Cloudflare zone for %s: %w. Either add the zone to Cloudflare first or use 'obol tunnel setup --register-domain'", hostname, zoneErr)
+			if errors.Is(zoneErr, errCloudflareZoneNotFound) {
+				return nil, fmt.Errorf("could not resolve a Cloudflare zone for %s: %w. Either add the zone to Cloudflare first or use 'obol tunnel setup --register-domain'", hostname, zoneErr)
+			}
+
+			return nil, fmt.Errorf("cloudflare zone lookup failed for %s: %w", hostname, zoneErr)
 		}
 		zoneID = zone.ID
 		zoneName = zone.Name

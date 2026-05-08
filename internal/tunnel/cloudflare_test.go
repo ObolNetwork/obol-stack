@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,30 @@ func TestCloudflareClientResolveZoneForHostname(t *testing.T) {
 	}
 	if zone.ID != "zone-123" || zone.Account.ID != "acct-123" {
 		t.Fatalf("unexpected zone: %+v", zone)
+	}
+}
+
+func TestCloudflareClientResolveZoneForHostnameNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zones" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result":  []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	client := newCloudflareClient("token")
+	client.baseURL = server.URL
+
+	_, err := client.ResolveZoneForHostname("stack.example.dev")
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !errors.Is(err, errCloudflareZoneNotFound) {
+		t.Fatalf("expected zone-not-found error, got %v", err)
 	}
 }
 

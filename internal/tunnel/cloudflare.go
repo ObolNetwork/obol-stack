@@ -18,6 +18,8 @@ import (
 
 const cloudflareAPIBaseURL = "https://api.cloudflare.com/client/v4"
 
+var errCloudflareZoneNotFound = errors.New("cloudflare zone not found")
+
 type cloudflareTunnel struct {
 	ID          string                       `json:"id"`
 	Name        string                       `json:"name,omitempty"`
@@ -190,7 +192,7 @@ func (c *cloudflareClient) ResolveZoneForHostname(hostname string) (*cloudflareZ
 		}
 	}
 
-	return nil, fmt.Errorf("cloudflare zone %q was not found; add the zone to Cloudflare or register it first", zoneName)
+	return nil, fmt.Errorf("%w: %s", errCloudflareZoneNotFound, zoneName)
 }
 
 func (c *cloudflareClient) CreateTunnel(accountID, tunnelName string) (*cloudflareTunnel, error) {

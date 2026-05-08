@@ -97,10 +97,17 @@ COMMANDS:
 
    Tunnel Management:
      tunnel status    Show tunnel status and public URL
+     tunnel setup     Guided persistent tunnel setup with optional domain registration
      tunnel login     Authenticate and create persistent tunnel (browser)
      tunnel provision Provision persistent tunnel (API token)
      tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel stop      Stop the tunnel connector
      tunnel logs      View cloudflared logs
+
+   Domain Management:
+     domain search    Search for available Cloudflare Registrar domains
+     domain check     Check authoritative availability for one or more domains
+     domain register  Register a domain through Cloudflare Registrar
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)

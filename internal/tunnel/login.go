@@ -44,7 +44,8 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		return errors.New("stack not initialized, run 'obol stack init' first")
 	}
 
-	tunnelName := "obol-stack-" + stackID
+	st, _ := loadTunnelState(cfg)
+	tunnelName := desiredPersistentTunnelName(stackID, st, tunnelManagementLocal)
 
 	cloudflaredPath, err := exec.LookPath("cloudflared")
 	if err != nil {
@@ -118,7 +119,6 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		return err
 	}
 
-	st, _ := loadTunnelState(cfg)
 	if st == nil {
 		st = &tunnelState{}
 	}

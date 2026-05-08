@@ -494,7 +494,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	} else {
 		u.Dim("Tunnel dormant (activates on first 'obol sell http')")
 		u.Dim("  Start manually with: obol tunnel restart")
-		u.Dim("  For a persistent URL: obol tunnel login --hostname stack.example.com")
+		u.Dim("  For a persistent URL: obol tunnel setup --hostname stack.example.com")
 	}
 
 	return nil

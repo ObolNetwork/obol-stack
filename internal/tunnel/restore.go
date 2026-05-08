@@ -39,7 +39,7 @@ func RestorePersistentResources(cfg *config.Config, u *ui.UI) error {
 
 func restoreLocalManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath string, st *tunnelState) error {
 	if st.TunnelID == "" {
-		return errors.New("persistent local tunnel is missing tunnel_id; rerun 'obol tunnel login --hostname <host>'")
+		return errors.New("persistent local tunnel is missing tunnel_id; rerun 'obol tunnel setup --management local --hostname <host>'")
 	}
 
 	cloudflaredDir := defaultCloudflaredDir()
@@ -89,7 +89,7 @@ func restoreRemoteManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath 
 	}
 
 	if token == "" {
-		return errors.New("persistent remote tunnel token is unavailable locally; rerun 'obol tunnel provision --hostname <host>' or set CLOUDFLARE_API_TOKEN and retry")
+		return errors.New("persistent remote tunnel token is unavailable locally; rerun 'obol tunnel setup --management remote --hostname <host> --api-token ...' or set CLOUDFLARE_API_TOKEN and retry")
 	}
 
 	if err := applyTunnelTokenSecret(cfg, u, kubeconfigPath, token); err != nil {

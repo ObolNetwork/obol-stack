@@ -476,7 +476,7 @@ func ConfirmQuickTunnelLoss(cfg *config.Config, u *ui.UI, currentURL, action str
 	u.Warnf("Quick tunnel URL will be invalidated: %s", currentURL)
 	u.Dim(fmt.Sprintf("  After `%s`, the next `obol sell http` brings up a fresh URL.", action))
 	u.Dim("  Buyers using the old URL will see 530 errors.")
-	u.Dim("  For a permanent URL: obol tunnel login --hostname stack.example.com")
+	u.Dim("  For a permanent URL: obol tunnel setup --hostname stack.example.com")
 
 	return u.Confirm("Continue?", true)
 }

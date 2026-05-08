@@ -205,8 +205,23 @@ func RegisterDomain(u *ui.UI, opts DomainRegisterOptions) (*DomainRegisterResult
 			return nil, err
 		}
 	}
-	if workflow != nil && workflow.Error != nil && workflow.State == "failed" {
-		return nil, fmt.Errorf("domain registration failed: %s", workflow.Error.Message)
+	if workflow != nil {
+		switch workflow.State {
+		case "failed":
+			if workflow.Error != nil && workflow.Error.Message != "" {
+				return nil, fmt.Errorf("domain registration failed: %s", workflow.Error.Message)
+			}
+			return nil, errors.New("domain registration failed")
+		case "action_required", "blocked":
+			message := fmt.Sprintf("domain registration requires manual action in Cloudflare (%s)", workflow.State)
+			if workflow.Error != nil && workflow.Error.Message != "" {
+				message = fmt.Sprintf("domain registration requires manual action in Cloudflare: %s", workflow.Error.Message)
+			}
+			if workflow.Links.Self != "" {
+				message += ": " + workflow.Links.Self
+			}
+			return nil, errors.New(message)
+		}
 	}
 
 	return &DomainRegisterResult{
@@ -253,6 +268,9 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 	zone, err := client.ResolveZoneForHostname(hostname)
 	var workflow *cloudflareRegistrarWorkflow
 	if err != nil {
+		if !errors.Is(err, errCloudflareZoneNotFound) {
+			return nil, fmt.Errorf("cloudflare zone lookup failed for %s: %w", hostname, err)
+		}
 		zoneName, zoneErr := extractZoneName(hostname)
 		if zoneErr != nil {
 			return nil, zoneErr
