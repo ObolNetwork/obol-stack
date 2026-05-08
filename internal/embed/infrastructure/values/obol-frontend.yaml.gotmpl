@@ -33,6 +33,15 @@ image:
     - name: OLLAMA_URL
       value: "http://ollama.llm.svc.cluster.local:11434"
 
+    # Base Sepolia OBOL test faucet runtime config. The frontend exposes these
+    # through /api/config/base-sepolia-obol once the token/faucet are deployed.
+    - name: BASE_SEPOLIA_OBOL_TOKEN_ADDRESS
+      value: {{ env "BASE_SEPOLIA_OBOL_TOKEN_ADDRESS" | default "0x0a09371a8b011d5110656ceBCc70603e53FD2c78" | quote }}
+    - name: BASE_SEPOLIA_OBOL_FAUCET_ADDRESS
+      value: {{ env "BASE_SEPOLIA_OBOL_FAUCET_ADDRESS" | default "0x0c8Ec594d067d1D850deba7BAa05d4052Ab97076" | quote }}
+    - name: BASE_SEPOLIA_OBOL_FAUCET_AMOUNT
+      value: {{ env "BASE_SEPOLIA_OBOL_FAUCET_AMOUNT" | default "5 OBOL" | quote }}
+
   repository: obolnetwork/obol-stack-front-end
   pullPolicy: IfNotPresent
   tag: "v0.1.20"
