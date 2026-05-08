@@ -164,8 +164,9 @@ fi
 # than mutating x402-pricing with dynamic route entries.
 step "ServiceOffer RoutePublished condition is True"
 status_out=$("$OBOL" sell status flow-qwen -n llm 2>&1) || true
-if echo "$status_out" | grep -q "type: RoutePublished" && \
-   echo "$status_out" | grep -B4 "type: RoutePublished" | grep -q 'status: "True"'; then
+if { echo "$status_out" | grep -q "type: RoutePublished" && \
+     echo "$status_out" | grep -B4 "type: RoutePublished" | grep -q 'status: "True"'; } || \
+   echo "$status_out" | grep -Eq '^  ✓ RoutePublished:'; then
     pass "ServiceOffer flow-qwen has RoutePublished=True"
 else
     fail "ServiceOffer flow-qwen missing RoutePublished=True — ${status_out:0:200}"
@@ -185,7 +186,8 @@ fi
 # RoutePublished, Registered, Ready
 step "obol sell status flow-qwen shows Ready conditions"
 status_out=$("$OBOL" sell status flow-qwen -n llm 2>&1) || true
-if echo "$status_out" | grep -q 'type: Ready' && echo "$status_out" | grep -q "status: \"True\""; then
+if { echo "$status_out" | grep -q 'type: Ready' && echo "$status_out" | grep -q "status: \"True\""; } || \
+   echo "$status_out" | grep -Eq '^  ✓ Ready:'; then
     pass "ServiceOffer flow-qwen has Ready condition True"
 else
     fail "ServiceOffer status missing Ready condition — ${status_out:0:200}"
