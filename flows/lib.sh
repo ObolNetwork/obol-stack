@@ -6,8 +6,14 @@ set -euo pipefail
 
 # Make the standard Foundry / k3d / kubectl install paths available even when
 # the script is launched from nohup / setsid / cron — none of which source
-# .bashrc the way an interactive login shell does.
-export PATH="$HOME/.foundry/bin:$HOME/.local/bin:/usr/local/go/bin:$PATH"
+# .bashrc the way an interactive login shell does. Prefer the distro/toolchain
+# Go in /usr/bin when present so stale manual installs in /usr/local/go/bin do
+# not shadow the current Go required by this repo's go.mod.
+if [ -x /usr/bin/go ]; then
+    export PATH="$HOME/.foundry/bin:$HOME/.local/bin:/usr/bin:$PATH:/usr/local/go/bin"
+else
+    export PATH="$HOME/.foundry/bin:$HOME/.local/bin:$PATH:/usr/local/go/bin"
+fi
 
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 OBOL_INGRESS_URL_CALLER_OVERRIDE="${OBOL_INGRESS_URL:-}"

@@ -825,13 +825,21 @@ pass "Alice remote-signer seeded with seller wallet"
 # exceeds allowance (0)" — a confusing, slow failure. This step fails
 # fast with a clear diagnostic instead.
 step "Alice: remote-signer pod rolled by wallet import (age < 120s)"
-set +e
-pod_start=$(alice kubectl get pods -n hermes-obol-agent \
-    -l app.kubernetes.io/name=remote-signer \
-    -o jsonpath='{.items[0].status.startTime}' 2>/dev/null)
-set -e
+pod_start=""
+for _ in $(seq 1 36); do
+    set +e
+    pod_start=$(alice kubectl get pods -n hermes-obol-agent \
+        -l app.kubernetes.io/name=remote-signer \
+        -o jsonpath='{.items[0].status.startTime}' 2>/dev/null)
+    set -e
+    [ -n "$pod_start" ] && break
+    sleep 5
+done
 if [ -z "$pod_start" ]; then
-    fail "remote-signer pod not found (label app.kubernetes.io/name=remote-signer)"
+    pod_diag=$(alice kubectl get pods -n hermes-obol-agent \
+        -l app.kubernetes.io/name=remote-signer \
+        -o wide 2>/dev/null || true)
+    fail "remote-signer pod did not start after wallet import (label app.kubernetes.io/name=remote-signer). Pods: ${pod_diag:-none}"
     emit_metrics; exit 1
 fi
 pod_epoch=$(date -u -d "$pod_start" +%s 2>/dev/null || python3 -c "import datetime,sys; print(int(datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).timestamp()))" "$pod_start")
