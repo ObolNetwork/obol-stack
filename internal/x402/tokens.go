@@ -43,21 +43,22 @@ type TokenEntry struct {
 // See .agents/skills/obol-stack-dev/SKILL.md "Adding a New Payment Token" for the full checklist.
 var tokenRegistry = map[string]map[string]TokenEntry{
 	"USDC": {
-		"base":            {Address: ChainBaseMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"base-sepolia":    {Address: ChainBaseSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"ethereum":        {Address: ChainEthereumMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"polygon":         {Address: ChainPolygonMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"polygon-amoy":    {Address: ChainPolygonAmoy.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"avalanche":       {Address: ChainAvalancheMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"avalanche-fuji":  {Address: ChainAvalancheFuji.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"arbitrum-one":    {Address: ChainArbitrumOne.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"base":             {Address: ChainBaseMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"base-sepolia":     {Address: ChainBaseSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"ethereum":         {Address: ChainEthereumMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"polygon":          {Address: ChainPolygonMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"polygon-amoy":     {Address: ChainPolygonAmoy.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"avalanche":        {Address: ChainAvalancheMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"avalanche-fuji":   {Address: ChainAvalancheFuji.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"arbitrum-one":     {Address: ChainArbitrumOne.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
 		"arbitrum-sepolia": {Address: ChainArbitrumSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
 	},
 	"OBOL": {
 		// OBOL implements ERC20Permit ("Obol Network", v1). The Obol-operated
 		// facilitator at https://x402.gcp.obol.tech batches permit() with
 		// transferFrom on settle, so buyers don't need a one-time approve.
-		"ethereum": {Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1", EIP2612GasSponsoring: true},
+		"ethereum":     {Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1", EIP2612GasSponsoring: true},
+		"base-sepolia": {Address: "0x0a09371a8b011d5110656ceBCc70603e53FD2c78", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1", EIP2612GasSponsoring: true},
 	},
 }
 

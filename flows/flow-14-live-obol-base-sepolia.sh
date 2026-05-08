@@ -35,7 +35,7 @@
 #
 # Optional overrides:
 #   BASE_SEPOLIA_RPC                          default: https://sepolia.base.org
-#   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
+#   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x0a09371a8b011d5110656ceBCc70603e53FD2c78
 #   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
@@ -78,7 +78,7 @@ if ! BASE_SEPOLIA_RPC="$(resolve_base_sepolia_rpc "${BASE_SEPOLIA_RPC:-}")"; the
 fi
 FACILITATOR_URL="https://x402.gcp.obol.tech"
 
-DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4"
+DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x0a09371a8b011d5110656ceBCc70603e53FD2c78"
 OBOL_TOKEN_BASE_SEPOLIA="${OBOL_TOKEN_BASE_SEPOLIA:-$DEFAULT_OBOL_TOKEN_BASE_SEPOLIA}"
 
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
@@ -100,6 +100,7 @@ fi
 # ERC-20 Transfer scanners. Point them at OBOL_TOKEN_BASE_SEPOLIA below.
 export FLOW11_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR"
 export BASE_SEPOLIA_RPC
+BASE_SEPOLIA_RPC_LOG="$(redact_url_for_log "$BASE_SEPOLIA_RPC")"
 
 # Initial Hermes defaults; detect_buyer_runtime overwrites these once Bob's
 # cluster is up and we know whether OpenClaw or Hermes was deployed.
@@ -269,7 +270,7 @@ stack_init_and_up_with_retry() {
 }
 
 preseed_bob_wallet() {
-    local deploy_dir existing import_out key_file onboard_out rc
+    local deploy_dir existing import_out onboard_out rc
 
     deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
     if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
@@ -293,17 +294,15 @@ preseed_bob_wallet() {
     fi
 
     step "Bob: import derived buyer wallet before stack up"
-    key_file=$(mktemp)
-    chmod 600 "$key_file"
-    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
+    # Use process substitution instead of a mktemp file so private-key material
+    # is streamed to the CLI and never persisted on disk.
     set +e
     import_out=$(bob wallet import \
         --instance obol-agent \
-        --private-key-file "$key_file" \
+        --private-key-file <(printf '%s\n' "$BOB_PRIVATE_KEY") \
         --force 2>&1)
     rc=$?
     set -e
-    rm -f "$key_file"
     echo "$import_out" | tail -8
     if [ "$rc" -ne 0 ]; then
         fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
@@ -524,7 +523,7 @@ export USDC_ADDRESS_BASE_SEPOLIA="$OBOL_TOKEN"
 pass "OBOL_TOKEN_BASE_SEPOLIA=$OBOL_TOKEN"
 
 step "Preflight: .env signer key (Alice seller / register payer)"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
     SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
 fi
@@ -563,7 +562,7 @@ fi
 # 6-7. LIVE BASE SEPOLIA SANITY (RPC + chain id)
 # ═════════════════════════════════════════════════════════════════
 
-step "Base Sepolia: RPC reachable at $BASE_SEPOLIA_RPC"
+step "Base Sepolia: RPC reachable at $BASE_SEPOLIA_RPC_LOG"
 chain_id_resp=$(curl -sf --max-time 10 "$BASE_SEPOLIA_RPC" -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1) || true
 if echo "$chain_id_resp" | grep -qi '"result":"0x14a34"'; then
@@ -622,7 +621,7 @@ OBOL_TOKEN_DOMAIN_SEPARATOR=$(cast_with_retries call "$OBOL_TOKEN" "DOMAIN_SEPAR
 OBOL_TOKEN_DOMAIN_SEPARATOR=$(echo "$OBOL_TOKEN_DOMAIN_SEPARATOR" | grep -oE '0x[0-9a-fA-F]+' | head -1 || true)
 
 if [ -z "$OBOL_TOKEN_NAME" ] || [ -z "$OBOL_TOKEN_SYMBOL" ] || [ -z "$OBOL_TOKEN_DECIMALS" ]; then
-    fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC (name/symbol/decimals all empty)"
+    fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC_LOG (name/symbol/decimals all empty)"
     emit_metrics; exit 1
 fi
 if [ -z "$OBOL_TOKEN_DOMAIN_SEPARATOR" ]; then
@@ -689,10 +688,10 @@ poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
 step "Alice: add base-sepolia route in eRPC (live RPC, writes allowed)"
-alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
+alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes >/dev/null
 alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-pass "Alice eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
+pass "Alice eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC_LOG"
 
 step "Alice: configure x402 pricing pointing at public Obol facilitator"
 alice sell pricing \
@@ -800,17 +799,15 @@ pass "Tunnel: $TUNNEL_URL"
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: import seller wallet into remote-signer"
-KEY_FILE=$(mktemp)
-chmod 600 "$KEY_FILE"
-echo "$SIGNER_KEY" > "$KEY_FILE"
+# Use process substitution instead of a mktemp file so private-key material is
+# streamed to the CLI and never persisted on disk.
 set +e
 import_out=$(alice wallet import \
     --instance obol-agent \
-    --private-key-file "$KEY_FILE" \
+    --private-key-file <(printf '%s\n' "$SIGNER_KEY") \
     --force 2>&1)
 import_rc=$?
 set -e
-rm -f "$KEY_FILE"
 printf '%s\n' "$import_out" | tail -6
 if [ "$import_rc" -ne 0 ]; then
     fail "Could not seed Alice remote-signer: ${import_out:0:300}"
@@ -982,10 +979,10 @@ poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
 step "Bob: add base-sepolia route to live RPC (writes allowed)"
-bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
+bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes >/dev/null
 bob kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 bob kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-pass "Bob eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
+pass "Bob eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC_LOG"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
@@ -1328,7 +1325,7 @@ if FLOW14_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR" \
    FLOW14_OBOL_TOKEN_SYMBOL="${OBOL_TOKEN_SYMBOL:-}" \
    FLOW14_OBOL_TOKEN_DOMAIN_SEPARATOR="${OBOL_TOKEN_DOMAIN_SEPARATOR:-}" \
    FLOW14_FACILITATOR_URL="${FACILITATOR_URL:-}" \
-   FLOW14_BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-}" \
+   FLOW14_BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC_LOG:-}" \
    python3 - <<'PY'
 import json, os
 from pathlib import Path

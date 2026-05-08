@@ -486,6 +486,23 @@ write_x402_facilitator_logs() {
     docker logs "$name" > "$log" 2>&1 || true
 }
 
+redact_url_for_log() {
+    python3 - "$1" <<'PY'
+from urllib.parse import urlparse
+import sys
+url = sys.argv[1]
+parsed = urlparse(url)
+if not parsed.scheme or not parsed.netloc:
+    print("[redacted-url]")
+    sys.exit(0)
+host = parsed.hostname or ""
+port = f":{parsed.port}" if parsed.port else ""
+has_sensitive_parts = bool(parsed.username or parsed.password or parsed.query or parsed.fragment or (parsed.path and parsed.path != "/"))
+suffix = "/[redacted]" if has_sensitive_parts else ""
+print(f"{parsed.scheme}://{host}{port}{suffix}")
+PY
+}
+
 base_sepolia_rpc_candidates() {
     if [ -n "${1:-}" ]; then
         printf '%s\n' "$1"
