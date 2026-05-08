@@ -149,7 +149,7 @@ const BaseGrayscaleIcon = ({ size = 32 }: { size?: number }) => (
     style={{
       display: 'block',
       borderRadius: '50%',
-      filter: 'grayscale(1) brightness(0.85)',
+      filter: 'grayscale(1) brightness(1.7) contrast(0.85)',
     }}
   />
 );

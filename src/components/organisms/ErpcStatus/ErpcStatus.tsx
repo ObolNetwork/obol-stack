@@ -20,6 +20,7 @@ import {
   networkToStatus,
   chainIdFromEvmId,
   erpcUrl,
+  TESTNETS,
 } from '../../../lib/utils/network-rpc';
 
 // ── Network card ──────────────────────────────────────────────────────────────
@@ -73,6 +74,20 @@ const EndpointRow = styled(Flex, {
   minWidth: 0,
 });
 
+const TestnetChip = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '$body',
+  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  border: '1px solid rgba(255, 255, 255, 0.18)',
+  borderRadius: '4px',
+  padding: '1px 6px',
+  lineHeight: 1.4,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  whiteSpace: 'nowrap',
+});
+
 // ── Upstream cards ───────────────────────────────────────────────────────────
 
 const UpstreamSection = styled(Box, {
@@ -118,6 +133,7 @@ export function ErpcStatus({
   const status = networkToStatus(network.state);
   const chainId = chainIdFromEvmId(network.id);
   const isMainnet = chainIdFromEvmId(network.id) === 1;
+  const isTestnet = TESTNETS.has(network.alias);
   const endpoint = `${erpcUrl()}/${network.alias}`;
 
   const erpcUpstreams = upstreams ?? [];
@@ -131,7 +147,10 @@ export function ErpcStatus({
           {chainName && <ChainIcon chain={chainName} size={24} />}
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
             <CardAppType>RPC</CardAppType>
-            <CardAppId>{aliasDisplay(network.alias)}</CardAppId>
+            <Flex css={{ alignItems: 'center', gap: '$xs', width: 'auto' }}>
+              <CardAppId>{aliasDisplay(network.alias)}</CardAppId>
+              {isTestnet && <TestnetChip>Testnet</TestnetChip>}
+            </Flex>
           </Flex>
         </Flex>
 
