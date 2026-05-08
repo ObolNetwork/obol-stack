@@ -51,6 +51,9 @@ func TestTunnelState_RoundTrip(t *testing.T) {
 	if got.Hostname != "" {
 		t.Errorf("hostname = %q, want empty", got.Hostname)
 	}
+	if got.TransportProtocol != tunnelTransportAuto {
+		t.Errorf("transport_protocol = %q, want %q", got.TransportProtocol, tunnelTransportAuto)
+	}
 	if got.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt should be set by save")
 	}
@@ -60,12 +63,13 @@ func TestTunnelState_DNSMode(t *testing.T) {
 	cfg := testConfig(t)
 
 	st := &tunnelState{
-		Mode:       "dns",
-		Hostname:   "stack.example.com",
-		AccountID:  "acct-123",
-		ZoneID:     "zone-456",
-		TunnelID:   "tun-789",
-		TunnelName: "my-tunnel",
+		Mode:              "dns",
+		Hostname:          "stack.example.com",
+		AccountID:         "acct-123",
+		ZoneID:            "zone-456",
+		TunnelID:          "tun-789",
+		TunnelName:        "my-tunnel",
+		TransportProtocol: tunnelTransportHTTP2,
 	}
 
 	if err := saveTunnelState(cfg, st); err != nil {
@@ -85,6 +89,9 @@ func TestTunnelState_DNSMode(t *testing.T) {
 	}
 	if got.ManagementMode != tunnelManagementRemote {
 		t.Errorf("management_mode = %q, want remote", got.ManagementMode)
+	}
+	if got.TransportProtocol != tunnelTransportHTTP2 {
+		t.Errorf("transport_protocol = %q, want %q", got.TransportProtocol, tunnelTransportHTTP2)
 	}
 	if got.TunnelID != "tun-789" {
 		t.Errorf("tunnel_id = %q, want tun-789", got.TunnelID)
@@ -218,6 +225,33 @@ func TestTunnelModeAndURL(t *testing.T) {
 				t.Errorf("url = %q, want %q", url, tt.wantURL)
 			}
 		})
+	}
+}
+
+func TestNormalizeTunnelTransportProtocol(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "default empty", input: "", want: tunnelTransportAuto},
+		{name: "auto", input: "auto", want: tunnelTransportAuto},
+		{name: "quic", input: "quic", want: tunnelTransportQUIC},
+		{name: "http2", input: "http2", want: tunnelTransportHTTP2},
+		{name: "http slash 2 alias", input: "http/2", want: tunnelTransportHTTP2},
+		{name: "uppercase trims", input: " HTTP2 ", want: tunnelTransportHTTP2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeTunnelTransportProtocol(tt.input); got != tt.want {
+				t.Fatalf("normalizeTunnelTransportProtocol(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	if got := normalizeTunnelTransportProtocol("bogus"); got != "" {
+		t.Fatalf("normalizeTunnelTransportProtocol(%q) = %q, want empty", "bogus", got)
 	}
 }
 

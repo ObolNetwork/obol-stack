@@ -1,5 +1,8 @@
 mode: auto
 
+transport:
+  protocol: "auto"
+
 image:
   repository: cloudflare/cloudflared
   tag: "2026.3.0"
@@ -16,6 +19,7 @@ persistent:
 management:
   configMapName: "cloudflared-management"
   modeKey: "management_mode"
+  protocolKey: "transport_protocol"
 
 remoteManaged:
   tokenSecretName: "cloudflared-tunnel-token"

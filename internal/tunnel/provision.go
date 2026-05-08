@@ -14,10 +14,11 @@ import (
 
 // ProvisionOptions configures `obol tunnel provision`.
 type ProvisionOptions struct {
-	Hostname  string
-	AccountID string
-	ZoneID    string
-	APIToken  string
+	Hostname          string
+	AccountID         string
+	ZoneID            string
+	APIToken          string
+	TransportProtocol string
 }
 
 type resolvedProvisionTarget struct {
@@ -35,6 +36,10 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	}
 	if opts.APIToken == "" {
 		return errors.New("--api-token is required (or set CLOUDFLARE_API_TOKEN)")
+	}
+	transportProtocol, err := validateTunnelTransportProtocol(opts.TransportProtocol)
+	if err != nil {
+		return err
 	}
 
 	// Stack must be running so we can store the tunnel token in-cluster.
@@ -108,7 +113,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	if err := deleteLocalManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
-	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementRemote); err != nil {
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementRemote, transportProtocol); err != nil {
 		return err
 	}
 
@@ -122,6 +127,7 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	}
 	st.ExposureMode = tunnelExposurePersistent
 	st.ManagementMode = tunnelManagementRemote
+	st.TransportProtocol = transportProtocol
 	st.Hostname = target.Hostname
 	st.AccountID = target.AccountID
 	st.ZoneID = target.ZoneID

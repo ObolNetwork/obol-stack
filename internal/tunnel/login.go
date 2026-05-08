@@ -16,7 +16,8 @@ import (
 )
 
 type LoginOptions struct {
-	Hostname string
+	Hostname          string
+	TransportProtocol string
 }
 
 // Login provisions a locally-managed tunnel using `cloudflared tunnel login` (browser auth),
@@ -31,6 +32,10 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
 		return errors.New("--hostname is required (e.g. stack.example.com)")
+	}
+	transportProtocol, err := validateTunnelTransportProtocol(opts.TransportProtocol)
+	if err != nil {
+		return err
 	}
 
 	// Stack must be running so we can write secrets/config to the cluster.
@@ -110,7 +115,7 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if err := deleteRemoteTunnelToken(cfg); err != nil {
 		return err
 	}
-	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal); err != nil {
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal, transportProtocol); err != nil {
 		return err
 	}
 
@@ -125,6 +130,7 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 
 	st.ExposureMode = tunnelExposurePersistent
 	st.ManagementMode = tunnelManagementLocal
+	st.TransportProtocol = transportProtocol
 	st.Hostname = hostname
 	st.AccountID = ""
 	st.ZoneID = ""

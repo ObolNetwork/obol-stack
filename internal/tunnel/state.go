@@ -19,11 +19,16 @@ const (
 	tunnelManagementLocal  = "local"
 	tunnelManagementRemote = "remote"
 
+	tunnelTransportAuto  = "auto"
+	tunnelTransportQUIC  = "quic"
+	tunnelTransportHTTP2 = "http2"
+
 	legacyTunnelModeQuick = "quick"
 	legacyTunnelModeDNS   = "dns"
 
-	managementConfigMapName = "cloudflared-management"
-	managementConfigModeKey = "management_mode"
+	managementConfigMapName     = "cloudflared-management"
+	managementConfigModeKey     = "management_mode"
+	managementConfigProtocolKey = "transport_protocol"
 
 	persistentReplicaCount = 2
 	quickReplicaCount      = 1
@@ -33,14 +38,15 @@ type tunnelState struct {
 	// Mode is kept for backward compatibility with older on-disk state files.
 	Mode string `json:"mode,omitempty"`
 
-	ExposureMode   string    `json:"exposure_mode,omitempty"`
-	ManagementMode string    `json:"management_mode,omitempty"`
-	Hostname       string    `json:"hostname,omitempty"`
-	AccountID      string    `json:"account_id,omitempty"`
-	ZoneID         string    `json:"zone_id,omitempty"`
-	TunnelID       string    `json:"tunnel_id,omitempty"`
-	TunnelName     string    `json:"tunnel_name,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ExposureMode      string    `json:"exposure_mode,omitempty"`
+	ManagementMode    string    `json:"management_mode,omitempty"`
+	TransportProtocol string    `json:"transport_protocol,omitempty"`
+	Hostname          string    `json:"hostname,omitempty"`
+	AccountID         string    `json:"account_id,omitempty"`
+	ZoneID            string    `json:"zone_id,omitempty"`
+	TunnelID          string    `json:"tunnel_id,omitempty"`
+	TunnelName        string    `json:"tunnel_name,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func tunnelStateDir(cfg *config.Config) string {
@@ -65,6 +71,37 @@ func defaultPersistentTunnelName(stackID, management string) string {
 	default:
 		return base
 	}
+}
+
+func normalizeTunnelTransportProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "", tunnelTransportAuto:
+		return tunnelTransportAuto
+	case tunnelTransportQUIC:
+		return tunnelTransportQUIC
+	case tunnelTransportHTTP2, "http/2":
+		return tunnelTransportHTTP2
+	default:
+		return ""
+	}
+}
+
+func validateTunnelTransportProtocol(protocol string) (string, error) {
+	normalized := normalizeTunnelTransportProtocol(protocol)
+	if normalized == "" {
+		return "", errors.New("unsupported transport protocol (expected auto, quic, or http2)")
+	}
+
+	return normalized, nil
+}
+
+func tunnelTransportProtocol(st *tunnelState) string {
+	normalized := normalizeTunnelState(st)
+	if normalized == nil || normalized.TransportProtocol == "" {
+		return tunnelTransportAuto
+	}
+
+	return normalized.TransportProtocol
 }
 
 func desiredPersistentTunnelName(stackID string, st *tunnelState, management string) string {
@@ -109,6 +146,11 @@ func normalizeTunnelState(st *tunnelState) *tunnelState {
 		default:
 			clone.ManagementMode = tunnelManagementQuick
 		}
+	}
+
+	clone.TransportProtocol = normalizeTunnelTransportProtocol(clone.TransportProtocol)
+	if clone.TransportProtocol == "" {
+		clone.TransportProtocol = tunnelTransportAuto
 	}
 
 	clone.Mode = legacyTunnelMode(clone.ExposureMode)

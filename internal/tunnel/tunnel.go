@@ -33,6 +33,7 @@ type tunnelStatusResult struct {
 	Mode              string `json:"mode"`
 	ExposureMode      string `json:"exposure_mode,omitempty"`
 	ManagementMode    string `json:"management_mode,omitempty"`
+	TransportProtocol string `json:"transport_protocol,omitempty"`
 	Status            string `json:"status"`
 	URL               string `json:"url"`
 	Hostname          string `json:"hostname,omitempty"`
@@ -75,6 +76,10 @@ type tunnelRuntimeHealth struct {
 	PodStatus         string
 }
 
+type RestartOptions struct {
+	TransportProtocol string
+}
+
 // Status displays the current tunnel status and URL.
 func Status(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -87,16 +92,18 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	st, _ := loadTunnelState(cfg)
 	mode, url := tunnelModeAndURL(st)
 	result := tunnelStatusResult{
-		Mode:            mode,
-		ExposureMode:    tunnelExposureQuick,
-		ManagementMode:  tunnelManagementQuick,
-		URL:             url,
-		DesiredReplicas: desiredRuntimeReplicas(st),
-		LastUpdated:     now.Format(time.RFC3339),
+		Mode:              mode,
+		ExposureMode:      tunnelExposureQuick,
+		ManagementMode:    tunnelManagementQuick,
+		TransportProtocol: tunnelTransportAuto,
+		URL:               url,
+		DesiredReplicas:   desiredRuntimeReplicas(st),
+		LastUpdated:       now.Format(time.RFC3339),
 	}
 	if st != nil {
 		result.ExposureMode = st.ExposureMode
 		result.ManagementMode = st.Management()
+		result.TransportProtocol = tunnelTransportProtocol(st)
 		result.Hostname = st.Hostname
 	}
 	if result.ExposureMode == "" {
@@ -490,7 +497,7 @@ func ConfirmQuickTunnelLoss(cfg *config.Config, u *ui.UI, currentURL, action str
 //   - the storefront HTTPRoute is hostname-pinned; without an update it points
 //     at the old tunnel hostname and traffic to the new hostname's `/` falls
 //     through to the frontend catch-all
-func Restart(cfg *config.Config, u *ui.UI) error {
+func Restart(cfg *config.Config, u *ui.UI, opts RestartOptions) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -500,6 +507,28 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 	}
 
 	st, _ := loadTunnelState(cfg)
+	transportOverrideSpecified := strings.TrimSpace(opts.TransportProtocol) != ""
+	if transportOverrideSpecified {
+		transportProtocol, err := validateTunnelTransportProtocol(opts.TransportProtocol)
+		if err != nil {
+			return err
+		}
+		if st == nil {
+			st = &tunnelState{}
+		}
+		if !st.IsPersistent() {
+			st.ExposureMode = tunnelExposureQuick
+			st.ManagementMode = tunnelManagementQuick
+			st.Hostname = ""
+			st.AccountID = ""
+			st.ZoneID = ""
+		}
+		st.TransportProtocol = transportProtocol
+		if err := saveTunnelState(cfg, st); err != nil {
+			return fmt.Errorf("save tunnel state: %w", err)
+		}
+	}
+
 	if st != nil && st.IsPersistent() {
 		if err := RestorePersistentResources(cfg, u); err != nil {
 			return fmt.Errorf("restore persistent tunnel resources: %w", err)
@@ -510,6 +539,16 @@ func Restart(cfg *config.Config, u *ui.UI) error {
 			u.Info("Aborted.")
 
 			return nil
+		}
+
+		transportProtocol := tunnelTransportProtocol(st)
+		if transportOverrideSpecified || transportProtocol != tunnelTransportAuto {
+			if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementQuick, transportProtocol); err != nil {
+				return err
+			}
+			if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
+				return fmt.Errorf("failed to apply cloudflared transport settings: %w", err)
+			}
 		}
 	}
 
@@ -667,6 +706,9 @@ func printDetailedStatusBox(u *ui.UI, result tunnelStatusResult, lastUpdated tim
 	u.Detail("Mode", result.Mode)
 	if result.ManagementMode != "" {
 		u.Detail("Management", result.ManagementMode)
+	}
+	if result.TransportProtocol != "" {
+		u.Detail("Transport", result.TransportProtocol)
 	}
 	u.Detail("Status", result.Status)
 	if result.Hostname != "" {

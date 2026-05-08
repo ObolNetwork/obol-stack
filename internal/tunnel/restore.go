@@ -65,7 +65,7 @@ func restoreLocalManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath s
 	if err := deleteRemoteTunnelToken(cfg); err != nil {
 		return err
 	}
-	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal); err != nil {
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal, tunnelTransportProtocol(st)); err != nil {
 		return err
 	}
 
@@ -98,7 +98,7 @@ func restoreRemoteManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath 
 	if err := deleteLocalManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
-	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementRemote); err != nil {
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementRemote, tunnelTransportProtocol(st)); err != nil {
 		return err
 	}
 

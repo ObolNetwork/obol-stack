@@ -9,15 +9,21 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-func applyManagementModeConfigMap(cfg *config.Config, u *ui.UI, kubeconfigPath, mode string) error {
+func applyManagementModeConfigMap(cfg *config.Config, u *ui.UI, kubeconfigPath, mode, transportProtocol string) error {
+	protocol := normalizeTunnelTransportProtocol(transportProtocol)
+	if protocol == "" {
+		protocol = tunnelTransportAuto
+	}
+
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
   name: %s
   namespace: %s
 data:
-  %s: %s
-`, managementConfigMapName, tunnelNamespace, managementConfigModeKey, mode)
+  %s: %q
+  %s: %q
+`, managementConfigMapName, tunnelNamespace, managementConfigModeKey, mode, managementConfigProtocolKey, protocol)
 
 	return kubectlApply(cfg, u, kubeconfigPath, []byte(manifest))
 }

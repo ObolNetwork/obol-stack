@@ -6,14 +6,21 @@
 {{- $localTunnelIDKey := default "tunnel_id" .Values.localManaged.tunnelIDKey -}}
 {{- $managementConfigMapName := default "cloudflared-management" .Values.management.configMapName -}}
 {{- $managementModeKey := default "management_mode" .Values.management.modeKey -}}
+{{- $managementProtocolKey := default "transport_protocol" .Values.management.protocolKey -}}
 {{- $persistentReplicas := int (default 2 .Values.persistent.replicaCount) -}}
+{{- $defaultProtocol := default "auto" .Values.transport.protocol -}}
+{{- $mgmt := lookup "v1" "ConfigMap" .Release.Namespace $managementConfigMapName -}}
 
 {{- $effectiveMode := $mode -}}
 {{- if eq $mode "auto" -}}
-{{- $mgmt := lookup "v1" "ConfigMap" .Release.Namespace $managementConfigMapName -}}
 {{- if and $mgmt $mgmt.data (hasKey $mgmt.data $managementModeKey) -}}
 {{- $effectiveMode = get $mgmt.data $managementModeKey | default "auto" -}}
 {{- end -}}
+{{- end -}}
+
+{{- $effectiveProtocol := $defaultProtocol -}}
+{{- if and $mgmt $mgmt.data (hasKey $mgmt.data $managementProtocolKey) -}}
+{{- $effectiveProtocol = get $mgmt.data $managementProtocolKey | default $defaultProtocol -}}
 {{- end -}}
 
 {{- $useLocal := false -}}
@@ -69,6 +76,8 @@ spec:
             - --no-autoupdate
             - --metrics
             - {{ .Values.metrics.address | quote }}
+            - --protocol
+            - {{ $effectiveProtocol | quote }}
             {{- if $useLocal }}
             - --origincert
             - /etc/cloudflared/cert.pem

@@ -55,9 +55,13 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 						Usage:    "Public hostname to route (e.g. stack.example.com)",
 						Required: true,
 					},
+					tunnelTransportProtocolFlag(),
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{Hostname: cmd.String("hostname")})
+					return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{
+						Hostname:          cmd.String("hostname"),
+						TransportProtocol: cmd.String("transport-protocol"),
+					})
 				},
 			},
 			{
@@ -88,21 +92,24 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 						Usage:   "Cloudflare API token",
 						Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN"),
 					},
+					tunnelTransportProtocolFlag(),
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return tunnel.Provision(cfg, getUI(cmd), tunnel.ProvisionOptions{
-						Hostname:  cmd.String("hostname"),
-						AccountID: cmd.String("account-id"),
-						ZoneID:    cmd.String("zone-id"),
-						APIToken:  cmd.String("api-token"),
+						Hostname:          cmd.String("hostname"),
+						AccountID:         cmd.String("account-id"),
+						ZoneID:            cmd.String("zone-id"),
+						APIToken:          cmd.String("api-token"),
+						TransportProtocol: cmd.String("transport-protocol"),
 					})
 				},
 			},
 			{
 				Name:  "restart",
 				Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
+				Flags: []cli.Flag{tunnelTransportProtocolFlag()},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return tunnel.Restart(cfg, getUI(cmd))
+					return tunnel.Restart(cfg, getUI(cmd), tunnel.RestartOptions{TransportProtocol: cmd.String("transport-protocol")})
 				},
 			},
 			{
@@ -220,10 +227,18 @@ func domainCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+func tunnelTransportProtocolFlag() cli.Flag {
+	return &cli.StringFlag{
+		Name:  "transport-protocol",
+		Usage: "Cloudflared edge transport: auto, quic, or http2 (defaults to auto)",
+	}
+}
+
 func tunnelSetupFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to route (e.g. stack.example.com)"},
 		&cli.StringFlag{Name: "management", Usage: "Tunnel management mode: local or remote", Value: "auto"},
+		tunnelTransportProtocolFlag(),
 		&cli.StringFlag{Name: "account-id", Aliases: []string{"a"}, Usage: "Cloudflare account ID", Sources: cli.EnvVars("CLOUDFLARE_ACCOUNT_ID")},
 		&cli.StringFlag{Name: "zone-id", Aliases: []string{"z"}, Usage: "Cloudflare zone ID (auto-detected when omitted)", Sources: cli.EnvVars("CLOUDFLARE_ZONE_ID")},
 		&cli.StringFlag{Name: "api-token", Aliases: []string{"t"}, Usage: "Cloudflare API token", Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN")},
@@ -261,16 +276,17 @@ func setupOptionsFromCommand(cmd *cli.Command, u interface {
 	}
 
 	return tunnel.SetupOptions{
-		Hostname:       hostname,
-		Management:     cmd.String("management"),
-		AccountID:      cmd.String("account-id"),
-		ZoneID:         cmd.String("zone-id"),
-		APIToken:       cmd.String("api-token"),
-		RegisterDomain: cmd.Bool("register-domain"),
-		Years:          cmd.Int("years"),
-		AutoRenew:      cmd.Bool("auto-renew"),
-		PrivacyMode:    cmd.String("privacy-mode"),
-		ConfirmCharge:  cmd.Bool("yes"),
+		Hostname:          hostname,
+		Management:        cmd.String("management"),
+		TransportProtocol: cmd.String("transport-protocol"),
+		AccountID:         cmd.String("account-id"),
+		ZoneID:            cmd.String("zone-id"),
+		APIToken:          cmd.String("api-token"),
+		RegisterDomain:    cmd.Bool("register-domain"),
+		Years:             cmd.Int("years"),
+		AutoRenew:         cmd.Bool("auto-renew"),
+		PrivacyMode:       cmd.String("privacy-mode"),
+		ConfirmCharge:     cmd.Bool("yes"),
 	}, nil
 }
 

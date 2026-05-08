@@ -52,16 +52,17 @@ type DomainRegisterResult struct {
 }
 
 type SetupOptions struct {
-	Hostname       string
-	Management     string
-	AccountID      string
-	ZoneID         string
-	APIToken       string
-	RegisterDomain bool
-	Years          int
-	AutoRenew      bool
-	PrivacyMode    string
-	ConfirmCharge  bool
+	Hostname          string
+	Management        string
+	TransportProtocol string
+	AccountID         string
+	ZoneID            string
+	APIToken          string
+	RegisterDomain    bool
+	Years             int
+	AutoRenew         bool
+	PrivacyMode       string
+	ConfirmCharge     bool
 }
 
 type SetupResult struct {
@@ -69,6 +70,7 @@ type SetupResult struct {
 	URL                string                       `json:"url"`
 	Mode               string                       `json:"mode"`
 	ManagementMode     string                       `json:"management_mode"`
+	TransportProtocol  string                       `json:"transport_protocol,omitempty"`
 	AccountID          string                       `json:"account_id,omitempty"`
 	ZoneID             string                       `json:"zone_id,omitempty"`
 	RegistrationStatus *cloudflareRegistrarWorkflow `json:"registration_status,omitempty"`
@@ -247,14 +249,15 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 	}
 
 	if management == tunnelManagementLocal {
-		if err := Login(cfg, u, LoginOptions{Hostname: hostname}); err != nil {
+		if err := Login(cfg, u, LoginOptions{Hostname: hostname, TransportProtocol: opts.TransportProtocol}); err != nil {
 			return nil, err
 		}
 		return &SetupResult{
-			Hostname:       hostname,
-			URL:            "https://" + hostname,
-			Mode:           tunnelExposurePersistent,
-			ManagementMode: tunnelManagementLocal,
+			Hostname:          hostname,
+			URL:               "https://" + hostname,
+			Mode:              tunnelExposurePersistent,
+			ManagementMode:    tunnelManagementLocal,
+			TransportProtocol: normalizeTunnelTransportProtocol(opts.TransportProtocol),
 		}, nil
 	}
 	if management != tunnelManagementRemote {
@@ -316,10 +319,11 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 	}
 
 	if err := Provision(cfg, u, ProvisionOptions{
-		Hostname:  hostname,
-		AccountID: opts.AccountID,
-		ZoneID:    opts.ZoneID,
-		APIToken:  opts.APIToken,
+		Hostname:          hostname,
+		AccountID:         opts.AccountID,
+		ZoneID:            opts.ZoneID,
+		APIToken:          opts.APIToken,
+		TransportProtocol: opts.TransportProtocol,
 	}); err != nil {
 		return nil, err
 	}
@@ -329,6 +333,7 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 		URL:                "https://" + hostname,
 		Mode:               tunnelExposurePersistent,
 		ManagementMode:     tunnelManagementRemote,
+		TransportProtocol:  normalizeTunnelTransportProtocol(opts.TransportProtocol),
 		AccountID:          opts.AccountID,
 		ZoneID:             opts.ZoneID,
 		RegistrationStatus: workflow,
