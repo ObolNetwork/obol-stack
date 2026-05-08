@@ -117,6 +117,47 @@ BOB_AGENT_RUNTIME="hermes"
 PF_AGENT=""
 PF_AGENT_LOG=""
 
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return $?
+    fi
+
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+
+def write_maybe_bytes(stream, data):
+    if not data:
+        return
+    if isinstance(data, bytes):
+        data = data.decode(errors="replace")
+    stream.write(data)
+
+
+timeout_seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=timeout_seconds, text=True, capture_output=True)
+    write_maybe_bytes(sys.stdout, completed.stdout)
+    write_maybe_bytes(sys.stderr, completed.stderr)
+    raise SystemExit(completed.returncode)
+except subprocess.TimeoutExpired as exc:
+    write_maybe_bytes(sys.stdout, exc.stdout)
+    write_maybe_bytes(sys.stderr, exc.stderr)
+    sys.stderr.write(f"command timed out after {timeout_seconds}s\n")
+    raise SystemExit(124)
+PY
+}
+
 # ═════════════════════════════════════════════════════════════════
 # CLEANUP TRAP
 # ═════════════════════════════════════════════════════════════════
@@ -854,11 +895,11 @@ pass "remote-signer pod is ${pod_age}s old (rolled by wallet import)"
 step "Alice: drive ERC-8004 registration (obol sell register)"
 # 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
 # should complete in ~30-60s; anything beyond that is a hang we want
-# to surface, not silently block the run. `timeout` is an external
-# program and cannot see the `alice()` bash function, so call the
-# binary directly with the same env the function exports.
+# to surface, not silently block the run. macOS often lacks GNU `timeout`,
+# so use a small wrapper that prefers timeout/gtimeout and otherwise falls
+# back to a Python-enforced timeout while preserving stdout/stderr.
 set +e
-register_out=$(timeout 300 \
+register_out=$(run_with_timeout 300 \
     env OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
         OBOL_CONFIG_DIR="$ALICE_DIR/config" \
         OBOL_BIN_DIR="$ALICE_DIR/bin" \
