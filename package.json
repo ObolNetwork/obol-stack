@@ -44,7 +44,7 @@
     "next": "16.2.4",
     "pino": "10.3.1",
     "react": "19.2.5",
-    "react-dom": "19.2.4",
+    "react-dom": "19.2.5",
     "react-hook-form": "7.75.0",
     "react-toastify": "11.0.5",
     "shiki": "4.0.2",
