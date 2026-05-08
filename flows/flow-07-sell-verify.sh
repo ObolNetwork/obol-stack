@@ -60,6 +60,52 @@ else
     fail "No tunnel URL found — ${TUNNEL_OUTPUT:0:200}"
 fi
 
+# Security: public tunnel must not expose local-only eRPC routes.
+if [ -n "$TUNNEL_URL" ]; then
+    step "Public tunnel does not expose eRPC"
+    public_erpc_exposed=false
+
+    tunnel_erpc_index_file=$(mktemp)
+    tunnel_erpc_index_code=$(curl -sS --max-time 10 -o "$tunnel_erpc_index_file" -w '%{http_code}' \
+        "$TUNNEL_URL/rpc" 2>/dev/null || echo "000")
+    tunnel_erpc_index_body=$(<"$tunnel_erpc_index_file")
+    rm -f "$tunnel_erpc_index_file"
+    if echo "$tunnel_erpc_index_body" | python3 -c "
+import sys, json
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if 'rpc' in payload else 1)
+" 2>/dev/null; then
+        public_erpc_exposed=true
+        fail "Public tunnel unexpectedly exposed eRPC /rpc (HTTP $tunnel_erpc_index_code)"
+    fi
+
+    tunnel_erpc_chain_file=$(mktemp)
+    tunnel_erpc_chain_code=$(curl -sS --max-time 15 -o "$tunnel_erpc_chain_file" -w '%{http_code}' -X POST \
+        "$TUNNEL_URL/rpc/evm/84532" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>/dev/null || echo "000")
+    tunnel_erpc_chain_body=$(<"$tunnel_erpc_chain_file")
+    rm -f "$tunnel_erpc_chain_file"
+    if echo "$tunnel_erpc_chain_body" | python3 -c "
+import sys, json
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get('result') else 1)
+" 2>/dev/null; then
+        public_erpc_exposed=true
+        fail "Public tunnel unexpectedly served eRPC eth_chainId successfully (HTTP $tunnel_erpc_chain_code)"
+    fi
+
+    if [ "$public_erpc_exposed" = false ]; then
+        pass "Public tunnel did not expose eRPC (index HTTP $tunnel_erpc_index_code, JSON-RPC HTTP $tunnel_erpc_chain_code)"
+    fi
+fi
+
 # §1.6: Verify paths
 
 # Wait for x402-verifier pods to be ready — Kubernetes Reloader restarts them when
