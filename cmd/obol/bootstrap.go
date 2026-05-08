@@ -50,12 +50,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			}
 
 			// Step 4: Open browser
-			url := "http://obol.stack"
-			if resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(url); err != nil {
-				url = "http://obol.stack:8080"
-			} else {
-				resp.Body.Close()
-			}
+			url := stack.LocalIngressURL(cfg)
 			u.Infof("Opening browser to %s", url)
 
 			if err := openBrowser(url); err != nil {
@@ -142,7 +137,7 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 
 	// Wait for ingress to respond
 	err = u.RunWithSpinner("Waiting for ingress to respond", func() error {
-		ingressURL := "http://obol.stack:8080"
+		ingressURL := stack.LocalIngressURL(cfg)
 
 		client := &http.Client{Timeout: 5 * time.Second}
 		for time.Now().Before(deadline) {
