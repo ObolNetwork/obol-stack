@@ -61,7 +61,8 @@ RELEASE_SMOKE_INCLUDE_OBOL_FORK=true  # fork flow-13
 Live OBOL token default:
 
 ```bash
-OBOL_TOKEN_BASE_SEPOLIA=0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
+OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
+# Source of truth: ObolNetwork/obol-stack#447
 ```
 
 Buyer wallet invariant:

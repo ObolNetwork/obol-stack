@@ -36,6 +36,7 @@
 # Optional overrides:
 #   BASE_SEPOLIA_RPC                          default: https://sepolia.base.org
 #   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x0a09371a8b011d5110656ceBCc70603e53FD2c78
+#                                               (source of truth: ObolNetwork/obol-stack#447)
 #   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
