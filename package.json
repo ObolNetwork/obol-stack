@@ -50,7 +50,7 @@
     "shiki": "4.0.2",
     "thread-stream": "4.0.0",
     "value": "link:@sinclair/typebox/value",
-    "viem": "2.47.10",
+    "viem": "2.48.11",
     "wagmi": "2.19.5"
   },
   "devDependencies": {

@@ -9947,24 +9947,10 @@ own-keys@^1.0.1:
     object-keys "^1.1.1"
     safe-push-apply "^1.0.0"
 
-ox@0.14.5:
-  version "0.14.5"
-  resolved "https://registry.yarnpkg.com/ox/-/ox-0.14.5.tgz#b5b630d0f7e8f6c2ea485ca9db103bc126afa30e"
-  integrity sha512-HgmHmBveYO40H/R3K6TMrwYtHsx/u6TAB+GpZlgJCoW0Sq5Ttpjih0IZZiwGQw7T6vdW4IAyobYrE2mdAvyF8Q==
-  dependencies:
-    "@adraffy/ens-normalize" "^1.11.0"
-    "@noble/ciphers" "^1.3.0"
-    "@noble/curves" "1.9.1"
-    "@noble/hashes" "^1.8.0"
-    "@scure/bip32" "^1.7.0"
-    "@scure/bip39" "^1.6.0"
-    abitype "^1.2.3"
-    eventemitter3 "5.0.1"
-
-ox@0.14.7:
-  version "0.14.7"
-  resolved "https://registry.yarnpkg.com/ox/-/ox-0.14.7.tgz#efe6770f7a138f823fb2df26001b679c2565b0a4"
-  integrity sha512-zSQ/cfBdolj7U4++NAvH7sI+VG0T3pEohITCgcQj8KlawvTDY4vGVhDT64Atsm0d6adWfIYHDpu88iUBMMp+AQ==
+ox@0.14.20:
+  version "0.14.20"
+  resolved "https://registry.yarnpkg.com/ox/-/ox-0.14.20.tgz#b9ff923c88976508b63648fa7a01b6106cf71ff4"
+  integrity sha512-rby38C3nDn8eQkf29Zgw4hkCZJ64Qqi0zRPWL8ENUQ7JVuoITqrVtwWQgM/He19SCMUEc7hS/Sjw0jIOSLJhOw==
   dependencies:
     "@adraffy/ens-normalize" "^1.11.0"
     "@noble/ciphers" "^1.3.0"
@@ -12532,10 +12518,10 @@ viem@2.23.2:
     ox "0.6.7"
     ws "8.18.0"
 
-viem@2.47.10:
-  version "2.47.10"
-  resolved "https://registry.yarnpkg.com/viem/-/viem-2.47.10.tgz#aa59aa1b181520895c4a2eeb7446acb65dd453e2"
-  integrity sha512-D+l6SDDZWB5bh8u9hgICzMX2/egMrgEQ+Pef/QkZgmOl6bOTyCQMSgWAH8jZTWJ/218J9QNv7s/9BH6Wu5oPDg==
+viem@2.48.11, viem@>=2.29.0, viem@^2.1.1, viem@^2.21.26, viem@^2.27.2, viem@^2.31.7:
+  version "2.48.11"
+  resolved "https://registry.yarnpkg.com/viem/-/viem-2.48.11.tgz#f0b8db28a9c201113eb3cb0d9bb2c7c05f372259"
+  integrity sha512-+WZ5E0dBS6GtKb+1wEk5DeYRRRW42+pFnXCo67Ydodf42sBwO+hu3wnQy66lc4MKmHz+llPVdbyehYr9oTE2iw==
   dependencies:
     "@noble/curves" "1.9.1"
     "@noble/hashes" "1.8.0"
@@ -12543,21 +12529,7 @@ viem@2.47.10:
     "@scure/bip39" "1.6.0"
     abitype "1.2.3"
     isows "1.0.7"
-    ox "0.14.7"
-    ws "8.18.3"
-
-viem@>=2.29.0, viem@^2.1.1, viem@^2.21.26, viem@^2.27.2, viem@^2.31.7:
-  version "2.47.4"
-  resolved "https://registry.yarnpkg.com/viem/-/viem-2.47.4.tgz#e892858ec9764dd909ee75858e419f2086cda166"
-  integrity sha512-h0Wp/SYmJO/HB4B/em1OZ3W1LaKrmr7jzaN7talSlZpo0LCn0V6rZ5g923j6sf4VUSrqp/gUuWuHFc7UcoIp8A==
-  dependencies:
-    "@noble/curves" "1.9.1"
-    "@noble/hashes" "1.8.0"
-    "@scure/bip32" "1.7.0"
-    "@scure/bip39" "1.6.0"
-    abitype "1.2.3"
-    isows "1.0.7"
-    ox "0.14.5"
+    ox "0.14.20"
     ws "8.18.3"
 
 vscode-jsonrpc@8.2.0:
