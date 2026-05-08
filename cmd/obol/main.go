@@ -14,7 +14,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
-	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -98,10 +97,17 @@ COMMANDS:
 
    Tunnel Management:
      tunnel status    Show tunnel status and public URL
+     tunnel setup     Guided persistent tunnel setup with optional domain registration
      tunnel login     Authenticate and create persistent tunnel (browser)
      tunnel provision Provision persistent tunnel (API token)
      tunnel restart   Restart tunnel connector (quick tunnels get new URL)
+     tunnel stop      Stop the tunnel connector
      tunnel logs      View cloudflared logs
+
+   Domain Management:
+     domain search    Search for available Cloudflare Registrar domains
+     domain check     Check authoritative availability for one or more domains
+     domain register  Register a domain through Cloudflare Registrar
 
    Kubernetes Tools (with auto-configured KUBECONFIG):
      kubectl         Run kubectl with stack kubeconfig (passthrough)
@@ -227,104 +233,10 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			agentCommand(cfg),
 			walletCommand(cfg),
 			// ============================================================
-			// Tunnel Management Commands
+			// Tunnel & Domain Commands
 			// ============================================================
-			{
-				Name:  "tunnel",
-				Usage: "Manage Cloudflare tunnel for public access",
-				Commands: []*cli.Command{
-					{
-						Name:  "status",
-						Usage: "Show tunnel status and public URL",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Status(cfg, getUI(cmd))
-						},
-					},
-					{
-						Name:  "login",
-						Usage: "Authenticate via browser and create a locally-managed tunnel (no API token)",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "hostname",
-								Aliases:  []string{"H"},
-								Usage:    "Public hostname to route (e.g. stack.example.com)",
-								Required: true,
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{
-								Hostname: cmd.String("hostname"),
-							})
-						},
-					},
-					{
-						Name:  "provision",
-						Usage: "Provision a persistent (DNS-routed) Cloudflare Tunnel",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "hostname",
-								Aliases:  []string{"H"},
-								Usage:    "Public hostname to route (e.g. stack.example.com)",
-								Required: true,
-							},
-							&cli.StringFlag{
-								Name:    "account-id",
-								Aliases: []string{"a"},
-								Usage:   "Cloudflare account ID (or set CLOUDFLARE_ACCOUNT_ID)",
-								Sources: cli.EnvVars("CLOUDFLARE_ACCOUNT_ID"),
-							},
-							&cli.StringFlag{
-								Name:    "zone-id",
-								Aliases: []string{"z"},
-								Usage:   "Cloudflare zone ID for the hostname (or set CLOUDFLARE_ZONE_ID)",
-								Sources: cli.EnvVars("CLOUDFLARE_ZONE_ID"),
-							},
-							&cli.StringFlag{
-								Name:    "api-token",
-								Aliases: []string{"t"},
-								Usage:   "Cloudflare API token (or set CLOUDFLARE_API_TOKEN)",
-								Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN"),
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Provision(cfg, getUI(cmd), tunnel.ProvisionOptions{
-								Hostname:  cmd.String("hostname"),
-								AccountID: cmd.String("account-id"),
-								ZoneID:    cmd.String("zone-id"),
-								APIToken:  cmd.String("api-token"),
-							})
-						},
-					},
-					{
-						Name:  "restart",
-						Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Restart(cfg, getUI(cmd))
-						},
-					},
-					{
-						Name:  "stop",
-						Usage: "Stop the tunnel (scale cloudflared to 0 replicas)",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Stop(cfg, getUI(cmd))
-						},
-					},
-					{
-						Name:  "logs",
-						Usage: "View cloudflared logs",
-						Flags: []cli.Flag{
-							&cli.BoolFlag{
-								Name:    "follow",
-								Aliases: []string{"f"},
-								Usage:   "Follow log output",
-							},
-						},
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return tunnel.Logs(cfg, cmd.Bool("follow"))
-						},
-					},
-				},
-			},
+			tunnelCommand(cfg),
+			domainCommand(cfg),
 			// ============================================================
 			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
 			// ============================================================

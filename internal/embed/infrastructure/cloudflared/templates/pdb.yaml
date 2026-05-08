@@ -1,0 +1,22 @@
+{{- $mode := default "auto" .Values.mode -}}
+{{- $managementConfigMapName := default "cloudflared-management" .Values.management.configMapName -}}
+{{- $managementModeKey := default "management_mode" .Values.management.modeKey -}}
+{{- $persistentReplicas := int (default 2 .Values.persistent.replicaCount) -}}
+{{- $effectiveMode := $mode -}}
+{{- if eq $mode "auto" -}}
+{{- $mgmt := lookup "v1" "ConfigMap" .Release.Namespace $managementConfigMapName -}}
+{{- if and $mgmt $mgmt.data (hasKey $mgmt.data $managementModeKey) -}}
+{{- $effectiveMode = get $mgmt.data $managementModeKey | default "auto" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (or (eq $effectiveMode "local") (eq $effectiveMode "remote")) (gt $persistentReplicas 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudflared
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+{{- end }}

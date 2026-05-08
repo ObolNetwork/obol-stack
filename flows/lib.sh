@@ -16,7 +16,10 @@ else
 fi
 
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-OBOL_INGRESS_URL_CALLER_OVERRIDE="${OBOL_INGRESS_URL:-}"
+# Only an explicit override variable should pin the ingress URL. Using the
+# computed/exported OBOL_INGRESS_URL itself here can leak a stale port (for
+# example 8080 from another still-running stack) into later flow scripts.
+OBOL_INGRESS_URL_CALLER_OVERRIDE="${OBOL_INGRESS_URL_OVERRIDE:-}"
 
 # Auto-load .env so flow scripts can read REMOTE_SIGNER_PRIVATE_KEY and any
 # FLOW*_PORT / FLOW*_URL overrides without re-exporting them every run.

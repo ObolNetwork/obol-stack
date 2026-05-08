@@ -16,7 +16,8 @@ import (
 )
 
 type LoginOptions struct {
-	Hostname string
+	Hostname          string
+	TransportProtocol string
 }
 
 // Login provisions a locally-managed tunnel using `cloudflared tunnel login` (browser auth),
@@ -32,6 +33,10 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if hostname == "" {
 		return errors.New("--hostname is required (e.g. stack.example.com)")
 	}
+	transportProtocol, err := validateTunnelTransportProtocol(opts.TransportProtocol)
+	if err != nil {
+		return err
+	}
 
 	// Stack must be running so we can write secrets/config to the cluster.
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -44,7 +49,8 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		return errors.New("stack not initialized, run 'obol stack init' first")
 	}
 
-	tunnelName := "obol-stack-" + stackID
+	st, _ := loadTunnelState(cfg)
+	tunnelName := desiredPersistentTunnelName(stackID, st, tunnelManagementLocal)
 
 	cloudflaredPath, err := exec.LookPath("cloudflared")
 	if err != nil {
@@ -103,21 +109,32 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
 		return err
 	}
+	if err := deleteRemoteManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
+		return err
+	}
+	if err := deleteRemoteTunnelToken(cfg); err != nil {
+		return err
+	}
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementLocal, transportProtocol); err != nil {
+		return err
+	}
 
 	// Re-render the chart so it flips from quick tunnel to locally-managed.
 	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
 
-	st, _ := loadTunnelState(cfg)
 	if st == nil {
 		st = &tunnelState{}
 	}
 
-	st.Mode = "dns"
+	st.ExposureMode = tunnelExposurePersistent
+	st.ManagementMode = tunnelManagementLocal
+	st.TransportProtocol = transportProtocol
 	st.Hostname = hostname
+	st.AccountID = ""
+	st.ZoneID = ""
 	st.TunnelID = tunnelID
-
 	st.TunnelName = tunnelName
 	if err := saveTunnelState(cfg, st); err != nil {
 		return fmt.Errorf("tunnel created, but failed to save local state: %w", err)

@@ -161,7 +161,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	agentBaseURL := ""
 	if opts.AgentMode {
-		if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Hostname != "" {
+		if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.IsPersistent() {
 			agentBaseURL = "https://" + st.Hostname
 		}
 	}
