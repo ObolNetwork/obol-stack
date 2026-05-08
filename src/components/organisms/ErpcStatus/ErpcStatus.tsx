@@ -7,6 +7,7 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
 import { Accordion } from '../../molecules/Accordion';
+import { BaseSepoliaObolFaucet } from '../../molecules/BaseSepoliaObolFaucet';
 import {
   ErpcNetwork,
   ErpcUpstream,
@@ -153,6 +154,8 @@ export function ErpcStatus({
           </>
         )}
       </DetailsSection>
+
+      {network.alias === 'base-sepolia' && <BaseSepoliaObolFaucet />}
 
       {totalUpstreams > 0 && (
         <UpstreamSection>
