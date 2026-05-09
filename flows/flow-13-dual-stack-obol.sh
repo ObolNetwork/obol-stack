@@ -64,10 +64,12 @@ ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
 FACILITATOR_PORT="${FLOW13_FACILITATOR_PORT:-$(pick_free_port)}"
 
 # Both clusters speak to host processes through a Docker-managed host alias.
-# From the host we use 127.0.0.1.
+# Plain Docker containers use the host alias that matches the current OS.
+# From the host shell we use 127.0.0.1.
 CLUSTER_HOST="${FLOW13_CLUSTER_HOST:-host.k3d.internal}"
 ANVIL_RPC_HOST="http://127.0.0.1:$ANVIL_PORT"
 ANVIL_RPC_CLUSTER="http://$CLUSTER_HOST:$ANVIL_PORT"
+ANVIL_RPC_FACILITATOR="$(host_service_url_for_plain_container "$ANVIL_PORT")"
 FACILITATOR_URL_HOST="http://127.0.0.1:$FACILITATOR_PORT"
 FACILITATOR_URL_CLUSTER="http://$CLUSTER_HOST:$FACILITATOR_PORT"
 BASE_SEPOLIA_FORK_RPC="${FLOW13_BASE_SEPOLIA_RPC:-${BASE_SEPOLIA_RPC:-}}"
@@ -252,43 +254,42 @@ pin_erpc_chain_single_upstream() {
     patched=$(FLOW13_ERPC_YAML="$current" \
               FLOW13_CHAIN_ID="$chain_id" \
               FLOW13_UPSTREAM_ID="$upstream_id" \
-              python3 - <<'PY'
-import os
-import sys
-import yaml
+              ruby - <<'RUBY'
+require "yaml"
 
-cfg = yaml.safe_load(os.environ["FLOW13_ERPC_YAML"]) or {}
-chain_id = int(os.environ["FLOW13_CHAIN_ID"])
-upstream_id = os.environ["FLOW13_UPSTREAM_ID"]
+cfg = YAML.safe_load(ENV.fetch("FLOW13_ERPC_YAML"), permitted_classes: [], aliases: true) || {}
+chain_id = Integer(ENV.fetch("FLOW13_CHAIN_ID"))
+upstream_id = ENV.fetch("FLOW13_UPSTREAM_ID")
 
-projects = cfg.get("projects") or []
-if not projects:
-    sys.exit(1)
+projects = cfg["projects"] || []
+exit 1 if projects.empty?
+
 project = projects[0]
-upstreams = project.get("upstreams") or []
-selected = None
+upstreams = project["upstreams"] || []
+selected = nil
 filtered = []
-for u in upstreams:
-    if not isinstance(u, dict):
-        filtered.append(u)
-        continue
-    evm = u.get("evm") or {}
-    try:
-        cid = int(evm.get("chainId", 0))
-    except Exception:
-        cid = 0
-    if cid != chain_id:
-        filtered.append(u)
-        continue
-    if u.get("id") == upstream_id:
-        selected = u
 
-if selected is None:
-    sys.exit(2)
+upstreams.each do |u|
+  unless u.is_a?(Hash)
+    filtered << u
+    next
+  end
+
+  evm = u["evm"] || {}
+  cid = Integer(evm["chainId"] || 0) rescue 0
+  if cid != chain_id
+    filtered << u
+    next
+  end
+
+  selected = u if u["id"] == upstream_id
+end
+
+exit 2 if selected.nil?
 
 project["upstreams"] = [selected] + filtered
-print(yaml.safe_dump(cfg, sort_keys=False))
-PY
+puts YAML.dump(cfg)
+RUBY
               )
     [ -n "$patched" ] || return 1
     local tmp
@@ -723,7 +724,7 @@ cat > "$FACILITATOR_CONFIG" << FEOF
   "port": $FACILITATOR_PORT, "host": "0.0.0.0",
   "chains": {"eip155:84532": {"eip1559": true, "flashblocks": false,
     "signers": ["$FAC_SIGNER_KEY"],
-    "rpc": [{"http": "$ANVIL_RPC_HOST", "rate_limit": 50}]}},
+    "rpc": [{"http": "$ANVIL_RPC_FACILITATOR", "rate_limit": 50}]}},
   "schemes": [
     {"id": "v1-eip155-exact", "chains": "eip155:*"},
     {"id": "v2-eip155-exact", "chains": "eip155:*",
@@ -732,7 +733,7 @@ cat > "$FACILITATOR_CONFIG" << FEOF
 }
 FEOF
 FACILITATOR_CONTAINER="obol-flow13-x402-facilitator-$$"
-if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG"; then
+if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG" "$FACILITATOR_PORT"; then
     fail "Facilitator container failed to start — see $FACILITATOR_LOG"
     emit_metrics; exit 1
 fi
@@ -1002,7 +1003,7 @@ pass "Tunnel: $TUNNEL_URL"
 
 step "Alice: 402 gate works on $TUNNEL_URL/services/alice-obol-inference"
 gate_code=""
-for _ in $(seq 1 24); do
+for _ in $(seq 1 48); do
     gate_code=$(curl_tunnel_402_code "$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions" "$TUNNEL_HOST" "$TUNNEL_IP")
     [ "$gate_code" = "402" ] && break
     sleep 5
@@ -1010,7 +1011,7 @@ done
 if [ "$gate_code" = "402" ]; then
     pass "402 gate works"
 else
-    fail "402 gate returned ${gate_code:-no HTTP response} after 120s"
+    fail "402 gate returned ${gate_code:-no HTTP response} after 240s"
 fi
 
 # ═════════════════════════════════════════════════════════════════
@@ -1163,6 +1164,45 @@ else
     fail "Bob signer OBOL balance not credited — got ${got_balance:-0} expected $ten_obol"
 fi
 
+step "Bob: ensure local OBOL Permit2 allowance"
+PERMIT2_ADDRESS="0x000000000022D473030F116dDEE9F6B43aC78BA3"
+permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+    "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+    pass "Bob Permit2 allowance already set: $permit2_allowance"
+else
+    approve_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
+        "approve(address,uint256)" "$PERMIT2_ADDRESS" \
+        115792089237316195423570985008687907853269984665640564039457584007913129639935 \
+        --rpc-url "$ANVIL_RPC_HOST" --private-key "$BOB_PRIVATE_KEY" 2>&1 || true)
+    approve_tx=$(echo "$approve_out" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+    print(d.get("transactionHash",""))
+except Exception:
+    pass' || true)
+    if [ -z "$approve_tx" ]; then
+        fail "Could not submit Bob Permit2 approval: ${approve_out:0:300}"
+        emit_metrics; exit 1
+    fi
+    permit2_ready=0
+    for _ in $(seq 1 30); do
+        permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+            "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+        if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+            permit2_ready=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$permit2_ready" = "1" ]; then
+        pass "Bob Permit2 approval confirmed: tx=$approve_tx allowance=$permit2_allowance"
+    else
+        fail "Bob Permit2 approval did not become visible after tx $approve_tx"
+        emit_metrics; exit 1
+    fi
+fi
+
 # ═════════════════════════════════════════════════════════════════
 # 32-33. AGENT TOKEN + PORT-FORWARD
 # ═════════════════════════════════════════════════════════════════
@@ -1239,7 +1279,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Load the buy-x402 skill, then use your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+            \"content\": \"Load the buy-x402 skill, then use your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
         }],
         \"max_tokens\": 4000,
         \"stream\": false

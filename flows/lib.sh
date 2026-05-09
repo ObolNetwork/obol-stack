@@ -188,6 +188,17 @@ refresh_obol_ingress_env() {
     export CURL_OBOL
 }
 
+init_obol_ingress_env_static() {
+    export OBOL_INGRESS_URL
+    if [ -n "${OBOL_INGRESS_URL_OVERRIDE:-}" ]; then
+        OBOL_INGRESS_URL="${OBOL_INGRESS_URL_OVERRIDE%/}"
+    else
+        OBOL_INGRESS_URL="http://obol.stack"
+    fi
+    CURL_OBOL="$(obol_curl_command_for_url "$OBOL_INGRESS_URL")"
+    export CURL_OBOL
+}
+
 step() {
     STEP_COUNT=$((STEP_COUNT + 1))
     echo "STEP: [$STEP_COUNT] $1"
@@ -299,6 +310,79 @@ cleanup_pid() {
     fi
 }
 
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return $?
+    fi
+
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=seconds, text=True, capture_output=True)
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    raise SystemExit(completed.returncode)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        data = exc.stdout.decode() if isinstance(exc.stdout, bytes) else exc.stdout
+        sys.stdout.write(data)
+    if exc.stderr:
+        data = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+        sys.stderr.write(data)
+    raise SystemExit(124)
+PY
+}
+
+docker_host_for_plain_container() {
+    case "$(uname -s)" in
+        Darwin)
+            printf 'host.docker.internal\n'
+            ;;
+        *)
+            printf '127.0.0.1\n'
+            ;;
+    esac
+}
+
+host_service_url_for_plain_container() {
+    local port="$1"
+    printf 'http://%s:%s\n' "$(docker_host_for_plain_container)" "$port"
+}
+
+docker_pull_public_image() {
+    local image="$1"
+    local timeout_seconds="${2:-180}"
+    local cfg_dir
+
+    if docker image inspect "$image" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    cfg_dir=$(mktemp -d "${TMPDIR:-/tmp}/obol-docker-config-XXXXXX")
+    printf '{}\n' > "$cfg_dir/config.json"
+    if DOCKER_CONFIG="$cfg_dir" run_with_timeout "$timeout_seconds" docker pull "$image" >/dev/null 2>&1; then
+        rm -rf "$cfg_dir"
+        return 0
+    fi
+
+    rm -rf "$cfg_dir"
+    return 1
+}
+
 # Reclaim Docker networks left behind by deleted k3d clusters.
 #
 # Each `k3d cluster create` provisions a `k3d-<cluster-name>` Docker network
@@ -342,23 +426,51 @@ cleanup_k3d_obol_networks() {
 
 reset_flow_workspace() {
     local dir="$1"
+    local archive_stale="${FLOW_ARCHIVE_STALE_WORKSPACES:-false}"
     local stale_root="$OBOL_ROOT/.tmp/stale-workspaces"
-    local stack_id name
+    local stack_id name obol_cmd archive_target
+
+    obol_cmd=""
+    if [ -x "$dir/bin/obol" ]; then
+        obol_cmd="$dir/bin/obol"
+    elif [ -x "$OBOL" ]; then
+        obol_cmd="$OBOL"
+    fi
+
+    if [ -n "$obol_cmd" ] && { [ -d "$dir/config" ] || [ -d "$dir/data" ]; }; then
+        OBOL_DEVELOPMENT=true \
+        OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$dir/config" \
+        OBOL_BIN_DIR="$dir/bin" \
+        OBOL_DATA_DIR="$dir/data" \
+            run_with_timeout 120 "$obol_cmd" stack down >/dev/null 2>&1 || true
+        OBOL_DEVELOPMENT=true \
+        OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$dir/config" \
+        OBOL_BIN_DIR="$dir/bin" \
+        OBOL_DATA_DIR="$dir/data" \
+            run_with_timeout 120 "$obol_cmd" stack purge --force >/dev/null 2>&1 || true
+    fi
 
     if [ -f "$dir/config/.stack-id" ]; then
         stack_id="$(tr -d '[:space:]' < "$dir/config/.stack-id" 2>/dev/null || true)"
         if [ -n "$stack_id" ] && command -v k3d >/dev/null 2>&1; then
-            k3d cluster delete "obol-stack-$stack_id" >/dev/null 2>&1 || true
+            run_with_timeout 30 k3d cluster delete "obol-stack-$stack_id" >/dev/null 2>&1 || true
         fi
     fi
 
-    mkdir -p "$stale_root"
     for name in config data; do
         if [ -e "$dir/$name" ]; then
-            mv "$dir/$name" "$stale_root/$(basename "$dir")-$name-$(date +%Y%m%d-%H%M%S)-$$" 2>/dev/null || rm -rf "$dir/$name" 2>/dev/null || true
+            if [ "$archive_stale" = "true" ]; then
+                mkdir -p "$stale_root"
+                archive_target="$stale_root/$(basename "$dir")-$name-$(date +%Y%m%d-%H%M%S)-$$"
+                mv "$dir/$name" "$archive_target" 2>/dev/null || rm -rf "${dir:?}/$name" 2>/dev/null || true
+            else
+                rm -rf "${dir:?}/$name" 2>/dev/null || true
+            fi
         fi
     done
-    rm -rf "$dir/bin" 2>/dev/null || true
+    rm -rf "${dir:?}/bin" 2>/dev/null || true
     mkdir -p "$dir"/{bin,config,data}
 
     cleanup_k3d_obol_networks
@@ -460,7 +572,7 @@ x402_facilitator_image() {
         return 1
     }
 
-    if ! docker pull "$image" >/dev/null 2>&1; then
+    if ! docker_pull_public_image "$image" "${X402_FACILITATOR_PULL_TIMEOUT:-180}"; then
         echo "x402 facilitator image not available: $image" >&2
         return 1
     fi
@@ -472,6 +584,7 @@ start_x402_facilitator_container() {
     local name="$1"
     local config="$2"
     local log="$3"
+    local port="$4"
     local image config_abs
 
     image=$(x402_facilitator_image) || return 1
@@ -479,12 +592,21 @@ start_x402_facilitator_container() {
 
     docker rm -f "$name" >/dev/null 2>&1 || true
     : > "$log"
-    docker run -d \
-        --name "$name" \
-        --network host \
-        -v "$config_abs:/config.json:ro" \
-        "$image" \
-        --config /config.json >/dev/null
+    if [ "$(uname -s)" = "Darwin" ]; then
+        docker run -d \
+            --name "$name" \
+            -p "${port}:${port}" \
+            -v "$config_abs:/config.json:ro" \
+            "$image" \
+            --config /config.json >/dev/null
+    else
+        docker run -d \
+            --name "$name" \
+            --network host \
+            -v "$config_abs:/config.json:ro" \
+            "$image" \
+            --config /config.json >/dev/null
+    fi
 }
 
 write_x402_facilitator_logs() {
@@ -898,7 +1020,7 @@ ensure_image_in_k3d() {
     local cluster="$2"
     local node="k3d-${cluster}-server-0"
     if ! docker exec "$node" crictl images 2>/dev/null | grep -q "$(echo "$img" | cut -d: -f1)\b"; then
-        docker pull -q "$img" >/dev/null 2>&1 || return 1
+        docker_pull_public_image "$img" "${K3D_IMAGE_PULL_TIMEOUT:-300}" || return 1
         local tar
         tar=$(mktemp -t k3d-img-XXXXXX.tar)
         docker save "$img" -o "$tar"
@@ -909,4 +1031,4 @@ ensure_image_in_k3d() {
     fi
 }
 
-refresh_obol_ingress_env
+init_obol_ingress_env_static

@@ -1199,7 +1199,7 @@ discover_response=$(curl -sf --max-time 300 \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"hermes-agent\",
+        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
             \"content\": \"Search the ERC-8004 agent identity registry on Base Sepolia for recently registered AI inference services that support x402 payments. Use the discovery skill to scan for agents. Look for one named 'Dual-Stack Test Inference' or similar with natural_language_processing skills. Report what you find — the agent ID, name, endpoint URL, and whether it supports x402.\"
@@ -1222,10 +1222,10 @@ buy_response=$(curl -sf --max-time 300 \
     -H "Authorization: Bearer $BOB_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
-        \"model\": \"hermes-agent\",
+        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"
         }],
         \"max_tokens\": 4000,
 	        \"stream\": false

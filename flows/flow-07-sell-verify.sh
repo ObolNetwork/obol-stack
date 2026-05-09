@@ -54,6 +54,12 @@ fi
 step "Tunnel status"
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
 TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
+TUNNEL_HOST=""
+TUNNEL_IP=""
+if [ -n "$TUNNEL_URL" ]; then
+    TUNNEL_HOST=$(printf '%s\n' "${TUNNEL_URL#https://}" | cut -d/ -f1)
+    TUNNEL_IP=$(dig +short A "$TUNNEL_HOST" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+fi
 if [ -n "$TUNNEL_URL" ]; then
     pass "Tunnel URL: $TUNNEL_URL"
 else
@@ -158,15 +164,28 @@ fi
 # 402 via tunnel
 if [ -n "$TUNNEL_URL" ]; then
     step "402 via tunnel"
-    tunnel_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
-        "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
-    if [ "$tunnel_code" = "402" ]; then
-        pass "Tunnel 402 Payment Required"
-    else
-        fail "Tunnel expected 402, got $tunnel_code"
-    fi
+    tunnel_target="$TUNNEL_URL/services/flow-qwen/v1/chat/completions"
+    for i in $(seq 1 48); do
+        if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
+            tunnel_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --connect-timeout 10 \
+                --connect-to "${TUNNEL_HOST}:443:${TUNNEL_IP}:443" \
+                -H "Host: $TUNNEL_HOST" \
+                -X POST "$tunnel_target" \
+                -H "Content-Type: application/json" \
+                -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
+        else
+            tunnel_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+                "$tunnel_target" \
+                -H "Content-Type: application/json" \
+                -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
+        fi
+        if [ "$tunnel_code" = "402" ]; then
+            pass "Tunnel 402 Payment Required (attempt $i)"
+            break
+        fi
+        [ "$i" -eq 48 ] && fail "Tunnel expected 402 after 240s, got $tunnel_code"
+        sleep 5
+    done
 fi
 
 # §1.7: Verifier metrics — check metrics from ALL x402-verifier pods

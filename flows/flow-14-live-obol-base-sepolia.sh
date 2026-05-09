@@ -397,8 +397,10 @@ ensure_bob_tunnel_dns() {
     local host="$1"; local ip="$2"; local nodehosts patch_file
     [ -n "$host" ] || return 0
     if [ -z "$ip" ]; then ip=$(resolve_public_ipv4 "$host" || true); fi
-    if [ -z "$ip" ]; then fail "Could not resolve public IPv4 for tunnel host $host"; return 0; fi
-
+    if [ -z "$ip" ]; then
+        echo "  ! Could not resolve public IPv4 for tunnel host $host; continuing without CoreDNS override"
+        return 0
+    fi
     step "Bob: tunnel DNS override"
     nodehosts=$(bob kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}' 2>/dev/null || true)
     if [ -z "$nodehosts" ]; then fail "Could not read Bob CoreDNS NodeHosts"; return 0; fi
@@ -1120,6 +1122,45 @@ if [ -z "$erpc_balance_wei" ] || ! python3 -c "import sys; sys.exit(0 if int('$e
     emit_metrics; exit 1
 fi
 
+step "Bob: ensure live OBOL Permit2 allowance"
+PERMIT2_ADDRESS="0x000000000022D473030F116dDEE9F6B43aC78BA3"
+permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+    "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+    pass "Bob Permit2 allowance already set: $permit2_allowance"
+else
+    approve_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
+        "approve(address,uint256)" "$PERMIT2_ADDRESS" \
+        115792089237316195423570985008687907853269984665640564039457584007913129639935 \
+        --rpc-url "$BASE_SEPOLIA_RPC" --private-key "$BOB_PRIVATE_KEY" 2>&1 || true)
+    approve_tx=$(echo "$approve_out" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+    print(d.get("transactionHash",""))
+except Exception:
+    pass' || true)
+    if [ -z "$approve_tx" ]; then
+        fail "Could not submit Bob Permit2 approval: ${approve_out:0:300}"
+        emit_metrics; exit 1
+    fi
+    permit2_ready=0
+    for _ in $(seq 1 30); do
+        permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+            "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+        if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+            permit2_ready=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$permit2_ready" = "1" ]; then
+        pass "Bob Permit2 approval confirmed: tx=$approve_tx allowance=$permit2_allowance"
+    else
+        fail "Bob Permit2 approval did not become visible after tx $approve_tx"
+        emit_metrics; exit 1
+    fi
+fi
+
 BOB_SIGNER_BAL_BEFORE_PAID="$got_balance"
 ALICE_BAL_BEFORE_PAID=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
     "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
@@ -1201,7 +1242,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
         }],
         \"max_tokens\": 4000,
         \"stream\": false

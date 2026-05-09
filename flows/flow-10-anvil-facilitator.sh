@@ -159,6 +159,8 @@ else
 
     FACILITATOR_PORT=4040
     FACILITATOR_CONFIG="$FLOW_STATE_DIR/facilitator-config.json"
+    FACILITATOR_RPC_PORT="${ANVIL_RPC##*:}"
+    FACILITATOR_RPC_URL="$(host_service_url_for_plain_container "$FACILITATOR_RPC_PORT")"
     # Use FACILITATOR_SIGNER_KEY (accounts[0]) — matches internal/testutil/facilitator_real.go
     SIGNER_KEY="${FACILITATOR_SIGNER_KEY#0x}"
     cat > "$FACILITATOR_CONFIG" << FEOF
@@ -166,12 +168,12 @@ else
   "port": $FACILITATOR_PORT, "host": "0.0.0.0",
   "chains": {"eip155:84532": {"eip1559": true, "flashblocks": false,
     "signers": ["$SIGNER_KEY"],
-    "rpc": [{"http": "http://127.0.0.1:8545", "rate_limit": 50}]}},
+    "rpc": [{"http": "$FACILITATOR_RPC_URL", "rate_limit": 50}]}},
   "schemes": [{"id": "v1-eip155-exact","chains":"eip155:*"},{"id":"v2-eip155-exact","chains":"eip155:*"}]
 }
 FEOF
     FACILITATOR_CONTAINER="obol-flow10-x402-facilitator"
-    if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG"; then
+    if ! start_x402_facilitator_container "$FACILITATOR_CONTAINER" "$FACILITATOR_CONFIG" "$FACILITATOR_LOG" "$FACILITATOR_PORT"; then
         fail "Facilitator container failed to start — inspect $FACILITATOR_LOG"
         emit_metrics; exit 0
     fi
