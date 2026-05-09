@@ -3,11 +3,13 @@
 #
 # Two independent obol stacks on the same machine. Alice registers her
 # inference service on the ERC-8004 Identity Registry (Base Sepolia).
-# Bob's Hermes agent discovers her by scanning the registry, buys inference
-# tokens via x402, and uses the paid/* sidecar route.
+# Bob's Hermes agent discovers her by scanning the registry. The buy step then
+# validates the host-side `obol buy inference` path by default. A legacy
+# in-agent `buy.py` prompt remains available only via an explicit
+# FLOW11_BUY_MODE=agent-prompt override.
 #
-# This is the most human-like integration test: every interaction with
-# Bob is through natural language prompts to his Hermes agent.
+# This exercises the live dual-stack Alice/Bob path while also covering the
+# host-side buy CLI on the same Base Sepolia flow.
 #
 # Requires:
 #   - .env with REMOTE_SIGNER_PRIVATE_KEY funded with Base Sepolia ETH for Alice
@@ -86,6 +88,18 @@ BOB_AGENT_RUNTIME="hermes"
 FLOW11_BUY_COUNT="${FLOW11_BUY_COUNT:-5}"
 FLOW11_PRICE_MICRO_USDC=1000
 FLOW11_REQUIRED_BOB_USDC=$((FLOW11_BUY_COUNT * FLOW11_PRICE_MICRO_USDC))
+FLOW11_BUY_MODE="${FLOW11_BUY_MODE:-host-cli}"
+FLOW11_BUY_BUDGET_USDC="$(python3 - "$FLOW11_REQUIRED_BOB_USDC" <<'PY'
+import sys
+
+micro = int(sys.argv[1])
+whole, frac = divmod(micro, 1_000_000)
+if frac:
+    print(f"{whole}.{frac:06d}".rstrip("0"))
+else:
+    print(str(whole))
+PY
+)"
 mkdir -p "$FLOW11_ARTIFACT_DIR"
 
 if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
@@ -1216,34 +1230,71 @@ echo "${discover_content:0:500}"
 # versions (interim "let me check..." responses sometimes fall under threshold).
 pass "Agent discovery prompt issued (success will be confirmed by buy + PurchaseRequest CR)"
 
-step "Bob's agent: buy inference from Alice"
-buy_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"
-        }],
-        \"max_tokens\": 4000,
-	        \"stream\": false
-	    }" 2>&1 || true)
-
-buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
-# The agent's textual response is informational only; the purchase is confirmed
-# structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
-# matching has been brittle across runtime versions (OpenClaw vs Hermes).
-echo "${buy_content:0:500}"
-if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
-    echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
-fi
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py: ${buy_content:0:500}"
+step "Bob: buy inference from Alice"
+buy_mode="$FLOW11_BUY_MODE"
+case "$buy_mode" in
+    host-cli|agent-prompt) ;;
+    *)
+        fail "Unsupported FLOW11_BUY_MODE=$buy_mode (expected host-cli or agent-prompt)"
+        cleanup_pid "$PF_AGENT"
+        rm -f "$PF_AGENT_LOG"
+        emit_metrics; exit 1
+        ;;
+esac
+if [ "$buy_mode" = "host-cli" ] && [ "$BOB_AGENT_RUNTIME" != "hermes" ]; then
+    fail "FLOW11_BUY_MODE=host-cli requires the Hermes runtime, got runtime=$BOB_AGENT_RUNTIME. Re-run with FLOW11_BUY_MODE=agent-prompt only if you intentionally want legacy coverage."
+    cleanup_pid "$PF_AGENT"
+    rm -f "$PF_AGENT_LOG"
     emit_metrics; exit 1
 fi
-pass "Agent buy prompt issued (success will be confirmed by PurchaseRequest CR)"
+
+if [ "$buy_mode" = "host-cli" ]; then
+    if buy_output=$(bob buy inference alice-inference \
+        --seller "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
+        --model "$OBOL_LLM_MODEL" \
+        --budget "$FLOW11_BUY_BUDGET_USDC" \
+        --expected-agent-id "$AGENT_ID" 2>&1); then
+        buy_ec=0
+    else
+        buy_ec=$?
+    fi
+    echo "${buy_output:0:500}"
+    if [ "$buy_ec" -ne 0 ]; then
+        fail "Host buy CLI failed — ${buy_output:0:500}"
+        cleanup_pid "$PF_AGENT"
+        rm -f "$PF_AGENT_LOG"
+        emit_metrics; exit 1
+    fi
+    pass "Host buy CLI succeeded (PurchaseRequest CR will confirm auth provisioning)"
+else
+    buy_response=$(curl -sf --max-time 300 \
+        -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
+        -H "Authorization: Bearer $BOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"$BOB_AGENT_RUNTIME-agent\",
+            \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-inference --endpoint $TUNNEL_URL/services/alice-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count $FLOW11_BUY_COUNT\"
+            }],
+            \"max_tokens\": 4000,
+	            \"stream\": false
+	        }" 2>&1 || true)
+
+    buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
+    # The agent's textual response is informational only; the purchase is confirmed
+    # structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
+    # matching has been brittle across runtime versions (OpenClaw vs Hermes).
+    echo "${buy_content:0:500}"
+    if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
+        echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
+    fi
+    if printf '%s' "$buy_content" | agent_response_refused; then
+        fail "Agent refused to run buy.py: ${buy_content:0:500}"
+        emit_metrics; exit 1
+    fi
+    pass "Agent buy prompt issued (success will be confirmed by PurchaseRequest CR)"
+fi
 
 poll_step_grep "Bob: PurchaseRequest Ready" "True" 24 5 purchase_request_status
 pr_status=$(purchase_request_status)
