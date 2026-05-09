@@ -74,6 +74,36 @@ obol kubectl cluster-info
 obol kubectl get namespaces
 ```
 
+### Forcing image rebuilds
+
+`obol stack up` (with `OBOL_DEVELOPMENT=true`) reuses any locally-tagged
+`ghcr.io/obolnetwork/<name>:latest` image to keep warm runs fast. Use
+`OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES` to override that for specific images:
+
+```bash
+# Rebuild everything
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true obol stack up
+
+# Rebuild only the image you changed — avoids the full 10-minute rebuild
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=x402-verifier obol stack up
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller,x402-buyer obol stack up
+```
+
+| Value | Effect |
+|-------|--------|
+| unset / `false` / `0` | Reuse all cached images (default) |
+| `true` / `all` | Rebuild every local image |
+| `img1,img2` | Rebuild only the named images |
+
+The short name is the image base without registry prefix or tag
+(`x402-verifier` from `ghcr.io/obolnetwork/x402-verifier:latest`).
+
+Available image names: `x402-verifier`, `serviceoffer-controller`,
+`x402-buyer`, `demo-server`, `public-storefront`.
+
+When nothing was rebuilt the "Local dev images ready" summary line prints
+the selective-rebuild hint so you know the option is available.
+
 The cluster runs:
 - k3d (Kubernetes in Docker) with 1 server + 3 agent nodes
 - Traefik (ingress controller)

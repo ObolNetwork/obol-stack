@@ -20,8 +20,17 @@ const (
 	remoteSignerName        = "remote-signer"
 	remoteSignerPort        = 9000
 	remoteSignerImage       = "ghcr.io/obolnetwork/remote-signer:v0.3.0"
-	remoteSignerKeystoreDir = "/keystores"
+	// Image hard-codes /data/keystores as the default and reads its
+	// config under the SIGNER__... env namespace; values picked to match
+	// the master agent's working config in hermes-obol-agent.
+	remoteSignerKeystoreDir = "/data/keystores"
 	remoteSignerSecretName  = "remote-signer-keystore"
+	// Fixed filename for the keystore inside the Secret + projected
+	// volume. The remote-signer reads the address from inside the V3
+	// keystore document, so the on-disk name is purely cosmetic — a
+	// stable name lets the volume `items` projection drop the password
+	// key cleanly without us having to thread the UUID through.
+	remoteSignerKeystoreKey = "keystore.json"
 )
 
 // ensureAgentWallet provisions a per-namespace remote-signer when the
@@ -111,11 +120,12 @@ func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial)
 		},
 		"type": "Opaque",
 		"data": map[string]any{
-			// V3 keystore filename matches its UUID by convention so
-			// remote-signer's directory walker resolves it consistently
-			// with the chart's flow.
-			mat.KeystoreUUID + ".json": base64.StdEncoding.EncodeToString(mat.KeystoreJSON),
-			"password":                 base64.StdEncoding.EncodeToString([]byte(mat.Password)),
+			// Fixed key name; the V3 document carries the UUID + address
+			// internally, and the volume's `items` projection only
+			// references this key (the password lives under a separate
+			// key, read via env, never mounted into the keystore dir).
+			remoteSignerKeystoreKey: base64.StdEncoding.EncodeToString(mat.KeystoreJSON),
+			"password":              base64.StdEncoding.EncodeToString([]byte(mat.Password)),
 		},
 	})
 	return u
@@ -165,9 +175,17 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 							"ports": []any{
 								map[string]any{"name": "http", "containerPort": int64(remoteSignerPort)},
 							},
+							// Env names match the upstream remote-signer image's
+							// SIGNER__<SECTION>__<KEY> hierarchy. Mirrors the
+							// master agent's config in hermes-obol-agent.
 							"env": []any{
+								map[string]any{"name": "SIGNER__SERVER__HOST", "value": "0.0.0.0"},
+								map[string]any{"name": "SIGNER__SERVER__PORT", "value": fmt.Sprintf("%d", remoteSignerPort)},
+								map[string]any{"name": "SIGNER__KEYSTORE__DIR", "value": remoteSignerKeystoreDir},
+								map[string]any{"name": "SIGNER__LOGGING__FORMAT", "value": "json"},
+								map[string]any{"name": "SIGNER__LOGGING__LEVEL", "value": "info"},
 								map[string]any{
-									"name": "KEYSTORE_PASSWORD",
+									"name": "SIGNER__KEYSTORE__PASSWORD",
 									"valueFrom": map[string]any{
 										"secretKeyRef": map[string]any{
 											"name": remoteSignerSecretName,
@@ -175,15 +193,14 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 										},
 									},
 								},
-								map[string]any{"name": "KEYSTORE_PATH", "value": remoteSignerKeystoreDir},
 							},
 							"readinessProbe": map[string]any{
-								"httpGet":             map[string]any{"path": "/health", "port": int64(remoteSignerPort)},
+								"httpGet":             map[string]any{"path": "/healthz", "port": int64(remoteSignerPort)},
 								"initialDelaySeconds": int64(2),
 								"periodSeconds":       int64(5),
 							},
 							"livenessProbe": map[string]any{
-								"httpGet":             map[string]any{"path": "/health", "port": int64(remoteSignerPort)},
+								"httpGet":             map[string]any{"path": "/healthz", "port": int64(remoteSignerPort)},
 								"initialDelaySeconds": int64(10),
 								"periodSeconds":       int64(15),
 							},
@@ -201,14 +218,15 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 							"name": "keystore",
 							"secret": map[string]any{
 								"secretName": remoteSignerSecretName,
-								// Mount only the keystore JSON (and not
-								// the password) into the directory — the
-								// password is wired through env, not file.
+								// Mount only the keystore JSON. The password
+								// lives in the same Secret under a separate
+								// key but is read via env, not file —
+								// projecting it would create a non-keystore
+								// file in /data/keystores and trigger the
+								// signer's "skipping keystore" warnings.
 								"items": []any{
-									map[string]any{"key": "password", "path": ".password.skip"},
+									map[string]any{"key": remoteSignerKeystoreKey, "path": remoteSignerKeystoreKey},
 								},
-								// Default-mode override irrelevant: fsGroup
-								// + readOnly on volumeMount cover access.
 							},
 						},
 					},
@@ -216,11 +234,6 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 			},
 		},
 	})
-	// Patch the volume to also project the keystore JSON. The fixed
-	// `items` list above only references `password`; we want the keystore
-	// JSON file too. Using a projected items list lets us pick filenames
-	// without parsing Secret keys at apply time.
-	patchSignerVolumeWithKeystoreJSON(deployment)
 
 	service := &unstructured.Unstructured{}
 	service.SetUnstructuredContent(map[string]any{
@@ -251,35 +264,3 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 	return []*unstructured.Unstructured{deployment, service}
 }
 
-// patchSignerVolumeWithKeystoreJSON drops the no-op .password.skip stub
-// produced inline above and projects every Secret key as a file under
-// /keystores. Done after the Deployment is fully constructed so the
-// inline literal stays readable; a build-time-only post-step rather than
-// branching the construction logic is the smaller change.
-func patchSignerVolumeWithKeystoreJSON(deployment *unstructured.Unstructured) {
-	volumes, _, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
-	if err != nil {
-		return
-	}
-	for i, raw := range volumes {
-		v, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if v["name"] != "keystore" {
-			continue
-		}
-		secretMap, _ := v["secret"].(map[string]any)
-		if secretMap == nil {
-			continue
-		}
-		// Drop items so the Secret volume mounts every key as a file at
-		// /keystores/<key>. The remote-signer's keystore-dir scan picks
-		// up the .json file; "password" is a non-JSON sibling that the
-		// scanner ignores.
-		delete(secretMap, "items")
-		v["secret"] = secretMap
-		volumes[i] = v
-	}
-	_ = unstructured.SetNestedSlice(deployment.Object, volumes, "spec", "template", "spec", "volumes")
-}

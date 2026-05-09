@@ -11,6 +11,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -310,7 +311,18 @@ func runAgentBackedDemo(
 		if _, err := kubectlApplyOutput(cfg, nsManifest); err != nil {
 			return fmt.Errorf("apply namespace: %w", err)
 		}
+		// Pin a model up front so the controller doesn't park at
+		// ModelUnpinned. The demo is meant to be one-shot; surfacing
+		// LiteLLM-empty as a clear error here is better than letting the
+		// agent silently never reach Ready.
+		demoModel, modelErr := resolveDefaultAgentModel(cfg)
+		if modelErr != nil {
+			return fmt.Errorf("resolve a default model for the demo agent: %w", modelErr)
+		}
+		u.Infof("Pinning demo agent to model %q (cluster top-of-rank)", demoModel)
+
 		manifest := agentcrd.BuildAgent(agentName, agentcrd.AgentOptions{
+			Model:        demoModel,
 			Skills:       spec.Agent.Skills,
 			Objective:    spec.Agent.Objective,
 			CreateWallet: true,
@@ -398,10 +410,34 @@ func runAgentBackedDemo(
 	}
 
 	u.Blank()
-	u.Dim("Note: agent-backed demos depend on serviceoffer-controller step 2d for in-cluster Hermes provisioning. Until that lands the offer will park at Ready=False until you provision the agent's pod manually.")
 	printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, false)
 
 	return nil
+}
+
+// resolveDefaultAgentModel picks a model to pin onto a fresh Agent CR.
+// Walks the cluster's LiteLLM model_list (the same source `obol model
+// list` reads), drops the meta `paid/*` route, and returns the top
+// entry. The list is already in the operator's preferred order via
+// `obol model prefer`, so "first non-paid" is a meaningful default.
+//
+// Returns an error if the cluster has no usable models — the caller
+// turns this into a clear "configure a model first" message rather than
+// silently picking nothing.
+func resolveDefaultAgentModel(cfg *config.Config) (string, error) {
+	configured, err := model.GetConfiguredModels(cfg)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range configured {
+		// Skip the paid/* meta route — it's a buyer-side namespace, not
+		// a model the agent can actually run inference on.
+		if strings.HasPrefix(name, "paid/") {
+			continue
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("no usable LiteLLM model configured; run `obol model setup` or pull an Ollama model first")
 }
 
 // agentRefForSale is what we need to know about the referenced Agent CR

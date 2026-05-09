@@ -714,8 +714,39 @@ func devPreloadImages() []string {
 	return images
 }
 
-func reuseLocalDevImages() bool {
-	return !strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES")), "true")
+// forceRebuildSet parses OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES and returns a
+// predicate that reports whether a given image tag should be force-rebuilt.
+//
+//   - unset / "" / "false" / "0" → never force-rebuild (default reuse behaviour)
+//   - "true" / "all"             → always force-rebuild every image
+//   - "img1,img2,…"              → force-rebuild only the named images; match is
+//     against the short name (last path component before the colon, e.g.
+//     "x402-verifier" from "ghcr.io/obolnetwork/x402-verifier:latest")
+func forceRebuildSet() func(tag string) bool {
+	raw := strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES"))
+	switch strings.ToLower(raw) {
+	case "", "false", "0":
+		return func(string) bool { return false }
+	case "true", "all":
+		return func(string) bool { return true }
+	}
+	names := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if idx := strings.Index(name, ":"); idx != -1 {
+			name = name[:idx]
+		}
+		if name != "" {
+			names[name] = true
+		}
+	}
+	return func(tag string) bool {
+		base := filepath.Base(tag)
+		if idx := strings.Index(base, ":"); idx != -1 {
+			base = base[:idx]
+		}
+		return names[base]
+	}
 }
 
 func dockerImageAvailableLocally(tag string) bool {
@@ -844,7 +875,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
-	reuseCachedImages := reuseLocalDevImages()
+	shouldForceRebuild := forceRebuildSet()
 	serverCID := k3dServerContainerID(clusterName)
 	cache := loadImportedImageCache(cfg)
 
@@ -870,7 +901,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 
 		total++
 
-		if !(reuseCachedImages && dockerImageAvailableLocally(img.tag)) {
+		if shouldForceRebuild(img.tag) || !dockerImageAvailableLocally(img.tag) {
 			if u != nil {
 				u.Infof("Building %s from %s", img.tag, img.dockerfile)
 			}
@@ -898,7 +929,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	for _, ref := range devPreloadImages() {
 		total++
 
-		if !(reuseCachedImages && dockerImageAvailableLocally(ref)) {
+		if shouldForceRebuild(ref) || !dockerImageAvailableLocally(ref) {
 			if u != nil {
 				u.Infof("Pulling %s", ref)
 			}
@@ -936,8 +967,8 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 		// Surface the rebuild escape hatch on the warm path. When `built == 0`
 		// the dev may be wondering whether their latest source change actually
 		// landed in the running pods; the hint tells them how to force it.
-		if built == 0 && reuseCachedImages {
-			u.Dim("  Re-run with OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true to rebuild from source.")
+		if built == 0 {
+			u.Dim("  Re-run with OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true (all) or e.g. =x402-verifier,serviceoffer-controller to rebuild from source.")
 		}
 	}
 }
