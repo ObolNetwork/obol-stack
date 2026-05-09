@@ -23,7 +23,7 @@ const (
 	hermesAPISecret    = "hermes-api-server"
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
-	defaultHermesImage = "nousresearch/hermes-agent:v2026.4.30"
+	defaultHermesImage = "nousresearch/hermes-agent:v2026.5.7"
 )
 
 // agentLabels returns the standard label set we attach to every primitive
