@@ -244,6 +244,11 @@ pin_erpc_chain_single_upstream() {
     local chain_id="$2"
     local upstream_id="$3"
 
+    if ! command -v ruby >/dev/null 2>&1; then
+        echo "ruby is required to pin eRPC chain upstreams in flow-13" >&2
+        return 1
+    fi
+
     local current
     current=$("$runner" kubectl get cm erpc-config -n erpc -o jsonpath='{.data.erpc\.yaml}' 2>/dev/null || true)
     if [ -z "$current" ]; then

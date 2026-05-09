@@ -430,6 +430,12 @@ reset_flow_workspace() {
     local stale_root="$OBOL_ROOT/.tmp/stale-workspaces"
     local stack_id name obol_cmd archive_target
 
+    if [ -f "$dir/config/.stack-id" ]; then
+        stack_id="$(tr -d '[:space:]' < "$dir/config/.stack-id" 2>/dev/null || true)"
+    else
+        stack_id=""
+    fi
+
     obol_cmd=""
     if [ -x "$dir/bin/obol" ]; then
         obol_cmd="$dir/bin/obol"
@@ -452,11 +458,8 @@ reset_flow_workspace() {
             run_with_timeout 120 "$obol_cmd" stack purge --force >/dev/null 2>&1 || true
     fi
 
-    if [ -f "$dir/config/.stack-id" ]; then
-        stack_id="$(tr -d '[:space:]' < "$dir/config/.stack-id" 2>/dev/null || true)"
-        if [ -n "$stack_id" ] && command -v k3d >/dev/null 2>&1; then
-            run_with_timeout 30 k3d cluster delete "obol-stack-$stack_id" >/dev/null 2>&1 || true
-        fi
+    if [ -n "$stack_id" ] && command -v k3d >/dev/null 2>&1; then
+        run_with_timeout 30 k3d cluster delete "obol-stack-$stack_id" >/dev/null 2>&1 || true
     fi
 
     for name in config data; do
