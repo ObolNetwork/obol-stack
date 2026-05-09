@@ -46,6 +46,7 @@ func TestEmbeddedImages_NoNewLatestTags(t *testing.T) {
 		"base/templates/serviceoffer-crd.yaml",
 		"base/templates/registrationrequest-crd.yaml",
 		"base/templates/purchaserequest-crd.yaml",
+		"base/templates/agent-crd.yaml",
 	}
 
 	var hits []latestHit

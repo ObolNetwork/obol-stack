@@ -14,18 +14,28 @@ const (
 	ServiceOfferKind        = "ServiceOffer"
 	RegistrationRequestKind = "RegistrationRequest"
 	PurchaseRequestKind     = "PurchaseRequest"
+	AgentKind               = "Agent"
 
 	ServiceOfferResource        = "serviceoffers"
 	RegistrationRequestResource = "registrationrequests"
 	PurchaseRequestResource     = "purchaserequests"
+	AgentResource               = "agents"
 
 	PausedAnnotation = "obol.org/paused"
+
+	AgentRuntimeHermes = "hermes"
+
+	AgentPhasePending      = "Pending"
+	AgentPhaseProvisioning = "Provisioning"
+	AgentPhaseReady        = "Ready"
+	AgentPhaseFailed       = "Failed"
 )
 
 var (
 	ServiceOfferGVR        = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceOfferResource}
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
 	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
+	AgentGVR               = schema.GroupVersionResource{Group: Group, Version: Version, Resource: AgentResource}
 
 	ServiceGVR        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 	SecretGVR         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
@@ -34,6 +44,12 @@ var (
 	MiddlewareGVR     = schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "middlewares"}
 	HTTPRouteGVR      = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 	ReferenceGrantGVR = schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1beta1", Resource: "referencegrants"}
+	// Used by the agent reconciler when provisioning per-namespace
+	// runtime primitives. Keeping them next to the existing GVRs avoids
+	// scattering schema.GroupVersionResource literals across the package.
+	NamespaceGVR      = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
+	ServiceAccountGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
+	PVCGVR            = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
 )
 
 type ServiceOffer struct {
@@ -45,12 +61,26 @@ type ServiceOffer struct {
 
 type ServiceOfferSpec struct {
 	Type         string                   `json:"type,omitempty"`
+	Agent        ServiceOfferAgent        `json:"agent,omitempty"`
 	Model        ServiceOfferModel        `json:"model,omitempty"`
 	Upstream     ServiceOfferUpstream     `json:"upstream,omitempty"`
 	Payment      ServiceOfferPayment      `json:"payment,omitempty"`
 	Path         string                   `json:"path,omitempty"`
 	Provenance   map[string]string        `json:"provenance,omitempty"`
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
+}
+
+// ServiceOfferAgent is populated when Spec.Type == "agent". The controller
+// resolves Ref → Agent CR, derives Upstream from Agent.status.endpoint, and
+// surfaces the agent's model + skills in the 402 response's extra block so
+// buyers see what they're paying for.
+type ServiceOfferAgent struct {
+	Ref ServiceOfferAgentRef `json:"ref,omitempty"`
+}
+
+type ServiceOfferAgentRef struct {
+	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type ServiceOfferModel struct {
@@ -109,11 +139,24 @@ type ServiceOfferService struct {
 }
 
 type ServiceOfferStatus struct {
-	Conditions         []Condition `json:"conditions,omitempty"`
-	Endpoint           string      `json:"endpoint,omitempty"`
-	AgentID            string      `json:"agentId,omitempty"`
-	RegistrationTxHash string      `json:"registrationTxHash,omitempty"`
-	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Conditions         []Condition                  `json:"conditions,omitempty"`
+	Endpoint           string                       `json:"endpoint,omitempty"`
+	AgentID            string                       `json:"agentId,omitempty"`
+	RegistrationTxHash string                       `json:"registrationTxHash,omitempty"`
+	ObservedGeneration int64                        `json:"observedGeneration,omitempty"`
+	AgentResolution    *ServiceOfferAgentResolution `json:"agentResolution,omitempty"`
+}
+
+// ServiceOfferAgentResolution is the controller's resolved view of an
+// agent-type offer's referenced Agent. Populated only when Spec.Type ==
+// "agent" and the Agent CR is Ready. Read by the route source when
+// building RouteRules so the 402 extra block surfaces what's actually
+// running.
+type ServiceOfferAgentResolution struct {
+	Model    string   `json:"model,omitempty"`
+	Skills   []string `json:"skills,omitempty"`
+	Runtime  string   `json:"runtime,omitempty"`
+	Endpoint string   `json:"endpoint,omitempty"`
 }
 
 type Condition struct {
@@ -179,6 +222,13 @@ func (o *ServiceOffer) EffectivePath() string {
 
 func (o *ServiceOffer) IsInference() bool {
 	return o.Spec.Type == "" || o.Spec.Type == "inference"
+}
+
+// IsAgent reports whether the offer references an Agent CR for its
+// upstream. Type=="agent" is the only signal — Ref must also be non-empty
+// for a usable offer, but admission validation enforces that.
+func (o *ServiceOffer) IsAgent() bool {
+	return o.Spec.Type == "agent"
 }
 
 func (o *ServiceOffer) IsPaused() bool {
@@ -249,4 +299,56 @@ type PurchaseRequestStatus struct {
 
 func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
 	return "llm"
+}
+
+// ── Agent ───────────────────────────────────────────────────────────────────
+
+type Agent struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              AgentSpec   `json:"spec,omitempty"`
+	Status            AgentStatus `json:"status,omitempty"`
+}
+
+type AgentSpec struct {
+	Runtime   string      `json:"runtime,omitempty"`
+	Model     string      `json:"model,omitempty"`
+	Skills    []string    `json:"skills,omitempty"`
+	Objective string      `json:"objective,omitempty"`
+	Wallet    AgentWallet `json:"wallet,omitempty"`
+}
+
+type AgentWallet struct {
+	Create bool `json:"create,omitempty"`
+}
+
+type AgentStatus struct {
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Phase              string      `json:"phase,omitempty"`
+	PinnedModel        string      `json:"pinnedModel,omitempty"`
+	WalletAddress      string      `json:"walletAddress,omitempty"`
+	Endpoint           string      `json:"endpoint,omitempty"`
+	Conditions         []Condition `json:"conditions,omitempty"`
+}
+
+func (a *Agent) EffectiveRuntime() string {
+	if a.Spec.Runtime != "" {
+		return a.Spec.Runtime
+	}
+	return AgentRuntimeHermes
+}
+
+// EffectiveModel returns the model the controller should use right now:
+// the user-pinned spec.model when set, falling back to the previously
+// resolved status.pinnedModel. Returns "" if neither is set, signalling
+// "first reconcile, pick top-of-rank from LiteLLM and write back to status".
+func (a *Agent) EffectiveModel() string {
+	if a.Spec.Model != "" {
+		return a.Spec.Model
+	}
+	return a.Status.PinnedModel
+}
+
+func (a *Agent) IsReady() bool {
+	return a.Status.Phase == AgentPhaseReady
 }

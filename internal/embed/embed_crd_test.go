@@ -148,10 +148,23 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 		t.Fatalf("spec.properties is not a map: %T", specProps)
 	}
 
-	// Required fields in spec (aligned with x402/ERC-8004 schema)
-	for _, field := range []string{"type", "model", "upstream", "payment", "path", "registration"} {
+	// Required fields in spec (aligned with x402/ERC-8004 schema). agent
+	// joins this list as part of the type=agent offer flow.
+	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "path", "registration"} {
 		if _, exists := pm[field]; !exists {
 			t.Errorf("spec.properties missing field %q", field)
+		}
+	}
+
+	typeProp, _ := pm["type"].(map[string]any)
+	enum, _ := typeProp["enum"].([]any)
+	got := make(map[string]bool, len(enum))
+	for _, v := range enum {
+		got[v.(string)] = true
+	}
+	for _, want := range []string{"inference", "fine-tuning", "http", "agent"} {
+		if !got[want] {
+			t.Errorf("spec.type.enum missing %q", want)
 		}
 	}
 }
@@ -349,6 +362,165 @@ func TestPurchaseRequestCRD_Parses(t *testing.T) {
 	}
 
 	_ = raw
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent CRD tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestAgentCRD_Parses(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+
+	docs := multiDoc(data)
+
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no Agent CRD found")
+	}
+
+	if name := nested(crd, "metadata", "name"); name != "agents.obol.org" {
+		t.Errorf("metadata.name = %v, want agents.obol.org", name)
+	}
+	if kind := nested(crd, "spec", "names", "kind"); kind != "Agent" {
+		t.Errorf("spec.names.kind = %v, want Agent", kind)
+	}
+	if group := nested(crd, "spec", "group"); group != "obol.org" {
+		t.Errorf("spec.group = %v, want obol.org", group)
+	}
+}
+
+func TestAgentCRD_Fields(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD found")
+	}
+
+	versions, ok := nested(crd, "spec", "versions").([]any)
+	if !ok || len(versions) == 0 {
+		t.Fatal("spec.versions empty")
+	}
+	v0 := versions[0].(map[string]any)
+
+	specProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("spec.properties not a map")
+	}
+	for _, field := range []string{"runtime", "model", "skills", "objective", "wallet"} {
+		if _, exists := specProps[field]; !exists {
+			t.Errorf("spec.properties missing %q", field)
+		}
+	}
+
+	statusProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "status", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("status.properties not a map — schema indentation broken?")
+	}
+	for _, field := range []string{"observedGeneration", "phase", "pinnedModel", "walletAddress", "endpoint", "conditions"} {
+		if _, exists := statusProps[field]; !exists {
+			t.Errorf("status.properties missing %q", field)
+		}
+	}
+
+	// Printer columns reference status fields — confirm each .status.X path
+	// resolves so kubectl shows real values, not blanks.
+	cols, ok := v0["additionalPrinterColumns"].([]any)
+	if !ok || len(cols) == 0 {
+		t.Fatal("additionalPrinterColumns missing")
+	}
+	for _, c := range cols {
+		col := c.(map[string]any)
+		path, _ := col["jsonPath"].(string)
+		if !strings.HasPrefix(path, ".status.") {
+			continue
+		}
+		field := strings.TrimPrefix(path, ".status.")
+		if idx := strings.Index(field, "["); idx > 0 {
+			field = field[:idx]
+		}
+		if _, exists := statusProps[field]; !exists {
+			t.Errorf("printer column %q references .status.%s missing from schema", col["name"], field)
+		}
+	}
+}
+
+func TestAgentCRD_RuntimeEnum(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD found")
+	}
+
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
+	runtime := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties", "runtime")
+
+	rm, ok := runtime.(map[string]any)
+	if !ok {
+		t.Fatal("spec.runtime not a map")
+	}
+
+	enum, ok := rm["enum"].([]any)
+	if !ok || len(enum) == 0 {
+		t.Fatal("spec.runtime.enum missing — controller relies on this to reject unknown runtimes")
+	}
+
+	got := make(map[string]bool)
+	for _, e := range enum {
+		got[e.(string)] = true
+	}
+	if !got["hermes"] {
+		t.Error("spec.runtime.enum missing 'hermes'")
+	}
+
+	if def, ok := rm["default"].(string); !ok || def != "hermes" {
+		t.Errorf("spec.runtime.default = %v, want hermes", rm["default"])
+	}
+}
+
+func TestAgentCRD_WalletAddressPattern(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD found")
+	}
+
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
+	addr := nested(v0, "schema", "openAPIV3Schema", "properties", "status", "properties", "walletAddress")
+
+	am, ok := addr.(map[string]any)
+	if !ok {
+		t.Fatal("status.walletAddress not a map")
+	}
+	pattern, _ := am["pattern"].(string)
+	// Empty string is allowed (wallet.create=false), so the pattern must be optional.
+	if pattern != "^(0x[0-9a-fA-F]{40})?$" {
+		t.Errorf("status.walletAddress.pattern = %q, want ^(0x[0-9a-fA-F]{40})?$", pattern)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

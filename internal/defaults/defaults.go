@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -60,12 +62,78 @@ func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
 		return err
 	}
 
+	// Under OBOL_DEVELOPMENT we build images from the working tree and
+	// import them into k3d as `<image>:latest`. The embedded templates
+	// pin published digests for production safety, which means the
+	// cluster ignores our locally-built images and silently uses stale
+	// ghcr.io binaries. Rewrite digest pins to :latest after copy so the
+	// dev cycle Just Works without operators having to kubectl-set-image
+	// every loop.
+	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+		if err := rewriteDevDigestPins(defaultsDir); err != nil {
+			return fmt.Errorf("rewrite dev digest pins: %w", err)
+		}
+	}
+
 	stamp, err := infrastructureStamp(backendName, stackID)
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(filepath.Join(defaultsDir, stampFile), []byte(stamp), 0o600)
+}
+
+// devLocallyBuiltImageBases lists the image refs whose digests we want
+// to swap for :latest under OBOL_DEVELOPMENT. Must stay in lockstep
+// with internal/stack.baseLocalImages — duplication is intentional to
+// avoid an import cycle (defaults → stack would form a loop).
+var devLocallyBuiltImageBases = []string{
+	"ghcr.io/obolnetwork/x402-verifier",
+	"ghcr.io/obolnetwork/serviceoffer-controller",
+	"ghcr.io/obolnetwork/x402-buyer",
+	"ghcr.io/obolnetwork/demo-server",
+	"ghcr.io/obolnetwork/obol-stack-public-storefront",
+}
+
+// rewriteDevDigestPins walks the copied defaults tree and replaces
+// every `<base>@sha256:<hex>` reference whose base is in
+// devLocallyBuiltImageBases with `<base>:latest`. Only operates on .yaml
+// and .yml files so we don't risk corrupting binaries or charts.
+func rewriteDevDigestPins(defaultsDir string) error {
+	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
+	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
+	for _, base := range devLocallyBuiltImageBases {
+		// Escape the base in case it ever grows a regex metachar; sha256
+		// digests are hex so a simple character class is enough.
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"@sha256:[a-f0-9]{64}"))
+		replaceWith = append(replaceWith, base+":latest")
+	}
+
+	return filepath.WalkDir(defaultsDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		updated := data
+		for i, p := range patterns {
+			updated = p.ReplaceAll(updated, []byte(replaceWith[i]))
+		}
+		if string(updated) == string(data) {
+			return nil
+		}
+		return os.WriteFile(path, updated, 0o600)
+	})
 }
 
 // InfrastructureReplacements returns the placeholder values used when copying

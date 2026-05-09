@@ -115,14 +115,23 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		return RouteRule{}, err
 	}
 
-	upstreamURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d",
-		offer.Spec.Upstream.Service,
-		offer.EffectiveNamespace(),
-		offer.EffectivePort(),
-	)
+	// Agent-type offers derive their upstream URL from the controller's
+	// resolved view (ServiceOffer.status.agentResolution), which the
+	// reconciler populates after looking up the referenced Agent CR. The
+	// non-agent path keeps the existing spec-based synthesis.
+	upstreamURL := ""
+	if offer.IsAgent() && offer.Status.AgentResolution != nil && offer.Status.AgentResolution.Endpoint != "" {
+		upstreamURL = offer.Status.AgentResolution.Endpoint
+	} else {
+		upstreamURL = fmt.Sprintf("http://%s.%s.svc.cluster.local:%d",
+			offer.Spec.Upstream.Service,
+			offer.EffectiveNamespace(),
+			offer.EffectivePort(),
+		)
+	}
 	stripPrefix := offer.EffectivePath()
 
-	return RouteRule{
+	rule := RouteRule{
 		Pattern:                strings.TrimSuffix(offer.EffectivePath(), "/") + "/*",
 		Price:                  price,
 		Description:            fmt.Sprintf("ServiceOffer %s", offer.Name),
@@ -142,7 +151,16 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		ApproxTokensPerRequest: approx,
 		OfferNamespace:         offer.Namespace,
 		OfferName:              offer.Name,
-	}, nil
+	}
+
+	if offer.IsAgent() && offer.Status.AgentResolution != nil {
+		res := offer.Status.AgentResolution
+		rule.AgentModel = res.Model
+		rule.AgentSkills = append([]string(nil), res.Skills...)
+		rule.AgentRuntime = res.Runtime
+	}
+
+	return rule, nil
 }
 
 func effectivePrice(offer *monetizeapi.ServiceOffer) (price, priceModel, perMTok string, approx int, err error) {

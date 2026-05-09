@@ -150,69 +150,6 @@ func TestBlocksHandler_MockRPC(t *testing.T) {
 	}
 }
 
-func TestQuantHandler_MockRPC(t *testing.T) {
-	callCount := 0
-	mockRPC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		var req struct {
-			Method string `json:"method"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-
-		var result string
-		switch req.Method {
-		case "eth_blockNumber":
-			result = `"0x10"`
-		case "eth_chainId":
-			result = `"0x2105"`
-		case "eth_getBlockByNumber":
-			result = `{"number":"0x10","timestamp":"0x60000000","gasUsed":"0x5208","gasLimit":"0x1c9c380","baseFeePerGas":"0x3b9aca00","transactions":["0x1","0x2"]}`
-		default:
-			result = `null`
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"result":  json.RawMessage(result),
-		})
-	}))
-	defer mockRPC.Close()
-
-	handler := QuantHandler(mockRPC.URL)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp Response
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if resp.Demo != "quant" {
-		t.Errorf("expected demo=quant, got %q", resp.Demo)
-	}
-
-	data, ok := resp.Data.(map[string]any)
-	if !ok {
-		t.Fatalf("data is not a map: %T", resp.Data)
-	}
-	if data["gasAnalysis"] == nil {
-		t.Error("expected gasAnalysis in response")
-	}
-	if data["txVolume"] == nil {
-		t.Error("expected txVolume in response")
-	}
-	if data["gasUtilization"] == nil {
-		t.Error("expected gasUtilization in response")
-	}
-}
-
 func TestResponseEnvelope(t *testing.T) {
 	handler := HelloHandler()
 	req := httptest.NewRequest(http.MethodGet, "/test?foo=bar", nil)

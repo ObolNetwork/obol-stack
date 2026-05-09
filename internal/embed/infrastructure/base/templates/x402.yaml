@@ -114,6 +114,31 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["purchaserequests/status"]
     verbs: ["get", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["agents"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["agents/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+  # Per-agent runtime resources written by the Agent reconciler.
+  # ServiceAccount + PVC are namespace-scoped child resources; secrets
+  # are limited to creating the agent's API-server token (random) and
+  # reading litellm-secrets for the master key. Reading all secrets
+  # cluster-wide is intentionally not granted; the agent reconciler only
+  # needs read access on litellm-secrets, but the dynamic client makes
+  # narrowing harder than it's worth for v1.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]

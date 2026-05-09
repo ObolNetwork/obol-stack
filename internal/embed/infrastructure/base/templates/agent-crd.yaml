@@ -1,0 +1,116 @@
+---
+# Agent CRD
+# Declarative spec for an Obol Stack agent (Hermes today, OpenClaw later).
+# Decouples agent lifecycle from selling — `obol sell agent <name>` references
+# an existing Agent rather than provisioning one inline. Internal manager
+# agents with RBAC can also create Agent resources to spawn sub-agents.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: Agent
+    listKind: AgentList
+    plural: agents
+    singular: agent
+    shortNames:
+      - ag
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: Model
+          type: string
+          jsonPath: .status.pinnedModel
+        - name: Wallet
+          type: string
+          jsonPath: .status.walletAddress
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                runtime:
+                  type: string
+                  enum:
+                    - hermes
+                  default: hermes
+                  description: "Agent runtime (only hermes today; openclaw planned)"
+                model:
+                  type: string
+                  maxLength: 256
+                  description: "LiteLLM model name to pin. Empty = controller picks cluster top-of-rank on first deploy and writes status.pinnedModel."
+                skills:
+                  type: array
+                  maxItems: 64
+                  items:
+                    type: string
+                    pattern: "^[a-z0-9][a-z0-9-]*$"
+                    maxLength: 64
+                  description: "Allow-listed skills written to the per-agent skills dir on first reconcile. Agent can edit afterwards; this is a seed, not a sandbox."
+                objective:
+                  type: string
+                  maxLength: 4096
+                  description: "Operator-supplied objective text. Substituted into the soul.md template by the controller on first write. Agent owns soul.md after that."
+                wallet:
+                  type: object
+                  properties:
+                    create:
+                      type: boolean
+                      default: false
+                      description: "Provision a per-namespace remote-signer keystore. Address is published in status.walletAddress."
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                phase:
+                  type: string
+                  description: "Pending | Provisioning | Ready | Failed"
+                pinnedModel:
+                  type: string
+                  description: "Actual model the agent is using (= spec.model when set, otherwise the auto-picked top-of-rank)."
+                walletAddress:
+                  type: string
+                  pattern: "^(0x[0-9a-fA-F]{40})?$"
+                  description: "Agent's signing address when wallet.create=true. Empty otherwise."
+                endpoint:
+                  type: string
+                  description: "Cluster-internal URL for the agent runtime (e.g. http://hermes.agent-quant.svc.cluster.local:8642)."
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

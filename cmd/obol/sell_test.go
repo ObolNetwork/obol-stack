@@ -199,6 +199,42 @@ func TestSellInference_Flags(t *testing.T) {
 	assertIntDefault(t, flags, "vm-host-port", 11435)
 }
 
+// TestSell_PayToFlagAliases locks in the --pay-to rollout: every sell
+// command that takes a recipient address must use --pay-to as the primary
+// flag with --wallet/--recipient/-w as deprecated aliases. The shared
+// payToFlag() helper produces this exact shape; the test guards against
+// someone re-introducing a bespoke --wallet flag.
+func TestSell_PayToFlagAliases(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+
+	cases := []string{"inference", "http", "demo", "update", "pricing"}
+	for _, sub := range cases {
+		t.Run(sub, func(t *testing.T) {
+			subCmd := findSubcommand(t, cmd, sub)
+			flags := flagMap(subCmd)
+
+			payTo, ok := flags["pay-to"]
+			if !ok {
+				t.Fatalf("--pay-to missing on `obol sell %s`", sub)
+			}
+			names := payTo.Names()
+			for _, expected := range []string{"pay-to", "wallet", "recipient", "w"} {
+				found := false
+				for _, n := range names {
+					if n == expected {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("`obol sell %s` --pay-to missing alias %q (got %v)", sub, expected, names)
+				}
+			}
+		})
+	}
+}
+
 func TestSellHTTP_Flags(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := sellCommand(cfg)
@@ -538,7 +574,10 @@ func TestDemoTypes_PerTypeDefaults(t *testing.T) {
 	}{
 		{"hello", "ethereum", "OBOL", "1"},
 		{"blocks", "base-sepolia", "USDC", "0.0001"},
-		{"quant", "base-sepolia", "USDC", "0.01"},
+		// Quant moved to agent-backed: 10 OBOL on ethereum mainnet, served
+		// by the new Agent CRD path. The legacy 0.01 USDC / base-sepolia
+		// pricing is gone with the pure-Go quant handler.
+		{"quant", "ethereum", "OBOL", "10"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.demo, func(t *testing.T) {

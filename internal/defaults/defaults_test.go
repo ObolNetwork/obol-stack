@@ -9,6 +9,58 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
+func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
+		t.Fatalf("CopyInfrastructure: %v", err)
+	}
+
+	x402Path := filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml")
+	data, err := os.ReadFile(x402Path)
+	if err != nil {
+		t.Fatalf("read x402.yaml: %v", err)
+	}
+	out := string(data)
+
+	// Every locally-built image must have lost its @sha256: pin and gained
+	// :latest, otherwise the cluster pulls a stale ghcr.io binary even
+	// when OBOL_DEVELOPMENT=true rebuilt the image locally.
+	for _, base := range devLocallyBuiltImageBases {
+		if strings.Contains(out, base+"@sha256:") {
+			t.Errorf("dev mode left digest pin on %s in %s", base, x402Path)
+		}
+	}
+	for _, want := range []string{
+		"ghcr.io/obolnetwork/x402-verifier:latest",
+		"ghcr.io/obolnetwork/serviceoffer-controller:latest",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dev mode did not rewrite to %q in %s", want, x402Path)
+		}
+	}
+}
+
+func TestCopyInfrastructure_ProductionPreservesDigestPins(t *testing.T) {
+	// Without OBOL_DEVELOPMENT=true, the digest pins must survive
+	// untouched. A regression here would silently downgrade prod
+	// installs to floating :latest tags.
+	t.Setenv("OBOL_DEVELOPMENT", "")
+
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
+		t.Fatalf("CopyInfrastructure: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ghcr.io/obolnetwork/serviceoffer-controller@sha256:") {
+		t.Error("production install lost serviceoffer-controller digest pin")
+	}
+}
+
 func TestCopyInfrastructureRendersStackPlaceholders(t *testing.T) {
 	cfg := &config.Config{ConfigDir: t.TempDir()}
 
