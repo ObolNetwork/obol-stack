@@ -25,7 +25,7 @@ import urllib.error
 # Constants
 # ---------------------------------------------------------------------------
 
-ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local:4000/rpc")
+ERPC_URL = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local/rpc")
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
 
 # ERC-8004 Identity Registry addresses (CREATE2 — same on all mainnets, same on all testnets)

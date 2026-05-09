@@ -4,6 +4,9 @@
 # Covers only: network list, network add/remove RPC, eRPC gateway health.
 source "$(dirname "$0")/lib.sh"
 
+refresh_obol_ingress_env
+INGRESS_URL="${OBOL_INGRESS_URL%/}"
+
 # List available networks (local nodes + remote RPCs)
 run_step_grep "network list" "ethereum\|Remote\|Local" "$OBOL" network list
 
@@ -18,7 +21,7 @@ run_step_grep "base-sepolia in network list" "base-sepolia\|84532" "$OBOL" netwo
 
 # eRPC is accessible at /rpc/evm/<chainId> — base-sepolia is chain 84532
 step "eRPC base-sepolia via Traefik (/rpc/evm/84532)"
-out=$($CURL_OBOL -sf --max-time 10 "http://obol.stack:8080/rpc/evm/84532" \
+out=$($CURL_OBOL -sf --max-time 10 "$INGRESS_URL/rpc/evm/84532" \
     -X POST -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1) || true
 if echo "$out" | grep -q '"result"'; then

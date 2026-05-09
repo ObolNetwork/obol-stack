@@ -12,10 +12,11 @@ if [ -n "$TUNNEL_URL" ]; then
         "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
-    if [ "$tunnel_probe" = "402" ]; then
+if [ "$tunnel_probe" = "402" ]; then
         BASE_URL="$TUNNEL_URL"
     fi
 fi
+export BASE_URL
 if [[ "$BASE_URL" == *"obol.stack"* ]]; then
     CURL_BASE="$CURL_OBOL"
 else

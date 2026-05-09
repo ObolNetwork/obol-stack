@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -161,7 +160,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	agentBaseURL := ""
 	if opts.AgentMode {
-		if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.Hostname != "" {
+		if st, _ := tunnel.LoadTunnelState(cfg); st != nil && st.IsPersistent() {
 			agentBaseURL = "https://" + st.Hostname
 		}
 	}
@@ -574,50 +573,21 @@ func containsID(ids []string, id string) bool {
 }
 
 func cliViaKubectlExec(cfg *config.Config, id string, args []string) error {
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return errors.New("cluster not running. Run 'obol stack up' first")
-	}
-
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
-	cmd := exec.Command(kubectlBinary, hermesExecArgs(namespace, args, stdinIsTerminal())...)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		exitErr := &exec.ExitError{}
-		if errors.As(err, &exitErr) {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus())
-			}
-		}
-		return err
-	}
-
-	return nil
+	return agentruntime.ExecInPod(cfg, agentruntime.Hermes, id, append([]string{hermesBinary}, args...))
 }
 
+// hermesExecArgs preserves the legacy argv-builder signature (namespace,
+// in-pod hermes args, TTY flag) so existing tests stay valid. It composes
+// the runtime-agnostic agentruntime.BuildExecArgs with the hermes binary
+// path, deriving the instance id from the namespace suffix.
 func hermesExecArgs(namespace string, args []string, withTTY bool) []string {
-	execArgs := []string{"exec", "-i"}
-	if withTTY {
-		execArgs = append(execArgs, "-t")
-	}
-	execArgs = append(execArgs,
-		"-c", agentruntime.Describe(agentruntime.Hermes).ServiceName,
-		"-n", namespace,
-		"deploy/"+agentruntime.Describe(agentruntime.Hermes).ServiceName,
-		"--",
-		hermesBinary,
+	id := strings.TrimPrefix(namespace, string(agentruntime.Hermes)+"-")
+	return agentruntime.BuildExecArgs(
+		agentruntime.Hermes,
+		id,
+		append([]string{hermesBinary}, args...),
+		withTTY,
 	)
-	return append(execArgs, args...)
-}
-
-func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func getToken(cfg *config.Config, id string) (string, error) {

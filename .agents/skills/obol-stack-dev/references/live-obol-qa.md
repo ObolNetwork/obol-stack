@@ -15,7 +15,8 @@ Default to live Base Sepolia for OBOL. Start Anvil only when explicitly testing 
 ## Live Token
 
 ```bash
-OBOL_TOKEN_BASE_SEPOLIA=0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
+OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
+# Source of truth: ObolNetwork/obol-stack#447
 ```
 
 `flow-14` defaults to this token. Override only when validating a different deployment.
@@ -28,10 +29,11 @@ Bob is the deterministic second-derived key from `REMOTE_SIGNER_PRIVATE_KEY`; it
 
 Current canonical live QA pair:
 
-- Alice/register key address: `0xC0De030F6C37f490594F93fB99e2756703c4297E`
-- Bob/buyer derived address: `0x57b0eF875DeB5A37301F1640E469a2129Da9490E`
+- Use the single Alice/Bob pair derived from the `REMOTE_SIGNER_PRIVATE_KEY` selected for the run.
+- Alice/register address is `cast wallet address --private-key "$REMOTE_SIGNER_PRIVATE_KEY"`.
+- Bob/buyer address is the deterministic second-derived key from that same Alice key.
 
-Keep live OBOL funding on the canonical Bob address. Do not maintain a second live QA key set unless a test explicitly needs an isolated wallet pair.
+Keep live OBOL funding on that deterministic Bob address. Do not infer the canonical pair from balances on older duplicate/testnet token deployments, and do not maintain a second live QA key set unless a test explicitly needs an isolated wallet pair.
 
 Derive/check Bob:
 

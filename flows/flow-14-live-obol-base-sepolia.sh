@@ -17,8 +17,9 @@
 #     DOMAIN_SEPARATOR), and asserts decimals == 18.
 #   - No `cast send <forkOBOL>.mint(...)`. Bob's deterministic second-derived
 #     wallet must already hold real OBOL on Base Sepolia. The script pre-seeds
-#     Bob's remote-signer with that key before stack up, reads the balance, and
-#     fails fast with an actionable message if it's below the buy threshold.
+#     Bob's remote-signer with that key before stack up, reads the OBOL and
+#     ETH balances, and fails fast with an actionable message if either is
+#     below the buy/approval threshold.
 #   - ERC-8004 registration is enabled on Alice's seller path (live Base
 #     Sepolia registry 0x8004A818BFB912233c491871b3d84c89A494BD9e). This
 #     exercises PR #387's WaitForAgent fix on the OBOL path.
@@ -31,14 +32,16 @@
 #                                for ERC-8004 register + metadata-set gas).
 #                                Bob is derived deterministically from this key
 #                                using the same second-key derivation as flow-11
-#                                and must hold OBOL on Base Sepolia.
+#                                and must hold OBOL plus ETH gas on Base Sepolia.
 #
 # Optional overrides:
 #   BASE_SEPOLIA_RPC                          default: https://sepolia.base.org
-#   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4
+#   OBOL_TOKEN_BASE_SEPOLIA                   default: 0x0a09371a8b011d5110656ceBCc70603e53FD2c78
+#                                               (source of truth: ObolNetwork/obol-stack#447)
 #   FLOW14_ALICE_HTTP_PORT, _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
+#   FLOW14_BOB_GAS_MIN_WEI                    default: 100000000000000
 #   OBOL_LLM_ENDPOINT                         required vLLM/llama.cpp/OpenAI-compatible endpoint
 #   OBOL_LLM_MODEL                            endpoint model name (default: qwen36-fast)
 #
@@ -49,6 +52,10 @@
 # gas) and real (testnet) OBOL (paid inference settlement). Run it with care.
 
 source "$(dirname "$0")/lib.sh"
+DUAL_STACK_FLOW_PREFIX="FLOW14"
+DUAL_STACK_SERVICE_NAME="alice-obol-inference"
+DUAL_STACK_TUNNEL_DNS_WARN_ONLY=false
+source "$(dirname "$0")/lib-dual-stack.sh"
 
 # ═════════════════════════════════════════════════════════════════
 # CONSTANTS / WORKSPACES
@@ -57,15 +64,15 @@ source "$(dirname "$0")/lib.sh"
 ALICE_DIR="$OBOL_ROOT/.workspace-alice"
 BOB_DIR="$OBOL_ROOT/.workspace-bob"
 
-ALICE_HTTP_PORT="${FLOW14_ALICE_HTTP_PORT:-$(pick_free_port)}"
-ALICE_HTTP_ALT_PORT="${FLOW14_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
-ALICE_HTTPS_PORT="${FLOW14_ALICE_HTTPS_PORT:-$(pick_free_port)}"
-ALICE_HTTPS_ALT_PORT="${FLOW14_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
+ALICE_HTTP_PORT="$(dual_stack_env_or_free_port ALICE_HTTP_PORT)"
+ALICE_HTTP_ALT_PORT="$(dual_stack_env_or_free_port ALICE_HTTP_ALT_PORT)"
+ALICE_HTTPS_PORT="$(dual_stack_env_or_free_port ALICE_HTTPS_PORT)"
+ALICE_HTTPS_ALT_PORT="$(dual_stack_env_or_free_port ALICE_HTTPS_ALT_PORT)"
 
-BOB_HTTP_PORT="${FLOW14_BOB_HTTP_PORT:-$(pick_free_port)}"
-BOB_HTTP_ALT_PORT="${FLOW14_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
-BOB_HTTPS_PORT="${FLOW14_BOB_HTTPS_PORT:-$(pick_free_port)}"
-BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
+BOB_HTTP_PORT="$(dual_stack_env_or_free_port BOB_HTTP_PORT)"
+BOB_HTTP_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTP_ALT_PORT)"
+BOB_HTTPS_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_PORT)"
+BOB_HTTPS_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_ALT_PORT)"
 
 OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
 export OBOL_LLM_MODEL
@@ -78,13 +85,14 @@ if ! BASE_SEPOLIA_RPC="$(resolve_base_sepolia_rpc "${BASE_SEPOLIA_RPC:-}")"; the
 fi
 FACILITATOR_URL="https://x402.gcp.obol.tech"
 
-DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x54AE82bc871a4E3E8E2FE1173Cb864B8563D44D4"
+DEFAULT_OBOL_TOKEN_BASE_SEPOLIA="0x0a09371a8b011d5110656ceBCc70603e53FD2c78"
 OBOL_TOKEN_BASE_SEPOLIA="${OBOL_TOKEN_BASE_SEPOLIA:-$DEFAULT_OBOL_TOKEN_BASE_SEPOLIA}"
 
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
 
 # OBOL Permit2 wire amount: 0.001 OBOL with 18 decimals = 1e15 wei.
 OBOL_PRICE_WEI="1000000000000000"
+BOB_GAS_MIN_WEI="${FLOW14_BOB_GAS_MIN_WEI:-100000000000000}"
 
 FLOW14_ARTIFACT_DIR="${FLOW14_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-14-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$FLOW14_ARTIFACT_DIR"
@@ -100,6 +108,7 @@ fi
 # ERC-20 Transfer scanners. Point them at OBOL_TOKEN_BASE_SEPOLIA below.
 export FLOW11_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR"
 export BASE_SEPOLIA_RPC
+BASE_SEPOLIA_RPC_LOG="$(redact_url_for_log "$BASE_SEPOLIA_RPC")"
 
 # Initial Hermes defaults; detect_buyer_runtime overwrites these once Bob's
 # cluster is up and we know whether OpenClaw or Hermes was deployed.
@@ -114,6 +123,47 @@ BOB_AGENT_RUNTIME="hermes"
 
 PF_AGENT=""
 PF_AGENT_LOG=""
+
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$seconds" "$@"
+        return $?
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return $?
+    fi
+
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+
+def write_maybe_bytes(stream, data):
+    if not data:
+        return
+    if isinstance(data, bytes):
+        data = data.decode(errors="replace")
+    stream.write(data)
+
+
+timeout_seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=timeout_seconds, text=True, capture_output=True)
+    write_maybe_bytes(sys.stdout, completed.stdout)
+    write_maybe_bytes(sys.stderr, completed.stderr)
+    raise SystemExit(completed.returncode)
+except subprocess.TimeoutExpired as exc:
+    write_maybe_bytes(sys.stdout, exc.stdout)
+    write_maybe_bytes(sys.stderr, exc.stderr)
+    sys.stderr.write(f"command timed out after {timeout_seconds}s\n")
+    raise SystemExit(124)
+PY
+}
 
 # ═════════════════════════════════════════════════════════════════
 # CLEANUP TRAP
@@ -164,281 +214,6 @@ cleanup_k3d_obol_networks
 # RUNNERS / HELPERS
 # ═════════════════════════════════════════════════════════════════
 
-alice() {
-    OBOL_DEVELOPMENT=true \
-    OBOL_NONINTERACTIVE=true \
-    OBOL_CONFIG_DIR="$ALICE_DIR/config" \
-    OBOL_BIN_DIR="$ALICE_DIR/bin" \
-    OBOL_DATA_DIR="$ALICE_DIR/data" \
-    "$ALICE_DIR/bin/obol" "$@"
-}
-bob() {
-    OBOL_DEVELOPMENT=true \
-    OBOL_NONINTERACTIVE=true \
-    OBOL_CONFIG_DIR="$BOB_DIR/config" \
-    OBOL_BIN_DIR="$BOB_DIR/bin" \
-    OBOL_DATA_DIR="$BOB_DIR/data" \
-    "$BOB_DIR/bin/obol" "$@"
-}
-
-lower_addr() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
-}
-
-rewrite_k3d_ports() {
-    local config_path="$1"
-    local http_port="$2"
-    local http_alt_port="$3"
-    local https_port="$4"
-    local https_alt_port="$5"
-
-    if [ ! -f "$config_path" ]; then
-        echo "missing k3d config: $config_path" >&2
-        return 1
-    fi
-    sed -i.bak \
-        -e "s/port: 80:80/port: ${http_port}:80/" \
-        -e "s/port: 8080:80/port: ${http_alt_port}:80/" \
-        -e "s/port: 443:443/port: ${https_port}:443/" \
-        -e "s/port: 8443:443/port: ${https_alt_port}:443/" \
-        "$config_path"
-}
-
-refresh_alice_ports() {
-    ALICE_HTTP_PORT="${FLOW14_ALICE_HTTP_PORT:-$(pick_free_port)}"
-    ALICE_HTTP_ALT_PORT="${FLOW14_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
-    ALICE_HTTPS_PORT="${FLOW14_ALICE_HTTPS_PORT:-$(pick_free_port)}"
-    ALICE_HTTPS_ALT_PORT="${FLOW14_ALICE_HTTPS_ALT_PORT:-$(pick_free_port)}"
-}
-refresh_bob_ports() {
-    BOB_HTTP_PORT="${FLOW14_BOB_HTTP_PORT:-$(pick_free_port)}"
-    BOB_HTTP_ALT_PORT="${FLOW14_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
-    BOB_HTTPS_PORT="${FLOW14_BOB_HTTPS_PORT:-$(pick_free_port)}"
-    BOB_HTTPS_ALT_PORT="${FLOW14_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
-}
-
-stack_init_and_up_with_retry() {
-    local label="$1"
-    local runner="$2"
-    local dir="$3"
-    local pre_up_hook="${4:-}"
-    local attempt out rc
-
-    for attempt in 1 2 3; do
-        step "$label: stack init"
-        "$runner" stack init --force 2>&1 | tail -1
-        if [ "$label" = "Alice" ]; then
-            rewrite_k3d_ports "$dir/config/k3d.yaml" \
-                "$ALICE_HTTP_PORT" "$ALICE_HTTP_ALT_PORT" "$ALICE_HTTPS_PORT" "$ALICE_HTTPS_ALT_PORT"
-            pass "Alice ports set to $ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT"
-        else
-            rewrite_k3d_ports "$dir/config/k3d.yaml" \
-                "$BOB_HTTP_PORT" "$BOB_HTTP_ALT_PORT" "$BOB_HTTPS_PORT" "$BOB_HTTPS_ALT_PORT"
-            pass "Bob ports set to $BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
-        fi
-        if [ -n "$pre_up_hook" ]; then
-            "$pre_up_hook"
-        fi
-
-        step "$label: stack up"
-        set +e
-        out=$("$runner" stack up 2>&1)
-        rc=$?
-        set -e
-        if [ "$rc" -eq 0 ]; then
-            printf '%s\n' "$out" | tail -3
-            pass "$label stack up completed"
-            return 0
-        fi
-
-        printf '%s\n' "$out" | tail -120
-        if [ "$attempt" -lt 3 ] && echo "$out" | grep -qiE "address already in use|failed to bind host port"; then
-            "$runner" stack down >/dev/null 2>&1 || true
-            if [ "$label" = "Alice" ]; then refresh_alice_ports; else refresh_bob_ports; fi
-            continue
-        fi
-        if [ "$attempt" -lt 3 ] && echo "$out" | grep -qiE "context deadline exceeded|Client.Timeout|failed to import images"; then
-            "$runner" stack down >/dev/null 2>&1 || true
-            sleep 10
-            continue
-        fi
-        fail "$label: stack up failed (exit $rc)"
-        emit_metrics
-        exit "$rc"
-    done
-}
-
-preseed_bob_wallet() {
-    local deploy_dir existing import_out key_file onboard_out rc
-
-    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
-    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
-        step "Bob: scaffold default agent before stack up"
-        set +e
-        onboard_out=$(bob agent new --runtime hermes --id obol-agent --no-sync 2>&1)
-        rc=$?
-        set -e
-        echo "$onboard_out" | tail -8
-        if [ "$rc" -ne 0 ]; then
-            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
-            emit_metrics; exit "$rc"
-        fi
-        pass "Bob default agent scaffolded"
-    fi
-
-    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
-    if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
-        pass "Bob wallet preseeded: $existing"
-        return 0
-    fi
-
-    step "Bob: import derived buyer wallet before stack up"
-    key_file=$(mktemp)
-    chmod 600 "$key_file"
-    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
-    set +e
-    import_out=$(bob wallet import \
-        --instance obol-agent \
-        --private-key-file "$key_file" \
-        --force 2>&1)
-    rc=$?
-    set -e
-    rm -f "$key_file"
-    echo "$import_out" | tail -8
-    if [ "$rc" -ne 0 ]; then
-        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
-        emit_metrics; exit "$rc"
-    fi
-
-    existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
-    if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
-        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
-        emit_metrics; exit 1
-    fi
-    pass "Bob wallet preseeded: $existing"
-}
-
-tunnel_hostname() {
-    python3 - "$1" <<'PY'
-from urllib.parse import urlparse
-import sys
-print(urlparse(sys.argv[1]).hostname or "")
-PY
-}
-resolve_public_ipv4() {
-    dig +short A "$1" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1
-}
-system_resolves_host() {
-    python3 - "$1" <<'PY'
-import socket, sys
-try:
-    socket.getaddrinfo(sys.argv[1], 443)
-except OSError:
-    sys.exit(1)
-PY
-}
-
-curl_tunnel_402_code() {
-    local url="$1"; local host="$2"; local ip="$3"
-    if [ -n "$host" ] && [ -n "$ip" ] && ! system_resolves_host "$host"; then
-        curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-            --resolve "$host:443:$ip" -X POST "$url" \
-            -H "Content-Type: application/json" \
-            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
-    else
-        curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-            -X POST "$url" -H "Content-Type: application/json" \
-            -d "{\"model\":\"$OBOL_LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null || true
-    fi
-}
-
-ensure_bob_tunnel_dns() {
-    local host="$1"; local ip="$2"; local nodehosts patch_file
-    [ -n "$host" ] || return 0
-    if [ -z "$ip" ]; then ip=$(resolve_public_ipv4 "$host" || true); fi
-    if [ -z "$ip" ]; then fail "Could not resolve public IPv4 for tunnel host $host"; return 0; fi
-
-    step "Bob: tunnel DNS override"
-    nodehosts=$(bob kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}' 2>/dev/null || true)
-    if [ -z "$nodehosts" ]; then fail "Could not read Bob CoreDNS NodeHosts"; return 0; fi
-    if echo "$nodehosts" | grep -Fq "$host"; then
-        pass "Bob CoreDNS NodeHosts already maps $host"
-        return 0
-    fi
-    patch_file=$(mktemp)
-    FLOW14_NODEHOSTS="$nodehosts" FLOW14_TUNNEL_HOST="$host" FLOW14_TUNNEL_IP="$ip" \
-        python3 - <<'PY' > "$patch_file"
-import json, os
-nh = os.environ["FLOW14_NODEHOSTS"].rstrip()
-host = os.environ["FLOW14_TUNNEL_HOST"]
-ip = os.environ["FLOW14_TUNNEL_IP"]
-nh = f"{nh}\n{ip} {host}\n"
-print(json.dumps({"data": {"NodeHosts": nh}}))
-PY
-    if bob kubectl patch configmap coredns -n kube-system --type merge --patch-file "$patch_file" >/dev/null 2>&1; then
-        bob kubectl rollout restart deployment/coredns -n kube-system >/dev/null 2>&1 || true
-        bob kubectl rollout status deployment/coredns -n kube-system --timeout=60s >/dev/null 2>&1 || true
-        pass "Bob CoreDNS NodeHosts maps $host -> $ip"
-    else
-        fail "Could not patch Bob CoreDNS for $host"
-    fi
-    rm -f "$patch_file"
-}
-
-bob_tunnel_402_code() {
-    bob kubectl exec -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
-        python3 -c "
-import json, urllib.error, urllib.request
-req = urllib.request.Request('$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions',
-    data=json.dumps({'model':'$OBOL_LLM_MODEL','messages':[{'role':'user','content':'hi'}],'max_tokens':5}).encode(),
-    headers={'Content-Type':'application/json'})
-try:
-    resp = urllib.request.urlopen(req, timeout=20); print(resp.status)
-except urllib.error.HTTPError as e:
-    print(e.code)
-except Exception as e:
-    print('ERR: %s' % e)
-" 2>/dev/null || true
-}
-
-purchase_request_status() {
-    bob kubectl get purchaserequests.obol.org -n "$BOB_AGENT_NS" --no-headers 2>&1 || true
-}
-
-buyer_sidecar_status() {
-    bob kubectl exec -n llm deployment/litellm -c litellm -- \
-        python3 -c "
-import urllib.request, json
-try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
-    d = json.loads(resp.read())
-    for name, info in d.items():
-        print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
-except Exception as e:
-    print('error: %s' % e)
-" 2>&1 || true
-}
-
-extract_assistant_content() {
-    FLOW14_RESPONSE="$1" python3 - <<'PY'
-import json, os, sys
-try:
-    data = json.loads(os.environ["FLOW14_RESPONSE"])
-    content = data["choices"][0]["message"].get("content", "")
-    if isinstance(content, list):
-        content = json.dumps(content)
-    sys.stdout.write(content)
-except Exception:
-    sys.exit(1)
-PY
-}
-
-bob_buy_skill_balance() {
-    bob kubectl exec \
-        -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
-        python3 "$BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py" balance 2>&1 || true
-}
-
 # bob_obol_balance_via_erpc directly queries OBOL `balanceOf(signer)` against
 # Bob's in-cluster eRPC, bypassing buy.py's `balance` subcommand which is
 # hardcoded to query USDC. We use the litellm pod because it ships with
@@ -467,41 +242,6 @@ except Exception as e:
 " 2>/dev/null || true
 }
 
-litellm_paid_inference() {
-    bob kubectl exec -n llm deployment/litellm -c litellm -- \
-        python3 -c "
-import urllib.request, urllib.error, json, time
-t0 = time.time()
-req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
-    data=json.dumps({
-        'model': '$PAID_MODEL',
-        'messages': [
-            {'role':'system','content':'Return only the final answer. Do not include reasoning, analysis, markdown, lists, or preambles.'},
-            {'role':'user','content':'Reply with exactly this sentence: OBOL payment smoke test passed.'}
-        ],
-        'max_tokens': 60, 'temperature': 0, 'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False}
-    }).encode(),
-    headers={'Content-Type':'application/json','Authorization':'Bearer $BOB_MASTER_KEY'})
-try:
-    resp = urllib.request.urlopen(req, timeout=180)
-    elapsed = time.time() - t0
-    body = json.loads(resp.read())
-    c = body['choices'][0]['message']
-    content = ' '.join((c.get('content') or '').split())
-    reasoning = c.get('reasoning_content') or c.get('reasoning') or ''
-    print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
-    print('MODEL=%s' % body.get('model','?'))
-    if reasoning:
-        print('REASONING_PRESENT=1')
-    print('CONTENT=%s' % content[:300])
-except urllib.error.HTTPError as e:
-    print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
-except Exception as e:
-    print('ERROR=%s' % repr(e))
-" 2>&1 || true
-}
-
 # ═════════════════════════════════════════════════════════════════
 # 1-5. PREFLIGHT
 # ═════════════════════════════════════════════════════════════════
@@ -524,7 +264,7 @@ export USDC_ADDRESS_BASE_SEPOLIA="$OBOL_TOKEN"
 pass "OBOL_TOKEN_BASE_SEPOLIA=$OBOL_TOKEN"
 
 step "Preflight: .env signer key (Alice seller / register payer)"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
     SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
 fi
@@ -563,7 +303,7 @@ fi
 # 6-7. LIVE BASE SEPOLIA SANITY (RPC + chain id)
 # ═════════════════════════════════════════════════════════════════
 
-step "Base Sepolia: RPC reachable at $BASE_SEPOLIA_RPC"
+step "Base Sepolia: RPC reachable at $BASE_SEPOLIA_RPC_LOG"
 chain_id_resp=$(curl -sf --max-time 10 "$BASE_SEPOLIA_RPC" -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' 2>&1) || true
 if echo "$chain_id_resp" | grep -qi '"result":"0x14a34"'; then
@@ -622,7 +362,7 @@ OBOL_TOKEN_DOMAIN_SEPARATOR=$(cast_with_retries call "$OBOL_TOKEN" "DOMAIN_SEPAR
 OBOL_TOKEN_DOMAIN_SEPARATOR=$(echo "$OBOL_TOKEN_DOMAIN_SEPARATOR" | grep -oE '0x[0-9a-fA-F]+' | head -1 || true)
 
 if [ -z "$OBOL_TOKEN_NAME" ] || [ -z "$OBOL_TOKEN_SYMBOL" ] || [ -z "$OBOL_TOKEN_DECIMALS" ]; then
-    fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC (name/symbol/decimals all empty)"
+    fail "OBOL token not reachable at $OBOL_TOKEN on $BASE_SEPOLIA_RPC_LOG (name/symbol/decimals all empty)"
     emit_metrics; exit 1
 fi
 if [ -z "$OBOL_TOKEN_DOMAIN_SEPARATOR" ]; then
@@ -668,6 +408,18 @@ if [ "$bob_below" = "1" ]; then
 fi
 pass "Derived Bob wallet $BOB_WALLET holds $bob_obol_bal OBOL wei (>= $required_min)"
 
+step "Bob: derived buyer wallet has Base Sepolia ETH for buyer gas"
+bob_eth_bal=$(cast_with_retries balance "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -z "$bob_eth_bal" ]; then
+    fail "Could not read ETH balance for derived Bob wallet $BOB_WALLET"
+    emit_metrics; exit 1
+fi
+if [ "$(python3 -c "print(1 if int('$bob_eth_bal') < int('$BOB_GAS_MIN_WEI') else 0)")" = "1" ]; then
+    fail "Derived Bob wallet $BOB_WALLET holds $bob_eth_bal wei Base Sepolia ETH; need >= $BOB_GAS_MIN_WEI wei for buyer Permit2 approval gas. Top up this deterministic wallet or override FLOW14_BOB_GAS_MIN_WEI."
+    emit_metrics; exit 1
+fi
+pass "Derived Bob wallet $BOB_WALLET holds $bob_eth_bal wei Base Sepolia ETH (>= $BOB_GAS_MIN_WEI)"
+
 # ═════════════════════════════════════════════════════════════════
 # 10-15. ALICE STACK
 # ═════════════════════════════════════════════════════════════════
@@ -689,10 +441,10 @@ poll_step_grep "Alice: x402 pods running" "Running" 30 10 \
     alice kubectl get pods -n x402 --no-headers
 
 step "Alice: add base-sepolia route in eRPC (live RPC, writes allowed)"
-alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
+alice network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes >/dev/null
 alice kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 alice kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-pass "Alice eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
+pass "Alice eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC_LOG"
 
 step "Alice: configure x402 pricing pointing at public Obol facilitator"
 alice sell pricing \
@@ -800,17 +552,15 @@ pass "Tunnel: $TUNNEL_URL"
 # ═════════════════════════════════════════════════════════════════
 
 step "Alice: import seller wallet into remote-signer"
-KEY_FILE=$(mktemp)
-chmod 600 "$KEY_FILE"
-echo "$SIGNER_KEY" > "$KEY_FILE"
+# Use process substitution instead of a mktemp file so private-key material is
+# streamed to the CLI and never persisted on disk.
 set +e
 import_out=$(alice wallet import \
     --instance obol-agent \
-    --private-key-file "$KEY_FILE" \
+    --private-key-file <(printf '%s\n' "$SIGNER_KEY") \
     --force 2>&1)
 import_rc=$?
 set -e
-rm -f "$KEY_FILE"
 printf '%s\n' "$import_out" | tail -6
 if [ "$import_rc" -ne 0 ]; then
     fail "Could not seed Alice remote-signer: ${import_out:0:300}"
@@ -827,13 +577,21 @@ pass "Alice remote-signer seeded with seller wallet"
 # exceeds allowance (0)" — a confusing, slow failure. This step fails
 # fast with a clear diagnostic instead.
 step "Alice: remote-signer pod rolled by wallet import (age < 120s)"
-set +e
-pod_start=$(alice kubectl get pods -n hermes-obol-agent \
-    -l app.kubernetes.io/name=remote-signer \
-    -o jsonpath='{.items[0].status.startTime}' 2>/dev/null)
-set -e
+pod_start=""
+for _ in $(seq 1 36); do
+    set +e
+    pod_start=$(alice kubectl get pods -n hermes-obol-agent \
+        -l app.kubernetes.io/name=remote-signer \
+        -o jsonpath='{.items[0].status.startTime}' 2>/dev/null)
+    set -e
+    [ -n "$pod_start" ] && break
+    sleep 5
+done
 if [ -z "$pod_start" ]; then
-    fail "remote-signer pod not found (label app.kubernetes.io/name=remote-signer)"
+    pod_diag=$(alice kubectl get pods -n hermes-obol-agent \
+        -l app.kubernetes.io/name=remote-signer \
+        -o wide 2>/dev/null || true)
+    fail "remote-signer pod did not start after wallet import (label app.kubernetes.io/name=remote-signer). Pods: ${pod_diag:-none}"
     emit_metrics; exit 1
 fi
 pod_epoch=$(date -u -d "$pod_start" +%s 2>/dev/null || python3 -c "import datetime,sys; print(int(datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).timestamp()))" "$pod_start")
@@ -848,11 +606,11 @@ pass "remote-signer pod is ${pod_age}s old (rolled by wallet import)"
 step "Alice: drive ERC-8004 registration (obol sell register)"
 # 5-minute hard timeout: the on-chain tx + WaitForAgent + SetMetadata
 # should complete in ~30-60s; anything beyond that is a hang we want
-# to surface, not silently block the run. `timeout` is an external
-# program and cannot see the `alice()` bash function, so call the
-# binary directly with the same env the function exports.
+# to surface, not silently block the run. macOS often lacks GNU `timeout`,
+# so use a small wrapper that prefers timeout/gtimeout and otherwise falls
+# back to a Python-enforced timeout while preserving stdout/stderr.
 set +e
-register_out=$(timeout 300 \
+register_out=$(run_with_timeout 300 \
     env OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
         OBOL_CONFIG_DIR="$ALICE_DIR/config" \
         OBOL_BIN_DIR="$ALICE_DIR/bin" \
@@ -982,10 +740,10 @@ poll_step_grep "Bob: x402 pods running" "Running" 30 10 \
     bob kubectl get pods -n x402 --no-headers
 
 step "Bob: add base-sepolia route to live RPC (writes allowed)"
-bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes 2>&1 | tail -2
+bob network add base-sepolia --endpoint "$BASE_SEPOLIA_RPC" --allow-writes >/dev/null
 bob kubectl rollout restart deployment/erpc -n erpc 2>/dev/null || true
 bob kubectl rollout status deployment/erpc -n erpc --timeout=60s 2>/dev/null || true
-pass "Bob eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC"
+pass "Bob eRPC: base-sepolia routed to default upstreams + $BASE_SEPOLIA_RPC_LOG"
 
 ensure_bob_tunnel_dns "$TUNNEL_HOST" "$TUNNEL_IP"
 
@@ -1073,6 +831,45 @@ if [ -z "$erpc_balance_wei" ] || ! python3 -c "import sys; sys.exit(0 if int('$e
     emit_metrics; exit 1
 fi
 
+step "Bob: ensure live OBOL Permit2 allowance"
+PERMIT2_ADDRESS="0x000000000022D473030F116dDEE9F6B43aC78BA3"
+permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+    "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+    pass "Bob Permit2 allowance already set: $permit2_allowance"
+else
+    approve_out=$(env -u CHAIN cast send --json "$OBOL_TOKEN" \
+        "approve(address,uint256)" "$PERMIT2_ADDRESS" \
+        115792089237316195423570985008687907853269984665640564039457584007913129639935 \
+        --rpc-url "$BASE_SEPOLIA_RPC" --private-key "$BOB_PRIVATE_KEY" 2>&1 || true)
+    approve_tx=$(echo "$approve_out" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read())
+    print(d.get("transactionHash",""))
+except Exception:
+    pass' || true)
+    if [ -z "$approve_tx" ]; then
+        fail "Could not submit Bob Permit2 approval: ${approve_out:0:300}"
+        emit_metrics; exit 1
+    fi
+    permit2_ready=0
+    for _ in $(seq 1 30); do
+        permit2_allowance=$(env -u CHAIN cast call "$OBOL_TOKEN" "allowance(address,address)(uint256)" \
+            "$BOB_SIGNER_ADDR" "$PERMIT2_ADDRESS" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+        if [ -n "$permit2_allowance" ] && [ "$permit2_allowance" != "0" ]; then
+            permit2_ready=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$permit2_ready" = "1" ]; then
+        pass "Bob Permit2 approval confirmed: tx=$approve_tx allowance=$permit2_allowance"
+    else
+        fail "Bob Permit2 approval did not become visible after tx $approve_tx"
+        emit_metrics; exit 1
+    fi
+fi
+
 BOB_SIGNER_BAL_BEFORE_PAID="$got_balance"
 ALICE_BAL_BEFORE_PAID=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
     "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
@@ -1154,7 +951,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
         }],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -1328,7 +1125,7 @@ if FLOW14_ARTIFACT_DIR="$FLOW14_ARTIFACT_DIR" \
    FLOW14_OBOL_TOKEN_SYMBOL="${OBOL_TOKEN_SYMBOL:-}" \
    FLOW14_OBOL_TOKEN_DOMAIN_SEPARATOR="${OBOL_TOKEN_DOMAIN_SEPARATOR:-}" \
    FLOW14_FACILITATOR_URL="${FACILITATOR_URL:-}" \
-   FLOW14_BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC:-}" \
+   FLOW14_BASE_SEPOLIA_RPC="${BASE_SEPOLIA_RPC_LOG:-}" \
    python3 - <<'PY'
 import json, os
 from pathlib import Path

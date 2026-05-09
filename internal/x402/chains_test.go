@@ -82,29 +82,50 @@ func TestBuildV1Requirement(t *testing.T) {
 }
 
 func TestResolveAssetInfo_Override(t *testing.T) {
-	asset := ResolveAssetInfo(ChainEthereumMainnet, &RouteRule{
-		AssetAddress:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
-		AssetSymbol:         "OBOL",
-		AssetDecimals:       18,
-		AssetTransferMethod: "permit2",
-		EIP712Name:          "Obol Network",
-		EIP712Version:       "1",
-	})
+	tests := []struct {
+		name         string
+		chain        ChainInfo
+		assetAddress string
+	}{
+		{
+			name:         "ethereum",
+			chain:        ChainEthereumMainnet,
+			assetAddress: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		},
+		{
+			name:         "base-sepolia",
+			chain:        ChainBaseSepolia,
+			assetAddress: "0x0a09371a8b011d5110656ceBCc70603e53FD2c78",
+		},
+	}
 
-	if asset.Address != "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7" {
-		t.Fatalf("asset.Address = %q", asset.Address)
-	}
-	if asset.TransferMethod != "permit2" {
-		t.Fatalf("asset.TransferMethod = %q", asset.TransferMethod)
-	}
-	if asset.Decimals != 18 {
-		t.Fatalf("asset.Decimals = %d", asset.Decimals)
-	}
-	if asset.EIP712Name != "Obol Network" || asset.EIP712Version != "1" {
-		t.Fatalf("asset EIP-712 metadata = %q/%q", asset.EIP712Name, asset.EIP712Version)
-	}
-	if !asset.EIP2612GasSponsoring {
-		t.Fatalf("EIP2612GasSponsoring = false, want true (re-derived from registry for OBOL on mainnet)")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			asset := ResolveAssetInfo(tc.chain, &RouteRule{
+				AssetAddress:        tc.assetAddress,
+				AssetSymbol:         "OBOL",
+				AssetDecimals:       18,
+				AssetTransferMethod: "permit2",
+				EIP712Name:          "Obol Network",
+				EIP712Version:       "1",
+			})
+
+			if asset.Address != tc.assetAddress {
+				t.Fatalf("asset.Address = %q", asset.Address)
+			}
+			if asset.TransferMethod != "permit2" {
+				t.Fatalf("asset.TransferMethod = %q", asset.TransferMethod)
+			}
+			if asset.Decimals != 18 {
+				t.Fatalf("asset.Decimals = %d", asset.Decimals)
+			}
+			if asset.EIP712Name != "Obol Network" || asset.EIP712Version != "1" {
+				t.Fatalf("asset EIP-712 metadata = %q/%q", asset.EIP712Name, asset.EIP712Version)
+			}
+			if !asset.EIP2612GasSponsoring {
+				t.Fatalf("EIP2612GasSponsoring = false, want true (re-derived from registry for OBOL on %s)", tc.name)
+			}
+		})
 	}
 }
 
@@ -133,6 +154,19 @@ func TestBuildExtensionsForAsset(t *testing.T) {
 	got := BuildExtensionsForAsset(AssetInfo{EIP2612GasSponsoring: true})
 	if _, ok := got["eip2612GasSponsoring"]; !ok {
 		t.Errorf("expected eip2612GasSponsoring key, got %v", got)
+	}
+
+	baseSepoliaOBOL := ResolveAssetInfo(ChainBaseSepolia, &RouteRule{
+		AssetAddress:        "0x0a09371a8b011d5110656ceBCc70603e53FD2c78",
+		AssetSymbol:         "OBOL",
+		AssetDecimals:       18,
+		AssetTransferMethod: "permit2",
+		EIP712Name:          "Obol Network",
+		EIP712Version:       "1",
+	})
+	got = BuildExtensionsForAsset(baseSepoliaOBOL)
+	if _, ok := got["eip2612GasSponsoring"]; !ok {
+		t.Errorf("Base Sepolia OBOL should advertise eip2612GasSponsoring, got %v", got)
 	}
 }
 

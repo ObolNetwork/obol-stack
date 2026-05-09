@@ -202,6 +202,68 @@ func CopySkills(destDir string) error {
 	})
 }
 
+// WriteSkillSubset copies the named embedded skills into dst, overwriting any
+// per-skill files already present for the named skills. It does NOT delete
+// skills already at dst that aren't in names — agents own the dir after the
+// initial seed. Callers that need exact-set semantics should remove the
+// unwanted skill dirs themselves before calling.
+//
+// Returns an error if any requested name does not exist in the embedded FS,
+// because a typo'd skill name should fail loudly rather than silently produce
+// an under-skilled agent.
+func WriteSkillSubset(dst string, names []string) error {
+	if dst == "" {
+		return fmt.Errorf("WriteSkillSubset: dst is empty")
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	for _, name := range names {
+		src := filepath.Join("skills", name)
+		info, err := fs.Stat(skillsFS, src)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("skill %q not found in embedded skills", name)
+		}
+	}
+
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("create skills dir %s: %w", dst, err)
+	}
+
+	for _, name := range names {
+		src := filepath.Join("skills", name)
+		skillDst := filepath.Join(dst, name)
+
+		err := fs.WalkDir(skillsFS, src, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			rel := strings.TrimPrefix(path, src)
+			rel = strings.TrimPrefix(rel, "/")
+			out := skillDst
+			if rel != "" {
+				out = filepath.Join(skillDst, rel)
+			}
+			if d.IsDir() {
+				return os.MkdirAll(out, 0o755)
+			}
+			data, err := skillsFS.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read embedded %s: %w", path, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(out, data, 0o600)
+		})
+		if err != nil {
+			return fmt.Errorf("write skill %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // GetEmbeddedSkillNames returns the names of all embedded skill directories.
 func GetEmbeddedSkillNames() ([]string, error) {
 	entries, err := fs.ReadDir(skillsFS, "skills")

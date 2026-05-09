@@ -115,6 +115,49 @@ func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u 
 	)
 }
 
+// KeystoreMaterial bundles the in-memory output of GenerateKeystoreInMemory:
+// a freshly minted secp256k1 wallet encrypted as a Web3 V3 keystore plus
+// the password needed to decrypt it. Used by callers that persist the
+// keystore via mechanisms other than the host-side PVC (e.g. a K8s
+// Secret created by an in-cluster controller).
+type KeystoreMaterial struct {
+	Address      string // EIP-55 checksummed
+	PublicKey    string // 0x04 || X || Y (130 hex chars)
+	KeystoreUUID string // V3 keystore "id" field
+	KeystoreJSON []byte // Encrypted V3 keystore document
+	Password     string // Random 32-char password
+}
+
+// GenerateKeystoreInMemory mints a fresh wallet keypair, V3-encrypts it
+// in-memory, and returns everything the caller needs to persist the
+// keystore wherever they want. Mirrors GenerateWallet's crypto path
+// without the host-side disk write — useful for in-cluster controllers
+// that materialise the keystore into a Secret rather than a PVC.
+func GenerateKeystoreInMemory() (*KeystoreMaterial, error) {
+	privKey, pubKey, err := generateKeypair()
+	if err != nil {
+		return nil, fmt.Errorf("key generation failed: %w", err)
+	}
+	defer zeroBytes(privKey)
+
+	password, err := generateRandomPassword(32)
+	if err != nil {
+		return nil, fmt.Errorf("password generation failed: %w", err)
+	}
+	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	if err != nil {
+		return nil, fmt.Errorf("keystore encryption failed: %w", err)
+	}
+
+	return &KeystoreMaterial{
+		Address:      addressFromPublicKey(pubKey),
+		PublicKey:    "0x04" + hex.EncodeToString(pubKey),
+		KeystoreUUID: keystoreID,
+		KeystoreJSON: keystoreJSON,
+		Password:     password,
+	}, nil
+}
+
 func provisionWalletFromKeyMaterial(cfg *config.Config, id string, privKey, pubKey []byte, address string, u *ui.UI) (*WalletInfo, error) {
 	if len(privKey) != 32 {
 		return nil, errors.New("private key must be 32 bytes")

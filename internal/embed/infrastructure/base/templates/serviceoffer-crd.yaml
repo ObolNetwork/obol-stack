@@ -57,17 +57,41 @@ spec:
             spec:
               type: object
               required:
-                - upstream
                 - payment
+              # upstream is required for type=http|inference|fine-tuning but
+              # synthesized by the controller from Agent.status.endpoint when
+              # type=agent. Validation of "upstream OR agent.ref" lives in
+              # the controller's runtime check.
               properties:
                 type:
                   type: string
-                  description: "Service type. 'inference' enables model management; 'http' for any HTTP service."
+                  description: >-
+                    Service type. 'inference' enables model management; 'http' for any HTTP service;
+                    'agent' references an Agent CR via spec.agent.ref and the controller derives
+                    upstream + model + skills from the agent's status.
                   default: "http"
                   enum:
                     - inference
                     - fine-tuning
                     - http
+                    - agent
+                agent:
+                  type: object
+                  description: >-
+                    Required when type='agent'. The controller resolves spec.agent.ref to the
+                    referenced Agent CR, derives upstream from Agent.status.endpoint, and surfaces
+                    the agent's pinned model + skills in the 402 response's extra block.
+                  properties:
+                    ref:
+                      type: object
+                      required:
+                        - name
+                        - namespace
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
                 model:
                   type: object
                   description: "LLM model metadata. Required when the upstream serves an LLM."
@@ -328,3 +352,19 @@ spec:
                   type: integer
                   format: int64
                   description: "The generation observed by the controller."
+                agentResolution:
+                  type: object
+                  description: >-
+                    Controller's resolved view of an agent-type offer's referenced
+                    Agent. Populated only when type=agent and the Agent is Ready.
+                  properties:
+                    model:
+                      type: string
+                    skills:
+                      type: array
+                      items:
+                        type: string
+                    runtime:
+                      type: string
+                    endpoint:
+                      type: string

@@ -256,8 +256,37 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
+	mergeAgentExtras(&requirement, rule)
 	extensions := BuildExtensionsForAsset(asset)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
+}
+
+// mergeAgentExtras adds the agent fields from a RouteRule to the
+// requirement's Extra map so buyers probing a 402 see which model and
+// skills are powering the offer. No-op for non-agent rules.
+func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.AgentModel == "" && len(rule.AgentSkills) == 0 && rule.AgentRuntime == "" {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	if rule.AgentModel != "" {
+		req.Extra["agentModel"] = rule.AgentModel
+	}
+	if len(rule.AgentSkills) > 0 {
+		// Materialise as []any so JSON marshalling produces a proper array
+		// regardless of whether the source loaded it from yaml or
+		// constructed it in-memory.
+		skills := make([]any, len(rule.AgentSkills))
+		for i, s := range rule.AgentSkills {
+			skills[i] = s
+		}
+		req.Extra["agentSkills"] = skills
+	}
+	if rule.AgentRuntime != "" {
+		req.Extra["agentRuntime"] = rule.AgentRuntime
+	}
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

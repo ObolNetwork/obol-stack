@@ -33,10 +33,10 @@ forge create src/BaseSepoliaObolFaucet.sol:BaseSepoliaObolFaucet \
   --constructor-args <token-address> <owner> 100000000000000000000 86400
 ```
 
-After deploying and seeding the faucet, configure the frontend with:
+After deploying and seeding the faucet, configure the frontend runtime env with the deployed Base Sepolia contracts. Source of truth: `ObolNetwork/obol-stack#447` for the token/faucet addresses, with the current faucet amount coming from the deployed faucet's `claimAmount()` / stack default.
 
 ```bash
-NEXT_PUBLIC_BASE_SEPOLIA_OBOL_TOKEN_ADDRESS=<token-address>
-NEXT_PUBLIC_BASE_SEPOLIA_OBOL_FAUCET_ADDRESS=<faucet-address>
-NEXT_PUBLIC_BASE_SEPOLIA_OBOL_FAUCET_AMOUNT="100 OBOL"
+BASE_SEPOLIA_OBOL_TOKEN_ADDRESS=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
+BASE_SEPOLIA_OBOL_FAUCET_ADDRESS=0x0c8Ec594d067d1D850deba7BAa05d4052Ab97076
+BASE_SEPOLIA_OBOL_FAUCET_AMOUNT="5 OBOL"
 ```

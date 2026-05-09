@@ -54,6 +54,109 @@ fi
 step "Tunnel status"
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
 TUNNEL_URL=$(echo "$TUNNEL_OUTPUT" | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
+TUNNEL_HOST=""
+TUNNEL_IP=""
+if [ -n "$TUNNEL_URL" ]; then
+    TUNNEL_HOST=$(printf '%s\n' "${TUNNEL_URL#https://}" | cut -d/ -f1)
+    TUNNEL_IP=$(dig +short A "$TUNNEL_HOST" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+fi
+
+tunnel_get_code() {
+    local url="$1"
+    local code
+    if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
+        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+            --resolve "$TUNNEL_HOST:443:$TUNNEL_IP" \
+            "$url" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            printf '000\n'
+        fi
+    else
+        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+            "$url" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            printf '000\n'
+        fi
+    fi
+}
+
+tunnel_get_file_code() {
+    local url="$1"
+    local outfile="$2"
+    local code
+    if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
+        if code=$(curl -sS --max-time 15 -o "$outfile" -w '%{http_code}' \
+            --resolve "$TUNNEL_HOST:443:$TUNNEL_IP" \
+            "$url" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            : > "$outfile"
+            printf '000\n'
+        fi
+    else
+        if code=$(curl -sS --max-time 15 -o "$outfile" -w '%{http_code}' \
+            "$url" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            : > "$outfile"
+            printf '000\n'
+        fi
+    fi
+}
+
+tunnel_post_code_json() {
+    local url="$1"
+    local body="$2"
+    local code
+    if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
+        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+            --resolve "$TUNNEL_HOST:443:$TUNNEL_IP" \
+            -X POST "$url" -H "Content-Type: application/json" \
+            -d "$body" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            printf '000\n'
+        fi
+    else
+        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+            -X POST "$url" -H "Content-Type: application/json" \
+            -d "$body" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            printf '000\n'
+        fi
+    fi
+}
+
+tunnel_post_json_file_code() {
+    local url="$1"
+    local body="$2"
+    local outfile="$3"
+    local code
+    if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
+        if code=$(curl -sS --max-time 15 -o "$outfile" -w '%{http_code}' \
+            --resolve "$TUNNEL_HOST:443:$TUNNEL_IP" \
+            -X POST "$url" -H "Content-Type: application/json" \
+            -d "$body" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            : > "$outfile"
+            printf '000\n'
+        fi
+    else
+        if code=$(curl -sS --max-time 15 -o "$outfile" -w '%{http_code}' \
+            -X POST "$url" -H "Content-Type: application/json" \
+            -d "$body" 2>/dev/null); then
+            printf '%s\n' "$code"
+        else
+            : > "$outfile"
+            printf '000\n'
+        fi
+    fi
+}
+
 if [ -n "$TUNNEL_URL" ]; then
     pass "Tunnel URL: $TUNNEL_URL"
 else
@@ -112,14 +215,74 @@ fi
 # 402 via tunnel
 if [ -n "$TUNNEL_URL" ]; then
     step "402 via tunnel"
-    tunnel_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
-        "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
-    if [ "$tunnel_code" = "402" ]; then
-        pass "Tunnel 402 Payment Required"
-    else
-        fail "Tunnel expected 402, got $tunnel_code"
+    tunnel_target="$TUNNEL_URL/services/flow-qwen/v1/chat/completions"
+    for i in $(seq 1 48); do
+        tunnel_code=$(tunnel_post_code_json "$tunnel_target" \
+            "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}")
+        if [ "$tunnel_code" = "402" ]; then
+            pass "Tunnel 402 Payment Required (attempt $i)"
+            break
+        fi
+        [ "$i" -eq 48 ] && fail "Tunnel expected 402 after 240s, got $tunnel_code"
+        sleep 5
+    done
+fi
+
+# Security: public tunnel must not expose local-only eRPC routes.
+if [ -n "$TUNNEL_URL" ]; then
+    step "Public tunnel does not expose eRPC"
+    public_erpc_exposed=false
+    tunnel_erpc_index_code="000"
+    tunnel_erpc_chain_code="000"
+    tunnel_erpc_index_body=""
+    tunnel_erpc_chain_body=""
+
+    tunnel_erpc_index_file=$(mktemp)
+    for i in $(seq 1 12); do
+        tunnel_erpc_index_code=$(tunnel_get_file_code "$TUNNEL_URL/rpc" "$tunnel_erpc_index_file")
+        [ "$tunnel_erpc_index_code" != "000" ] && break
+        sleep 2
+    done
+    tunnel_erpc_index_body=$(cat "$tunnel_erpc_index_file")
+    rm -f "$tunnel_erpc_index_file"
+    if [ "$tunnel_erpc_index_code" = "000" ]; then
+        fail "Could not verify tunnel eRPC /rpc exposure — tunnel unreachable after 24s"
+    elif echo "$tunnel_erpc_index_body" | python3 -c "
+import sys, json
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if 'rpc' in payload else 1)
+" 2>/dev/null; then
+        public_erpc_exposed=true
+        fail "Public tunnel unexpectedly exposed eRPC /rpc (HTTP $tunnel_erpc_index_code)"
+    fi
+
+    tunnel_erpc_chain_file=$(mktemp)
+    for i in $(seq 1 12); do
+        tunnel_erpc_chain_code=$(tunnel_post_json_file_code "$TUNNEL_URL/rpc/evm/84532" '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' "$tunnel_erpc_chain_file")
+        [ "$tunnel_erpc_chain_code" != "000" ] && break
+        sleep 2
+    done
+    tunnel_erpc_chain_body=$(cat "$tunnel_erpc_chain_file")
+    rm -f "$tunnel_erpc_chain_file"
+    if [ "$tunnel_erpc_chain_code" = "000" ]; then
+        fail "Could not verify tunnel eRPC JSON-RPC exposure — tunnel unreachable after 24s"
+    elif echo "$tunnel_erpc_chain_body" | python3 -c "
+import sys, json
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get('result') else 1)
+" 2>/dev/null; then
+        public_erpc_exposed=true
+        fail "Public tunnel unexpectedly served eRPC eth_chainId successfully (HTTP $tunnel_erpc_chain_code)"
+    fi
+
+    if [ "$public_erpc_exposed" = false ]; then
+        pass "Public tunnel did not expose eRPC (index HTTP $tunnel_erpc_index_code, JSON-RPC HTTP $tunnel_erpc_chain_code)"
     fi
 fi
 
@@ -164,8 +327,9 @@ fi
 # than mutating x402-pricing with dynamic route entries.
 step "ServiceOffer RoutePublished condition is True"
 status_out=$("$OBOL" sell status flow-qwen -n llm 2>&1) || true
-if echo "$status_out" | grep -q "type: RoutePublished" && \
-   echo "$status_out" | grep -B4 "type: RoutePublished" | grep -q 'status: "True"'; then
+if { echo "$status_out" | grep -q "type: RoutePublished" && \
+     echo "$status_out" | grep -B4 "type: RoutePublished" | grep -q 'status: "True"'; } || \
+   echo "$status_out" | grep -Eq '^  ✓ RoutePublished:'; then
     pass "ServiceOffer flow-qwen has RoutePublished=True"
 else
     fail "ServiceOffer flow-qwen missing RoutePublished=True — ${status_out:0:200}"
@@ -185,7 +349,8 @@ fi
 # RoutePublished, Registered, Ready
 step "obol sell status flow-qwen shows Ready conditions"
 status_out=$("$OBOL" sell status flow-qwen -n llm 2>&1) || true
-if echo "$status_out" | grep -q 'type: Ready' && echo "$status_out" | grep -q "status: \"True\""; then
+if { echo "$status_out" | grep -q 'type: Ready' && echo "$status_out" | grep -q "status: \"True\""; } || \
+   echo "$status_out" | grep -Eq '^  ✓ Ready:'; then
     pass "ServiceOffer flow-qwen has Ready condition True"
 else
     fail "ServiceOffer status missing Ready condition — ${status_out:0:200}"

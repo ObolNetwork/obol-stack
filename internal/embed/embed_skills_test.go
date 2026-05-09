@@ -40,6 +40,96 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	}
 }
 
+func TestWriteSkillSubset_WritesOnlyRequested(t *testing.T) {
+	dst := t.TempDir()
+	want := []string{"ethereum-networks", "ethereum-local-wallet", "addresses", "gas"}
+
+	if err := WriteSkillSubset(dst, want); err != nil {
+		t.Fatalf("WriteSkillSubset: %v", err)
+	}
+
+	// Every requested skill landed.
+	for _, name := range want {
+		if _, err := os.Stat(filepath.Join(dst, name, "SKILL.md")); err != nil {
+			t.Errorf("%s/SKILL.md missing: %v", name, err)
+		}
+	}
+
+	// Nothing else snuck in. Listing dst must equal the requested set exactly
+	// for a fresh target dir — the seed should not pull in transitively any
+	// skills we didn't ask for.
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	got := make(map[string]bool)
+	for _, e := range entries {
+		got[e.Name()] = true
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("missing %q in dst listing", name)
+		}
+		delete(got, name)
+	}
+	if len(got) > 0 {
+		t.Errorf("unexpected entries in dst: %v", got)
+	}
+}
+
+func TestWriteSkillSubset_LeavesExistingSkillsAlone(t *testing.T) {
+	dst := t.TempDir()
+
+	// Pretend the agent has already self-installed a custom skill.
+	custom := filepath.Join(dst, "agent-installed-skill")
+	if err := os.MkdirAll(custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(custom, "SKILL.md"), []byte("# custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteSkillSubset(dst, []string{"addresses"}); err != nil {
+		t.Fatalf("WriteSkillSubset: %v", err)
+	}
+
+	// Custom skill must survive the seed write.
+	if _, err := os.Stat(filepath.Join(custom, "SKILL.md")); err != nil {
+		t.Errorf("agent-installed skill clobbered: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "addresses", "SKILL.md")); err != nil {
+		t.Errorf("requested skill missing: %v", err)
+	}
+}
+
+func TestWriteSkillSubset_RejectsUnknownSkill(t *testing.T) {
+	dst := t.TempDir()
+
+	err := WriteSkillSubset(dst, []string{"addresses", "this-skill-does-not-exist"})
+	if err == nil {
+		t.Fatal("expected error for unknown skill, got nil")
+	}
+	if !strings.Contains(err.Error(), "this-skill-does-not-exist") {
+		t.Errorf("error should name the missing skill, got: %v", err)
+	}
+
+	// When the input is invalid, no partial write should happen — fail fast
+	// before touching the destination so callers can retry without cleanup.
+	if _, err := os.Stat(filepath.Join(dst, "addresses")); err == nil {
+		t.Error("partial write occurred despite invalid input")
+	}
+}
+
+func TestWriteSkillSubset_EmptyNamesIsNoop(t *testing.T) {
+	dst := t.TempDir()
+	if err := WriteSkillSubset(dst, nil); err != nil {
+		t.Fatalf("nil names: %v", err)
+	}
+	if err := WriteSkillSubset(dst, []string{}); err != nil {
+		t.Fatalf("empty names: %v", err)
+	}
+}
+
 func TestCopySkills(t *testing.T) {
 	destDir := t.TempDir()
 

@@ -53,6 +53,7 @@ type Controller struct {
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
+	agents               dynamic.NamespaceableResourceInterface
 	services             dynamic.NamespaceableResourceInterface
 	configMaps           dynamic.NamespaceableResourceInterface
 	deployments          dynamic.NamespaceableResourceInterface
@@ -63,10 +64,12 @@ type Controller struct {
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
 	purchaseInformer     cache.SharedIndexInformer
+	agentInformer        cache.SharedIndexInformer
 	configMapInformer    cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
 	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
+	agentQueue           workqueue.TypedRateLimitingInterface[string]
 	catalogMu            sync.Mutex
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
@@ -99,6 +102,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	registrationInformer := factory.ForResource(monetizeapi.RegistrationRequestGVR).Informer()
 	purchaseInformer := factory.ForResource(monetizeapi.PurchaseRequestGVR).Informer()
+	agentInformer := factory.ForResource(monetizeapi.AgentGVR).Informer()
 	configMapFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, "obol-frontend", func(options *metav1.ListOptions) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
 	})
@@ -110,6 +114,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		client:               client,
 		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
 		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
+		agents:               client.Resource(monetizeapi.AgentGVR),
 		services:             client.Resource(monetizeapi.ServiceGVR),
 		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
 		deployments:          client.Resource(monetizeapi.DeploymentGVR),
@@ -119,10 +124,12 @@ func New(cfg *rest.Config) (*Controller, error) {
 		offerInformer:        offerInformer,
 		registrationInformer: registrationInformer,
 		purchaseInformer:     purchaseInformer,
+		agentInformer:        agentInformer,
 		configMapInformer:    configMapInformer,
 		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		httpClient:           &http.Client{Timeout: 3 * time.Second},
 		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
 		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
@@ -149,6 +156,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueuePurchase(newObj) },
 		DeleteFunc: controller.enqueuePurchase,
 	})
+	agentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueAgent,
+		UpdateFunc: func(_, newObj any) { controller.enqueueAgent(newObj) },
+		DeleteFunc: controller.enqueueAgent,
+	})
 	configMapInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    controller.enqueueDiscoveryRefresh,
 		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
@@ -162,12 +174,20 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer c.offerQueue.ShutDown()
 	defer c.registrationQueue.ShutDown()
 	defer c.purchaseQueue.ShutDown()
+	defer c.agentQueue.ShutDown()
 
 	go c.offerInformer.Run(ctx.Done())
 	go c.registrationInformer.Run(ctx.Done())
 	go c.purchaseInformer.Run(ctx.Done())
+	go c.agentInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), c.offerInformer.HasSynced, c.registrationInformer.HasSynced, c.purchaseInformer.HasSynced, c.configMapInformer.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(),
+		c.offerInformer.HasSynced,
+		c.registrationInformer.HasSynced,
+		c.purchaseInformer.HasSynced,
+		c.agentInformer.HasSynced,
+		c.configMapInformer.HasSynced,
+	) {
 		return fmt.Errorf("wait for informer sync")
 	}
 
@@ -185,6 +205,10 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		}()
 		go func() {
 			for c.processNextPurchase(ctx) {
+			}
+		}()
+		go func() {
+			for c.processNextAgent(ctx) {
 			}
 		}()
 	}
@@ -357,6 +381,21 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	status := offer.Status
 	status.ObservedGeneration = offer.Generation
 	status.Endpoint = offer.EffectivePath()
+
+	if offer.IsAgent() {
+		ready, resolveErr := c.resolveAgentOffer(ctx, offer, &status)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if !ready {
+			setCondition(&status, "ModelReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			setCondition(&status, "UpstreamHealthy", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			return c.updateOfferStatus(ctx, raw, status)
+		}
+	}
 
 	if err := c.reconcileModel(&status, offer); err != nil {
 		return err

@@ -103,6 +103,19 @@ type RouteRule struct {
 
 	// OfferName identifies the originating ServiceOffer name.
 	OfferName string `yaml:"offerName,omitempty"`
+
+	// AgentModel is the LLM the agent is pinned to. Surfaced in the 402
+	// response's `accepts[].extra.agentModel` so buyers see what's
+	// powering the offer.
+	AgentModel string `yaml:"agentModel,omitempty"`
+
+	// AgentSkills is the skill allow-list this agent was deployed with.
+	// Surfaced as `accepts[].extra.agentSkills`.
+	AgentSkills []string `yaml:"agentSkills,omitempty"`
+
+	// AgentRuntime is the runtime backing the agent ("hermes", etc).
+	// Surfaced as `accepts[].extra.agentRuntime`.
+	AgentRuntime string `yaml:"agentRuntime,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

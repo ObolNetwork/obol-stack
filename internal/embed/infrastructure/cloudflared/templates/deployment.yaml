@@ -4,11 +4,29 @@
 {{- $localSecretName := default "cloudflared-local-credentials" .Values.localManaged.secretName -}}
 {{- $localConfigMapName := default "cloudflared-local-config" .Values.localManaged.configMapName -}}
 {{- $localTunnelIDKey := default "tunnel_id" .Values.localManaged.tunnelIDKey -}}
+{{- $managementConfigMapName := default "cloudflared-management" .Values.management.configMapName -}}
+{{- $managementModeKey := default "management_mode" .Values.management.modeKey -}}
+{{- $managementProtocolKey := default "transport_protocol" .Values.management.protocolKey -}}
+{{- $persistentReplicas := int (default 2 .Values.persistent.replicaCount) -}}
+{{- $defaultProtocol := default "auto" .Values.transport.protocol -}}
+{{- $mgmt := lookup "v1" "ConfigMap" .Release.Namespace $managementConfigMapName -}}
+
+{{- $effectiveMode := $mode -}}
+{{- if eq $mode "auto" -}}
+{{- if and $mgmt $mgmt.data (hasKey $mgmt.data $managementModeKey) -}}
+{{- $effectiveMode = get $mgmt.data $managementModeKey | default "auto" -}}
+{{- end -}}
+{{- end -}}
+
+{{- $effectiveProtocol := $defaultProtocol -}}
+{{- if and $mgmt $mgmt.data (hasKey $mgmt.data $managementProtocolKey) -}}
+{{- $effectiveProtocol = get $mgmt.data $managementProtocolKey | default $defaultProtocol -}}
+{{- end -}}
 
 {{- $useLocal := false -}}
-{{- if eq $mode "local" -}}
+{{- if eq $effectiveMode "local" -}}
 {{- $useLocal = true -}}
-{{- else if eq $mode "auto" -}}
+{{- else if eq $effectiveMode "auto" -}}
 {{- $ls := lookup "v1" "Secret" .Release.Namespace $localSecretName -}}
 {{- $cm := lookup "v1" "ConfigMap" .Release.Namespace $localConfigMapName -}}
 {{- if and $ls $cm -}}
@@ -18,14 +36,19 @@
 
 {{- $useRemote := false -}}
 {{- if not $useLocal -}}
-{{- if eq $mode "remote" -}}
+{{- if eq $effectiveMode "remote" -}}
 {{- $useRemote = true -}}
-{{- else if eq $mode "auto" -}}
+{{- else if eq $effectiveMode "auto" -}}
 {{- $rs := lookup "v1" "Secret" .Release.Namespace $remoteSecretName -}}
 {{- if $rs -}}
 {{- $useRemote = true -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{- $replicas := 0 -}}
+{{- if or $useLocal $useRemote -}}
+{{- $replicas = $persistentReplicas -}}
 {{- end -}}
 
 apiVersion: apps/v1
@@ -36,11 +59,7 @@ metadata:
     app.kubernetes.io/name: cloudflared
     app.kubernetes.io/part-of: obol-stack
 spec:
-  {{- if or $useLocal $useRemote }}
-  replicas: 1
-  {{- else }}
-  replicas: 0
-  {{- end }}
+  replicas: {{ $replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudflared
@@ -57,22 +76,24 @@ spec:
             - --no-autoupdate
             - --metrics
             - {{ .Values.metrics.address | quote }}
-            {{ if $useLocal }}
+            - --protocol
+            - {{ $effectiveProtocol | quote }}
+            {{- if $useLocal }}
             - --origincert
             - /etc/cloudflared/cert.pem
             - --config
             - /etc/cloudflared/config.yml
             - run
             - "$(TUNNEL_ID)"
-            {{ else if $useRemote }}
+            {{- else if $useRemote }}
             - run
             - --token
             - "$(TUNNEL_TOKEN)"
-            {{ else }}
+            {{- else }}
             - --url
             - {{ .Values.quickTunnel.url | quote }}
-            {{ end }}
-          {{ if $useLocal }}
+            {{- end }}
+          {{- if $useLocal }}
           env:
             - name: TUNNEL_ID
               valueFrom:
@@ -83,23 +104,36 @@ spec:
             - name: cloudflared-local
               mountPath: /etc/cloudflared
               readOnly: true
-          {{ else if $useRemote }}
+          {{- else if $useRemote }}
           env:
             - name: TUNNEL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ $remoteSecretName | quote }}
                   key: {{ $remoteSecretKey | quote }}
-          {{ end }}
+          {{- end }}
           ports:
             - name: metrics
               containerPort: 2000
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /ready
               port: metrics
             initialDelaySeconds: 10
             periodSeconds: 10
+            failureThreshold: 6
           resources:
             requests:
               cpu: 10m
@@ -107,7 +141,7 @@ spec:
             limits:
               cpu: 100m
               memory: 128Mi
-      {{ if $useLocal }}
+      {{- if $useLocal }}
       volumes:
         - name: cloudflared-local
           projected:
@@ -116,5 +150,5 @@ spec:
                   name: {{ $localSecretName | quote }}
               - configMap:
                   name: {{ $localConfigMapName | quote }}
-      {{ end }}
+      {{- end }}
       restartPolicy: Always

@@ -6,7 +6,7 @@ import (
 
 func TestResolveToken_USDC_AllChains(t *testing.T) {
 	chains := []struct {
-		name    string
+		name     string
 		wantAddr string
 	}{
 		{"base", ChainBaseMainnet.USDCAddress},
@@ -39,28 +39,46 @@ func TestResolveToken_USDC_AllChains(t *testing.T) {
 	}
 }
 
-func TestResolveToken_OBOL_Ethereum(t *testing.T) {
-	entry, ok := ResolveToken("OBOL", "ethereum")
-	if !ok {
-		t.Fatal("ResolveToken(OBOL, ethereum) not found")
+func TestResolveToken_OBOL_LiveChains(t *testing.T) {
+	tests := []struct {
+		chain   string
+		address string
+	}{
+		{
+			chain:   "ethereum",
+			address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+		},
+		{
+			chain:   "base-sepolia",
+			address: "0x0a09371a8b011d5110656ceBCc70603e53FD2c78",
+		},
 	}
-	if entry.Address != "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7" {
-		t.Errorf("Address = %q", entry.Address)
-	}
-	if entry.Decimals != 18 {
-		t.Errorf("Decimals = %d, want 18", entry.Decimals)
-	}
-	if entry.TransferMethod != "permit2" {
-		t.Errorf("TransferMethod = %q, want permit2", entry.TransferMethod)
-	}
-	if entry.EIP712Name != "Obol Network" {
-		t.Errorf("EIP712Name = %q", entry.EIP712Name)
-	}
-	if entry.EIP712Version != "1" {
-		t.Errorf("EIP712Version = %q", entry.EIP712Version)
-	}
-	if !entry.EIP2612GasSponsoring {
-		t.Error("EIP2612GasSponsoring = false, want true (OBOL implements ERC20Permit and the Obol facilitator batches permit() with transferFrom)")
+
+	for _, tc := range tests {
+		t.Run(tc.chain, func(t *testing.T) {
+			entry, ok := ResolveToken("OBOL", tc.chain)
+			if !ok {
+				t.Fatalf("ResolveToken(OBOL, %s) not found", tc.chain)
+			}
+			if entry.Address != tc.address {
+				t.Errorf("Address = %q, want %q", entry.Address, tc.address)
+			}
+			if entry.Decimals != 18 {
+				t.Errorf("Decimals = %d, want 18", entry.Decimals)
+			}
+			if entry.TransferMethod != "permit2" {
+				t.Errorf("TransferMethod = %q, want permit2", entry.TransferMethod)
+			}
+			if entry.EIP712Name != "Obol Network" {
+				t.Errorf("EIP712Name = %q", entry.EIP712Name)
+			}
+			if entry.EIP712Version != "1" {
+				t.Errorf("EIP712Version = %q", entry.EIP712Version)
+			}
+			if !entry.EIP2612GasSponsoring {
+				t.Error("EIP2612GasSponsoring = false, want true (OBOL implements ERC20Permit and the Obol facilitator batches permit() with transferFrom)")
+			}
+		})
 	}
 }
 
@@ -161,6 +179,12 @@ func TestTokenSupportedOnChain(t *testing.T) {
 	}
 	if !TokenSupportedOnChain("OBOL", "ethereum") {
 		t.Error("OBOL should be supported on ethereum")
+	}
+	if !TokenSupportedOnChain("OBOL", "base-sepolia") {
+		t.Error("OBOL should be supported on base-sepolia")
+	}
+	if TokenSupportedOnChain("OBOL", "base") {
+		t.Error("OBOL should not be supported on base mainnet")
 	}
 	if TokenSupportedOnChain("OBOL", "polygon") {
 		t.Error("OBOL should not be supported on polygon")

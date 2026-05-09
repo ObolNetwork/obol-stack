@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	agentmgr "github.com/ObolNetwork/obol-stack/internal/agent"
+	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
@@ -41,14 +45,21 @@ func agentCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:    "new",
-				Aliases: []string{"onboard"},
-				Usage:   "Create and deploy an agent instance",
+				Name:      "new",
+				Aliases:   []string{"onboard"},
+				Usage:     "Create and deploy an agent instance",
+				ArgsUsage: "[name]",
+				Description: `With a positional name and CRD-path flags (--model, --skills,
+--objective, --create-wallet) this declares an Agent custom resource and
+seeds soul.md + the per-agent skills dir on the host.
+
+Without a positional name, falls back to the legacy host-rendered
+Hermes/OpenClaw onboard flow used by the master agent.`,
 				Flags: []cli.Flag{
 					agentRuntimeFlag("hermes"),
 					&cli.StringFlag{
 						Name:  "id",
-						Usage: "Instance ID (defaults to generated petname)",
+						Usage: "Instance ID for the legacy onboard path (defaults to generated petname)",
 					},
 					&cli.BoolFlag{
 						Name:    "force",
@@ -59,14 +70,43 @@ func agentCommand(cfg *config.Config) *cli.Command {
 						Name:  "no-sync",
 						Usage: "Only scaffold config, don't deploy to cluster",
 					},
+					// CRD-path flags. Presence of any of these (or a positional
+					// name argument) routes to the new sub-agent flow.
+					&cli.StringFlag{
+						Name:  "model",
+						Usage: "Pin a LiteLLM model name for this agent (CRD path; defaults to cluster top-of-rank at first reconcile)",
+					},
+					&cli.StringFlag{
+						Name:  "skills",
+						Usage: "Comma-separated skill names to seed for this agent (CRD path)",
+					},
+					&cli.StringFlag{
+						Name:  "objective",
+						Usage: "Operator objective text substituted into soul.md (CRD path)",
+					},
+					&cli.BoolFlag{
+						Name:  "create-wallet",
+						Usage: "Provision a per-namespace remote-signer keystore for this agent (CRD path)",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+
+					// CRD path: positional name, or any CRD-only flag set.
+					useCRDPath := cmd.NArg() > 0 || cmd.IsSet("model") || cmd.IsSet("skills") || cmd.IsSet("objective") || cmd.IsSet("create-wallet")
+					if err := validateAgentNewMode(useCRDPath, cmd.IsSet("runtime"), cmd.IsSet("id"), cmd.IsSet("force"), cmd.IsSet("no-sync")); err != nil {
+						return err
+					}
+					if useCRDPath {
+						return agentNewCRD(cfg, cmd, u)
+					}
+
+					// Legacy onboard path (master agent, additional Hermes/OpenClaw).
 					runtime, err := parseAgentRuntime(cmd.String("runtime"))
 					if err != nil {
 						return err
 					}
 
-					u := getUI(cmd)
 					switch runtime {
 					case agentruntime.Hermes:
 						return hermes.Onboard(cfg, hermes.OnboardOptions{
@@ -164,16 +204,254 @@ func agentCommand(cfg *config.Config) *cli.Command {
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+
+					// CRD-managed sub-agent path: when a positional name
+					// matches an Agent CR (and no legacy instance exists
+					// for it), delete the CR + host data dir. Mirrors the
+					// dispatch shape used by `obol agent new`.
+					if cmd.NArg() == 1 {
+						name := strings.TrimSpace(cmd.Args().First())
+						if isCRDAgent(cfg, name) && !hasLegacyInstance(cfg, name) {
+							if !cmd.Bool("force") && u.IsTTY() {
+								confirm, _ := u.Input(fmt.Sprintf("Delete Agent %q (namespace %s) and host data? [y/N]", name, agentcrd.Namespace(name)), "n")
+								if !strings.EqualFold(strings.TrimSpace(confirm), "y") {
+									u.Info("Aborted")
+									return nil
+								}
+							}
+							return deleteCRDAgent(cfg, name, u)
+						}
+					}
+
 					target, err := resolveAgentTarget(cfg, cmd.String("runtime"), cmd.Args().Slice())
 					if err != nil {
 						return err
 					}
-					return deleteAgentTarget(cfg, target, cmd.Bool("force"), getUI(cmd))
+					return deleteAgentTarget(cfg, target, cmd.Bool("force"), u)
 				},
 			},
+			agentUpdateCommand(cfg),
 			agentWalletCommand(cfg),
 		},
 	}
+}
+
+// agentUpdateCommand implements `obol agent update <name>` for the
+// CRD-declared sub-agents. Supports +foo,-bar diff syntax on --skills so
+// users can layer changes without retyping the full list. Operates on a
+// kubectl get → mutate → kubectl apply round-trip; no interactive flow yet.
+func agentUpdateCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "update",
+		Usage:     "Update a CRD-declared sub-agent (model, skills, objective)",
+		ArgsUsage: "<name>",
+		Description: `Updates spec fields on an existing Agent custom resource.
+
+--skills accepts both replacement (a,b,c) and diff (+foo,-bar) syntax.
+Diff entries leave existing skills in place; literal entries replace the
+list wholesale. Mixing the two is rejected to avoid surprise.
+
+Examples:
+  obol agent update quant --model qwen3.5:35b
+  obol agent update quant --skills +building-blocks,-gas
+  obol agent update quant --skills addresses,gas        # replaces the list`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "model", Usage: "Pin a different LiteLLM model"},
+			&cli.StringFlag{Name: "skills", Usage: "Replacement list or +foo,-bar diff"},
+			&cli.StringFlag{Name: "objective", Usage: "Replacement objective text"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() != 1 {
+				return fmt.Errorf("agent name required: obol agent update <name>")
+			}
+			name := strings.TrimSpace(cmd.Args().First())
+			if err := agentcrd.ValidateName(name); err != nil {
+				return err
+			}
+			if err := kubectl.EnsureCluster(cfg); err != nil {
+				return fmt.Errorf("Obol Stack is not running. Start it with `obol stack up` first")
+			}
+
+			bin, kc := kubectl.Paths(cfg)
+			ns := agentcrd.Namespace(name)
+			currentJSON, err := kubectl.Output(bin, kc, "get", "agent", name, "-n", ns, "-o", "json")
+			if err != nil {
+				return fmt.Errorf("agent %q not found in namespace %s", name, ns)
+			}
+
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(currentJSON), &doc); err != nil {
+				return fmt.Errorf("decode agent: %w", err)
+			}
+			spec, _ := doc["spec"].(map[string]any)
+			if spec == nil {
+				spec = map[string]any{}
+				doc["spec"] = spec
+			}
+
+			u := getUI(cmd)
+			finalSkills := stringSliceFromAny(spec["skills"])
+			objectiveChanged := false
+			skillsRequested := false
+
+			if cmd.IsSet("model") {
+				spec["model"] = strings.TrimSpace(cmd.String("model"))
+				u.Successf("model → %v", spec["model"])
+			}
+			if cmd.IsSet("objective") {
+				spec["objective"] = strings.TrimSpace(cmd.String("objective"))
+				objectiveChanged = true
+				u.Successf("objective updated")
+			}
+			if cmd.IsSet("skills") {
+				skillsRequested = true
+				current := finalSkills
+				updated, err := applySkillDiff(current, cmd.String("skills"))
+				if err != nil {
+					return err
+				}
+				finalSkills = updated
+				out := make([]any, len(updated))
+				for i, s := range updated {
+					out[i] = s
+				}
+				spec["skills"] = out
+
+				if added, removed := skillDelta(current, updated); len(added)+len(removed) > 0 {
+					if len(added) > 0 {
+						u.Successf("skills added: %s", strings.Join(added, ", "))
+					}
+					if len(removed) > 0 {
+						u.Successf("skills removed: %s", strings.Join(removed, ", "))
+					}
+				}
+			}
+
+			if skillsRequested {
+				if _, err := agentcrd.SeedHostFiles(cfg, name, finalSkills, stringValueFromAny(spec["objective"]), agentcrd.SeedOptions{
+					OverwriteSoul: objectiveChanged,
+					ExactSkills:   true,
+				}); err != nil {
+					return fmt.Errorf("sync host agent files: %w", err)
+				}
+			} else if objectiveChanged {
+				if _, err := agentcrd.WriteSoul(cfg, name, stringValueFromAny(spec["objective"]), true); err != nil {
+					return fmt.Errorf("sync host soul.md: %w", err)
+				}
+			}
+
+			// Strip status before re-applying so we don't fight the controller.
+			delete(doc, "status")
+
+			if _, err := kubectlApplyOutput(cfg, doc); err != nil {
+				return fmt.Errorf("apply Agent: %w", err)
+			}
+			u.Successf("Agent %s/%s updated", ns, name)
+			return nil
+		},
+	}
+}
+
+// applySkillDiff returns the new skill list given the current list and a
+// CLI-style spec. The spec is one of:
+//   - all-literal (e.g. "addresses,gas"): wholesale replacement
+//   - all-diff (e.g. "+foo,-bar"): additions/removals applied to current
+//
+// Mixing literal and diff entries is rejected.
+func applySkillDiff(current []string, spec string) ([]string, error) {
+	parts := strings.Split(spec, ",")
+	hasLiteral, hasDiff := false, false
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p[0] == '+' || p[0] == '-' {
+			hasDiff = true
+		} else {
+			hasLiteral = true
+		}
+	}
+	if hasDiff && hasLiteral {
+		return nil, fmt.Errorf("--skills must be all-replace (a,b,c) or all-diff (+foo,-bar), not mixed")
+	}
+
+	if hasLiteral {
+		// Validate against agentcrd.ParseSkills which enforces naming
+		// rules. Empty input is allowed and yields an empty list.
+		return agentcrd.ParseSkills(spec)
+	}
+
+	out := append([]string(nil), current...)
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		op, name := p[0], strings.TrimSpace(p[1:])
+		if name == "" {
+			return nil, fmt.Errorf("empty skill name in %q", p)
+		}
+		switch op {
+		case '+':
+			if !containsString(out, name) {
+				out = append(out, name)
+			}
+		case '-':
+			out = removeString(out, name)
+		}
+	}
+	return out, nil
+}
+
+func skillDelta(before, after []string) (added, removed []string) {
+	beforeSet := map[string]bool{}
+	for _, s := range before {
+		beforeSet[s] = true
+	}
+	afterSet := map[string]bool{}
+	for _, s := range after {
+		afterSet[s] = true
+		if !beforeSet[s] {
+			added = append(added, s)
+		}
+	}
+	for _, s := range before {
+		if !afterSet[s] {
+			removed = append(removed, s)
+		}
+	}
+	return added, removed
+}
+
+func stringSliceFromAny(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func stringValueFromAny(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func removeString(values []string, needle string) []string {
+	out := values[:0]
+	for _, v := range values {
+		if v != needle {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func agentWalletCommand(cfg *config.Config) *cli.Command {
@@ -520,6 +798,14 @@ func listAgentInstances(cfg *config.Config, runtimeValue string, u *ui.UI) error
 		}
 	}
 
+	// CRD-managed sub-agents live alongside the legacy host-managed
+	// instances. Include them only in the aggregate view so a runtime-
+	// filtered listing stays round-trippable with the rest of the CLI.
+	if shouldIncludeCRDAgents(runtimeValue) {
+		crdAgents, _ := listCRDAgents(cfg)
+		instances = append(instances, crdAgents...)
+	}
+
 	if u.IsJSON() {
 		return u.JSON(instances)
 	}
@@ -538,6 +824,119 @@ func listAgentInstances(cfg *config.Config, runtimeValue string, u *ui.UI) error
 		u.Blank()
 	}
 	u.Printf("Total: %d instance(s)", len(instances))
+	return nil
+}
+
+// isCRDAgent reports whether the named agent exists as an obol.org/Agent
+// custom resource. Soft errors (cluster down, CRD missing) return false.
+func isCRDAgent(cfg *config.Config, name string) bool {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return false
+	}
+	bin, kc := kubectl.Paths(cfg)
+	out, err := kubectl.Output(bin, kc, "get", "agent", name, "-n", agentcrd.Namespace(name), "-o", "name", "--ignore-not-found")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
+// hasLegacyInstance reports whether the name matches a host-managed
+// Hermes/OpenClaw instance. Used to disambiguate `obol agent delete <name>`
+// when both forms could conceivably be present.
+func hasLegacyInstance(cfg *config.Config, name string) bool {
+	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw} {
+		ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if id == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// listCRDAgents returns Agent CRs as agentListItems so they merge cleanly
+// into the existing host-side listing. Best-effort: kubectl errors are
+// returned but the caller treats them as soft failures (cluster down,
+// CRD not yet installed, etc.).
+func listCRDAgents(cfg *config.Config) ([]agentListItem, error) {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return nil, err
+	}
+	bin, kc := kubectl.Paths(cfg)
+	out, err := kubectl.Output(bin, kc, "get", "agents.obol.org", "-A", "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Status struct {
+				Endpoint string `json:"endpoint"`
+				Phase    string `json:"phase"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		return nil, fmt.Errorf("decode agent list: %w", err)
+	}
+	items := make([]agentListItem, 0, len(doc.Items))
+	for _, it := range doc.Items {
+		url := it.Status.Endpoint
+		if url == "" {
+			url = "(pending controller)"
+		}
+		items = append(items, agentListItem{
+			Runtime:   "agent-crd",
+			ID:        it.Metadata.Name,
+			Namespace: it.Metadata.Namespace,
+			URL:       url,
+		})
+	}
+	return items, nil
+}
+
+// deleteCRDAgent removes the Agent CR and its host-side data directory
+// (skills + soul.md). Used by `obol agent delete <name>` when the
+// argument matches a CRD-declared agent. Idempotent: missing cluster,
+// missing CR, and missing host dir are all treated as "already gone".
+func deleteCRDAgent(cfg *config.Config, name string, u *ui.UI) error {
+	if err := agentcrd.ValidateName(name); err != nil {
+		return err
+	}
+
+	if err := kubectl.EnsureCluster(cfg); err == nil {
+		bin, kc := kubectl.Paths(cfg)
+		ns := agentcrd.Namespace(name)
+		// --ignore-not-found makes the CRUD idempotent. The namespace
+		// itself stays — step 2d's controller may own its lifecycle once
+		// it provisions resources there. This avoids the CLI deleting
+		// a namespace another piece of the system thinks it owns.
+		if err := kubectl.Run(bin, kc, "delete", "agent", name, "-n", ns, "--ignore-not-found"); err != nil {
+			return fmt.Errorf("delete Agent: %w", err)
+		}
+		u.Successf("Agent %s/%s deleted", ns, name)
+	} else {
+		u.Dim("Cluster unreachable; skipping CR deletion (host-side files only)")
+	}
+
+	// Wipe host-side data root for this agent. Confirm via dim log so the
+	// user can see what we removed; intentionally no prompt because
+	// `obol agent delete` already prompts for confirmation upstream.
+	root := filepath.Dir(filepath.Dir(agentcrd.HostHomePath(cfg, name))) // .../<DataDir>/agent-<name>
+	if _, err := os.Stat(root); err == nil {
+		if err := os.RemoveAll(root); err != nil {
+			return fmt.Errorf("remove host data dir %s: %w", root, err)
+		}
+		u.Dim("Removed host data dir " + root)
+	}
 	return nil
 }
 
@@ -595,6 +994,38 @@ func listRuntimes(runtimeValue string) ([]agentruntime.Runtime, error) {
 		}
 		return []agentruntime.Runtime{runtime}, nil
 	}
+}
+
+func shouldIncludeCRDAgents(runtimeValue string) bool {
+	switch strings.ToLower(strings.TrimSpace(runtimeValue)) {
+	case "", "all":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateAgentNewMode(useCRDPath, runtimeSet, idSet, forceSet, noSyncSet bool) error {
+	if !useCRDPath {
+		return nil
+	}
+	var legacy []string
+	if runtimeSet {
+		legacy = append(legacy, "--runtime")
+	}
+	if idSet {
+		legacy = append(legacy, "--id")
+	}
+	if forceSet {
+		legacy = append(legacy, "--force")
+	}
+	if noSyncSet {
+		legacy = append(legacy, "--no-sync")
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+	return fmt.Errorf("CRD agent creation does not support legacy flags %s; use `obol agent new <name> --model/--skills/--objective/--create-wallet` or drop the positional name for legacy runtime onboarding", strings.Join(legacy, ", "))
 }
 
 func containsString(values []string, needle string) bool {

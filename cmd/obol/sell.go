@@ -48,6 +48,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 		Commands: []*cli.Command{
 			sellInferenceCommand(cfg),
 			sellHTTPCommand(cfg),
+			sellAgentCommand(cfg),
 			sellDemoCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
@@ -59,6 +60,23 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellRegisterCommand(cfg),
 			sellInfoCommand(cfg),
 		},
+	}
+}
+
+// payToFlag returns the standard "where do payments go" flag used across
+// all sell commands. The primary name is --pay-to; --wallet and -w are
+// kept as deprecated aliases for one minor release. Usage strings are
+// wired so help text consistently advertises --pay-to as the canonical
+// form. Callers read the value via cmd.String("pay-to").
+func payToFlag(usage string) *cli.StringFlag {
+	if usage == "" {
+		usage = "Token recipient address (auto-detected from remote-signer)"
+	}
+	return &cli.StringFlag{
+		Name:    "pay-to",
+		Aliases: []string{"wallet", "recipient", "w"},
+		Usage:   usage + " [aliases: --wallet (deprecated), -w]",
+		Sources: cli.EnvVars("X402_WALLET"),
 	}
 }
 
@@ -75,19 +93,14 @@ func sellInferenceCommand(cfg *config.Config) *cli.Command {
 Buyers pay per-request in USDC to access inference endpoints.
 
 Examples:
-  obol sell inference my-qwen --model qwen3.5:4b --wallet 0x... --price 0.001
-  obol sell inference my-llama --model llama3:8b --wallet 0x... --chain base`,
+  obol sell inference my-qwen --model qwen3.5:4b --pay-to 0x... --price 0.001
+  obol sell inference my-llama --model llama3:8b --pay-to 0x... --chain base`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "model",
 				Usage: "Model name to serve (e.g. qwen3.5:4b)",
 			},
-			&cli.StringFlag{
-				Name:    "wallet",
-				Aliases: []string{"w"},
-				Usage:   "USDC recipient wallet address",
-				Sources: cli.EnvVars("X402_WALLET"),
-			},
+			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "price",
 				Usage: "USDC price per request",
@@ -181,17 +194,17 @@ Examples:
 					var err error
 					name, err = u.Input("Service name", "")
 					if err != nil || name == "" {
-						return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
+						return fmt.Errorf("name required: obol sell inference <name> --pay-to <addr>")
 					}
 				} else {
-					return fmt.Errorf("name required: obol sell inference <name> --wallet <addr>")
+					return fmt.Errorf("name required: obol sell inference <name> --pay-to <addr>")
 				}
 			}
 			if err := validate.Name(name); err != nil {
 				return err
 			}
 
-			wallet := cmd.String("wallet")
+			wallet := cmd.String("pay-to")
 			if wallet == "" {
 				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
@@ -200,10 +213,10 @@ Examples:
 					var inputErr error
 					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
 					if inputErr != nil || wallet == "" {
-						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 					}
 				} else {
-					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 				}
 			}
 
@@ -416,15 +429,10 @@ By default it also registers the seller agent on ERC-8004 after the route is liv
 Use --no-register to skip the on-chain registration step.
 
 Examples:
-  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --wallet 0x... --price 0.01 --chain base
-  obol sell http my-cool-api --upstream my-svc --port 8080 --wallet 0x... --price 0.01 --chain base --no-register`,
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --chain base
+  obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --chain base --no-register`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "wallet",
-				Aliases: []string{"w"},
-				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
-				Sources: cli.EnvVars("X402_WALLET"),
-			},
+			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Payment chain (base, base-sepolia, ethereum)",
@@ -574,10 +582,10 @@ Examples:
 					var err error
 					name, err = u.Input("Service name", "")
 					if err != nil || name == "" {
-						return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
+						return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --chain <chain>")
 					}
 				} else {
-					return fmt.Errorf("name required: obol sell http <name> --wallet <addr> --chain <chain>")
+					return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --chain <chain>")
 				}
 			}
 			if err := validate.Name(name); err != nil {
@@ -585,7 +593,7 @@ Examples:
 			}
 
 			// Auto-discover wallet from remote-signer if not set.
-			wallet := cmd.String("wallet")
+			wallet := cmd.String("pay-to")
 			if wallet == "" {
 				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
@@ -594,10 +602,10 @@ Examples:
 					var inputErr error
 					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
 					if inputErr != nil || wallet == "" {
-						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 					}
 				} else {
-					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 				}
 			}
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
@@ -611,10 +619,10 @@ Examples:
 			ns := cmd.String("namespace")
 
 			if cmd.String("upstream") == "" {
-				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
 			}
 			if cmd.Int("port") == 0 {
-				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --wallet 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
 			}
 
 			priceTable, err := resolvePriceTable(cmd, true)
@@ -1072,6 +1080,18 @@ type demoSpec struct {
 	NeedsERPC    bool   // whether the demo queries eRPC
 	DefaultChain string // default --chain when not explicitly set
 	DefaultToken string // default --token when not explicitly set
+
+	// Agent is set on demo types that resolve to an agent-backed offer
+	// (Agent CRD + ServiceOffer of type=agent) rather than a pure-Go
+	// demo-server Deployment. Empty for legacy hello/blocks demos.
+	Agent *demoAgentSpec
+}
+
+// demoAgentSpec captures the per-demo Agent shape used by quant-style
+// demos. The values land on the Agent CR via `obol agent new` semantics.
+type demoAgentSpec struct {
+	Skills    []string
+	Objective string
 }
 
 const defaultDemoType = "hello"
@@ -1094,11 +1114,20 @@ var demoTypes = map[string]demoSpec{
 	},
 	"quant": {
 		Type:         "quant",
-		Price:        "0.01",
-		Description:  "Agent driven analysis report",
+		Price:        "10",
+		Description:  "Agent-backed chain analyst (Agent CRD + ServiceOffer of type=agent)",
 		NeedsERPC:    true,
-		DefaultChain: "base-sepolia",
-		DefaultToken: "USDC",
+		DefaultChain: "ethereum",
+		DefaultToken: "OBOL",
+		Agent: &demoAgentSpec{
+			Skills: []string{
+				"ethereum-networks",
+				"ethereum-local-wallet",
+				"addresses",
+				"gas",
+			},
+			Objective: "You are a focused EVM chain analyst. Answer the user's question using only the RPC tools you have. Be concise. If a question is outside chain analysis, refuse politely.",
+		},
 	},
 }
 
@@ -1113,24 +1142,19 @@ func sellDemoCommand(cfg *config.Config) *cli.Command {
 The demo proves the full sell→discover→pay→receive flow works end-to-end.
 
 Types:
-  hello    Proof-of-payment echo  (default: 1 OBOL on ethereum)
-  blocks   Live blockchain data   (default: 0.0001 USDC on base-sepolia)
-  quant    Agent driven analysis  (default: 0.01 USDC on base-sepolia)
+  hello    Proof-of-payment echo                    (default: 1 OBOL on ethereum)
+  blocks   Live blockchain data                     (default: 0.0001 USDC on base-sepolia)
+  quant    Agent-backed chain analyst (Agent CRD)   (default: 10 OBOL on ethereum)
 
 Run with no arguments to deploy the canonical hello demo on mainnet.
 
 Example:
   obol sell demo                                # hello @ 1 OBOL on ethereum
   obol sell demo blocks                         # blocks @ 0.0001 USDC on base-sepolia
-  obol sell demo quant --price 0.05             # quant @ 0.05 USDC on base-sepolia
+  obol sell demo quant --price 5                # quant @ 5 OBOL on ethereum
   obol sell demo hello --token USDC --chain base --price 0.001`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "wallet",
-				Aliases: []string{"w"},
-				Usage:   "Token recipient wallet address (auto-detected from remote-signer)",
-				Sources: cli.EnvVars("X402_WALLET"),
-			},
+			payToFlag("Token recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Payment chain (defaults to demo type's default chain)",
@@ -1193,7 +1217,7 @@ Example:
 			}
 
 			// Resolve wallet.
-			wallet := cmd.String("wallet")
+			wallet := cmd.String("pay-to")
 			if wallet == "" {
 				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
@@ -1202,10 +1226,10 @@ Example:
 					var inputErr error
 					wallet, inputErr = u.Input("Wallet address (token recipient)", "")
 					if inputErr != nil || wallet == "" {
-						return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 					}
 				} else {
-					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 				}
 			}
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
@@ -1229,6 +1253,14 @@ Example:
 			}
 
 			u.Infof("Deploying demo %q (%s)", typeName, spec.Description)
+
+			// Agent-backed demos take a separate path: declare an Agent CR
+			// + ServiceOffer of type=agent rather than rolling out the
+			// pure-Go demo-server. We branch here so legacy hello/blocks
+			// flow stays untouched.
+			if spec.Agent != nil {
+				return runAgentBackedDemo(ctx, cfg, u, cmd, name, typeName, price, symbol, chain, wallet, spec, assetTerms)
+			}
 
 			// 1. Deploy demo backend (namespace + Deployment + Service).
 			if err := deployDemoBackend(cfg, u, name, spec, chain); err != nil {
@@ -2166,11 +2198,7 @@ Examples:
 				Usage:    "Namespace of the ServiceOffer",
 				Required: true,
 			},
-			&cli.StringFlag{
-				Name:    "wallet",
-				Aliases: []string{"w"},
-				Usage:   "New USDC recipient wallet address",
-			},
+			payToFlag("New USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "New payment chain (base, base-sepolia, ethereum)",
@@ -2195,7 +2223,7 @@ Examples:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() == 0 {
-				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N] [--wallet 0x...] [--chain base]")
+				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N] [--pay-to 0x...] [--chain base]")
 			}
 
 			name := cmd.Args().First()
@@ -2210,7 +2238,7 @@ Examples:
 
 			payment := map[string]any{}
 
-			if wallet := strings.TrimSpace(cmd.String("wallet")); wallet != "" {
+			if wallet := strings.TrimSpace(cmd.String("pay-to")); wallet != "" {
 				if err := x402verifier.ValidateWallet(wallet); err != nil {
 					return err
 				}
@@ -2364,7 +2392,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				"-o", "jsonpath={.items}")
 			if listErr == nil && (remaining == "[]" || strings.TrimSpace(remaining) == "") {
 				st, _ := tunnel.LoadTunnelState(cfg)
-				if st == nil || st.Mode != "dns" {
+				if st == nil || !st.IsPersistent() {
 					u.Blank()
 					u.Info("No ServiceOffers remaining. Stopping quick tunnel.")
 					_ = tunnel.Stop(cfg, u)
@@ -2385,14 +2413,10 @@ func sellPricingCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "pricing",
 		Usage: "Manage service pricing",
-		Description: `Sets the wallet address and chain for x402 payment collection.
+		Description: `Sets the recipient address and chain for x402 payment collection.
 Reloads the payment verifier when configuration is changed.`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "wallet",
-				Usage:   "USDC recipient wallet address (auto-detected from remote-signer)",
-				Sources: cli.EnvVars("X402_WALLET"),
-			},
+			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Payment chain (base, base-sepolia, ethereum)",
@@ -2431,13 +2455,13 @@ Reloads the payment verifier when configuration is changed.`,
 				return x402verifier.Setup(cfg, pricingCfg.Wallet, pricingCfg.Chain, pricingCfg.FacilitatorURL)
 			}
 
-			wallet := cmd.String("wallet")
+			wallet := cmd.String("pay-to")
 			if wallet == "" {
 				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
 					wallet = resolved
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else {
-					return fmt.Errorf("wallet required: use --wallet <addr> or set X402_WALLET")
+					return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 				}
 			}
 			if err := x402verifier.ValidateWallet(wallet); err != nil {
@@ -2614,7 +2638,6 @@ func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	}
 	return successes
 }
-
 
 // registerDirectViaSigner performs a direct on-chain registration via the remote-signer.
 func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {

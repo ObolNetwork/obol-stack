@@ -47,6 +47,116 @@ func TestAgentNewCommand_DefaultsToHermes(t *testing.T) {
 	requireFlags(t, flags, "id", "force", "no-sync")
 }
 
+func TestAgentNewCommand_ExposesCRDFlags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := agentCommand(cfg)
+	newCmd := findSubcommand(t, cmd, "new")
+	flags := flagMap(newCmd)
+
+	// CRD-path flags must be present so the dispatch in the Action func
+	// can route between legacy onboard and the new sub-agent flow without
+	// a separate subcommand. The presence check protects against accidental
+	// removal during refactors.
+	requireFlags(t, flags, "model", "skills", "objective", "create-wallet")
+}
+
+func TestValidateAgentNewMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		useCRDPath bool
+		runtimeSet bool
+		idSet      bool
+		forceSet   bool
+		noSyncSet  bool
+		wantErr    bool
+	}{
+		{name: "legacy path accepts legacy flags", runtimeSet: true, wantErr: false},
+		{name: "crd path accepts crd-only flags", useCRDPath: true, wantErr: false},
+		{name: "crd path rejects runtime flag", useCRDPath: true, runtimeSet: true, wantErr: true},
+		{name: "crd path rejects id flag", useCRDPath: true, idSet: true, wantErr: true},
+		{name: "crd path rejects force flag", useCRDPath: true, forceSet: true, wantErr: true},
+		{name: "crd path rejects no-sync flag", useCRDPath: true, noSyncSet: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAgentNewMode(tt.useCRDPath, tt.runtimeSet, tt.idSet, tt.forceSet, tt.noSyncSet)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateAgentNewMode() err=%v wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestShouldIncludeCRDAgents(t *testing.T) {
+	tests := []struct {
+		runtime string
+		want    bool
+	}{
+		{"", true},
+		{"all", true},
+		{"ALL", true},
+		{"hermes", false},
+		{"openclaw", false},
+	}
+	for _, tt := range tests {
+		if got := shouldIncludeCRDAgents(tt.runtime); got != tt.want {
+			t.Fatalf("shouldIncludeCRDAgents(%q)=%v want %v", tt.runtime, got, tt.want)
+		}
+	}
+}
+
+func TestApplySkillDiff(t *testing.T) {
+	cases := []struct {
+		name    string
+		current []string
+		spec    string
+		want    []string
+		wantErr bool
+	}{
+		{"replace clobbers", []string{"a", "b"}, "x,y", []string{"x", "y"}, false},
+		// Empty --skills spec is treated as no-change rather than "wipe to
+		// nothing" — there is no good syntactic way to express the wipe,
+		// and an accidental empty-string from a misformatted shell var
+		// shouldn't silently clear an agent's skill loadout.
+		{"empty leaves current alone", []string{"a"}, "", []string{"a"}, false},
+		{"add new skill", []string{"a", "b"}, "+c", []string{"a", "b", "c"}, false},
+		{"add already-present is noop", []string{"a", "b"}, "+a", []string{"a", "b"}, false},
+		{"remove existing", []string{"a", "b", "c"}, "-b", []string{"a", "c"}, false},
+		{"remove missing is noop", []string{"a", "b"}, "-c", []string{"a", "b"}, false},
+		{"mixed +/- in one diff", []string{"a", "b"}, "+c,-b", []string{"a", "c"}, false},
+		{"reject mixed literal+diff", []string{"a"}, "+b,c", nil, true},
+		{"empty operand rejected", []string{"a"}, "+", nil, true},
+		{"whitespace tolerated", []string{"a"}, " +b , -a ", []string{"b"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := applySkillDiff(tc.current, tc.spec)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if !equalStringSlice(got, tc.want) {
+				t.Errorf("got=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestAgentWalletCommand_Structure(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := agentCommand(cfg)

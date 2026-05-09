@@ -28,10 +28,7 @@ func testConfig(t *testing.T) *config.Config {
 func TestTunnelState_RoundTrip(t *testing.T) {
 	cfg := testConfig(t)
 
-	st := &tunnelState{
-		Mode:     "quick",
-		Hostname: "abc-def.trycloudflare.com",
-	}
+	st := &tunnelState{Mode: "quick"}
 
 	if err := saveTunnelState(cfg, st); err != nil {
 		t.Fatalf("save: %v", err)
@@ -45,11 +42,18 @@ func TestTunnelState_RoundTrip(t *testing.T) {
 	if got.Mode != "quick" {
 		t.Errorf("mode = %q, want quick", got.Mode)
 	}
-
-	if got.Hostname != "abc-def.trycloudflare.com" {
-		t.Errorf("hostname = %q, want abc-def.trycloudflare.com", got.Hostname)
+	if got.ExposureMode != tunnelExposureQuick {
+		t.Errorf("exposure_mode = %q, want quick", got.ExposureMode)
 	}
-
+	if got.ManagementMode != tunnelManagementQuick {
+		t.Errorf("management_mode = %q, want quick", got.ManagementMode)
+	}
+	if got.Hostname != "" {
+		t.Errorf("hostname = %q, want empty", got.Hostname)
+	}
+	if got.TransportProtocol != tunnelTransportAuto {
+		t.Errorf("transport_protocol = %q, want %q", got.TransportProtocol, tunnelTransportAuto)
+	}
 	if got.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt should be set by save")
 	}
@@ -59,12 +63,13 @@ func TestTunnelState_DNSMode(t *testing.T) {
 	cfg := testConfig(t)
 
 	st := &tunnelState{
-		Mode:       "dns",
-		Hostname:   "stack.example.com",
-		AccountID:  "acct-123",
-		ZoneID:     "zone-456",
-		TunnelID:   "tun-789",
-		TunnelName: "my-tunnel",
+		Mode:              "dns",
+		Hostname:          "stack.example.com",
+		AccountID:         "acct-123",
+		ZoneID:            "zone-456",
+		TunnelID:          "tun-789",
+		TunnelName:        "my-tunnel",
+		TransportProtocol: tunnelTransportHTTP2,
 	}
 
 	if err := saveTunnelState(cfg, st); err != nil {
@@ -79,9 +84,47 @@ func TestTunnelState_DNSMode(t *testing.T) {
 	if got.Mode != "dns" {
 		t.Errorf("mode = %q, want dns", got.Mode)
 	}
-
+	if got.ExposureMode != tunnelExposurePersistent {
+		t.Errorf("exposure_mode = %q, want persistent", got.ExposureMode)
+	}
+	if got.ManagementMode != tunnelManagementRemote {
+		t.Errorf("management_mode = %q, want remote", got.ManagementMode)
+	}
+	if got.TransportProtocol != tunnelTransportHTTP2 {
+		t.Errorf("transport_protocol = %q, want %q", got.TransportProtocol, tunnelTransportHTTP2)
+	}
 	if got.TunnelID != "tun-789" {
 		t.Errorf("tunnel_id = %q, want tun-789", got.TunnelID)
+	}
+}
+
+func TestTunnelState_LegacyQuickHostnameStaysQuick(t *testing.T) {
+	cfg := testConfig(t)
+
+	if err := os.MkdirAll(filepath.Dir(tunnelStatePath(cfg)), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `{"mode":"quick","hostname":"annual-arc-abilities-lenses.trycloudflare.com"}`
+	if err := os.WriteFile(tunnelStatePath(cfg), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	got, err := loadTunnelState(cfg)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if got.Mode != legacyTunnelModeQuick {
+		t.Fatalf("mode = %q, want %q", got.Mode, legacyTunnelModeQuick)
+	}
+	if got.ExposureMode != tunnelExposureQuick {
+		t.Fatalf("exposure_mode = %q, want %q", got.ExposureMode, tunnelExposureQuick)
+	}
+	if got.ManagementMode != tunnelManagementQuick {
+		t.Fatalf("management_mode = %q, want %q", got.ManagementMode, tunnelManagementQuick)
+	}
+	if got.IsPersistent() {
+		t.Fatal("legacy quick tunnel with hostname should not be treated as persistent")
 	}
 }
 
@@ -101,7 +144,7 @@ func TestTunnelState_NotExist(t *testing.T) {
 func TestTunnelState_Overwrite(t *testing.T) {
 	cfg := testConfig(t)
 
-	st1 := &tunnelState{Mode: "quick", Hostname: "old.trycloudflare.com"}
+	st1 := &tunnelState{Mode: "quick"}
 	if err := saveTunnelState(cfg, st1); err != nil {
 		t.Fatalf("save 1: %v", err)
 	}
@@ -124,7 +167,7 @@ func TestTunnelState_Overwrite(t *testing.T) {
 func TestTunnelState_FilePermissions(t *testing.T) {
 	cfg := testConfig(t)
 
-	st := &tunnelState{Mode: "quick", Hostname: "test.trycloudflare.com"}
+	st := &tunnelState{Mode: "quick"}
 	if err := saveTunnelState(cfg, st); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -166,7 +209,7 @@ func TestTunnelModeAndURL(t *testing.T) {
 		{
 			name:     "dns mode with hostname",
 			st:       &tunnelState{Mode: "dns", Hostname: "stack.example.com"},
-			wantMode: "dns",
+			wantMode: "persistent",
 			wantURL:  "https://stack.example.com",
 		},
 	}
@@ -185,6 +228,87 @@ func TestTunnelModeAndURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeTunnelTransportProtocol(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "default empty", input: "", want: tunnelTransportAuto},
+		{name: "auto", input: "auto", want: tunnelTransportAuto},
+		{name: "quic", input: "quic", want: tunnelTransportQUIC},
+		{name: "http2", input: "http2", want: tunnelTransportHTTP2},
+		{name: "http slash 2 alias", input: "http/2", want: tunnelTransportHTTP2},
+		{name: "uppercase trims", input: " HTTP2 ", want: tunnelTransportHTTP2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeTunnelTransportProtocol(tt.input); got != tt.want {
+				t.Fatalf("normalizeTunnelTransportProtocol(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	if got := normalizeTunnelTransportProtocol("bogus"); got != "" {
+		t.Fatalf("normalizeTunnelTransportProtocol(%q) = %q, want empty", "bogus", got)
+	}
+}
+
+func TestDesiredPersistentTunnelName(t *testing.T) {
+	tests := []struct {
+		name       string
+		stackID    string
+		state      *tunnelState
+		management string
+		want       string
+	}{
+		{
+			name:       "new local tunnel gets local suffix",
+			stackID:    "sunny-otter",
+			management: tunnelManagementLocal,
+			want:       "obol-stack-sunny-otter-local",
+		},
+		{
+			name:       "new remote tunnel gets remote suffix",
+			stackID:    "sunny-otter",
+			management: tunnelManagementRemote,
+			want:       "obol-stack-sunny-otter-remote",
+		},
+		{
+			name:       "same management reuses existing tunnel name",
+			stackID:    "sunny-otter",
+			management: tunnelManagementRemote,
+			state: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementRemote,
+				TunnelName:     "obol-stack-sunny-otter",
+			},
+			want: "obol-stack-sunny-otter",
+		},
+		{
+			name:       "management handoff does not reuse opposite mode tunnel name",
+			stackID:    "sunny-otter",
+			management: tunnelManagementLocal,
+			state: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementRemote,
+				TunnelName:     "obol-stack-sunny-otter",
+			},
+			want: "obol-stack-sunny-otter-local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := desiredPersistentTunnelName(tt.stackID, tt.state, tt.management)
+			if got != tt.want {
+				t.Fatalf("desiredPersistentTunnelName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Auto-stop decision logic
 // ---------------------------------------------------------------------------
@@ -197,8 +321,8 @@ func shouldAutoStopTunnel(remainingOffers string, st *tunnelState) bool {
 	if remainingOffers != "[]" && remainingOffers != "" {
 		return false
 	}
-	// DNS (persistent) tunnels should not be auto-stopped.
-	if st != nil && st.Mode == "dns" {
+	// Persistent tunnels should not be auto-stopped.
+	if st != nil && st.IsPersistent() {
 		return false
 	}
 	// Quick tunnels with no remaining offers: stop.
@@ -268,10 +392,7 @@ func TestLoadTunnelState_Exported(t *testing.T) {
 	}
 
 	// Write state, then load via exported function.
-	if err := saveTunnelState(cfg, &tunnelState{
-		Mode:     "quick",
-		Hostname: "exported-test.trycloudflare.com",
-	}); err != nil {
+	if err := saveTunnelState(cfg, &tunnelState{Mode: "quick"}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -280,8 +401,8 @@ func TestLoadTunnelState_Exported(t *testing.T) {
 		t.Fatalf("LoadTunnelState: %v", err)
 	}
 
-	if st.Hostname != "exported-test.trycloudflare.com" {
-		t.Errorf("hostname = %q, want exported-test.trycloudflare.com", st.Hostname)
+	if st.Hostname != "" {
+		t.Errorf("hostname = %q, want empty", st.Hostname)
 	}
 }
 
