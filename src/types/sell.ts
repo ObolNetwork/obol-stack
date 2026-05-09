@@ -1,4 +1,4 @@
-export type ServiceOfferType = 'inference' | 'fine-tuning' | 'http';
+export type ServiceOfferType = 'inference' | 'fine-tuning' | 'http' | 'agent';
 
 export interface ServiceOfferModel {
   name?: string;

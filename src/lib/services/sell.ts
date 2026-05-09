@@ -124,7 +124,12 @@ function normalizeServiceOffer(raw: unknown): ServiceOffer {
 }
 
 function normalizeType(value: unknown): ServiceOfferType {
-  if (value === 'inference' || value === 'fine-tuning' || value === 'http') {
+  if (
+    value === 'inference' ||
+    value === 'fine-tuning' ||
+    value === 'http' ||
+    value === 'agent'
+  ) {
     return value;
   }
   return 'http';

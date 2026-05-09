@@ -166,6 +166,7 @@ const AgentLinkText = styled('a', {
 });
 
 const TYPE_LABEL: Record<ServiceOfferType, string> = {
+  agent: 'Agent',
   inference: 'Inference',
   'fine-tuning': 'Fine-tuning',
   http: 'HTTP',
