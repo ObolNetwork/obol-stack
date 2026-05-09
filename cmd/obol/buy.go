@@ -20,10 +20,10 @@ import (
 // internal/hermes/hermes.go where the env is wired). We reference the
 // literal paths so we don't depend on shell expansion through `kubectl exec`.
 const (
-	hermesPython     = "/opt/hermes/.venv/bin/python3"
-	hermesBuyPyPath  = "/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
-	defaultBuyName   = "default-paid"
-	usdcDecimals     = 6
+	hermesPython    = "/opt/hermes/.venv/bin/python3"
+	hermesBuyPyPath = "/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
+	defaultBuyName  = "default-paid"
+	usdcDecimals    = 6
 )
 
 func buyCommand(cfg *config.Config) *cli.Command {
@@ -44,28 +44,34 @@ func buyInferenceCommand(cfg *config.Config) *cli.Command {
 		Description: `Pre-pays an x402-gated inference seller through the obol-agent's wallet.
 
 Identity is verified before signing: the seller's
-/.well-known/agent-registration.json must list an ERC-8004 agentId that
-matches --expected-agent-id (default: DefaultBuySellerAgentID). Use
+/.well-known/agent-registration.json must advertise the requested service
+endpoint and list an ERC-8004 agentId that matches --expected-agent-id on the
+same priced payment network that the seller advertises in its 402 response. Use
 --no-verify-identity to bypass during development.
 
+Today the baked default seller placeholders are not yet provisioned, so the
+practical path is to pass an explicit --seller, --model, and either
+--expected-agent-id or --no-verify-identity.
+
 Examples:
-  obol buy inference --budget 10                          # zero-arg, full default path
-  obol buy inference my-buy --budget 5 --model qwen3.5:9b
-  obol buy inference --seller https://seller.example/services/x \
-                     --expected-agent-id 42 --budget 1`,
+	obol buy inference my-buy --seller https://seller.example/services/x \
+	                     --model qwen3.5:9b --expected-agent-id 42 --budget 1
+	obol buy inference --seller https://seller.example/services/x \
+	                     --model qwen3.5:9b --no-verify-identity --budget 1`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "seller",
-				Usage: "Seller endpoint (defaults to the Obol-operated default seller)",
+				Usage: fmt.Sprintf("Seller endpoint (defaults to the Obol-operated %s demo seller placeholder)", x402verifier.DefaultBuySellerChain),
 				Value: x402verifier.DefaultBuySellerURL,
 			},
 			&cli.StringFlag{
-				Name:  "model",
-				Usage: "Remote model id to buy (e.g. qwen3.5:9b)",
+				Name:     "model",
+				Usage:    "Remote model id to buy (required until a default seller/model are provisioned, e.g. qwen3.5:9b)",
+				Required: true,
 			},
 			&cli.StringFlag{
 				Name:     "budget",
-				Usage:    "Spending cap in USDC (e.g. \"10\" for 10 USDC). Converted to micro-units before passing to the agent.",
+				Usage:    "Spending cap in USDC (e.g. \"10\" for 10 USDC). Converted to micro-units before passing to the agent; current host-side preflight supports USDC-priced sellers only.",
 				Required: true,
 			},
 			&cli.IntFlag{
@@ -96,7 +102,7 @@ Examples:
 			},
 			&cli.BoolFlag{
 				Name:  "force",
-				Usage: "Pass-through to buy.py: force re-creation of the PurchaseRequest",
+				Usage: "Pass-through to buy.py: replace an existing PurchaseRequest and bypass certain balance/overwrite safety checks",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -120,6 +126,15 @@ Examples:
 				return err
 			}
 
+			u.Infof("Probing seller pricing at %s …", seller)
+			pricing, err := buy.FetchSellerPricing(ctx, seller, cmd.String("model"))
+			if err != nil {
+				return fmt.Errorf("pricing pre-flight: %w", err)
+			}
+			if err := buy.ValidateBudgetAgainstPricing(budgetMicro, pricing); err != nil {
+				return err
+			}
+
 			if !cmd.Bool("no-verify-identity") {
 				expected := cmd.Int("expected-agent-id")
 				if expected == 0 {
@@ -130,7 +145,10 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("identity pre-flight: %w", err)
 				}
-				if err := buy.VerifyAgentID(reg, int64(expected)); err != nil {
+				if err := buy.VerifySellerEndpoint(reg, seller); err != nil {
+					return err
+				}
+				if err := buy.VerifyAgentIDForPricing(reg, int64(expected), pricing); err != nil {
 					return err
 				}
 				u.Infof("Identity OK: agentId=%d", expected)
