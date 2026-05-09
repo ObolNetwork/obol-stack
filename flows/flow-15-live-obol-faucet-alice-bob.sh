@@ -17,7 +17,8 @@
 #   3. Derive Bob exactly the same way flow-14 derives Bob from
 #      REMOTE_SIGNER_PRIVATE_KEY.
 #   4. Call faucet.claim(Bob) from a funded claimer key, so Bob does not need
-#      Base Sepolia ETH to obtain OBOL.
+#      Base Sepolia ETH to obtain OBOL. Bob still needs buyer gas for the
+#      downstream Permit2 approval in flow-14.
 #   5. Assert Bob's OBOL balance increased by claimAmount and the faucet balance
 #      decreased by claimAmount.
 #   6. Run flow-14 with the faucet-backed token and Bob balance.
@@ -35,12 +36,14 @@
 #   OBOL_TOKEN_BASE_SEPOLIA             default: official faucet-backed OBOL
 #   OBOL_FAUCET_BASE_SEPOLIA            default: official OBOL faucet
 #   FLOW15_ARTIFACT_DIR                 default: .tmp/flow-15-<timestamp>
+#   FLOW14_BOB_GAS_MIN_WEI              default: 100000000000000
 #   FLOW14_*                            passed through to flow-14 for ports,
 #                                       artifacts, model overrides, etc.
 #
-# WARNING: This flow spends real Base Sepolia ETH for the faucet claim and the
-# downstream Alice registration/metadata transactions, plus real testnet OBOL
-# for x402 settlement. Private key values are never printed or written.
+# WARNING: This flow spends real Base Sepolia ETH for the faucet claim, Bob's
+# buyer approval, and the downstream Alice registration/metadata transactions,
+# plus real testnet OBOL for x402 settlement. Private key values are never
+# printed or written.
 
 source "$(dirname "$0")/lib.sh"
 
@@ -52,6 +55,7 @@ OFFICIAL_OBOL_FAUCET_BASE_SEPOLIA="0x0c8Ec594d067d1D850deba7BAa05d4052Ab97076"
 
 OBOL_TOKEN_BASE_SEPOLIA="${OBOL_TOKEN_BASE_SEPOLIA:-$OFFICIAL_OBOL_TOKEN_BASE_SEPOLIA}"
 OBOL_FAUCET_BASE_SEPOLIA="${OBOL_FAUCET_BASE_SEPOLIA:-$OFFICIAL_OBOL_FAUCET_BASE_SEPOLIA}"
+BOB_GAS_MIN_WEI="${FLOW14_BOB_GAS_MIN_WEI:-100000000000000}"
 FLOW15_ARTIFACT_DIR="${FLOW15_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-15-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$FLOW15_ARTIFACT_DIR"
 
@@ -232,6 +236,18 @@ if [ "$(python3 -c "print(1 if int('$projected_bob_after') < int('$required_min'
     emit_metrics; exit 1
 fi
 pass "Bob before faucet claim: $(format_obol "$bob_before") OBOL; projected after claim: $(format_obol "$projected_bob_after") OBOL"
+
+step "Bob: buyer wallet has Base Sepolia ETH for downstream buyer gas"
+bob_eth=$(cast_with_retries balance "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+if [ -z "$bob_eth" ]; then
+    fail "Could not read ETH balance for Bob wallet $BOB_WALLET"
+    emit_metrics; exit 1
+fi
+if [ "$(python3 -c "print(1 if int('$bob_eth') < int('$BOB_GAS_MIN_WEI') else 0)")" = "1" ]; then
+    fail "Bob wallet $BOB_WALLET holds $bob_eth wei Base Sepolia ETH; need >= $BOB_GAS_MIN_WEI wei for downstream flow-14 buyer Permit2 approval gas. Top up Bob or override FLOW14_BOB_GAS_MIN_WEI."
+    emit_metrics; exit 1
+fi
+pass "Bob has $bob_eth wei Base Sepolia ETH for buyer gas (>= $BOB_GAS_MIN_WEI)"
 
 if [ "$already_funded_skip_claim" = "1" ]; then
     step "Faucet claim: skipped for cooldown-safe rerun"
