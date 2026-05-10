@@ -463,7 +463,6 @@ func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
 	}
 }
 
-
 func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
@@ -864,6 +863,18 @@ func TestBuildAndImportLocalImages_SelectiveRebuild(t *testing.T) {
 	}
 	if strings.Contains(log, "Dockerfile.serviceoffer-controller") {
 		t.Fatalf("expected selective rebuild to skip serviceoffer-controller (already local), log:\n%s", log)
+	}
+}
+
+func TestForceRebuildSet_PublicStorefrontAlias(t *testing.T) {
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "public-storefront")
+
+	shouldForceRebuild := forceRebuildSet()
+	if !shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-public-storefront:latest") {
+		t.Fatal("public-storefront alias should rebuild obol-stack-public-storefront")
+	}
+	if shouldForceRebuild("ghcr.io/obolnetwork/x402-verifier:latest") {
+		t.Fatal("public-storefront alias should not rebuild unrelated images")
 	}
 }
 

@@ -721,7 +721,9 @@ func devPreloadImages() []string {
 //   - "true" / "all"             → always force-rebuild every image
 //   - "img1,img2,…"              → force-rebuild only the named images; match is
 //     against the short name (last path component before the colon, e.g.
-//     "x402-verifier" from "ghcr.io/obolnetwork/x402-verifier:latest")
+//     "x402-verifier" from "ghcr.io/obolnetwork/x402-verifier:latest").
+//     "public-storefront" is accepted as an alias for the published image name
+//     "obol-stack-public-storefront".
 func forceRebuildSet() func(tag string) bool {
 	raw := strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES"))
 	switch strings.ToLower(raw) {
@@ -741,12 +743,24 @@ func forceRebuildSet() func(tag string) bool {
 		}
 	}
 	return func(tag string) bool {
-		base := filepath.Base(tag)
-		if idx := strings.Index(base, ":"); idx != -1 {
-			base = base[:idx]
-		}
-		return names[base]
+		base := localImageShortName(tag)
+		return names[base] || names[localImageRebuildAlias(base)]
 	}
+}
+
+func localImageShortName(tag string) string {
+	base := filepath.Base(tag)
+	if idx := strings.Index(base, ":"); idx != -1 {
+		base = base[:idx]
+	}
+	return base
+}
+
+func localImageRebuildAlias(name string) string {
+	if name == "obol-stack-public-storefront" {
+		return "public-storefront"
+	}
+	return name
 }
 
 func dockerImageAvailableLocally(tag string) bool {

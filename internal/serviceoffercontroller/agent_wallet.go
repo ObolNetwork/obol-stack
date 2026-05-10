@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
@@ -17,9 +18,9 @@ import (
 // version synced with agentruntime.RemoteSignerChartVersion's notes
 // (chart 0.3.2 → image v0.3.0, the canonical recovery-id behaviour).
 const (
-	remoteSignerName        = "remote-signer"
-	remoteSignerPort        = 9000
-	remoteSignerImage       = "ghcr.io/obolnetwork/remote-signer:v0.3.0"
+	remoteSignerName  = "remote-signer"
+	remoteSignerPort  = 9000
+	remoteSignerImage = "ghcr.io/obolnetwork/remote-signer:v0.3.0"
 	// Image hard-codes /data/keystores as the default and reads its
 	// config under the SIGNER__... env namespace; values picked to match
 	// the master agent's working config in hermes-obol-agent.
@@ -78,6 +79,9 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, namespace string)
 	if err == nil {
 		annotations := existing.GetAnnotations()
 		if addr := annotations[signerKeystoreAddressAnnotation]; addr != "" {
+			if err := c.ensureCanonicalKeystoreKey(ctx, namespace, existing); err != nil {
+				return "", err
+			}
 			return addr, nil
 		}
 		// Secret exists but has no address — likely written by a
@@ -100,6 +104,43 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, namespace string)
 		return "", err
 	}
 	return mat.Address, nil
+}
+
+func (c *Controller) ensureCanonicalKeystoreKey(ctx context.Context, namespace string, secret *unstructured.Unstructured) error {
+	data, _, err := unstructured.NestedStringMap(secret.Object, "data")
+	if err != nil {
+		return fmt.Errorf("read %s data: %w", remoteSignerSecretName, err)
+	}
+	if data[remoteSignerKeystoreKey] != "" {
+		return nil
+	}
+
+	var candidateKey, candidateValue string
+	for key, value := range data {
+		if key == "password" || !strings.HasSuffix(key, ".json") || value == "" {
+			continue
+		}
+		if candidateKey != "" {
+			return fmt.Errorf("secret %s/%s has multiple legacy keystore JSON data keys (%q and %q); refusing to choose one", namespace, remoteSignerSecretName, candidateKey, key)
+		}
+		candidateKey = key
+		candidateValue = value
+	}
+	if candidateKey == "" {
+		return fmt.Errorf("secret %s/%s has wallet annotation but no keystore JSON data", namespace, remoteSignerSecretName)
+	}
+
+	data[remoteSignerKeystoreKey] = candidateValue
+	if err := unstructured.SetNestedStringMap(secret.Object, data, "data"); err != nil {
+		return fmt.Errorf("set canonical keystore key: %w", err)
+	}
+	_, err = c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace).Update(ctx, secret, metav1.UpdateOptions{
+		FieldManager: controllerFieldManager,
+	})
+	if err != nil {
+		return fmt.Errorf("update %s/%s with canonical keystore key: %w", namespace, remoteSignerSecretName, err)
+	}
+	return nil
 }
 
 func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial) *unstructured.Unstructured {
@@ -263,4 +304,3 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 
 	return []*unstructured.Unstructured{deployment, service}
 }
-

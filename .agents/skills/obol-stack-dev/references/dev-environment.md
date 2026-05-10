@@ -99,7 +99,8 @@ The short name is the image base without registry prefix or tag
 (`x402-verifier` from `ghcr.io/obolnetwork/x402-verifier:latest`).
 
 Available image names: `x402-verifier`, `serviceoffer-controller`,
-`x402-buyer`, `demo-server`, `public-storefront`.
+`x402-buyer`, `demo-server`, `obol-stack-public-storefront`
+(`public-storefront` alias accepted).
 
 When nothing was rebuilt the "Local dev images ready" summary line prints
 the selective-rebuild hint so you know the option is available.

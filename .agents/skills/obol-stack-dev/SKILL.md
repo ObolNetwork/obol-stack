@@ -146,8 +146,8 @@ rebuild only those; `false`/`0`/unset → reuse all cached images (default).
 Short name is the image base without the registry prefix or tag
 (e.g. `x402-verifier` from `ghcr.io/obolnetwork/x402-verifier:latest`).
 Images: x402-verifier, serviceoffer-controller, x402-buyer, demo-server,
-public-storefront. The warm-path summary line surfaces this hint when nothing
-was rebuilt.
+obol-stack-public-storefront (`public-storefront` alias accepted). The
+warm-path summary line surfaces this hint when nothing was rebuilt.
 
 Integration checks:
 
