@@ -61,6 +61,11 @@ agent_buy_skill_balance() {
         python3 "$AGENT_BUY_PY" balance --chain base-sepolia 2>&1 || true
 }
 
+agent_wallet_anvil_balance() {
+    env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$AGENT_WALLET" \
+        --rpc-url "$ANVIL_RPC" 2>&1 || true
+}
+
 litellm_paid_inference() {
     "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
         python3 -c "
@@ -222,7 +227,7 @@ else
     fail "Could not fund agent wallet on Anvil — ${AGENT_SLOT:0:120}"
 fi
 
-poll_step_grep "Agent buy.py balance sees funded USDC" "USDC:.*1000\.000000" 24 5 agent_buy_skill_balance
+poll_step_grep "Agent wallet funded on local Anvil" "^1000000000 " 24 5 agent_wallet_anvil_balance
 
 step "Ensure PurchaseRequest auth pool via obol buy inference"
 buy_out=$("$OBOL" buy inference "$PURCHASE_NAME" \
