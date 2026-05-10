@@ -497,7 +497,104 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  For a persistent URL: obol tunnel setup --hostname stack.example.com")
 	}
 
+	claudeTipIfRelevant(u)
+
 	return nil
+}
+
+// claudeTipIfRelevant prints a hint when the user has Claude Code installed
+// but the Obol skills plugin is not yet usable in their setup. Best-effort
+// and silent on any error — a missing or malformed Claude config must never
+// block stack up.
+//
+// Three states the user can be in:
+//   - plugin already installed → silent (nothing to suggest)
+//   - marketplace registered but plugin not installed → suggest the install step
+//   - marketplace not registered at all → suggest both the marketplace add and install
+func claudeTipIfRelevant(u *ui.UI) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return
+	}
+	mpName, mpRegistered := obolMarketplaceName()
+	if mpRegistered && obolPluginInstalled(mpName) {
+		return
+	}
+	u.Blank()
+	u.Dim("Tip: let your Claude Code instance manage your Obol Stack for you.")
+	if !mpRegistered {
+		u.Dim("  Add the Obol skills marketplace, then install the plugin:")
+		u.Dim("    claude plugin marketplace add ObolNetwork/skills")
+		u.Dim("    /plugin install obol@obol")
+	} else {
+		u.Dim("  The Obol marketplace is registered. Install the plugin to enable it:")
+		u.Dim(fmt.Sprintf("    /plugin install obol@%s", mpName))
+	}
+}
+
+// obolMarketplaceName returns the local marketplace name that points at
+// ObolNetwork/skills (typically "obol") and a bool indicating whether it was
+// found in ~/.claude/plugins/known_marketplaces.json. The file is shaped as
+// an object keyed by marketplace name, e.g.:
+//
+//	{
+//	  "obol": {"source": {"source": "github", "repo": "ObolNetwork/skills"}, ...}
+//	}
+func obolMarketplaceName() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "known_marketplaces.json"))
+	if err != nil {
+		return "", false
+	}
+	var doc map[string]struct {
+		Source struct {
+			Repo string `json:"repo"`
+			URL  string `json:"url"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", false
+	}
+	for name, entry := range doc {
+		if strings.EqualFold(entry.Source.Repo, "ObolNetwork/skills") ||
+			strings.Contains(strings.ToLower(entry.Source.URL), "obolnetwork/skills") {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// obolPluginInstalled reports whether any plugin from the given local
+// marketplace name is recorded in ~/.claude/plugins/installed_plugins.json.
+// Plugin keys are stored as "<plugin>@<marketplace>"; we match on the suffix
+// so we don't have to hardcode every plugin the marketplace ever publishes.
+func obolPluginInstalled(marketplaceName string) bool {
+	if marketplaceName == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		Plugins map[string]any `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	suffix := "@" + marketplaceName
+	for key := range doc.Plugins {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // autoConfigureLLM detects host Ollama and imported cloud providers, then

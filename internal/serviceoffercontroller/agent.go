@@ -50,6 +50,40 @@ func (c *Controller) enqueueAgent(obj any) {
 	c.agentQueue.Add(key)
 }
 
+// enqueueOffersFromAgent re-queues every ServiceOffer whose
+// spec.agent.ref points at the given Agent. Without this, an Agent
+// status change (e.g. status.pinnedModel after the user edits the
+// Agent's spec.model) would not propagate into the offer's
+// status.agentResolution — the offer reconciler only runs when the
+// offer itself changes. Mirrors enqueueOfferFromRegistration.
+func (c *Controller) enqueueOffersFromAgent(obj any) {
+	u := asUnstructured(obj)
+	if u == nil {
+		return
+	}
+	agentNS := u.GetNamespace()
+	agentName := u.GetName()
+	for _, item := range c.offerInformer.GetStore().List() {
+		ou := asUnstructured(item)
+		if ou == nil {
+			continue
+		}
+		offer, err := decodeServiceOffer(ou)
+		if err != nil {
+			log.Printf("serviceoffer-controller: decode offer for agent fan-out: %v", err)
+			continue
+		}
+		if !offer.IsAgent() {
+			continue
+		}
+		ref := offer.Spec.Agent.Ref
+		if ref.Name != agentName || ref.Namespace != agentNS {
+			continue
+		}
+		c.offerQueue.Add(offer.Namespace + "/" + offer.Name)
+	}
+}
+
 func (c *Controller) processNextAgent(ctx context.Context) bool {
 	key, shutdown := c.agentQueue.Get()
 	if shutdown {

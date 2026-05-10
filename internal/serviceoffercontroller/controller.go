@@ -157,9 +157,18 @@ func New(cfg *rest.Config) (*Controller, error) {
 		DeleteFunc: controller.enqueuePurchase,
 	})
 	agentInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    controller.enqueueAgent,
-		UpdateFunc: func(_, newObj any) { controller.enqueueAgent(newObj) },
-		DeleteFunc: controller.enqueueAgent,
+		AddFunc: func(obj any) {
+			controller.enqueueAgent(obj)
+			controller.enqueueOffersFromAgent(obj)
+		},
+		UpdateFunc: func(_, newObj any) {
+			controller.enqueueAgent(newObj)
+			controller.enqueueOffersFromAgent(newObj)
+		},
+		DeleteFunc: func(obj any) {
+			controller.enqueueAgent(obj)
+			controller.enqueueOffersFromAgent(obj)
+		},
 	})
 	configMapInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    controller.enqueueDiscoveryRefresh,
