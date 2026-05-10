@@ -58,7 +58,7 @@ TUNNEL_HOST=""
 TUNNEL_IP=""
 if [ -n "$TUNNEL_URL" ]; then
     TUNNEL_HOST=$(printf '%s\n' "${TUNNEL_URL#https://}" | cut -d/ -f1)
-    TUNNEL_IP=$(dig +short A "$TUNNEL_HOST" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
 fi
 
 tunnel_get_code() {

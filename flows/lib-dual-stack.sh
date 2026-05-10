@@ -205,7 +205,25 @@ PY
 }
 
 resolve_public_ipv4() {
-    dig +short A "$1" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1
+    local host="$1"
+    local ip=""
+    local resolver
+
+    ip=$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    if [ -n "$ip" ]; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+
+    for resolver in 1.1.1.1 8.8.8.8; do
+        ip=$(dig @"$resolver" +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+        if [ -n "$ip" ]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 system_resolves_host() {

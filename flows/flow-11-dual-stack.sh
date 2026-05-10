@@ -195,7 +195,25 @@ PY
 }
 
 resolve_public_ipv4() {
-    dig +short A "$1" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1
+    local host="$1"
+    local ip=""
+    local resolver
+
+    ip=$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    if [ -n "$ip" ]; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+
+    for resolver in 1.1.1.1 8.8.8.8; do
+        ip=$(dig @"$resolver" +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+        if [ -n "$ip" ]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 curl_tunnel_402_code() {
@@ -736,9 +754,12 @@ wait_usdc_transfer_receipt() {
 }
 
 step "Preflight: .env key"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
-    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
+    SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
+fi
+if [ -z "$SIGNER_KEY" ]; then
+    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
     emit_metrics; exit 1
 fi
 # Bob is the second deterministic derived key. The flow pre-seeds this key

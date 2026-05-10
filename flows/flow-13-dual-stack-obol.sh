@@ -244,7 +244,7 @@ fi
 pass "Facilitator image available: $FACILITATOR_IMAGE"
 
 step "Preflight: .env signer key (Alice/Bob seed)"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
     SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
 fi

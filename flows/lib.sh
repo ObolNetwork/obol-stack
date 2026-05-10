@@ -181,6 +181,28 @@ obol_curl_command_for_url() {
     echo "curl --resolve obol.stack:$port:127.0.0.1 --resolve obol.stack:80:127.0.0.1 --resolve obol.stack:8080:127.0.0.1 --resolve obol.stack:443:127.0.0.1"
 }
 
+resolve_public_ipv4() {
+    local host="$1"
+    local ip=""
+    local resolver
+
+    ip=$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    if [ -n "$ip" ]; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+
+    for resolver in 1.1.1.1 8.8.8.8; do
+        ip=$(dig @"$resolver" +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+        if [ -n "$ip" ]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 refresh_obol_ingress_env() {
     export OBOL_INGRESS_URL
     OBOL_INGRESS_URL="$(obol_ingress_url)"

@@ -12,7 +12,7 @@ if [ -n "$TUNNEL_URL" ]; then
         "$TUNNEL_URL/services/flow-qwen/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>/dev/null || echo "000")
-if [ "$tunnel_probe" = "402" ]; then
+    if [ "$tunnel_probe" = "402" ]; then
         BASE_URL="$TUNNEL_URL"
     fi
 fi
@@ -22,6 +22,112 @@ if [[ "$BASE_URL" == *"obol.stack"* ]]; then
 else
     CURL_BASE="curl"
 fi
+
+PUBLIC_SELLER_URL="${TUNNEL_URL%/}/services/flow-qwen/v1/chat/completions"
+PURCHASE_NAME="flow08-paid"
+AGENT_NS="hermes-obol-agent"
+AGENT_DEPLOY="hermes"
+AGENT_CONTAINER="hermes"
+AGENT_BUY_PY="/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
+BUY_AUTH_COUNT=5
+BUY_BUDGET_USDC="0.005"
+
+purchase_request_ready() {
+    "$OBOL" kubectl get purchaserequests.obol.org "$PURCHASE_NAME" -n "$AGENT_NS" \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true
+}
+
+purchase_request_absent() {
+    ! "$OBOL" kubectl get purchaserequests.obol.org "$PURCHASE_NAME" -n "$AGENT_NS" >/dev/null 2>&1
+}
+
+buyer_sidecar_status() {
+    "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request, json
+try:
+    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    d = json.loads(resp.read())
+    for name, info in d.items():
+        print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
+except Exception as e:
+    print('error: %s' % e)
+" 2>&1 || true
+}
+
+agent_buy_skill_balance() {
+    "$OBOL" kubectl exec \
+        -n "$AGENT_NS" "deploy/$AGENT_DEPLOY" -c "$AGENT_CONTAINER" -- \
+        python3 "$AGENT_BUY_PY" balance --chain base-sepolia 2>&1 || true
+}
+
+litellm_paid_inference() {
+    "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request, urllib.error, json, time
+t0 = time.time()
+req = urllib.request.Request('http://localhost:4000/v1/chat/completions',
+    data=json.dumps({
+        'model': '$PAID_MODEL',
+        'messages': [
+            {'role':'system','content':'Return only the final answer. Do not include reasoning, analysis, markdown, lists, or preambles.'},
+            {'role':'user','content':'Reply with exactly this sentence: USDC payment smoke test passed.'}
+        ],
+        'max_tokens': 60, 'temperature': 0, 'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False}
+    }).encode(),
+    headers={'Content-Type':'application/json','Authorization':'Bearer $LITELLM_MASTER_KEY'})
+try:
+    resp = urllib.request.urlopen(req, timeout=180)
+    elapsed = time.time() - t0
+    body = json.loads(resp.read())
+    c = body['choices'][0]['message']
+    content = ' '.join((c.get('content') or '').split())
+    reasoning = ' '.join(((c.get('reasoning_content') or c.get('reasoning') or '')).split())
+    text = content or reasoning
+    print('STATUS=%d TIME=%.1fs' % (resp.status, elapsed))
+    print('MODEL=%s' % body.get('model','?'))
+    if reasoning:
+        print('REASONING_PRESENT=1')
+    print('CONTENT=%s' % content[:300])
+    print('TEXT=%s' % text[:300])
+except urllib.error.HTTPError as e:
+    print('ERROR=%d %s' % (e.code, e.read().decode()[:300]))
+except Exception as e:
+    print('ERROR=%s' % repr(e))
+" 2>&1 || true
+}
+
+pin_local_erpc_chain_single_upstream() {
+    local chain_id="$1"
+    local upstream_id="$2"
+
+    local current
+    current=$("$OBOL" kubectl get cm erpc-config -n erpc -o jsonpath='{.data.erpc\.yaml}' 2>/dev/null || true)
+    if [ -z "$current" ]; then
+        return 1
+    fi
+
+    local patched
+    if ! patched=$(printf '%s' "$current" | \
+        (cd "$OBOL_ROOT" && go run ./flows/tools/pin-erpc-upstream \
+            --chain-id "$chain_id" --upstream-id "$upstream_id")); then
+        return 1
+    fi
+    [ -n "$patched" ] || return 1
+
+    local tmp rc
+    tmp=$(mktemp)
+    printf '%s' "$patched" > "$tmp"
+    "$OBOL" kubectl create cm erpc-config -n erpc \
+        --from-file=erpc.yaml="$tmp" --dry-run=client -o yaml | \
+        "$OBOL" kubectl replace -f - >/dev/null 2>&1
+    rc=$?
+    rm -f "$tmp"
+    "$OBOL" kubectl rollout restart deployment/erpc -n erpc >/dev/null 2>&1 || true
+    "$OBOL" kubectl rollout status deployment/erpc -n erpc --timeout=60s >/dev/null 2>&1 || true
+    return "$rc"
+}
 
 # §2.1: Discover services via /skill.md (machine-readable catalog, always published
 # when ServiceOffers are ready; /.well-known/agent-registration.json requires
@@ -75,8 +181,77 @@ else
     fail "402 body validation failed — ${body_402:0:200}"
 fi
 
-# §2.4 pre-capture: Record seller balance BEFORE paid inference to verify settlement
-# (monetize §2.4 — "payee balance should have increased")
+PAID_AMOUNT=$(echo "$body_402" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+a = d['accepts'][0]
+print(a.get('amount') or a.get('maxAmountRequired') or '')
+" 2>/dev/null | tr -d '[:space:]')
+
+step "Supported paid flow uses public tunnel URL"
+if [ -n "$TUNNEL_URL" ]; then
+    pass "Using public seller URL: $PUBLIC_SELLER_URL"
+else
+    fail "No public tunnel URL available for obol buy inference"
+fi
+
+step "eRPC base-sepolia pinned to local Anvil"
+network_out=$("$OBOL" network add base-sepolia --endpoint http://host.k3d.internal:8545 --allow-writes 2>&1) || true
+if pin_local_erpc_chain_single_upstream 84532 custom-84532-0; then
+    pass "Pinned base-sepolia to custom-84532-0 (host.k3d.internal:8545)"
+else
+    fail "Could not pin eRPC base-sepolia to local Anvil — ${network_out:0:200}"
+fi
+
+step "Agent wallet discovered"
+AGENT_WALLET=$("$OBOL" agent wallet list obol-agent 2>/dev/null | grep -oE '0x[a-fA-F0-9]{40}' | head -1 || true)
+if [ -n "$AGENT_WALLET" ]; then
+    pass "Agent wallet: $AGENT_WALLET"
+else
+    fail "Could not resolve obol-agent wallet address"
+fi
+
+step "Fund agent wallet with USDC on local Anvil"
+AGENT_SLOT=$(cast index address "$AGENT_WALLET" 9 2>&1) || true
+if [[ "$AGENT_SLOT" =~ ^0x[0-9a-fA-F]+$ ]] && \
+    cast rpc anvil_setStorageAt "$USDC_ADDRESS" "$AGENT_SLOT" \
+        "0x000000000000000000000000000000000000000000000000000000003B9ACA00" \
+        --rpc-url "$ANVIL_RPC" >/dev/null 2>&1; then
+    pass "USDC storage slot written for $AGENT_WALLET"
+else
+    fail "Could not fund agent wallet on Anvil — ${AGENT_SLOT:0:120}"
+fi
+
+poll_step_grep "Agent buy.py balance sees funded USDC" "USDC:.*1000\.000000" 24 5 agent_buy_skill_balance
+
+step "Ensure PurchaseRequest auth pool via obol buy inference"
+buy_out=$("$OBOL" buy inference "$PURCHASE_NAME" \
+    --seller "$PUBLIC_SELLER_URL" \
+    --model "$FLOW_MODEL" \
+    --budget "$BUY_BUDGET_USDC" \
+    --no-verify-identity \
+    --force 2>&1) || true
+if echo "$buy_out" | grep -q "Purchased upstream '$PURCHASE_NAME' configured via x402-buyer sidecar"; then
+    pass "obol buy inference ensured PurchaseRequest $PURCHASE_NAME"
+else
+    fail "obol buy inference failed — ${buy_out:0:500}"
+fi
+
+poll_step_grep "PurchaseRequest Ready" "True" 36 5 purchase_request_ready
+poll_step_grep "x402-buyer has a live auth pool" "$PURCHASE_NAME: remaining=[1-9]" 36 5 buyer_sidecar_status
+
+buyer_status=$(buyer_sidecar_status)
+PAID_MODEL=$(echo "$buyer_status" | grep "^$PURCHASE_NAME:" | grep -oE 'model=[^ ]+' | head -1 | cut -d= -f2)
+if [ -z "$PAID_MODEL" ]; then
+    PAID_MODEL="paid/$FLOW_MODEL"
+fi
+
+LITELLM_MASTER_KEY=$("$OBOL" kubectl get secret litellm-secrets -n llm -o jsonpath='{.data.LITELLM_MASTER_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)
+if [ -z "$LITELLM_MASTER_KEY" ]; then
+    fail "Could not read LiteLLM master key"
+fi
+
+# §2.4 pre-capture: Record seller balance BEFORE paid inference to verify settlement.
 PRE_SELLER_BAL=""
 if command -v cast &>/dev/null; then
     PRE_SELLER_BAL=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$SELLER_WALLET" \
@@ -84,152 +259,35 @@ if command -v cast &>/dev/null; then
     [[ "$PRE_SELLER_BAL" =~ ^[0-9] ]] || PRE_SELLER_BAL=""
 fi
 
-# Capture start block before paid inference for on-chain settlement receipt search
+# Capture start block immediately before the paid request.
 BUY_START_BLOCK=""
 if command -v cast &>/dev/null; then
     BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC" 2>/dev/null | tr -d ' ' || true)
     [[ "$BUY_START_BLOCK" =~ ^[0-9]+$ ]] || BUY_START_BLOCK=""
 fi
 
-# §2.3: Paid inference — sign EIP-712 ERC-3009 payment and retry
-# Uses eth_account to sign the TransferWithAuthorization payload, matching
-# internal/testutil/eip712_signer.go. If host Python lacks the dependency,
-# lib.sh creates an isolated .workspace/venv and puts it on PATH.
-step "Paid inference via x402 payment signing"
-if ensure_payment_python_deps; then
-    paid_out=$(python3 << 'PYEOF' 2>&1
-import sys, os, json, base64, secrets, time
-import httpx
-from eth_account import Account
-from eth_account.messages import encode_typed_data
-
-SERVICE_URL = os.environ.get('BASE_URL', os.environ.get('OBOL_INGRESS_URL', 'http://obol.stack:8080'))
-SERVICE_PATH = "/services/flow-qwen/v1/chat/completions"
-CONSUMER_KEY  = os.environ["CONSUMER_PRIVATE_KEY"]  # derived from Hardhat mnemonic in lib.sh
-USDC_ADDRESS  = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-CHAIN_ID      = 84532  # Base Sepolia
-MODEL         = os.environ.get("FLOW_MODEL", "qwen3.5:9b")
-
-acct = Account.from_key(CONSUMER_KEY)
-
-# 1. Initial request → 402
-url = SERVICE_URL + SERVICE_PATH
-body = {"model": MODEL, "messages": [{"role": "user", "content": "What is 2+2?"}], "max_tokens": 20}
-headers = {"Content-Type": "application/json"}
-if "obol.stack" in SERVICE_URL:
-    # macOS mDNS bypass: connect to 127.0.0.1 but send Host header
-    transport = httpx.HTTPTransport()
-resp = httpx.post(url, json=body, headers=headers, timeout=30, follow_redirects=True)
-if resp.status_code != 402:
-    print(f"ERROR: expected 402, got {resp.status_code}: {resp.text[:200]}")
-    sys.exit(1)
-
-req_data = resp.json()
-accept = req_data["accepts"][0]
-pay_to  = accept["payTo"]
-amount  = accept.get("amount") or accept.get("maxAmountRequired")  # micro-USDC string e.g. "1000"
-network = accept["network"]
-asset   = accept.get("asset") or USDC_ADDRESS
-domain_name = "USDC"
-domain_version = "2"
-
-# 2. Sign EIP-712 TransferWithAuthorization (ERC-3009)
-nonce = "0x" + secrets.token_hex(32)
-valid_before = str(int(time.time()) + 3600)  # 1 hour from now
-
-structured = {
-    "types": {
-        "EIP712Domain": [
-            {"name": "name",              "type": "string"},
-            {"name": "version",           "type": "string"},
-            {"name": "chainId",           "type": "uint256"},
-            {"name": "verifyingContract", "type": "address"},
-        ],
-        "TransferWithAuthorization": [
-            {"name": "from",        "type": "address"},
-            {"name": "to",          "type": "address"},
-            {"name": "value",       "type": "uint256"},
-            {"name": "validAfter",  "type": "uint256"},
-            {"name": "validBefore", "type": "uint256"},
-            {"name": "nonce",       "type": "bytes32"},
-        ],
-    },
-    "primaryType": "TransferWithAuthorization",
-    "domain": {
-        "name": domain_name, "version": domain_version,
-        "chainId": CHAIN_ID, "verifyingContract": USDC_ADDRESS,
-    },
-    "message": {
-        "from":        acct.address,
-        "to":          pay_to,
-        "value":       int(amount),
-        "validAfter":  0,
-        "validBefore": int(valid_before),
-        "nonce":       bytes.fromhex(nonce[2:]),
-    },
-}
-signed = acct.sign_message(encode_typed_data(full_message=structured))
-sig_hex = "0x" + signed.signature.hex()
-
-# 3. Build x402 v2 payment envelope. The accepted requirement must round-trip
-# exactly enough for strict facilitators to deserialize the EIP-3009 variant.
-accepted = dict(accept)
-accepted["amount"] = amount
-accepted["asset"] = asset
-envelope = {
-    "x402Version": 2,
-    "accepted": accepted,
-    "payload": {
-        "signature": sig_hex,
-        "authorization": {
-            "from":        acct.address,
-            "to":          pay_to,
-            "value":       amount,
-            "validAfter":  "0",
-            "validBefore": valid_before,
-            "nonce":       nonce,
-        },
-    },
-}
-payment_header = base64.b64encode(json.dumps(envelope).encode()).decode()
-
-# 4. Retry with X-Payment header
-resp2 = httpx.post(url, json=body,
-    headers={**headers, "X-Payment": payment_header},
-    timeout=120, follow_redirects=True)
-if resp2.status_code == 200 and "choices" in resp2.text:
-    d = resp2.json()
-    nc = len(d.get("choices", []))
-    print(f"PAID_RESPONSE: HTTP 200, choices={nc}")
-    print(f"PAID_AMOUNT_USDC={amount}")
-else:
-    print(f"ERROR: payment rejected — HTTP {resp2.status_code}: {resp2.text[:300]}")
-    sys.exit(1)
-PYEOF
-    ) || true  # prevent set -e from killing the flow on Python script failure
-    if echo "$paid_out" | grep -q "PAID_RESPONSE:\|choices_ok"; then
-        pass "Paid inference succeeded"
-    else
-        fail "Paid inference failed — ${paid_out:0:400}"
-    fi
+step "Paid inference via LiteLLM paid/* route"
+paid_out=$(litellm_paid_inference)
+if echo "$paid_out" | grep -q "STATUS=200" && \
+   echo "$paid_out" | grep -q "TEXT=.*USDC payment smoke test passed\."; then
+    pass "Paid inference succeeded via $PAID_MODEL"
 else
-    fail "eth_account/httpx unavailable and automatic venv setup failed"
+    fail "Paid inference failed — ${paid_out:0:500}"
 fi
 
 step "On-chain: settlement receipt"
-PAID_AMOUNT=$(echo "$paid_out" | grep -oE 'PAID_AMOUNT_USDC=[0-9]+' | head -1 | cut -d= -f2)
 if [ -z "$PAID_AMOUNT" ] || [ -z "$BUY_START_BLOCK" ]; then
     fail "Could not capture amount or start block — settlement receipt skipped"
 else
     ARTIFACT_DIR="${FLOW08_ARTIFACT_DIR:-${ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-08-$(date +%Y%m%d-%H%M%S)}}"
     mkdir -p "$ARTIFACT_DIR"
     settlement_match=$(USDC_ADDRESS_BASE_SEPOLIA="$USDC_ADDRESS" BASE_SEPOLIA_RPC="$ANVIL_RPC" \
-        wait_usdc_transfer_receipt settlement "$CONSUMER_WALLET" "$SELLER_WALLET" "$PAID_AMOUNT" "$BUY_START_BLOCK" 30 2 || true)
+        wait_usdc_transfer_receipt settlement "$AGENT_WALLET" "$SELLER_WALLET" "$PAID_AMOUNT" "$BUY_START_BLOCK" 30 2 || true)
     SETTLEMENT_TX=$(echo "$settlement_match" | awk '{print $1; exit}')
     if [ -n "$SETTLEMENT_TX" ]; then
         pass "Settlement receipt archived: $SETTLEMENT_TX"
     else
-        fail "No USDC Transfer($CONSUMER_WALLET → $SELLER_WALLET, $PAID_AMOUNT) found after block $BUY_START_BLOCK"
+        fail "No USDC Transfer($AGENT_WALLET → $SELLER_WALLET, $PAID_AMOUNT) found after block $BUY_START_BLOCK"
     fi
 fi
 
@@ -238,7 +296,7 @@ fi
 if command -v cast &>/dev/null; then
     step "Buyer USDC balance check"
     # env -u CHAIN: CHAIN=base-sepolia conflicts with foundry (expects uint64)
-    if buyer_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$CONSUMER_WALLET" \
+    if buyer_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$AGENT_WALLET" \
             --rpc-url "$ANVIL_RPC" 2>&1) && [[ "$buyer_bal" =~ ^[0-9] ]]; then
         pass "Buyer USDC balance: $buyer_bal"
     else
@@ -249,7 +307,7 @@ if command -v cast &>/dev/null; then
     if seller_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$SELLER_WALLET" \
             --rpc-url "$ANVIL_RPC" 2>&1) && [[ "$seller_bal" =~ ^[0-9] ]]; then
         # If we captured a pre-balance, verify it increased (actual settlement check)
-        if [ -n "$PRE_SELLER_BAL" ] && echo "$paid_out" | grep -q "PAID_RESPONSE:"; then
+        if [ -n "$PRE_SELLER_BAL" ] && echo "$paid_out" | grep -q "STATUS=200"; then
             pre_num=$(echo "$PRE_SELLER_BAL" | grep -oE '^[0-9]+' | head -1)
             post_num=$(echo "$seller_bal" | grep -oE '^[0-9]+' | head -1)
             if [ -n "$pre_num" ] && [ -n "$post_num" ] && [ "$post_num" -gt "$pre_num" ] 2>/dev/null; then
