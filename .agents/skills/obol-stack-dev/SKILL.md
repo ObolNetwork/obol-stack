@@ -103,6 +103,13 @@ QA LLM invariant:
 
 Read `references/remote-qa.md` before running SSH/tmux cleanup or live smoke remotely.
 
+## Release Notes
+
+- Use `.github/release-template.md` as the starting point for GitHub release descriptions.
+- The release workflow creates a draft with generated notes; replace the narrative body with the template and keep generated `What's Changed`, `New Contributors`, and `Full Changelog` sections at the bottom.
+- The v0.9.0 release is the style reference: banner, release theme, concise user-facing summary, install block, curated highlights, smaller wins, and generated changelog.
+- Never include private keys, seed phrases, passwords, hostnames, personal paths, or raw bearer tokens in release notes.
+
 ## Common Commands
 
 Local syntax/config:
