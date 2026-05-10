@@ -1003,8 +1003,7 @@ if [ -z "$BOB_MASTER_KEY" ]; then
     emit_metrics; exit 1
 fi
 BUY_START_BLOCK=$(base_sepolia_block_number "$BASE_SEPOLIA_RPC" || true)
-inference_response=$(litellm_paid_inference)
-if echo "$inference_response" | grep -q "STATUS=200"; then
+if inference_response=$(wait_for_paid_inference 24 5); then
     pass "Paid inference succeeded"
     echo "$inference_response"
 else

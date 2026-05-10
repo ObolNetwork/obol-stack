@@ -244,7 +244,7 @@ fi
 pass "Facilitator image available: $FACILITATOR_IMAGE"
 
 step "Preflight: .env signer key (Alice/Bob seed)"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
     SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
 fi
@@ -628,15 +628,18 @@ pass "Tunnel: $TUNNEL_URL"
 
 step "Alice: 402 gate works on $TUNNEL_URL/services/alice-obol-inference"
 gate_code=""
-for _ in $(seq 1 48); do
+gate_attempts=120
+gate_sleep=5
+for _ in $(seq 1 "$gate_attempts"); do
+    TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
     gate_code=$(curl_tunnel_402_code "$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions" "$TUNNEL_HOST" "$TUNNEL_IP")
     [ "$gate_code" = "402" ] && break
-    sleep 5
+    sleep "$gate_sleep"
 done
 if [ "$gate_code" = "402" ]; then
     pass "402 gate works"
 else
-    fail "402 gate returned ${gate_code:-no HTTP response} after 240s"
+    fail "402 gate returned ${gate_code:-no HTTP response} after $((gate_attempts * gate_sleep))s"
 fi
 
 # ═════════════════════════════════════════════════════════════════
@@ -958,8 +961,7 @@ if [ -z "$BOB_MASTER_KEY" ]; then
     emit_metrics; exit 1
 fi
 BUY_START_BLOCK=$(env -u CHAIN cast block-number --rpc-url "$ANVIL_RPC_HOST" 2>/dev/null | tr -d ' ' || true)
-inference_response=$(litellm_paid_inference)
-if echo "$inference_response" | grep -q "STATUS=200"; then
+if inference_response=$(wait_for_paid_inference 24 5); then
     pass "Paid inference succeeded"
     echo "$inference_response"
 else

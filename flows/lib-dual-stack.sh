@@ -205,7 +205,25 @@ PY
 }
 
 resolve_public_ipv4() {
-    dig +short A "$1" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1
+    local host="$1"
+    local ip=""
+    local resolver
+
+    ip=$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    if [ -n "$ip" ]; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+
+    for resolver in 1.1.1.1 8.8.8.8; do
+        ip=$(dig @"$resolver" +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+        if [ -n "$ip" ]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 system_resolves_host() {
@@ -385,6 +403,32 @@ except urllib.error.HTTPError as e:
 except Exception as e:
     print('ERROR=%s' % repr(e))
 " 2>&1 || true
+}
+
+wait_for_paid_inference() {
+    local attempts="${1:-24}"
+    local delay="${2:-5}"
+    local out=""
+    local i
+
+    for i in $(seq 1 "$attempts"); do
+        out=$(litellm_paid_inference)
+        if echo "$out" | grep -q "STATUS=200"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if echo "$out" | grep -q "Payment verification failed" || \
+           echo "$out" | grep -q "ERROR=503" || \
+           echo "$out" | grep -q "ServiceUnavailableError"; then
+            sleep "$delay"
+            continue
+        fi
+        printf '%s\n' "$out"
+        return 1
+    done
+
+    printf '%s\n' "$out"
+    return 1
 }
 
 # Pin a chain to a single eRPC upstream by mutating the eRPC ConfigMap. The

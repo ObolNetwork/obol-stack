@@ -55,16 +55,36 @@ fi
 
 # §3.2: Start Anvil fork (if not already running)
 step "Start Anvil fork of Base Sepolia"
+ANVIL_RPC="http://localhost:8545"
+ANVIL_STARTED=0
 if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
-    pass "Anvil already running on port 8545"
-    ANVIL_RPC="http://localhost:8545"
+    anvil_cmdline=$(ps -Ao pid=,command= | awk '/[a]nvil/ && /--port 8545/ {print; exit}' || true)
+    if echo "$anvil_cmdline" | grep -q -- '--prune-history'; then
+        pass "Anvil already running on port 8545 with historical-state retention"
+    else
+        old_pid=$(echo "$anvil_cmdline" | awk '{print $1}' || true)
+        if [ -n "$old_pid" ]; then
+            kill "$old_pid" >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
+            fail "Existing Anvil on port 8545 lacks --prune-history and could not be restarted"
+            emit_metrics; exit 0
+        fi
+        ANVIL_STARTED=1
+    fi
 else
+    ANVIL_STARTED=1
+fi
+
+if [ "$ANVIL_STARTED" = "1" ]; then
     if ! BASE_SEPOLIA_FORK_RPC="$(resolve_base_sepolia_rpc "$BASE_SEPOLIA_FORK_RPC")"; then
         fail "Could not find a reachable Base Sepolia RPC for Anvil fork"
         emit_metrics; exit 0
     fi
-    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 >"$ANVIL_LOG" 2>&1 &
+    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --prune-history 1000000 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
     anvil_ready=0
     for _ in $(seq 1 60); do
@@ -79,14 +99,13 @@ else
         sleep 2
     done
     if [ "$anvil_ready" = "1" ]; then
-        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC"
+        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC with --prune-history 1000000"
     else
         cleanup_pid "$(cat "$ANVIL_PID_FILE" 2>/dev/null || true)"
         fail "Anvil failed to start"
         tail -n 40 "$ANVIL_LOG" 2>/dev/null || true
         emit_metrics; exit 0
     fi
-    ANVIL_RPC="http://localhost:8545"
 fi
 export ANVIL_RPC
 
@@ -140,6 +159,24 @@ if bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$
     pass "Consumer USDC balance: $bal"
 else
     fail "Consumer USDC balance check failed — $bal"
+fi
+
+step "Anvil preserves historical state for funded USDC slots"
+fund_block=$(cast block-number --rpc-url "$ANVIL_RPC" 2>/dev/null | tr -d ' ' || true)
+history_slot=$(cast index address "$CONSUMER_WALLET" 9 2>/dev/null || true)
+if [[ "$fund_block" =~ ^[0-9]+$ ]] && [[ "$history_slot" =~ ^0x[0-9a-fA-F]+$ ]]; then
+    cast rpc anvil_mine 1 --rpc-url "$ANVIL_RPC" >/dev/null 2>&1 || true
+    historic_raw=$(cast rpc eth_getStorageAt "$USDC_ADDRESS" "$history_slot" "0x$(printf '%x' "$fund_block")" \
+        --rpc-url "$ANVIL_RPC" 2>&1 | tr -d '"') || true
+    if echo "$historic_raw" | grep -qi 'state at block .* is pruned'; then
+        fail "Historical storage lookup is pruned — restart Anvil with --prune-history 1000000"
+    elif [[ "$historic_raw" =~ ^0x[0-9a-fA-F]+$ ]] && [ "$historic_raw" != "0x" ] && [ "$historic_raw" != "0x0" ]; then
+        pass "Historical storage lookup succeeded at block $fund_block"
+    else
+        fail "Historical storage lookup failed — ${historic_raw:0:160}"
+    fi
+else
+    fail "Could not capture funded block/slot for historical-state check"
 fi
 
 # §3.3: x402-rs facilitator

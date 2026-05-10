@@ -195,7 +195,25 @@ PY
 }
 
 resolve_public_ipv4() {
-    dig +short A "$1" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1
+    local host="$1"
+    local ip=""
+    local resolver
+
+    ip=$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+    if [ -n "$ip" ]; then
+        printf '%s\n' "$ip"
+        return 0
+    fi
+
+    for resolver in 1.1.1.1 8.8.8.8; do
+        ip=$(dig @"$resolver" +short A "$host" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+        if [ -n "$ip" ]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 curl_tunnel_402_code() {
@@ -587,6 +605,32 @@ except Exception as e:
 " 2>&1 || true
 }
 
+wait_for_paid_inference() {
+    local attempts="${1:-24}"
+    local delay="${2:-5}"
+    local out=""
+    local i
+
+    for i in $(seq 1 "$attempts"); do
+        out=$(litellm_paid_inference)
+        if echo "$out" | grep -q "STATUS=200"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if echo "$out" | grep -q "Payment verification failed" || \
+           echo "$out" | grep -q "ERROR=503" || \
+           echo "$out" | grep -q "ServiceUnavailableError"; then
+            sleep "$delay"
+            continue
+        fi
+        printf '%s\n' "$out"
+        return 1
+    done
+
+    printf '%s\n' "$out"
+    return 1
+}
+
 write_receipt() {
     local name="$1"
     local tx="$2"
@@ -736,9 +780,12 @@ wait_usdc_transfer_receipt() {
 }
 
 step "Preflight: .env key"
-SIGNER_KEY=$(grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2-)
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
 if [ -z "$SIGNER_KEY" ]; then
-    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env"
+    SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
+fi
+if [ -z "$SIGNER_KEY" ]; then
+    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
     emit_metrics; exit 1
 fi
 # Bob is the second deterministic derived key. The flow pre-seeds this key
@@ -1345,8 +1392,7 @@ if [ -z "$BUY_START_BLOCK" ]; then
     emit_metrics; exit 1
 fi
 
-inference_response=$(litellm_paid_inference)
-if echo "$inference_response" | grep -q "STATUS=200"; then
+if inference_response=$(wait_for_paid_inference 24 5); then
     pass "Paid inference succeeded"
     echo "$inference_response"
 else
