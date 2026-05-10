@@ -8,6 +8,7 @@ import { ObjectCustomObjectsApi } from '@kubernetes/client-node/dist/gen/types/O
 import type {
   CreateServiceOfferRequest,
   ServiceOffer,
+  ServiceOfferAgentResolution,
   ServiceOfferCondition,
   ServiceOfferType,
 } from '@/types/sell';
@@ -116,10 +117,26 @@ function normalizeServiceOffer(raw: unknown): ServiceOffer {
     upstream: normalizeUpstream(spec.upstream),
     payment: normalizePayment(spec.payment),
     registration: normalizeRegistration(spec.registration),
+    agentResolution: normalizeAgentResolution(status.agentResolution),
     // agentLink and usage are filled in by the API route after joining
     // against the live agent list and Prometheus.
     agentLink: null,
     usage: { chargedRequests: null },
+  };
+}
+
+function normalizeAgentResolution(
+  value: unknown
+): ServiceOfferAgentResolution | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  return {
+    runtime: typeof v.runtime === 'string' ? v.runtime : undefined,
+    endpoint: typeof v.endpoint === 'string' ? v.endpoint : undefined,
+    model: typeof v.model === 'string' ? v.model : undefined,
+    skills: Array.isArray(v.skills)
+      ? v.skills.filter((s): s is string => typeof s === 'string')
+      : undefined,
   };
 }
 
