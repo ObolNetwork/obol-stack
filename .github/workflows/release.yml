@@ -22,6 +22,13 @@
 #      - Uploads binaries and SHA256SUMS checksums
 #      - Generates release notes
 #
+#   Before publishing the draft release:
+#      - Rewrite the generated body using .github/release-template.md
+#      - Keep the generated "What's Changed", "New Contributors", and
+#        "Full Changelog" sections at the bottom
+#      - Do not include private keys, seed phrases, passwords, hostnames,
+#        personal paths, or raw bearer tokens
+#
 #   3. Binaries are available at:
 #      https://github.com/ObolNetwork/obol-stack/releases/download/v0.1.0/obol_linux_amd64
 #

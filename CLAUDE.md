@@ -14,6 +14,7 @@ Obol Stack: framework for AI agents to run decentralised infrastructure locally.
 - **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
 - **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
 - **Planning docs vs user docs**: Implementation plans, design notes, and feature retrospectives belong in `plans/` — they're useful to revisit when picking work back up later. Keep `docs/` for durable, user-facing documentation. Don't mix the two.
+- **Release descriptions**: Use `.github/release-template.md` for future GitHub releases. The release workflow creates a draft with generated notes; rewrite the narrative body from the template, keep generated `What's Changed`, `New Contributors`, and `Full Changelog` sections at the bottom, and never include private keys, seed phrases, passwords, hostnames, personal paths, or raw bearer tokens.
 
 ## Build, Test, Run
 
