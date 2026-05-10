@@ -605,6 +605,32 @@ except Exception as e:
 " 2>&1 || true
 }
 
+wait_for_paid_inference() {
+    local attempts="${1:-24}"
+    local delay="${2:-5}"
+    local out=""
+    local i
+
+    for i in $(seq 1 "$attempts"); do
+        out=$(litellm_paid_inference)
+        if echo "$out" | grep -q "STATUS=200"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if echo "$out" | grep -q "Payment verification failed" || \
+           echo "$out" | grep -q "ERROR=503" || \
+           echo "$out" | grep -q "ServiceUnavailableError"; then
+            sleep "$delay"
+            continue
+        fi
+        printf '%s\n' "$out"
+        return 1
+    done
+
+    printf '%s\n' "$out"
+    return 1
+}
+
 write_receipt() {
     local name="$1"
     local tx="$2"
@@ -1366,8 +1392,7 @@ if [ -z "$BUY_START_BLOCK" ]; then
     emit_metrics; exit 1
 fi
 
-inference_response=$(litellm_paid_inference)
-if echo "$inference_response" | grep -q "STATUS=200"; then
+if inference_response=$(wait_for_paid_inference 24 5); then
     pass "Paid inference succeeded"
     echo "$inference_response"
 else

@@ -405,6 +405,32 @@ except Exception as e:
 " 2>&1 || true
 }
 
+wait_for_paid_inference() {
+    local attempts="${1:-24}"
+    local delay="${2:-5}"
+    local out=""
+    local i
+
+    for i in $(seq 1 "$attempts"); do
+        out=$(litellm_paid_inference)
+        if echo "$out" | grep -q "STATUS=200"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if echo "$out" | grep -q "Payment verification failed" || \
+           echo "$out" | grep -q "ERROR=503" || \
+           echo "$out" | grep -q "ServiceUnavailableError"; then
+            sleep "$delay"
+            continue
+        fi
+        printf '%s\n' "$out"
+        return 1
+    done
+
+    printf '%s\n' "$out"
+    return 1
+}
+
 # Pin a chain to a single eRPC upstream by mutating the eRPC ConfigMap. The
 # structured YAML transform lives in Go so smoke flows do not gain ad hoc host
 # dependencies such as Ruby.
