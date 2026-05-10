@@ -81,6 +81,216 @@ type CloudflareRegistrarDomainAlias = cloudflareRegistrarDomain
 
 type CloudflareRegistrarWorkflowAlias = cloudflareRegistrarWorkflow
 
+type setupWizardUI interface {
+	IsTTY() bool
+	IsJSON() bool
+	Confirm(string, bool) bool
+	SecretInput(string) (string, error)
+	Select(string, []string, int) (int, error)
+}
+
+type setupCloudflareClient interface {
+	ResolveZoneForHostname(string) (*cloudflareZone, error)
+	ListAccounts() ([]cloudflareAccount, error)
+}
+
+func isInteractiveSetupUI(u setupWizardUI) bool {
+	return u != nil && u.IsTTY() && !u.IsJSON()
+}
+
+func resolveSetupManagement(u setupWizardUI, management, apiToken string) (string, error) {
+	management = strings.ToLower(strings.TrimSpace(management))
+	switch management {
+	case "", "auto":
+		if isInteractiveSetupUI(u) {
+			options := []string{
+				"Remote-managed (stable DNS with a Cloudflare API token)",
+				"Local-managed (browser login on this machine)",
+			}
+			defaultIdx := 1
+			if strings.TrimSpace(apiToken) != "" {
+				defaultIdx = 0
+			}
+			idx, err := u.Select("How should Obol manage this tunnel?", options, defaultIdx)
+			if err != nil {
+				return "", err
+			}
+			if idx == 0 {
+				return tunnelManagementRemote, nil
+			}
+			return tunnelManagementLocal, nil
+		}
+		if strings.TrimSpace(apiToken) != "" {
+			return tunnelManagementRemote, nil
+		}
+		return tunnelManagementLocal, nil
+	case tunnelManagementLocal, tunnelManagementRemote:
+		return management, nil
+	default:
+		return "", fmt.Errorf("unsupported tunnel management mode %q", management)
+	}
+}
+
+func resolveRemoteSetupAPIToken(u setupWizardUI, apiToken string) (string, error) {
+	apiToken = strings.TrimSpace(apiToken)
+	if apiToken != "" {
+		return apiToken, nil
+	}
+	if !isInteractiveSetupUI(u) {
+		return "", errors.New("--api-token is required for remote tunnel setup")
+	}
+	input, err := u.SecretInput("Cloudflare API token")
+	if err != nil {
+		return "", err
+	}
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", errors.New("--api-token is required for remote tunnel setup")
+	}
+	return input, nil
+}
+
+func resolveSetupAccountID(u setupWizardUI, client setupCloudflareClient, explicitAccountID string) (string, error) {
+	explicitAccountID = strings.TrimSpace(explicitAccountID)
+	if explicitAccountID != "" {
+		return explicitAccountID, nil
+	}
+
+	accounts, err := client.ListAccounts()
+	if err != nil {
+		return "", err
+	}
+
+	switch len(accounts) {
+	case 0:
+		return "", errors.New("cloudflare token cannot access any accounts")
+	case 1:
+		return accounts[0].ID, nil
+	default:
+		if !isInteractiveSetupUI(u) {
+			return "", errors.New("--account-id is required because the Cloudflare token can access multiple accounts")
+		}
+
+		options := make([]string, 0, len(accounts))
+		for _, account := range accounts {
+			label := account.ID
+			if strings.TrimSpace(account.Name) != "" {
+				label = fmt.Sprintf("%s (%s)", account.Name, account.ID)
+			}
+			options = append(options, label)
+		}
+
+		idx, err := u.Select("Which Cloudflare account should Obol use?", options, 0)
+		if err != nil {
+			return "", err
+		}
+		if idx < 0 || idx >= len(accounts) {
+			return "", fmt.Errorf("invalid Cloudflare account selection %d", idx+1)
+		}
+		return accounts[idx].ID, nil
+	}
+}
+
+func resolveRemoteSetupOptions(
+	u setupWizardUI,
+	client setupCloudflareClient,
+	hostname string,
+	opts SetupOptions,
+	registerDomain func(DomainRegisterOptions) (*DomainRegisterResult, error),
+	waitForZone func(string) (*cloudflareZone, error),
+) (SetupOptions, *cloudflareRegistrarWorkflow, error) {
+	zoneLookupOptional := strings.TrimSpace(opts.ZoneID) != "" && !opts.RegisterDomain
+	if zoneLookupOptional && strings.TrimSpace(opts.AccountID) != "" {
+		return opts, nil, nil
+	}
+
+	zone, err := client.ResolveZoneForHostname(hostname)
+	var workflow *cloudflareRegistrarWorkflow
+	if err != nil {
+		if zoneLookupOptional {
+			if strings.TrimSpace(opts.AccountID) == "" {
+				accountID, resolveErr := resolveSetupAccountID(u, client, opts.AccountID)
+				if resolveErr != nil {
+					return opts, nil, resolveErr
+				}
+				opts.AccountID = accountID
+			}
+			return opts, nil, nil
+		}
+		if !errors.Is(err, errCloudflareZoneNotFound) {
+			return opts, nil, fmt.Errorf("cloudflare zone lookup failed for %s: %w", hostname, err)
+		}
+		zoneName, zoneErr := extractZoneName(hostname)
+		if zoneErr != nil {
+			return opts, nil, zoneErr
+		}
+		if !opts.RegisterDomain && isInteractiveSetupUI(u) {
+			opts.RegisterDomain = u.Confirm(fmt.Sprintf("Cloudflare does not have zone %s. Register it through Cloudflare Registrar now?", zoneName), false)
+		}
+		if !opts.RegisterDomain {
+			return opts, nil, fmt.Errorf("could not resolve a Cloudflare zone for %s: %w. Add the domain to Cloudflare first or rerun with --register-domain", hostname, err)
+		}
+
+		if strings.TrimSpace(opts.AccountID) == "" {
+			accountID, err := resolveSetupAccountID(u, client, opts.AccountID)
+			if err != nil {
+				return opts, nil, err
+			}
+			opts.AccountID = accountID
+		}
+
+		if registerDomain == nil {
+			return opts, nil, errors.New("register domain handler is required")
+		}
+		registerResult, regErr := registerDomain(DomainRegisterOptions{
+			DomainName:    zoneName,
+			Years:         opts.Years,
+			AutoRenew:     opts.AutoRenew,
+			PrivacyMode:   opts.PrivacyMode,
+			ConfirmCharge: opts.ConfirmCharge,
+			AccountID:     opts.AccountID,
+		})
+		if regErr != nil {
+			return opts, nil, regErr
+		}
+		workflow = registerResult.Workflow
+		if strings.TrimSpace(opts.AccountID) == "" {
+			opts.AccountID = registerResult.AccountID
+		}
+
+		if waitForZone == nil {
+			return opts, nil, errors.New("zone wait handler is required")
+		}
+		zone, err = waitForZone(hostname)
+		if err != nil {
+			return opts, nil, fmt.Errorf("domain registration started, but the Cloudflare zone is not ready yet: %w", err)
+		}
+	}
+
+	if zone != nil {
+		if strings.TrimSpace(opts.AccountID) == "" {
+			opts.AccountID = zone.Account.ID
+		}
+		if strings.TrimSpace(opts.ZoneID) == "" {
+			opts.ZoneID = zone.ID
+		}
+	}
+
+	if strings.TrimSpace(opts.AccountID) == "" {
+		accountID, err := resolveSetupAccountID(u, client, opts.AccountID)
+		if err != nil {
+			return opts, nil, err
+		}
+		opts.AccountID = accountID
+	}
+
+	if strings.TrimSpace(opts.ZoneID) == "" {
+		return opts, nil, fmt.Errorf("--zone-id is required because Obol could not auto-detect the Cloudflare zone for %s", hostname)
+	}
+
+	return opts, workflow, nil
+}
+
 func SearchDomains(opts DomainSearchOptions) (*DomainSearchResult, error) {
 	query := strings.TrimSpace(opts.Query)
 	if query == "" {
@@ -239,13 +449,9 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 		return nil, errors.New("--hostname is required (e.g. stack.example.com)")
 	}
 
-	management := strings.ToLower(strings.TrimSpace(opts.Management))
-	if management == "" || management == "auto" {
-		if strings.TrimSpace(opts.APIToken) != "" {
-			management = tunnelManagementRemote
-		} else {
-			management = tunnelManagementLocal
-		}
+	management, err := resolveSetupManagement(u, opts.Management, opts.APIToken)
+	if err != nil {
+		return nil, err
 	}
 
 	if management == tunnelManagementLocal {
@@ -263,60 +469,31 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 	if management != tunnelManagementRemote {
 		return nil, fmt.Errorf("unsupported tunnel management mode %q", management)
 	}
-	if strings.TrimSpace(opts.APIToken) == "" {
-		return nil, errors.New("--api-token is required for remote tunnel setup")
+
+	apiToken, err := resolveRemoteSetupAPIToken(u, opts.APIToken)
+	if err != nil {
+		return nil, err
 	}
+	opts.APIToken = apiToken
 
 	client := newCloudflareClient(opts.APIToken)
-	zone, err := client.ResolveZoneForHostname(hostname)
-	var workflow *cloudflareRegistrarWorkflow
+	resolvedOpts, workflow, err := resolveRemoteSetupOptions(
+		u,
+		client,
+		hostname,
+		opts,
+		func(registerOpts DomainRegisterOptions) (*DomainRegisterResult, error) {
+			registerOpts.APIToken = opts.APIToken
+			return RegisterDomain(u, registerOpts)
+		},
+		func(waitHostname string) (*cloudflareZone, error) {
+			return waitForZone(client, waitHostname, 12, 5*time.Second)
+		},
+	)
 	if err != nil {
-		if !errors.Is(err, errCloudflareZoneNotFound) {
-			return nil, fmt.Errorf("cloudflare zone lookup failed for %s: %w", hostname, err)
-		}
-		zoneName, zoneErr := extractZoneName(hostname)
-		if zoneErr != nil {
-			return nil, zoneErr
-		}
-		if !opts.RegisterDomain {
-			if u.IsTTY() && !u.IsJSON() {
-				opts.RegisterDomain = u.Confirm(fmt.Sprintf("Cloudflare does not have zone %s. Register it through Cloudflare Registrar now?", zoneName), false)
-			}
-		}
-		if !opts.RegisterDomain {
-			return nil, fmt.Errorf("could not resolve a Cloudflare zone for %s: %w. Add the domain to Cloudflare first or rerun with --register-domain", hostname, err)
-		}
-
-		registerResult, regErr := RegisterDomain(u, DomainRegisterOptions{
-			DomainName:    zoneName,
-			Years:         opts.Years,
-			AutoRenew:     opts.AutoRenew,
-			PrivacyMode:   opts.PrivacyMode,
-			ConfirmCharge: opts.ConfirmCharge,
-			AccountID:     opts.AccountID,
-			APIToken:      opts.APIToken,
-		})
-		if regErr != nil {
-			return nil, regErr
-		}
-		workflow = registerResult.Workflow
-		zone, err = waitForZone(client, hostname, 12, 5*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("domain registration started, but the Cloudflare zone is not ready yet: %w", err)
-		}
-		if opts.AccountID == "" {
-			opts.AccountID = registerResult.AccountID
-		}
+		return nil, err
 	}
-
-	if zone != nil {
-		if opts.AccountID == "" {
-			opts.AccountID = zone.Account.ID
-		}
-		if opts.ZoneID == "" {
-			opts.ZoneID = zone.ID
-		}
-	}
+	opts = resolvedOpts
 
 	if err := Provision(cfg, u, ProvisionOptions{
 		Hostname:          hostname,
