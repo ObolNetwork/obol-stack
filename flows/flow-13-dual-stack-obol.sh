@@ -628,15 +628,18 @@ pass "Tunnel: $TUNNEL_URL"
 
 step "Alice: 402 gate works on $TUNNEL_URL/services/alice-obol-inference"
 gate_code=""
-for _ in $(seq 1 48); do
+gate_attempts=120
+gate_sleep=5
+for _ in $(seq 1 "$gate_attempts"); do
+    TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
     gate_code=$(curl_tunnel_402_code "$TUNNEL_URL/services/alice-obol-inference/v1/chat/completions" "$TUNNEL_HOST" "$TUNNEL_IP")
     [ "$gate_code" = "402" ] && break
-    sleep 5
+    sleep "$gate_sleep"
 done
 if [ "$gate_code" = "402" ]; then
     pass "402 gate works"
 else
-    fail "402 gate returned ${gate_code:-no HTTP response} after 240s"
+    fail "402 gate returned ${gate_code:-no HTTP response} after $((gate_attempts * gate_sleep))s"
 fi
 
 # ═════════════════════════════════════════════════════════════════
