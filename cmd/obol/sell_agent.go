@@ -282,10 +282,21 @@ func runAgentBackedDemo(
 
 	// 1. Seed host-side files (skills + soul.md) and apply the Agent CR.
 	//    Idempotent — re-running `obol sell demo quant` after a previous
-	//    run is a no-op for the agent if it already exists.
-	if existing, err := getAgentCR(cfg, agentName); err == nil && existing != "" {
+	//    run is a no-op for the agent if it already exists. A CR that is
+	//    mid-deletion (DeletionTimestamp set, finalizer still draining)
+	//    is NOT treated as "already exists": short-circuiting on it
+	//    means a follow-up `sell demo quant` after a hung `agent delete`
+	//    silently does nothing, which is what motivated this check.
+	state, stateErr := getAgentCRState(cfg, agentName)
+	switch {
+	case stateErr == nil && state.Exists && state.Terminating:
+		return fmt.Errorf("Agent %s is still being deleted (DeletionTimestamp set, finalizer draining).\n\n"+
+			"Wait for the controller to finish, or run `obol agent delete %s --force` to strip the finalizer "+
+			"and retry. The previous `obol agent delete` likely stalled on a controller image without Agent "+
+			"CRD support.", agentName, agentName)
+	case stateErr == nil && state.Exists:
 		u.Dim(fmt.Sprintf("Agent %s already exists, leaving as-is", agentName))
-	} else {
+	default:
 		soulWritten, seedErr := agentcrd.SeedHostFiles(cfg, agentName,
 			spec.Agent.Skills, spec.Agent.Objective, agentcrd.SeedOptions{})
 		if seedErr != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	agentmgr "github.com/ObolNetwork/obol-stack/internal/agent"
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
@@ -19,6 +20,14 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
+
+// agentDeleteWaitTimeout is how long deleteCRDAgent waits for the K8s
+// finalizer to drain before reporting the delete as stuck. Sized to be
+// longer than the controller's typical tearDownAgent (which deletes
+// Deployment + Service + Secret + remote-signer manifests) but short
+// enough that the user notices when a controller is unreachable or
+// running a pre-agent-CRD image without finalizer handling.
+const agentDeleteWaitTimeout = 60 * time.Second
 
 type agentTarget struct {
 	Runtime agentruntime.Runtime
@@ -220,7 +229,7 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 									return nil
 								}
 							}
-							return deleteCRDAgent(cfg, name, u)
+							return deleteCRDAgent(cfg, name, cmd.Bool("force"), u)
 						}
 					}
 
@@ -907,20 +916,56 @@ func listCRDAgents(cfg *config.Config) ([]agentListItem, error) {
 // (skills + soul.md). Used by `obol agent delete <name>` when the
 // argument matches a CRD-declared agent. Idempotent: missing cluster,
 // missing CR, and missing host dir are all treated as "already gone".
-func deleteCRDAgent(cfg *config.Config, name string, u *ui.UI) error {
+//
+// The CR delete uses --wait=false and the CLI polls separately so we
+// can show a spinner and surface a clear error when the finalizer drain
+// stalls (the common cause: a controller image that pre-dates Agent
+// CRD support, which never removes the finalizer). With force=true a
+// stuck delete is escalated to a finalizer strip so the user can
+// recover without hand-running kubectl patch.
+func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error {
 	if err := agentcrd.ValidateName(name); err != nil {
 		return err
 	}
 
+	ns := agentcrd.Namespace(name)
+
 	if err := kubectl.EnsureCluster(cfg); err == nil {
 		bin, kc := kubectl.Paths(cfg)
-		ns := agentcrd.Namespace(name)
-		// --ignore-not-found makes the CRUD idempotent. The namespace
-		// itself stays — step 2d's controller may own its lifecycle once
-		// it provisions resources there. This avoids the CLI deleting
-		// a namespace another piece of the system thinks it owns.
-		if err := kubectl.Run(bin, kc, "delete", "agent", name, "-n", ns, "--ignore-not-found"); err != nil {
+
+		// Fire-and-watch: send the DELETE request immediately, then poll
+		// for absence under a spinner. --wait=false makes kubectl return
+		// after the API server accepts the request (DeletionTimestamp
+		// set) rather than blocking on finalizer drain. That lets us
+		// surface clear progress and a recovery hint when drain stalls.
+		if err := kubectl.Run(bin, kc, "delete", "agent", name, "-n", ns, "--ignore-not-found", "--wait=false"); err != nil {
 			return fmt.Errorf("delete Agent: %w", err)
+		}
+
+		drainErr := u.RunWithSpinner(
+			fmt.Sprintf("Waiting for Agent %s/%s finalizer to drain", ns, name),
+			func() error {
+				return waitForAgentGone(cfg, name, ns, agentDeleteWaitTimeout)
+			},
+		)
+		if drainErr != nil {
+			if !force {
+				return fmt.Errorf("%w\n\nThe controller hasn't drained the Agent finalizer. "+
+					"Re-run with --force to strip the finalizer and complete the deletion locally.\n"+
+					"Common cause: the serviceoffer-controller pod is running a pre-Agent-CRD image "+
+					"(check `kubectl -n x402 get pod -l app=serviceoffer-controller -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'`)",
+					drainErr)
+			}
+			u.Warnf("Drain timed out; stripping Agent finalizer (--force)")
+			if err := stripAgentFinalizers(cfg, name, ns); err != nil {
+				return fmt.Errorf("force-strip finalizer: %w", err)
+			}
+			// One more wait pass — finalizer stripped, the CR should
+			// drop within a second or two. Short timeout: if this also
+			// stalls, something more fundamental is wrong.
+			if err := waitForAgentGone(cfg, name, ns, 10*time.Second); err != nil {
+				return fmt.Errorf("agent still present after finalizer strip: %w", err)
+			}
 		}
 		u.Successf("Agent %s/%s deleted", ns, name)
 	} else {
@@ -938,6 +983,38 @@ func deleteCRDAgent(cfg *config.Config, name string, u *ui.UI) error {
 		u.Dim("Removed host data dir " + root)
 	}
 	return nil
+}
+
+// waitForAgentGone polls for the Agent CR's absence. Returns nil once
+// kubectl reports the CR is gone (either fully GC'd or never existed),
+// and a timeout error otherwise. The caller decides what to do with a
+// timeout — surface to the user or escalate to a finalizer strip.
+func waitForAgentGone(cfg *config.Config, name, ns string, timeout time.Duration) error {
+	bin, kc := kubectl.Paths(cfg)
+	deadline := time.Now().Add(timeout)
+	for {
+		out, err := kubectl.Output(bin, kc, "get", "agent", name, "-n", ns, "-o", "name", "--ignore-not-found")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(out) == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for Agent %s/%s to be removed", timeout, ns, name)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// stripAgentFinalizers clears spec.metadata.finalizers via a JSON merge
+// patch. The K8s GC then completes the deletion that was stuck. Used by
+// deleteCRDAgent under --force when the controller can't drain the
+// finalizer (typically a stale controller image).
+func stripAgentFinalizers(cfg *config.Config, name, ns string) error {
+	bin, kc := kubectl.Paths(cfg)
+	return kubectl.Run(bin, kc, "patch", "agent", name, "-n", ns,
+		"--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
 }
 
 func listAgentWallets(cfg *config.Config, runtimeValue string, args []string, u *ui.UI) error {
