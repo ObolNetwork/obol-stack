@@ -55,9 +55,12 @@ export function ServiceCard({ service }: { service: Service }) {
         )}
         <div className="col-span-2">
           <span className="text-text-muted">Endpoint</span>
-          <p className="text-obol-green font-mono text-xs break-all">
+          <a
+            href={service.endpoint}
+            className="block text-obol-green font-mono text-xs break-all hover:underline"
+          >
             {service.endpoint}
-          </p>
+          </a>
         </div>
       </div>
 
