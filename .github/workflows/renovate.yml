@@ -1,0 +1,31 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "0 * * * *" # every hour
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run (no PRs opened)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@a4df0f50ee02c2fc7b4b8f8aa4a3ff6929fa4fc1 # v46.1.13
+        env:
+          LOG_LEVEL: debug
+          RENOVATE_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'full' || '' }}
+        with:
+          token: ${{ secrets.RENOVATE_TOKEN }}
