@@ -463,7 +463,6 @@ func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
 	}
 }
 
-
 func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
@@ -795,6 +794,87 @@ func TestBuildAndImportLocalImages_ForceRebuildEvenWhenImageExists(t *testing.T)
 	}
 	if strings.Contains(log, "Reusing existing local image ghcr.io/obolnetwork/x402-verifier:latest") {
 		t.Fatalf("expected force-rebuild env var to rebuild instead of reusing cache, log:\n%s", log)
+	}
+}
+
+func TestBuildAndImportLocalImages_SelectiveRebuild(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, "config")
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	for _, d := range []string{cfgDir, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, stackIDFile), []byte("test-stack"), 0o600); err != nil {
+		t.Fatalf("write stack id: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	// Provide Dockerfiles for two images so both are candidates.
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile.x402-verifier"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile x402-verifier: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile.serviceoffer-controller"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile serviceoffer-controller: %v", err)
+	}
+
+	// Both images are already available locally; only x402-verifier should be rebuilt.
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ]; then exit 0; fi\n" +
+		"if [ \"${1:-}\" = \"build\" ]; then exit 0; fi\n" +
+		"exit 0\n"
+	k3dScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'k3d %s\\n' \"$*\" >> \"" + logPath + "\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "k3d"), []byte(k3dScript), 0o755); err != nil {
+		t.Fatalf("write k3d stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+	// Only request a rebuild of x402-verifier, not serviceoffer-controller.
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "x402-verifier")
+
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	if !strings.Contains(log, "Dockerfile.x402-verifier") {
+		t.Fatalf("expected selective rebuild to build x402-verifier, log:\n%s", log)
+	}
+	if strings.Contains(log, "Dockerfile.serviceoffer-controller") {
+		t.Fatalf("expected selective rebuild to skip serviceoffer-controller (already local), log:\n%s", log)
+	}
+}
+
+func TestForceRebuildSet_PublicStorefrontAlias(t *testing.T) {
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "public-storefront")
+
+	shouldForceRebuild := forceRebuildSet()
+	if !shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-public-storefront:latest") {
+		t.Fatal("public-storefront alias should rebuild obol-stack-public-storefront")
+	}
+	if shouldForceRebuild("ghcr.io/obolnetwork/x402-verifier:latest") {
+		t.Fatal("public-storefront alias should not rebuild unrelated images")
 	}
 }
 
