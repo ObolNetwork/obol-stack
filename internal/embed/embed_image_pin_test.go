@@ -32,9 +32,7 @@ func TestEmbeddedImages_NoNewLatestTags(t *testing.T) {
 
 	// Known unpinned images as of PR #343 follow-up. Each entry MUST have a
 	// TODO in the template body explaining the pin-by-digest policy.
-	allowed := map[string]string{
-		"base/templates/llm.yaml:ghcr.io/obolnetwork/x402-buyer:latest": "x402-buyer: pin by digest once CI publishes a stable tag",
-	}
+	allowed := map[string]string{}
 
 	files := []string{
 		"base/templates/llm.yaml",

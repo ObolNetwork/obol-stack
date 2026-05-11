@@ -96,16 +96,26 @@ var devLocallyBuiltImageBases = []string{
 }
 
 // rewriteDevDigestPins walks the copied defaults tree and replaces
-// every `<base>@sha256:<hex>` reference whose base is in
-// devLocallyBuiltImageBases with `<base>:latest`. Only operates on .yaml
-// and .yml files so we don't risk corrupting binaries or charts.
+// every `<base>@sha256:<hex>` or `<base>:<short-sha>` reference whose
+// base is in devLocallyBuiltImageBases with `<base>:latest`. Only
+// operates on .yaml and .yml files so we don't risk corrupting binaries
+// or charts.
+//
+// Both pin styles are matched because release pipelines may publish
+// either digest pins (immutable) or short-SHA tag pins (e.g. `:b13254e`)
+// — in either case the local dev build is tagged `:latest`, so the
+// rewrite needs to catch both forms or `obol stack up` would pull from
+// the registry instead of using the freshly-built local image.
 func rewriteDevDigestPins(defaultsDir string) error {
 	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
 	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
 	for _, base := range devLocallyBuiltImageBases {
-		// Escape the base in case it ever grows a regex metachar; sha256
-		// digests are hex so a simple character class is enough.
-		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"@sha256:[a-f0-9]{64}"))
+		// Match either:
+		//   <base>@sha256:<64 hex>       (digest pin)
+		//   <base>:<7-40 hex>            (short-SHA tag pin, e.g. b13254e)
+		// The short-SHA pattern intentionally excludes `:latest` and any
+		// non-hex tag so we only rewrite immutable pins.
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})"))
 		replaceWith = append(replaceWith, base+":latest")
 	}
 
