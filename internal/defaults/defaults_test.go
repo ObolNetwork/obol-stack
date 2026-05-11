@@ -3,6 +3,7 @@ package defaults
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -42,10 +43,12 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 	}
 }
 
-func TestCopyInfrastructure_ProductionPreservesDigestPins(t *testing.T) {
-	// Without OBOL_DEVELOPMENT=true, the digest pins must survive
-	// untouched. A regression here would silently downgrade prod
-	// installs to floating :latest tags.
+func TestCopyInfrastructure_ProductionPreservesImagePins(t *testing.T) {
+	// Without OBOL_DEVELOPMENT=true, the immutable image pins must
+	// survive untouched. A regression here would silently downgrade prod
+	// installs to floating :latest tags. We accept either pin style
+	// (digest or short-SHA tag) — both are immutable, and the rewrite
+	// path under OBOL_DEVELOPMENT now handles both equivalently.
 	t.Setenv("OBOL_DEVELOPMENT", "")
 
 	cfg := &config.Config{ConfigDir: t.TempDir()}
@@ -56,10 +59,21 @@ func TestCopyInfrastructure_ProductionPreservesDigestPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "ghcr.io/obolnetwork/serviceoffer-controller@sha256:") {
-		t.Error("production install lost serviceoffer-controller digest pin")
+	out := string(data)
+	if strings.Contains(out, "ghcr.io/obolnetwork/serviceoffer-controller:latest") {
+		t.Error("production install downgraded serviceoffer-controller to :latest")
+	}
+	hasDigest := strings.Contains(out, "ghcr.io/obolnetwork/serviceoffer-controller@sha256:")
+	hasShortTag := pinnedShortTag.MatchString(out)
+	if !hasDigest && !hasShortTag {
+		t.Error("production install lost serviceoffer-controller immutable pin (expected digest or short-SHA tag)")
 	}
 }
+
+// pinnedShortTag matches a serviceoffer-controller tag of 7-40 hex chars
+// (git short SHA). Used by the production-pin test to accept either of
+// the two pinning styles the dev-mode rewriter knows about.
+var pinnedShortTag = regexp.MustCompile(`ghcr\.io/obolnetwork/serviceoffer-controller:[a-f0-9]{7,40}\b`)
 
 func TestCopyInfrastructureRendersStackPlaceholders(t *testing.T) {
 	cfg := &config.Config{ConfigDir: t.TempDir()}

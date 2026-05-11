@@ -118,6 +118,20 @@
       "depNameTemplate": "k3s-io/k3s",
       "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)([+-](?<build>.+))?$",
       "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Track ghcr.io/obolnetwork/* image pins in embedded infra templates. Captures both `image: <ref>:<tag>` and `image: <ref>:<tag>@sha256:<digest>` shapes, plus the pure-digest `image: <ref>@sha256:<digest>` form used historically. Renovate uses the docker datasource to discover newer tags and (with pinDigests) keeps the @sha256 part in lockstep. For this to drive useful tag bumps, release CI should tag images with sortable versions (e.g. v0.9.0-rc10) rather than only short commit SHAs — loose versioning can't decide which arbitrary SHA is newer.",
+      "matchStrings": [
+        "image:\\s*(?<depName>ghcr\\.io/obolnetwork/[A-Za-z0-9._-]+):(?<currentValue>[A-Za-z0-9._-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?",
+        "image:\\s*(?<depName>ghcr\\.io/obolnetwork/[A-Za-z0-9._-]+)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "fileMatch": [
+        "^internal/embed/infrastructure/.+\\.yaml$",
+        "^internal/embed/infrastructure/.+\\.yaml\\.gotmpl$"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "loose"
     }
   ],
   "packageRules": [
@@ -331,6 +345,23 @@
         "before 6am on monday"
       ],
       "groupName": "k3s image updates"
+    },
+    {
+      "description": "Group ghcr.io/obolnetwork/* image bumps (verifier, controller, buyer, demo-server, public-storefront, etc.) and ensure they are digest-pinned. The custom regex manager above captures the tag and optional @sha256 suffix; pinDigests=true causes Renovate to add a digest to any pure-tag pin and keep it fresh.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackagePrefixes": [
+        "ghcr.io/obolnetwork/"
+      ],
+      "labels": [
+        "renovate/obol-images"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Obol Network image updates",
+      "pinDigests": true
     }
   ]
 }

@@ -206,7 +206,7 @@ spec:
       serviceAccountName: x402-verifier
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier@sha256:05d6e535143974386e4de054eb44ef83270b62da5e48add1f113f4743d08eccc
+          image: ghcr.io/obolnetwork/x402-verifier:b13254e
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -277,7 +277,7 @@ spec:
       serviceAccountName: serviceoffer-controller
       containers:
         - name: controller
-          image: ghcr.io/obolnetwork/serviceoffer-controller@sha256:943ba3506c7fdd090bd0db8e563cab6a32c558de8ab69f505008cce48ea3b366
+          image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e
           imagePullPolicy: IfNotPresent
           env:
             - name: POD_NAMESPACE
