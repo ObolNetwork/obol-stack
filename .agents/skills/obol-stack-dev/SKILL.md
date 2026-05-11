@@ -140,12 +140,21 @@ locally-tagged `ghcr.io/obolnetwork/<name>:latest` and your source change
 won't reach the running pod):
 
 ```bash
+# Rebuild everything
 OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true obol stack up
+
+# Rebuild only the image(s) you changed — much faster
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=x402-verifier obol stack up
+OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller,x402-buyer obol stack up
 ```
 
-Applies to every image in `baseLocalImages` (x402-verifier,
-serviceoffer-controller, x402-buyer, demo-server, public-storefront).
-The warm-path summary line surfaces this hint when nothing was rebuilt.
+Values: `true`/`all` → rebuild every image; comma-separated short names →
+rebuild only those; `false`/`0`/unset → reuse all cached images (default).
+Short name is the image base without the registry prefix or tag
+(e.g. `x402-verifier` from `ghcr.io/obolnetwork/x402-verifier:latest`).
+Images: x402-verifier, serviceoffer-controller, x402-buyer, demo-server,
+obol-stack-public-storefront (`public-storefront` alias accepted). The
+warm-path summary line surfaces this hint when nothing was rebuilt.
 
 Integration checks:
 
