@@ -14,6 +14,11 @@ concurrency:
   group: renovate
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 jobs:
   renovate:
     name: Renovate
@@ -28,4 +33,4 @@ jobs:
           LOG_LEVEL: debug
           RENOVATE_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'full' || '' }}
         with:
-          token: ${{ secrets.RENOVATE_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
