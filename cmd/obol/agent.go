@@ -951,9 +951,7 @@ func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error
 		if drainErr != nil {
 			if !force {
 				return fmt.Errorf("%w\n\nThe controller hasn't drained the Agent finalizer. "+
-					"Re-run with --force to strip the finalizer and complete the deletion locally.\n"+
-					"Common cause: the serviceoffer-controller pod is running a pre-Agent-CRD image "+
-					"(check `kubectl -n x402 get pod -l app=serviceoffer-controller -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'`)",
+					"Re-run with --force to strip the finalizer and complete the deletion locally.",
 					drainErr)
 			}
 			u.Warnf("Drain timed out; stripping Agent finalizer (--force)")

@@ -292,8 +292,7 @@ func runAgentBackedDemo(
 	case stateErr == nil && state.Exists && state.Terminating:
 		return fmt.Errorf("Agent %s is still being deleted (DeletionTimestamp set, finalizer draining).\n\n"+
 			"Wait for the controller to finish, or run `obol agent delete %s --force` to strip the finalizer "+
-			"and retry. The previous `obol agent delete` likely stalled on a controller image without Agent "+
-			"CRD support.", agentName, agentName)
+			"and retry.", agentName, agentName)
 	case stateErr == nil && state.Exists:
 		u.Dim(fmt.Sprintf("Agent %s already exists, leaving as-is", agentName))
 	default:
