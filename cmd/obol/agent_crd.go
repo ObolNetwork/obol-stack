@@ -164,3 +164,43 @@ func getAgentCR(cfg *config.Config, name string) (string, error) {
 	}
 	return strings.TrimSpace(out), nil
 }
+
+// getAgentCRState reports both existence and whether the CR is mid-
+// deletion. Callers that branch on "already exists, skip creation" must
+// not treat a Terminating CR as "already exists" — that path silently
+// no-ops `obol sell demo quant` while the previous Agent is still
+// finalizing, leaving the user confused about why nothing got created.
+type agentCRState struct {
+	Exists       bool
+	Terminating  bool
+	ResourceName string // e.g. "agent.obol.org/demo-quant", empty when absent
+}
+
+func getAgentCRState(cfg *config.Config, name string) (agentCRState, error) {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return agentCRState{}, err
+	}
+	bin, kc := kubectl.Paths(cfg)
+	// jsonpath outputs the deletion timestamp (empty if not set) so we
+	// don't need a second kubectl call to disambiguate present-but-
+	// terminating from fully-present.
+	out, err := kubectl.Output(bin, kc, "get", "agent", name, "-n", agentcrd.Namespace(name),
+		"-o", `jsonpath={.metadata.name}{"|"}{.metadata.deletionTimestamp}`,
+		"--ignore-not-found")
+	if err != nil {
+		return agentCRState{}, err
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" || trimmed == "|" {
+		return agentCRState{Exists: false}, nil
+	}
+	parts := strings.SplitN(trimmed, "|", 2)
+	state := agentCRState{
+		Exists:       parts[0] != "",
+		ResourceName: "agent.obol.org/" + parts[0],
+	}
+	if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+		state.Terminating = true
+	}
+	return state, nil
+}
