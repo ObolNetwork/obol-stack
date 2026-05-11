@@ -50,6 +50,40 @@ func (c *Controller) enqueueAgent(obj any) {
 	c.agentQueue.Add(key)
 }
 
+// enqueueOffersFromAgent re-queues every ServiceOffer whose
+// spec.agent.ref points at the given Agent. Without this, an Agent
+// status change (e.g. status.pinnedModel after the user edits the
+// Agent's spec.model) would not propagate into the offer's
+// status.agentResolution — the offer reconciler only runs when the
+// offer itself changes. Mirrors enqueueOfferFromRegistration.
+func (c *Controller) enqueueOffersFromAgent(obj any) {
+	u := asUnstructured(obj)
+	if u == nil {
+		return
+	}
+	agentNS := u.GetNamespace()
+	agentName := u.GetName()
+	for _, item := range c.offerInformer.GetStore().List() {
+		ou := asUnstructured(item)
+		if ou == nil {
+			continue
+		}
+		offer, err := decodeServiceOffer(ou)
+		if err != nil {
+			log.Printf("serviceoffer-controller: decode offer for agent fan-out: %v", err)
+			continue
+		}
+		if !offer.IsAgent() {
+			continue
+		}
+		ref := offer.Spec.Agent.Ref
+		if ref.Name != agentName || ref.Namespace != agentNS {
+			continue
+		}
+		c.offerQueue.Add(offer.Namespace + "/" + offer.Name)
+	}
+}
+
 func (c *Controller) processNextAgent(ctx context.Context) bool {
 	key, shutdown := c.agentQueue.Get()
 	if shutdown {
@@ -384,6 +418,16 @@ func (c *Controller) applyAgentObject(ctx context.Context, resource dynamic.Reso
 		return err
 	}
 
+	// Some kinds we only ever create — never reshape after the fact.
+	// Namespaces are the canonical example: the host CLI creates the
+	// namespace before applying the Agent CR (since the CR is namespaced
+	// and can't land otherwise), and the controller's RBAC intentionally
+	// only grants `create`, not `update`, to keep the blast radius small.
+	// Treat existence as success for these and move on.
+	if isCreateOnlyKind(desired.GetKind()) {
+		return nil
+	}
+
 	// Preserve resourceVersion + uid so Update doesn't 409. Spec/data is
 	// rewritten in full from `desired`; that's the controller's contract.
 	desired.SetResourceVersion(existing.GetResourceVersion())
@@ -395,6 +439,21 @@ func (c *Controller) applyAgentObject(ctx context.Context, resource dynamic.Reso
 		FieldManager: controllerFieldManager,
 	})
 	return err
+}
+
+// isCreateOnlyKind returns true for kinds that the controller refuses to
+// Update on subsequent reconciles. Either the Update would require
+// broader RBAC than we want (Namespace), or the resource has immutable
+// spec fields that reject any wholesale Update (PVC's
+// `spec is immutable after creation`). Mutable kinds (ConfigMap, Secret
+// data, Deployment, Service ports, ServiceAccount) keep going through
+// the normal Update path so reconciles still pick up rendered changes.
+func isCreateOnlyKind(kind string) bool {
+	switch kind {
+	case "Namespace", "PersistentVolumeClaim":
+		return true
+	}
+	return false
 }
 
 // resourceFor maps an unstructured.Unstructured to the dynamic resource

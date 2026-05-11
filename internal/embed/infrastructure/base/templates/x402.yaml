@@ -288,10 +288,14 @@ spec:
           resources:
             requests:
               cpu: 25m
-              memory: 64Mi
+              memory: 128Mi
             limits:
               cpu: 250m
-              memory: 256Mi
+              # Bumped from 256Mi after adding the Agent informer + agent
+              # reconciler — the additional shared cache + workqueue + the
+              # in-controller keystore generation pushed steady-state past
+              # 256Mi and triggered OOMKilled restart loops.
+              memory: 512Mi
 
 ---
 apiVersion: v1
