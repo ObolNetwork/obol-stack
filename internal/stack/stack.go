@@ -497,7 +497,104 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  For a persistent URL: obol tunnel setup --hostname stack.example.com")
 	}
 
+	claudeTipIfRelevant(u)
+
 	return nil
+}
+
+// claudeTipIfRelevant prints a hint when the user has Claude Code installed
+// but the Obol skills plugin is not yet usable in their setup. Best-effort
+// and silent on any error — a missing or malformed Claude config must never
+// block stack up.
+//
+// Three states the user can be in:
+//   - plugin already installed → silent (nothing to suggest)
+//   - marketplace registered but plugin not installed → suggest the install step
+//   - marketplace not registered at all → suggest both the marketplace add and install
+func claudeTipIfRelevant(u *ui.UI) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return
+	}
+	mpName, mpRegistered := obolMarketplaceName()
+	if mpRegistered && obolPluginInstalled(mpName) {
+		return
+	}
+	u.Blank()
+	u.Dim("Tip: let your Claude Code instance manage your Obol Stack for you.")
+	if !mpRegistered {
+		u.Dim("  Add the Obol skills marketplace, then install the plugin:")
+		u.Dim("    claude plugin marketplace add ObolNetwork/skills")
+		u.Dim("    /plugin install obol@obol")
+	} else {
+		u.Dim("  The Obol marketplace is registered. Install the plugin to enable it:")
+		u.Dim(fmt.Sprintf("    /plugin install obol@%s", mpName))
+	}
+}
+
+// obolMarketplaceName returns the local marketplace name that points at
+// ObolNetwork/skills (typically "obol") and a bool indicating whether it was
+// found in ~/.claude/plugins/known_marketplaces.json. The file is shaped as
+// an object keyed by marketplace name, e.g.:
+//
+//	{
+//	  "obol": {"source": {"source": "github", "repo": "ObolNetwork/skills"}, ...}
+//	}
+func obolMarketplaceName() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "known_marketplaces.json"))
+	if err != nil {
+		return "", false
+	}
+	var doc map[string]struct {
+		Source struct {
+			Repo string `json:"repo"`
+			URL  string `json:"url"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", false
+	}
+	for name, entry := range doc {
+		if strings.EqualFold(entry.Source.Repo, "ObolNetwork/skills") ||
+			strings.Contains(strings.ToLower(entry.Source.URL), "obolnetwork/skills") {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// obolPluginInstalled reports whether any plugin from the given local
+// marketplace name is recorded in ~/.claude/plugins/installed_plugins.json.
+// Plugin keys are stored as "<plugin>@<marketplace>"; we match on the suffix
+// so we don't have to hardcode every plugin the marketplace ever publishes.
+func obolPluginInstalled(marketplaceName string) bool {
+	if marketplaceName == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		Plugins map[string]any `json:"plugins"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	suffix := "@" + marketplaceName
+	for key := range doc.Plugins {
+		if strings.HasSuffix(key, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // autoConfigureLLM detects host Ollama and imported cloud providers, then
@@ -714,8 +811,53 @@ func devPreloadImages() []string {
 	return images
 }
 
-func reuseLocalDevImages() bool {
-	return !strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES")), "true")
+// forceRebuildSet parses OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES and returns a
+// predicate that reports whether a given image tag should be force-rebuilt.
+//
+//   - unset / "" / "false" / "0" → never force-rebuild (default reuse behaviour)
+//   - "true" / "all"             → always force-rebuild every image
+//   - "img1,img2,…"              → force-rebuild only the named images; match is
+//     against the short name (last path component before the colon, e.g.
+//     "x402-verifier" from "ghcr.io/obolnetwork/x402-verifier:latest").
+//     "public-storefront" is accepted as an alias for the published image name
+//     "obol-stack-public-storefront".
+func forceRebuildSet() func(tag string) bool {
+	raw := strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES"))
+	switch strings.ToLower(raw) {
+	case "", "false", "0":
+		return func(string) bool { return false }
+	case "true", "all":
+		return func(string) bool { return true }
+	}
+	names := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if idx := strings.Index(name, ":"); idx != -1 {
+			name = name[:idx]
+		}
+		if name != "" {
+			names[name] = true
+		}
+	}
+	return func(tag string) bool {
+		base := localImageShortName(tag)
+		return names[base] || names[localImageRebuildAlias(base)]
+	}
+}
+
+func localImageShortName(tag string) string {
+	base := filepath.Base(tag)
+	if idx := strings.Index(base, ":"); idx != -1 {
+		base = base[:idx]
+	}
+	return base
+}
+
+func localImageRebuildAlias(name string) string {
+	if name == "obol-stack-public-storefront" {
+		return "public-storefront"
+	}
+	return name
 }
 
 func dockerImageAvailableLocally(tag string) bool {
@@ -844,7 +986,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 
 	clusterName := "obol-stack-" + stackID
 	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
-	reuseCachedImages := reuseLocalDevImages()
+	shouldForceRebuild := forceRebuildSet()
 	serverCID := k3dServerContainerID(clusterName)
 	cache := loadImportedImageCache(cfg)
 
@@ -870,7 +1012,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 
 		total++
 
-		if !(reuseCachedImages && dockerImageAvailableLocally(img.tag)) {
+		if shouldForceRebuild(img.tag) || !dockerImageAvailableLocally(img.tag) {
 			if u != nil {
 				u.Infof("Building %s from %s", img.tag, img.dockerfile)
 			}
@@ -898,7 +1040,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	for _, ref := range devPreloadImages() {
 		total++
 
-		if !(reuseCachedImages && dockerImageAvailableLocally(ref)) {
+		if shouldForceRebuild(ref) || !dockerImageAvailableLocally(ref) {
 			if u != nil {
 				u.Infof("Pulling %s", ref)
 			}
@@ -936,8 +1078,8 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 		// Surface the rebuild escape hatch on the warm path. When `built == 0`
 		// the dev may be wondering whether their latest source change actually
 		// landed in the running pods; the hint tells them how to force it.
-		if built == 0 && reuseCachedImages {
-			u.Dim("  Re-run with OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true to rebuild from source.")
+		if built == 0 {
+			u.Dim("  Re-run with OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true (all) or e.g. =x402-verifier,serviceoffer-controller to rebuild from source.")
 		}
 	}
 }

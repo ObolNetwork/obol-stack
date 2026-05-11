@@ -23,7 +23,7 @@ const (
 	hermesAPISecret    = "hermes-api-server"
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
-	defaultHermesImage = "nousresearch/hermes-agent:v2026.4.30"
+	defaultHermesImage = "nousresearch/hermes-agent:v2026.5.7"
 )
 
 // agentLabels returns the standard label set we attach to every primitive
@@ -228,6 +228,14 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 		map[string]any{"name": "API_SERVER_MODEL_NAME", "value": agent.EffectiveModel()},
 		map[string]any{"name": "AGENT_NAMESPACE", "value": agent.Namespace},
 		map[string]any{"name": "OBOL_SKILLS_DIR", "value": "/data/.hermes/obol-skills"},
+		// CRD agents expose only the API (gated by API_SERVER_KEY and reached
+		// only through the in-cluster Traefik route + x402 ForwardAuth). No
+		// Telegram/Discord/dashboard platforms are wired, so Hermes' user
+		// gateway has nothing to actually gate — "allow all" silences its
+		// startup warning without opening any real surface. If platform
+		// integrations are ever added, swap this for explicit per-platform
+		// allowlists.
+		map[string]any{"name": "GATEWAY_ALLOW_ALL_USERS", "value": "true"},
 	}
 	if agent.Status.WalletAddress != "" {
 		containerEnv = append(containerEnv, map[string]any{
