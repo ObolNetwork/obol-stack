@@ -37,6 +37,24 @@ go build -o .workspace/bin/obol ./cmd/obol
 
 **Important**: Always rebuild after code changes. The `.workspace/bin/obol` is a compiled binary, not a `go run` wrapper.
 
+`obolup.sh` with `OBOL_DEVELOPMENT=true` installs a `go run -a` *wrapper* at `.workspace/bin/obol` for rapid iteration. That wrapper recompiles on every invocation, and any flow step that backgrounds a port-forward and polls within ~5–8 seconds (e.g. `flow-06` step 15) will false-FAIL because the port-forward isn't listening yet. Replace the wrapper with a real binary before running flows:
+
+```bash
+mv .workspace/bin/obol .workspace/bin/obol.wrapper
+go build -o .workspace/bin/obol ./cmd/obol
+```
+
+## Foundry
+
+`obolup.sh` does not manage Foundry. Install separately and **use nightly, not stable** — stable lags far enough behind that Base Sepolia archive-lookup support drifts, and `flow-08` / `flow-11` payment verification then dies with `state at block #N is pruned` from the facilitator. Install:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup --install nightly
+```
+
+`flows/lib.sh` sets `FOUNDRY_DISABLE_NIGHTLY_WARNING=1` so nightly's per-invocation stderr warning doesn't bleed into `cast` output and break pattern-matching assertions. Keep that export.
+
 ## Environment Variables
 
 When running tests or the binary outside the normal `obol` CLI flow, set these explicitly:

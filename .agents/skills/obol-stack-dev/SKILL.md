@@ -19,6 +19,7 @@ Treat this skill as an operational router. Load only the reference needed for th
 3. Use separate QA worktrees on remote machines.
 4. Never leak hostnames, personal paths, passwords, or private keys into skill files or PR text.
 5. Validate with the narrowest command set that covers the change.
+6. On a dev branch (anything other than `main` with the latest release tag), use `OBOL_DEVELOPMENT=true` for `./obolup.sh` and `obol stack up`. The plain `./obolup.sh` downloads the latest tagged release binary and will not exercise local branch changes. If you started a fresh install without it, kill obolup and rerun with the env var before continuing.
 
 ## Reference Router
 

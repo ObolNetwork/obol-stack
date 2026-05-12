@@ -1,6 +1,13 @@
 #!/bin/bash
 # Flow 08: Buy — monetize-inference.md §2.1-2.5.
 # Requires: flow-06 (ServiceOffer Ready) + flow-10 (Anvil + facilitator running).
+#
+# Buyer-wallet invariant: the default obol-agent must be pre-seeded with the
+# deterministic "Bob" key derived from .env REMOTE_SIGNER_PRIVATE_KEY so
+# funding here lands on a reproducible address. flow-08 asserts the match
+# below and fails fast if obol-agent generated a random wallet (which would
+# pass storage-slot funding but defeat the named "do not fund a generated
+# signer" invariant in references/live-obol-qa.md).
 source "$(dirname "$0")/lib.sh"
 
 TUNNEL_OUTPUT=$("$OBOL" tunnel status 2>&1) || true
@@ -29,8 +36,23 @@ AGENT_NS="hermes-obol-agent"
 AGENT_DEPLOY="hermes"
 AGENT_CONTAINER="hermes"
 AGENT_BUY_PY="/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
-BUY_AUTH_COUNT=5
 BUY_BUDGET_USDC="0.005"
+# Derived from BUY_BUDGET_USDC / flow-06 per-request price ("0.001" USDC).
+# Used to assert the sidecar publishes the expected number of auths and that
+# the post-call remaining count decreases by exactly one.
+EXPECTED_AUTHS=5
+
+# Derive deterministic Bob from REMOTE_SIGNER_PRIVATE_KEY (canonical pattern
+# from flow-11). flow-08 asserts that the default obol-agent's wallet equals
+# this address; if not, the agent was generated rather than pre-seeded.
+SIGNER_KEY=$({ grep -E '^[[:space:]]*REMOTE_SIGNER_PRIVATE_KEY=' "$OBOL_ROOT/.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-)
+[ -n "$SIGNER_KEY" ] || SIGNER_KEY="${REMOTE_SIGNER_PRIVATE_KEY:-}"
+if [ -z "$SIGNER_KEY" ]; then
+    fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
+    emit_metrics; exit 1
+fi
+BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
+BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
 
 purchase_request_ready() {
     "$OBOL" kubectl get purchaserequests.obol.org "$PURCHASE_NAME" -n "$AGENT_NS" \
@@ -192,6 +214,10 @@ d = json.load(sys.stdin)
 a = d['accepts'][0]
 print(a.get('amount') or a.get('maxAmountRequired') or '')
 " 2>/dev/null | tr -d '[:space:]')
+if [ -z "$PAID_AMOUNT" ]; then
+    fail "Could not parse PAID_AMOUNT from 402 body — ${body_402:0:200}"
+    emit_metrics; exit 1
+fi
 
 step "Supported paid flow uses public tunnel URL"
 if [ -n "$TUNNEL_URL" ]; then
@@ -208,12 +234,14 @@ else
     fail "Could not pin eRPC base-sepolia to local Anvil — ${network_out:0:200}"
 fi
 
-step "Agent wallet discovered"
+step "Agent wallet matches deterministic Bob"
 AGENT_WALLET=$("$OBOL" agent wallet list obol-agent 2>/dev/null | grep -oE '0x[a-fA-F0-9]{40}' | head -1 || true)
-if [ -n "$AGENT_WALLET" ]; then
-    pass "Agent wallet: $AGENT_WALLET"
-else
+if [ -z "$AGENT_WALLET" ]; then
     fail "Could not resolve obol-agent wallet address"
+elif [ "$(printf '%s' "$AGENT_WALLET" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$BOB_WALLET" | tr '[:upper:]' '[:lower:]')" ]; then
+    fail "Agent wallet $AGENT_WALLET != deterministic Bob $BOB_WALLET (preseed missing; obol-agent must be created with REMOTE_SIGNER_PRIVATE_KEY-derived Bob — see references/live-obol-qa.md)"
+else
+    pass "Agent wallet matches deterministic Bob: $AGENT_WALLET"
 fi
 
 step "Fund agent wallet with USDC on local Anvil"
@@ -227,7 +255,7 @@ else
     fail "Could not fund agent wallet on Anvil — ${AGENT_SLOT:0:120}"
 fi
 
-poll_step_grep "Agent wallet funded on local Anvil" "^1000000000 " 24 5 agent_wallet_anvil_balance
+poll_step_grep "Agent wallet funded on local Anvil" "^[1-9][0-9]{8,} " 24 5 agent_wallet_anvil_balance
 
 step "Ensure PurchaseRequest auth pool via obol buy inference"
 buy_out=$("$OBOL" buy inference "$PURCHASE_NAME" \
@@ -243,7 +271,7 @@ else
 fi
 
 poll_step_grep "PurchaseRequest Ready" "True" 36 5 purchase_request_ready
-poll_step_grep "x402-buyer has a live auth pool" "$PURCHASE_NAME: remaining=[1-9]" 36 5 buyer_sidecar_status
+poll_step_grep "x402-buyer has exactly $EXPECTED_AUTHS auths" "$PURCHASE_NAME: remaining=$EXPECTED_AUTHS " 36 5 buyer_sidecar_status
 
 buyer_status=$(buyer_sidecar_status)
 PAID_MODEL=$(echo "$buyer_status" | grep "^$PURCHASE_NAME:" | grep -oE 'model=[^ ]+' | head -1 | cut -d= -f2)
@@ -254,14 +282,20 @@ fi
 LITELLM_MASTER_KEY=$("$OBOL" kubectl get secret litellm-secrets -n llm -o jsonpath='{.data.LITELLM_MASTER_KEY}' 2>/dev/null | base64 -d 2>/dev/null || true)
 if [ -z "$LITELLM_MASTER_KEY" ]; then
     fail "Could not read LiteLLM master key"
+    emit_metrics; exit 1
 fi
 
-# §2.4 pre-capture: Record seller balance BEFORE paid inference to verify settlement.
+# §2.4 pre-capture: Record buyer + seller balances BEFORE paid inference so we
+# can assert that settlement moved EXACTLY PAID_AMOUNT in each direction.
 PRE_SELLER_BAL=""
+PRE_BUYER_BAL=""
 if command -v cast &>/dev/null; then
     PRE_SELLER_BAL=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$SELLER_WALLET" \
         --rpc-url "$ANVIL_RPC" 2>&1) || true
     [[ "$PRE_SELLER_BAL" =~ ^[0-9] ]] || PRE_SELLER_BAL=""
+    PRE_BUYER_BAL=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$AGENT_WALLET" \
+        --rpc-url "$ANVIL_RPC" 2>&1) || true
+    [[ "$PRE_BUYER_BAL" =~ ^[0-9] ]] || PRE_BUYER_BAL=""
 fi
 
 # Capture start block immediately before the paid request.
@@ -273,11 +307,21 @@ fi
 
 step "Paid inference via LiteLLM paid/* route"
 paid_out=$(litellm_paid_inference)
-if echo "$paid_out" | grep -q "STATUS=200" && \
-   echo "$paid_out" | grep -q "TEXT=.*USDC payment smoke test passed\."; then
-    pass "Paid inference succeeded via $PAID_MODEL"
+# Structural assertion only: HTTP 200 + non-empty TEXT. Payment correctness
+# must not depend on the model returning a verbatim sentence (references/
+# paid-commerce.md: "Do not rely on agent wording").
+paid_status_ok=0; paid_text=""
+if echo "$paid_out" | grep -q "STATUS=200"; then
+    paid_status_ok=1
+    paid_text=$(echo "$paid_out" | grep -E '^TEXT=' | head -1 | sed -E 's/^TEXT=//')
+fi
+if [ "$paid_status_ok" = "1" ] && [ -n "${paid_text// /}" ]; then
+    pass "Paid inference: HTTP 200 + non-empty content via $PAID_MODEL"
+    if echo "$paid_text" | grep -qF "USDC payment smoke test passed."; then
+        pass "(informational) model also returned the verbatim instruction sentence"
+    fi
 else
-    fail "Paid inference failed — ${paid_out:0:500}"
+    fail "Paid inference failed (status_ok=$paid_status_ok text_empty=$([ -z "${paid_text// /}" ] && echo yes || echo no)) — ${paid_out:0:500}"
 fi
 
 step "On-chain: settlement receipt"
@@ -296,40 +340,58 @@ else
     fi
 fi
 
-# §2.4: Balance checks (requires cast/Foundry)
-# Use exit-code check + numeric pattern to avoid false positives from cast error messages
+# §2.4: Balance + sidecar checks. Each side must move by EXACTLY PAID_AMOUNT
+# — "increased" is not a settlement proof. See references/paid-commerce.md.
 if command -v cast &>/dev/null; then
-    step "Buyer USDC balance check"
-    # env -u CHAIN: CHAIN=base-sepolia conflicts with foundry (expects uint64)
-    if buyer_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$AGENT_WALLET" \
-            --rpc-url "$ANVIL_RPC" 2>&1) && [[ "$buyer_bal" =~ ^[0-9] ]]; then
-        pass "Buyer USDC balance: $buyer_bal"
+    step "Seller USDC balance increased by exactly PAID_AMOUNT"
+    seller_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$SELLER_WALLET" \
+        --rpc-url "$ANVIL_RPC" 2>&1) || true
+    if ! [[ "$seller_bal" =~ ^[0-9] ]]; then
+        fail "Seller balance read failed — ${seller_bal:0:100}"
     else
-        fail "Buyer balance check failed — ${buyer_bal:0:100}"
+        post_seller=$(echo "$seller_bal" | grep -oE '^[0-9]+' | head -1)
+        pre_seller=$(echo "${PRE_SELLER_BAL:-}" | grep -oE '^[0-9]+' | head -1)
+        if [ -z "$pre_seller" ] || [ -z "$post_seller" ] || [ -z "$PAID_AMOUNT" ]; then
+            fail "Seller delta unverifiable (pre=${pre_seller:-?} post=${post_seller:-?} amount=${PAID_AMOUNT:-?})"
+        else
+            delta=$(( post_seller - pre_seller ))
+            if [ "$delta" = "$PAID_AMOUNT" ]; then
+                pass "Seller delta exactly PAID_AMOUNT: $pre_seller → $post_seller (Δ=$delta)"
+            else
+                fail "Seller delta $delta != PAID_AMOUNT $PAID_AMOUNT ($pre_seller → $post_seller)"
+            fi
+        fi
     fi
 
-    step "Seller USDC balance increased after payment (§2.4 settlement)"
-    if seller_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$SELLER_WALLET" \
-            --rpc-url "$ANVIL_RPC" 2>&1) && [[ "$seller_bal" =~ ^[0-9] ]]; then
-        # If we captured a pre-balance, verify it increased (actual settlement check)
-        if [ -n "$PRE_SELLER_BAL" ] && echo "$paid_out" | grep -q "STATUS=200"; then
-            pre_num=$(echo "$PRE_SELLER_BAL" | grep -oE '^[0-9]+' | head -1)
-            post_num=$(echo "$seller_bal" | grep -oE '^[0-9]+' | head -1)
-            if [ -n "$pre_num" ] && [ -n "$post_num" ] && [ "$post_num" -gt "$pre_num" ] 2>/dev/null; then
-                pass "Seller USDC balance increased: $pre_num → $post_num (payment settled)"
-            elif [ "$post_num" = "$pre_num" ]; then
-                fail "Seller balance unchanged after payment: $pre_num (settlement may have failed)"
-            else
-                pass "Seller USDC balance: $seller_bal (pre-balance: ${PRE_SELLER_BAL:-unknown})"
-            fi
-        else
-            pass "Seller USDC balance: $seller_bal"
-        fi
+    step "Buyer USDC balance decreased by exactly PAID_AMOUNT"
+    buyer_bal=$(env -u CHAIN cast call "$USDC_ADDRESS" "balanceOf(address)(uint256)" "$AGENT_WALLET" \
+        --rpc-url "$ANVIL_RPC" 2>&1) || true
+    if ! [[ "$buyer_bal" =~ ^[0-9] ]]; then
+        fail "Buyer balance read failed — ${buyer_bal:0:100}"
     else
-        fail "Seller balance check failed — ${seller_bal:0:100}"
+        post_buyer=$(echo "$buyer_bal" | grep -oE '^[0-9]+' | head -1)
+        pre_buyer=$(echo "${PRE_BUYER_BAL:-}" | grep -oE '^[0-9]+' | head -1)
+        if [ -z "$pre_buyer" ] || [ -z "$post_buyer" ] || [ -z "$PAID_AMOUNT" ]; then
+            fail "Buyer delta unverifiable (pre=${pre_buyer:-?} post=${post_buyer:-?} amount=${PAID_AMOUNT:-?})"
+        else
+            delta=$(( pre_buyer - post_buyer ))
+            if [ "$delta" = "$PAID_AMOUNT" ]; then
+                pass "Buyer delta exactly PAID_AMOUNT: $pre_buyer → $post_buyer (Δ=$delta)"
+            else
+                fail "Buyer delta $delta != PAID_AMOUNT $PAID_AMOUNT ($pre_buyer → $post_buyer)"
+            fi
+        fi
     fi
 else
     fail "cast (Foundry) not installed — skipping balance checks"
 fi
+
+# The buyer sidecar persists the spent-auth state asynchronously after the
+# upstream returns, so /status can still report the pre-call count for a few
+# seconds even when the on-chain settlement and the buyer/seller balance
+# deltas have already cleared. Poll instead of one-shot to remove the race.
+poll_step_grep "x402-buyer auth pool decremented by 1" \
+    "$PURCHASE_NAME: remaining=$(( EXPECTED_AUTHS - 1 )) " \
+    12 5 buyer_sidecar_status
 
 emit_metrics

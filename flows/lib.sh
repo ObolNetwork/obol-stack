@@ -15,6 +15,13 @@ else
     export PATH="$HOME/.foundry/bin:$HOME/.local/bin:$PATH:/usr/local/go/bin"
 fi
 
+# Foundry nightly prints a stderr warning on every cast/anvil invocation; the
+# flow scripts pattern-match cast output, so the noise causes false FAILs at
+# steps that grep for hex/decimal values. Silence it globally for flow runs —
+# nightly is the only build that publishes new chain support promptly enough
+# for Base Sepolia archive lookups not to drift.
+export FOUNDRY_DISABLE_NIGHTLY_WARNING="${FOUNDRY_DISABLE_NIGHTLY_WARNING:-1}"
+
 OBOL_ROOT="${OBOL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Only an explicit override variable should pin the ingress URL. Using the
 # computed/exported OBOL_INGRESS_URL itself here can leak a stale port (for
@@ -286,7 +293,8 @@ run_step_grep() {
     local desc="$1"; local pattern="$2"; shift 2
     step "$desc"
     local out
-    if out=$("$@" 2>&1) && echo "$out" | grep -q "$pattern"; then
+    # grep -E for parity with poll_step_grep — callers can use ERE quantifiers.
+    if out=$("$@" 2>&1) && echo "$out" | grep -qE "$pattern"; then
         pass "$desc"
     else
         fail "$desc — pattern '$pattern' not found — ${out:0:200}"
@@ -310,11 +318,15 @@ poll_step() {
 # Poll a command until its output matches a grep pattern
 poll_step_grep() {
     local desc="$1"; local pattern="$2"; local max="$3"; local delay="$4"; shift 4
+    # grep -E so callers can use ERE quantifiers like {N,} — without -E, grep
+    # treats the braces literally and the pattern never matches even when the
+    # output is what the caller intended. Callers that pass plain substrings
+    # (no special regex chars) are unaffected.
     step "$desc (polling, max ${max}x${delay}s)"
     for i in $(seq 1 "$max"); do
         local out
         out=$("$@" 2>&1) || true
-        if echo "$out" | grep -q "$pattern"; then
+        if echo "$out" | grep -qE "$pattern"; then
             pass "$desc (attempt $i)"
             return 0
         fi
@@ -667,11 +679,19 @@ base_sepolia_rpc_candidates() {
         printf '%s\n' "$BASE_SEPOLIA_RPC"
     fi
 
+    # Archive-capable endpoints first. publicnode.com is intentionally omitted —
+    # confirmed non-archive against eth_getStorageAt at historical blocks, which
+    # causes Anvil-fork-based facilitator verifies to fail with "state at block
+    # #N is pruned" once the fork drifts past the upstream's retention window.
+    # Source: chainlist.org/rpcs.json, filtered to chainId 84532, archive-tested
+    # via historical eth_getStorageAt against USDC (0x036C…CF7e).
     printf '%s\n' \
-        "https://base-sepolia-rpc.publicnode.com" \
         "https://base-sepolia.drpc.org" \
         "https://sepolia.base.org" \
-        "https://base-sepolia.gateway.tenderly.co"
+        "https://base-sepolia.gateway.tenderly.co" \
+        "https://base-sepolia.api.onfinality.io/public" \
+        "https://base-sepolia.rpc.sentio.xyz" \
+        "https://base-testnet.api.pocket.network"
 }
 
 resolve_base_sepolia_rpc() {
