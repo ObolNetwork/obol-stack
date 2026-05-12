@@ -127,7 +127,37 @@ run_flow() {
     [ "$result" != "FAIL" ]
 }
 
+# Guard: flow-11, flow-14, and flow-13 each enforce a preflight that rejects
+# the run unless OBOL_LLM_ENDPOINT points at an OpenAI-compatible vLLM /
+# llama.cpp endpoint. Without this guard the runner spends ~30 min on the
+# baseline flows before those three FAIL on their preflights, which makes
+# release-smoke results look worse than they are. Fail fast instead.
+require_obol_llm_endpoint() {
+    local need=false
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]      && need=true
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ] && need=true
+    [ "$need" = "true" ] || return 0
+
+    if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+        cat >&2 <<EOF
+release-smoke: OBOL_LLM_ENDPOINT must be set when RELEASE_SMOKE_INCLUDE_OBOL=true
+               or RELEASE_SMOKE_INCLUDE_OBOL_FORK=true.
+
+  flow-11 / flow-14 / flow-13 enforce this preflight themselves — running
+  them without OBOL_LLM_ENDPOINT only produces three guaranteed FAILs.
+
+  Set, for example:
+    export OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1
+    export OBOL_LLM_MODEL=qwen36-fast      # or whatever the endpoint serves
+
+  See .claude/skills/obol-stack-dev/references/qa-model-envs.md.
+EOF
+        exit 2
+    fi
+}
+
 main() {
+    require_obol_llm_endpoint
     write_report_header
     reset_flow_workspace "$OBOL_ROOT/.workspace"
     prepare_workspace
