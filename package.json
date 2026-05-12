@@ -29,7 +29,7 @@
   "dependencies": {
     "@ag-ui/client": "0.0.53",
     "@copilotkit/react-core": "1.57.1",
-    "@copilotkit/react-ui": "1.56.3",
+    "@copilotkit/react-ui": "1.57.1",
     "@copilotkit/runtime": "1.56.3",
     "@kubernetes/client-node": "1.4.0",
     "@obolnetwork/obol-ui": "1.1.19",
@@ -60,7 +60,7 @@
     "@types/node": "25.6.2",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@typescript-eslint/eslint-plugin": "8.58.1",
+    "@typescript-eslint/eslint-plugin": "8.59.1",
     "@typescript-eslint/parser": "8.59.2",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
