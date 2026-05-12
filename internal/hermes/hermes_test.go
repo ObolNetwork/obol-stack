@@ -351,3 +351,27 @@ func mkdirInstance(t *testing.T, cfg *config.Config, id string) {
 		t.Fatalf("create Hermes instance %q: %v", id, err)
 	}
 }
+
+// TestHermesPVCPaths pins the host-side directories that
+// ensureHermesPVCOwnership chowns. Refactoring either path (renaming a PVC,
+// relocating the namespace prefix in agentruntime, etc.) without updating
+// this list would silently regress the #475 fix on Linux k3d, because the
+// chown would land on a non-existent path while the real PVC backing dir
+// kept its local-path-provisioner default ownership of 1000:1000.
+func TestHermesPVCPaths(t *testing.T) {
+	cfg := testConfig(t)
+	const id = "obol-agent"
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+
+	got := hermesPVCPaths(cfg, id)
+	want := []string{
+		filepath.Join(cfg.DataDir, namespace, "hermes-data"),
+		filepath.Join(cfg.DataDir, namespace, "remote-signer-keystores"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hermesPVCPaths(%q) = %#v; want %#v", id, got, want)
+	}
+	if got[0] == got[1] {
+		t.Fatalf("expected distinct paths, got %q twice", got[0])
+	}
+}

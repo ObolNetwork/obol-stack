@@ -245,6 +245,11 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
+	// Host-side chown the PVC backing dirs to the in-pod UID/GID, bypassing
+	// the user-namespacing that defeats the in-pod `init-hermes-perms`
+	// chown from #446 (see ensureHermesPVCOwnership doc comment for details).
+	ensureHermesPVCOwnership(cfg, id, u)
+
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
@@ -1307,4 +1312,101 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	default:
 		_ = os.Chown(hostPath, containerUID, containerGID)
 	}
+}
+
+// hermesPVCPaths returns the host-side PVC backing directories that the Hermes
+// pod mounts, in the order they appear in the deployment template. Exposed for
+// tests and for callers that need to chown multiple volumes consistently.
+func hermesPVCPaths(cfg *config.Config, id string) []string {
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+	return []string{
+		filepath.Join(cfg.DataDir, namespace, agentruntime.Describe(agentruntime.Hermes).DataPVCName),
+		filepath.Join(cfg.DataDir, namespace, "remote-signer-keystores"),
+	}
+}
+
+// ensureHermesPVCOwnership host-side chowns the Hermes PVC backing directories
+// to containerUID:containerGID so the agent's init containers can write under
+// /data on the first start.
+//
+// Why this is needed (issue #475):
+//   - The embedded k3d config (internal/embed/k3d-config.yaml) sets
+//     KubeletInUserNamespace=true. Pod "root" maps to a host subuid that
+//     lacks chown authority over the host bind-mount path provisioned by
+//     local-path-provisioner. The in-pod `init-hermes-perms` chown added in
+//     #446 (commit c066baa) silently no-ops in this configuration.
+//   - local-path-provisioner's helper-pod sets the dir to 1000:1000 (see
+//     internal/embed/infrastructure/base/templates/local-path.yaml). Hermes
+//     runs as 10000:10000, so the next init container fails on
+//     `mkdir /data/.hermes/home: Permission denied`.
+//
+// The fix is to chown from outside the user namespace: `docker exec` into the
+// k3d server container runs at the host Docker daemon's authority, which is
+// real root and is not subject to the kubelet's user-namespacing.
+//
+// Best-effort. Waits up to 60s for each PVC to be Bound (local-path uses
+// WaitForFirstConsumer, so the host dir doesn't exist until the consuming
+// pod is scheduled). On non-k3d backends fixRuntimeVolumeOwnership falls
+// back to a plain os.Chown.
+//
+// If a Hermes pod is currently stuck in Init:CrashLoopBackOff because of the
+// pre-fix permissions, deletes it so kubelet re-creates with the corrected
+// perms immediately rather than after exponential backoff (up to ~5 min).
+// Skips the delete when no pod is stuck so repeated `Sync` calls
+// (e.g. `obol model sync` after `obol model prefer`) do not gratuitously
+// restart a healthy agent.
+func ensureHermesPVCOwnership(cfg *config.Config, id string, u *ui.UI) {
+	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+
+	for _, pvc := range []string{
+		agentruntime.Describe(agentruntime.Hermes).DataPVCName,
+		"remote-signer-keystores",
+	} {
+		waitCmd := exec.Command(kubectlBin,
+			"wait", "--for=jsonpath={.status.phase}=Bound",
+			"--timeout=60s", "pvc/"+pvc, "-n", namespace)
+		waitCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+		_ = waitCmd.Run() // best-effort; continue even on timeout
+	}
+
+	for _, p := range hermesPVCPaths(cfg, id) {
+		fixRuntimeVolumeOwnership(cfg, p, u)
+	}
+
+	if hermesInitStuck(cfg, namespace) {
+		deleteCmd := exec.Command(kubectlBin,
+			"-n", namespace, "delete", "pod",
+			"-l", "app.kubernetes.io/name=hermes",
+			"--ignore-not-found", "--wait=false")
+		deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+		if err := deleteCmd.Run(); err == nil && u != nil {
+			u.Info("Restarted Hermes pod to apply fresh volume ownership")
+		}
+	}
+}
+
+// hermesInitStuck reports whether at least one Hermes pod has an init
+// container in CrashLoopBackOff or an Error waiting state — the signature of
+// the perm-denied symptom this fix targets. Returns false on any kubectl
+// failure so that a transient API hiccup does not trigger spurious restarts.
+func hermesInitStuck(cfg *config.Config, namespace string) bool {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	cmd := exec.Command(kubectlBin,
+		"-n", namespace, "get", "pods",
+		"-l", "app.kubernetes.io/name=hermes",
+		"-o", "jsonpath={.items[*].status.initContainerStatuses[*].state.waiting.reason}")
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	for _, reason := range strings.Fields(string(out)) {
+		if strings.Contains(reason, "CrashLoop") || strings.Contains(reason, "Error") {
+			return true
+		}
+	}
+	return false
 }
