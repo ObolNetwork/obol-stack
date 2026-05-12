@@ -63,6 +63,13 @@ type SetupOptions struct {
 	AutoRenew         bool
 	PrivacyMode       string
 	ConfirmCharge     bool
+
+	// OverwriteDNS forwards --overwrite-dns to the underlying
+	// `cloudflared tunnel route dns` invocation in local-managed mode, so a
+	// prior CNAME at the hostname is replaced instead of failing the wizard.
+	// Has no effect in remote-managed mode (the Cloudflare API path performs
+	// its own upsert).
+	OverwriteDNS bool
 }
 
 type SetupResult struct {
@@ -455,7 +462,11 @@ func Setup(cfg *config.Config, u *ui.UI, opts SetupOptions) (*SetupResult, error
 	}
 
 	if management == tunnelManagementLocal {
-		if err := Login(cfg, u, LoginOptions{Hostname: hostname, TransportProtocol: opts.TransportProtocol}); err != nil {
+		if err := Login(cfg, u, LoginOptions{
+			Hostname:          hostname,
+			TransportProtocol: opts.TransportProtocol,
+			OverwriteDNS:      opts.OverwriteDNS,
+		}); err != nil {
 			return nil, err
 		}
 		return &SetupResult{
