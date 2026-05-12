@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -337,7 +338,7 @@ Examples:
 				readOnly := !netCfg.AllowWrites
 
 				if netCfg.Endpoint != "" {
-					u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, netCfg.Endpoint)
+					u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, redactRPCURL(netCfg.Endpoint))
 					if err := network.AddCustomRPC(cfg, chainID, chainName, netCfg.Endpoint, readOnly); err != nil {
 						return fmt.Errorf("failed to add custom RPC: %w", err)
 					}
@@ -387,7 +388,7 @@ Examples:
 				if err := validate.URL(endpoint); err != nil {
 					return fmt.Errorf("invalid --endpoint: %w", err)
 				}
-				u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, endpoint)
+				u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, redactRPCURL(endpoint))
 				if readOnly {
 					u.Infof("  Write methods blocked (use --allow-writes to enable)")
 				}
@@ -558,4 +559,38 @@ func chainIDToName(chainID int) string {
 	}
 
 	return fmt.Sprintf("Chain %d", chainID)
+}
+
+// redactRPCURL replaces api-key path segments / query tokens in a paid RPC
+// URL with [REDACTED]. Preserves scheme, host, port, and the path-prefix
+// structure so the operator can still see which provider they pointed at.
+//
+// Patterns covered:
+//   - https://*.alchemy.com/v2/<key>
+//   - https://*.infura.io/v3/<key>
+//   - https://*.quiknode.pro/<token>/
+//   - https://lb.drpc.live/<network>/<token>     (drpc paid path token)
+//   - https://*?dkey=<token>                      (drpc paid query token)
+//
+// Keep this function in lockstep with flows/lib.sh::scrub_secrets — both
+// must redact the same providers or the log surface fragments.
+func redactRPCURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	patterns := []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		{regexp.MustCompile(`(alchemy\.com/v2/)[A-Za-z0-9_-]+`), "${1}[REDACTED]"},
+		{regexp.MustCompile(`(infura\.io/v3/)[A-Za-z0-9_-]+`), "${1}[REDACTED]"},
+		{regexp.MustCompile(`(quiknode\.pro/)[A-Za-z0-9_-]+`), "${1}[REDACTED]"},
+		{regexp.MustCompile(`(lb\.drpc\.live/[a-z0-9-]+/)[A-Za-z0-9_-]+`), "${1}[REDACTED]"},
+		{regexp.MustCompile(`([?&]dkey=)[A-Za-z0-9_-]+`), "${1}[REDACTED]"},
+	}
+	out := raw
+	for _, p := range patterns {
+		out = p.re.ReplaceAllString(out, p.repl)
+	}
+	return out
 }
