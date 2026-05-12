@@ -197,7 +197,7 @@ else
 
     FACILITATOR_IMAGE=$(x402_facilitator_image || true)
     if [ -z "$FACILITATOR_IMAGE" ]; then
-        fail "x402-facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
+        fail "x402-facilitator image unavailable: ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
         emit_metrics; exit 0
     fi
 

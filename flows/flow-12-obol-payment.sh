@@ -8,7 +8,7 @@
 #
 # Requires:
 #   - A running obol stack with the agent initialized.
-#   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7.
+#   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9.
 source "$(dirname "$0")/lib.sh"
 
 step "local stack context is isolated"
@@ -53,7 +53,7 @@ FACILITATOR_IMAGE=$(x402_facilitator_image || true)
 if [ -n "$FACILITATOR_IMAGE" ]; then
     pass "Facilitator image available: $FACILITATOR_IMAGE"
 else
-    fail "x402-rs facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
+    fail "x402-rs facilitator image unavailable: ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
     emit_metrics
     exit 1
 fi

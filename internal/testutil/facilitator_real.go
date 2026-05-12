@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const x402FacilitatorImage = "ghcr.io/x402-rs/x402-facilitator:1.4.7"
+const x402FacilitatorImage = "ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
 
 // RealFacilitator wraps a running x402-rs facilitator process.
 // Unlike MockFacilitator, this validates real EIP-712 signatures against

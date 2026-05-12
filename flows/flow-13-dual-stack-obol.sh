@@ -21,7 +21,7 @@
 #   - forge on PATH (used to compile ForkObolToken.sol)
 #   - Docker running with the configured Alice/Bob ingress ports + Anvil port free
 #   - OpenAI-compatible QA LLM endpoint via OBOL_LLM_ENDPOINT
-#   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
+#   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9
 #
 # Use this flow when you want to validate the OBOL Permit2 path end-to-end
 # without depending on the public Obol facilitator or any USDC contract.
@@ -237,7 +237,7 @@ pass "Foundry tools available"
 step "Preflight: x402-rs facilitator image available"
 FACILITATOR_IMAGE=$(x402_facilitator_image || true)
 if [ -z "$FACILITATOR_IMAGE" ]; then
-    skip "flow-13 requires Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7"
+    skip "flow-13 requires Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
     emit_metrics
     exit 0
 fi

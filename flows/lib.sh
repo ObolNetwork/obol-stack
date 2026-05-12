@@ -602,7 +602,7 @@ require_tool() {
 }
 
 x402_facilitator_image() {
-    local image="ghcr.io/x402-rs/x402-facilitator:1.4.7"
+    local image="ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
 
     command -v docker >/dev/null 2>&1 || {
         echo "docker is required to fetch $image" >&2

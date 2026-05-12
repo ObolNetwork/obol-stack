@@ -2744,7 +2744,7 @@ spec:
 // Prerequisites:
 //   - Running k3d cluster with CRD, agent, and x402-verifier
 //   - Anvil (Foundry) installed
-//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
+//   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9
 func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -2892,7 +2892,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 //   - Running k3d cluster with CRD, agent, x402-verifier, CF quick tunnel
 //   - Ollama with a cached model (any model — qwen3.5:4b, qwen3.5:9b, etc.)
 //   - Anvil (Foundry) installed
-//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
+//   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9
 func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
@@ -3402,7 +3402,7 @@ func verifyOwnerRef(t *testing.T, resource map[string]interface{}, ownerName, ow
 //   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
 //   - Anthropic API key configured in LiteLLM (for agent tool calling)
 //   - Anvil (Foundry) installed
-//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
+//   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9
 // ---------------------------------------------------------------------------
 
 func TestIntegration_SellDiscoverBuySettle(t *testing.T) {
@@ -4384,7 +4384,7 @@ const monetizePy = "/data/.openclaw/skills/sell/scripts/monetize.py"
 //   - Running k3d cluster with CRD, agent, x402-verifier, LiteLLM
 //   - Ollama with qwen3.5:9b available locally
 //   - Anvil (Foundry) installed
-//   - Docker access to ghcr.io/x402-rs/x402-facilitator:1.4.7
+//   - Docker access to ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9
 func TestIntegration_SellBuyRoundtrip_LiteLLM(t *testing.T) {
 	cfg := requireCluster(t)
 	requireCRD(t, cfg)
