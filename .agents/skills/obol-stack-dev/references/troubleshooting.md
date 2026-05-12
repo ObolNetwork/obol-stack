@@ -204,3 +204,39 @@ curl -s http://localhost:18789/v1/chat/completions \
 # Check Ollama models
 curl -s http://localhost:11434/api/tags | jq '.models[].name'
 ```
+
+### `flow-08` payment verification 503 / `state at block #N is pruned`
+
+**Cause**: facilitator (`x402-rs/x402-facilitator`) does an `eth_getStorageAt` against the Anvil fork's USDC balances slot at a historical block. Anvil forwards to its `--fork-url`, and if the upstream is non-archive (`publicnode.com`) or the fork has drifted past the upstream's retention window, the upstream returns `state at block #N is pruned`. Facilitator surfaces that as `verify_eip3009_payment` → 500, x402-verifier returns 402-retry-failed, LiteLLM returns `503 Payment verification failed`.
+
+**Fix**: restart Anvil + facilitator with a fresh fork against an archive RPC. `flows/lib.sh::base_sepolia_rpc_candidates` now lists archive endpoints first (`drpc.org`, `sepolia.base.org`, `tenderly`, `onfinality`, `sentio`, `pocket`); `publicnode.com` is excluded.
+
+```bash
+docker rm -f obol-flow10-x402-facilitator
+pkill -f '^anvil '
+bash flows/flow-10-anvil-facilitator.sh
+```
+
+### `flow-08` step 8 `pattern '^[1-9][0-9]{8,} ' not found after 120s`
+
+**Cause**: pre-fix `poll_step_grep` / `run_step_grep` used `grep -q` (BRE), so ERE quantifier `{8,}` was treated as literal text and never matched the `cast call balanceOf` output even when the value was correct. Side-effect: a Foundry nightly stderr warning leaking through `2>&1` would also fail any cast pattern match.
+
+**Fix**: both helpers now use `grep -qE`; `FOUNDRY_DISABLE_NIGHTLY_WARNING=1` is exported. Nothing to do operationally — confirm the helpers haven't been reverted.
+
+### PurchaseRequest stuck in `Terminating` after `kubectl delete`
+
+**Cause**: the serviceoffer-controller's `obol.org/purchase-finalizer` is responsible for tombstone cleanup (deleting per-PR keys from `x402-buyer-config` / `x402-buyer-auths`, signalling the sidecar). If the controller is unhealthy or paused, deletion hangs on the finalizer.
+
+**Fix (manual cleanup ritual)**:
+
+```bash
+kubectl patch purchaserequest <name> -n hermes-obol-agent --type=merge \
+  -p '{"metadata":{"finalizers":[]}}'
+kubectl patch cm x402-buyer-config -n llm --type=json \
+  -p='[{"op":"remove","path":"/data/<name>.json"}]'
+kubectl patch cm x402-buyer-auths  -n llm --type=json \
+  -p='[{"op":"remove","path":"/data/<name>.json"}]'
+kubectl rollout restart deployment/litellm -n llm
+```
+
+Without the ConfigMap+restart steps, the sidecar continues to report the deleted PR in `/status` and the next `flow-08` run sees a polluted starting auth pool.
