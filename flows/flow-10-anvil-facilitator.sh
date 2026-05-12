@@ -276,17 +276,15 @@ export SELLER_WALLET="$SELLER_WALLET"
 EOF
 
 # obol sell pricing changes x402-pricing ConfigMap → Kubernetes Reloader restarts
-# x402-verifier pods.  Wait for them to be ready before flow-08 makes paid requests.
-step "x402 verifier pods ready after pricing change"
-for i in $(seq 1 24); do
-    ready=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep "Running" | grep -c "1/1" || echo 0)
-    total=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep -v "^$" | wc -l | tr -d ' ')
-    if [ "$ready" -ge 1 ] && [ "$ready" = "$total" ]; then
-        pass "x402 verifier ready ($ready/$total)"
-        break
-    fi
-    [ "$i" -eq 24 ] && fail "x402 verifier not ready after 120s"
-    sleep 5
-done
+# x402-verifier pods. Step above already used `kubectl rollout status` which is
+# the authoritative readiness signal, but re-check the latest ReplicaSet here in
+# case Reloader started another rollout between the pricing call and this point.
+step "x402 verifier ready after pricing change"
+if "$OBOL" kubectl rollout status deployment/x402-verifier -n x402 --timeout=180s >/dev/null 2>&1; then
+    pass "x402 verifier ready"
+else
+    pods_state=$("$OBOL" kubectl get pods -n x402 -l app=x402-verifier --no-headers 2>&1 | head -10)
+    fail "x402 verifier not ready after 180s — ${pods_state//$'\n'/ | }"
+fi
 
 emit_metrics
