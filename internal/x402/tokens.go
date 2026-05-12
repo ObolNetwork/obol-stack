@@ -108,3 +108,33 @@ func TokenSupportedOnChain(tokenName, chainName string) bool {
 	_, ok := ResolveToken(tokenName, chainName)
 	return ok
 }
+
+// TokensOnChain returns a sorted slice of token symbols registered for the
+// given chain. Returns an empty slice when no tokens are registered for that
+// chain (or the chain is unknown).
+func TokensOnChain(chainName string) []string {
+	canonical := normalizeChainAlias(chainName)
+	tokens := make([]string, 0, len(tokenRegistry))
+	for name, chains := range tokenRegistry {
+		if _, ok := chains[canonical]; ok {
+			tokens = append(tokens, name)
+		}
+	}
+	sort.Strings(tokens)
+	return tokens
+}
+
+// ChainsForToken returns a sorted slice of canonical chain names on which the
+// given token is registered. Returns an empty slice for unknown tokens.
+func ChainsForToken(tokenName string) []string {
+	chains, ok := tokenRegistry[strings.ToUpper(strings.TrimSpace(tokenName))]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(chains))
+	for name := range chains {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
