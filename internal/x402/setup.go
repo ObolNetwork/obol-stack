@@ -1,11 +1,12 @@
 package x402
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
-	"encoding/json"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -48,6 +49,50 @@ func mustReadX402Manifest() []byte {
 	return data
 }
 
+// devLocallyBuiltImageBases mirrors internal/defaults.devLocallyBuiltImageBases
+// — duplicated here to avoid a defaults → x402 → defaults import cycle.
+// Must stay in lockstep with the canonical list there.
+var devLocallyBuiltImageBases = []string{
+	"ghcr.io/obolnetwork/x402-verifier",
+	"ghcr.io/obolnetwork/serviceoffer-controller",
+	"ghcr.io/obolnetwork/x402-buyer",
+	"ghcr.io/obolnetwork/demo-server",
+	"ghcr.io/obolnetwork/obol-stack-public-storefront",
+}
+
+// rewriteDevImagePinsInManifest applies the same `:tag@sha256:digest` /
+// `@sha256:digest` / `:tag` → `:latest` rewrite the defaults pipeline uses,
+// so kubectl-applied manifests inside EnsureVerifier honor the local-build
+// path under OBOL_DEVELOPMENT=true. Without this rewrite, the embedded
+// x402.yaml carrying `:b13254e` pins beats the helmfile-rendered :latest
+// deployment, and the cluster runs the stale registry image regardless of
+// OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES (root cause of the missing
+// HandleProxy debug-log saga during flow-11 step 43 chase, May 2026).
+//
+// Pattern parity with internal/defaults.rewriteDevDigestPins is enforced
+// by the regression test in TestX402Manifest_DevModeRewritesPins.
+func rewriteDevImagePinsInManifest(data []byte) []byte {
+	out := data
+	for _, base := range devLocallyBuiltImageBases {
+		re := regexp.MustCompile(regexp.QuoteMeta(base) +
+			`(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})`)
+		out = re.ReplaceAll(out, []byte(base+":latest"))
+	}
+	return out
+}
+
+// x402ManifestForApply returns the kubectl-apply-ready bytes, rewriting
+// immutable image pins to `:latest` when OBOL_DEVELOPMENT=true so the
+// in-cluster verifier/controller uses the freshly-built local image.
+// In production (OBOL_DEVELOPMENT unset/false) returns the embedded
+// manifest verbatim — the pins are intentional and immutable.
+func x402ManifestForApply() []byte {
+	if os.Getenv("OBOL_DEVELOPMENT") != "true" {
+		return x402Manifest
+	}
+	return rewriteDevImagePinsInManifest(x402Manifest)
+}
+
 // EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.
 // Idempotent — kubectl apply is safe to run multiple times.
 func EnsureVerifier(cfg *config.Config) error {
@@ -57,7 +102,7 @@ func EnsureVerifier(cfg *config.Config) error {
 	bin, kc := kubectl.Paths(cfg)
 
 	fmt.Println("Applying x402 payment components...")
-	if err := kubectl.Apply(bin, kc, x402Manifest); err != nil {
+	if err := kubectl.Apply(bin, kc, x402ManifestForApply()); err != nil {
 		return err
 	}
 	// Populate the CA bundle after deploying the verifier so TLS verification
@@ -120,8 +165,8 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		FacilitatorURL: facilitatorURL,
 		// ForwardAuth should verify only; settlement is performed downstream
 		// after a successful paid upstream response.
-		VerifyOnly:     true,
-		Routes:         existingRoutes,
+		VerifyOnly: true,
+		Routes:     existingRoutes,
 	}
 	if err := patchPricingConfig(bin, kc, pricingCfg); err != nil {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
@@ -130,7 +175,6 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 	fmt.Printf("x402 configured: wallet=%s chain=%s facilitator=%s\n", wallet, chain, facilitatorURL)
 	return nil
 }
-
 
 // GetPricingConfig reads the current x402 pricing ConfigMap from the cluster.
 func GetPricingConfig(cfg *config.Config) (*PricingConfig, error) {
@@ -184,7 +228,7 @@ func populateCABundle(bin, kc string) {
 	candidates := []string{
 		"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu
 		"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/Fedora
-		"/etc/ssl/cert.pem",                   // macOS / Alpine
+		"/etc/ssl/cert.pem",                  // macOS / Alpine
 	}
 	var caPath string
 	for _, path := range candidates {
@@ -200,9 +244,11 @@ func populateCABundle(bin, kc string) {
 	// Pipe through kubectl create --dry-run to generate the ConfigMap YAML,
 	// then kubectl replace to apply it without the annotation size limit.
 	if err := kubectl.PipeCommands(bin, kc,
-		[]string{"create", "configmap", "ca-certificates", "-n", x402Namespace,
+		[]string{
+			"create", "configmap", "ca-certificates", "-n", x402Namespace,
 			"--from-file=ca-certificates.crt=" + caPath,
-			"--dry-run=client", "-o", "yaml"},
+			"--dry-run=client", "-o", "yaml",
+		},
 		[]string{"replace", "-f", "-"}); err != nil {
 		return
 	}
@@ -235,4 +281,3 @@ func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
 		"patch", "configmap", pricingConfigMap, "-n", x402Namespace,
 		"-p", string(cmPatchJSON), "--type=merge")
 }
-
