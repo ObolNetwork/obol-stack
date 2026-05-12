@@ -86,8 +86,13 @@ prepare_workspace() {
     ensure_payment_python_deps
 }
 
+# run_flow <flow_path> [env_name env_value]
+# Optional env_name/env_value is exported only for the child flow process
+# (used to pin per-flow receipt dirs without polluting the runner's env).
 run_flow() {
     local flow="$1"
+    local env_name="${2:-}"
+    local env_value="${3:-}"
     local name log rc fail_count skip_count result
     name=$(basename "$flow" .sh)
     log="$ARTIFACT_DIR/$name.log"
@@ -95,12 +100,8 @@ run_flow() {
     echo
     echo "===== START $name ====="
     set +e
-    if [ "$name" = "flow-11-dual-stack" ]; then
-        FLOW11_ARTIFACT_DIR="$ARTIFACT_DIR/flow-11-receipts" bash "$flow" 2>&1 | tee "$log"
-    elif [ "$name" = "flow-13-dual-stack-obol" ]; then
-        FLOW13_ARTIFACT_DIR="$ARTIFACT_DIR/flow-13-receipts" bash "$flow" 2>&1 | tee "$log"
-    elif [ "$name" = "flow-14-live-obol-base-sepolia" ]; then
-        FLOW14_ARTIFACT_DIR="$ARTIFACT_DIR/flow-14-receipts" bash "$flow" 2>&1 | tee "$log"
+    if [ -n "$env_name" ]; then
+        env "$env_name=$env_value" bash "$flow" 2>&1 | tee "$log"
     else
         bash "$flow" 2>&1 | tee "$log"
     fi
@@ -109,6 +110,8 @@ run_flow() {
 
     fail_count=$(grep -c '^FAIL:' "$log" 2>/dev/null || true)
     skip_count=$(grep -c '^SKIP:' "$log" 2>/dev/null || true)
+    fail_count=${fail_count:-0}
+    skip_count=${skip_count:-0}
     if [ "$rc" -eq 0 ] && [ "$fail_count" -eq 0 ]; then
         if [ "$skip_count" -gt 0 ]; then
             result="SKIP"
@@ -124,12 +127,6 @@ run_flow() {
     [ "$result" != "FAIL" ]
 }
 
-cleanup_default_stack_before_dual() {
-    echo
-    echo "==> Cleaning default stack before dual-stack flow"
-    reset_flow_workspace "$OBOL_ROOT/.workspace"
-}
-
 main() {
     write_report_header
     reset_flow_workspace "$OBOL_ROOT/.workspace"
@@ -137,6 +134,8 @@ main() {
 
     local failed=0
     local flow
+    # flow-10 runs between flow-07 and flow-08 because it starts the local
+    # Anvil + facilitator that flow-08 (and downstream buy/lifecycle) require.
     local flows=(
         "$SCRIPT_DIR/flow-01-prerequisites.sh"
         "$SCRIPT_DIR/flow-02-stack-init-up.sh"
@@ -151,27 +150,27 @@ main() {
     )
 
     for flow in "${flows[@]}"; do
-        if ! run_flow "$flow"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$flow" || failed=$((failed + 1))
     done
 
-    cleanup_default_stack_before_dual
+    echo
+    echo "==> Cleaning default stack before dual-stack flow"
+    reset_flow_workspace "$OBOL_ROOT/.workspace"
 
-    if ! run_flow "$SCRIPT_DIR/flow-11-dual-stack.sh"; then
-        failed=$((failed + 1))
-    fi
+    run_flow "$SCRIPT_DIR/flow-11-dual-stack.sh" \
+        FLOW11_ARTIFACT_DIR "$ARTIFACT_DIR/flow-11-receipts" \
+        || failed=$((failed + 1))
 
     if [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]; then
-        if ! run_flow "$SCRIPT_DIR/flow-14-live-obol-base-sepolia.sh"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$SCRIPT_DIR/flow-14-live-obol-base-sepolia.sh" \
+            FLOW14_ARTIFACT_DIR "$ARTIFACT_DIR/flow-14-receipts" \
+            || failed=$((failed + 1))
     fi
 
     if [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ]; then
-        if ! run_flow "$SCRIPT_DIR/flow-13-dual-stack-obol.sh"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$SCRIPT_DIR/flow-13-dual-stack-obol.sh" \
+            FLOW13_ARTIFACT_DIR "$ARTIFACT_DIR/flow-13-receipts" \
+            || failed=$((failed + 1))
     fi
 
     append_report_footer
