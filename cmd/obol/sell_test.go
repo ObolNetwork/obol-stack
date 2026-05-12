@@ -1000,6 +1000,229 @@ func TestSellInferenceAction_InvokesAutoRegister(t *testing.T) {
 	}
 }
 
+// TestSignerPayeeDelegationNote pins the contract that obol now treats the
+// "registration signer != offer payTo" case as legitimate ERC-8004 ownership
+// delegation rather than an error. The helper returns "" when the two match
+// (or either is empty) and a single-line informational note otherwise.
+//
+// Regression context: autoRegisterServiceOffer used to fail with
+//
+//	registration signer 0xA... does not match the payment wallet 0xB...
+//
+// which read like an ERC-8004 spec constraint but was purely an obol-CLI
+// policy. ERC-8004 explicitly supports the split (msg.sender at register
+// time owns the agent; setAgentWallet re-points the wallet post-mint), and
+// x402 settlement honors the offer's payTo regardless of what the registry
+// reports.
+func TestSignerPayeeDelegationNote(t *testing.T) {
+	tests := []struct {
+		name        string
+		signer      string
+		payTo       string
+		wantNoteHas []string
+		wantEmpty   bool
+	}{
+		{
+			name:      "exact match → no note",
+			signer:    "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:     "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			wantEmpty: true,
+		},
+		{
+			name:      "case-insensitive match → no note",
+			signer:    "0xa5d4af96e3e740383a36c3123a54724dacb3df57",
+			payTo:     "0xA5D4AF96E3E740383A36C3123A54724DACB3DF57",
+			wantEmpty: true,
+		},
+		{
+			name:      "whitespace tolerance → no note",
+			signer:    "  0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57  ",
+			payTo:     "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			wantEmpty: true,
+		},
+		{
+			name:      "empty payTo → no note (caller didn't request the check)",
+			signer:    "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:     "",
+			wantEmpty: true,
+		},
+		{
+			name:      "empty signer → no note (impossible in practice; defensive)",
+			signer:    "",
+			payTo:     "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+			wantEmpty: true,
+		},
+		{
+			name:   "true mismatch → note names both addrs and suggests sell update",
+			signer: "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:  "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+			wantNoteHas: []string{
+				"0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+				"0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"obol sell update",
+				"--pay-to",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := signerPayeeDelegationNote(tc.signer, tc.payTo)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Errorf("note = %q, want empty", got)
+				}
+				return
+			}
+			for _, sub := range tc.wantNoteHas {
+				if !strings.Contains(got, sub) {
+					t.Errorf("note missing %q: %s", sub, got)
+				}
+			}
+		})
+	}
+}
+
+// TestAutoRegister_AllowsSignerPayeeMismatch is the source-level guard against
+// re-introducing the early-return error that used to reject ERC-8004
+// registrations whenever signer != payTo. The error wording was specific
+// ("registration signer ... does not match the payment wallet ..."); we grep
+// the function body for it. Anyone who reintroduces that check — even with a
+// different error message — must also delete this test, which is a deliberate
+// nudge to read the rationale comment first.
+func TestAutoRegister_AllowsSignerPayeeMismatch(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func autoRegisterServiceOffer(")
+	if start < 0 {
+		t.Fatal("autoRegisterServiceOffer not found in sell.go")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit autoRegisterServiceOffer body")
+	}
+	scope := body[start : start+1+end]
+	for _, banned := range []string{
+		`"registration signer %s does not match the payment wallet`,
+		`does not match the payment wallet`,
+	} {
+		if strings.Contains(scope, banned) {
+			t.Errorf("autoRegisterServiceOffer must NOT reject signer != payee — ERC-8004 allows "+
+				"the split via setAgentWallet and x402 settlement honors payTo directly. "+
+				"Banned snippet still present: %q", banned)
+		}
+	}
+	// Positive guard: the soft-notice path must still be present, otherwise
+	// the operator gets no signal that the addresses diverge.
+	if !strings.Contains(scope, "signerPayeeDelegationNote(") {
+		t.Error("autoRegisterServiceOffer must call signerPayeeDelegationNote(...) so operators see when signer ≠ payTo")
+	}
+}
+
+// TestBuildSellUpdatePatch_PayToOnly pins the `obol sell update <name> --pay-to 0x...`
+// shape. The user-facing promise is "change the payee in place" — the patch
+// must touch only spec.payment.payTo, not the rest of the offer.
+func TestBuildSellUpdatePatch_PayToOnly(t *testing.T) {
+	const newPayee = "0xB00B00000000000000000000000000000000B00B"
+	patch, err := buildSellUpdatePatch(newPayee, "", schemas.PriceTable{})
+	if err != nil {
+		t.Fatalf("buildSellUpdatePatch: %v", err)
+	}
+	spec, ok := patch["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("patch.spec missing or wrong type: %#v", patch)
+	}
+	payment, ok := spec["payment"].(map[string]any)
+	if !ok {
+		t.Fatalf("patch.spec.payment missing or wrong type: %#v", spec)
+	}
+	if payment["payTo"] != newPayee {
+		t.Errorf("patch.spec.payment.payTo = %v, want %q", payment["payTo"], newPayee)
+	}
+	if _, present := payment["network"]; present {
+		t.Errorf("--pay-to only patch should NOT touch payment.network; got %#v", payment["network"])
+	}
+	if _, present := payment["price"]; present {
+		t.Errorf("--pay-to only patch should NOT touch payment.price; got %#v", payment["price"])
+	}
+}
+
+// TestBuildSellUpdatePatch_PriceSwitchNullsOldKeys pins the switching contract:
+// changing the price model (e.g. perRequest → perMTok) must explicitly null
+// the unused keys so merge-patch semantics don't leave a stranded perRequest
+// fighting the new perMTok.
+func TestBuildSellUpdatePatch_PriceSwitchNullsOldKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		price  schemas.PriceTable
+		setKey string
+	}{
+		{"per-request set", schemas.PriceTable{PerRequest: "0.002"}, "perRequest"},
+		{"per-mtok set", schemas.PriceTable{PerMTok: "5.0"}, "perMTok"},
+		{"per-hour set", schemas.PriceTable{PerHour: "1.0"}, "perHour"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, err := buildSellUpdatePatch("", "", tc.price)
+			if err != nil {
+				t.Fatalf("buildSellUpdatePatch: %v", err)
+			}
+			price := patch["spec"].(map[string]any)["payment"].(map[string]any)["price"].(map[string]any)
+			for _, key := range []string{"perRequest", "perMTok", "perHour"} {
+				v := price[key]
+				if key == tc.setKey {
+					if v == nil {
+						t.Errorf("price.%s = nil, want a value", key)
+					}
+				} else {
+					if v != nil {
+						t.Errorf("price.%s = %#v, want nil (so old key doesn't survive the merge)", key, v)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildSellUpdatePatch_NoFieldsErrors pins the no-op-protection contract:
+// `obol sell update <name>` with no field flags must error rather than fire
+// a no-op kubectl patch. The error message names the flags so the operator
+// learns the surface from the failure.
+func TestBuildSellUpdatePatch_NoFieldsErrors(t *testing.T) {
+	_, err := buildSellUpdatePatch("", "", schemas.PriceTable{})
+	if err == nil {
+		t.Fatal("expected error when no update flags are set")
+	}
+	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--chain"} {
+		if !strings.Contains(err.Error(), sub) {
+			t.Errorf("error must name flag %q so the operator learns the surface; got: %v", sub, err)
+		}
+	}
+}
+
+// TestSellUpdate_PayToFlagSurface pins the user-facing `obol sell update
+// <name> --pay-to 0x...` flag wiring: the same payToFlag() shape used by
+// inference + http (so a buyer can muscle-memory `-w` / `--wallet`), plus
+// the namespace requirement (the resource is per-namespace, ambiguous
+// otherwise).
+func TestSellUpdate_PayToFlagSurface(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	update := findSubcommand(t, cmd, "update")
+	flags := flagMap(update)
+
+	requireFlags(t, flags,
+		"namespace", "pay-to", "wallet", "recipient", "w",
+		"chain", "price", "per-request", "per-mtok", "per-hour",
+	)
+	assertFlagRequired(t, flags, "namespace")
+	assertFlagHasAlias(t, flags, "pay-to", "wallet")
+	assertFlagHasAlias(t, flags, "pay-to", "recipient")
+	assertFlagHasAlias(t, flags, "pay-to", "w")
+}
+
 func TestBuildDemoServiceOffer_RegisterFlagDrivesEnabled(t *testing.T) {
 	for _, register := range []bool{true, false} {
 		manifest := buildDemoServiceOffer(

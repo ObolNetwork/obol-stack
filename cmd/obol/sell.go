@@ -863,6 +863,83 @@ Examples:
 	}
 }
 
+// signerPayeeDelegationNote returns a human-readable note explaining the
+// ownership delegation when the agent's on-chain registration signer differs
+// from the offer's payment payTo wallet, and "" when they match (or either
+// is empty). Used by the auto-register flow to surface the split as an
+// informational message rather than blocking the registration outright —
+// ERC-8004 explicitly supports this separation via setAgentWallet, and x402
+// settlement uses the offer's payTo regardless of the registry's wallet.
+//
+// The previous behavior (returning fmt.Errorf("registration signer ... does
+// not match the payment wallet ...")) made it look like an ERC-8004 spec
+// constraint when it was purely an obol-CLI policy choice. See PR notes for
+// the full rationale.
+func signerPayeeDelegationNote(signer, payTo string) string {
+	s := strings.TrimSpace(signer)
+	p := strings.TrimSpace(payTo)
+	if s == "" || p == "" || strings.EqualFold(s, p) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Agent owner (registration signer) %s differs from offer payTo %s. "+
+			"ERC-8004 allows this via setAgentWallet; x402 settlement honors payTo regardless. "+
+			"Re-point payments later with: obol sell update <name> --pay-to <addr>",
+		s, p,
+	)
+}
+
+// buildSellUpdatePatch assembles the JSON-merge patch body for
+// `obol sell update`. Extracted from the Action so the patch shape — the
+// thing that actually hits the cluster — is testable without a live ServiceOffer.
+//
+// Returns the patch map and an error when nothing was provided (the Action
+// surfaces this as "nothing to update: pass at least one of ...").
+//
+// When --pay-to is set, the wallet must already have been validated by
+// x402verifier.ValidateWallet at the call site; this helper does no further
+// validation so it stays a pure data shape.
+func buildSellUpdatePatch(payTo, chain string, price schemas.PriceTable) (map[string]any, error) {
+	payment := map[string]any{}
+
+	if payTo = strings.TrimSpace(payTo); payTo != "" {
+		payment["payTo"] = payTo
+	}
+	if chain = strings.TrimSpace(chain); chain != "" {
+		payment["network"] = chain
+	}
+
+	if price.PerRequest != "" || price.PerMTok != "" || price.PerHour != "" {
+		// Null out the unused price keys explicitly so a switch from, e.g.,
+		// perRequest→perMTok doesn't leave the previous key stranded and
+		// fighting the new one through merge semantics.
+		p := map[string]any{
+			"perRequest": nil,
+			"perMTok":    nil,
+			"perHour":    nil,
+		}
+		switch {
+		case price.PerRequest != "":
+			p["perRequest"] = price.PerRequest
+		case price.PerMTok != "":
+			p["perMTok"] = price.PerMTok
+		case price.PerHour != "":
+			p["perHour"] = price.PerHour
+		}
+		payment["price"] = p
+	}
+
+	if len(payment) == 0 {
+		return nil, errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --pay-to / --chain")
+	}
+
+	return map[string]any{
+		"spec": map[string]any{
+			"payment": payment,
+		},
+	}, nil
+}
+
 // shouldAutoRegisterSell reports whether the post-create auto-register step
 // must run for a freshly-applied ServiceOffer spec. Both `obol sell http` and
 // `obol sell inference` need the same gate: registration must be enabled AND
@@ -958,8 +1035,19 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	}
 	signerAddr := addr.Hex()
 
-	if opts.ExpectedOwner != "" && !strings.EqualFold(strings.TrimSpace(opts.ExpectedOwner), strings.TrimSpace(signerAddr)) {
-		return fmt.Errorf("registration signer %s does not match the payment wallet %s.\nUse a matching signer, omit --wallet so the remote-signer wallet is used, or pass --no-register", signerAddr, opts.ExpectedOwner)
+	// ERC-8004 treats the agent OWNER (msg.sender at register time) and the
+	// agent WALLET (settable post-mint via setAgentWallet) as independent
+	// addresses. x402 settlement honors the offer's spec.payment.payTo
+	// directly — buyers pay that address regardless of what the registry's
+	// getAgentWallet returns. So a different signer and payTo is legitimate;
+	// it is the canonical pattern for "hot signer, cold/multisig payee".
+	//
+	// We surface the split as an informational note (not an error) so the
+	// operator can confirm the delegation was intentional, and so the obvious
+	// follow-up — `obol sell update <name> --pay-to <new>` for the payee — is
+	// discoverable.
+	if note := signerPayeeDelegationNote(signerAddr, opts.ExpectedOwner); note != "" {
+		u.Info(note)
 	}
 
 	agentURI := strings.TrimRight(opts.Endpoint, "/") + "/.well-known/agent-registration.json"
@@ -2328,50 +2416,25 @@ Examples:
 				return fmt.Errorf("ServiceOffer %s/%s not found: %w", ns, name, err)
 			}
 
-			payment := map[string]any{}
-
-			if wallet := strings.TrimSpace(cmd.String("pay-to")); wallet != "" {
+			wallet := strings.TrimSpace(cmd.String("pay-to"))
+			if wallet != "" {
 				if err := x402verifier.ValidateWallet(wallet); err != nil {
 					return err
 				}
-				payment["payTo"] = wallet
 			}
 
-			if chain := strings.TrimSpace(cmd.String("chain")); chain != "" {
-				payment["network"] = chain
-			}
-
-			priceSet := cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != ""
-			if priceSet {
-				priceTable, err := resolvePriceTable(cmd, true)
+			var price schemas.PriceTable
+			if cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != "" {
+				resolved, err := resolvePriceTable(cmd, true)
 				if err != nil {
 					return err
 				}
-
-				price := map[string]any{
-					"perRequest": nil,
-					"perMTok":    nil,
-					"perHour":    nil,
-				}
-				switch {
-				case priceTable.PerRequest != "":
-					price["perRequest"] = priceTable.PerRequest
-				case priceTable.PerMTok != "":
-					price["perMTok"] = priceTable.PerMTok
-				case priceTable.PerHour != "":
-					price["perHour"] = priceTable.PerHour
-				}
-				payment["price"] = price
+				price = resolved
 			}
 
-			if len(payment) == 0 {
-				return errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --wallet / --chain")
-			}
-
-			patch := map[string]any{
-				"spec": map[string]any{
-					"payment": payment,
-				},
+			patch, err := buildSellUpdatePatch(wallet, cmd.String("chain"), price)
+			if err != nil {
+				return err
 			}
 			patchBytes, err := json.Marshal(patch)
 			if err != nil {
