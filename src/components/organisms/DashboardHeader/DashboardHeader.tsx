@@ -1,8 +1,32 @@
-import { Flex } from '@obolnetwork/obol-ui';
+'use client';
+
+import { Flex, Link, OpenInNew, styled } from '@obolnetwork/obol-ui';
 import { WalletConnection } from '../../molecules/WalletConnection';
 import { isWalletConnectConfigured } from '@/lib/config/wagmi';
+import { useTunnelURL } from '../../../hooks/useAgents';
+
+const StorefrontLink = styled(Link, {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '$xxxs',
+  fontSize: '$2',
+  color: '$obolGreen',
+  textDecoration: 'none',
+  border: '1px solid rgba(47, 228, 171, 0.3)',
+  borderRadius: '$pill',
+  padding: '$xxxs $sm',
+  transition: 'border-color 0.15s ease, background 0.15s ease',
+  whiteSpace: 'nowrap',
+
+  '&:hover': {
+    borderColor: 'rgba(47, 228, 171, 0.6)',
+    background: 'rgba(47, 228, 171, 0.06)',
+  },
+});
 
 export function DashboardHeader() {
+  const { tunnelURL } = useTunnelURL();
+
   return (
     <Flex css={{ justifyContent: 'space-between', alignItems: 'center' }}>
       <svg
@@ -63,6 +87,12 @@ export function DashboardHeader() {
       </svg>
 
       <Flex css={{ gap: '$sm', alignItems: 'center', width: 'fit-content' }}>
+        {tunnelURL && (
+          <StorefrontLink href={tunnelURL} target="_blank">
+            Storefront
+            <OpenInNew size="sm" />
+          </StorefrontLink>
+        )}
         {isWalletConnectConfigured() && <WalletConnection />}
       </Flex>
     </Flex>

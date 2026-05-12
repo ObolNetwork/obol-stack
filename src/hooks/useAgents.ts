@@ -197,6 +197,52 @@ export function useAgentWalletMetadata(instance: AgentInstance | null) {
   return { metadata };
 }
 
+export interface AgentRegistrationService {
+  name: string;
+  endpoint?: string;
+  version?: string;
+}
+
+export interface AgentRegistrationDoc {
+  type: string;
+  name: string;
+  description?: string;
+  image?: string;
+  services: AgentRegistrationService[];
+  x402Support: boolean;
+  active: boolean;
+  supportedTrust?: string[];
+}
+
+export function useAgentRegistration() {
+  const [registration, setRegistration] = useState<AgentRegistrationDoc | null>(
+    null
+  );
+  const [tunnelURL, setTunnelURL] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchRegistration = useCallback(async () => {
+    try {
+      const response = await fetch('/api/agents/registration');
+      if (response.ok) {
+        const data = await response.json();
+        setRegistration(data?.registration ?? null);
+        setTunnelURL(data?.tunnelURL ?? null);
+      }
+    } catch {
+      setRegistration(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRegistration();
+  }, [fetchRegistration]);
+
+  return { registration, tunnelURL, loading };
+}
+
 export function isSupportedAgentRuntime(
   runtime: string | null
 ): runtime is AgentRuntime {
