@@ -117,6 +117,9 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		}
 		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s%s", err, strings.TrimSpace(string(routeOut)), hint)
 	}
+	if err := verifyRoutedHostname(string(routeOut), hostname); err != nil {
+		return err
+	}
 
 	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
 		return err
@@ -201,6 +204,52 @@ func parseFirstUUID(s string) (string, error) {
 	}
 
 	return "", errors.New("uuid not found")
+}
+
+// routedHostnameRegexps matches the two log shapes cloudflared emits on a
+// successful `tunnel route dns` invocation:
+//
+//	... INF Added CNAME <hostname> which will route to this tunnel tunnelID=<UUID>
+//	... INF <hostname> is already configured to route to your tunnel tunnelID=<UUID>
+var routedHostnameRegexps = []*regexp.Regexp{
+	regexp.MustCompile(`Added CNAME\s+(\S+)\s+which will route to this tunnel`),
+	regexp.MustCompile(`(\S+)\s+is already configured to route to your tunnel`),
+}
+
+// verifyRoutedHostname parses cloudflared's combined stdout/stderr from
+// `tunnel route dns` and returns an error when the hostname it actually routed
+// differs from the requested hostname. This catches the silent zone-fallback
+// failure mode where ~/.cloudflared/cert.pem is scoped to a Cloudflare account
+// that does not own the requested zone, and cloudflared appends its default
+// zone to the request (e.g. requested "inference.v1337.org" → routed
+// "inference.v1337.org.humanresearch.ai").
+//
+// If neither known log pattern is found, the parser returns nil so a benign
+// upstream log-format change does not break the happy path.
+func verifyRoutedHostname(routedOutput, requestedHostname string) error {
+	want := strings.TrimSpace(requestedHostname)
+	if want == "" {
+		return nil
+	}
+
+	for _, re := range routedHostnameRegexps {
+		m := re.FindStringSubmatch(routedOutput)
+		if len(m) < 2 {
+			continue
+		}
+
+		got := strings.TrimSpace(m[1])
+		if strings.EqualFold(got, want) {
+			return nil
+		}
+
+		return fmt.Errorf(
+			"cloudflared routed DNS to %q, not %q. Your ~/.cloudflared/cert.pem is scoped to a Cloudflare account that does not own the zone for %q. Move or delete the cert and re-run `obol tunnel login` to authorize a fresh cert against the correct account.",
+			got, want, want,
+		)
+	}
+
+	return nil
 }
 
 func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
