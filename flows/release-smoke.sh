@@ -156,8 +156,37 @@ EOF
     fi
 }
 
+# Warn (not block) when the OBOL/_FORK gates are on but no paid Base
+# Sepolia RPC is configured. The free-tier fallbacks (drpc.org, sepolia.base.org)
+# routinely hit 408 "Request timeout on the free tier" during smoke runs
+# that fire multiple anvil forks + receipt scans + balance reads, which
+# surfaces as flow-13 facilitator-not-reachable or flow-11 cast-call empty.
+warn_unpaid_base_sepolia_rpc() {
+    local need=false
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]      && need=true
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ] && need=true
+    [ "$need" = "true" ] || return 0
+    [ -n "${ALCHEMY_BASE_SEPOLIA_API_KEY:-}" ] && return 0
+    [ -n "${BASE_SEPOLIA_RPC:-}" ] && return 0
+
+    cat >&2 <<EOF
+release-smoke: WARNING — no paid Base Sepolia RPC configured.
+               Set ALCHEMY_BASE_SEPOLIA_API_KEY in .env for a stable run.
+
+  flow-13's anvil fork and flow-11/14 balance reads default to the free-tier
+  candidates (drpc.org, sepolia.base.org, ...) which routinely return
+  HTTP 408 "Request timeout on the free tier" under release-smoke load.
+  Expect intermittent failures at:
+    flow-11 step 8     (Could not read Alice starting USDC balance)
+    flow-11 step 1170  (Bob signer USDC pre-buy snapshot)
+    flow-13 step 9     (Facilitator did not become reachable — fork RPC timeout)
+    flow-14 balance reads
+EOF
+}
+
 main() {
     require_obol_llm_endpoint
+    warn_unpaid_base_sepolia_rpc
     write_report_header
     reset_flow_workspace "$OBOL_ROOT/.workspace"
     prepare_workspace

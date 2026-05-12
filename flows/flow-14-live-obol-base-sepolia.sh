@@ -393,10 +393,20 @@ fi
 # 9. BOB: prerequisite OBOL balance check (NO mint/funding transfer on live network)
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: derived buyer wallet has OBOL"
+step "Bob: derived buyer wallet has OBOL (top up from Alice if needed)"
+required_min=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
+
+# Bob's deterministic wallet drains across smoke runs that complete paid
+# commerce (each successful run spends OBOL_PRICE_WEI). Top up from Alice
+# (the seller wallet) before failing so a single under-funded Bob doesn't
+# require manual operator action between runs. Alice typically holds OBOL
+# because she receives settlement payments from earlier runs.
+fund_bob_from_alice_if_needed "OBOL" "$OBOL_TOKEN" \
+    "$SIGNER_KEY" "$ALICE_WALLET" "$BOB_WALLET" \
+    "$required_min" "$BASE_SEPOLIA_RPC" || true
+
 bob_obol_bal=$(env -u CHAIN cast call "$OBOL_TOKEN" "balanceOf(address)(uint256)" \
     "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
-required_min=$(python3 -c "print($OBOL_PRICE_WEI * 5)")
 if [ -z "$bob_obol_bal" ]; then
     fail "Could not read OBOL balance for derived Bob wallet $BOB_WALLET (network/contract issue)"
     emit_metrics; exit 1
