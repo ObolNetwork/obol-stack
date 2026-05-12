@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@ag-ui/client": "0.0.53",
-    "@copilotkit/react-core": "1.56.3",
+    "@copilotkit/react-core": "1.57.1",
     "@copilotkit/react-ui": "1.56.3",
     "@copilotkit/runtime": "1.56.3",
     "@kubernetes/client-node": "1.4.0",
