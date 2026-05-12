@@ -8,16 +8,16 @@ refresh_obol_ingress_env
 INGRESS_URL="${OBOL_INGRESS_URL%/}"
 
 # List available networks (local nodes + remote RPCs)
-run_step_grep "network list" "ethereum\|Remote\|Local" "$OBOL" network list
+run_step_grep "network list" "Remote RPCs|Local Nodes|mainnet|chain=" "$OBOL" network list
 
 # eRPC gateway health via obol network status
-run_step_grep "eRPC gateway status" "eRPC\|Pod\|Upstream" "$OBOL" network status
+run_step_grep "eRPC gateway status" "eRPC|Pod|Upstream|Running" "$OBOL" network status
 
 # Add a public RPC for base-sepolia (documented user path for RPC access)
 run_step "network add base-sepolia RPC" "$OBOL" network add base-sepolia --count 1
 
 # Verify it appears in list
-run_step_grep "base-sepolia in network list" "base-sepolia\|84532" "$OBOL" network list
+run_step_grep "base-sepolia in network list" "base-sepolia|84532" "$OBOL" network list
 
 # eRPC is accessible at /rpc/evm/<chainId> — base-sepolia is chain 84532
 step "eRPC base-sepolia via Traefik (/rpc/evm/84532)"
