@@ -686,6 +686,7 @@ scrub_secrets() {
         -e 's#(alchemy\.com/v2/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
         -e 's#(infura\.io/v3/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
         -e 's#(quiknode\.pro/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#(lb\.drpc\.live/[a-z0-9-]+/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
         -e 's#([?&]dkey=)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
         -e 's#((PRIVATE_KEY|private-key)["= :]+)0x[a-fA-F0-9]{64}#\1[REDACTED-PRIVKEY]#g'
 }
