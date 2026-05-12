@@ -1314,14 +1314,22 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	}
 }
 
-// hermesPVCPaths returns the host-side PVC backing directories that the Hermes
-// pod mounts, in the order they appear in the deployment template. Exposed for
-// tests and for callers that need to chown multiple volumes consistently.
+// hermesPVCPaths returns the host-side PVC backing directories owned by the
+// Hermes pod and chowned to containerUID:containerGID.
+//
+// Intentionally limited to PVCs that the Hermes container itself mounts —
+// `remote-signer-keystores` is excluded even though it sits in the same
+// namespace because the remote-signer pod runs as runAsUser=65532 with
+// fsGroup=1000 (obol/remote-signer chart) and forcing its volume to
+// 10000:10000 (Hermes' UID) makes the remote-signer crash-loop on
+// `failed to load keystores: Permission denied (os error 13)` against
+// the read-only /data/keystores mount. The local-path-provisioner default
+// of 1000:1000 already matches that pod's fsGroup contract, so leaving
+// that volume untouched is the safe behavior.
 func hermesPVCPaths(cfg *config.Config, id string) []string {
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	return []string{
 		filepath.Join(cfg.DataDir, namespace, agentruntime.Describe(agentruntime.Hermes).DataPVCName),
-		filepath.Join(cfg.DataDir, namespace, "remote-signer-keystores"),
 	}
 }
 
@@ -1360,9 +1368,11 @@ func ensureHermesPVCOwnership(cfg *config.Config, id string, u *ui.UI) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 
+	// Wait only for the PVCs hermesPVCPaths chowns. remote-signer-keystores
+	// is intentionally NOT in this loop — see the doc comment on
+	// hermesPVCPaths for why.
 	for _, pvc := range []string{
 		agentruntime.Describe(agentruntime.Hermes).DataPVCName,
-		"remote-signer-keystores",
 	} {
 		waitCmd := exec.Command(kubectlBin,
 			"wait", "--for=jsonpath={.status.phase}=Bound",
