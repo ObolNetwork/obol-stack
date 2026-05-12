@@ -18,6 +18,13 @@ import (
 type LoginOptions struct {
 	Hostname          string
 	TransportProtocol string
+
+	// OverwriteDNS passes --overwrite-dns to `cloudflared tunnel route dns`.
+	// Without it, cloudflared refuses to replace an existing A/AAAA/CNAME
+	// record at the hostname, so re-running the wizard after a prior attempt
+	// fails with "An A, AAAA, or CNAME record with that host already exists"
+	// (Cloudflare API error 1003).
+	OverwriteDNS bool
 }
 
 // Login provisions a locally-managed tunnel using `cloudflared tunnel login` (browser auth),
@@ -101,9 +108,14 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 
 	u.Infof("Creating DNS route for %s...", hostname)
 
-	routeOut, err := exec.Command(cloudflaredPath, "tunnel", "route", "dns", tunnelName, hostname).CombinedOutput()
+	routeArgs := routeDNSArgs(tunnelName, hostname, opts.OverwriteDNS)
+	routeOut, err := exec.Command(cloudflaredPath, routeArgs...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s", err, strings.TrimSpace(string(routeOut)))
+		hint := ""
+		if !opts.OverwriteDNS && strings.Contains(string(routeOut), "record with that host already exists") {
+			hint = "\nhint: a record for this hostname already exists. Re-run with --overwrite-dns to replace it."
+		}
+		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s%s", err, strings.TrimSpace(string(routeOut)), hint)
 	}
 
 	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
@@ -158,6 +170,19 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
 
 	return nil
+}
+
+// routeDNSArgs builds the cloudflared argument vector for the
+// `tunnel route dns` subcommand. When overwrite is true, --overwrite-dns is
+// inserted between `dns` and the tunnel/hostname so cloudflared replaces an
+// existing A/AAAA/CNAME record at the hostname instead of failing with API
+// error 1003.
+func routeDNSArgs(tunnelName, hostname string, overwrite bool) []string {
+	args := []string{"tunnel", "route", "dns"}
+	if overwrite {
+		args = append(args, "--overwrite-dns")
+	}
+	return append(args, tunnelName, hostname)
 }
 
 func defaultCloudflaredDir() string {

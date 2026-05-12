@@ -56,11 +56,16 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 						Required: true,
 					},
 					tunnelTransportProtocolFlag(),
+					&cli.BoolFlag{
+						Name:  "overwrite-dns",
+						Usage: "Replace any existing A/AAAA/CNAME at the hostname (forwards --overwrite-dns to cloudflared)",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{
 						Hostname:          cmd.String("hostname"),
 						TransportProtocol: cmd.String("transport-protocol"),
+						OverwriteDNS:      cmd.Bool("overwrite-dns"),
 					})
 				},
 			},
@@ -247,13 +252,15 @@ func tunnelSetupFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "auto-renew", Usage: "Enable domain auto-renew when registering a domain"},
 		&cli.StringFlag{Name: "privacy-mode", Usage: "WHOIS privacy mode for registration", Value: "redaction"},
 		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Confirm billable domain registration without prompting"},
+		&cli.BoolFlag{Name: "overwrite-dns", Usage: "Replace any existing A/AAAA/CNAME at the hostname (forwards --overwrite-dns to cloudflared in local-managed mode)"},
 		&cli.StringFlag{Name: "from-json", Usage: "Read setup options from JSON file (or - for stdin)"},
 	}
 }
 
 func setupOptionsFromCommand(cmd *cli.Command, u interface {
 	Input(string, string) (string, error)
-}) (tunnel.SetupOptions, error) {
+},
+) (tunnel.SetupOptions, error) {
 	if jsonPath := cmd.String("from-json"); jsonPath != "" {
 		var opts tunnel.SetupOptions
 		data, err := readJSONInput(jsonPath)
@@ -287,12 +294,14 @@ func setupOptionsFromCommand(cmd *cli.Command, u interface {
 		AutoRenew:         cmd.Bool("auto-renew"),
 		PrivacyMode:       cmd.String("privacy-mode"),
 		ConfirmCharge:     cmd.Bool("yes"),
+		OverwriteDNS:      cmd.Bool("overwrite-dns"),
 	}, nil
 }
 
 func domainSearchOptionsFromCommand(cmd *cli.Command, u interface {
 	Input(string, string) (string, error)
-}) (tunnel.DomainSearchOptions, error) {
+},
+) (tunnel.DomainSearchOptions, error) {
 	if jsonPath := cmd.String("from-json"); jsonPath != "" {
 		var opts tunnel.DomainSearchOptions
 		data, err := readJSONInput(jsonPath)
@@ -373,7 +382,8 @@ func printDomainSuggestions(u interface {
 	Bold(string)
 	Print(string)
 	Detail(string, string)
-}, result *tunnel.DomainSearchResult) {
+}, result *tunnel.DomainSearchResult,
+) {
 	u.Blank()
 	u.Bold("Domain Suggestions")
 	for _, domain := range result.Domains {
@@ -394,7 +404,8 @@ func printDomainChecks(u interface {
 	Bold(string)
 	Print(string)
 	Detail(string, string)
-}, result *tunnel.DomainCheckResult) {
+}, result *tunnel.DomainCheckResult,
+) {
 	u.Blank()
 	u.Bold("Domain Availability")
 	for _, domain := range result.Domains {
@@ -416,7 +427,8 @@ func printDomainRegistration(u interface {
 	Print(string)
 	Detail(string, string)
 	Successf(string, ...any)
-}, result *tunnel.DomainRegisterResult) {
+}, result *tunnel.DomainRegisterResult,
+) {
 	u.Blank()
 	u.Successf("Domain registration submitted for %s", result.Availability.Name)
 	u.Detail("Price", tunnelSummaryPrice(result.Availability))
