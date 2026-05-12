@@ -334,24 +334,46 @@ Examples:
 				assetSymbol = "USDC"
 			}
 
+			// Resolve the registration block once, here, so we can persist it
+			// alongside the deployment descriptor. The resume path
+			// (`obol stack up` after a stack-down) rebuilds the ServiceOffer
+			// from the on-disk descriptor; without the registration block
+			// persisted, replays would lose the operator's --register-*
+			// customizations.
+			persistedRegistration, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
+				NoRegister:    cmd.Bool("no-register"),
+				Name:          cmd.String("register-name"),
+				Description:   cmd.String("register-description"),
+				Image:         cmd.String("register-image"),
+				Skills:        cmd.StringSlice("register-skills"),
+				Domains:       cmd.StringSlice("register-domains"),
+				MetadataPairs: cmd.StringSlice("register-metadata"),
+			})
+			if regErr != nil {
+				return regErr
+			}
+
 			d := &inference.Deployment{
-				Name:            name,
-				EnclaveTag:      cmd.String("enclave-tag"),
-				ListenAddr:      cmd.String("listen"),
-				UpstreamURL:     upstreamFlag,
-				WalletAddress:   wallet,
-				PricePerRequest: perRequest,
-				PricePerMTok:    priceTable.PerMTok,
-				AssetSymbol:     assetSymbol,
-				Chain:           chainName,
-				FacilitatorURL:  cmd.String("facilitator"),
-				VMMode:          cmd.Bool("vm"),
-				VMImage:         cmd.String("vm-image"),
-				VMCPUs:          cmd.Int("vm-cpus"),
-				VMMemoryMB:      cmd.Int("vm-memory"),
-				VMHostPort:      cmd.Int("vm-host-port"),
-				TEEType:         teeType,
-				ModelHash:       modelHash,
+				Name:             name,
+				EnclaveTag:       cmd.String("enclave-tag"),
+				ListenAddr:       cmd.String("listen"),
+				UpstreamURL:      upstreamFlag,
+				WalletAddress:    wallet,
+				PricePerRequest:  perRequest,
+				PricePerMTok:     priceTable.PerMTok,
+				AssetSymbol:      assetSymbol,
+				Chain:            chainName,
+				FacilitatorURL:   cmd.String("facilitator"),
+				VMMode:           cmd.Bool("vm"),
+				VMImage:          cmd.String("vm-image"),
+				VMCPUs:           cmd.Int("vm-cpus"),
+				VMMemoryMB:       cmd.Int("vm-memory"),
+				VMHostPort:       cmd.Int("vm-host-port"),
+				TEEType:          teeType,
+				ModelHash:        modelHash,
+				ModelName:        modelFlag,
+				ServiceNamespace: "llm",
+				Registration:     persistedRegistration,
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -412,19 +434,9 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					reg, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
-						NoRegister:    cmd.Bool("no-register"),
-						Name:          cmd.String("register-name"),
-						Description:   cmd.String("register-description"),
-						Image:         cmd.String("register-image"),
-						Skills:        cmd.StringSlice("register-skills"),
-						Domains:       cmd.StringSlice("register-domains"),
-						MetadataPairs: cmd.StringSlice("register-metadata"),
-					})
-					if regErr != nil {
-						return regErr
-					}
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms, modelFlag, reg)
+					// Reuse the persistedRegistration resolved above; both this
+					// in-process create AND the on-disk descriptor must agree.
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms, modelFlag, persistedRegistration)
 					if err != nil {
 						return err
 					}
@@ -3441,6 +3453,114 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 //
 // Kubernetes Endpoints require an IP address, not a hostname. We resolve the
 // host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
+// resumeSellOffers re-applies the cluster-side artifacts (Service +
+// Endpoints + ServiceOffer) for every locally-persisted `obol sell
+// inference` deployment after `obol stack up` brings a fresh cluster
+// online. Without this step the cluster has no record of operator-created
+// offers (CRs live in etcd, which is destroyed by `obol stack down`),
+// even though the host-side descriptors at
+// `<ConfigDir>/inference/<name>/` still exist.
+//
+// The foreground gateway is NOT restarted here — `obol sell inference`
+// is an interactive operator action and we don't want stack-up to launch
+// long-running processes. The operator re-runs `obol sell inference
+// <name>` after stack-up to bring the gateway back; this step ensures
+// the cluster side is already in place so the gateway hits a "service
+// healthy" reconcile instead of "create from scratch".
+//
+// Best-effort. Per-offer failures emit a warning and the loop continues,
+// so one broken descriptor cannot block stack-up.
+func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
+	store := inference.NewStore(cfg.ConfigDir)
+	deployments, err := store.List()
+	if err != nil {
+		return fmt.Errorf("list inference deployments: %w", err)
+	}
+	if len(deployments) == 0 {
+		return nil
+	}
+
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
+		// No cluster — nothing to reattach.
+		return nil
+	}
+
+	u.Blank()
+	u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
+
+	var resumed int
+	for _, d := range deployments {
+		if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
+			u.Warnf("resume %s: %v", d.Name, err)
+			continue
+		}
+		resumed++
+		u.Successf("Resumed sell-inference offer %q (run `obol sell inference %s` to restart the host gateway)", d.Name, d.Name)
+	}
+
+	if resumed > 0 {
+		u.Dim("  Host gateways are not auto-started — re-run `obol sell inference <name>` in a terminal you can keep open.")
+	}
+	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
+	return nil
+}
+
+// resumeOneInferenceOffer re-creates the cluster-side artifacts that
+// `obol sell inference` would have produced for a single Deployment. Pure
+// in the sense that it only consumes the on-disk descriptor; it never
+// re-prompts the operator. Returns an error when the descriptor is
+// incomplete (no model name, no namespace, no listen port) so the resume
+// loop can surface a clear message per-offer.
+func resumeOneInferenceOffer(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
+	if d == nil || d.Name == "" {
+		return errors.New("nil or unnamed deployment descriptor")
+	}
+	if d.ModelName == "" {
+		return fmt.Errorf("deployment %q is missing model_name on disk — recreate the offer with `obol sell inference %s --model <id> ...`", d.Name, d.Name)
+	}
+	ns := d.ServiceNamespace
+	if ns == "" {
+		ns = "llm" // legacy descriptors written before service_namespace was persisted
+	}
+
+	port := "8402"
+	if idx := strings.LastIndex(d.ListenAddr, ":"); idx >= 0 && idx+1 < len(d.ListenAddr) {
+		port = d.ListenAddr[idx+1:]
+	}
+
+	if err := createHostService(cfg, d.Name, ns, port); err != nil {
+		return fmt.Errorf("create cluster Service/Endpoints: %w", err)
+	}
+
+	chainName := d.Chain
+	assetTerms, err := resolveAssetTermsFor(d.AssetSymbol, &chainName, true)
+	if err != nil {
+		return fmt.Errorf("resolve asset terms: %w", err)
+	}
+
+	pt := schemas.PriceTable{PerRequest: d.PricePerRequest, PerMTok: d.PricePerMTok}
+	soSpec, err := buildInferenceServiceOfferSpec(d, pt, ns, port, assetTerms, d.ModelName, d.Registration)
+	if err != nil {
+		return fmt.Errorf("rebuild ServiceOffer spec: %w", err)
+	}
+
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata": map[string]any{
+			"name":      d.Name,
+			"namespace": ns,
+		},
+		"spec": soSpec,
+	}
+	if err := kubectlApply(cfg, manifest); err != nil {
+		return fmt.Errorf("apply ServiceOffer: %w", err)
+	}
+	_ = u // ui is held for caller-side messaging only
+	return nil
+}
+
 func createHostService(cfg *config.Config, name, ns, port string) error {
 	hostIP, err := resolveHostIP(cfg)
 	if err != nil {

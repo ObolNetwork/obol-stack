@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 )
@@ -1221,6 +1223,118 @@ func TestSellUpdate_PayToFlagSurface(t *testing.T) {
 	assertFlagHasAlias(t, flags, "pay-to", "wallet")
 	assertFlagHasAlias(t, flags, "pay-to", "recipient")
 	assertFlagHasAlias(t, flags, "pay-to", "w")
+}
+
+// TestResumeSellOffers_EmptyStoreNoOp pins the "nothing to resume" path:
+// stack-up against a workspace with no persisted sell-inference deployments
+// must return nil without erroring. The same path also has to handle the
+// no-cluster-yet case (no kubeconfig.yaml) gracefully — both are exercised
+// by an empty ConfigDir.
+func TestResumeSellOffers_EmptyStoreNoOp(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	if err := resumeSellOffers(context.Background(), cfg, u); err != nil {
+		t.Fatalf("empty resume must succeed, got: %v", err)
+	}
+}
+
+// TestResumeSellOffers_DescriptorPresentButNoCluster pins the
+// "descriptors-on-disk-but-cluster-not-up-yet" path. Real-world example:
+// `obol stack down`, then re-running `obol sell inference` somewhere that
+// happens to fail before reaching cluster apply — the descriptor lands on
+// disk, the cluster never comes back, and a subsequent `obol stack up`
+// against a missing kubeconfig must NOT panic or hard-error. It should be
+// a quiet skip until the cluster is available.
+func TestResumeSellOffers_DescriptorPresentButNoCluster(t *testing.T) {
+	cfg := newTestConfig(t)
+	store := inference.NewStore(cfg.ConfigDir)
+	if err := store.Create(&inference.Deployment{
+		Name:             "aeon",
+		ModelName:        "aeon-ultimate",
+		ServiceNamespace: "llm",
+		ListenAddr:       "0.0.0.0:8402",
+		WalletAddress:    "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		PricePerRequest:  "0.023",
+		AssetSymbol:      "OBOL",
+		Chain:            "base-sepolia",
+	}, true); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// No kubeconfig.yaml in cfg.ConfigDir — resume must not attempt
+	// cluster operations.
+	u := ui.New(false)
+	if err := resumeSellOffers(context.Background(), cfg, u); err != nil {
+		t.Fatalf("resume with descriptor + no cluster must skip cleanly, got: %v", err)
+	}
+}
+
+// TestResumeOneInferenceOffer_RequiresModelName pins the per-offer error
+// for legacy descriptors that were written before ModelName became a
+// persisted field. The resume path cannot fabricate a model name out of
+// thin air, and silently writing a ServiceOffer with no spec.model.name
+// would surface as a controller "ModelReady=False" loop with no actionable
+// signal. Operators need a clear "recreate the offer" message instead.
+func TestResumeOneInferenceOffer_RequiresModelName(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	err := resumeOneInferenceOffer(cfg, u, &inference.Deployment{
+		Name:             "legacy",
+		ServiceNamespace: "llm",
+		ListenAddr:       ":8402",
+		// No ModelName.
+	})
+	if err == nil {
+		t.Fatal("expected error for legacy descriptor with no ModelName")
+	}
+	for _, sub := range []string{"model_name", "obol sell inference"} {
+		if !strings.Contains(err.Error(), sub) {
+			t.Errorf("error must name the missing field and the recovery command; missing %q: %v", sub, err)
+		}
+	}
+}
+
+// TestResumeOneInferenceOffer_NilDescriptor pins the defensive guard for
+// the never-supposed-to-happen case of a nil or empty descriptor reaching
+// the resume loop. A bug elsewhere that produces such an entry shouldn't
+// panic the entire resume pass; one descriptor failing should not block
+// the rest.
+func TestResumeOneInferenceOffer_NilDescriptor(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	if err := resumeOneInferenceOffer(cfg, u, nil); err == nil {
+		t.Fatal("expected error for nil descriptor")
+	}
+	if err := resumeOneInferenceOffer(cfg, u, &inference.Deployment{}); err == nil {
+		t.Fatal("expected error for empty descriptor (no Name)")
+	}
+}
+
+// TestStackUpAction_CallsResumeSellOffers is a source-level guard against
+// silently regressing the stack-up → sell-resume wiring. The whole feature
+// hinges on the `stack up` action handler calling resumeSellOffers after
+// stack.Up succeeds; without that call, persisted sell-inference offers
+// stay on disk forever and never reach the freshly-recreated cluster.
+// A future refactor that splits the handler or moves the call must update
+// this test, which forces a moment of "why is this here" attention.
+func TestStackUpAction_CallsResumeSellOffers(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "resumeSellOffers(") {
+		t.Fatal("cmd/obol/main.go must call resumeSellOffers — without it persisted sell-inference offers never reach a freshly-stacked cluster")
+	}
+	// Belt-and-suspenders: assert the call lives after stack.Up so the
+	// kubeconfig + infrastructure are ready when resume runs.
+	upIdx := strings.Index(body, "stack.Up(cfg")
+	resumeIdx := strings.Index(body, "resumeSellOffers(")
+	if upIdx < 0 || resumeIdx < 0 {
+		t.Fatalf("expected both stack.Up and resumeSellOffers in main.go; upIdx=%d resumeIdx=%d", upIdx, resumeIdx)
+	}
+	if resumeIdx < upIdx {
+		t.Error("resumeSellOffers must be invoked AFTER stack.Up — running it before the cluster is up will see no kubeconfig and skip every offer")
+	}
 }
 
 func TestBuildDemoServiceOffer_RegisterFlagDrivesEnabled(t *testing.T) {

@@ -301,3 +301,104 @@ func TestStoreDirPermissions(t *testing.T) {
 		t.Errorf("config.json permissions: want 0600, got %04o", mode)
 	}
 }
+
+// TestStoreCreate_PersistsResumeFields pins the new resume-side fields on
+// the inference Deployment descriptor. Without ModelName, ServiceNamespace,
+// and Registration persisted on disk, the `obol stack up` resume path
+// would lose the operator's --model + --register-* customizations and
+// rebuild a stripped-down ServiceOffer (or fail outright on missing
+// model_name). The round-trip here is the contract: anything Create()
+// writes must come back verbatim from Get().
+func TestStoreCreate_PersistsResumeFields(t *testing.T) {
+	dir := t.TempDir()
+	store := inference.NewStore(dir)
+
+	registration := map[string]any{
+		"enabled":     true,
+		"name":        "Qwen3.6-27B AEON Ultimate",
+		"description": "Uncensored Qwen3.6-27B abliteration on DGX Spark",
+		"skills":      []any{"llm/inference", "llm/uncensored"},
+		"domains":     []any{"inference.v1337.org"},
+	}
+
+	in := &inference.Deployment{
+		Name:             "aeon",
+		EnclaveTag:       "com.obol.inference.aeon",
+		ListenAddr:       "0.0.0.0:8402",
+		UpstreamURL:      "http://127.0.0.1:8000",
+		WalletAddress:    "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		PricePerRequest:  "0.023",
+		AssetSymbol:      "OBOL",
+		Chain:            "base-sepolia",
+		ModelName:        "aeon-ultimate",
+		ServiceNamespace: "llm",
+		Registration:     registration,
+	}
+	if err := store.Create(in, true); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.Get("aeon")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if got.ModelName != "aeon-ultimate" {
+		t.Errorf("ModelName = %q, want %q", got.ModelName, "aeon-ultimate")
+	}
+	if got.ServiceNamespace != "llm" {
+		t.Errorf("ServiceNamespace = %q, want %q", got.ServiceNamespace, "llm")
+	}
+	if got.Registration == nil {
+		t.Fatal("Registration round-tripped to nil; resume would rebuild offer without operator customizations")
+	}
+	if got.Registration["enabled"] != true {
+		t.Errorf("Registration.enabled = %v, want true", got.Registration["enabled"])
+	}
+	if got.Registration["name"] != "Qwen3.6-27B AEON Ultimate" {
+		t.Errorf("Registration.name = %v, want %q", got.Registration["name"], "Qwen3.6-27B AEON Ultimate")
+	}
+}
+
+// TestStoreCreate_LegacyDescriptorWithoutResumeFields pins backwards-
+// compatibility: a descriptor written by an older binary (no ModelName,
+// no ServiceNamespace, no Registration) must still be readable, with the
+// new fields coming back as zero values. The resume path uses the zero
+// values to either default sensibly or refuse with an actionable error.
+func TestStoreCreate_LegacyDescriptorWithoutResumeFields(t *testing.T) {
+	dir := t.TempDir()
+	configDir := dir + "/inference/legacy"
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// JSON shape an older binary would have written — no model_name,
+	// no service_namespace, no registration.
+	legacyJSON := `{
+		"name": "legacy",
+		"listen_addr": ":8402",
+		"upstream_url": "http://localhost:11434",
+		"wallet_address": "0xefab75b7b199bf8512e2d5b379374cb94dfdba47",
+		"price_per_request": "0.001",
+		"chain": "base",
+		"facilitator_url": "https://x402.gcp.obol.tech",
+		"created_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(configDir+"/config.json", []byte(legacyJSON), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	store := inference.NewStore(dir)
+	got, err := store.Get("legacy")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ModelName != "" {
+		t.Errorf("ModelName = %q, want empty for legacy descriptor", got.ModelName)
+	}
+	if got.ServiceNamespace != "" {
+		t.Errorf("ServiceNamespace = %q, want empty for legacy descriptor", got.ServiceNamespace)
+	}
+	if got.Registration != nil {
+		t.Errorf("Registration = %#v, want nil for legacy descriptor", got.Registration)
+	}
+}
