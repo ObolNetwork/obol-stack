@@ -705,12 +705,18 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	// Same operationally-ready filter as buildServiceCatalogJSON — keep the
+	// two surfaces consistent. An offer that's usable for x402 payments
+	// (route published, payment gate active, upstream healthy) appears in
+	// both /skill.md and /api/services.json, with the on-chain ERC-8004
+	// registration treated as informational metadata rather than a gating
+	// signal. See offerOperationallyReady's doc comment for the rationale.
 	var ready []*monetizeapi.ServiceOffer
 	for _, offer := range offers {
 		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
 			continue
 		}
-		if isConditionTrue(offer.Status, "Ready") {
+		if offerOperationallyReady(offer) {
 			ready = append(ready, offer)
 		}
 	}

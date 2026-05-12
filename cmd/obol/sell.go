@@ -3496,11 +3496,11 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 			continue
 		}
 		resumed++
-		u.Successf("Resumed sell-inference offer %q (run `obol sell inference %s` to restart the host gateway)", d.Name, d.Name)
+		u.Successf("Resumed sell-inference offer %q", d.Name)
 	}
 
 	if resumed > 0 {
-		u.Dim("  Host gateways are not auto-started — re-run `obol sell inference <name>` in a terminal you can keep open.")
+		u.Dim("  Gateways spawned as detached background processes — check <state>/sell-inference/<name>/gateway.log for output.")
 	}
 	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
 	return nil
@@ -3634,15 +3634,20 @@ func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.De
 		_ = logF.Close()
 		return fmt.Errorf("start gateway subprocess: %w", err)
 	}
+	// Snapshot the PID BEFORE Release — on Unix, os.Process.Release sets
+	// the Pid field to -1 as part of its handle teardown, so reading the
+	// field afterwards prints a misleading "-1" to the operator and pins
+	// a bogus -1 in the PID file. Persist + announce the captured value.
+	gatewayPID := cmd.Process.Pid
 	// We don't wait on the child, but releasing the handle ensures the
 	// parent process can exit cleanly without keeping a zombie reference.
 	if err := cmd.Process.Release(); err != nil {
 		u.Dim("  (could not release gateway process handle: " + err.Error() + ")")
 	}
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
-		u.Warnf("gateway started (pid %d) but could not write %s: %v", cmd.Process.Pid, pidFile, err)
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(gatewayPID)), 0o644); err != nil {
+		u.Warnf("gateway started (pid %d) but could not write %s: %v", gatewayPID, pidFile, err)
 	}
-	u.Successf("Gateway started in background (pid %d, log %s)", cmd.Process.Pid, logFile)
+	u.Successf("Gateway started in background (pid %d, log %s)", gatewayPID, logFile)
 	return nil
 }
 
