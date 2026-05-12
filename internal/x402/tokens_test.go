@@ -173,6 +173,72 @@ func TestSupportedTokens(t *testing.T) {
 	}
 }
 
+func TestTokensOnChain(t *testing.T) {
+	tests := []struct {
+		chain string
+		want  []string
+	}{
+		{"base", []string{"USDC"}},
+		{"base-mainnet", []string{"USDC"}},
+		{"base-sepolia", []string{"OBOL", "USDC"}},
+		{"ethereum", []string{"OBOL", "USDC"}},
+		{"mainnet", []string{"OBOL", "USDC"}},
+		{"polygon", []string{"USDC"}},
+		{"unknown-chain", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.chain, func(t *testing.T) {
+			got := TokensOnChain(tc.chain)
+			if len(got) != len(tc.want) {
+				t.Fatalf("TokensOnChain(%q) = %v, want %v", tc.chain, got, tc.want)
+			}
+			for i, want := range tc.want {
+				if got[i] != want {
+					t.Errorf("TokensOnChain(%q)[%d] = %q, want %q", tc.chain, i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestChainsForToken(t *testing.T) {
+	usdc := ChainsForToken("USDC")
+	if len(usdc) < 4 {
+		t.Errorf("ChainsForToken(USDC) returned %d chains, want >= 4: %v", len(usdc), usdc)
+	}
+	contains := func(slice []string, want string) bool {
+		for _, s := range slice {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{"base", "base-sepolia", "ethereum"} {
+		if !contains(usdc, want) {
+			t.Errorf("ChainsForToken(USDC) missing %q: %v", want, usdc)
+		}
+	}
+
+	obol := ChainsForToken("OBOL")
+	if len(obol) != 2 {
+		t.Fatalf("ChainsForToken(OBOL) = %v, want exactly [base-sepolia ethereum]", obol)
+	}
+	for _, want := range []string{"base-sepolia", "ethereum"} {
+		if !contains(obol, want) {
+			t.Errorf("ChainsForToken(OBOL) missing %q: %v", want, obol)
+		}
+	}
+
+	if got := ChainsForToken("obol"); len(got) != 2 {
+		t.Errorf("ChainsForToken(obol) lowercase = %v, want 2 chains", got)
+	}
+
+	if got := ChainsForToken("WETH"); got != nil {
+		t.Errorf("ChainsForToken(WETH) = %v, want nil", got)
+	}
+}
+
 func TestTokenSupportedOnChain(t *testing.T) {
 	if !TokenSupportedOnChain("USDC", "base") {
 		t.Error("USDC should be supported on base")

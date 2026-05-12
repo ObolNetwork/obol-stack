@@ -3158,9 +3158,35 @@ func resolveAssetTermsFor(tokenName string, chainName *string, chainExplicit boo
 	// Registry lookup.
 	entry, ok := x402verifier.ResolveToken(tokenName, *chainName)
 	if !ok {
+		onChain := x402verifier.TokensOnChain(*chainName)
+		forToken := x402verifier.ChainsForToken(tokenName)
+		var hint string
+		switch {
+		case len(forToken) > 0 && len(onChain) > 0:
+			hint = fmt.Sprintf(
+				"; tokens on %s: %s; %s is registered on: %s",
+				*chainName, strings.Join(onChain, ", "),
+				tokenName, strings.Join(forToken, ", "),
+			)
+		case len(forToken) > 0:
+			hint = fmt.Sprintf(
+				"; no tokens registered on %s; %s is registered on: %s",
+				*chainName, tokenName, strings.Join(forToken, ", "),
+			)
+		case len(onChain) > 0:
+			hint = fmt.Sprintf(
+				"; tokens on %s: %s; %s is not registered on any chain",
+				*chainName, strings.Join(onChain, ", "), tokenName,
+			)
+		default:
+			hint = fmt.Sprintf(
+				"; no tokens registered on %s and %s is not registered on any chain",
+				*chainName, tokenName,
+			)
+		}
 		return schemas.AssetTerms{}, fmt.Errorf(
-			"--token %s is not available on chain %s (supported tokens: %s)",
-			tokenName, *chainName, strings.Join(x402verifier.SupportedTokens(), ", "),
+			"--token %s is not available on chain %s%s",
+			tokenName, *chainName, hint,
 		)
 	}
 
