@@ -386,14 +386,12 @@ else
     fail "cast (Foundry) not installed — skipping balance checks"
 fi
 
-step "x402-buyer auth pool decremented by 1"
-remaining_after=$(buyer_sidecar_status | grep "^$PURCHASE_NAME:" | grep -oE 'remaining=[0-9]+' | head -1 | cut -d= -f2)
-if [ -z "$remaining_after" ]; then
-    fail "Could not read x402-buyer remaining after paid call"
-elif [ "$remaining_after" = "$(( EXPECTED_AUTHS - 1 ))" ]; then
-    pass "x402-buyer remaining decremented: $EXPECTED_AUTHS → $remaining_after"
-else
-    fail "x402-buyer remaining=$remaining_after, expected $(( EXPECTED_AUTHS - 1 )) (one auth should have been spent)"
-fi
+# The buyer sidecar persists the spent-auth state asynchronously after the
+# upstream returns, so /status can still report the pre-call count for a few
+# seconds even when the on-chain settlement and the buyer/seller balance
+# deltas have already cleared. Poll instead of one-shot to remove the race.
+poll_step_grep "x402-buyer auth pool decremented by 1" \
+    "$PURCHASE_NAME: remaining=$(( EXPECTED_AUTHS - 1 )) " \
+    12 5 buyer_sidecar_status
 
 emit_metrics
