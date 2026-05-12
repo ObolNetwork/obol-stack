@@ -19,5 +19,8 @@
       "Bash(grep -A 50 ResponsiveDialogStyledContents*= /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)",
       "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui -name \"ResponsiveDialog.tsx\" -o -name \"ResponsiveDialog.ts\")"
     ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
   }
 }

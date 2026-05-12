@@ -1,4 +1,4 @@
-export type ServiceOfferType = 'inference' | 'fine-tuning' | 'http';
+export type ServiceOfferType = 'inference' | 'fine-tuning' | 'http' | 'agent';
 
 export interface ServiceOfferModel {
   name?: string;
@@ -48,6 +48,17 @@ export interface ServiceOfferAgentLink {
   namespace: string;
 }
 
+// Mirror of monetizeapi.ServiceOfferAgentResolution. The controller fills
+// this in for type=agent offers from the linked Agent's status; spec.model
+// is empty by design on agent offers, so this is the source of truth for
+// display.
+export interface ServiceOfferAgentResolution {
+  runtime?: string;
+  endpoint?: string;
+  model?: string;
+  skills?: string[];
+}
+
 export interface ServiceOfferUsage {
   chargedRequests: number | null;
 }
@@ -64,6 +75,7 @@ export interface ServiceOffer {
   payment?: ServiceOfferPayment;
   registration?: ServiceOfferRegistration;
   agentLink?: ServiceOfferAgentLink | null;
+  agentResolution?: ServiceOfferAgentResolution | null;
   usage?: ServiceOfferUsage;
 }
 

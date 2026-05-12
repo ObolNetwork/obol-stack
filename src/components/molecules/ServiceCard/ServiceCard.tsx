@@ -166,6 +166,7 @@ const AgentLinkText = styled('a', {
 });
 
 const TYPE_LABEL: Record<ServiceOfferType, string> = {
+  agent: 'Agent',
   inference: 'Inference',
   'fine-tuning': 'Fine-tuning',
   http: 'HTTP',
@@ -238,6 +239,10 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
  * `obol.stack` hostname) to use the public Cloudflare tunnel as the base.
  * Returns null when the tunnel URL is unavailable so the local-only
  * `obol.stack` URL is never surfaced as a clickable link.
+ *
+ * The controller writes either a full URL (older offers) or a path-only
+ * value like "/services/demo-quant" (current ServiceOffer status). We
+ * resolve the latter against the tunnel URL as a base so both work.
  */
 function publicEndpoint(
   endpoint: string | undefined,
@@ -250,7 +255,7 @@ function publicEndpoint(
     if (!endpoint) {
       return `${tunnel.origin}${tunnelPath}` || tunnel.toString();
     }
-    const ep = new URL(endpoint);
+    const ep = new URL(endpoint, tunnel);
     return `${tunnel.origin}${tunnelPath}${ep.pathname}${ep.search}${ep.hash}`;
   } catch {
     return null;
@@ -263,7 +268,13 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const price = formatPrice(offer);
   const symbol = offer.payment?.asset?.symbol || 'USDC';
   const network = offer.payment?.network;
-  const skills = offer.registration?.skills ?? [];
+  // type=agent leaves spec.model and registration.skills empty by design;
+  // the linked Agent's resolved view is the source of truth.
+  const modelName = offer.model?.name || offer.agentResolution?.model;
+  const skills =
+    offer.registration?.skills && offer.registration.skills.length > 0
+      ? offer.registration.skills
+      : (offer.agentResolution?.skills ?? []);
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
   const charged = offer.usage?.chargedRequests;
@@ -275,7 +286,7 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
         <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
           <ServiceName>{displayName}</ServiceName>
           <TypeBadge>{TYPE_LABEL[offer.type]}</TypeBadge>
-          {offer.model?.name && (
+          {modelName && (
             <TypeBadge
               css={{
                 color: '$obolGreen',
@@ -283,8 +294,22 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
                 background: 'rgba(47, 228, 171, 0.08)',
               }}
             >
-              {offer.model.name}
+              {modelName}
             </TypeBadge>
+          )}
+          {endpoint && (
+            <Link
+              href={endpoint}
+              target="_blank"
+              title="Open service in new tab"
+              css={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                fontSize: '13px',
+              }}
+            >
+              <OpenInNew size="sm" />
+            </Link>
           )}
         </Flex>
         <StatusPill
@@ -343,9 +368,6 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
           <InfoLabel>Endpoint:</InfoLabel>
           <InfoValue css={{ wordBreak: 'break-all' }}>{endpoint}</InfoValue>
           <CopyButton text={endpoint} title="Copy endpoint" />
-          <Link href={endpoint} target="_blank" css={{ fontSize: '13px' }}>
-            <OpenInNew size="sm" />
-          </Link>
         </InfoRow>
       )}
 

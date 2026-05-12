@@ -72,7 +72,7 @@ function getConfig() {
   if (typeof window === 'undefined') {
     // Return a minimal config for SSR that doesn't use connectors
     return createConfig({
-      chains: [mainnet, sepolia, hoodi],
+      chains: [mainnet, sepolia, hoodi, base, baseSepolia],
       transports,
       ssr: true,
     });
@@ -108,12 +108,12 @@ function getConfig() {
     wagmiConfig = connectors
       ? createConfig({
           connectors,
-          chains: [mainnet, sepolia, hoodi],
+          chains: [mainnet, sepolia, hoodi, base, baseSepolia],
           transports,
           ssr: true,
         })
       : createConfig({
-          chains: [mainnet, sepolia, hoodi],
+          chains: [mainnet, sepolia, hoodi, base, baseSepolia],
           transports,
           ssr: true,
         });

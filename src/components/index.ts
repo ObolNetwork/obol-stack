@@ -28,6 +28,7 @@ export { OpenClawChatSidebar } from './molecules/OpenClawChatSidebar';
 export { OpenClawInstanceCard } from './molecules/OpenClawInstanceCard';
 export { WalletConnection } from './molecules/WalletConnection';
 export { WalletModal } from './molecules/WalletModal';
+export { BaseSepoliaObolFaucet } from './molecules/BaseSepoliaObolFaucet';
 
 // Templates
 export { DashboardTemplate } from './templates/DashboardTemplate';

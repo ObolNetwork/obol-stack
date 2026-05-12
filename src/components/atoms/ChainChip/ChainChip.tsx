@@ -86,15 +86,15 @@ const getChipText = (variant: ChainChipProps['variant']) => {
     case 'sepolia':
       return 'Sepolia';
     case 'mainnet':
-      return 'Mainnet';
+      return 'Ethereum';
     case 'aztecSequencer':
       return 'Sequencer';
     case 'remoteNode':
       return 'Remote Node';
     case 'erpcProxy':
-      return 'RPC Proxy';
+      return 'RPC';
     default:
-      return 'Mainnet';
+      return 'Ethereum';
   }
 };
 

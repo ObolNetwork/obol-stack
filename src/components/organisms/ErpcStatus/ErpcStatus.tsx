@@ -7,6 +7,7 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
 import { Accordion } from '../../molecules/Accordion';
+import { BaseSepoliaObolFaucet } from '../../molecules/BaseSepoliaObolFaucet';
 import {
   ErpcNetwork,
   ErpcUpstream,
@@ -19,6 +20,7 @@ import {
   networkToStatus,
   chainIdFromEvmId,
   erpcUrl,
+  TESTNETS,
 } from '../../../lib/utils/network-rpc';
 
 // ── Network card ──────────────────────────────────────────────────────────────
@@ -72,6 +74,20 @@ const EndpointRow = styled(Flex, {
   minWidth: 0,
 });
 
+const TestnetChip = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '$body',
+  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  border: '1px solid rgba(255, 255, 255, 0.18)',
+  borderRadius: '4px',
+  padding: '1px 6px',
+  lineHeight: 1.4,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  whiteSpace: 'nowrap',
+});
+
 // ── Upstream cards ───────────────────────────────────────────────────────────
 
 const UpstreamSection = styled(Box, {
@@ -95,6 +111,12 @@ const UpstreamsGrid = styled(Box, {
   paddingTop: '$lg',
 });
 
+function aliasDisplay(alias: string): string {
+  if (alias === 'mainnet') return 'Ethereum';
+  if (alias === 'base-sepolia') return 'Base Sepolia';
+  return alias.charAt(0).toUpperCase() + alias.slice(1);
+}
+
 // ── ErpcStatus ────────────────────────────────────────────────────────────────
 
 export function ErpcStatus({
@@ -111,6 +133,7 @@ export function ErpcStatus({
   const status = networkToStatus(network.state);
   const chainId = chainIdFromEvmId(network.id);
   const isMainnet = chainIdFromEvmId(network.id) === 1;
+  const isTestnet = TESTNETS.has(network.alias);
   const endpoint = `${erpcUrl()}/${network.alias}`;
 
   const erpcUpstreams = upstreams ?? [];
@@ -123,10 +146,11 @@ export function ErpcStatus({
         <Flex css={{ alignItems: 'center', gap: '$sm' }}>
           {chainName && <ChainIcon chain={chainName} size={24} />}
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
-            <CardAppType>eRPC Proxy</CardAppType>
-            <CardAppId>
-              {network.alias.charAt(0).toUpperCase() + network.alias.slice(1)}
-            </CardAppId>
+            <CardAppType>RPC</CardAppType>
+            <Flex css={{ alignItems: 'center', gap: '$xs', width: 'auto' }}>
+              <CardAppId>{aliasDisplay(network.alias)}</CardAppId>
+              {isTestnet && <TestnetChip>Testnet</TestnetChip>}
+            </Flex>
           </Flex>
         </Flex>
 
@@ -153,6 +177,8 @@ export function ErpcStatus({
           </>
         )}
       </DetailsSection>
+
+      {network.alias === 'base-sepolia' && <BaseSepoliaObolFaucet />}
 
       {totalUpstreams > 0 && (
         <UpstreamSection>

@@ -1,12 +1,12 @@
 # -------------------------------
 # Base image
 # -------------------------------
-FROM node:25-alpine AS base
+FROM node:26-alpine AS base
 
-# Install corepack (needed for pnpm)
+# Install a pinned pnpm via corepack so Docker builds match CI and local lockfile behavior.
 RUN npm install -g --force corepack \
     && corepack enable \
-    && corepack prepare pnpm@latest --activate
+    && corepack prepare pnpm@10.30.1 --activate
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -23,8 +23,8 @@ RUN apk add --no-cache libc6-compat
 # Copy only package files for caching
 COPY package.json pnpm-lock.yaml* ./
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile || pnpm install --force
+# Install dependencies deterministically from the checked-in lockfile.
+RUN pnpm install --frozen-lockfile
 
 # -------------------------------
 # Builder

@@ -50,9 +50,12 @@ const ListBody = styled(Box, {
 });
 
 function partitionOffers(offers: ServiceOffer[]) {
-  const agentOffers = offers.filter(
-    o => o.type === 'inference' || o.type === 'fine-tuning'
-  );
+  const agentOffers = offers
+    .filter(
+      o =>
+        o.type === 'agent' || o.type === 'inference' || o.type === 'fine-tuning'
+    )
+    .sort((a, b) => (a.type === 'agent' ? -1 : b.type === 'agent' ? 1 : 0));
   const httpOffers = offers.filter(o => o.type === 'http');
   return { agentOffers, httpOffers };
 }
@@ -92,7 +95,9 @@ export function ServiceList() {
                   {agentOffers.length > 0 && (
                     <CountBadge count={agentOffers.length} />
                   )}
-                  <SubSectionHint>inference · fine-tuning</SubSectionHint>
+                  <SubSectionHint>
+                    agent · inference · fine-tuning
+                  </SubSectionHint>
                 </SubSectionHeader>
                 {agentOffers.length === 0 ? (
                   <EmptyMessage>No agent services for sale.</EmptyMessage>
