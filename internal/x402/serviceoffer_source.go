@@ -136,7 +136,7 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		Price:                  price,
 		Description:            fmt.Sprintf("ServiceOffer %s", offer.Name),
 		PayTo:                  offer.Spec.Payment.PayTo,
-		Network:                offer.Spec.Payment.Network,
+		Network:                NormalizeNetworkID(offer.Spec.Payment.Network),
 		AssetAddress:           offer.Spec.Payment.Asset.Address,
 		AssetSymbol:            offer.Spec.Payment.Asset.Symbol,
 		AssetDecimals:          int(offer.Spec.Payment.Asset.Decimals),
