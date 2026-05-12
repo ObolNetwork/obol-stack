@@ -25,8 +25,11 @@ else
     fail "Stack config missing: stack-id=${STACK_ID:-empty}, kubeconfig=$([ -f "$OBOL_CONFIG_DIR/kubeconfig.yaml" ] && echo 'present' || echo 'MISSING')"
 fi
 
-# §2: Verify the cluster — wait for all pods to be Running/Completed
-run_step_grep "Nodes ready" "Ready" "$OBOL" kubectl get nodes
+# §2: Verify the cluster — wait for all pods to be Running/Completed.
+# `obol stack up` returns once the k3s API responds, but the node may take
+# another few seconds to register in `kubectl get nodes`. Poll briefly to
+# absorb that race instead of one-shotting.
+poll_step_grep "Nodes ready" " Ready " 12 5 "$OBOL" kubectl get nodes
 # Verify the k3s cluster version matches the documented version (CLAUDE.md: v1.35.1-k3s1)
 step "k3s server version is v1.35.1+k3s1"
 kube_ver=$("$OBOL" kubectl version 2>&1) || true
@@ -69,20 +72,26 @@ run_step_grep "obol network status shows eRPC upstreams" \
     "eRPC|Pod|Upstream|Running" \
     "$OBOL" network status
 
-# §6/§1.6: eRPC /rpc JSON lists base-sepolia among available chains + all states OK
+# §6/§1.6: eRPC /rpc JSON lists base-sepolia among available chains + all states OK.
+# Poll briefly because eRPC's HTTP listener is up before its upstream pool has
+# fully resolved every alias; one-shotting this races with cold-start init.
 step "eRPC /rpc lists base-sepolia (required for x402 payment chain)"
-erpc_json=$($CURL_OBOL -sf --max-time 5 "$INGRESS_URL/rpc" 2>&1) || true
-if echo "$erpc_json" | python3 -c "
+erpc_json=""
+for i in $(seq 1 12); do
+    erpc_json=$($CURL_OBOL -sf --max-time 5 "$INGRESS_URL/rpc" 2>&1) || true
+    if echo "$erpc_json" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 aliases = [r.get('alias','') for r in d.get('rpc',[])]
 assert 'base-sepolia' in aliases, f'base-sepolia not in {aliases}'
 print(f'eRPC chains: {aliases}')
-" 2>&1; then
-    pass "eRPC lists base-sepolia chain for x402 payments"
-else
-    fail "eRPC /rpc missing base-sepolia — ${erpc_json:0:100}"
-fi
+" 2>/dev/null; then
+        pass "eRPC lists base-sepolia chain for x402 payments (attempt $i)"
+        break
+    fi
+    [ "$i" -eq 12 ] && fail "eRPC /rpc missing base-sepolia after 60s — ${erpc_json:0:100}"
+    sleep 5
+done
 
 step "eRPC all configured chains are in OK state"
 if echo "$erpc_json" | python3 -c "
