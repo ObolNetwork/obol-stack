@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1334,6 +1335,189 @@ func TestStackUpAction_CallsResumeSellOffers(t *testing.T) {
 	}
 	if resumeIdx < upIdx {
 		t.Error("resumeSellOffers must be invoked AFTER stack.Up — running it before the cluster is up will see no kubeconfig and skip every offer")
+	}
+}
+
+// TestBuildResumeGatewayArgs pins the round-trip between an
+// inference.Deployment on disk and the `obol sell inference` invocation
+// the resume path uses to relaunch the host gateway. If a flag is dropped
+// here, an offer that came back from disk would lose part of the
+// operator's original intent — most painfully, registration metadata
+// that fell out of the relaunch would leave the gateway running with
+// stripped-down /.well-known/ content.
+func TestBuildResumeGatewayArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		d         *inference.Deployment
+		wantSubs  []string
+		wantNoSub []string
+	}{
+		{
+			name: "full descriptor (the spark2 aeon offer)",
+			d: &inference.Deployment{
+				Name:            "aeon",
+				ModelName:       "aeon-ultimate",
+				UpstreamURL:     "http://127.0.0.1:8000",
+				WalletAddress:   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				ListenAddr:      "0.0.0.0:8402",
+				Chain:           "base-sepolia",
+				AssetSymbol:     "OBOL",
+				PricePerMTok:    "23",
+				PricePerRequest: "0.023",
+				FacilitatorURL:  "https://x402.gcp.obol.tech",
+				Registration: map[string]any{
+					"enabled":     true,
+					"name":        "Qwen3.6-27B AEON Ultimate",
+					"description": "Uncensored Qwen3.6-27B abliteration",
+					"skills":      []any{"llm/inference", "llm/uncensored"},
+					"domains":     []any{"inference.v1337.org"},
+				},
+			},
+			wantSubs: []string{
+				"sell", "inference", "aeon",
+				"--model", "aeon-ultimate",
+				"--upstream", "http://127.0.0.1:8000",
+				"--pay-to", "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"--listen", "0.0.0.0:8402",
+				"--chain", "base-sepolia",
+				"--token", "OBOL",
+				"--per-mtok", "23",
+				"--facilitator", "https://x402.gcp.obol.tech",
+				"--register-name", "Qwen3.6-27B AEON Ultimate",
+				"--register-description", "Uncensored Qwen3.6-27B abliteration",
+				"--register-skills", "llm/inference",
+				"--register-skills", "llm/uncensored",
+				"--register-domains", "inference.v1337.org",
+			},
+			wantNoSub: []string{
+				"--price", // perMTok set, perRequest must not also be passed
+				"--no-register",
+			},
+		},
+		{
+			name: "no-register descriptor",
+			d: &inference.Deployment{
+				Name:         "no-reg",
+				ModelName:    "qwen3:0.6b",
+				ListenAddr:   ":8402",
+				Registration: map[string]any{"enabled": false},
+			},
+			wantSubs: []string{
+				"--no-register",
+			},
+			wantNoSub: []string{
+				"--register-name",
+				"--register-description",
+			},
+		},
+		{
+			name: "legacy descriptor (no registration map at all)",
+			d: &inference.Deployment{
+				Name:            "legacy",
+				ModelName:       "qwen3.5:9b",
+				ListenAddr:      ":8402",
+				PricePerRequest: "0.001",
+			},
+			wantSubs: []string{"--price", "0.001"},
+			wantNoSub: []string{
+				"--no-register",
+				"--register-name",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildResumeGatewayArgs(tc.d)
+			joined := strings.Join(got, " ")
+			for _, want := range tc.wantSubs {
+				found := false
+				for _, a := range got {
+					if a == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("buildResumeGatewayArgs missing %q in %v", want, got)
+				}
+			}
+			for _, banned := range tc.wantNoSub {
+				for _, a := range got {
+					if a == banned {
+						t.Errorf("buildResumeGatewayArgs unexpectedly contains %q in %v", banned, got)
+					}
+				}
+			}
+			// Order sanity: positional `<name>` comes before any flag.
+			nameIdx := -1
+			firstFlagIdx := -1
+			for i, a := range got {
+				if a == tc.d.Name && nameIdx < 0 {
+					nameIdx = i
+				}
+				if strings.HasPrefix(a, "--") && firstFlagIdx < 0 {
+					firstFlagIdx = i
+				}
+			}
+			if nameIdx < 0 || firstFlagIdx < 0 || nameIdx > firstFlagIdx {
+				t.Errorf("name positional must come before flags; got %v", joined)
+			}
+		})
+	}
+}
+
+// TestReadGatewayPID pins the on-disk PID file format. The file must be a
+// single decimal integer in ASCII (no JSON, no trailing newlines that
+// confuse trivial readers) so other tools — `tail -f .../gateway.log` and
+// `kill $(cat .../gateway.pid)` — work without parsing helpers.
+func TestReadGatewayPID(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		content string
+		wantPID int
+		wantOK  bool
+	}{
+		{"clean integer", "12345", 12345, true},
+		{"trailing newline tolerated", "12345\n", 12345, true},
+		{"surrounding whitespace tolerated", "  12345  \n", 12345, true},
+		{"zero rejected", "0", 0, false},
+		{"negative rejected", "-1", 0, false},
+		{"non-numeric rejected", "abc", 0, false},
+		{"empty rejected", "", 0, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".pid")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			pid, ok := readGatewayPID(path)
+			if pid != tc.wantPID || ok != tc.wantOK {
+				t.Errorf("readGatewayPID(%q) = (%d, %v); want (%d, %v)", tc.content, pid, ok, tc.wantPID, tc.wantOK)
+			}
+		})
+	}
+
+	t.Run("missing file → (0, false)", func(t *testing.T) {
+		pid, ok := readGatewayPID(filepath.Join(dir, "does-not-exist"))
+		if pid != 0 || ok {
+			t.Errorf("readGatewayPID(missing) = (%d, %v); want (0, false)", pid, ok)
+		}
+	})
+}
+
+// TestProcessAlive_SelfAndBogus pins the liveness probe used to decide
+// whether the previous gateway is still running. The current process is
+// trivially alive; a far-out-of-range PID is not. We don't test
+// "definitely-dead-but-recently-existed" cases because those depend on
+// the kernel's PID-reuse window and would be flaky.
+func TestProcessAlive_SelfAndBogus(t *testing.T) {
+	if !processAlive(os.Getpid()) {
+		t.Error("processAlive(self) must be true")
+	}
+	if processAlive(99_999_999) {
+		t.Error("processAlive(absurd pid) must be false")
 	}
 }
 

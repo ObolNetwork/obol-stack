@@ -31,6 +31,14 @@ type ServiceCatalogEntry struct {
 	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
 	Description      string               `json:"description"`
 	IsDemo           bool                 `json:"isDemo"`
+
+	// RegistrationPending is true when the offer is operationally ready
+	// (route published, payment gate active, upstream healthy) but its
+	// ERC-8004 on-chain registration tx hasn't landed yet. The storefront
+	// should surface these with a "registration pending" badge so consumers
+	// know the offer is usable for x402 payments today, even though
+	// ERC-8004 discovery via the chain still resolves to the prior state.
+	RegistrationPending bool `json:"registrationPending,omitempty"`
 }
 
 // ServiceCatalogAsset describes the settlement token resolved for a catalog

@@ -3557,8 +3557,194 @@ func resumeOneInferenceOffer(cfg *config.Config, u *ui.UI, d *inference.Deployme
 	if err := kubectlApply(cfg, manifest); err != nil {
 		return fmt.Errorf("apply ServiceOffer: %w", err)
 	}
-	_ = u // ui is held for caller-side messaging only
+
+	// Auto-start the foreground x402 gateway as a detached background
+	// subprocess so the offer reaches UpstreamHealthy=True (and therefore
+	// shows up in /api/services.json) without the operator running an
+	// extra `obol sell inference` command after every stack-up.
+	//
+	// This is the pragmatic shape of the resume feature today. The proper
+	// long-term path is C from the design doc: build the inference gateway
+	// as an in-cluster Deployment image, helmfile-managed, so stack-up
+	// brings it back the same way it brings back Traefik or LiteLLM. That
+	// removes the host-side subprocess + PID-file plumbing entirely and
+	// lets the controller observe the gateway as a normal Pod. Tracked as
+	// a follow-up because the gateway code (internal/inference/gateway.go)
+	// currently runs in-process with the CLI, not as a packaged image.
+	if err := startDetachedInferenceGateway(cfg, u, d); err != nil {
+		u.Warnf("could not auto-start host gateway for %q: %v", d.Name, err)
+		u.Dim("  Run `obol sell inference " + d.Name + "` manually in a terminal you can keep open.")
+	}
 	return nil
+}
+
+// startDetachedInferenceGateway forks `obol sell inference <name>` as a
+// detached background subprocess. The CLI rebuilds the full flag set from
+// the persisted Deployment, redirects stdout/stderr to a log file under
+// the workspace state dir, and stores the PID alongside so subsequent
+// stack-ups can detect a still-running gateway and skip the relaunch.
+//
+// Skipped silently when a healthy PID is already on disk. Returns an
+// error only when launch itself fails (e.g. missing obol binary, log
+// file unwritable). Callers should warn-and-continue on failure — a
+// missing gateway leaves UpstreamHealthy=False which the controller will
+// re-emit clearly, while a hard error here would block the rest of the
+// resume loop.
+func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
+	if d == nil || d.Name == "" {
+		return errors.New("nil or unnamed deployment")
+	}
+
+	stateDir := filepath.Join(cfg.StateDir, "sell-inference", d.Name)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	pidFile := filepath.Join(stateDir, "gateway.pid")
+	logFile := filepath.Join(stateDir, "gateway.log")
+
+	if pid, ok := readGatewayPID(pidFile); ok && processAlive(pid) {
+		u.Dim("  Gateway already running for " + d.Name + " (pid " + strconv.Itoa(pid) + ")")
+		return nil
+	}
+
+	obolBin := filepath.Join(cfg.BinDir, "obol")
+	if _, statErr := os.Stat(obolBin); statErr != nil {
+		// Fall back to whatever obol the parent process is running as.
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return fmt.Errorf("locate obol binary: %w", exeErr)
+		}
+		obolBin = exe
+	}
+
+	args := buildResumeGatewayArgs(d)
+
+	logF, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+
+	cmd := exec.Command(obolBin, args...)
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	cmd.SysProcAttr = detachedSysProcAttr()
+	cmd.Env = os.Environ()
+
+	if err := cmd.Start(); err != nil {
+		_ = logF.Close()
+		return fmt.Errorf("start gateway subprocess: %w", err)
+	}
+	// We don't wait on the child, but releasing the handle ensures the
+	// parent process can exit cleanly without keeping a zombie reference.
+	if err := cmd.Process.Release(); err != nil {
+		u.Dim("  (could not release gateway process handle: " + err.Error() + ")")
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		u.Warnf("gateway started (pid %d) but could not write %s: %v", cmd.Process.Pid, pidFile, err)
+	}
+	u.Successf("Gateway started in background (pid %d, log %s)", cmd.Process.Pid, logFile)
+	return nil
+}
+
+// buildResumeGatewayArgs reconstructs the `obol sell inference` flag set
+// that originally created the offer, from the persisted Deployment. The
+// order matches obol sell inference's flag list so a future surface
+// reduction of the CLI doesn't silently drop a piece of operator intent
+// (CI's source-level guard tests catch that case).
+//
+// Exposed for testing: callers can compare the reproduced flag set
+// against the original `obol sell inference` invocation that wrote the
+// descriptor.
+func buildResumeGatewayArgs(d *inference.Deployment) []string {
+	args := []string{"sell", "inference", d.Name}
+	if d.ModelName != "" {
+		args = append(args, "--model", d.ModelName)
+	}
+	if d.UpstreamURL != "" {
+		args = append(args, "--upstream", d.UpstreamURL)
+	}
+	if d.WalletAddress != "" {
+		args = append(args, "--pay-to", d.WalletAddress)
+	}
+	if d.ListenAddr != "" {
+		args = append(args, "--listen", d.ListenAddr)
+	}
+	if d.Chain != "" {
+		args = append(args, "--chain", d.Chain)
+	}
+	if d.AssetSymbol != "" {
+		args = append(args, "--token", d.AssetSymbol)
+	}
+	if d.PricePerMTok != "" {
+		args = append(args, "--per-mtok", d.PricePerMTok)
+	} else if d.PricePerRequest != "" {
+		args = append(args, "--price", d.PricePerRequest)
+	}
+	if d.FacilitatorURL != "" {
+		args = append(args, "--facilitator", d.FacilitatorURL)
+	}
+	// Registration block — rebuild --register-* flags from the persisted map.
+	if reg, ok := d.Registration["enabled"].(bool); ok && !reg {
+		args = append(args, "--no-register")
+	} else if d.Registration != nil {
+		if v, _ := d.Registration["name"].(string); v != "" {
+			args = append(args, "--register-name", v)
+		}
+		if v, _ := d.Registration["description"].(string); v != "" {
+			args = append(args, "--register-description", v)
+		}
+		if v, _ := d.Registration["image"].(string); v != "" {
+			args = append(args, "--register-image", v)
+		}
+		for _, s := range registrationStringSlice(d.Registration, "skills") {
+			args = append(args, "--register-skills", s)
+		}
+		for _, s := range registrationStringSlice(d.Registration, "domains") {
+			args = append(args, "--register-domains", s)
+		}
+	}
+	return args
+}
+
+func registrationStringSlice(reg map[string]any, key string) []string {
+	raw, ok := reg[key]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func readGatewayPID(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 doesn't deliver — just probes existence/permission on Unix.
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 func createHostService(cfg *config.Config, name, ns, port string) error {
