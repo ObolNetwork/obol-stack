@@ -84,7 +84,14 @@ if [ "$ANVIL_STARTED" = "1" ]; then
         fail "Could not find a reachable Base Sepolia RPC for Anvil fork"
         emit_metrics; exit 0
     fi
-    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --prune-history 1000000 >"$ANVIL_LOG" 2>&1 &
+    # --host 0.0.0.0 is critical: default anvil binds to 127.0.0.1 only, which
+    # makes it reachable from the host (host-local health checks pass) but NOT
+    # from inside the k3d cluster via host.k3d.internal. That mismatch causes
+    # downstream flows to silently fail — buy.py's eRPC call times out, no
+    # PurchaseRequest is created, no paid/* model is hot-added to LiteLLM, and
+    # the paid inference step then returns a misleading 503 "Payment
+    # verification failed" (actually "no such LiteLLM model group").
+    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --host 0.0.0.0 --prune-history 1000000 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
     anvil_ready=0
     for _ in $(seq 1 60); do
