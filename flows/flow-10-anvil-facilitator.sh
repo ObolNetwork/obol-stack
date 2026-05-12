@@ -134,6 +134,31 @@ else
     fail "Anvil chain ID unexpected — ${anvil_chain:0:100}"
 fi
 
+# Anvil must be reachable from inside the k3d cluster via host.k3d.internal.
+# Host-local 127.0.0.1:8545 succeeding is necessary but NOT sufficient: if
+# anvil bound only to loopback (the default without --host 0.0.0.0), pods
+# get Connection refused via host.k3d.internal, which then silently breaks
+# buy.py's eRPC calls, blocks PurchaseRequest creation, and bubbles up as a
+# misleading "Payment verification failed" 503 in flow-08/11/14/13. Always
+# fail-fast here so the root cause is obvious instead of buried.
+step "Anvil reachable from inside k3d cluster (host.k3d.internal:8545)"
+cluster_anvil=$("$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- python3 -c "
+import urllib.request, json
+req = urllib.request.Request('http://host.k3d.internal:8545',
+    data=json.dumps({'jsonrpc':'2.0','method':'eth_chainId','params':[],'id':1}).encode(),
+    headers={'Content-Type':'application/json'})
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print(r.read().decode())
+except Exception as e:
+    print('CLUSTER_PROBE_ERROR=' + repr(e))
+" 2>&1) || true
+if echo "$cluster_anvil" | grep -q '"result":"0x14a34"'; then
+    pass "Anvil reachable from cluster: chainId 0x14a34"
+else
+    fail "Anvil NOT reachable from cluster at host.k3d.internal:8545 — likely bound to 127.0.0.1 only. Add --host 0.0.0.0 to the anvil launch (see line ~87) or kill the existing anvil and let this flow restart it. Got: ${cluster_anvil:0:200}"
+fi
+
 # §3.2: Verify USDC contract is deployed at expected address on the fork
 # FiatTokenV2 should have name=USDC, symbol=USDC, decimals=6
 step "USDC contract (0x036C...) deployed on Anvil fork"
