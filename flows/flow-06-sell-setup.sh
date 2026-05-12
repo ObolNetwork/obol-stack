@@ -151,7 +151,7 @@ fi
 sleep 2
 
 run_step_grep "sell http flow-qwen" \
-    "ServiceOffer.*created\|ServiceOffer.*updated\|agent will reconcile" \
+    "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
     "$OBOL" sell http flow-qwen \
     --wallet "$SELLER_WALLET" \
     --chain "$CHAIN" \

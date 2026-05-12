@@ -61,12 +61,12 @@ poll_step "Frontend at $INGRESS_URL/" 60 5 \
 # §6: obol network list shows available networks (getting-started §6)
 # Tests the network management CLI without deploying any Ethereum clients.
 run_step_grep "obol network list shows available networks" \
-    "ethereum\|aztec\|Available" \
+    "Local Nodes|Remote RPCs|mainnet|chain=" \
     "$OBOL" network list
 
 # §6: obol network status shows eRPC gateway health (getting-started §Managing Networks)
 run_step_grep "obol network status shows eRPC upstreams" \
-    "Running\|upstream\|chain" \
+    "eRPC|Pod|Upstream|Running" \
     "$OBOL" network status
 
 # §6/§1.6: eRPC /rpc JSON lists base-sepolia among available chains + all states OK
