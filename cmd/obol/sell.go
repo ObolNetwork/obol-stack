@@ -2316,8 +2316,8 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			},
 			&cli.BoolFlag{
 				Name:    "force",
-				Aliases: []string{"f"},
-				Usage:   "Skip confirmation",
+				Aliases: []string{"f", "y", "yes"},
+				Usage:   "Skip confirmation (aliases: -f, -y, --yes)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
