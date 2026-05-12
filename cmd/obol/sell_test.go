@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -185,9 +186,19 @@ func TestSellInference_Flags(t *testing.T) {
 		"listen", "upstream", "enclave-tag",
 		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
 		"tee", "model-hash",
+		// Registration parity with `obol sell http`. Their absence on the
+		// inference subcommand was the regression that left
+		// /.well-known/agent-registration.json unrouted (see
+		// TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault).
+		"no-register",
+		"register-name", "register-description", "register-image",
+		"register-skills", "register-domains", "register-metadata",
 	)
 
-	assertStringDefault(t, flags, "price", "0.001")
+	// --price intentionally has no default after #470 — the resolvePriceTable
+	// fallthrough requires an explicit price flag instead of letting "0.001"
+	// shadow --per-mtok / --per-request. Empty default is the pinned contract.
+	assertStringDefault(t, flags, "price", "")
 	assertStringDefault(t, flags, "chain", "base")
 	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "listen", ":8402")
@@ -256,8 +267,8 @@ func TestSellHTTP_Flags(t *testing.T) {
 	assertIntDefault(t, flags, "max-timeout", 300)
 }
 
-func TestBuildSellHTTPRegistrationConfig_DefaultEnabled(t *testing.T) {
-	reg, enabled, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{})
+func TestBuildSellRegistrationConfig_DefaultEnabled(t *testing.T) {
+	reg, enabled, err := buildSellRegistrationConfig("demo", sellRegistrationInput{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,8 +283,8 @@ func TestBuildSellHTTPRegistrationConfig_DefaultEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
-	_, _, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{
+func TestBuildSellRegistrationConfig_NoRegisterConflicts(t *testing.T) {
+	_, _, err := buildSellRegistrationConfig("demo", sellRegistrationInput{
 		NoRegister: true,
 		Name:       "custom",
 	})
@@ -752,6 +763,141 @@ func TestDemoRPCNetwork(t *testing.T) {
 				t.Fatalf("demoRPCNetwork(%q) = %q, want %q", tt.paymentChain, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault pins the
+// fix for the missing-registration regression: `obol sell inference` used to
+// build a ServiceOffer with empty `spec.registration`, so the controller
+// emitted "Registration disabled" and never published the
+// /.well-known/agent-registration.json HTTPRoute. The default contract is
+// "registration enabled, name derived from offer name" — same as `sell http`.
+func TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault(t *testing.T) {
+	d := &inference.Deployment{
+		Name:            "aeon",
+		UpstreamURL:     "http://127.0.0.1:8000",
+		WalletAddress:   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:           "base-sepolia",
+		PricePerRequest: "0.001",
+	}
+	reg, enabled, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	if !enabled {
+		t.Fatal("registration should default to enabled")
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	got, ok := spec["registration"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.registration missing or wrong type: %#v", spec["registration"])
+	}
+	if got["enabled"] != true {
+		t.Errorf("spec.registration.enabled = %v, want true", got["enabled"])
+	}
+	if got["name"] != "aeon" {
+		t.Errorf("spec.registration.name = %v, want %q", got["name"], "aeon")
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_NoRegisterOmitsRegistration confirms the
+// opt-out path: --no-register produces an empty registration map and the spec
+// builder must leave spec.registration unset (so the controller emits the
+// well-known route only when explicitly requested).
+func TestBuildInferenceServiceOfferSpec_NoRegisterOmitsRegistration(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	reg, enabled, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{NoRegister: true})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	if enabled {
+		t.Fatal("--no-register should disable registration")
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	if _, present := spec["registration"]; present {
+		t.Errorf("spec.registration should be absent when --no-register; got %#v", spec["registration"])
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_OperatorOverridesWin pins the fix for
+// the controller-side description-clobber regression in
+// internal/serviceoffercontroller/render.go: the operator's explicit
+// registration fields (name, description, image, skills, domains) must
+// survive into the published spec verbatim, not be silently replaced by
+// controller-side defaults. This test covers the *spec input*; the
+// controller-side guarantee is covered by the companion test in
+// serviceoffercontroller/render_test.go.
+func TestBuildInferenceServiceOfferSpec_OperatorOverridesWin(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	reg, _, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{
+		Name:        "Qwen36 AEON Ultimate",
+		Description: "Uncensored Qwen3.6-27B abliteration on DGX Spark",
+		Image:       "https://example.com/aeon.png",
+		Skills:      []string{"llm/inference", "llm/uncensored"},
+		Domains:     []string{"inference.v1337.org"},
+	})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	r := spec["registration"].(map[string]any)
+	for k, want := range map[string]any{
+		"name":        "Qwen36 AEON Ultimate",
+		"description": "Uncensored Qwen3.6-27B abliteration on DGX Spark",
+		"image":       "https://example.com/aeon.png",
+	} {
+		if r[k] != want {
+			t.Errorf("spec.registration.%s = %#v, want %#v", k, r[k], want)
+		}
+	}
+	skills, _ := r["skills"].([]string)
+	if len(skills) != 2 || skills[0] != "llm/inference" {
+		t.Errorf("spec.registration.skills = %#v, want [llm/inference llm/uncensored]", r["skills"])
+	}
+	domains, _ := r["domains"].([]string)
+	if len(domains) != 1 || domains[0] != "inference.v1337.org" {
+		t.Errorf("spec.registration.domains = %#v, want [inference.v1337.org]", r["domains"])
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_ModelNameNotHardcoded pins the fix for
+// the "spec.model.name = ollama regardless of --model" regression. The model
+// id the operator passed must surface in spec.model.name so the controller's
+// per-model registration description (and any downstream tooling that keys
+// off model name) reads the truth, not the historical hardcoded literal.
+func TestBuildInferenceServiceOfferSpec_ModelNameNotHardcoded(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", nil)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	model, ok := spec["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.model missing or wrong type: %#v", spec["model"])
+	}
+	if model["name"] != "aeon-ultimate" {
+		t.Errorf("spec.model.name = %v, want %q (must reflect --model, not the legacy hardcoded \"ollama\")", model["name"], "aeon-ultimate")
 	}
 }
 

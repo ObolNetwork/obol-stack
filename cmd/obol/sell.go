@@ -184,6 +184,34 @@ Examples:
 				Name:  "provenance-file",
 				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
 			},
+			&cli.BoolFlag{
+				Name:  "no-register",
+				Usage: "Skip ERC-8004 registration (no /.well-known/agent-registration.json HTTPRoute is published)",
+			},
+			&cli.StringFlag{
+				Name:  "register-name",
+				Usage: "Agent name for ERC-8004 registration (defaults to the offer name)",
+			},
+			&cli.StringFlag{
+				Name:  "register-description",
+				Usage: "Agent description for ERC-8004 registration",
+			},
+			&cli.StringFlag{
+				Name:  "register-image",
+				Usage: "Agent image URL for ERC-8004 registration",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-skills",
+				Usage: "OASF skill tags for ERC-8004 registration (repeatable)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-domains",
+				Usage: "OASF domain tags for ERC-8004 registration (repeatable)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-metadata",
+				Usage: "Additional registration metadata as key=value pairs (repeatable, e.g. gpu=A100-80GB)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -384,7 +412,19 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms)
+					reg, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
+						NoRegister:    cmd.Bool("no-register"),
+						Name:          cmd.String("register-name"),
+						Description:   cmd.String("register-description"),
+						Image:         cmd.String("register-image"),
+						Skills:        cmd.StringSlice("register-skills"),
+						Domains:       cmd.StringSlice("register-domains"),
+						MetadataPairs: cmd.StringSlice("register-metadata"),
+					})
+					if regErr != nil {
+						return regErr
+					}
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms, modelFlag, reg)
 					if err != nil {
 						return err
 					}
@@ -701,7 +741,7 @@ Examples:
 					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
-			reg, registerEnabled, err := buildSellHTTPRegistrationConfig(name, sellHTTPRegistrationInput{
+			reg, registerEnabled, err := buildSellRegistrationConfig(name, sellRegistrationInput{
 				NoRegister:    cmd.Bool("no-register"),
 				Register:      cmd.Bool("register"),
 				Name:          cmd.String("register-name"),
@@ -827,7 +867,7 @@ type autoRegisterOptions struct {
 	ExpectedOwner string
 }
 
-type sellHTTPRegistrationInput struct {
+type sellRegistrationInput struct {
 	NoRegister    bool
 	Register      bool
 	Name          string
@@ -907,7 +947,7 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	return nil
 }
 
-func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistrationInput) (map[string]any, bool, error) {
+func buildSellRegistrationConfig(serviceName string, in sellRegistrationInput) (map[string]any, bool, error) {
 	registerEnabled := !in.NoRegister
 	if !registerEnabled && (in.Register || in.Name != "" || in.Description != "" || in.Image != "" ||
 		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0) {
@@ -3383,7 +3423,16 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms) (map[string]any, error) {
+//
+// modelName is the upstream model identifier the operator passed via --model
+// (e.g. "aeon-ultimate"). It is written into spec.model.name so the
+// serviceoffer-controller's registration document carries the real model id
+// rather than the historical hardcoded "ollama" string.
+//
+// registration is the operator's ERC-8004 registration block as produced by
+// buildSellRegistrationConfig — pass nil (or an empty map) to skip
+// registration. When non-nil it is merged verbatim into spec.registration.
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms, modelName string, registration map[string]any) (map[string]any, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 1 || portNum > 65535 {
 		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
@@ -3416,10 +3465,18 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	}
 
 	if d.UpstreamURL != "" {
+		model := strings.TrimSpace(modelName)
+		if model == "" {
+			model = "ollama" // pre-fix fallback; the Action enforces --model
+		}
 		spec["model"] = map[string]any{
-			"name":    "ollama",
+			"name":    model,
 			"runtime": "ollama",
 		}
+	}
+
+	if len(registration) > 0 {
+		spec["registration"] = registration
 	}
 
 	return spec, nil

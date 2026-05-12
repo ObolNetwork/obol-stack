@@ -240,6 +240,74 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 	}
 }
 
+// TestBuildActiveRegistrationDocument_KeepsOperatorDescription pins the fix
+// for the controller-side description-clobber bug:
+// `buildActiveRegistrationDocument` used to unconditionally overwrite
+// `owner.Spec.Registration.Description` for inference-typed offers with
+// `"<model.name> inference via x402 micropayments"`, so any explicit operator
+// description set at sell time was silently lost in the published
+// /.well-known/agent-registration.json document. The fix only fills the
+// description from the model name when the operator's value is empty.
+func TestBuildActiveRegistrationDocument_KeepsOperatorDescription(t *testing.T) {
+	operatorDesc := "Uncensored Qwen3.6-27B abliteration on DGX Spark"
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "aeon-ultimate"},
+			Path:  "/services/aeon",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled:     true,
+				Name:        "Qwen36 AEON Ultimate",
+				Description: operatorDesc,
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+	doc := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner}, "https://inference.example.com", "")
+	if doc.Description != operatorDesc {
+		t.Fatalf("description = %q, want operator value %q (the controller used to overwrite this with %q-inference-via-x402-micropayments)",
+			doc.Description, operatorDesc, owner.Spec.Model.Name)
+	}
+	if doc.Name != "Qwen36 AEON Ultimate" {
+		t.Errorf("name = %q, want operator value %q", doc.Name, "Qwen36 AEON Ultimate")
+	}
+}
+
+// TestBuildActiveRegistrationDocument_FallsBackToModelDescriptionForInference
+// pins the *other* side of the description contract: when the operator does
+// not supply a description, inference offers should still get the
+// model-aware default ("<model.name> inference via x402 micropayments"),
+// not the generic "x402 payment-gated <type> service: <name>" string used
+// for non-inference fallback. The refactor must preserve both branches.
+func TestBuildActiveRegistrationDocument_FallsBackToModelDescriptionForInference(t *testing.T) {
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "aeon-ultimate"},
+			Path:  "/services/aeon",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Name:    "aeon",
+				// Description intentionally left blank.
+			},
+		},
+	}
+	doc := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner}, "https://inference.example.com", "")
+	want := "aeon-ultimate inference via x402 micropayments"
+	if doc.Description != want {
+		t.Errorf("description = %q, want %q (model-aware default for inference offers with no operator description)", doc.Description, want)
+	}
+}
+
 func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *testing.T) {
 	owner := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "demo"},
@@ -528,13 +596,17 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	offers := []*monetizeapi.ServiceOffer{
 		nil,
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "paused-svc", Namespace: "llm",
-				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"}},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "paused-svc", Namespace: "llm",
+				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"},
+			},
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "deleting-svc", Namespace: "llm",
-				DeletionTimestamp: &deleting},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "deleting-svc", Namespace: "llm",
+				DeletionTimestamp: &deleting,
+			},
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 		},
 		{

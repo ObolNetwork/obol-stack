@@ -26,7 +26,6 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
-
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -583,12 +582,18 @@ func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string
 
 func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
 	baseURL = strings.TrimRight(baseURL, "/")
+	// Operator-supplied description wins. Only fall back to a controller-
+	// generated default when the offer left Spec.Registration.Description
+	// empty. The inference-typed default is more specific (names the model),
+	// so it preempts the generic default — but neither overrides an explicit
+	// operator value.
 	description := owner.Spec.Registration.Description
 	if description == "" {
-		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
-	}
-	if owner.IsInference() && owner.Spec.Model.Name != "" {
-		description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		if owner.IsInference() && owner.Spec.Model.Name != "" {
+			description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		} else {
+			description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
+		}
 	}
 
 	image := owner.Spec.Registration.Image
