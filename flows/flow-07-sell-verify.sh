@@ -195,12 +195,21 @@ for i in $(seq 1 6); do
     sleep 5
 done
 
-# Validate 402 JSON body has required x402 fields
+# Validate 402 JSON body has required x402 fields.
+# Retry: the first request after the verifier pod becomes Ready can return
+# an empty body / Bad Gateway from Traefik before the route is fully wired.
 step "402 body has x402Version and accepts[]"
-body=$($CURL_OBOL -s --max-time 10 -X POST \
-    "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+body=""
+for _ in $(seq 1 12); do
+    body=$($CURL_OBOL -s --max-time 10 -X POST \
+        "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+    if echo "$body" | python3 -c 'import sys,json; json.load(sys.stdin)' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 5
+done
 if echo "$body" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)

@@ -187,11 +187,21 @@ else
 fi
 
 # §2.2: 402 body validation
+# Retry the POST a few times: the first request after verifier deployment can
+# return an empty body / Bad Gateway from Traefik before the verifier route is
+# fully published. Same race the flow-07 step 9 flake hits.
 step "402 body validated"
-body_402=$($CURL_BASE -s --max-time 10 -X POST \
-    "$BASE_URL/services/flow-qwen/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+body_402=""
+for _ in $(seq 1 12); do
+    body_402=$($CURL_BASE -s --max-time 10 -X POST \
+        "$BASE_URL/services/flow-qwen/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+    if echo "$body_402" | python3 -c 'import sys,json; json.load(sys.stdin)' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 5
+done
 if echo "$body_402" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
