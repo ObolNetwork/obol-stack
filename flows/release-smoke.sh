@@ -100,10 +100,14 @@ run_flow() {
     echo
     echo "===== START $name ====="
     set +e
+    # All flow output (stdout + stderr) is piped through scrub_secrets before
+    # both the terminal and the artifact log. This catches secret leaks that
+    # other CLI tools (e.g. `obol network add` echoing the full RPC URL with
+    # an Alchemy API key) would otherwise persist on disk.
     if [ -n "$env_name" ]; then
-        env "$env_name=$env_value" bash "$flow" 2>&1 | tee "$log"
+        env "$env_name=$env_value" bash "$flow" 2>&1 | scrub_secrets | tee "$log"
     else
-        bash "$flow" 2>&1 | tee "$log"
+        bash "$flow" 2>&1 | scrub_secrets | tee "$log"
     fi
     rc=${PIPESTATUS[0]}
     set -e

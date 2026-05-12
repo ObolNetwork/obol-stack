@@ -669,6 +669,27 @@ write_x402_facilitator_logs() {
     docker logs "$name" > "$log" 2>&1 || true
 }
 
+# scrub_secrets — line-buffered stream filter that redacts known sensitive
+# tokens before they hit the terminal or the on-disk log. Patterns are
+# additive: any string we never want surfaced should land here. Uses GNU/BSD
+# sed common syntax (no extended regex needed for these literal-anchor patterns).
+#
+# Currently redacts:
+#   - https://*.alchemy.com/v2/<key>          -> https://*.alchemy.com/v2/[REDACTED]
+#   - https://*.infura.io/v3/<key>            -> https://*.infura.io/v3/[REDACTED]
+#   - https://*.quiknode.pro/<token>/         -> https://*.quiknode.pro/[REDACTED]/
+#   - https://lb.drpc.org/...?dkey=<token>    -> https://lb.drpc.org/...?dkey=[REDACTED]
+#   - eth_accounts-style hex private keys     -> [REDACTED-PRIVKEY] (only when
+#                                                  prefixed by literal 'private-key' or 'PRIVATE_KEY')
+scrub_secrets() {
+    sed -E -u \
+        -e 's#(alchemy\.com/v2/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#(infura\.io/v3/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#(quiknode\.pro/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#([?&]dkey=)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#((PRIVATE_KEY|private-key)["= :]+)0x[a-fA-F0-9]{64}#\1[REDACTED-PRIVKEY]#g'
+}
+
 redact_url_for_log() {
     python3 - "$1" <<'PY'
 from urllib.parse import urlparse
