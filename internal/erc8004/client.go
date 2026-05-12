@@ -277,16 +277,23 @@ func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID
 		return fmt.Errorf("erc8004: transactor: %w", err)
 	}
 	opts.Context = ctx
+	_, err = c.SetAgentURIWithOpts(ctx, opts, agentID, uri)
+	return err
+}
 
+// SetAgentURIWithOpts updates the agentURI using a caller-supplied
+// TransactOpts. Used by remote-signer flows where the CLI never sees raw
+// key material; the opts.Signer delegates to an HTTP signer. Returns the
+// mined tx hash for CLI output.
+func (c *Client) SetAgentURIWithOpts(ctx context.Context, opts *bind.TransactOpts, agentID *big.Int, uri string) (string, error) {
 	tx, err := c.contract.Transact(opts, "setAgentURI", agentID, uri)
 	if err != nil {
-		return wrapTransactError("erc8004: setAgentURI tx", err)
+		return "", wrapTransactError("erc8004: setAgentURI tx", err)
 	}
-
 	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
-		return fmt.Errorf("erc8004: wait mined: %w", err)
+		return "", fmt.Errorf("erc8004: wait mined: %w", err)
 	}
-	return nil
+	return tx.Hash().Hex(), nil
 }
 
 // SetMetadata stores arbitrary key-value metadata on the agent NFT.

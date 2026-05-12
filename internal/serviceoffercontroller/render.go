@@ -26,7 +26,6 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
-
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -41,20 +40,23 @@ func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState stri
 				"serviceOfferName":      offer.Name,
 				"serviceOfferNamespace": offer.Namespace,
 				"desiredState":          desiredState,
+				"chain":                 offer.Spec.Payment.Network,
 			},
 		},
 	}
 }
 
-func buildRegistrationConfigMap(request *monetizeapi.RegistrationRequest, documentJSON string) *unstructured.Unstructured {
+func buildAgentIdentityRegistrationConfigMap(identity *monetizeapi.AgentIdentity, documentJSON string) *unstructured.Unstructured {
+	name := agentIdentityRegistrationName(identity)
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata": map[string]any{
-				"name":            registrationWorkloadName(request.Name),
-				"namespace":       request.Namespace,
-				"ownerReferences": []any{registrationRequestOwnerRefMap(request)},
+				"name":            name,
+				"namespace":       identity.Namespace,
+				"ownerReferences": []any{agentIdentityOwnerRefMap(identity)},
+				"labels":          agentIdentityLabels(identity, name),
 			},
 			"data": map[string]any{
 				"agent-registration.json": documentJSON,
@@ -64,25 +66,21 @@ func buildRegistrationConfigMap(request *monetizeapi.RegistrationRequest, docume
 	}
 }
 
-func buildRegistrationDeployment(request *monetizeapi.RegistrationRequest, contentHash string) *unstructured.Unstructured {
-	name := registrationWorkloadName(request.Name)
-	labels := map[string]any{
-		"app":                   name,
-		"obol.org/registration": request.Name,
-		"obol.org/serviceoffer": request.Spec.ServiceOfferName,
-		"obol.org/managed-by":   "serviceoffer-controller",
-	}
+func buildAgentIdentityRegistrationDeployment(identity *monetizeapi.AgentIdentity, contentHash string) *unstructured.Unstructured {
+	name := agentIdentityRegistrationName(identity)
+	labels := agentIdentityLabels(identity, name)
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]any{
 				"name":            name,
-				"namespace":       request.Namespace,
-				"ownerReferences": []any{registrationRequestOwnerRefMap(request)},
+				"namespace":       identity.Namespace,
+				"ownerReferences": []any{agentIdentityOwnerRefMap(identity)},
+				"labels":          labels,
 			},
 			"spec": map[string]any{
-				"replicas": 1,
+				"replicas": int64(1),
 				"selector": map[string]any{
 					"matchLabels": labels,
 				},
@@ -135,20 +133,18 @@ func buildRegistrationDeployment(request *monetizeapi.RegistrationRequest, conte
 	}
 }
 
-func buildRegistrationService(request *monetizeapi.RegistrationRequest) *unstructured.Unstructured {
-	name := registrationWorkloadName(request.Name)
-	labels := map[string]any{
-		"app":                   name,
-		"obol.org/registration": request.Name,
-	}
+func buildAgentIdentityRegistrationService(identity *monetizeapi.AgentIdentity) *unstructured.Unstructured {
+	name := agentIdentityRegistrationName(identity)
+	labels := agentIdentityLabels(identity, name)
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]any{
 				"name":            name,
-				"namespace":       request.Namespace,
-				"ownerReferences": []any{registrationRequestOwnerRefMap(request)},
+				"namespace":       identity.Namespace,
+				"ownerReferences": []any{agentIdentityOwnerRefMap(identity)},
+				"labels":          labels,
 			},
 			"spec": map[string]any{
 				"type":     "ClusterIP",
@@ -161,17 +157,18 @@ func buildRegistrationService(request *monetizeapi.RegistrationRequest) *unstruc
 	}
 }
 
-func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstructured.Unstructured {
-	name := registrationRouteName(request.Spec.ServiceOfferName)
-	serviceName := registrationWorkloadName(request.Name)
+func buildAgentIdentityRegistrationHTTPRoute(identity *monetizeapi.AgentIdentity) *unstructured.Unstructured {
+	name := agentIdentityRouteName(identity)
+	serviceName := agentIdentityRegistrationName(identity)
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
 				"name":            name,
-				"namespace":       request.Namespace,
-				"ownerReferences": []any{registrationRequestOwnerRefMap(request)},
+				"namespace":       identity.Namespace,
+				"ownerReferences": []any{agentIdentityOwnerRefMap(identity)},
+				"labels":          agentIdentityLabels(identity, serviceName),
 			},
 			"spec": map[string]any{
 				"parentRefs": []any{
@@ -194,7 +191,7 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 						"backendRefs": []any{
 							map[string]any{
 								"name":      serviceName,
-								"namespace": request.Namespace,
+								"namespace": identity.Namespace,
 								"port":      int64(8080),
 							},
 						},
@@ -202,6 +199,14 @@ func buildRegistrationHTTPRoute(request *monetizeapi.RegistrationRequest) *unstr
 				},
 			},
 		},
+	}
+}
+
+func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) map[string]any {
+	return map[string]any{
+		"app":                    appName,
+		"obol.org/agentidentity": identity.Name,
+		"obol.org/managed-by":    "serviceoffer-controller",
 	}
 }
 
@@ -242,7 +247,7 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 				"labels":    labels,
 			},
 			"spec": map[string]any{
-				"replicas": 1,
+				"replicas": int64(1),
 				"selector": map[string]any{
 					"matchLabels": labels,
 				},
@@ -527,12 +532,26 @@ func registrationRouteName(name string) string {
 	return safeName("so-", name, "-wellknown")
 }
 
+func agentIdentityRegistrationName(identity *monetizeapi.AgentIdentity) string {
+	if identity == nil || identity.Name == "" {
+		return safeName("agentidentity-", monetizeapi.AgentIdentityDefaultName, "-registration")
+	}
+	return safeName("agentidentity-", identity.Name, "-registration")
+}
+
+func agentIdentityRouteName(identity *monetizeapi.AgentIdentity) string {
+	if identity == nil || identity.Name == "" {
+		return safeName("agentidentity-", monetizeapi.AgentIdentityDefaultName, "-wellknown")
+	}
+	return safeName("agentidentity-", identity.Name, "-wellknown")
+}
+
 func ownerRefMap(offer *monetizeapi.ServiceOffer) map[string]any {
 	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.ServiceOfferKind, offer.Name, offer.UID)
 }
 
-func registrationRequestOwnerRefMap(request *monetizeapi.RegistrationRequest) map[string]any {
-	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.RegistrationRequestKind, request.Name, request.UID)
+func agentIdentityOwnerRefMap(identity *monetizeapi.AgentIdentity) map[string]any {
+	return ownerRefMapFor(monetizeapi.Group+"/"+monetizeapi.Version, monetizeapi.AgentIdentityKind, identity.Name, identity.UID)
 }
 
 func ownerRefMapFor(apiVersion, kind, name string, uid types.UID) map[string]any {
@@ -579,112 +598,6 @@ func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string
 		}
 	}
 	return false
-}
-
-func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
-	baseURL = strings.TrimRight(baseURL, "/")
-	description := owner.Spec.Registration.Description
-	if description == "" {
-		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
-	}
-	if owner.IsInference() && owner.Spec.Model.Name != "" {
-		description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
-	}
-
-	image := owner.Spec.Registration.Image
-	if image == "" {
-		image = baseURL + "/agent-icon.png"
-	}
-
-	services := buildRegistrationServices(owner, offers, baseURL)
-
-	registration := erc8004.AgentRegistration{
-		Type:           erc8004.RegistrationType,
-		Name:           defaultString(owner.Spec.Registration.Name, owner.Name),
-		Description:    description,
-		Image:          image,
-		Services:       services,
-		X402Support:    true,
-		Active:         true,
-		SupportedTrust: owner.Spec.Registration.SupportedTrust,
-	}
-	if agentID != "" {
-		registration.Registrations = []erc8004.OnChainReg{{
-			AgentID:       parseInt64(agentID),
-			AgentRegistry: fmt.Sprintf("eip155:%d:%s", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia),
-		}}
-	}
-	if metadata := nonEmptyStringMap(owner.Spec.Registration.Metadata); len(metadata) > 0 {
-		registration.Metadata = metadata
-	}
-	if provenance := nonEmptyStringMap(owner.Spec.Provenance); len(provenance) > 0 {
-		registration.Provenance = provenance
-	}
-	return registration
-}
-
-func buildTombstoneRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
-	registration := buildActiveRegistrationDocument(offer, []*monetizeapi.ServiceOffer{offer}, baseURL, agentID)
-	registration.Active = false
-	registration.X402Support = false
-	registration.Description = fmt.Sprintf("%s (deactivated)", registration.Description)
-	return registration
-}
-
-func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL string) []erc8004.ServiceDef {
-	baseURL = strings.TrimRight(baseURL, "/")
-	type offerKey struct {
-		namespace string
-		name      string
-	}
-	seen := map[offerKey]struct{}{}
-	ordered := []*monetizeapi.ServiceOffer{}
-	add := func(offer *monetizeapi.ServiceOffer, force bool) {
-		if offer == nil {
-			return
-		}
-		key := offerKey{namespace: offer.Namespace, name: offer.Name}
-		if _, ok := seen[key]; ok {
-			return
-		}
-		if !force && !offerPublishedForRegistration(offer) {
-			return
-		}
-		seen[key] = struct{}{}
-		ordered = append(ordered, offer)
-	}
-
-	add(owner, true)
-	for _, offer := range offers {
-		if owner != nil && offer != nil && offer.Namespace == owner.Namespace && offer.Name == owner.Name {
-			continue
-		}
-		add(offer, false)
-	}
-
-	services := make([]erc8004.ServiceDef, 0, len(ordered)*2)
-	for _, offer := range ordered {
-		services = append(services, erc8004.ServiceDef{
-			Name:     "web",
-			Endpoint: baseURL + offer.EffectivePath(),
-		})
-		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
-			services = append(services, erc8004.ServiceDef{
-				Name:    "OASF",
-				Version: "0.8",
-				Skills:  offer.Spec.Registration.Skills,
-				Domains: offer.Spec.Registration.Domains,
-			})
-		}
-		for _, service := range offer.Spec.Registration.Services {
-			services = append(services, erc8004.ServiceDef{
-				Name:     service.Name,
-				Endpoint: service.Endpoint,
-				Version:  service.Version,
-			})
-		}
-	}
-	return services
 }
 
 func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {

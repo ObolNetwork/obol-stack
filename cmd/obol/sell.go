@@ -58,6 +58,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
+			sellIdentityCommand(cfg),
 			sellInfoCommand(cfg),
 		},
 	}
@@ -103,7 +104,7 @@ Examples:
 			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "price",
-				Usage: "Per-request price (alias for --per-request; default 0.001 when no price flag is set)",
+				Usage: "Per-request price (alias for --per-request)",
 			},
 			&cli.StringFlag{
 				Name:  "per-request",
@@ -852,7 +853,6 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	if err != nil {
 		return err
 	}
-
 	if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
 		return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
 	}
@@ -2342,7 +2342,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 
 			if !cmd.Bool("force") {
 				msg := fmt.Sprintf(
-					"Delete ServiceOffer %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove x402 enforcement for the service\n  - Deactivate the ERC-8004 registration (if registered)\n  - Let the serviceoffer-controller finalizer clean up published state",
+					"Delete ServiceOffer %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove x402 enforcement for the service\n  - Let the serviceoffer-controller finalizer clean up offer-scoped state\n  - Leave the AgentIdentity record and on-chain NFT intact (the controller renders a tombstone if no active offers remain)",
 					ns,
 					name,
 				)
@@ -2354,37 +2354,12 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 
 			removePricingRoute(cfg, u, name)
 
-			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
-				"-o", "jsonpath={.status.agentId}")
-			if err == nil && strings.TrimSpace(soOut) != "" {
-				agentID := strings.TrimSpace(soOut)
-				u.Infof("Deactivating ERC-8004 registration (agent %s)...", agentID)
-
-				cmName := fmt.Sprintf("so-%s-registration", name)
-				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
-					"-o", `jsonpath={.data.agent-registration\.json}`)
-				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
-					u.Printf("  No registration document found. Agent %s NFT persists on-chain.", agentID)
-				} else {
-					var regDoc map[string]interface{}
-					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
-						u.Warnf("corrupt registration JSON, skipping deactivation: %v", jsonErr)
-					} else {
-						regDoc["active"] = false
-						patchJSON, _ := json.Marshal(map[string]interface{}{
-							"data": map[string]string{
-								"agent-registration.json": mustMarshal(regDoc),
-							},
-						})
-						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
-							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							u.Warnf("could not deactivate agent registration: %v", patchErr)
-						} else {
-							u.Successf("Registration deactivated (active=false). On-chain NFT persists.")
-						}
-					}
-				}
-			}
+			// Identity-level registration ownership lives in the AgentIdentity
+			// CR and is managed by the controller. The CLI no longer patches
+			// the registration ConfigMap here; deleting the ServiceOffer is
+			// enough; if this was the last active offer for the identity, the
+			// controller renders an active:false / x402Support:false tombstone
+			// document while keeping the agentId.
 
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
@@ -2489,19 +2464,19 @@ func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
 		Usage: "Register a service on the ERC-8004 Agent Registry",
-		Description: `Registers an agent on the ERC-8004 Agent Registry on one or more chains.
+		Description: `Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
 and pays gas from the agent's wallet — make sure it has a small balance on
-each target chain (~$0.20–$0.50 of native gas typically suffices).
+the target chain (~$0.20–$0.50 of native gas typically suffices).
 
 Examples:
   obol sell register                                    # defaults to mainnet
   obol sell register --chain base                       # register on base
-  obol sell register --chain mainnet,base               # register on multiple chains`,
+  obol sell register --chain base-sepolia               # add a Base Sepolia registration`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Registration chain(s), comma-separated (mainnet, base, base-sepolia)",
+				Usage: "Registration chain (mainnet, base, base-sepolia)",
 				Value: "mainnet",
 			},
 			&cli.StringFlag{
@@ -2560,7 +2535,6 @@ Examples:
 			if err != nil {
 				return err
 			}
-
 			// Interactive confirmation of registration metadata.
 			agentName := cmd.String("name")
 			agentDesc := cmd.String("description")
@@ -2647,11 +2621,18 @@ func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	return successes
 }
 
-// registerDirectViaSigner performs a direct on-chain registration via the remote-signer.
+// registerDirectViaSigner performs an idempotent ERC-8004 registration via
+// the remote-signer. It reads the selected AgentIdentity first and branches:
+//   - identity.status.registrations has this chain -> verify signer ownership,
+//     then setAgentURI(uri) only when the on-chain tokenURI differs.
+//   - no registration exists for this chain -> recover by (owner, agentURI)
+//     on-chain; mint via register(agentURI) only if recovery returns no match.
+//
+// The AgentIdentity CR persists only durable ERC-8004 identity keys:
+// status.registrations[] entries keyed by chain.
 func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {
 	u.Printf("    Using direct on-chain registration via remote-signer...")
 
-	// Port-forward to remote-signer.
 	pf, err := startSignerPortForward(cfg, namespace)
 	if err != nil {
 		return fmt.Errorf("port-forward to remote-signer: %w", err)
@@ -2659,14 +2640,12 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	defer pf.Stop()
 
 	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
-
 	addr, err := signer.GetAddress(ctx)
 	if err != nil {
 		return err
 	}
 	u.Printf("    Wallet:   %s", addr.Hex())
 
-	// Connect to eRPC for this network.
 	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
 	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
 	if err != nil {
@@ -2674,9 +2653,68 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	}
 	defer client.Close()
 
-	// Create TransactOpts that delegates signing to the remote-signer.
 	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
 
+	identity, err := ensureAgentIdentity(cfg, monetizeapi.AgentIdentityDefaultNamespace, monetizeapi.AgentIdentityDefaultName, monetizeapi.AgentIdentitySpec{})
+	if err != nil {
+		return fmt.Errorf("load AgentIdentity: %w", err)
+	}
+	existingAgentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, net.Name)
+
+	// Idempotent path: this chain already has an on-chain registration.
+	if existingAgentID != "" {
+		agentID, ok := new(big.Int).SetString(existingAgentID, 10)
+		if !ok {
+			return fmt.Errorf("AgentIdentity %s/%s has malformed agentId %q for chain %s",
+				identity.Metadata.Namespace, identity.Metadata.Name, existingAgentID, net.Name)
+		}
+		owner, walletErr := client.AgentWallet(ctx, agentID)
+		if walletErr != nil {
+			return fmt.Errorf("verify agent %s on %s: %w", agentID, net.Name, walletErr)
+		}
+		if owner != addr {
+			return fmt.Errorf("signer %s does not control AgentIdentity agent %s (on-chain owner: %s)", addr.Hex(), agentID, owner.Hex())
+		}
+
+		u.Printf("    Agent ID: %s (existing)", agentID.String())
+		currentURI, err := client.TokenURI(ctx, agentID)
+		if err != nil {
+			return fmt.Errorf("read tokenURI(%s): %w", agentID, err)
+		}
+		if currentURI == agentURI {
+			u.Printf("    URI:      unchanged, skipping setAgentURI")
+		} else {
+			u.Printf("    Updating agentURI via setAgentURI...")
+			uriTx, err := client.SetAgentURIWithOpts(ctx, opts, agentID, agentURI)
+			if err != nil {
+				return fmt.Errorf("setAgentURI: %w", err)
+			}
+			u.Printf("    Tx:       %s", uriTx)
+		}
+		// Refresh x402 metadata to keep parity with first-mint behavior.
+		if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
+			u.Warnf("failed to set x402 metadata: %v", err)
+		}
+		return nil
+	}
+
+	// No recorded agentId: try owner+URI recovery from genesis before
+	// minting so reruns don't double-mint a registration that already
+	// exists on-chain.
+	if recoveredID, _, ok := recoverRegistrationByOwnerAndURI(ctx, client, addr, agentURI, 0); ok {
+		u.Printf("    Agent ID: %s (recovered via owner+URI)", recoveredID.String())
+		identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, recoveredID.String())
+		if err := applyAgentIdentity(cfg, identity); err != nil {
+			return fmt.Errorf("persist recovered AgentIdentity registration %s on %s: %w", recoveredID, net.Name, err)
+		}
+		_, _ = client.WaitForAgent(ctx, recoveredID, 30*time.Second)
+		if err := client.SetMetadataWithOpts(ctx, opts, recoveredID, "x402", []byte(`{"x402":true}`)); err != nil {
+			u.Warnf("failed to set x402 metadata: %v", err)
+		}
+		return nil
+	}
+
+	// Fresh mint.
 	startBlock := registrationRecoveryStartBlock(ctx, client, u)
 	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, addr, startBlock, func() (*big.Int, string, error) {
 		return client.RegisterWithOptsDetailed(ctx, opts, agentURI)
@@ -2691,18 +2729,17 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 		u.Printf("    Tx:       %s", txHash)
 	}
 
-	// The Register tx is mined on the WRITE upstream, but a follow-up
-	// setMetadata estimateGas goes through the READ upstream which can lag
-	// (we observed ERC721NonexistentToken reverts when a stale eRPC route was
-	// pinned to a parallel Anvil fork). Block until the reader sees the token.
 	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
 		u.Warnf("agent not visible to reader after register: %v", err)
 	}
 
-	// Set x402 metadata.
-	x402Meta := []byte(`{"x402":true}`)
-	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", x402Meta); err != nil {
+	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
 		u.Warnf("failed to set x402 metadata: %v", err)
+	}
+
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, agentID.String())
+	if err := applyAgentIdentity(cfg, identity); err != nil {
+		return fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --chain %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
 	}
 	return nil
 }

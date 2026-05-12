@@ -2,6 +2,7 @@ package monetizeapi
 
 import (
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,11 +16,18 @@ const (
 	RegistrationRequestKind = "RegistrationRequest"
 	PurchaseRequestKind     = "PurchaseRequest"
 	AgentKind               = "Agent"
+	AgentIdentityKind       = "AgentIdentity"
 
 	ServiceOfferResource        = "serviceoffers"
 	RegistrationRequestResource = "registrationrequests"
 	PurchaseRequestResource     = "purchaserequests"
 	AgentResource               = "agents"
+	AgentIdentityResource       = "agentidentities"
+
+	// Default identity used for the operator's public ERC-8004 registration
+	// file. The registration file can contain multiple per-chain registrations.
+	AgentIdentityDefaultNamespace = "x402"
+	AgentIdentityDefaultName      = "default"
 
 	PausedAnnotation = "obol.org/paused"
 
@@ -36,6 +44,7 @@ var (
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
 	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
 	AgentGVR               = schema.GroupVersionResource{Group: Group, Version: Version, Resource: AgentResource}
+	AgentIdentityGVR       = schema.GroupVersionResource{Group: Group, Version: Version, Resource: AgentIdentityResource}
 
 	ServiceGVR        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 	SecretGVR         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
@@ -178,6 +187,7 @@ type RegistrationRequestSpec struct {
 	ServiceOfferName      string `json:"serviceOfferName,omitempty"`
 	ServiceOfferNamespace string `json:"serviceOfferNamespace,omitempty"`
 	DesiredState          string `json:"desiredState,omitempty"`
+	Chain                 string `json:"chain,omitempty"`
 }
 
 type RegistrationRequestStatus struct {
@@ -351,4 +361,75 @@ func (a *Agent) EffectiveModel() string {
 
 func (a *Agent) IsReady() bool {
 	return a.Status.Phase == AgentPhaseReady
+}
+
+// AgentIdentity is the durable, on-chain identity an operator controls in the
+// ERC-8004 Identity Registry. A single AgentIdentity outlives ServiceOffers:
+// deleting the last ServiceOffer that references it does not delete the NFT,
+// the published registration document, or the recorded agentId; instead the
+// renderer publishes a tombstone (active:false, x402Support:false) so external
+// observers still see the historical record.
+type AgentIdentity struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              AgentIdentitySpec   `json:"spec,omitempty"`
+	Status            AgentIdentityStatus `json:"status,omitempty"`
+}
+
+type AgentIdentitySpec struct {
+}
+
+type AgentIdentityStatus struct {
+	Registrations []AgentIdentityRegistration `json:"registrations,omitempty"`
+}
+
+type AgentIdentityRegistration struct {
+	Chain   string `json:"chain,omitempty"`
+	AgentID string `json:"agentId,omitempty"`
+}
+
+func AgentIdentityAgentIDForChain(status AgentIdentityStatus, chain string) string {
+	chain = strings.TrimSpace(chain)
+	for _, registration := range status.Registrations {
+		if strings.EqualFold(strings.TrimSpace(registration.Chain), chain) && strings.TrimSpace(registration.AgentID) != "" {
+			return registration.AgentID
+		}
+	}
+	return ""
+}
+
+func UpsertAgentIdentityRegistration(status AgentIdentityStatus, chain, agentID string) AgentIdentityStatus {
+	chain = strings.TrimSpace(chain)
+	agentID = strings.TrimSpace(agentID)
+	if chain == "" || agentID == "" {
+		return status
+	}
+	updated := false
+	out := status.Registrations[:0]
+	for _, registration := range status.Registrations {
+		if strings.EqualFold(strings.TrimSpace(registration.Chain), chain) {
+			if !updated {
+				registration.Chain = chain
+				registration.AgentID = agentID
+				out = append(out, registration)
+				updated = true
+			}
+			continue
+		}
+		out = append(out, registration)
+	}
+	if !updated {
+		out = append(out, AgentIdentityRegistration{Chain: chain, AgentID: agentID})
+	}
+	status.Registrations = out
+	return status
+}
+
+func HasAgentIdentityRegistrations(status AgentIdentityStatus) bool {
+	for _, registration := range status.Registrations {
+		if strings.TrimSpace(registration.Chain) != "" && strings.TrimSpace(registration.AgentID) != "" {
+			return true
+		}
+	}
+	return false
 }

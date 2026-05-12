@@ -187,7 +187,7 @@ func TestSellInference_Flags(t *testing.T) {
 		"tee", "model-hash",
 	)
 
-	assertStringDefault(t, flags, "price", "0.001")
+	assertStringDefault(t, flags, "price", "")
 	assertStringDefault(t, flags, "chain", "base")
 	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "listen", ":8402")

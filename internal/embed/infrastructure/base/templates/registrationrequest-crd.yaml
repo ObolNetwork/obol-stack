@@ -58,6 +58,9 @@ spec:
                   enum:
                     - Active
                     - Tombstoned
+                chain:
+                  type: string
+                  description: "ERC-8004 registration chain alias for this request."
             status:
               type: object
               properties:
