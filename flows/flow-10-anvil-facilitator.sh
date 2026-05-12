@@ -60,8 +60,15 @@ ANVIL_STARTED=0
 if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
     anvil_cmdline=$(ps -Ao pid=,command= | awk '/[a]nvil/ && /--port 8545/ {print; exit}' || true)
-    if echo "$anvil_cmdline" | grep -q -- '--prune-history'; then
-        pass "Anvil already running on port 8545 with historical-state retention"
+    # Reject any anvil that was started with --prune-history (which is an
+    # ENABLE flag, NOT a retention guarantee — anvil's docs say "Don't keep
+    # full chain history. If a number argument is specified, at most this
+    # number of [states are retained]."). When the flag is set, the
+    # facilitator's eth_getStorageAt for the EIP-3009 nonce slot at the fork
+    # block returns 'state at block #N is pruned' and flow-08 step 12 fails
+    # with a 503 from the verifier. Always restart anvil clean.
+    if echo "$anvil_cmdline" | grep -qv -- '--prune-history' && [ -n "$anvil_cmdline" ]; then
+        pass "Anvil already running on port 8545 (full history)"
     else
         old_pid=$(echo "$anvil_cmdline" | awk '{print $1}' || true)
         if [ -n "$old_pid" ]; then
@@ -70,7 +77,7 @@ if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
         fi
         if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
-            fail "Existing Anvil on port 8545 lacks --prune-history and could not be restarted"
+            fail "Existing Anvil on port 8545 carries --prune-history and could not be restarted"
             emit_metrics; exit 0
         fi
         ANVIL_STARTED=1
@@ -91,7 +98,17 @@ if [ "$ANVIL_STARTED" = "1" ]; then
     # PurchaseRequest is created, no paid/* model is hot-added to LiteLLM, and
     # the paid inference step then returns a misleading 503 "Payment
     # verification failed" (actually "no such LiteLLM model group").
-    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --host 0.0.0.0 --prune-history 1000000 >"$ANVIL_LOG" 2>&1 &
+    # NOTE: do NOT pass --prune-history here. anvil's docs:
+    #   "--prune-history [<PRUNE_HISTORY>]: Don't keep full chain history.
+    #    If a number argument is specified, at most this number of
+    #    [states are retained]."
+    # i.e. --prune-history is an ENABLE flag for pruning, not a retention
+    # guarantee. With --prune-history 1000000 set, anvil pruned the
+    # fork-block state and the facilitator's eth_getStorageAt for the
+    # EIP-3009 nonce slot returned 'state at block #N is pruned' (HTTP 500
+    # invalidReason=unexpected_error), failing flow-08 step 12.
+    # Without the flag, anvil keeps full history from the fork point onward.
+    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --host 0.0.0.0 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
     anvil_ready=0
     for _ in $(seq 1 60); do
@@ -106,7 +123,7 @@ if [ "$ANVIL_STARTED" = "1" ]; then
         sleep 2
     done
     if [ "$anvil_ready" = "1" ]; then
-        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC with --prune-history 1000000"
+        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC (full history, no --prune-history)"
     else
         cleanup_pid "$(cat "$ANVIL_PID_FILE" 2>/dev/null || true)"
         fail "Anvil failed to start"
@@ -201,7 +218,7 @@ if [[ "$fund_block" =~ ^[0-9]+$ ]] && [[ "$history_slot" =~ ^0x[0-9a-fA-F]+$ ]];
     historic_raw=$(cast rpc eth_getStorageAt "$USDC_ADDRESS" "$history_slot" "0x$(printf '%x' "$fund_block")" \
         --rpc-url "$ANVIL_RPC" 2>&1 | tr -d '"') || true
     if echo "$historic_raw" | grep -qi 'state at block .* is pruned'; then
-        fail "Historical storage lookup is pruned — restart Anvil with --prune-history 1000000"
+        fail "Historical storage lookup is pruned — anvil should be started WITHOUT --prune-history (it's an enable-pruning flag, not a retention guarantee)"
     elif [[ "$historic_raw" =~ ^0x[0-9a-fA-F]+$ ]] && [ "$historic_raw" != "0x" ] && [ "$historic_raw" != "0x0" ]; then
         pass "Historical storage lookup succeeded at block $fund_block"
     else
