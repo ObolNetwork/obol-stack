@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -898,6 +899,104 @@ func TestBuildInferenceServiceOfferSpec_ModelNameNotHardcoded(t *testing.T) {
 	}
 	if model["name"] != "aeon-ultimate" {
 		t.Errorf("spec.model.name = %v, want %q (must reflect --model, not the legacy hardcoded \"ollama\")", model["name"], "aeon-ultimate")
+	}
+}
+
+// TestShouldAutoRegisterSell pins the decision logic shared by the http and
+// inference action handlers. The bug it guards: leaving a fresh inference
+// offer in `Registered=False AwaitingExternalRegistration` so that the
+// controller's services.json filter (which requires Ready=True, which in
+// turn requires Registered=True) silently excluded the offer from the
+// operator's own storefront. Both call sites must auto-register exactly
+// when the spec says enabled AND the tunnel is up — anything else is a
+// regression.
+func TestShouldAutoRegisterSell(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      map[string]any
+		tunnelURL string
+		want      bool
+	}{
+		{
+			name:      "registration enabled + tunnel up → register",
+			spec:      map[string]any{"registration": map[string]any{"enabled": true}},
+			tunnelURL: "https://inference.example.com",
+			want:      true,
+		},
+		{
+			name:      "registration explicitly disabled → skip",
+			spec:      map[string]any{"registration": map[string]any{"enabled": false}},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "no registration block (sell http --no-register / pre-#485 sell inference) → skip",
+			spec:      map[string]any{},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "registration enabled but tunnel down → skip (no endpoint to advertise)",
+			spec:      map[string]any{"registration": map[string]any{"enabled": true}},
+			tunnelURL: "",
+			want:      false,
+		},
+		{
+			name:      "registration block is not a map (defensive) → skip",
+			spec:      map[string]any{"registration": "garbage"},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "registration.enabled is not a bool (defensive) → skip",
+			spec:      map[string]any{"registration": map[string]any{"enabled": "yes"}},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldAutoRegisterSell(tc.spec, tc.tunnelURL)
+			if got != tc.want {
+				t.Errorf("shouldAutoRegisterSell = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSellInferenceAction_InvokesAutoRegister is a source-level guard
+// against the specific regression the user just hit on spark2: the
+// inference Action committed the ServiceOffer, ensured the tunnel, then
+// jumped straight to runInferenceGateway without ever calling
+// autoRegisterServiceOffer. Result: the offer stayed in
+// AwaitingExternalRegistration and never reached the storefront feed.
+// Without this guard, an innocent refactor of the post-create code path
+// could silently remove the call again — and the only downstream signal
+// would be "operator's storefront mysteriously empty", which is hard to
+// attribute.
+func TestSellInferenceAction_InvokesAutoRegister(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellInferenceCommand(")
+	if start < 0 {
+		t.Fatal("sellInferenceCommand not found in sell.go")
+	}
+	next := strings.Index(body[start+1:], "\nfunc ")
+	if next < 0 {
+		t.Fatal("could not delimit sellInferenceCommand body")
+	}
+	scope := body[start : start+1+next]
+	for _, needle := range []string{
+		"shouldAutoRegisterSell(",
+		"autoRegisterServiceOffer(",
+	} {
+		if !strings.Contains(scope, needle) {
+			t.Errorf("sellInferenceCommand body must contain %q — auto-register path missing, "+
+				"offers will stay in AwaitingExternalRegistration and be excluded from /api/services.json", needle)
+		}
 	}
 }
 

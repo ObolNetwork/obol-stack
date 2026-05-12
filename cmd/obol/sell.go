@@ -448,11 +448,35 @@ Examples:
 						u.Blank()
 						u.Info("Ensuring tunnel is active for public access...")
 
-						if tunnelURL, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
+						tunnelURL := ""
+						if url, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
 							u.Warnf("Tunnel not started: %v", tErr)
 							u.Dim("  Start manually with: obol tunnel restart")
 						} else {
+							tunnelURL = url
 							u.Successf("Tunnel active: %s", tunnelURL)
+						}
+
+						// Auto-register the seller on ERC-8004, mirroring the
+						// `obol sell http` path. Without this step the offer
+						// stays in Registered=False AwaitingExternalRegistration
+						// forever, which makes Ready=False and excludes the
+						// offer from /api/services.json (the storefront feed
+						// only includes Ready=True offers).
+						if shouldAutoRegisterSell(soSpec, tunnelURL) {
+							reg, _ := soSpec["registration"].(map[string]any)
+							u.Blank()
+							u.Info("Registering seller agent on ERC-8004...")
+							if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
+								ChainCSV:      cmd.String("chain"),
+								Endpoint:      tunnelURL,
+								AgentName:     registrationNameForPrompt(name, reg),
+								AgentDesc:     registrationDescriptionForPrompt(name, reg),
+								ExpectedOwner: wallet,
+							}); err != nil {
+								u.Warnf("automatic sell registration failed: %v", err)
+								u.Dim("  Re-run later with: obol sell register " + name + " -n " + svcNs)
+							}
 						}
 					}
 				}
@@ -837,6 +861,26 @@ Examples:
 			return nil
 		},
 	}
+}
+
+// shouldAutoRegisterSell reports whether the post-create auto-register step
+// must run for a freshly-applied ServiceOffer spec. Both `obol sell http` and
+// `obol sell inference` need the same gate: registration must be enabled AND
+// a tunnel URL must be available to write into the on-chain registration
+// document. The decision is intentionally shared so the inference path
+// cannot silently regress to "create the offer, never register" (the bug
+// behind https://github.com/ObolNetwork/obol-stack/issues — Registered=False
+// AwaitingExternalRegistration hiding the offer from /api/services.json).
+func shouldAutoRegisterSell(spec map[string]any, tunnelURL string) bool {
+	if tunnelURL == "" {
+		return false
+	}
+	reg, ok := spec["registration"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := reg["enabled"].(bool)
+	return enabled
 }
 
 func registrationNameForPrompt(fallback string, reg map[string]any) string {
