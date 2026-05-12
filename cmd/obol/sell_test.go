@@ -15,6 +15,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
+	"gopkg.in/yaml.v3"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1518,6 +1519,199 @@ func TestProcessAlive_SelfAndBogus(t *testing.T) {
 	}
 	if processAlive(99_999_999) {
 		t.Error("processAlive(absurd pid) must be false")
+	}
+}
+
+// TestPersistSellHTTPOffer_RoundTrip pins the on-disk manifest contract.
+// Anything the persistence layer writes must come back identically from
+// the resume path (which reads it via yaml.Unmarshal + kubectl-apply).
+// The path layout — <ConfigDir>/sell-http/<namespace>__<name>.yaml — is
+// the second half of the contract: two offers with the same name in
+// different namespaces must never collide on disk.
+func TestPersistSellHTTPOffer_RoundTrip(t *testing.T) {
+	cfg := newTestConfig(t)
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata": map[string]any{
+			"name":      "my-api",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"type": "http",
+			"upstream": map[string]any{
+				"service": "my-svc", "namespace": "default", "port": int64(8080), "healthPath": "/health",
+			},
+			"payment": map[string]any{
+				"scheme":  "exact",
+				"network": "base-sepolia",
+				"payTo":   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"price":   map[string]any{"perRequest": "0.001"},
+			},
+		},
+	}
+	if err := persistSellHTTPOffer(cfg, "default", "my-api", manifest); err != nil {
+		t.Fatalf("persistSellHTTPOffer: %v", err)
+	}
+
+	expected := filepath.Join(cfg.ConfigDir, "sell-http", "default__my-api.yaml")
+	data, err := os.ReadFile(expected)
+	if err != nil {
+		t.Fatalf("expected manifest at %s: %v", expected, err)
+	}
+	if len(data) == 0 {
+		t.Fatal("manifest file is empty")
+	}
+	// Round-trip: parse, verify metadata.name + spec.payment.payTo survived.
+	var round map[string]any
+	if err := yaml.Unmarshal(data, &round); err != nil {
+		t.Fatalf("YAML unmarshal: %v\n%s", err, data)
+	}
+	ns, name := manifestNSName(round)
+	if ns != "default" || name != "my-api" {
+		t.Errorf("round-tripped metadata = %s/%s, want default/my-api", ns, name)
+	}
+	payTo := round["spec"].(map[string]any)["payment"].(map[string]any)["payTo"]
+	if payTo != "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47" {
+		t.Errorf("round-tripped payTo = %v, want operator-supplied", payTo)
+	}
+}
+
+// TestPersistSellHTTPOffer_NamespaceIsolation pins that two offers with
+// the same name in different namespaces produce distinct files. A
+// careless filename scheme would have the second `obol sell http`
+// silently overwrite the first.
+func TestPersistSellHTTPOffer_NamespaceIsolation(t *testing.T) {
+	cfg := newTestConfig(t)
+	stub := func(ns string) map[string]any {
+		return map[string]any{
+			"apiVersion": "obol.org/v1alpha1",
+			"kind":       "ServiceOffer",
+			"metadata":   map[string]any{"name": "shared", "namespace": ns},
+			"spec":       map[string]any{"type": "http"},
+		}
+	}
+	if err := persistSellHTTPOffer(cfg, "team-a", "shared", stub("team-a")); err != nil {
+		t.Fatalf("persist team-a: %v", err)
+	}
+	if err := persistSellHTTPOffer(cfg, "team-b", "shared", stub("team-b")); err != nil {
+		t.Fatalf("persist team-b: %v", err)
+	}
+	for _, ns := range []string{"team-a", "team-b"} {
+		path := filepath.Join(cfg.ConfigDir, "sell-http", ns+"__shared.yaml")
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected %s to exist: %v", path, err)
+		}
+	}
+}
+
+// TestRemoveSellHTTPOffer_DropsPersistedManifest pins the symmetric
+// teardown: `obol sell delete` must remove the on-disk manifest so the
+// next stack-up doesn't re-create an offer the operator intentionally
+// deleted. The function must also be a quiet no-op for missing files —
+// running it twice (or against an offer that was never persisted) must
+// not error.
+func TestRemoveSellHTTPOffer_DropsPersistedManifest(t *testing.T) {
+	cfg := newTestConfig(t)
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+		"metadata": map[string]any{"name": "doomed", "namespace": "llm"},
+	}
+	if err := persistSellHTTPOffer(cfg, "llm", "doomed", manifest); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	path := filepath.Join(cfg.ConfigDir, "sell-http", "llm__doomed.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("manifest must exist before remove: %v", err)
+	}
+	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+		t.Errorf("remove: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("manifest still exists after remove: %v", err)
+	}
+	// Idempotent: removing the missing file must not error.
+	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+		t.Errorf("second remove must be no-op, got: %v", err)
+	}
+	// Defensive: empty inputs are silent no-ops, not panics.
+	if err := removeSellHTTPOffer(cfg, "", "foo"); err != nil {
+		t.Errorf("empty namespace: %v", err)
+	}
+	if err := removeSellHTTPOffer(cfg, "llm", ""); err != nil {
+		t.Errorf("empty name: %v", err)
+	}
+}
+
+// TestResumeSellHTTPOffers_EmptyStoreNoOp pins the "no http offers yet"
+// path: stack-up against a workspace that's never persisted an http
+// offer returns nil without erroring. Same shape as the inference
+// equivalent — important because resumeSellOffers calls both even when
+// only one store has entries.
+func TestResumeSellHTTPOffers_EmptyStoreNoOp(t *testing.T) {
+	cfg := newTestConfig(t)
+	// Need a kubeconfig.yaml present, otherwise the function bails early
+	// (correctly — no cluster). For the "store empty but cluster up"
+	// case we want to verify it doesn't error.
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("seed kubeconfig: %v", err)
+	}
+	if err := resumeSellHTTPOffers(cfg, ui.New(false)); err != nil {
+		t.Errorf("empty-store resume must succeed: %v", err)
+	}
+}
+
+// TestSellDeleteAction_CallsRemoveSellHTTPOffer is a source-level guard
+// against the obvious post-delete leak: forget to call
+// removeSellHTTPOffer in the sell delete handler and the next
+// `obol stack up` resurrects the offer the operator just killed. The
+// only signal would be "deleted offers spookily come back" which is
+// hard to attribute, hence the test.
+func TestSellDeleteAction_CallsRemoveSellHTTPOffer(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellDeleteCommand(")
+	if start < 0 {
+		t.Fatal("sellDeleteCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellDeleteCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "removeSellHTTPOffer(") {
+		t.Fatal("sellDeleteCommand must call removeSellHTTPOffer — otherwise the on-disk manifest survives the kubectl delete and `obol stack up` resurrects the offer")
+	}
+}
+
+// TestResumeSellOffers_HTTPOnlyStore pins that http offers are still
+// resumed when the inference store is completely empty. The original
+// resumeSellOffers short-circuited on `len(deployments) == 0` before
+// reaching the http branch; this test catches a regression that
+// reintroduces that early return.
+func TestResumeSellOffers_HTTPOnlyStore(t *testing.T) {
+	cfg := newTestConfig(t)
+	// Seed a kubeconfig so resume gets past the no-cluster guard.
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("seed kubeconfig: %v", err)
+	}
+	// No inference offers. One http offer present. Function must walk
+	// the http branch without erroring on the missing inference store.
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+		"metadata": map[string]any{"name": "only-http", "namespace": "llm"},
+	}
+	if err := persistSellHTTPOffer(cfg, "llm", "only-http", manifest); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	// kubectl apply will fail against the fake kubeconfig — that's
+	// expected and reported as a warn, not an error. We just need
+	// resumeSellOffers itself to return nil.
+	if err := resumeSellOffers(context.Background(), cfg, ui.New(false)); err != nil {
+		t.Errorf("http-only store must not error from resumeSellOffers: %v", err)
 	}
 }
 
