@@ -30,8 +30,15 @@ type GatewayConfig struct {
 	// WalletAddress is the USDC recipient address for payments.
 	WalletAddress string
 
-	// PricePerRequest is the USDC amount charged per inference request (e.g., "0.001").
+	// PricePerRequest is the amount charged per inference request, denominated
+	// in AssetSymbol units (e.g., "0.001" with AssetSymbol="USDC", or "0.023"
+	// with AssetSymbol="OBOL"). Atomic-unit conversion happens at the x402
+	// middleware boundary using the token's decimals.
 	PricePerRequest string
+
+	// AssetSymbol is the token symbol charged per request (default "USDC").
+	// Used for human-readable log output and price summaries.
+	AssetSymbol string
 
 	// Chain is the x402 chain configuration (e.g., x402pkg.ChainBaseMainnet).
 	Chain x402pkg.ChainInfo
@@ -108,6 +115,16 @@ type Gateway struct {
 	server    *http.Server
 	container *ContainerManager // non-nil when VMMode is active
 	seKey     enclave.Key       // non-nil when TEE or SE mode is active
+}
+
+// formatPriceLogLine renders the human-readable per-request price string used
+// in the gateway's startup log. An empty symbol defaults to "USDC" so legacy
+// callers that don't set AssetSymbol keep their previous output.
+func formatPriceLogLine(price, symbol string) string {
+	if symbol == "" {
+		symbol = "USDC"
+	}
+	return fmt.Sprintf("%s %s/request", price, symbol)
 }
 
 // NewGateway creates a new inference gateway with the given configuration.
@@ -354,7 +371,7 @@ func (g *Gateway) Start() error {
 	log.Printf("x402 inference gateway listening on %s", g.config.ListenAddr)
 	log.Printf("  upstream:    %s", upstreamURL)
 	log.Printf("  wallet:      %s", g.config.WalletAddress)
-	log.Printf("  price:       %s USDC/request", g.config.PricePerRequest)
+	log.Printf("  price:       %s", formatPriceLogLine(g.config.PricePerRequest, g.config.AssetSymbol))
 	log.Printf("  chain:       %s", g.config.Chain.NetworkID)
 	log.Printf("  facilitator: %s", g.config.FacilitatorURL)
 
