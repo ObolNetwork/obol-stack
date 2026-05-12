@@ -240,7 +240,7 @@ run_step_grep "Facilitator /supported" "eip155" \
 CLUSTER_FACILITATOR_HOST=$(cluster_facilitator_host)
 CLUSTER_FACILITATOR_URL="http://${CLUSTER_FACILITATOR_HOST}:$FACILITATOR_PORT"
 run_step_grep "sell pricing with local facilitator" \
-    "configured.*facilitator\|x402 configured" \
+    "configured.*facilitator|x402 configured|x402-pricing configured" \
     "$OBOL" sell pricing \
     --wallet "$SELLER_WALLET" \
     --chain "$CHAIN" \
