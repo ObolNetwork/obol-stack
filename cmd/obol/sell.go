@@ -103,12 +103,11 @@ Examples:
 			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "price",
-				Usage: "USDC price per request",
-				Value: "0.001",
+				Usage: "Per-request price (alias for --per-request; default 0.001 when no price flag is set)",
 			},
 			&cli.StringFlag{
 				Name:  "per-request",
-				Usage: "Per-request price in USDC (alias for --price)",
+				Usage: "Per-request price (alias for --price)",
 			},
 			&cli.StringFlag{
 				Name:  "per-mtok",
@@ -302,6 +301,11 @@ Examples:
 				return fmt.Errorf("invalid pricing: %w", err)
 			}
 
+			assetSymbol := strings.ToUpper(strings.TrimSpace(assetTerms.Symbol))
+			if assetSymbol == "" {
+				assetSymbol = "USDC"
+			}
+
 			d := &inference.Deployment{
 				Name:            name,
 				EnclaveTag:      cmd.String("enclave-tag"),
@@ -310,6 +314,7 @@ Examples:
 				WalletAddress:   wallet,
 				PricePerRequest: perRequest,
 				PricePerMTok:    priceTable.PerMTok,
+				AssetSymbol:     assetSymbol,
 				Chain:           chainName,
 				FacilitatorURL:  cmd.String("facilitator"),
 				VMMode:          cmd.Bool("vm"),
@@ -363,10 +368,13 @@ Examples:
 					port = listenAddr[idx+1:]
 				}
 
-				// Bind to loopback only — the cluster reaches us via the
-				// K8s Service+Endpoints bridge; there is no reason to expose
-				// the unpaid gateway on all interfaces.
-				d.ListenAddr = "127.0.0.1:" + port
+				// Bind on all interfaces — the in-cluster Endpoints object
+				// points at the host's docker-bridge IP (e.g. 172.17.0.1 on
+				// Linux), which the kernel only delivers to listeners bound
+				// to 0.0.0.0 or the bridge IP itself, not to 127.0.0.1.
+				// Loopback-only binding made the cluster see "connection
+				// refused" on the host-routed Service.
+				d.ListenAddr = "0.0.0.0:" + port
 
 				// Create a K8s Service + Endpoints pointing to the host.
 				svcNs := "llm" // co-locate with LiteLLM for simplicity
@@ -2802,6 +2810,7 @@ func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402verifier.C
 		UpstreamURL:     d.UpstreamURL,
 		WalletAddress:   d.WalletAddress,
 		PricePerRequest: d.PricePerRequest,
+		AssetSymbol:     d.AssetSymbol,
 		Chain:           chain,
 		FacilitatorURL:  d.FacilitatorURL,
 		EnclaveTag:      d.EnclaveTag,

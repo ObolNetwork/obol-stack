@@ -43,8 +43,13 @@ type Deployment struct {
 	// WalletAddress is the USDC payment recipient.
 	WalletAddress string `json:"wallet_address"`
 
-	// PricePerRequest is the USDC price per inference call (default "0.001").
+	// PricePerRequest is the per-inference price denominated in AssetSymbol
+	// units (default "0.001" USDC).
 	PricePerRequest string `json:"price_per_request"`
+
+	// AssetSymbol is the token symbol charged per request (default "USDC").
+	// Used for human-readable log output and to label persisted state.
+	AssetSymbol string `json:"asset_symbol,omitempty"`
 
 	// PricePerMTok is the original per-million-token price when request pricing
 	// was derived from the temporary phase-1 approximation.

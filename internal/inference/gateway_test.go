@@ -653,3 +653,53 @@ func TestGateway_ServicePrefixedPath_PreservesQuery(t *testing.T) {
 		t.Errorf("expected 402 after prefix normalisation with query, got %d", resp.StatusCode)
 	}
 }
+
+func TestFormatPriceLogLine(t *testing.T) {
+	tests := []struct {
+		name   string
+		price  string
+		symbol string
+		want   string
+	}{
+		{"empty symbol defaults to USDC", "0.001", "", "0.001 USDC/request"},
+		{"explicit USDC", "0.001", "USDC", "0.001 USDC/request"},
+		{"OBOL", "0.023", "OBOL", "0.023 OBOL/request"},
+		{"lowercase passed through", "0.5", "obol", "0.5 obol/request"},
+		{"empty price stays empty", "", "OBOL", " OBOL/request"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatPriceLogLine(tc.price, tc.symbol)
+			if got != tc.want {
+				t.Errorf("formatPriceLogLine(%q, %q) = %q; want %q", tc.price, tc.symbol, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewGateway_PreservesAssetSymbol(t *testing.T) {
+	tests := []struct {
+		name   string
+		symbol string
+		want   string
+	}{
+		{"explicit OBOL", "OBOL", "OBOL"},
+		{"explicit USDC", "USDC", "USDC"},
+		{"empty kept as empty (default applied at log site)", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw, err := NewGateway(GatewayConfig{
+				UpstreamURL:   "http://localhost:11434",
+				WalletAddress: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				AssetSymbol:   tc.symbol,
+			})
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			if gw.config.AssetSymbol != tc.want {
+				t.Errorf("gw.config.AssetSymbol = %q; want %q", gw.config.AssetSymbol, tc.want)
+			}
+		})
+	}
+}
