@@ -496,6 +496,53 @@ func TestAgentCRD_RuntimeEnum(t *testing.T) {
 	}
 }
 
+// AgentIdentity CRD tests
+
+func TestAgentIdentityCRD_Parses(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agentidentity-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	docs := multiDoc(data)
+	crd := findDoc(docs, "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no AgentIdentity CRD found")
+	}
+
+	if name := nested(crd, "metadata", "name"); name != "agentidentities.obol.org" {
+		t.Errorf("metadata.name = %v, want agentidentities.obol.org", name)
+	}
+	if kind := nested(crd, "spec", "names", "kind"); kind != "AgentIdentity" {
+		t.Errorf("spec.names.kind = %v, want AgentIdentity", kind)
+	}
+	if scope := nested(crd, "spec", "scope"); scope != "Namespaced" {
+		t.Errorf("spec.scope = %v, want Namespaced", scope)
+	}
+
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
+
+	specProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties").(map[string]any)
+	if ok && len(specProps) != 0 {
+		t.Errorf("spec.properties = %v, want empty AgentIdentity spec", specProps)
+	}
+	if specType := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "type"); specType != "object" {
+		t.Errorf("spec.type = %v, want object", specType)
+	}
+
+	statusProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "status", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("status.properties not a map")
+	}
+	if _, exists := statusProps["registrations"]; !exists {
+		t.Error("status.properties missing registrations")
+	}
+	if len(statusProps) != 1 {
+		t.Errorf("status.properties = %v, want only registrations", statusProps)
+	}
+}
+
 func TestAgentCRD_WalletAddressPattern(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
 	if err != nil {

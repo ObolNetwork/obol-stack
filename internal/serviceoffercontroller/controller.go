@@ -53,6 +53,7 @@ type Controller struct {
 	client               dynamic.Interface
 	offers               dynamic.NamespaceableResourceInterface
 	registrationRequests dynamic.NamespaceableResourceInterface
+	agentIdentities      dynamic.NamespaceableResourceInterface
 	agents               dynamic.NamespaceableResourceInterface
 	services             dynamic.NamespaceableResourceInterface
 	configMaps           dynamic.NamespaceableResourceInterface
@@ -63,11 +64,13 @@ type Controller struct {
 
 	offerInformer        cache.SharedIndexInformer
 	registrationInformer cache.SharedIndexInformer
+	identityInformer     cache.SharedIndexInformer
 	purchaseInformer     cache.SharedIndexInformer
 	agentInformer        cache.SharedIndexInformer
 	configMapInformer    cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
+	identityQueue        workqueue.TypedRateLimitingInterface[string]
 	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
 	agentQueue           workqueue.TypedRateLimitingInterface[string]
 	catalogMu            sync.Mutex
@@ -101,6 +104,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
 	offerInformer := factory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	registrationInformer := factory.ForResource(monetizeapi.RegistrationRequestGVR).Informer()
+	identityInformer := factory.ForResource(monetizeapi.AgentIdentityGVR).Informer()
 	purchaseInformer := factory.ForResource(monetizeapi.PurchaseRequestGVR).Informer()
 	agentInformer := factory.ForResource(monetizeapi.AgentGVR).Informer()
 	configMapFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, "obol-frontend", func(options *metav1.ListOptions) {
@@ -114,6 +118,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		client:               client,
 		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
 		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
+		agentIdentities:      client.Resource(monetizeapi.AgentIdentityGVR),
 		agents:               client.Resource(monetizeapi.AgentGVR),
 		services:             client.Resource(monetizeapi.ServiceGVR),
 		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
@@ -123,11 +128,13 @@ func New(cfg *rest.Config) (*Controller, error) {
 		referenceGrants:      client.Resource(monetizeapi.ReferenceGrantGVR),
 		offerInformer:        offerInformer,
 		registrationInformer: registrationInformer,
+		identityInformer:     identityInformer,
 		purchaseInformer:     purchaseInformer,
 		agentInformer:        agentInformer,
 		configMapInformer:    configMapInformer,
 		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		identityQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		httpClient:           &http.Client{Timeout: 3 * time.Second},
@@ -137,9 +144,18 @@ func New(cfg *rest.Config) (*Controller, error) {
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    controller.enqueueOffer,
-		UpdateFunc: func(_, newObj any) { controller.enqueueOffer(newObj) },
-		DeleteFunc: controller.enqueueOffer,
+		AddFunc: func(obj any) {
+			controller.enqueueOffer(obj)
+			controller.enqueueIdentityFromOffer(obj)
+		},
+		UpdateFunc: func(_, newObj any) {
+			controller.enqueueOffer(newObj)
+			controller.enqueueIdentityFromOffer(newObj)
+		},
+		DeleteFunc: func(obj any) {
+			controller.enqueueOffer(obj)
+			controller.enqueueIdentityFromOffer(obj)
+		},
 	})
 	registrationInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    controller.enqueueRegistration,
@@ -150,6 +166,16 @@ func New(cfg *rest.Config) (*Controller, error) {
 		AddFunc:    controller.enqueueOfferFromRegistration,
 		UpdateFunc: func(_, newObj any) { controller.enqueueOfferFromRegistration(newObj) },
 		DeleteFunc: controller.enqueueOfferFromRegistration,
+	})
+	registrationInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueIdentityFromRegistration,
+		UpdateFunc: func(_, newObj any) { controller.enqueueIdentityFromRegistration(newObj) },
+		DeleteFunc: controller.enqueueIdentityFromRegistration,
+	})
+	identityInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueIdentity,
+		UpdateFunc: func(_, newObj any) { controller.enqueueIdentity(newObj) },
+		DeleteFunc: controller.enqueueIdentity,
 	})
 	purchaseInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    controller.enqueuePurchase,
@@ -182,22 +208,29 @@ func New(cfg *rest.Config) (*Controller, error) {
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer c.offerQueue.ShutDown()
 	defer c.registrationQueue.ShutDown()
+	defer c.identityQueue.ShutDown()
 	defer c.purchaseQueue.ShutDown()
 	defer c.agentQueue.ShutDown()
 
 	go c.offerInformer.Run(ctx.Done())
 	go c.registrationInformer.Run(ctx.Done())
+	go c.identityInformer.Run(ctx.Done())
 	go c.purchaseInformer.Run(ctx.Done())
 	go c.agentInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(),
 		c.offerInformer.HasSynced,
 		c.registrationInformer.HasSynced,
+		c.identityInformer.HasSynced,
 		c.purchaseInformer.HasSynced,
 		c.agentInformer.HasSynced,
 		c.configMapInformer.HasSynced,
 	) {
 		return fmt.Errorf("wait for informer sync")
+	}
+
+	if err := c.ensureDefaultAgentIdentity(ctx); err != nil {
+		log.Printf("serviceoffer-controller: ensure default AgentIdentity: %v", err)
 	}
 
 	if workers < 1 {
@@ -210,6 +243,10 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		}()
 		go func() {
 			for c.processNextRegistration(ctx) {
+			}
+		}()
+		go func() {
+			for c.processNextIdentity(ctx) {
 			}
 		}()
 		go func() {
@@ -280,6 +317,9 @@ func (c *Controller) enqueueDiscoveryRefresh(obj any) {
 	}
 	for _, item := range c.registrationInformer.GetStore().List() {
 		c.enqueueRegistration(item)
+	}
+	for _, item := range c.identityInformer.GetStore().List() {
+		c.enqueueIdentity(item)
 	}
 }
 
@@ -454,7 +494,9 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 	if offer.Spec.Registration.Enabled {
-		owner, err := c.registrationOwner()
+		identityKey := defaultAgentIdentityKey()
+		c.enqueueAgentIdentityKey(identityKey)
+		owner, err := c.registrationOwnerForIdentity(identityKey)
 		if err != nil {
 			return err
 		}
@@ -486,7 +528,9 @@ func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetize
 	}
 
 	if offer.Spec.Registration.Enabled {
-		nextOwner, err := c.registrationOwner()
+		identityKey := defaultAgentIdentityKey()
+		c.enqueueAgentIdentityKey(identityKey)
+		nextOwner, err := c.registrationOwnerForIdentity(identityKey)
 		if err != nil {
 			return err
 		}
@@ -620,7 +664,15 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		setCondition(status, "Registered", "True", "Disabled", "Registration disabled")
 		return nil
 	}
-	owner, err := c.registrationOwner()
+	_, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
+	if err != nil {
+		setCondition(status, "Registered", "False", "IdentityError", err.Error())
+		return err
+	}
+	status.AgentID = monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network)
+
+	identityKey := defaultAgentIdentityKey()
+	owner, err := c.registrationOwnerForIdentity(identityKey)
 	if err != nil {
 		return err
 	}
@@ -650,6 +702,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		if err != nil {
 			return err
 		}
+		request.Status = registrationRequestStatusWithIdentity(request, identity)
 		applySharedRegistrationStatus(status, offer, owner, request)
 		return nil
 	}
@@ -672,6 +725,10 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 
 	status.AgentID = request.Status.AgentID
 	status.RegistrationTxHash = request.Status.RegistrationTxHash
+	if agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network); agentID != "" {
+		status.AgentID = agentID
+		request.Status = registrationRequestStatusWithIdentity(request, identity)
+	}
 
 	applySharedRegistrationStatus(status, offer, owner, request)
 	return nil
@@ -717,7 +774,12 @@ func (c *Controller) reconcileRegistrationRequest(ctx context.Context, key strin
 
 	offerRaw, err := c.offers.Namespace(request.Spec.ServiceOfferNamespace).Get(ctx, request.Spec.ServiceOfferName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		owner, ownerErr := c.registrationOwner()
+		identityKey := defaultAgentIdentityKey()
+		identityRaw, identity, identityErr := c.ensureAgentIdentityForKey(ctx, identityKey)
+		if identityErr != nil {
+			return identityErr
+		}
+		owner, ownerErr := c.registrationOwnerForIdentity(identityKey)
 		if ownerErr != nil {
 			return ownerErr
 		}
@@ -725,17 +787,56 @@ func (c *Controller) reconcileRegistrationRequest(ctx context.Context, key strin
 			if err := c.deleteRegistrationRequest(ctx, namespace, request.Spec.ServiceOfferName); err != nil {
 				return err
 			}
+			c.enqueueAgentIdentityKey(identityKey)
 			c.offerQueue.Add(owner.Namespace + "/" + owner.Name)
 			c.registrationQueue.Add(owner.Namespace + "/" + registrationRequestName(owner.Name))
 			return nil
 		}
+
+		registrationChain := request.Spec.Chain
+		agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), request.Status.AgentID)
+		if agentID != "" && monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain) == "" {
+			identity.Status = agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
+			if err := c.updateAgentIdentityStatus(ctx, identityRaw, identity.Status); err != nil {
+				return err
+			}
+			identityRaw, err = c.agentIdentities.Namespace(identity.Namespace).Get(ctx, identity.Name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			identity, err = decodeAgentIdentity(identityRaw)
+			if err != nil {
+				return err
+			}
+		}
+
+		baseURL, baseErr := c.registrationBaseURL(ctx)
+		if baseErr != nil {
+			return baseErr
+		}
+		document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+			Identity: identity,
+			Offers:   nil,
+			BaseURL:  baseURL,
+		})
+		documentJSON, contentHash, marshalErr := marshalRegistrationDocument(document)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if err := c.publishAgentIdentityRegistrationResources(ctx, identity, documentJSON, contentHash); err != nil {
+			return err
+		}
 		if err := c.deleteRegistrationResources(ctx, request); err != nil {
 			return err
 		}
-		return c.updateRegistrationStatus(ctx, raw, monetizeapi.RegistrationRequestStatus{
-			Phase:   registrationPhaseTombstoned,
-			Message: "ServiceOffer no longer exists",
-		})
+		newStatus := request.Status
+		newStatus.Phase = registrationPhaseOffChainOnly
+		newStatus.Message = "Last ServiceOffer deleted; published tombstone registration document"
+		newStatus.AgentID = agentID
+		if newStatus.PublishedURL == "" {
+			newStatus.PublishedURL = strings.TrimRight(baseURL, "/") + "/.well-known/agent-registration.json"
+		}
+		return c.updateRegistrationStatus(ctx, raw, newStatus)
 	}
 	if err != nil {
 		return err
@@ -761,24 +862,39 @@ func (c *Controller) reconcileRegistrationRequest(ctx context.Context, key strin
 
 func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
 	status := request.Status
-	agentID := firstNonEmpty(status.AgentID, offer.Status.AgentID)
+	identityRaw, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
+	if err != nil {
+		status.Phase = registrationPhaseAwaitingExternal
+		status.Message = truncateMessage(fmt.Sprintf("Waiting for AgentIdentity: %v", err))
+		return c.updateRegistrationStatus(ctx, raw, status)
+	}
+	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
+	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
 	txHash := firstNonEmpty(status.RegistrationTxHash, offer.Status.RegistrationTxHash)
 
-	offers, err := c.registrationOffers("", "")
+	offers, err := c.registrationOffersForIdentity(defaultAgentIdentityKey(), "", "")
 	if err != nil {
 		return err
 	}
-	document := buildActiveRegistrationDocument(offer, offers, baseURL, agentID)
+	identity.Status = agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
+	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+		Identity: identity,
+		Offers:   mergeOfferOverride(offers, offer),
+		BaseURL:  baseURL,
+	})
 	documentJSON, contentHash, err := marshalRegistrationDocument(document)
 	if err != nil {
 		return err
 	}
-	if err := c.publishRegistrationResources(ctx, request, documentJSON, contentHash); err != nil {
+	if err := c.publishAgentIdentityRegistrationResources(ctx, identity, documentJSON, contentHash); err != nil {
+		return err
+	}
+	if err := c.deleteRegistrationResources(ctx, request); err != nil {
 		return err
 	}
 
 	status.PublishedURL = strings.TrimRight(baseURL, "/") + "/.well-known/agent-registration.json"
-	resourcesReady, message, err := c.registrationResourcesReady(ctx, request)
+	resourcesReady, message, err := c.identityRegistrationResourcesReady(ctx, identity)
 	if err != nil {
 		return err
 	}
@@ -789,17 +905,18 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	}
 
 	// On-chain registration is performed by the CLI (`obol sell register` /
-	// `obol sell http`) via the agent's remote-signer — never by the
+	// `obol sell http`) via the agent's remote-signer; never by the
 	// controller. The controller only publishes the registration document
 	// and watches for the registration tx to land on-chain so it can mark
-	// the request Ready=True. Each offer's payment.network selects which
-	// chain to watch; the client dials <eRPC base>/<network alias>.
+	// the request Ready=True. RegistrationRequest.spec.chain selects which
+	// chain to watch and AgentIdentity.status.registrations records the
+	// resulting per-chain tokenId. The client dials <eRPC base>/<network alias>.
 	var client *erc8004.Client
 	if agentID == "" {
-		network, lookupErr := erc8004.ResolveNetwork(offer.Spec.Payment.Network)
+		network, lookupErr := erc8004.ResolveNetwork(registrationChain)
 		if lookupErr != nil {
 			status.Phase = registrationPhaseAwaitingExternal
-			status.Message = truncateMessage(fmt.Sprintf("Unsupported registration chain %q: %v", offer.Spec.Payment.Network, lookupErr))
+			status.Message = truncateMessage(fmt.Sprintf("Unsupported registration chain %q: %v", registrationChain, lookupErr))
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 		client, err = erc8004.NewClientForNetwork(ctx, c.registrationRPCBase, network)
@@ -858,6 +975,11 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 	if agentID != "" {
 		status.Phase = registrationPhaseRegistered
 		status.Message = fmt.Sprintf("Published registration document and recorded agent %s", agentID)
+		identityStatus := agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
+		if err := c.updateAgentIdentityStatus(ctx, identityRaw, identityStatus); err != nil {
+			return err
+		}
+		c.enqueueAgentIdentityKey(defaultAgentIdentityKey())
 	}
 
 	return c.updateRegistrationStatus(ctx, raw, status)
@@ -888,50 +1010,53 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 	return agentID.String(), resolvedTxHash, true, nil
 }
 
-func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, _ string) error {
+func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
 	status := request.Status
-	agentID := firstNonEmpty(status.AgentID, offer.Status.AgentID)
+	identityRaw, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
+	if err != nil {
+		status.Phase = registrationPhaseAwaitingExternal
+		status.Message = truncateMessage(fmt.Sprintf("Waiting for AgentIdentity tombstone: %v", err))
+		return c.updateRegistrationStatus(ctx, raw, status)
+	}
+	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
+	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
 
-	// On-chain tombstoning is the operator's responsibility via the CLI
-	// (the controller has no signing key by design — registration is a
-	// CLI/remote-signer flow). We only delete the published registration
-	// resources here and mark the request OffChainOnly when an agent ID
-	// was ever assigned, otherwise Tombstoned (nothing to tombstone).
-	if agentID != "" {
-		status.Phase = registrationPhaseOffChainOnly
-		status.Message = "Deleted registration resources; on-chain tombstone is the operator's responsibility"
-	} else {
-		status.Phase = registrationPhaseTombstoned
-		status.Message = "Deleted registration resources"
+	if agentID != "" && monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain) == "" {
+		identity.Status = agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
+		if err := c.updateAgentIdentityStatus(ctx, identityRaw, identity.Status); err != nil {
+			return err
+		}
 	}
 
+	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+		Identity: identity,
+		Offers:   nil,
+		BaseURL:  baseURL,
+	})
+	documentJSON, contentHash, err := marshalRegistrationDocument(document)
+	if err != nil {
+		return err
+	}
+	if err := c.publishAgentIdentityRegistrationResources(ctx, identity, documentJSON, contentHash); err != nil {
+		return err
+	}
 	if err := c.deleteRegistrationResources(ctx, request); err != nil {
 		return err
 	}
-	return c.updateRegistrationStatus(ctx, raw, status)
-}
 
-func (c *Controller) publishRegistrationResources(ctx context.Context, request *monetizeapi.RegistrationRequest, documentJSON, contentHash string) error {
-	if err := c.applyObject(ctx, c.configMaps.Namespace(request.Namespace), buildRegistrationConfigMap(request, documentJSON)); err != nil {
-		return err
+	status.Phase = registrationPhaseOffChainOnly
+	status.Message = "Published tombstone registration document; on-chain NFT preserved"
+	status.AgentID = agentID
+	if status.PublishedURL == "" {
+		status.PublishedURL = strings.TrimRight(baseURL, "/") + "/.well-known/agent-registration.json"
 	}
-	if err := c.applyObject(ctx, c.deployments.Namespace(request.Namespace), buildRegistrationDeployment(request, contentHash)); err != nil {
-		return err
-	}
-	if err := c.applyObject(ctx, c.services.Namespace(request.Namespace), buildRegistrationService(request)); err != nil {
-		return err
-	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(request.Namespace), buildRegistrationHTTPRoute(request)); err != nil {
-		return err
-	}
-	log.Printf("serviceoffer-controller: registration resources published for %s/%s", request.Namespace, request.Name)
-	return nil
+	return c.updateRegistrationStatus(ctx, raw, status)
 }
 
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of Ready ServiceOffers. If `override` is
 // non-nil, that offer replaces (or is appended to) the informer-cached copy
-// with the same namespace/name — this is how reconcileOffer feeds its
+// with the same namespace/name; this is how reconcileOffer feeds its
 // just-committed status into the catalog without waiting for the informer's
 // watch event to update the local store.
 func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
@@ -997,50 +1122,6 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	return nil
 }
 
-func (c *Controller) registrationResourcesReady(ctx context.Context, request *monetizeapi.RegistrationRequest) (bool, string, error) {
-	name := registrationWorkloadName(request.Name)
-
-	if _, err := c.configMaps.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
-		return false, "Waiting for registration ConfigMap", nil
-	} else if err != nil {
-		return false, "", err
-	}
-
-	deployment, err := c.deployments.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return false, "Waiting for registration Deployment", nil
-	}
-	if err != nil {
-		return false, "", err
-	}
-	availableReplicas, _, err := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
-	if err != nil {
-		return false, "", err
-	}
-	if availableReplicas < 1 {
-		return false, "Waiting for registration Deployment availability", nil
-	}
-
-	if _, err := c.services.Namespace(request.Namespace).Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
-		return false, "Waiting for registration Service", nil
-	} else if err != nil {
-		return false, "", err
-	}
-
-	route, err := c.httpRoutes.Namespace(request.Namespace).Get(ctx, registrationRouteName(request.Spec.ServiceOfferName), metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return false, "Waiting for registration HTTPRoute", nil
-	}
-	if err != nil {
-		return false, "", err
-	}
-	if !httpRouteAccepted(route) {
-		return false, "Waiting for registration HTTPRoute acceptance", nil
-	}
-
-	return true, "", nil
-}
-
 func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
 	for _, deletion := range []struct {
 		resource dynamic.ResourceInterface
@@ -1081,39 +1162,6 @@ func (c *Controller) deleteRegistrationRequest(ctx context.Context, namespace, o
 		return err
 	}
 	return nil
-}
-
-func (c *Controller) registrationOffers(excludeNamespace, excludeName string) ([]*monetizeapi.ServiceOffer, error) {
-	var candidates []*monetizeapi.ServiceOffer
-	for _, item := range c.offerInformer.GetStore().List() {
-		u := asUnstructured(item)
-		if u == nil {
-			continue
-		}
-		offer, err := decodeServiceOffer(u)
-		if err != nil {
-			return nil, err
-		}
-		if offer.Namespace == excludeNamespace && offer.Name == excludeName {
-			continue
-		}
-		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
-			continue
-		}
-		if !isConditionTrue(offer.Status, "UpstreamHealthy") {
-			log.Printf("serviceoffer-controller: registration candidate %s/%s has unhealthy upstream", offer.Namespace, offer.Name)
-		}
-		candidates = append(candidates, offer)
-	}
-	return candidates, nil
-}
-
-func (c *Controller) registrationOwner() (*monetizeapi.ServiceOffer, error) {
-	candidates, err := c.registrationOffers("", "")
-	if err != nil {
-		return nil, err
-	}
-	return selectRegistrationOwner(candidates), nil
 }
 
 func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.ServiceOffer {

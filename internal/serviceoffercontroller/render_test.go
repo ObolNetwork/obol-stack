@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
@@ -81,7 +82,11 @@ func TestBuildHTTPRoute(t *testing.T) {
 
 func TestBuildReferenceGrant(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "demo",
+			Namespace:         "llm",
+			CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
+		},
 	}
 
 	grant := buildReferenceGrant(offer)
@@ -136,15 +141,13 @@ func TestBuildRegistrationRequest(t *testing.T) {
 	}
 }
 
-func TestBuildRegistrationHTTPRoute(t *testing.T) {
-	request := &monetizeapi.RegistrationRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "so-demo-registration", Namespace: "llm", UID: types.UID("req-uid")},
-		Spec: monetizeapi.RegistrationRequestSpec{
-			ServiceOfferName: "demo",
-		},
-	}
+func TestBuildAgentIdentityRegistrationHTTPRoute(t *testing.T) {
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Name = monetizeapi.AgentIdentityDefaultName
+	identity.Namespace = monetizeapi.AgentIdentityDefaultNamespace
+	identity.UID = types.UID("identity-uid")
 
-	route := buildRegistrationHTTPRoute(request)
+	route := buildAgentIdentityRegistrationHTTPRoute(identity)
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
 	firstRule := rules[0].(map[string]any)
@@ -159,8 +162,18 @@ func TestBuildRegistrationHTTPRoute(t *testing.T) {
 }
 
 func TestBuildActiveRegistrationDocument(t *testing.T) {
+	readyConditions := []monetizeapi.Condition{
+		{Type: "ModelReady", Status: "True"},
+		{Type: "UpstreamHealthy", Status: "True"},
+		{Type: "PaymentGateReady", Status: "True"},
+		{Type: "RoutePublished", Status: "True"},
+	}
 	owner := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "demo",
+			Namespace:         "llm",
+			CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
+		},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "inference",
 			Model: monetizeapi.ServiceOfferModel{
@@ -173,6 +186,7 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 				"metricValue": "0.9973",
 			},
 			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
 				Name:    "Demo Agent",
 				Skills:  []string{"natural_language_processing/text_generation"},
 				Domains: []string{"technology/artificial_intelligence"},
@@ -182,9 +196,14 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 				},
 			},
 		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
 	}
 	secondary := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "blocks", Namespace: "demo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "blocks",
+			Namespace:         "demo",
+			CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)),
+		},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "http",
 			Path: "/services/blocks",
@@ -194,17 +213,18 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 				Domains: []string{"technology/blockchain"},
 			},
 		},
-		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{
-				{Type: "ModelReady", Status: "True"},
-				{Type: "UpstreamHealthy", Status: "True"},
-				{Type: "PaymentGateReady", Status: "True"},
-				{Type: "RoutePublished", Status: "True"},
-			},
-		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
 	}
 
-	document := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner, secondary}, "https://example.com", "7")
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Namespace = monetizeapi.AgentIdentityDefaultNamespace
+	identity.Name = monetizeapi.AgentIdentityDefaultName
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base-sepolia", "7")
+	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+		Identity: identity,
+		Offers:   []*monetizeapi.ServiceOffer{owner, secondary},
+		BaseURL:  "https://example.com",
+	})
 
 	if document.Type != erc8004.RegistrationType {
 		t.Fatalf("type = %q", document.Type)
@@ -356,7 +376,12 @@ func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *test
 		{Type: "RoutePublished", Status: "True"},
 	}
 	owner := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "demo", UID: types.UID("owner-uid")},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "hello",
+			Namespace:         "demo",
+			UID:               types.UID("owner-uid"),
+			CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
+		},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Path: "/services/hello",
 			Registration: monetizeapi.ServiceOfferRegistration{
@@ -369,7 +394,11 @@ func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *test
 	offers := []*monetizeapi.ServiceOffer{
 		owner,
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "blocks", Namespace: "demo"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "blocks",
+				Namespace:         "demo",
+				CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)),
+			},
 			Spec: monetizeapi.ServiceOfferSpec{
 				Path: "/services/blocks",
 				Registration: monetizeapi.ServiceOfferRegistration{
@@ -379,7 +408,11 @@ func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *test
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyConditions},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "oracle", Namespace: "demo"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "oracle",
+				Namespace:         "demo",
+				CreationTimestamp: metav1.NewTime(time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)),
+			},
 			Spec: monetizeapi.ServiceOfferSpec{
 				Path: "/services/oracle",
 				Registration: monetizeapi.ServiceOfferRegistration{
@@ -390,20 +423,22 @@ func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *test
 		},
 	}
 
-	document := buildActiveRegistrationDocument(owner, offers, "https://example.com", "42")
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Namespace = monetizeapi.AgentIdentityDefaultNamespace
+	identity.Name = monetizeapi.AgentIdentityDefaultName
+	identity.UID = types.UID("identity-uid")
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base-sepolia", "42")
+	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+		Identity: identity,
+		Offers:   offers,
+		BaseURL:  "https://example.com",
+	})
 	documentJSON, _, err := marshalRegistrationDocument(document)
 	if err != nil {
 		t.Fatalf("marshalRegistrationDocument: %v", err)
 	}
-	request := &monetizeapi.RegistrationRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: registrationRequestName(owner.Name), Namespace: owner.Namespace, UID: types.UID("req-uid")},
-		Spec: monetizeapi.RegistrationRequestSpec{
-			ServiceOfferName:      owner.Name,
-			ServiceOfferNamespace: owner.Namespace,
-		},
-	}
 
-	cm := buildRegistrationConfigMap(request, documentJSON)
+	cm := buildAgentIdentityRegistrationConfigMap(identity, documentJSON)
 	data := cm.Object["data"].(map[string]any)
 	rawDoc, ok := data["agent-registration.json"].(string)
 	if !ok || rawDoc == "" {

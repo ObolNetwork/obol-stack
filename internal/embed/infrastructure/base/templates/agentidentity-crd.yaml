@@ -1,0 +1,62 @@
+---
+# AgentIdentity CRD
+# Durable ERC-8004 agent identity document. Outlives ServiceOffers: when the
+# last offer is deleted, the controller renders a tombstone (active:false,
+# x402Support:false) instead of removing the registration document. The
+# canonical operator identity lives at x402/default and status.registrations
+# records the on-chain agentId for each registered chain.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentidentities.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: AgentIdentity
+    listKind: AgentIdentityList
+    plural: agentidentities
+    singular: agentidentity
+    shortNames:
+      - aid
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Chains
+          type: string
+          jsonPath: .status.registrations[*].chain
+        - name: AgentIDs
+          type: string
+          jsonPath: .status.registrations[*].agentId
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+            status:
+              type: object
+              properties:
+                registrations:
+                  type: array
+                  description: "Per-chain ERC-8004 registrations for this identity document."
+                  items:
+                    type: object
+                    required:
+                      - chain
+                      - agentId
+                    properties:
+                      chain:
+                        type: string
+                        maxLength: 64
+                        description: "ERC-8004 registration chain alias."
+                      agentId:
+                        type: string
+                        description: "On-chain ERC-721 tokenId on the given chain."
