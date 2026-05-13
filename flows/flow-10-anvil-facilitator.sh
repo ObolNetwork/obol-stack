@@ -60,8 +60,15 @@ ANVIL_STARTED=0
 if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
     anvil_cmdline=$(ps -Ao pid=,command= | awk '/[a]nvil/ && /--port 8545/ {print; exit}' || true)
-    if echo "$anvil_cmdline" | grep -q -- '--prune-history'; then
-        pass "Anvil already running on port 8545 with historical-state retention"
+    # Reject any anvil that was started with --prune-history (which is an
+    # ENABLE flag, NOT a retention guarantee — anvil's docs say "Don't keep
+    # full chain history. If a number argument is specified, at most this
+    # number of [states are retained]."). When the flag is set, the
+    # facilitator's eth_getStorageAt for the EIP-3009 nonce slot at the fork
+    # block returns 'state at block #N is pruned' and flow-08 step 12 fails
+    # with a 503 from the verifier. Always restart anvil clean.
+    if echo "$anvil_cmdline" | grep -qv -- '--prune-history' && [ -n "$anvil_cmdline" ]; then
+        pass "Anvil already running on port 8545 (full history)"
     else
         old_pid=$(echo "$anvil_cmdline" | awk '{print $1}' || true)
         if [ -n "$old_pid" ]; then
@@ -70,7 +77,7 @@ if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
         fi
         if curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' >/dev/null 2>&1; then
-            fail "Existing Anvil on port 8545 lacks --prune-history and could not be restarted"
+            fail "Existing Anvil on port 8545 carries --prune-history and could not be restarted"
             emit_metrics; exit 0
         fi
         ANVIL_STARTED=1
@@ -84,7 +91,24 @@ if [ "$ANVIL_STARTED" = "1" ]; then
         fail "Could not find a reachable Base Sepolia RPC for Anvil fork"
         emit_metrics; exit 0
     fi
-    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --prune-history 1000000 >"$ANVIL_LOG" 2>&1 &
+    # --host 0.0.0.0 is critical: default anvil binds to 127.0.0.1 only, which
+    # makes it reachable from the host (host-local health checks pass) but NOT
+    # from inside the k3d cluster via host.k3d.internal. That mismatch causes
+    # downstream flows to silently fail — buy.py's eRPC call times out, no
+    # PurchaseRequest is created, no paid/* model is hot-added to LiteLLM, and
+    # the paid inference step then returns a misleading 503 "Payment
+    # verification failed" (actually "no such LiteLLM model group").
+    # NOTE: do NOT pass --prune-history here. anvil's docs:
+    #   "--prune-history [<PRUNE_HISTORY>]: Don't keep full chain history.
+    #    If a number argument is specified, at most this number of
+    #    [states are retained]."
+    # i.e. --prune-history is an ENABLE flag for pruning, not a retention
+    # guarantee. With --prune-history 1000000 set, anvil pruned the
+    # fork-block state and the facilitator's eth_getStorageAt for the
+    # EIP-3009 nonce slot returned 'state at block #N is pruned' (HTTP 500
+    # invalidReason=unexpected_error), failing flow-08 step 12.
+    # Without the flag, anvil keeps full history from the fork point onward.
+    nohup anvil --fork-url "$BASE_SEPOLIA_FORK_RPC" --port 8545 --host 0.0.0.0 >"$ANVIL_LOG" 2>&1 &
     echo $! > "$ANVIL_PID_FILE"
     anvil_ready=0
     for _ in $(seq 1 60); do
@@ -99,7 +123,7 @@ if [ "$ANVIL_STARTED" = "1" ]; then
         sleep 2
     done
     if [ "$anvil_ready" = "1" ]; then
-        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC with --prune-history 1000000"
+        pass "Anvil started on port 8545 using $BASE_SEPOLIA_FORK_RPC (full history, no --prune-history)"
     else
         cleanup_pid "$(cat "$ANVIL_PID_FILE" 2>/dev/null || true)"
         fail "Anvil failed to start"
@@ -125,6 +149,31 @@ print(f'Anvil chain ID: {int(cid, 16)} (Base Sepolia fork confirmed)')
     pass "Anvil is a Base Sepolia fork (chain 84532)"
 else
     fail "Anvil chain ID unexpected — ${anvil_chain:0:100}"
+fi
+
+# Anvil must be reachable from inside the k3d cluster via host.k3d.internal.
+# Host-local 127.0.0.1:8545 succeeding is necessary but NOT sufficient: if
+# anvil bound only to loopback (the default without --host 0.0.0.0), pods
+# get Connection refused via host.k3d.internal, which then silently breaks
+# buy.py's eRPC calls, blocks PurchaseRequest creation, and bubbles up as a
+# misleading "Payment verification failed" 503 in flow-08/11/14/13. Always
+# fail-fast here so the root cause is obvious instead of buried.
+step "Anvil reachable from inside k3d cluster (host.k3d.internal:8545)"
+cluster_anvil=$("$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- python3 -c "
+import urllib.request, json
+req = urllib.request.Request('http://host.k3d.internal:8545',
+    data=json.dumps({'jsonrpc':'2.0','method':'eth_chainId','params':[],'id':1}).encode(),
+    headers={'Content-Type':'application/json'})
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print(r.read().decode())
+except Exception as e:
+    print('CLUSTER_PROBE_ERROR=' + repr(e))
+" 2>&1) || true
+if echo "$cluster_anvil" | grep -q '"result":"0x14a34"'; then
+    pass "Anvil reachable from cluster: chainId 0x14a34"
+else
+    fail "Anvil NOT reachable from cluster at host.k3d.internal:8545 — likely bound to 127.0.0.1 only. Add --host 0.0.0.0 to the anvil launch (see line ~87) or kill the existing anvil and let this flow restart it. Got: ${cluster_anvil:0:200}"
 fi
 
 # §3.2: Verify USDC contract is deployed at expected address on the fork
@@ -169,7 +218,7 @@ if [[ "$fund_block" =~ ^[0-9]+$ ]] && [[ "$history_slot" =~ ^0x[0-9a-fA-F]+$ ]];
     historic_raw=$(cast rpc eth_getStorageAt "$USDC_ADDRESS" "$history_slot" "0x$(printf '%x' "$fund_block")" \
         --rpc-url "$ANVIL_RPC" 2>&1 | tr -d '"') || true
     if echo "$historic_raw" | grep -qi 'state at block .* is pruned'; then
-        fail "Historical storage lookup is pruned — restart Anvil with --prune-history 1000000"
+        fail "Historical storage lookup is pruned — anvil should be started WITHOUT --prune-history (it's an enable-pruning flag, not a retention guarantee)"
     elif [[ "$historic_raw" =~ ^0x[0-9a-fA-F]+$ ]] && [ "$historic_raw" != "0x" ] && [ "$historic_raw" != "0x0" ]; then
         pass "Historical storage lookup succeeded at block $fund_block"
     else
@@ -190,7 +239,7 @@ else
 
     FACILITATOR_IMAGE=$(x402_facilitator_image || true)
     if [ -z "$FACILITATOR_IMAGE" ]; then
-        fail "x402-facilitator image unavailable: ghcr.io/x402-rs/x402-facilitator:1.4.7"
+        fail "x402-facilitator image unavailable: ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
         emit_metrics; exit 0
     fi
 
@@ -240,7 +289,7 @@ run_step_grep "Facilitator /supported" "eip155" \
 CLUSTER_FACILITATOR_HOST=$(cluster_facilitator_host)
 CLUSTER_FACILITATOR_URL="http://${CLUSTER_FACILITATOR_HOST}:$FACILITATOR_PORT"
 run_step_grep "sell pricing with local facilitator" \
-    "configured.*facilitator\|x402 configured" \
+    "configured.*facilitator|x402 configured|x402-pricing configured" \
     "$OBOL" sell pricing \
     --wallet "$SELLER_WALLET" \
     --chain "$CHAIN" \
@@ -276,17 +325,15 @@ export SELLER_WALLET="$SELLER_WALLET"
 EOF
 
 # obol sell pricing changes x402-pricing ConfigMap → Kubernetes Reloader restarts
-# x402-verifier pods.  Wait for them to be ready before flow-08 makes paid requests.
-step "x402 verifier pods ready after pricing change"
-for i in $(seq 1 24); do
-    ready=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep "Running" | grep -c "1/1" || echo 0)
-    total=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep -v "^$" | wc -l | tr -d ' ')
-    if [ "$ready" -ge 1 ] && [ "$ready" = "$total" ]; then
-        pass "x402 verifier ready ($ready/$total)"
-        break
-    fi
-    [ "$i" -eq 24 ] && fail "x402 verifier not ready after 120s"
-    sleep 5
-done
+# x402-verifier pods. Step above already used `kubectl rollout status` which is
+# the authoritative readiness signal, but re-check the latest ReplicaSet here in
+# case Reloader started another rollout between the pricing call and this point.
+step "x402 verifier ready after pricing change"
+if "$OBOL" kubectl rollout status deployment/x402-verifier -n x402 --timeout=180s >/dev/null 2>&1; then
+    pass "x402 verifier ready"
+else
+    pods_state=$("$OBOL" kubectl get pods -n x402 -l app=x402-verifier --no-headers 2>&1 | head -10)
+    fail "x402 verifier not ready after 180s — ${pods_state//$'\n'/ | }"
+fi
 
 emit_metrics

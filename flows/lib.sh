@@ -602,12 +602,27 @@ require_tool() {
 }
 
 x402_facilitator_image() {
-    local image="ghcr.io/x402-rs/x402-facilitator:1.4.7"
+    local image="${X402_FACILITATOR_IMAGE:-ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9}"
 
     command -v docker >/dev/null 2>&1 || {
         echo "docker is required to fetch $image" >&2
         return 1
     }
+
+    # X402_FACILITATOR_SKIP_PULL=true uses an already-loaded local image without
+    # touching the registry. Required on arm64 QA hosts because upstream
+    # ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9 ships an
+    # amd64 binary inside the arm64 manifest variant (see ObolNetwork/x402-rs).
+    # Build locally with overlays/x402-facilitator-prometheus-overlay/Dockerfile
+    # and tag with the canonical name, then set this flag.
+    if [ "${X402_FACILITATOR_SKIP_PULL:-false}" = "true" ]; then
+        if ! docker image inspect "$image" >/dev/null 2>&1; then
+            echo "X402_FACILITATOR_SKIP_PULL=true but image not present locally: $image" >&2
+            return 1
+        fi
+        printf '%s\n' "$image"
+        return 0
+    fi
 
     if ! docker_pull_public_image "$image" "${X402_FACILITATOR_PULL_TIMEOUT:-180}"; then
         echo "x402 facilitator image not available: $image" >&2
@@ -654,6 +669,31 @@ write_x402_facilitator_logs() {
     docker logs "$name" > "$log" 2>&1 || true
 }
 
+# scrub_secrets — line-buffered stream filter that redacts known sensitive
+# tokens before they hit the terminal or the on-disk log. Patterns are
+# additive: any string we never want surfaced should land here. Uses
+# extended sed regex (GNU/BSD common syntax).
+#
+# Paid-RPC URLs are collapsed down to the provider's top-level domain so
+# the operator can still see which provider they pointed at, but the
+# subdomain, path, query, and api key are all redacted. Keep this in
+# lockstep with cmd/obol/network.go::redactRPCURL.
+#
+# Currently redacts:
+#   - https://*.alchemy.com/...   -> https://[REDACTED].alchemy.com/[REDACTED]
+#   - https://*.infura.io/...     -> https://[REDACTED].infura.io/[REDACTED]
+#   - https://*.quiknode.pro/...  -> https://[REDACTED].quiknode.pro/[REDACTED]
+#   - https://*.drpc.live/...     -> https://[REDACTED].drpc.live/[REDACTED]
+#   - https://*.drpc.org/...      -> https://[REDACTED].drpc.org/[REDACTED]
+#   - eth_accounts-style hex private keys -> [REDACTED-PRIVKEY] (only when
+#                                            prefixed by literal 'private-key'
+#                                            or 'PRIVATE_KEY')
+scrub_secrets() {
+    sed -E -u \
+        -e 's#(https?://)[A-Za-z0-9._-]+\.(alchemy\.com|infura\.io|quiknode\.pro|drpc\.live|drpc\.org)([:/?#][^[:space:]"<>]*)?#\1[REDACTED].\2/[REDACTED]#g' \
+        -e 's#((PRIVATE_KEY|private-key)["= :]+)0x[a-fA-F0-9]{64}#\1[REDACTED-PRIVKEY]#g'
+}
+
 redact_url_for_log() {
     python3 - "$1" <<'PY'
 from urllib.parse import urlparse
@@ -677,6 +717,15 @@ base_sepolia_rpc_candidates() {
     fi
     if [ -n "${BASE_SEPOLIA_RPC:-}" ]; then
         printf '%s\n' "$BASE_SEPOLIA_RPC"
+    fi
+
+    # Paid Alchemy endpoint first. Free-tier fallbacks below hit drpc.org's
+    # 408 "Request timeout on the free tier" under release-smoke load
+    # (multiple anvil forks + balance reads + receipt scans). The Alchemy
+    # URL contains the API key in its path so logs that print it should
+    # route through redact_url_for_log.
+    if [ -n "${ALCHEMY_BASE_SEPOLIA_API_KEY:-}" ]; then
+        printf '%s\n' "https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_BASE_SEPOLIA_API_KEY}"
     fi
 
     # Archive-capable endpoints first. publicnode.com is intentionally omitted —
@@ -736,6 +785,78 @@ cast_with_retries() {
 base_sepolia_block_number() {
     local rpc="$1"
     cast_with_retries block-number --rpc-url "$rpc" 2>/dev/null | tr -d ' '
+}
+
+# fund_bob_from_alice_if_needed <token-name> <token-address> <alice-key> <alice-addr>
+#                               <bob-addr> <required> <rpc>
+# If Bob's ERC-20 balance is below <required>, transfer (required - balance)
+# from Alice to Bob. Stays silent and returns 0 when no top-up is needed.
+# Returns non-zero only when Alice has insufficient balance OR the transfer
+# transaction fails; callers should fall through to the existing fail path
+# in that case so the operator sees the manual-funding requirement.
+#
+# Required because the deterministic Bob wallet is reused across smoke runs
+# and gets drained by previous (even partially-failed) paid-commerce flows;
+# the OBOL/USDC seller-faucet step previously had to be done out of band.
+fund_bob_from_alice_if_needed() {
+    local token_name="$1"
+    local token_addr="$2"
+    local alice_key="$3"
+    local alice_addr="$4"
+    local bob_addr="$5"
+    local required="$6"
+    local rpc="$7"
+
+    local bob_bal alice_bal deficit tx
+    bob_bal=$(env -u CHAIN cast call "$token_addr" \
+        "balanceOf(address)(uint256)" "$bob_addr" --rpc-url "$rpc" 2>/dev/null \
+        | grep -oE '^[0-9]+' | head -1 || true)
+    bob_bal="${bob_bal:-0}"
+
+    if [ "$bob_bal" -ge "$required" ] 2>/dev/null; then
+        return 0
+    fi
+
+    deficit=$(( required - bob_bal ))
+    echo "  Bob $token_name balance $bob_bal < required $required — topping up $deficit from Alice ($alice_addr)"
+
+    alice_bal=$(env -u CHAIN cast call "$token_addr" \
+        "balanceOf(address)(uint256)" "$alice_addr" --rpc-url "$rpc" 2>/dev/null \
+        | grep -oE '^[0-9]+' | head -1 || true)
+    alice_bal="${alice_bal:-0}"
+
+    if [ "$alice_bal" -lt "$deficit" ] 2>/dev/null; then
+        echo "  Alice $token_name balance $alice_bal < deficit $deficit — cannot top up; fund Alice or Bob manually" >&2
+        return 1
+    fi
+
+    tx=$(env -u CHAIN cast send "$token_addr" \
+        "transfer(address,uint256)" "$bob_addr" "$deficit" \
+        --private-key "$alice_key" --rpc-url "$rpc" \
+        --json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("transactionHash") or "")' 2>/dev/null || true)
+    if [ -z "$tx" ]; then
+        echo "  Top-up transfer failed (token=$token_addr alice=$alice_addr bob=$bob_addr deficit=$deficit)" >&2
+        return 1
+    fi
+    echo "  Top-up tx=$tx (re-reading balance)"
+
+    # Allow a couple of confirmations before re-checking. Alchemy / drpc usually
+    # surface the new balance within 2-3s on Base Sepolia.
+    local i new_bal
+    for i in 1 2 3 4 5 6 7 8; do
+        sleep 2
+        new_bal=$(env -u CHAIN cast call "$token_addr" \
+            "balanceOf(address)(uint256)" "$bob_addr" --rpc-url "$rpc" 2>/dev/null \
+            | grep -oE '^[0-9]+' | head -1 || true)
+        new_bal="${new_bal:-0}"
+        if [ "$new_bal" -ge "$required" ] 2>/dev/null; then
+            echo "  Bob $token_name balance now $new_bal (>= $required)"
+            return 0
+        fi
+    done
+
+    echo "  Top-up tx $tx submitted but Bob $token_name balance $new_bal still below $required after ${i}x2s" >&2
+    return 1
 }
 
 agent_response_refused() {

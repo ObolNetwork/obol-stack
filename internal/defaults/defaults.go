@@ -110,12 +110,18 @@ func rewriteDevDigestPins(defaultsDir string) error {
 	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
 	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
 	for _, base := range devLocallyBuiltImageBases {
-		// Match either:
-		//   <base>@sha256:<64 hex>       (digest pin)
-		//   <base>:<7-40 hex>            (short-SHA tag pin, e.g. b13254e)
-		// The short-SHA pattern intentionally excludes `:latest` and any
-		// non-hex tag so we only rewrite immutable pins.
-		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})"))
+		// Match all three pin styles we ship across the infrastructure
+		// templates and rewrite to `:latest` so the local-dev build wins.
+		// Patterns covered (single regex, left-to-right alternation):
+		//   <base>:<7-40 hex>@sha256:<64 hex>   tag + digest combo
+		//   <base>@sha256:<64 hex>              digest-only pin
+		//   <base>:<7-40 hex>                   short-SHA tag pin (e.g. b13254e)
+		// The combo form MUST come first so the engine doesn't stop at the
+		// shorter `:<hex>` match and leave a stray `@sha256:<digest>` suffix,
+		// which Docker still resolves to the immutable registry image and
+		// silently bypasses the local build (root cause of the no-debug-logs
+		// regression in flow-11 step 43 chase, May 2026).
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})"))
 		replaceWith = append(replaceWith, base+":latest")
 	}
 

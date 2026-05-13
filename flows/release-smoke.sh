@@ -86,8 +86,13 @@ prepare_workspace() {
     ensure_payment_python_deps
 }
 
+# run_flow <flow_path> [env_name env_value]
+# Optional env_name/env_value is exported only for the child flow process
+# (used to pin per-flow receipt dirs without polluting the runner's env).
 run_flow() {
     local flow="$1"
+    local env_name="${2:-}"
+    local env_value="${3:-}"
     local name log rc fail_count skip_count result
     name=$(basename "$flow" .sh)
     log="$ARTIFACT_DIR/$name.log"
@@ -95,20 +100,22 @@ run_flow() {
     echo
     echo "===== START $name ====="
     set +e
-    if [ "$name" = "flow-11-dual-stack" ]; then
-        FLOW11_ARTIFACT_DIR="$ARTIFACT_DIR/flow-11-receipts" bash "$flow" 2>&1 | tee "$log"
-    elif [ "$name" = "flow-13-dual-stack-obol" ]; then
-        FLOW13_ARTIFACT_DIR="$ARTIFACT_DIR/flow-13-receipts" bash "$flow" 2>&1 | tee "$log"
-    elif [ "$name" = "flow-14-live-obol-base-sepolia" ]; then
-        FLOW14_ARTIFACT_DIR="$ARTIFACT_DIR/flow-14-receipts" bash "$flow" 2>&1 | tee "$log"
+    # All flow output (stdout + stderr) is piped through scrub_secrets before
+    # both the terminal and the artifact log. This catches secret leaks that
+    # other CLI tools (e.g. `obol network add` echoing the full RPC URL with
+    # an Alchemy API key) would otherwise persist on disk.
+    if [ -n "$env_name" ]; then
+        env "$env_name=$env_value" bash "$flow" 2>&1 | scrub_secrets | tee "$log"
     else
-        bash "$flow" 2>&1 | tee "$log"
+        bash "$flow" 2>&1 | scrub_secrets | tee "$log"
     fi
     rc=${PIPESTATUS[0]}
     set -e
 
     fail_count=$(grep -c '^FAIL:' "$log" 2>/dev/null || true)
     skip_count=$(grep -c '^SKIP:' "$log" 2>/dev/null || true)
+    fail_count=${fail_count:-0}
+    skip_count=${skip_count:-0}
     if [ "$rc" -eq 0 ] && [ "$fail_count" -eq 0 ]; then
         if [ "$skip_count" -gt 0 ]; then
             result="SKIP"
@@ -124,19 +131,74 @@ run_flow() {
     [ "$result" != "FAIL" ]
 }
 
-cleanup_default_stack_before_dual() {
-    echo
-    echo "==> Cleaning default stack before dual-stack flow"
-    reset_flow_workspace "$OBOL_ROOT/.workspace"
+# Guard: flow-11, flow-14, and flow-13 each enforce a preflight that rejects
+# the run unless OBOL_LLM_ENDPOINT points at an OpenAI-compatible vLLM /
+# llama.cpp endpoint. Without this guard the runner spends ~30 min on the
+# baseline flows before those three FAIL on their preflights, which makes
+# release-smoke results look worse than they are. Fail fast instead.
+require_obol_llm_endpoint() {
+    local need=false
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]      && need=true
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ] && need=true
+    [ "$need" = "true" ] || return 0
+
+    if [ -z "${OBOL_LLM_ENDPOINT:-}" ]; then
+        cat >&2 <<EOF
+release-smoke: OBOL_LLM_ENDPOINT must be set when RELEASE_SMOKE_INCLUDE_OBOL=true
+               or RELEASE_SMOKE_INCLUDE_OBOL_FORK=true.
+
+  flow-11 / flow-14 / flow-13 enforce this preflight themselves — running
+  them without OBOL_LLM_ENDPOINT only produces three guaranteed FAILs.
+
+  Set, for example:
+    export OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1
+    export OBOL_LLM_MODEL=qwen36-fast      # or whatever the endpoint serves
+
+  See .claude/skills/obol-stack-dev/references/qa-model-envs.md.
+EOF
+        exit 2
+    fi
+}
+
+# Warn (not block) when the OBOL/_FORK gates are on but no paid Base
+# Sepolia RPC is configured. The free-tier fallbacks (drpc.org, sepolia.base.org)
+# routinely hit 408 "Request timeout on the free tier" during smoke runs
+# that fire multiple anvil forks + receipt scans + balance reads, which
+# surfaces as flow-13 facilitator-not-reachable or flow-11 cast-call empty.
+warn_unpaid_base_sepolia_rpc() {
+    local need=false
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]      && need=true
+    [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ] && need=true
+    [ "$need" = "true" ] || return 0
+    [ -n "${ALCHEMY_BASE_SEPOLIA_API_KEY:-}" ] && return 0
+    [ -n "${BASE_SEPOLIA_RPC:-}" ] && return 0
+
+    cat >&2 <<EOF
+release-smoke: WARNING — no paid Base Sepolia RPC configured.
+               Set ALCHEMY_BASE_SEPOLIA_API_KEY in .env for a stable run.
+
+  flow-13's anvil fork and flow-11/14 balance reads default to the free-tier
+  candidates (drpc.org, sepolia.base.org, ...) which routinely return
+  HTTP 408 "Request timeout on the free tier" under release-smoke load.
+  Expect intermittent failures at:
+    flow-11 step 8     (Could not read Alice starting USDC balance)
+    flow-11 step 1170  (Bob signer USDC pre-buy snapshot)
+    flow-13 step 9     (Facilitator did not become reachable — fork RPC timeout)
+    flow-14 balance reads
+EOF
 }
 
 main() {
+    require_obol_llm_endpoint
+    warn_unpaid_base_sepolia_rpc
     write_report_header
     reset_flow_workspace "$OBOL_ROOT/.workspace"
     prepare_workspace
 
     local failed=0
     local flow
+    # flow-10 runs between flow-07 and flow-08 because it starts the local
+    # Anvil + facilitator that flow-08 (and downstream buy/lifecycle) require.
     local flows=(
         "$SCRIPT_DIR/flow-01-prerequisites.sh"
         "$SCRIPT_DIR/flow-02-stack-init-up.sh"
@@ -151,27 +213,27 @@ main() {
     )
 
     for flow in "${flows[@]}"; do
-        if ! run_flow "$flow"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$flow" || failed=$((failed + 1))
     done
 
-    cleanup_default_stack_before_dual
+    echo
+    echo "==> Cleaning default stack before dual-stack flow"
+    reset_flow_workspace "$OBOL_ROOT/.workspace"
 
-    if ! run_flow "$SCRIPT_DIR/flow-11-dual-stack.sh"; then
-        failed=$((failed + 1))
-    fi
+    run_flow "$SCRIPT_DIR/flow-11-dual-stack.sh" \
+        FLOW11_ARTIFACT_DIR "$ARTIFACT_DIR/flow-11-receipts" \
+        || failed=$((failed + 1))
 
     if [ "${RELEASE_SMOKE_INCLUDE_OBOL:-false}" = "true" ]; then
-        if ! run_flow "$SCRIPT_DIR/flow-14-live-obol-base-sepolia.sh"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$SCRIPT_DIR/flow-14-live-obol-base-sepolia.sh" \
+            FLOW14_ARTIFACT_DIR "$ARTIFACT_DIR/flow-14-receipts" \
+            || failed=$((failed + 1))
     fi
 
     if [ "${RELEASE_SMOKE_INCLUDE_OBOL_FORK:-false}" = "true" ]; then
-        if ! run_flow "$SCRIPT_DIR/flow-13-dual-stack-obol.sh"; then
-            failed=$((failed + 1))
-        fi
+        run_flow "$SCRIPT_DIR/flow-13-dual-stack-obol.sh" \
+            FLOW13_ARTIFACT_DIR "$ARTIFACT_DIR/flow-13-receipts" \
+            || failed=$((failed + 1))
     fi
 
     append_report_footer

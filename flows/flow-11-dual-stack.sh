@@ -810,7 +810,16 @@ if [ "$alice_code" != "0x" ] || [ "$bob_code" != "0x" ]; then
 fi
 pass "Both wallets are regular EOAs"
 
-step "Preflight: Bob has USDC"
+step "Preflight: Bob has USDC (top up from Alice if needed)"
+# Bob's deterministic wallet gets drained by prior smoke runs that spend USDC
+# during paid commerce. Try to top up from Alice (the seller wallet) before
+# failing so a single under-funded Bob doesn't require manual operator action
+# between runs. Alice typically holds USDC because she receives settlement
+# payments from earlier runs.
+fund_bob_from_alice_if_needed "USDC" "$USDC_ADDRESS_BASE_SEPOLIA" \
+    "$SIGNER_KEY" "$ALICE_WALLET" "$BOB_WALLET" \
+    "$FLOW11_REQUIRED_BOB_USDC" "$BASE_SEPOLIA_RPC" || true
+
 bob_usdc_raw=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
     "balanceOf(address)(uint256)" "$BOB_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null || true)
 bob_usdc=$(echo "$bob_usdc_raw" | grep -oE '^[0-9]+' | head -1 || true)
@@ -893,9 +902,16 @@ busy_ports=$(require_ports_free \
 }
 pass "Ports: Alice=$ALICE_HTTP_PORT/$ALICE_HTTP_ALT_PORT/$ALICE_HTTPS_PORT/$ALICE_HTTPS_ALT_PORT Bob=$BOB_HTTP_PORT/$BOB_HTTP_ALT_PORT/$BOB_HTTPS_PORT/$BOB_HTTPS_ALT_PORT"
 
-# Record pre-test balances (strip cast's scientific notation suffix)
-PRE_ALICE_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
-    "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+# Record pre-test balances (strip cast's scientific notation suffix). Wrap in
+# the same 5-retry pattern used by the Alice ETH preflight — a single read can
+# return empty under free-tier RPC rate-limiting (HTTP 408 from drpc.org).
+PRE_ALICE_USDC=""
+for _ in $(seq 1 5); do
+    PRE_ALICE_USDC=$(env -u CHAIN cast call "$USDC_ADDRESS_BASE_SEPOLIA" \
+        "balanceOf(address)(uint256)" "$ALICE_WALLET" --rpc-url "$BASE_SEPOLIA_RPC" 2>/dev/null | grep -oE '^[0-9]+' | head -1 || true)
+    [ -n "$PRE_ALICE_USDC" ] && break
+    sleep 2
+done
 if [ -z "$PRE_ALICE_USDC" ]; then
     fail "Could not read Alice starting USDC balance"
     emit_metrics; exit 1
@@ -1397,6 +1413,18 @@ if inference_response=$(wait_for_paid_inference 24 5); then
     echo "$inference_response"
 else
     fail "Paid inference failed: $inference_response"
+    # Capture cluster-side diagnostics before teardown wipes them. The flow's
+    # cleanup tears down k3d clusters on exit; once that runs, kubectl logs
+    # against the verifier/buyer can no longer be retrieved.
+    diag_dir="${FLOW11_ARTIFACT_DIR:-${RELEASE_SMOKE_ARTIFACT_DIR:-$OBOL_ROOT/.tmp}}/flow11-step43-debug"
+    mkdir -p "$diag_dir"
+    echo "  [diag] capturing cluster state to $diag_dir" >&2
+    alice kubectl logs -n x402 deploy/x402-verifier --tail=200 > "$diag_dir/alice-verifier.log" 2>&1 || true
+    alice kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200 > "$diag_dir/alice-buyer.log" 2>&1 || true
+    bob   kubectl logs -n x402 deploy/x402-verifier --tail=200 > "$diag_dir/bob-verifier.log"   2>&1 || true
+    bob   kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200 > "$diag_dir/bob-buyer.log"     2>&1 || true
+    alice kubectl get serviceoffer -A -o yaml > "$diag_dir/alice-serviceoffers.yaml" 2>&1 || true
+    bob   kubectl get purchaserequest -A -o yaml > "$diag_dir/bob-purchaserequests.yaml" 2>&1 || true
     cleanup_pid "$PF_AGENT"
     rm -f "$PF_AGENT_LOG"
     emit_metrics; exit 1

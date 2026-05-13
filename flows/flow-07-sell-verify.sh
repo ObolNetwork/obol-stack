@@ -165,19 +165,19 @@ fi
 
 # §1.6: Verify paths
 
-# Wait for x402-verifier pods to be ready — Kubernetes Reloader restarts them when
-# x402-pricing ConfigMap changes (e.g., from obol sell pricing).  Fresh pods take ~10s.
-step "x402 verifier pods ready"
-for i in $(seq 1 12); do
-    ready=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep "Running" | grep -c "1/1" || echo 0)
-    total=$("$OBOL" kubectl get pods -n x402 --no-headers 2>&1 | grep -v "^$" | wc -l | tr -d ' ')
-    if [ "$ready" -ge 1 ] && [ "$ready" = "$total" ]; then
-        pass "x402 verifier pods ready ($ready/$total)"
-        break
-    fi
-    [ "$i" -eq 12 ] && fail "x402 verifier not ready after 60s ($ready/$total pods running)"
-    sleep 5
-done
+# Wait for x402-verifier to be ready — Kubernetes Reloader restarts pods when
+# x402-pricing ConfigMap changes (e.g., from obol sell pricing). Use
+# `kubectl rollout status` so we only wait for the *latest* ReplicaSet's
+# pods; previous loops counted every pod in the x402 namespace, which
+# never converged when stuck old ReplicaSets or unrelated deployments
+# (serviceoffer-controller) sat in Pending under load.
+step "x402 verifier rollout ready"
+if "$OBOL" kubectl rollout status deployment/x402-verifier -n x402 --timeout=180s >/dev/null 2>&1; then
+    pass "x402 verifier rollout ready"
+else
+    pods_state=$("$OBOL" kubectl get pods -n x402 -l app=x402-verifier --no-headers 2>&1 | head -10)
+    fail "x402 verifier not ready after 180s — ${pods_state//$'\n'/ | }"
+fi
 
 # 402 via local Traefik (primary check — no tunnel dependency)
 # Poll briefly: Traefik needs ~10s to propagate a newly created HTTPRoute
@@ -195,12 +195,21 @@ for i in $(seq 1 6); do
     sleep 5
 done
 
-# Validate 402 JSON body has required x402 fields
+# Validate 402 JSON body has required x402 fields.
+# Retry: the first request after the verifier pod becomes Ready can return
+# an empty body / Bad Gateway from Traefik before the route is fully wired.
 step "402 body has x402Version and accepts[]"
-body=$($CURL_OBOL -s --max-time 10 -X POST \
-    "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+body=""
+for _ in $(seq 1 12); do
+    body=$($CURL_OBOL -s --max-time 10 -X POST \
+        "$INGRESS_URL/services/flow-qwen/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
+    if echo "$body" | python3 -c 'import sys,json; json.load(sys.stdin)' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 5
+done
 if echo "$body" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)

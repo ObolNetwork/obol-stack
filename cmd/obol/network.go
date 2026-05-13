@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -337,7 +338,7 @@ Examples:
 				readOnly := !netCfg.AllowWrites
 
 				if netCfg.Endpoint != "" {
-					u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, netCfg.Endpoint)
+					u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, redactRPCURL(netCfg.Endpoint))
 					if err := network.AddCustomRPC(cfg, chainID, chainName, netCfg.Endpoint, readOnly); err != nil {
 						return fmt.Errorf("failed to add custom RPC: %w", err)
 					}
@@ -387,7 +388,7 @@ Examples:
 				if err := validate.URL(endpoint); err != nil {
 					return fmt.Errorf("invalid --endpoint: %w", err)
 				}
-				u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, endpoint)
+				u.Infof("Adding custom RPC for %s (chain ID: %d): %s", chainName, chainID, redactRPCURL(endpoint))
 				if readOnly {
 					u.Infof("  Write methods blocked (use --allow-writes to enable)")
 				}
@@ -558,4 +559,77 @@ func chainIDToName(chainID int) string {
 	}
 
 	return fmt.Sprintf("Chain %d", chainID)
+}
+
+// paidRPCDomains is the set of registered domains (eTLD+1) we recognize as
+// paid RPC providers. When the URL's host matches one of these (or any
+// subdomain of it), redactRPCURL collapses the URL down to "scheme://[REDACTED].<domain>[:port]/[REDACTED]"
+// so logs only ever surface the provider, not which instance, key, or
+// account is in use. Keep in lockstep with flows/lib.sh::scrub_secrets.
+var paidRPCDomains = []string{
+	"alchemy.com",
+	"infura.io",
+	"quiknode.pro",
+	"drpc.live",
+	"drpc.org",
+}
+
+// redactRPCURL collapses a paid-RPC URL down to its top-level provider
+// domain. Subdomain, path, query, and fragment are all replaced with
+// [REDACTED] so the operator can still see which provider they pointed at
+// without leaking which network, instance, or api key is in use.
+//
+// Hosts that don't match a known paid-RPC domain are returned unchanged.
+func redactRPCURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+
+	hostOnly := strings.ToLower(u.Hostname())
+	port := u.Port()
+
+	domain := matchPaidRPCDomain(hostOnly)
+	if domain == "" {
+		return raw
+	}
+
+	// Build "[REDACTED].<domain>" only when there is a real subdomain.
+	hostOut := domain
+	if hostOnly != domain {
+		hostOut = "[REDACTED]." + domain
+	}
+	if port != "" {
+		hostOut += ":" + port
+	}
+
+	out := u.Scheme + "://"
+	if u.User != nil {
+		out += "[REDACTED]@"
+	}
+	out += hostOut
+	if u.Path != "" && u.Path != "/" {
+		out += "/[REDACTED]"
+	}
+	if u.RawQuery != "" {
+		out += "?[REDACTED]"
+	}
+	if u.Fragment != "" {
+		out += "#[REDACTED]"
+	}
+	return out
+}
+
+// matchPaidRPCDomain returns the registered domain when host matches one
+// of paidRPCDomains exactly or as a subdomain. Returns "" otherwise.
+func matchPaidRPCDomain(host string) string {
+	for _, d := range paidRPCDomains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return d
+		}
+	}
+	return ""
 }

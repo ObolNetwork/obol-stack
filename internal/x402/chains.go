@@ -179,28 +179,34 @@ func NormalizeNetworkID(network string) string {
 // ResolveChainInfo maps a human-friendly chain name to its ChainInfo.
 // Phase 2 renames this to ResolveChain after deleting the old one in config.go.
 func ResolveChainInfo(name string) (ChainInfo, error) {
+	// Accept both legacy names ("base-sepolia") and CAIP-2 ids ("eip155:84532").
+	// fd95dc5 normalized RouteRule.Network to CAIP-2 form before this map was
+	// taught to resolve them, which broke matchPaidRouteFull's chain lookup
+	// (silent 404 for every paid request — root cause of flow-11 step 21
+	// regression). Both forms must work because cfg.Chain (operator-supplied)
+	// stays in the legacy form while RouteRule.Network is normalized.
 	switch name {
-	case "base", "base-mainnet":
+	case "base", "base-mainnet", ChainBaseMainnet.CAIP2Network:
 		return ChainBaseMainnet, nil
-	case "base-sepolia":
+	case "base-sepolia", ChainBaseSepolia.CAIP2Network:
 		return ChainBaseSepolia, nil
-	case "ethereum", "ethereum-mainnet", "mainnet":
+	case "ethereum", "ethereum-mainnet", "mainnet", ChainEthereumMainnet.CAIP2Network:
 		return ChainEthereumMainnet, nil
-	case "polygon", "polygon-mainnet":
+	case "polygon", "polygon-mainnet", ChainPolygonMainnet.CAIP2Network:
 		return ChainPolygonMainnet, nil
-	case "polygon-amoy":
+	case "polygon-amoy", ChainPolygonAmoy.CAIP2Network:
 		return ChainPolygonAmoy, nil
-	case "avalanche", "avalanche-mainnet":
+	case "avalanche", "avalanche-mainnet", ChainAvalancheMainnet.CAIP2Network:
 		return ChainAvalancheMainnet, nil
-	case "avalanche-fuji":
+	case "avalanche-fuji", ChainAvalancheFuji.CAIP2Network:
 		return ChainAvalancheFuji, nil
-	case "arbitrum-one", "arbitrum":
+	case "arbitrum-one", "arbitrum", ChainArbitrumOne.CAIP2Network:
 		return ChainArbitrumOne, nil
-	case "arbitrum-sepolia":
+	case "arbitrum-sepolia", ChainArbitrumSepolia.CAIP2Network:
 		return ChainArbitrumSepolia, nil
 	default:
 		return ChainInfo{}, fmt.Errorf(
-			"unsupported chain: %s (use: base, base-sepolia, ethereum, polygon, polygon-amoy, avalanche, avalanche-fuji, arbitrum-one, arbitrum-sepolia)",
+			"unsupported chain: %s (use: base, base-sepolia, ethereum, polygon, polygon-amoy, avalanche, avalanche-fuji, arbitrum-one, arbitrum-sepolia, or any eip155:<chainId>)",
 			name,
 		)
 	}

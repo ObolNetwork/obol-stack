@@ -1,8 +1,8 @@
 ---
 name: obol-stack-dev
-description: Obol Stack development and QA runbook. Use when working on obol-stack flows, x402 seller/buyer tests, live Base Sepolia OBOL smoke tests, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
+description: Obol Stack development and QA runbook. Use when working on obol-stack flows, x402 seller/buyer tests, live Base Sepolia OBOL smoke, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
 metadata:
-  version: "2.2.0"
+  version: "3.0.0"
   domain: infrastructure
   role: specialist
   scope: development-and-testing
@@ -10,172 +10,97 @@ metadata:
 
 # Obol Stack Dev
 
-Treat this skill as an operational router. Load only the reference needed for the task.
-
-## First Actions
-
-1. Inspect current files before changing anything.
-2. Prefer existing repo flows/helpers over new ad hoc scripts.
-3. Use separate QA worktrees on remote machines.
-4. Never leak hostnames, personal paths, passwords, or private keys into skill files or PR text.
-5. Validate with the narrowest command set that covers the change.
-6. On a dev branch (anything other than `main` with the latest release tag), use `OBOL_DEVELOPMENT=true` for `./obolup.sh` and `obol stack up`. The plain `./obolup.sh` downloads the latest tagged release binary and will not exercise local branch changes. If you started a fresh install without it, kill obolup and rerun with the env var before continuing.
+Operational router. Load only the reference for the task. **Do not delegate understanding** — read the relevant reference yourself; subagents lose context the next reference would have given them.
 
 ## Reference Router
 
 | Need | Read |
-|------|------|
-| Live OBOL smoke, flow choice, token, Bob pre-funded wallet, release smoke | `references/live-obol-qa.md` |
-| QA model/provider setup, Ollama vs vLLM/llama.cpp, model routing receipts | `references/qa-model-envs.md` |
-| Remote QA worktrees, tmux launch, scoped cleanup | `references/remote-qa.md` |
-| x402 paid routing, ERC-8004, token additions, flow gotchas | `references/paid-commerce.md` |
-| LiteLLM routing architecture | `references/litellm-routing.md` |
-| CLI wrappers and env layout | `references/obol-cli.md` |
-| Dev environment setup | `references/dev-environment.md` |
-| Integration tests and BDD tests | `references/integration-testing.md` |
-| Overlay generation | `references/overlay-generation.md` |
-| General troubleshooting | `references/troubleshooting.md` |
+|---|---|
+| Local build, env vars, force-rebuild, CLI surface | `references/dev.md` |
+| Release-smoke broken — what to check first | `references/release-smoke-debugging.md` |
+| Live OBOL smoke, flow choice, Bob derivation, success criteria | `references/paid-flows.md` |
+| LiteLLM model setup, paid/* route, port-forward | `references/llm-routing.md` |
+| Remote QA worktrees, tmux, scoped cleanup | `references/remote-qa.md` |
+| Integration tests (BDD + tunnel + sell/buy roundtrip) | `references/integration-testing.md` |
+| Catch-all gotchas (ca-certs, RBAC race, port drift) | `references/troubleshooting.md` |
 
-## Flow Selection
+## First Actions on Any Task
 
-Default assumptions:
-
-- Live OBOL seller/buyer smoke uses Base Sepolia, deployed OBOL, and public facilitator.
-- Anvil is only for explicit fork regression testing.
-- Release gating should name live and fork checks separately.
-
-| Flow | Run when |
-|------|----------|
-| `flows/flow-11-dual-stack.sh` | USDC seller/buyer baseline |
-| `flows/flow-14-live-obol-base-sepolia.sh` | live OBOL smoke/demo gate |
-| `flows/flow-13-dual-stack-obol.sh` | Anvil fork OBOL Permit2 regression |
-
-Release-smoke flags:
-
-```bash
-RELEASE_SMOKE_INCLUDE_OBOL=true       # live flow-14
-RELEASE_SMOKE_INCLUDE_OBOL_FORK=true  # fork flow-13
-```
+1. Read existing files before changing anything.
+2. Use repo flows/helpers; don't invent ad-hoc scripts.
+3. New worktree per remote QA run.
+4. Never write hostnames, personal paths, passwords, private keys, or raw tokens into skill files, PR text, or commit messages.
+5. Validate with the narrowest command set that covers the change.
+6. On a dev branch (anything not at the latest release tag), set `OBOL_DEVELOPMENT=true` for `obolup.sh` and `obol stack up`. Without it, `obolup.sh` downloads the released binary and your branch changes never run. Replace the `go run` wrapper with a real binary before running flows (`go build -o .workspace/bin/obol ./cmd/obol`) — backgrounded port-forwards in flows false-FAIL if the wrapper is recompiling.
 
 ## Critical Invariants
 
-Live OBOL token default:
-
-```bash
+**Live OBOL token** (Base Sepolia):
+```
 OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
 # Source of truth: ObolNetwork/obol-stack#447
 ```
 
-Buyer wallet invariant:
+**Buyer wallet (Bob)**: deterministic 2nd-derived key from `.env REMOTE_SIGNER_PRIVATE_KEY`. Flows 11/13/14 must pre-seed Bob's remote-signer before Bob's `stack up`, then assert `bobSigner == BOB_WALLET`. **Do not** transfer funds to a generated signer to make the test pass.
 
-- `flow-11`, `flow-13`, and `flow-14` derive Bob from `.env` `REMOTE_SIGNER_PRIVATE_KEY`.
-- Bob is the second deterministic derived key.
-- The flow must pre-seed Bob's remote-signer before Bob `stack up`.
-- The flow must assert `bobSigner == BOB_WALLET`.
-- Do not transfer funds to a generated signer to make the test pass.
+**Token/auth**: use `obol agent auth --runtime <runtime> obol-agent`. **Never** `obol hermes token obol-agent` — it can print CLI usage text and poison the Bearer token.
 
-Token/auth invariant:
+**Payment assertion**: don't bypass the agent buy step with a direct script exec. If the agent times out, diagnose Hermes/LiteLLM/model routing — don't relax the assertion. Required evidence: `PurchaseRequest Ready=True` + paid HTTP 200 + on-chain `Transfer` + exact balance deltas.
 
-- Use `obol agent auth --runtime <runtime> obol-agent`.
-- Do not use `obol hermes token obol-agent`; it can print CLI usage text and poison the Bearer token.
+**QA LLM**: full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT` (OpenAI-compatible vLLM or llama.cpp on the QA host). Default `OBOL_LLM_MODEL=qwen36-fast`. Sequence: `obol model setup custom` → `obol model prefer` → one `obol model sync`. Local Ollama and cloud-fallback are **not** acceptable green substitutes for full-flow QA.
 
-Payment assertion invariant:
+**Public vs private routes**: `/services/*`, `/.well-known/agent-registration.json`, `/skill.md`, and `/` (storefront) are public via the tunnel. **NEVER** remove `hostnames: ["obol.stack"]` from frontend or eRPC HTTPRoutes — exposing them publicly is a critical security flaw.
 
-- Do not bypass the agent/LLM buy step with a direct script exec.
-- If the agent refuses, times out, or claims tools/skills are unavailable, diagnose Hermes/LiteLLM/model routing.
-- Do not rely on agent wording.
-- Assert `PurchaseRequest Ready=True`, paid inference HTTP 200, settlement `Transfer`, and exact balance deltas.
+**Release notes**: start from `.github/release-template.md`. Keep generated `What's Changed` / `New Contributors` / `Full Changelog` at the bottom. v0.9.0 is the style reference. No private keys, seed phrases, hostnames, personal paths, or raw bearer tokens.
 
-QA LLM invariant:
+## Hard-Won Lessons (from release-smoke 2026-05-13)
 
-- Full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT`.
-- Use an OpenAI-compatible vLLM or llama.cpp endpoint on the QA machine.
-- Default `OBOL_LLM_MODEL` is `qwen36-fast`; override only when the endpoint advertises a different model.
-- The flow adds the endpoint with `obol model setup custom`, promotes it with `obol model prefer`, then runs one `obol model sync`.
-- Do not treat local Ollama `qwen3.5:9b` or cloud-provider fallback as a green full-flow QA substitute.
+When the smoke gate goes red, check these first — each was a multi-hour debug:
 
-## Remote QA Rules
+| Symptom | Real cause | Where |
+|---|---|---|
+| flow-11 step 43 `503 Payment verification failed` | `EnsureVerifier` reads embedded `x402.yaml` and `kubectl apply`s it, overwriting helmfile's `:latest` with the embedded pin. Source changes silently bypassed under `OBOL_DEVELOPMENT=true`. | `internal/x402/setup.go` rewrites image pins in-memory before apply (5a10fb8). Test: `internal/x402/manifest_devmode_test.go`. |
+| Paid route returns 404 even with verifier deployed | `RouteRule.Network` was normalized to CAIP-2 (`eip155:84532`) but `ResolveChainInfo` only knew legacy aliases (`base-sepolia`). Chain registry never gained an entry → `matchPaidRouteFull` returned 404. | `internal/x402/chains.go` — each case-arm lists both legacy alias and `CAIP2Network` value. |
+| flow-08 `state at block #N is pruned` | anvil's `--prune-history` is an *enable-pruning* flag, not retention. Passing it removed historical state needed by `eth_getStorageAt`. | `flows/flow-10-anvil-facilitator.sh` — never pass `--prune-history`. |
+| Local-built buyer image not running | dev-rewrite regex matched `:tag` but missed `:tag@sha256:digest` combo form. Docker honors digest over tag → local build silently bypassed. | `internal/defaults/defaults.go` — alternation lists longest first. Test: `internal/defaults/defaults_test.go`. |
+| flow-10 facilitator can't reach anvil | anvil bound to `127.0.0.1` only. In-cluster eRPC could not connect; surfaced as misleading 503. | `flows/flow-10-anvil-facilitator.sh` — `--host 0.0.0.0` + cluster-reachability preflight against `host.k3d.internal:8545`. |
+| Public facilitator stuck on stale image | `x402.gcp.obol.tech` was on vanilla `1.4.5`, not the `prometheus-overlay` variant clients are paired with. | `obol-infrastructure#2612` — chart pivot to overlay 1.4.9 + Traefik HTTPRoute filter denies `/metrics` on the public hostname (matches existing `vmauth` idiom). |
+| Free-tier RPC 408 on balance reads | `drpc.org`/`sepolia.base.org` rate-limit aggressively under release-smoke load. | Set `BASE_SEPOLIA_RPC` to a paid drpc lb URL or `ALCHEMY_BASE_SEPOLIA_API_KEY`. `flows/release-smoke.sh` runs `warn_unpaid_base_sepolia_rpc` preflight. `flows/lib.sh::scrub_secrets` collapses paid-RPC URLs to TLD-only in logs. |
+| First request after fresh verifier deploy returns empty body | Traefik HTTPRoute is wired but verifier's serviceoffer-source watcher hasn't loaded the route yet. | `flows/flow-07-sell-verify.sh` + `flows/flow-08-buy.sh` — wrap 402-body fetch in 12×5s retry loop. |
+| facilitator arm64 image runs amd64 binary | `ObolNetwork/x402-rs` v1.4.9 prom-overlay arm64 manifest packaging bug. | Workaround: `X402_FACILITATOR_SKIP_PULL=true` + locally-built arm64 image on QA host. Upstream fix on `fix/multiarch-overlay-arm64`. |
 
-- Use two generic QA machines with sudo access; do not write their names into docs.
-- Assume parallel tests are running.
-- Always create a per-run worktree.
-- Clean only clusters whose stack IDs are recorded in that worktree.
-- Move root-owned stale worktrees aside; do not broad-delete host paths.
+**Diagnosis pattern**: a 503 from the verifier or 404 from a paid route almost never means the verifier is bad — it usually means the deployed image isn't what you think it is, the chain id form mismatched, or the upstream wasn't reachable. Confirm the running image first (`kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'`) before diving into x402 logic.
 
-Read `references/remote-qa.md` before running SSH/tmux cleanup or live smoke remotely.
+## Force a Fresh Local Image Build
 
-## Release Notes
-
-- Use `.github/release-template.md` as the starting point for GitHub release descriptions.
-- The release workflow creates a draft with generated notes; replace the narrative body with the template and keep generated `What's Changed`, `New Contributors`, and `Full Changelog` sections at the bottom.
-- The v0.9.0 release is the style reference: banner, release theme, concise user-facing summary, install block, curated highlights, smaller wins, and generated changelog.
-- Never include private keys, seed phrases, passwords, hostnames, personal paths, or raw bearer tokens in release notes.
-
-## Common Commands
-
-Local syntax/config:
+`obol stack up` reuses any locally-tagged `ghcr.io/obolnetwork/<name>:latest`, so source changes don't reach the pod by default:
 
 ```bash
-bash -n flows/*.sh
-git diff --check
-jq empty renovate.json
-```
-
-Chart/image checks:
-
-```bash
-helm lint internal/embed/infrastructure/cloudflared
-helm template cloudflared internal/embed/infrastructure/cloudflared | rg 'cloudflare/cloudflared:'
-docker manifest inspect cloudflare/cloudflared:2026.3.0
-```
-
-Focused Go checks:
-
-```bash
-go test ./cmd/obol ./internal/tunnel ./internal/stack -count=1
-go test ./cmd/obol ./internal/stack ./internal/hermes -count=1
-```
-
-Force a fresh local image build (otherwise `obol stack up` reuses any
-locally-tagged `ghcr.io/obolnetwork/<name>:latest` and your source change
-won't reach the running pod):
-
-```bash
-# Rebuild everything
+# Rebuild everything (slow)
 OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=true obol stack up
 
-# Rebuild only the image(s) you changed — much faster
+# Rebuild only what you changed (fast)
 OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=x402-verifier obol stack up
 OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller,x402-buyer obol stack up
 ```
 
-Values: `true`/`all` → rebuild every image; comma-separated short names →
-rebuild only those; `false`/`0`/unset → reuse all cached images (default).
-Short name is the image base without the registry prefix or tag
-(e.g. `x402-verifier` from `ghcr.io/obolnetwork/x402-verifier:latest`).
-Images: x402-verifier, serviceoffer-controller, x402-buyer, demo-server,
-obol-stack-public-storefront (`public-storefront` alias accepted). The
-warm-path summary line surfaces this hint when nothing was rebuilt.
+Values: `true`/`all` → all; comma-separated short names → those only; unset/`false`/`0` → reuse cached. Image set: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `demo-server`, `obol-stack-public-storefront` (alias `public-storefront`). The "Local dev images ready" summary line surfaces this hint when nothing was rebuilt.
 
-Integration checks:
+## Pre-Push Local Checks
 
 ```bash
-go test -tags integration -v -run TestBDDIntegration -timeout 10m ./internal/x402/
-go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
+bash -n flows/*.sh                                                    # shell syntax
+git diff --check                                                      # whitespace/conflict markers
+jq empty renovate.json                                                # JSON valid
+helm lint internal/embed/infrastructure/cloudflared
+helm template cloudflared internal/embed/infrastructure/cloudflared | rg 'cloudflare/cloudflared:'
+docker manifest inspect cloudflare/cloudflared:<tag>                  # multi-arch sanity for image bumps
+go test ./cmd/obol ./internal/tunnel ./internal/stack -count=1
+go test ./cmd/obol ./internal/x402/... ./internal/defaults/... -count=1   # touched by smoke fixes
 ```
 
-## Editing Guidance
+## Editing This Skill
 
-Do:
+Do: keep `SKILL.md` short and operational; one fact lives in one place; references one hop from `SKILL.md`. Inline shell snippets directly in the markdown — don't ship parallel implementations of logic that already lives in `flows/lib.sh` or `internal/...`.
 
-- Keep `SKILL.md` short and operational.
-- Add detailed flow notes to `references/*.md`.
-- Add fragile repeated shell sequences to `scripts/` if they grow beyond one short command block.
-- Keep references one hop from `SKILL.md`.
-
-Do not:
-
-- Add README-style docs inside the skill folder.
-- Duplicate the same procedure in `SKILL.md` and references.
-- Bury safety constraints below examples.
-- Add host-specific names, credentials, or copied logs.
+Don't: README-style prose; duplicate the same procedure in `SKILL.md` and references; bury safety constraints below examples; copy host-specific names, credentials, or logs.

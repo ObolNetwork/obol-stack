@@ -246,6 +246,11 @@ func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL 
 		return nil, fmt.Errorf("marshal verify request: %w", err)
 	}
 
+	// DEBUG: temporary instrumentation to surface the exact /verify wire
+	// payload during release-smoke (post-CAIP-2-normalization regression).
+	// Remove once the public-facilitator 503 root cause is fixed.
+	log.Printf("x402: /verify outbound body=%s", string(jsonBody))
+
 	req, err := http.NewRequestWithContext(ctx, "POST", facilitatorURL+"/verify", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("create verify request: %w", err)
@@ -262,6 +267,9 @@ func facilitatorVerify(ctx context.Context, client *http.Client, facilitatorURL 
 	if err != nil {
 		return nil, fmt.Errorf("read verify response: %w", err)
 	}
+
+	// DEBUG: log facilitator response body for post-pivot 503 investigation.
+	log.Printf("x402: /verify response status=%d body=%s", resp.StatusCode, string(respBody))
 
 	var verifyResp facilitatorVerifyResponse
 	if err := json.Unmarshal(respBody, &verifyResp); err != nil {

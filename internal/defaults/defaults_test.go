@@ -41,6 +41,29 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 			t.Errorf("dev mode did not rewrite to %q in %s", want, x402Path)
 		}
 	}
+
+	// Combo tag+digest form (used by x402-buyer in llm.yaml) must be
+	// rewritten to a clean `:latest` with no stale `@sha256:` suffix.
+	// Regression guard for the bug where the old regex matched only
+	// the `:b13254e` part and left `@sha256:...` behind, causing Docker
+	// to silently pull the registry-pinned image instead of the local
+	// build (root cause of flow-11 step 43 unable-to-debug regression
+	// in May 2026 release-smoke).
+	llmPath := filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "llm.yaml")
+	llmData, err := os.ReadFile(llmPath)
+	if err != nil {
+		t.Fatalf("read llm.yaml: %v", err)
+	}
+	llmOut := string(llmData)
+	if !strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer:latest") {
+		t.Errorf("dev mode did not rewrite x402-buyer to :latest in %s", llmPath)
+	}
+	if strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer:latest@sha256:") {
+		t.Errorf("dev mode left orphan @sha256: suffix on x402-buyer:latest in %s — regex missed the combo form", llmPath)
+	}
+	if strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer@sha256:") {
+		t.Errorf("dev mode left @sha256: digest pin on x402-buyer in %s — regex missed it", llmPath)
+	}
 }
 
 func TestCopyInfrastructure_ProductionPreservesImagePins(t *testing.T) {

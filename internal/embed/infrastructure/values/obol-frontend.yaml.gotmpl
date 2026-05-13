@@ -44,7 +44,10 @@ image:
 
   repository: obolnetwork/obol-stack-front-end
   pullPolicy: IfNotPresent
-  tag: "v0.1.23"
+  # Digest-pinned: tag is informational, sha256 is authoritative. Eliminates
+  # the mutable-tag attack surface called out by the v0.10.0-rc2 supply-chain
+  # review. Multi-arch index digest for v0.1.23 (linux/amd64 + linux/arm64).
+  tag: "v0.1.23@sha256:950b887e1cbaca9f928ff7b449b5602ed9777b629b4ee1b9c4c91fac2d74c2f2"
 
 service:
   type: ClusterIP
