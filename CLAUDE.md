@@ -25,14 +25,20 @@ go build ./...                                # Check compilation
 go test ./...                                 # All unit tests
 go test -v -run 'TestName' ./internal/pkg/    # Single test
 
-# Integration tests (requires running cluster + Ollama)
+# Integration tests under internal/openclaw/ (legacy local matrix — requires running cluster + host Ollama)
 export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin OBOL_DATA_DIR=$(pwd)/.workspace/data
 go build -o .workspace/bin/obol ./cmd/obol    # MUST rebuild after code changes
 go test -tags integration -v -timeout 15m ./internal/openclaw/
 
-# Validated paid-inference commerce loop (requires qwen3.5:9b)
+# Validated paid-inference commerce loop (legacy local — requires host Ollama qwen3.5:9b)
+# Does NOT replace release-gate flows 11/13/14, which require OBOL_LLM_ENDPOINT (vLLM / llama.cpp).
 # If reusing a cluster from another worktree, point OBOL_CONFIG_DIR at that cluster's .workspace/config
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
+
+# Release-gate seller/buyer smoke (requires OBOL_LLM_ENDPOINT pointing at OpenAI-compatible vLLM/llama.cpp)
+RELEASE_SMOKE_INCLUDE_OBOL=true RELEASE_SMOKE_INCLUDE_OBOL_FORK=true \
+  OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1 OBOL_LLM_MODEL=qwen36-fast \
+  bash flows/release-smoke.sh
 
 just up    # obol stack init + up
 just down  # obol stack down + purge
@@ -58,12 +64,14 @@ Integration tests use `//go:build integration` and skip gracefully when prerequi
 ```
 obol
 ├── stack           init, up, down, purge
-├── agent           init (deploys obol-agent singleton)
+├── agent           init (deploys obol-agent singleton),
+│                   auth --runtime <runtime> obol-agent  (Bearer token — canonical)
 ├── network         list, install, add, remove, status, sync, delete
 ├── sell            inference, http, list, status, stop, delete, pricing, register
-├── hermes          onboard, setup, sync, list, delete, token, wallet, skills
+├── hermes          onboard, setup, sync, list, delete, wallet, skills
+│                   token   (LEGACY — prefer `obol agent auth`; can print CLI usage text and poison Bearer)
 ├── openclaw        onboard, setup, sync, list, delete, dashboard, cli, token, skills
-├── model           setup, status
+├── model           setup, setup custom, prefer, sync, list, remove, status
 ├── app             install, sync, list, delete
 ├── tunnel          status, login, provision, restart, logs
 ├── kubectl/helm/helmfile/k9s   Passthrough (auto KUBECONFIG)
@@ -298,14 +306,32 @@ Three places pin the OpenClaw version — all must agree:
 
 ### Pitfalls
 
+**First diagnostic when release-smoke goes red**: confirm what's actually deployed before reading verifier code. A `503 Payment verification failed` from Traefik is almost never a real verifier bug — it's usually one of pitfalls 9–13 below.
+
+```bash
+kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
+kubectl get deploy -n x402 serviceoffer-controller -o jsonpath='{.spec.template.spec.containers[*].image}'
+kubectl get deploy -n llm  litellm -o jsonpath='{.spec.template.spec.containers[*].image}'
+```
+
+A registry digest pin instead of `:latest` on the verifier means your dev rewrite was bypassed (pitfall 9).
+
 1. **Kubeconfig port drift** — k3d API port can change between restarts. Fix: `k3d kubeconfig write <name> -o .workspace/config/kubeconfig.yaml --overwrite`
-2. **RBAC binding empty** — `openclaw-monetize-binding` may have empty subjects if `obol agent init` races with k3s manifest apply
+2. **Agent RBAC binding empty** — `obol-agent-monetize-rbac` (Hermes default; legacy `openclaw-monetize-binding` for OpenClaw runs) may have empty subjects if `obol agent init` races with k3s manifest apply. Re-run `obol agent init`.
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
 6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer sidecar route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer and the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
 7. **LiteLLM restart is fallback, not the default buy path** — on this branch, the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. The controller hot-add/hot-delete path plus buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails to show up after the controller has reconciled and the buyer sidecar is reporting the upstream, then restart LiteLLM as a fallback investigation step. Treat a mandatory restart after every buy as historical behavior, not a current invariant.
 8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless and ships with no CA store. The `ca-certificates` ConfigMap in the `x402` namespace must be populated from the host's CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing all payments to fail with `x509: certificate signed by unknown authority`. **Fixed**: `obol stack up` now calls `x402verifier.PopulateCABundle` after infrastructure deployment, and `obol sell http` calls it before creating the ServiceOffer. If you encounter `Payment verification failed` errors, check the verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
+9. **`EnsureVerifier` overwrites helmfile's image pin under `OBOL_DEVELOPMENT=true`** — `internal/x402/setup.go` reads embedded `x402.yaml` (with hard-coded image pin) and `kubectl apply`s it. Without an in-memory rewrite this overwrites the helmfile-managed `:latest` deployment with the embedded pin → every source change to the verifier silently bypassed. Fix shipped in `5a10fb8` (rewrites pins in-memory before apply); regression test in `internal/x402/manifest_devmode_test.go`. **If you add a new component that the controller installs via `kubectl apply` of an embedded manifest**, give it the same dev-rewrite treatment.
+10. **CAIP-2 vs legacy chain id form mismatch** — `RouteRule.Network` is normalized to CAIP-2 (`eip155:84532`) at one boundary, but `internal/x402/chains.go::ResolveChainInfo` must know both that form and the legacy alias (`base-sepolia`). If only one is registered, `matchPaidRouteFull` returns 404 silently on every paid request. When adding a new chain, register both the legacy alias and `CAIP2Network` in every `case` arm.
+11. **anvil `--prune-history` is enable-pruning, not retention** — passing it to anvil drops historical state needed by the local x402-rs facilitator's `eth_getStorageAt`, surfacing as `state at block #N is pruned` and a misleading `503 Payment verification failed` from the cluster. Never pass `--prune-history` to anvil. Also bind anvil with `--host 0.0.0.0` so in-cluster eRPC can reach it via `host.k3d.internal:8545` (loopback-only is the silent-503 case).
+12. **Combo-form image-pin regex** — `internal/embed/infrastructure/...` may pin images as `<image>:<tag>@sha256:<digest>`. The dev-rewrite alternation in `internal/defaults/defaults.go` must list the longest form first (`:tag@sha256:digest` | `@sha256:digest` | `:tag`), or only the `:tag` portion gets rewritten, the `@sha256:` survives, and Docker honors the digest over the tag → local build silently bypassed. Test: `internal/defaults/defaults_test.go`.
+13. **Free-tier Base Sepolia RPC throttling** — `drpc.org`, `sepolia.base.org`, and similar free-tier endpoints return HTTP 408 under release-smoke load (multiple anvil forks + balance reads + receipt scans). Flow-11 step 8 / flow-13 facilitator-reachability / flow-14 balance reads all start failing intermittently. Set `BASE_SEPOLIA_RPC=https://lb.drpc.live/base-sepolia/<paid-token>` or `ALCHEMY_BASE_SEPOLIA_API_KEY=<key>` in `.env`. `flows/release-smoke.sh` runs `warn_unpaid_base_sepolia_rpc` preflight; `cmd/obol/network.go::redactRPCURL` and `flows/lib.sh::scrub_secrets` collapse paid-RPC URLs to `[REDACTED].<tld>/[REDACTED]` so logs only ever surface the provider.
+14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher hasn't loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12×5s retry loop. Don't extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
+
+For a fuller debug catalog with symptom→fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
 
 ### Security: Tunnel Exposure
 
@@ -354,9 +380,11 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 
 ## Related Codebases
 
-| Resource | Path |
-|----------|------|
-| Frontend | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-front-end` |
-| Docs | `/Users/bussyjd/Development/Obol_Workbench/obol-stack-docs` |
-| OpenClaw | `/Users/bussyjd/Development/Obol_Workbench/openclaw` |
-| LiteLLM | `/Users/bussyjd/Development/R&D/litellm` |
+These are sibling Git repositories that this stack integrates with. Set the env vars below to your local checkouts (or add a gitignored `CLAUDE.local.md` with absolute paths if you prefer).
+
+| Resource | Repository | Env override |
+|----------|------------|--------------|
+| Frontend | `ObolNetwork/obol-stack-front-end` | `OBOL_FRONTEND_DIR` |
+| Docs | `ObolNetwork/obol-stack-docs` | `OBOL_DOCS_DIR` |
+| OpenClaw | `ObolNetwork/openclaw` | `OPENCLAW_DIR` |
+| LiteLLM (Obol fork) | `ObolNetwork/litellm-fork` | `LITELLM_FORK_DIR` |
