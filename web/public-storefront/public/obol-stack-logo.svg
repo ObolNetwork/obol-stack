@@ -1,0 +1,24 @@
+<svg viewBox="0 0 165 28" xmlns="http://www.w3.org/2000/svg" width="165" height="28">
+  <!--
+    Obol Stack wordmark. Three layered parallelograms ("stack" mark) +
+    "Obol Stack" text in DM Sans. Single light fill (#d9eef3 = text-light
+    token from obol-ui). This SVG is the canonical source; the sibling
+    obol-stack-logo.png is a 3x raster of this file generated via
+    scripts/build-wordmark.html for consumers (e.g. the x402 verifier's
+    HTTP 402 HTML template, OG image generation) that need a bitmap.
+  -->
+  <g fill="#d9eef3">
+    <path d="M0 5 L36 5 L40 11 L4 11 Z" />
+    <path d="M6 13 L36 13 L40 19 L10 19 Z" />
+    <path d="M12 21 L36 21 L40 27 L16 27 Z" />
+  </g>
+  <text
+    x="52"
+    y="22"
+    font-family="DM Sans, system-ui, -apple-system, sans-serif"
+    font-weight="400"
+    font-size="20"
+    letter-spacing="-0.5"
+    fill="#d9eef3"
+  >Obol<tspan font-weight="700" dx="2">Stack</tspan></text>
+</svg>

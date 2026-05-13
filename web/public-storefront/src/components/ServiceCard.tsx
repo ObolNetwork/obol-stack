@@ -232,7 +232,11 @@ function Snippet({ code }: { code: string }) {
       </pre>
       <button
         onClick={copy}
-        className="absolute top-2 right-2 text-xs text-text-muted hover:text-obol-green cursor-pointer"
+        className={`absolute top-2 right-2 rounded-md border bg-bg03 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
+          copied
+            ? "border-obol-green text-obol-green"
+            : "border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
+        }`}
       >
         {copied ? "Copied" : "Copy"}
       </button>

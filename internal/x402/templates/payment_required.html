@@ -33,6 +33,7 @@
         --light: #d9eef3;
         --body: #9cc2c9;
         --muted: #475e64;
+        --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }
       /* Solid match to the storefront / page; also covers iOS/Safari overscroll
@@ -49,7 +50,7 @@
       header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 56px; }
       header img { height: 28px; width: auto; }
       .pill {
-        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         font-weight: 600;
         color: var(--green);
@@ -69,7 +70,7 @@
       .card h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--body); margin: 0 0 16px; }
       .grid { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; column-gap: 16px; font-size: 15px; }
       .grid dt { color: var(--muted); }
-      .grid dd { margin: 0; font-family: ui-monospace, SF Mono, Menlo, monospace; word-break: break-all; display: flex; align-items: center; gap: 10px; }
+      .grid dd { margin: 0; font-family: var(--font-mono); word-break: break-all; display: flex; align-items: center; gap: 10px; }
       .grid dd.green { color: var(--green); }
 
       /* Inline icon buttons next to the Pay To address: copy + open in
@@ -99,7 +100,7 @@
         border: 1px solid var(--stroke);
         border-radius: 8px;
         padding: 16px 56px 16px 16px;
-        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-family: var(--font-mono);
         font-size: 13px;
         color: var(--light);
         white-space: pre-wrap;
@@ -112,7 +113,7 @@
         border: 1px solid var(--stroke);
         border-radius: 8px;
         padding: 16px 56px 16px 16px;
-        font-family: ui-monospace, SF Mono, Menlo, monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         color: var(--body);
         overflow-x: auto;

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      html, body { margin: 0; padding: 0; background: transparent; }
+      .lockup {
+        width: 165px;
+        height: 28px;
+      }
+      .lockup svg { display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="lockup">
+      <!--
+        Obol Stack wordmark, reconstructed by hand from the existing 138×24
+        PNG. Three layered parallelograms (the "stack" mark) right-aligned,
+        stepping inward from top to bottom, plus DM Sans "Obol Stack" text.
+        Single light fill (#d9eef3 — same as text-light token) per design
+        review: it's one cohesive lockup, not mark-then-text two-tone.
+      -->
+      <svg viewBox="0 0 165 28" xmlns="http://www.w3.org/2000/svg" width="165" height="28">
+        <g fill="#d9eef3">
+          <!-- Top bar (widest) -->
+          <path d="M0 5 L36 5 L40 11 L4 11 Z" />
+          <!-- Middle bar -->
+          <path d="M6 13 L36 13 L40 19 L10 19 Z" />
+          <!-- Bottom bar (smallest, but still right-aligned) -->
+          <path d="M12 21 L36 21 L40 27 L16 27 Z" />
+        </g>
+        <text
+          x="52"
+          y="22"
+          font-family="DM Sans, system-ui, -apple-system, sans-serif"
+          font-weight="400"
+          font-size="20"
+          letter-spacing="-0.5"
+          fill="#d9eef3"
+        >Obol<tspan font-weight="700" dx="2">Stack</tspan></text>
+      </svg>
+    </div>
+  </body>
+</html>
