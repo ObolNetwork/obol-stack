@@ -561,135 +561,75 @@ func chainIDToName(chainID int) string {
 	return fmt.Sprintf("Chain %d", chainID)
 }
 
-// redactRPCURL replaces api-key path segments / query tokens in a paid RPC
-// URL with [REDACTED]. Preserves scheme, host, port, the path-prefix
-// structure, and the original query order so the operator can still see
-// which provider they pointed at.
+// paidRPCDomains is the set of registered domains (eTLD+1) we recognize as
+// paid RPC providers. When the URL's host matches one of these (or any
+// subdomain of it), redactRPCURL collapses the URL down to "scheme://[REDACTED].<domain>[:port]/[REDACTED]"
+// so logs only ever surface the provider, not which instance, key, or
+// account is in use. Keep in lockstep with flows/lib.sh::scrub_secrets.
+var paidRPCDomains = []string{
+	"alchemy.com",
+	"infura.io",
+	"quiknode.pro",
+	"drpc.live",
+	"drpc.org",
+}
+
+// redactRPCURL collapses a paid-RPC URL down to its top-level provider
+// domain. Subdomain, path, query, and fragment are all replaced with
+// [REDACTED] so the operator can still see which provider they pointed at
+// without leaking which network, instance, or api key is in use.
 //
-// Providers covered (matched against the parsed URL host, not via substring
-// regex on the full URL — host anchoring avoids redaction in attacker-
-// controlled embedded URLs):
-//   - *.alchemy.com → /v2/<key>
-//   - *.infura.io   → /v3/<key>
-//   - *.quiknode.pro → /<token>/...
-//   - lb.drpc.live  → /<network>/<token>
-//   - any host      → ?dkey=<token> query param (drpc paid form)
-//
-// Keep this function in lockstep with flows/lib.sh::scrub_secrets — both
-// must redact the same providers or the log surface fragments.
+// Hosts that don't match a known paid-RPC domain are returned unchanged.
 func redactRPCURL(raw string) string {
 	if raw == "" {
 		return raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return raw
 	}
-	host := strings.ToLower(u.Host)
-	if i := strings.IndexByte(host, ':'); i >= 0 {
-		host = host[:i]
+
+	hostOnly := strings.ToLower(u.Hostname())
+	port := u.Port()
+
+	domain := matchPaidRPCDomain(hostOnly)
+	if domain == "" {
+		return raw
 	}
 
-	out := raw
-
-	// Redact the host-specific path token via in-string substitution so we
-	// keep the original encoding of [, ], and the rest of the URL.
-	switch {
-	case host == "alchemy.com" || strings.HasSuffix(host, ".alchemy.com"):
-		out = replacePathTokenAfterPrefix(out, u.Path, "/v2/")
-	case host == "infura.io" || strings.HasSuffix(host, ".infura.io"):
-		out = replacePathTokenAfterPrefix(out, u.Path, "/v3/")
-	case host == "quiknode.pro" || strings.HasSuffix(host, ".quiknode.pro"):
-		out = replaceNthPathSegment(out, u.Path, 1)
-	case host == "lb.drpc.live":
-		out = replaceNthPathSegment(out, u.Path, 2)
+	// Build "[REDACTED].<domain>" only when there is a real subdomain.
+	hostOut := domain
+	if hostOnly != domain {
+		hostOut = "[REDACTED]." + domain
+	}
+	if port != "" {
+		hostOut += ":" + port
 	}
 
-	// Redact the dkey query parameter (drpc paid form) if present, again
-	// in-place so existing query parameter order is preserved.
-	out = replaceQueryParamValue(out, "dkey")
-
+	out := u.Scheme + "://"
+	if u.User != nil {
+		out += "[REDACTED]@"
+	}
+	out += hostOut
+	if u.Path != "" && u.Path != "/" {
+		out += "/[REDACTED]"
+	}
+	if u.RawQuery != "" {
+		out += "?[REDACTED]"
+	}
+	if u.Fragment != "" {
+		out += "#[REDACTED]"
+	}
 	return out
 }
 
-// replacePathTokenAfterPrefix locates the path inside raw and replaces
-// the segment immediately following the given prefix with [REDACTED].
-// Returns raw unchanged when the prefix is not present in the path.
-func replacePathTokenAfterPrefix(raw, path, prefix string) string {
-	idx := strings.Index(path, prefix)
-	if idx < 0 {
-		return raw
-	}
-	rest := path[idx+len(prefix):]
-	end := strings.IndexByte(rest, '/')
-	if end < 0 {
-		end = len(rest)
-	}
-	if end == 0 {
-		return raw
-	}
-	original := path[idx : idx+len(prefix)+end]
-	replaced := prefix + "[REDACTED]"
-	return strings.Replace(raw, original, replaced, 1)
-}
-
-// replaceNthPathSegment locates the path inside raw and replaces the
-// n-th (1-indexed) non-empty path segment with [REDACTED]. Returns raw
-// unchanged when fewer than n segments exist.
-func replaceNthPathSegment(raw, path string, n int) string {
-	if n <= 0 || path == "" || path == "/" {
-		return raw
-	}
-	segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(segs) < n || segs[n-1] == "" {
-		return raw
-	}
-	original := segs[n-1]
-	segs[n-1] = "[REDACTED]"
-	replaced := "/" + strings.Join(segs, "/")
-	// Substitute on the path span only — find it in raw and rebuild.
-	pidx := strings.Index(raw, path)
-	if pidx < 0 {
-		return raw
-	}
-	// Avoid degenerate replacement when original is empty or matches
-	// other text in raw by anchoring on the whole path span.
-	_ = original
-	return raw[:pidx] + replaced + raw[pidx+len(path):]
-}
-
-// replaceQueryParamValue replaces the value of a query parameter named key
-// with [REDACTED] in raw, preserving parameter order and the rest of the
-// URL. Returns raw unchanged when the parameter is absent.
-func replaceQueryParamValue(raw, key string) string {
-	qIdx := strings.IndexByte(raw, '?')
-	if qIdx < 0 {
-		return raw
-	}
-	prefix := raw[:qIdx+1]
-	queryAndFrag := raw[qIdx+1:]
-	frag := ""
-	if hIdx := strings.IndexByte(queryAndFrag, '#'); hIdx >= 0 {
-		frag = queryAndFrag[hIdx:]
-		queryAndFrag = queryAndFrag[:hIdx]
-	}
-	parts := strings.Split(queryAndFrag, "&")
-	changed := false
-	for i, p := range parts {
-		eq := strings.IndexByte(p, '=')
-		var name string
-		if eq < 0 {
-			name = p
-		} else {
-			name = p[:eq]
-		}
-		if name == key {
-			parts[i] = key + "=[REDACTED]"
-			changed = true
+// matchPaidRPCDomain returns the registered domain when host matches one
+// of paidRPCDomains exactly or as a subdomain. Returns "" otherwise.
+func matchPaidRPCDomain(host string) string {
+	for _, d := range paidRPCDomains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return d
 		}
 	}
-	if !changed {
-		return raw
-	}
-	return prefix + strings.Join(parts, "&") + frag
+	return ""
 }

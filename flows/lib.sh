@@ -671,23 +671,26 @@ write_x402_facilitator_logs() {
 
 # scrub_secrets — line-buffered stream filter that redacts known sensitive
 # tokens before they hit the terminal or the on-disk log. Patterns are
-# additive: any string we never want surfaced should land here. Uses GNU/BSD
-# sed common syntax (no extended regex needed for these literal-anchor patterns).
+# additive: any string we never want surfaced should land here. Uses
+# extended sed regex (GNU/BSD common syntax).
+#
+# Paid-RPC URLs are collapsed down to the provider's top-level domain so
+# the operator can still see which provider they pointed at, but the
+# subdomain, path, query, and api key are all redacted. Keep this in
+# lockstep with cmd/obol/network.go::redactRPCURL.
 #
 # Currently redacts:
-#   - https://*.alchemy.com/v2/<key>          -> https://*.alchemy.com/v2/[REDACTED]
-#   - https://*.infura.io/v3/<key>            -> https://*.infura.io/v3/[REDACTED]
-#   - https://*.quiknode.pro/<token>/         -> https://*.quiknode.pro/[REDACTED]/
-#   - https://lb.drpc.org/...?dkey=<token>    -> https://lb.drpc.org/...?dkey=[REDACTED]
-#   - eth_accounts-style hex private keys     -> [REDACTED-PRIVKEY] (only when
-#                                                  prefixed by literal 'private-key' or 'PRIVATE_KEY')
+#   - https://*.alchemy.com/...   -> https://[REDACTED].alchemy.com/[REDACTED]
+#   - https://*.infura.io/...     -> https://[REDACTED].infura.io/[REDACTED]
+#   - https://*.quiknode.pro/...  -> https://[REDACTED].quiknode.pro/[REDACTED]
+#   - https://*.drpc.live/...     -> https://[REDACTED].drpc.live/[REDACTED]
+#   - https://*.drpc.org/...      -> https://[REDACTED].drpc.org/[REDACTED]
+#   - eth_accounts-style hex private keys -> [REDACTED-PRIVKEY] (only when
+#                                            prefixed by literal 'private-key'
+#                                            or 'PRIVATE_KEY')
 scrub_secrets() {
     sed -E -u \
-        -e 's#(alchemy\.com/v2/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
-        -e 's#(infura\.io/v3/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
-        -e 's#(quiknode\.pro/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
-        -e 's#(lb\.drpc\.live/[a-z0-9-]+/)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
-        -e 's#([?&]dkey=)[A-Za-z0-9_-]+#\1[REDACTED]#g' \
+        -e 's#(https?://)[A-Za-z0-9._-]+\.(alchemy\.com|infura\.io|quiknode\.pro|drpc\.live|drpc\.org)([:/?#][^[:space:]"<>]*)?#\1[REDACTED].\2/[REDACTED]#g' \
         -e 's#((PRIVATE_KEY|private-key)["= :]+)0x[a-fA-F0-9]{64}#\1[REDACTED-PRIVKEY]#g'
 }
 
