@@ -101,6 +101,6 @@ go test ./cmd/obol ./internal/x402/... ./internal/defaults/... -count=1   # touc
 
 ## Editing This Skill
 
-Do: keep `SKILL.md` short and operational; one fact lives in one place; references one hop from `SKILL.md`; add reusable snippets to `scripts/`.
+Do: keep `SKILL.md` short and operational; one fact lives in one place; references one hop from `SKILL.md`. Inline shell snippets directly in the markdown — don't ship parallel implementations of logic that already lives in `flows/lib.sh` or `internal/...`.
 
 Don't: README-style prose; duplicate the same procedure in `SKILL.md` and references; bury safety constraints below examples; copy host-specific names, credentials, or logs.

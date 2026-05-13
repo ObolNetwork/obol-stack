@@ -38,8 +38,6 @@ cast call "$OBOL_TOKEN_BASE_SEPOLIA" "balanceOf(address)(uint256)" "$BOB_WALLET"
   --rpc-url "${BASE_SEPOLIA_RPC:-https://sepolia.base.org}"
 ```
 
-(Convenience script: `scripts/derive-bob.sh` in this skill folder.)
-
 ## Required Funding
 
 - Alice (`cast wallet address --private-key "$REMOTE_SIGNER_PRIVATE_KEY"`): Base Sepolia ETH for gas + ServiceOffer registration.
