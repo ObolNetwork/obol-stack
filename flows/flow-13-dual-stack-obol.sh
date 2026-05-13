@@ -907,7 +907,7 @@ buy_response=$(curl -sf --max-time 300 \
         \"model\": \"$BOB_AGENT_RUNTIME-agent\",
         \"messages\": [{
             \"role\": \"user\",
-            \"content\": \"Load the buy-x402 skill, then use your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
         }],
         \"max_tokens\": 4000,
         \"stream\": false
@@ -942,12 +942,20 @@ step "Bob: LiteLLM rollout settled"
 bob kubectl rollout status deployment/litellm -n llm --timeout=180s 2>&1 | tail -2
 pass "LiteLLM rollout settled"
 
-poll_step_grep "Bob: buyer sidecar has exactly 5 auths" "remaining=5" 24 5 buyer_sidecar_status
+poll_step_grep "Bob: buyer sidecar has at least 5 auths" "remaining=[0-9]+" 24 5 buyer_sidecar_status
 buyer_status=$(buyer_sidecar_status)
-if echo "$buyer_status" | grep -q "remaining=5"; then
-    pass "Sidecar has exactly 5 auths: $buyer_status"
+# Mirror flow-14's relaxed assertion. Two reasons to allow remaining>=5
+# rather than exact-5: (a) controller may merge into an existing auth
+# pool on rerun (remaining=10 etc.); (b) the agent prompt asks for
+# --count 5, but qwen36-fast occasionally hallucinates --count 1, which
+# is an LLM-stochasticity issue not a buy-flow correctness issue. We
+# only care that the buy step actually provisioned at least the
+# requested count.
+remaining_n=$(echo "$buyer_status" | grep -oE 'remaining=[0-9]+' | head -1 | cut -d= -f2)
+if [ -n "$remaining_n" ] && [ "$remaining_n" -ge 5 ] 2>/dev/null; then
+    pass "Sidecar has $remaining_n auths (>=5): $buyer_status"
 else
-    fail "Sidecar auth count mismatch; expected remaining=5, got: $buyer_status"
+    fail "Sidecar auth count below 5; got: $buyer_status"
     emit_metrics; exit 1
 fi
 PAID_MODEL=$(echo "$buyer_status" | grep -o 'model=[^ ]*' | sed 's/model=//' | head -1 || true)
