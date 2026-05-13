@@ -92,13 +92,12 @@ flow-07 step 9 + flow-08 step 3 POST once to a freshly-deployed verifier and JSO
 
 - **Fix in repo**: `b46f5d9` — wrap both 402-body assertions in 12×5s retry loops that break the moment the response parses as JSON.
 
-### 9. `obol-infrastructure x402-rs` arm64 manifest contains amd64 binary
+### 9. `ObolNetwork/x402-rs` arm64 manifest contained amd64 binary (historical)
 
-`ObolNetwork/x402-rs` v1.4.9 prometheus-overlay's arm64 manifest variant ships a cross-built amd64 ELF (overlay Dockerfile pinned `--platform=$BUILDPLATFORM` on the builder stage).
+Earlier `1.4.9` of `ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay` shipped a cross-built amd64 ELF inside the arm64 manifest variant (overlay Dockerfile pinned `--platform=$BUILDPLATFORM` on the builder stage). Facilitator crashlooped on arm64 hosts with `exec format error`.
 
-- **Symptom**: facilitator container on arm64 hosts crashloops with `exec format error` or comparable runtime errors.
-- **Workaround in repo**: `X402_FACILITATOR_SKIP_PULL=true` keeps `flow-10` from re-pulling the broken registry image; build the facilitator locally on arm64 hosts. Knob landed in `flows/lib.sh`.
-- **Upstream fix**: prepared but not pushed — `fix/multiarch-overlay-arm64` (drops the redundant `--platform` pin from the builder stage).
+- **Fixed upstream**: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) dropped the platform pin. The publish workflow republished `1.4.9` on push to `main`; arm64 digest is now `sha256:b209345c5e05415df36444b307213c61f9ca08db9f8131d0ebfebefc244ba4ec`.
+- **`X402_FACILITATOR_SKIP_PULL` knob removed** from `flows/lib.sh` once the republished image was validated against the release-smoke. If you encounter `exec format error` on an arm64 host now, the registry image is wrong, not the host — pull-fresh (`docker pull ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9`) and check the manifest with `docker buildx imagetools inspect`.
 
 ## Diagnostic Patterns
 

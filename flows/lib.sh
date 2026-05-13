@@ -609,21 +609,6 @@ x402_facilitator_image() {
         return 1
     }
 
-    # X402_FACILITATOR_SKIP_PULL=true uses an already-loaded local image without
-    # touching the registry. Required on arm64 QA hosts because upstream
-    # ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9 ships an
-    # amd64 binary inside the arm64 manifest variant (see ObolNetwork/x402-rs).
-    # Build locally with overlays/x402-facilitator-prometheus-overlay/Dockerfile
-    # and tag with the canonical name, then set this flag.
-    if [ "${X402_FACILITATOR_SKIP_PULL:-false}" = "true" ]; then
-        if ! docker image inspect "$image" >/dev/null 2>&1; then
-            echo "X402_FACILITATOR_SKIP_PULL=true but image not present locally: $image" >&2
-            return 1
-        fi
-        printf '%s\n' "$image"
-        return 0
-    fi
-
     if ! docker_pull_public_image "$image" "${X402_FACILITATOR_PULL_TIMEOUT:-180}"; then
         echo "x402 facilitator image not available: $image" >&2
         return 1
