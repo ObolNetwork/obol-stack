@@ -124,7 +124,11 @@ source "$OBOL_ROOT/flows/lib-dual-stack.sh"
 # about that pattern continue to work, but separated so we don't collide with
 # flow-14/15 reruns.
 BOB_DIR="$OBOL_ROOT/.workspace-bob-external"
-PINNED_STACK_ID="${EXTERNAL_STACK_ID:-post490-buy-external-bob}"
+# k3d cluster names are capped at 32 chars total, INCLUDING the "obol-stack-"
+# prefix (11 chars). So the user-supplied stack-id portion must be <= 21 chars,
+# or `obol stack up` fails the k3d config validation:
+#   "Cluster name must be <= 32 characters". Keep the default short.
+PINNED_STACK_ID="${EXTERNAL_STACK_ID:-buy-ext-bob}"
 
 EXTERNAL_BUY_ARTIFACT_DIR="${EXTERNAL_BUY_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/buy-external-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$EXTERNAL_BUY_ARTIFACT_DIR"
