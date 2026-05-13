@@ -204,7 +204,22 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Up(cfg, getUI(cmd), cmd.Bool("wildcard-dns"))
+							u := getUI(cmd)
+							if err := stack.Up(cfg, u, cmd.Bool("wildcard-dns")); err != nil {
+								return err
+							}
+							// Re-apply cluster-side state for locally-persisted
+							// `obol sell *` offers. ServiceOffer CRs and the
+							// Service/Endpoints that route to the host gateway
+							// live in etcd, which is destroyed by `obol stack
+							// down`, so a fresh `stack up` would otherwise come
+							// back with the descriptors still on disk but no
+							// matching cluster resources. Best-effort: a resume
+							// failure does not block stack-up.
+							if err := resumeSellOffers(ctx, cfg, u); err != nil {
+								u.Warnf("Could not resume sell offers: %v", err)
+							}
+							return nil
 						},
 					},
 					{

@@ -26,7 +26,6 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
-
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -583,12 +582,18 @@ func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string
 
 func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
 	baseURL = strings.TrimRight(baseURL, "/")
+	// Operator-supplied description wins. Only fall back to a controller-
+	// generated default when the offer left Spec.Registration.Description
+	// empty. The inference-typed default is more specific (names the model),
+	// so it preempts the generic default — but neither overrides an explicit
+	// operator value.
 	description := owner.Spec.Registration.Description
 	if description == "" {
-		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
-	}
-	if owner.IsInference() && owner.Spec.Model.Name != "" {
-		description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		if owner.IsInference() && owner.Spec.Model.Name != "" {
+			description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		} else {
+			description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
+		}
 	}
 
 	image := owner.Spec.Registration.Image
@@ -700,12 +705,18 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	// Same operationally-ready filter as buildServiceCatalogJSON — keep the
+	// two surfaces consistent. An offer that's usable for x402 payments
+	// (route published, payment gate active, upstream healthy) appears in
+	// both /skill.md and /api/services.json, with the on-chain ERC-8004
+	// registration treated as informational metadata rather than a gating
+	// signal. See offerOperationallyReady's doc comment for the rationale.
 	var ready []*monetizeapi.ServiceOffer
 	for _, offer := range offers {
 		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
 			continue
 		}
-		if isConditionTrue(offer.Status, "Ready") {
+		if offerOperationallyReady(offer) {
 			ready = append(ready, offer)
 		}
 	}
@@ -771,7 +782,69 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	return strings.Join(lines, "\n")
 }
 
-// buildServiceCatalogJSON returns a JSON array of ready ServiceOffers for the public storefront.
+// offerOperationallyReady reports whether an offer is usable for x402
+// payments today. This is intentionally LOOSER than the controller's
+// Ready=True condition: ModelReady + UpstreamHealthy + PaymentGateReady
+// + RoutePublished are sufficient. Registered is NOT in the AND. The
+// reasoning: ERC-8004 on-chain registration is publication metadata, not
+// operational readiness — an offer with the route published, payment gate
+// active, and upstream healthy serves buyers correctly regardless of
+// whether the on-chain identity has been minted yet.
+//
+// Used by the storefront catalog (and the skill catalog) so an offer that
+// is functionally usable doesn't disappear from the operator's own
+// dashboard just because the agent wallet hasn't been funded with gas
+// yet. Callers should set ServiceCatalogEntry.RegistrationPending = true
+// when the offer's Registered condition is False with reason
+// AwaitingExternalRegistration, so storefront UIs can badge it.
+func offerOperationallyReady(offer *monetizeapi.ServiceOffer) bool {
+	if offer == nil {
+		return false
+	}
+	// Backwards-compatible shortcut: the aggregate Ready=True implies all
+	// the per-condition gates by construction (see controller.go's `ready`
+	// computation), and existing tests / external callers that only emit
+	// the aggregate signal still want their offers to appear.
+	if isConditionTrue(offer.Status, "Ready") {
+		return true
+	}
+	// Fine-grained operational readiness: the four per-condition gates
+	// that make the offer usable today. Registered is intentionally NOT
+	// in this AND — see the doc comment on this function and on
+	// buildServiceCatalogJSON for the rationale.
+	return isConditionTrue(offer.Status, "ModelReady") &&
+		isConditionTrue(offer.Status, "UpstreamHealthy") &&
+		isConditionTrue(offer.Status, "PaymentGateReady") &&
+		isConditionTrue(offer.Status, "RoutePublished")
+}
+
+// offerAwaitingRegistration reports whether an offer is operationally
+// ready but has its on-chain ERC-8004 registration still pending. Used to
+// flip ServiceCatalogEntry.RegistrationPending so storefront UIs can show
+// a "registration pending" badge alongside the usable offer.
+func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
+	if offer == nil {
+		return false
+	}
+	for _, c := range offer.Status.Conditions {
+		if c.Type == "Registered" && c.Status == "False" && c.Reason == "AwaitingExternalRegistration" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildServiceCatalogJSON returns a JSON array of operationally-ready
+// ServiceOffers for the public storefront feed (/api/services.json).
+//
+// The filter is operationally-ready (route published, payment gate
+// active, upstream healthy) rather than the stricter controller
+// Ready=True (which also requires Registered=True). Excluding offers
+// whose only False condition is AwaitingExternalRegistration made
+// operators' own seller dashboards mysteriously empty after `obol stack
+// up` until they funded the agent wallet and ran `obol sell register`.
+// That UX failed the "all paid services come back automatically" promise
+// of the stack-up resume feature.
 func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 
@@ -780,7 +853,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
 			continue
 		}
-		if isConditionTrue(offer.Status, "Ready") {
+		if offerOperationallyReady(offer) {
 			ready = append(ready, offer)
 		}
 	}
@@ -803,16 +876,17 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		}
 
 		svc := schemas.ServiceCatalogEntry{
-			Name:        offer.Name,
-			Namespace:   offer.Namespace,
-			Type:        fallbackOfferType(offer),
-			Model:       modelName,
-			Endpoint:    baseURL + offer.EffectivePath(),
-			Price:       describeOfferPrice(offer),
-			PayTo:       offer.Spec.Payment.PayTo,
-			Network:     offer.Spec.Payment.Network,
-			Description: desc,
-			IsDemo:      offer.Namespace == "demo",
+			Name:                offer.Name,
+			Namespace:           offer.Namespace,
+			Type:                fallbackOfferType(offer),
+			Model:               modelName,
+			Endpoint:            baseURL + offer.EffectivePath(),
+			Price:               describeOfferPrice(offer),
+			PayTo:               offer.Spec.Payment.PayTo,
+			Network:             offer.Spec.Payment.Network,
+			Description:         desc,
+			IsDemo:              offer.Namespace == "demo",
+			RegistrationPending: offerAwaitingRegistration(offer),
 		}
 
 		raw, unit := offerPriceRawAndUnit(offer)

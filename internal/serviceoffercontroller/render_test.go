@@ -240,6 +240,74 @@ func TestBuildActiveRegistrationDocument(t *testing.T) {
 	}
 }
 
+// TestBuildActiveRegistrationDocument_KeepsOperatorDescription pins the fix
+// for the controller-side description-clobber bug:
+// `buildActiveRegistrationDocument` used to unconditionally overwrite
+// `owner.Spec.Registration.Description` for inference-typed offers with
+// `"<model.name> inference via x402 micropayments"`, so any explicit operator
+// description set at sell time was silently lost in the published
+// /.well-known/agent-registration.json document. The fix only fills the
+// description from the model name when the operator's value is empty.
+func TestBuildActiveRegistrationDocument_KeepsOperatorDescription(t *testing.T) {
+	operatorDesc := "Uncensored Qwen3.6-27B abliteration on DGX Spark"
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "aeon-ultimate"},
+			Path:  "/services/aeon",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled:     true,
+				Name:        "Qwen36 AEON Ultimate",
+				Description: operatorDesc,
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+	doc := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner}, "https://inference.example.com", "")
+	if doc.Description != operatorDesc {
+		t.Fatalf("description = %q, want operator value %q (the controller used to overwrite this with %q-inference-via-x402-micropayments)",
+			doc.Description, operatorDesc, owner.Spec.Model.Name)
+	}
+	if doc.Name != "Qwen36 AEON Ultimate" {
+		t.Errorf("name = %q, want operator value %q", doc.Name, "Qwen36 AEON Ultimate")
+	}
+}
+
+// TestBuildActiveRegistrationDocument_FallsBackToModelDescriptionForInference
+// pins the *other* side of the description contract: when the operator does
+// not supply a description, inference offers should still get the
+// model-aware default ("<model.name> inference via x402 micropayments"),
+// not the generic "x402 payment-gated <type> service: <name>" string used
+// for non-inference fallback. The refactor must preserve both branches.
+func TestBuildActiveRegistrationDocument_FallsBackToModelDescriptionForInference(t *testing.T) {
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "aeon-ultimate"},
+			Path:  "/services/aeon",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Name:    "aeon",
+				// Description intentionally left blank.
+			},
+		},
+	}
+	doc := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner}, "https://inference.example.com", "")
+	want := "aeon-ultimate inference via x402 micropayments"
+	if doc.Description != want {
+		t.Errorf("description = %q, want %q (model-aware default for inference offers with no operator description)", doc.Description, want)
+	}
+}
+
 func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *testing.T) {
 	owner := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "demo"},
@@ -528,13 +596,17 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	offers := []*monetizeapi.ServiceOffer{
 		nil,
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "paused-svc", Namespace: "llm",
-				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"}},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "paused-svc", Namespace: "llm",
+				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"},
+			},
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "deleting-svc", Namespace: "llm",
-				DeletionTimestamp: &deleting},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "deleting-svc", Namespace: "llm",
+				DeletionTimestamp: &deleting,
+			},
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 		},
 		{
@@ -918,5 +990,141 @@ func TestSafeName_Truncation(t *testing.T) {
 	otherLong := strings.Repeat("b", 260)
 	if childName(longName) == childName(otherLong) {
 		t.Error("different long names should produce different childNames")
+	}
+}
+
+// TestOfferOperationallyReady_IncludesAwaitingExternalRegistration pins the
+// behavioral fix that "operationally ready" no longer requires the on-chain
+// ERC-8004 registration to have landed.
+func TestOfferOperationallyReady_IncludesAwaitingExternalRegistration(t *testing.T) {
+	awaiting := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+				{Type: "Registered", Status: "False", Reason: "AwaitingExternalRegistration"},
+				{Type: "Ready", Status: "False", Reason: "Reconciling"},
+			},
+		},
+	}
+	if !offerOperationallyReady(awaiting) {
+		t.Fatal("offerOperationallyReady must return true for AwaitingExternalRegistration — the offer is usable for x402 payments today regardless of on-chain identity")
+	}
+	if !offerAwaitingRegistration(awaiting) {
+		t.Fatal("offerAwaitingRegistration must flag this offer so the storefront badges it as registration-pending")
+	}
+}
+
+// TestOfferOperationallyReady_RejectsRealNotReady pins the narrow scope of
+// the relax: an offer whose foreground gateway is down (UpstreamHealthy=False)
+// must still be excluded.
+func TestOfferOperationallyReady_RejectsRealNotReady(t *testing.T) {
+	notUsable := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "broken", Namespace: "llm"},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "False", Reason: "Unhealthy"},
+				{Type: "PaymentGateReady", Status: "False", Reason: "WaitingForUpstream"},
+				{Type: "RoutePublished", Status: "False", Reason: "WaitingForPaymentGate"},
+			},
+		},
+	}
+	if offerOperationallyReady(notUsable) {
+		t.Error("offerOperationallyReady must reject an offer with UpstreamHealthy=False")
+	}
+	if offerAwaitingRegistration(notUsable) {
+		t.Error("offerAwaitingRegistration must NOT flag offers whose Registered condition isn't AwaitingExternalRegistration")
+	}
+}
+
+// TestBuildServiceCatalogJSON_IncludesPendingRegistrationOffers pins the
+// end-to-end wiring: an offer that's operationally ready but awaiting
+// on-chain registration appears in /api/services.json with
+// RegistrationPending=true.
+func TestBuildServiceCatalogJSON_IncludesPendingRegistrationOffers(t *testing.T) {
+	offers := []*monetizeapi.ServiceOffer{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "inference",
+				Path: "/services/aeon",
+				Payment: monetizeapi.ServiceOfferPayment{
+					Network: "base-sepolia",
+					PayTo:   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+					Price:   monetizeapi.ServiceOfferPriceTable{PerMTok: "23"},
+				},
+				Model: monetizeapi.ServiceOfferModel{Name: "aeon-ultimate"},
+				Registration: monetizeapi.ServiceOfferRegistration{
+					Enabled: true, Name: "AEON Ultimate",
+					Description: "Uncensored Qwen3.6-27B",
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{
+					{Type: "ModelReady", Status: "True"},
+					{Type: "UpstreamHealthy", Status: "True"},
+					{Type: "PaymentGateReady", Status: "True"},
+					{Type: "RoutePublished", Status: "True"},
+					{Type: "Registered", Status: "False", Reason: "AwaitingExternalRegistration"},
+				},
+			},
+		},
+	}
+	jsonStr := buildServiceCatalogJSON(offers, "https://inference.example.com")
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service in catalog, got %d: %+v", len(services), services)
+	}
+	if services[0].Name != "aeon" {
+		t.Errorf("got %q, want aeon", services[0].Name)
+	}
+	if !services[0].RegistrationPending {
+		t.Error("RegistrationPending must be true for AwaitingExternalRegistration offers")
+	}
+}
+
+// TestBuildServiceCatalogJSON_RegistrationPendingFalseForFullyReady pins
+// the negative: an offer that's fully Ready=True (on-chain register tx
+// landed) must NOT carry RegistrationPending.
+func TestBuildServiceCatalogJSON_RegistrationPendingFalseForFullyReady(t *testing.T) {
+	offers := []*monetizeapi.ServiceOffer{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "fully-ready", Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "http",
+				Payment: monetizeapi.ServiceOfferPayment{
+					Network: "base", PayTo: "0x1111111111111111111111111111111111111111",
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{
+					{Type: "ModelReady", Status: "True"},
+					{Type: "UpstreamHealthy", Status: "True"},
+					{Type: "PaymentGateReady", Status: "True"},
+					{Type: "RoutePublished", Status: "True"},
+					{Type: "Registered", Status: "True", Reason: "Active"},
+					{Type: "Ready", Status: "True"},
+				},
+			},
+		},
+	}
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	if services[0].RegistrationPending {
+		t.Error("RegistrationPending must be false for fully Ready=True offers")
 	}
 }
