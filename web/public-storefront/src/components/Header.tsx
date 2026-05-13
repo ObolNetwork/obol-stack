@@ -7,10 +7,10 @@ export function Header() {
         <Image
           src="/obol-stack-logo.png"
           alt="Obol Stack"
-          width={138}
-          height={24}
+          width={161}
+          height={28}
           priority
-          className="h-6 w-auto"
+          className="h-7 w-auto"
         />
       </div>
     </header>
