@@ -157,13 +157,6 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	// DEBUG: surface every paid-route request the verifier handles, including
-	// whether the buyer attached X-PAYMENT. Without this we can't tell
-	// "verifier got request but no X-PAYMENT" from "verifier was never
-	// hit". Remove once flow-11 step 43 root cause is fixed.
-	hadPayHdr := r.Header.Get("X-PAYMENT") != ""
-	log.Printf("x402-verifier: HandleProxy %s %s xpayment=%v", r.Method, r.URL.Path, hadPayHdr)
-
 	rule, requirement, extensions, labels, chain, asset, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
