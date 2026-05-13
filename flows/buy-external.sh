@@ -243,6 +243,24 @@ PROBE_DIFF=$(EXT_TOKEN="$EXTERNAL_TOKEN" EXT_CHAIN="$EXTERNAL_CHAIN" \
     python3 <<'PY'
 import json, os, sys
 
+# Sellers may report network in CAIP-2 form ("eip155:84532") while operators
+# naturally use the legacy alias ("base-sepolia"). Normalize both sides to the
+# CAIP-2 form before comparing so the test isn't sensitive to wire format.
+CAIP2 = {
+    "mainnet":      "eip155:1",
+    "base":         "eip155:8453",
+    "base-sepolia": "eip155:84532",
+    "sepolia":      "eip155:11155111",
+    "hoodi":        "eip155:560048",
+    "polygon":      "eip155:137",
+    "optimism":     "eip155:10",
+    "arbitrum":     "eip155:42161",
+    "avalanche":    "eip155:43114",
+}
+def caip2(n: str) -> str:
+    n = (n or "").strip()
+    return CAIP2.get(n.lower(), n)
+
 with open(os.environ["PROBE_FILE"]) as f:
     body = json.load(f)
 accepts = body.get("accepts") or []
@@ -252,13 +270,13 @@ if not accepts:
 acc = accepts[0]
 got = {
     "asset":   (acc.get("asset")   or "").lower(),
-    "network": (acc.get("network") or ""),
+    "network": caip2(acc.get("network") or ""),
     "price":   str(acc.get("amount", acc.get("maxAmountRequired", ""))),
     "payTo":   (acc.get("payTo")   or "").lower(),
 }
 want = {
     "asset":   os.environ["EXT_TOKEN"].lower(),
-    "network": os.environ["EXT_CHAIN"],
+    "network": caip2(os.environ["EXT_CHAIN"]),
     "price":   os.environ["EXT_PRICE"],
     "payTo":   os.environ["EXT_PAYTO"].lower(),
 }
