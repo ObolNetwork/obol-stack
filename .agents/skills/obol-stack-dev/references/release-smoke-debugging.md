@@ -99,6 +99,14 @@ Earlier `1.4.9` of `ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay` shi
 - **Fixed upstream**: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) dropped the platform pin. The publish workflow republished `1.4.9` on push to `main`; arm64 digest is now `sha256:b209345c5e05415df36444b307213c61f9ca08db9f8131d0ebfebefc244ba4ec`.
 - **`X402_FACILITATOR_SKIP_PULL` knob removed** from `flows/lib.sh` once the republished image was validated against the release-smoke. If you encounter `exec format error` on an arm64 host now, the registry image is wrong, not the host — pull-fresh (`docker pull ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9`) and check the manifest with `docker buildx imagetools inspect`.
 
+### 10. Cloudflare WAF blocks default `Python-urllib` User-Agent on external sellers
+
+When buying from external x402 sellers (sellers running outside our k3d cluster — e.g. `https://inference.v1337.org/...`), some sit behind Cloudflare's managed WAF, which **blocks the default `Python-urllib/X.Y` UA with HTTP 403 + Cloudflare error 1010** ("the owner of this website has banned your access based on your browser's signature"). Both the unpaid 402 probe and the paid `X-PAYMENT` request fail; buyers see misleading auth/signing errors instead of the real cause.
+
+- **Symptom**: `buy.py probe` against an external seller fails with 403 (often surfaced as a JSON-decode error or "no accepts" downstream); `buy.py buy` against the same endpoint also fails before signature verification. Curl with default browser UA against the same URL returns 402 cleanly.
+- **Fix in repo**: `c2dddc1` — added module-level `USER_AGENT = os.environ.get("OBOL_BUYER_USER_AGENT", "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)")` to `internal/embed/skills/buy-x402/scripts/buy.py`, applied in `_probe_endpoint` (kind=http), `_probe_endpoint` (kind=inference), and the paid `X-PAYMENT` request in `buy_paid_oneshot`. Tested four UAs against v1337 (`curl/*`, generic `Mozilla/*`, `Chrome/*`, custom `obol-buy-x402/*`) — all four returned 402 cleanly. The fix is "send anything that isn't `Python-urllib`", not "send a specific browser UA". Operator override: `OBOL_BUYER_USER_AGENT`.
+- **Follow-up (not yet confirmed)**: the same WAF block likely affects the Go-side controller probe at `internal/serviceoffercontroller/purchase.go:183`, since Go's `http.Client` defaults to `User-Agent: Go-http-client/1.1`. Verify against v1337 and apply the same UA override on the Go side if reproduced.
+
 ## Diagnostic Patterns
 
 - **Don't confuse 503 with "verifier broken"** — almost always one of #1, #2, #5, #6, or a missing CA bundle (`paid-flows.md`).
