@@ -180,17 +180,108 @@ fi
 PF_LITELLM=""
 PF_LITELLM_LOG=""
 
+# Best-effort diagnostic snapshot, taken on the failure path BEFORE the cluster
+# is torn down. Each command is wrapped in `|| true` so a single failure does
+# not abort the rest of the bundle. The sidecar status snapshot uses the same
+# `kubectl exec ... python3 -c` shape as the in-flow before/after captures
+# (the buyer container is distroless — no curl/wget).
+external_snapshot_on_fail() {
+    type bob >/dev/null 2>&1 || return 0
+    [ -d "$EXTERNAL_BUY_ARTIFACT_DIR" ] || return 0
+
+    local f
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/controller.log"
+    if bob kubectl logs -n x402 deploy/serviceoffer-controller --tail=2000 --previous \
+        > "$f" 2>/dev/null; then
+        echo "  snapshot: $f"
+    else
+        if bob kubectl logs -n x402 deploy/serviceoffer-controller --tail=2000 \
+            > "$f" 2>/dev/null; then
+            echo "  snapshot: $f (no --previous available)"
+        else
+            rm -f "$f" 2>/dev/null || true
+        fi
+    fi
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/controller-current.log"
+    if bob kubectl logs -n x402 deploy/serviceoffer-controller --tail=2000 \
+        > "$f" 2>/dev/null; then
+        echo "  snapshot: $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+    fi
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/purchaserequest.yaml"
+    if bob kubectl get purchaserequest -A -o yaml > "$f" 2>/dev/null; then
+        echo "  snapshot: $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+    fi
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/buyer-status-after.json"
+    if bob kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request, json
+try:
+    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    print(json.dumps(json.loads(resp.read()), indent=2))
+except Exception as e:
+    print(json.dumps({'error': repr(e)}))
+" > "$f" 2>/dev/null; then
+        echo "  snapshot: $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+    fi
+
+    # Re-use the harness-captured buy.py log if it was written; do not re-fetch.
+    if [ -f "$EXTERNAL_BUY_ARTIFACT_DIR/buy-py.log" ]; then
+        f="$EXTERNAL_BUY_ARTIFACT_DIR/agent-pod-buypy.log"
+        if cp "$EXTERNAL_BUY_ARTIFACT_DIR/buy-py.log" "$f" 2>/dev/null; then
+            echo "  snapshot: $f"
+        fi
+    fi
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/cluster-pods.txt"
+    if bob kubectl get pods -A -o wide > "$f" 2>/dev/null; then
+        echo "  snapshot: $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+    fi
+
+    f="$EXTERNAL_BUY_ARTIFACT_DIR/cluster-events.txt"
+    if bob kubectl get events -A --sort-by='.lastTimestamp' 2>/dev/null \
+        | tail -100 > "$f" 2>/dev/null && [ -s "$f" ]; then
+        echo "  snapshot: $f"
+    else
+        rm -f "$f" 2>/dev/null || true
+    fi
+}
+
 external_cleanup() {
     local ec=$?
     set +e
     [ -n "$PF_LITELLM" ] && cleanup_pid "$PF_LITELLM" 2>/dev/null
     [ -n "$PF_LITELLM_LOG" ] && rm -f "$PF_LITELLM_LOG" 2>/dev/null
 
-    # Leave the cluster up on success so the operator can poke around. Only
-    # tear it down if the flow already failed — a leaked k3d cluster between
-    # runs eats Docker network space (cleanup_k3d_obol_networks reclaims).
-    if [ "$ec" -ne 0 ] && type bob >/dev/null 2>&1; then
-        bob stack down >/dev/null 2>&1 || true
+    # Cleanup gate: tear down only when every step passed. On FAIL, snapshot
+    # diagnostics and preserve the cluster — the only places that record why
+    # a PurchaseRequest never advanced are the controller logs, PR
+    # status.conditions[], and sidecar /status, all of which die with the
+    # cluster. Operator pays one manual `bob stack down` when done diagnosing.
+    if type bob >/dev/null 2>&1; then
+        if [ "$ec" -eq 0 ]; then
+            bob stack down >/dev/null 2>&1 || true
+        else
+            echo "Capturing failure snapshot to $EXTERNAL_BUY_ARTIFACT_DIR"
+            external_snapshot_on_fail
+            echo ""
+            echo "FAIL → cluster preserved for diagnosis."
+            echo "  Stack id:  $PINNED_STACK_ID"
+            echo "  Artifacts: $EXTERNAL_BUY_ARTIFACT_DIR"
+            echo "  Manual cleanup when done:"
+            echo "    bob stack down"
+        fi
     fi
     cleanup_k3d_obol_networks
     set -e
