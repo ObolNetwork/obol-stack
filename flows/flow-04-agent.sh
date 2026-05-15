@@ -110,8 +110,8 @@ fi
 
 model_name=$("$OBOL" kubectl get cm hermes-config -n "$NS" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^[[:space:]]*default: //p' | tr -d '"' | head -1)
 [ -n "$model_name" ] || model_name="qwen3.5:35b"
-if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ "$model_name" != "${OBOL_LLM_MODEL:-qwen36-fast}" ]; then
-    fail "Hermes default model $model_name does not match QA LLM model ${OBOL_LLM_MODEL:-qwen36-fast}"
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ "$model_name" != "${OBOL_LLM_MODEL:-qwen36-deep}" ]; then
+    fail "Hermes default model $model_name does not match QA LLM model ${OBOL_LLM_MODEL:-qwen36-deep}"
     cleanup_pid "$PF_PID"
     emit_metrics
     exit 0

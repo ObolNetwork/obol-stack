@@ -37,7 +37,7 @@ go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_
 
 # Release-gate seller/buyer smoke (requires OBOL_LLM_ENDPOINT pointing at OpenAI-compatible vLLM/llama.cpp)
 RELEASE_SMOKE_INCLUDE_OBOL=true RELEASE_SMOKE_INCLUDE_OBOL_FORK=true \
-  OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1 OBOL_LLM_MODEL=qwen36-fast \
+  OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1 OBOL_LLM_MODEL=qwen36-deep \
   bash flows/release-smoke.sh
 
 just up    # obol stack init + up
@@ -246,13 +246,13 @@ obol model remove qwen3.5:4b
 obol model setup custom \
     --name spark1-vllm \
     --endpoint http://192.168.18.23:8000/v1 \
-    --model qwen36-fast
+    --model qwen36-deep
 # `setup custom` validates the endpoint, patches LiteLLM, and internally calls
 # syncAgentModels → hermes.Sync → rewrites the default agent's deployment files
 # with the new primary model. No manual restart needed.
 
 # (b) OR keep Ollama and force-promote the custom entry to the head:
-obol model prefer qwen36-fast
+obol model prefer qwen36-deep
 obol model sync                                                # propagate to Hermes
 
 obol model list                                                # confirm head of model_list

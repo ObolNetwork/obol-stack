@@ -60,7 +60,7 @@ Set `OBOL_LLM_MODEL` to an id returned by `/models`.
 cd "$QA"
 export PATH="$QA/.workspace/bin:$FOUNDRY_BIN:$TOOL_ROOT:$PATH"
 export OBOL_LLM_ENDPOINT=${OBOL_LLM_ENDPOINT:-http://127.0.0.1:8000/v1}
-export OBOL_LLM_MODEL=${OBOL_LLM_MODEL:-qwen36-fast}
+export OBOL_LLM_MODEL=${OBOL_LLM_MODEL:-qwen36-deep}
 ts=$(date +%Y%m%d-%H%M%S)
 log="$QA/.tmp/flow-14-$ts.log"
 art="$QA/.tmp/flow-14-$ts-artifacts"

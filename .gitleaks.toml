@@ -44,6 +44,12 @@ regexes = [
     '''test test test test test test test test test test test junk''',
     # USDC storage slot values (uint256 padded, not secrets)
     '''0x0{50,}[0-9a-fA-F]{1,14}''',
+    # Shell variable expansion in HTTP Auth headers — the actual secret
+    # comes from $BOB_TOKEN / $LITELLM_KEY / etc. at runtime, not from
+    # the literal source text. Matches `Authorization: Bearer $VAR` and
+    # `Authorization: Basic ${VAR}` forms only; a hardcoded literal still
+    # trips the rule because the allowlist regex requires a literal `$`.
+    '''Authorization:\s+(?:Basic|Bearer)\s+\$\{?[A-Za-z_][A-Za-z0-9_]*''',
 ]
 paths = [
     # Gitleaks own config

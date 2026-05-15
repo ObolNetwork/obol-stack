@@ -36,7 +36,7 @@
 #   FLOW13_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW13_ARTIFACT_DIR           where receipts + logs land
 #   OBOL_LLM_ENDPOINT             required vLLM/llama.cpp/OpenAI-compatible endpoint
-#   OBOL_LLM_MODEL                endpoint model name (default: qwen36-fast)
+#   OBOL_LLM_MODEL                endpoint model name (default: qwen36-deep, 27B-class)
 #
 source "$(dirname "$0")/lib.sh"
 DUAL_STACK_FLOW_PREFIX="FLOW13"
@@ -61,7 +61,7 @@ BOB_HTTP_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTP_ALT_PORT)"
 BOB_HTTPS_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_PORT)"
 BOB_HTTPS_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_ALT_PORT)"
 
-OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 export OBOL_LLM_MODEL
 
 ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
@@ -899,31 +899,7 @@ pass "Agent discovery prompt issued (success will be confirmed by buy + Purchase
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob's agent: buy 5 OBOL Permit2 auths from Alice"
-buy_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
-        }],
-        \"max_tokens\": 4000,
-        \"stream\": false
-    }" 2>&1 || true)
-buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
-echo "${buy_content:0:500}"
-# Don't grep buy_content for natural-language confirmation; structural success
-# is the PurchaseRequest CR Ready=True poll below.
-if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
-    echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
-fi
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py: ${buy_content:0:500}"
-    emit_metrics; exit 1
-fi
-pass "Agent buy prompt issued (success will be confirmed by PurchaseRequest CR)"
+agent_buy_with_retry
 
 # ═════════════════════════════════════════════════════════════════
 # 36-39. PR Ready / LiteLLM rollout / sidecar auths / paid call
@@ -947,9 +923,9 @@ buyer_status=$(buyer_sidecar_status)
 # Mirror flow-14's relaxed assertion. Two reasons to allow remaining>=5
 # rather than exact-5: (a) controller may merge into an existing auth
 # pool on rerun (remaining=10 etc.); (b) the agent prompt asks for
-# --count 5, but qwen36-fast occasionally hallucinates --count 1, which
-# is an LLM-stochasticity issue not a buy-flow correctness issue. We
-# only care that the buy step actually provisioned at least the
+# --count 5, but the LLM occasionally hallucinates a different count,
+# which is an LLM-stochasticity issue not a buy-flow correctness issue.
+# We only care that the buy step actually provisioned at least the
 # requested count.
 remaining_n=$(echo "$buyer_status" | grep -oE 'remaining=[0-9]+' | head -1 | cut -d= -f2)
 if [ -n "$remaining_n" ] && [ "$remaining_n" -ge 5 ] 2>/dev/null; then

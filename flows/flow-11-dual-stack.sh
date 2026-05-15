@@ -36,7 +36,7 @@
 #   FLOW11_BOB_HTTP_PORT   FLOW11_BOB_HTTP_ALT_PORT
 #   FLOW11_BOB_HTTPS_PORT  FLOW11_BOB_HTTPS_ALT_PORT
 #   OBOL_LLM_ENDPOINT      required vLLM/llama.cpp/OpenAI-compatible endpoint
-#   OBOL_LLM_MODEL         endpoint model name (default: qwen36-fast)
+#   OBOL_LLM_MODEL         endpoint model name (default: qwen36-deep)
 source "$(dirname "$0")/lib.sh"
 
 # ═════════════════════════════════════════════════════════════════
@@ -60,7 +60,7 @@ BOB_HTTP_ALT_PORT="${FLOW11_BOB_HTTP_ALT_PORT:-$(pick_free_port)}"
 BOB_HTTPS_PORT="${FLOW11_BOB_HTTPS_PORT:-$(pick_free_port)}"
 BOB_HTTPS_ALT_PORT="${FLOW11_BOB_HTTPS_ALT_PORT:-$(pick_free_port)}"
 FACILITATOR_URL="${FLOW11_FACILITATOR_URL:-https://x402.gcp.obol.tech}"
-OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 export OBOL_LLM_MODEL
 FLOW11_ARTIFACT_DIR="${FLOW11_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-11-$(date +%Y%m%d-%H%M%S)}"
 if ! BASE_SEPOLIA_RPC="$(resolve_base_sepolia_rpc "${FLOW11_BASE_SEPOLIA_RPC:-${BASE_SEPOLIA_RPC:-}}")"; then

@@ -60,7 +60,7 @@
 #   EXTERNAL_PR_TIMEOUT_S       default: 300 (5 min)
 #   EXTERNAL_LOG_BLOCKS_BACK    default: 30 (~6 min on Base Sepolia at 2s/blk)
 #   OBOL_LLM_ENDPOINT           default: http://127.0.0.1:8000/v1
-#   OBOL_LLM_MODEL              default: qwen36-fast
+#   OBOL_LLM_MODEL              default: qwen36-deep (27B-class)
 #   OBOL_LLM_NAME               default: external-llm
 #
 # Exit code: 0 on PASS (every step pass), 1 on any FAIL.
@@ -106,7 +106,7 @@ EXTERNAL_PR_TIMEOUT_S="${EXTERNAL_PR_TIMEOUT_S:-300}"
 EXTERNAL_LOG_BLOCKS_BACK="${EXTERNAL_LOG_BLOCKS_BACK:-30}"
 
 OBOL_LLM_ENDPOINT="${OBOL_LLM_ENDPOINT:-http://127.0.0.1:8000/v1}"
-OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 OBOL_LLM_NAME="${OBOL_LLM_NAME:-external-llm}"
 
 # Resolve OBOL_ROOT before sourcing helpers — lib.sh re-derives it but

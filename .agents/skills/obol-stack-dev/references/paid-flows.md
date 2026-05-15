@@ -64,7 +64,7 @@ The runner has a `warn_unpaid_base_sepolia_rpc` preflight. The CLI scrubs paid-R
 - Alice ServiceOffer reaches `Ready=True`.
 - ERC-8004 registration tx published to Base Sepolia (`/.well-known/agent-registration.json` reachable via tunnel for live flows).
 - Bob `PurchaseRequest` reaches `Ready=True`.
-- LiteLLM exposes `paid/<OBOL_LLM_MODEL>` (default `qwen36-fast`).
+- LiteLLM exposes `paid/<OBOL_LLM_MODEL>` (default `qwen36-deep`).
 - Paid inference returns HTTP 200 and **final-answer** content (not reasoning metadata or tool-catalogue text).
 - On-chain `Transfer(Bob signer → Alice, <PAID_AMOUNT>)` receipt is archived.
 - Alice balance increases and Bob signer balance decreases by exactly `PAID_AMOUNT` wei (USDC for flow-11, OBOL for flow-13/14).
