@@ -19,6 +19,8 @@ charts/*/Chart.lock
 
 # Build & logs
 *.log
+*.txt
+!**/templates/NOTES.txt
 logs/
 dist/
 build/

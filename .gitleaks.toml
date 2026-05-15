@@ -1,5 +1,41 @@
 title = "obol-stack gitleaks config"
 
+[[rules]]
+id = "http-basic-auth-in-log"
+description = "HTTP Basic Auth credential in log output or config"
+regex = '''Basic\s+[A-Za-z0-9+/=]{8,}'''
+tags = ["auth", "credential"]
+
+[[rules]]
+id = "authorization-header-value"
+description = "Authorization header key=value pair with credential"
+regex = '''Authorization\s*[=:]\s*(?:Basic|Bearer)\s+\S+'''
+tags = ["auth", "credential"]
+
+[[rules]]
+id = "ethereum-private-key"
+description = "Ethereum/secp256k1 hex private key"
+regex = '''(?i)(?:private.?key|secret.?key|PRIVATE_KEY)\s*[=:]\s*(?:0x)?[0-9a-fA-F]{64}'''
+tags = ["key", "ethereum"]
+
+[[rules]]
+id = "charon-enr-private-key"
+description = "Charon ENR private key file content"
+regex = '''(?i)enr.?private.?key.*[0-9a-fA-F]{64}'''
+tags = ["key", "charon"]
+
+[[rules]]
+id = "jwt-hex-secret"
+description = "JWT hex secret (EL/CL auth)"
+regex = '''(?i)(?:jwt|engine).{0,20}(?:secret|hex|token)\s*[=:]\s*(?:0x)?[0-9a-fA-F]{64}'''
+tags = ["key", "jwt"]
+
+[[rules]]
+id = "bls-keystore-password"
+description = "BLS keystore password in plaintext"
+regex = '''(?i)(?:keystore|keystores|bls).{0,20}(?:password|pass|secret)\s*[=:]\s*\S{8,}'''
+tags = ["key", "validator"]
+
 [allowlist]
 description = "Global allowlist"
 regexTarget = "line"

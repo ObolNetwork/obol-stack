@@ -80,3 +80,14 @@ dev-frontend-reset:
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend reset to released image"
+
+# Install pre-commit hooks (run once after cloning)
+setup:
+    #!/usr/bin/env bash
+    set -e
+    if ! command -v pre-commit &>/dev/null; then
+        echo "⚠ pre-commit not found. Install: pip install pre-commit (or brew install pre-commit)"
+        exit 1
+    fi
+    pre-commit install
+    echo "✓ pre-commit hooks installed — gitleaks will run on every commit"
