@@ -63,6 +63,31 @@ rules:
 
 ---
 #------------------------------------------------------------------------------
+# ClusterRole - Hermes mother agent factory permissions
+#
+# This role is intentionally bound only to the default Hermes mother namespace.
+# The agent-factory skill writes deterministic child namespaces, profile/env
+# Secrets, Agent CRs, and optional agent-backed ServiceOffers. Admission policy
+# guards shape constraints for the broad core resources Kubernetes RBAC cannot
+# restrict by name prefix.
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hermes-agent-factory-write
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["agents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+#------------------------------------------------------------------------------
 # ClusterRoleBinding - Read permissions
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80,6 +105,23 @@ subjects:
   - kind: ServiceAccount
     name: openclaw
     namespace: openclaw-obol-agent
+
+---
+#------------------------------------------------------------------------------
+# ClusterRoleBinding - Hermes mother agent factory permissions
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hermes-agent-factory-write-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hermes-agent-factory-write
+subjects:
+  - kind: ServiceAccount
+    name: hermes
+    namespace: hermes-obol-agent
 
 ---
 #------------------------------------------------------------------------------

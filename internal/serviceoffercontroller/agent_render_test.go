@@ -104,6 +104,7 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 	containers := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
 	c := containers[0].(map[string]any)
 	envs := c["env"].([]any)
+	envFrom := c["envFrom"].([]any)
 
 	wantValues := map[string]string{
 		"API_SERVER_MODEL_NAME": "qwen3.5:9b",
@@ -122,6 +123,84 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 		if got[k] != want {
 			t.Errorf("env %s = %q, want %q", k, got[k], want)
 		}
+	}
+
+	if len(envFrom) != 1 {
+		t.Fatalf("envFrom length = %d, want 1", len(envFrom))
+	}
+	secretRef := envFrom[0].(map[string]any)["secretRef"].(map[string]any)
+	if secretRef["name"] != hermesEnvSecret {
+		t.Errorf("envFrom secret = %v, want %s", secretRef["name"], hermesEnvSecret)
+	}
+	if secretRef["optional"] != true {
+		t.Errorf("envFrom secret optional = %v, want true", secretRef["optional"])
+	}
+}
+
+func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	agent.Spec = monetizeapi.AgentSpec{Model: "qwen3.5:9b"}
+
+	out, err := agentManifests(agent, "litellm", "api")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	var dep map[string]any
+	for _, m := range out {
+		if m.GetKind() == "Deployment" {
+			dep = m.UnstructuredContent()
+			break
+		}
+	}
+	if dep == nil {
+		t.Fatal("Deployment manifest missing")
+	}
+
+	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	inits := podSpec["initContainers"].([]any)
+	if len(inits) != 1 {
+		t.Fatalf("initContainers length = %d, want 1", len(inits))
+	}
+	init := inits[0].(map[string]any)
+	if init["name"] != "profile-seed" {
+		t.Errorf("init name = %v, want profile-seed", init["name"])
+	}
+	args := init["args"].([]any)
+	if len(args) != 1 {
+		t.Fatalf("init args length = %d, want 1", len(args))
+	}
+	script := args[0].(string)
+	for _, must := range []string{
+		"/profile-seed/profile.tar.gz",
+		".obol-profile-seed-imported",
+		"/data/.hermes/SOUL.md",
+		"cp -R",
+	} {
+		if !strings.Contains(script, must) {
+			t.Errorf("profile seed script missing %q\n---\n%s", must, script)
+		}
+	}
+
+	volumes := podSpec["volumes"].([]any)
+	var profileSeed map[string]any
+	for _, v := range volumes {
+		vm := v.(map[string]any)
+		if vm["name"] == "profile-seed" {
+			profileSeed = vm
+			break
+		}
+	}
+	if profileSeed == nil {
+		t.Fatal("profile-seed volume missing")
+	}
+	secret := profileSeed["secret"].(map[string]any)
+	if secret["secretName"] != hermesProfileSeed {
+		t.Errorf("profile seed secretName = %v, want %s", secret["secretName"], hermesProfileSeed)
+	}
+	if secret["optional"] != true {
+		t.Errorf("profile seed optional = %v, want true", secret["optional"])
 	}
 }
 

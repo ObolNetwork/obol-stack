@@ -2,7 +2,7 @@
 # Flow 16: Sell Agent — agent-backed ServiceOffer metadata smoke.
 #
 # Steps:
-#   1. Declare an Agent CRD via `obol agent new <name>` (host seeds soul.md
+#   1. Declare an Agent CRD via `obol agent new <name>` (host seeds SOUL.md
 #      + skills, applies the CR; controller provisions Hermes + optional
 #      remote-signer in the agent's namespace)
 #   2. Gate it with `obol sell agent <name>` (creates a ServiceOffer of
@@ -35,12 +35,12 @@ else
 fi
 
 # §1.1: Host-side seed landed
-step "Host data dir contains soul.md and skills"
+step "Host data dir contains SOUL.md and skills"
 host_root="${OBOL_DATA_DIR}/${AGENT_NS}/hermes-data/.hermes"
-if [ -f "$host_root/soul.md" ]; then
-    pass "soul.md seeded at $host_root/soul.md"
+if [ -f "$host_root/SOUL.md" ]; then
+    pass "SOUL.md seeded at $host_root/SOUL.md"
 else
-    fail "soul.md missing at $host_root/soul.md"
+    fail "SOUL.md missing at $host_root/SOUL.md"
 fi
 expected=$(echo "$AGENT_SKILLS" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 got=$(ls "$host_root/obol-skills" 2>/dev/null | sort | tr '\n' ',' | sed 's/,$//' || true)

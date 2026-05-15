@@ -17,7 +17,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 
 	// Core skills that must always be present
 	coreSkills := []string{
-		"addresses", "building-blocks", "buy-x402", "concepts", "discovery",
+		"addresses", "agent-factory", "building-blocks", "buy-x402", "concepts", "discovery",
 		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
 		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "wallets", "why",
 	}
@@ -191,6 +191,10 @@ func TestCopySkills(t *testing.T) {
 		}
 	}
 
+	if _, err := os.Stat(filepath.Join(destDir, "agent-factory", "scripts", "factory.py")); err != nil {
+		t.Errorf("missing agent-factory/scripts/factory.py: %v", err)
+	}
+
 	// buy-x402 must have references/
 	for _, sub := range []string{
 		"buy-x402/references/purchase-request-spec.md",
@@ -237,6 +241,96 @@ func TestMonetizePy_Syntax(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("monetize.py has syntax errors:\n%s\n%v", output, err)
+	}
+}
+
+func TestAgentFactoryPy_Syntax(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
+	if _, err := os.Stat(factoryPy); err != nil {
+		t.Fatalf("factory.py not found: %v", err)
+	}
+
+	cmd := exec.Command("python3", "-m", "py_compile", factoryPy)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("factory.py has syntax errors:\n%s\n%v", output, err)
+	}
+}
+
+func TestAgentFactoryPy_ProfileArchiveAndRegistrationBehavior(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
+	script := `
+import importlib.util
+import io
+import sys
+import tarfile
+from types import SimpleNamespace
+
+spec = importlib.util.spec_from_file_location("factory", sys.argv[1])
+factory = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(factory)
+
+archive = factory.build_profile_archive("medical", "Stay in scope.", [])
+factory.validate_profile_archive_bytes(archive)
+
+bad = io.BytesIO()
+with tarfile.open(fileobj=bad, mode="w:gz") as tf:
+    body = b"escape"
+    info = tarfile.TarInfo("../escape")
+    info.size = len(body)
+    tf.addfile(info, io.BytesIO(body))
+try:
+    factory.validate_profile_archive_bytes(bad.getvalue())
+except ValueError:
+    pass
+else:
+    raise SystemExit("unsafe archive accepted")
+
+args = SimpleNamespace(
+    name="medical",
+    network="base-sepolia",
+    pay_to="0x1111111111111111111111111111111111111111",
+    max_timeout=300,
+    price="0.05",
+    path=None,
+    offer_name=None,
+    register=False,
+    register_name="Medical Advisor",
+    register_description=None,
+    register_skills=[],
+    skills=["privacy-filter"],
+)
+offer = factory.serviceoffer_resource(args, "hermes-obol-agent")
+registration = offer["spec"]["registration"]
+if registration.get("enabled") is not True:
+    raise SystemExit("registration metadata did not enable registration")
+if registration.get("skills") != ["privacy-filter"]:
+    raise SystemExit(f"registration skills did not inherit agent skills: {registration!r}")
+`
+
+	cmd := exec.Command("python3", "-c", script, factoryPy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("factory.py behavior test failed:\n%s\n%v", output, err)
 	}
 }
 

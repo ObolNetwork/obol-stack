@@ -280,7 +280,7 @@ func runAgentBackedDemo(
 		return fmt.Errorf("derived agent name %q is invalid: %w", agentName, err)
 	}
 
-	// 1. Seed host-side files (skills + soul.md) and apply the Agent CR.
+	// 1. Seed host-side files (skills + SOUL.md) and apply the Agent CR.
 	//    Idempotent — re-running `obol sell demo quant` after a previous
 	//    run is a no-op for the agent if it already exists. A CR that is
 	//    mid-deletion (DeletionTimestamp set, finalizer still draining)
@@ -302,7 +302,7 @@ func runAgentBackedDemo(
 			return fmt.Errorf("seed agent host files: %w", seedErr)
 		}
 		if soulWritten {
-			u.Successf("soul.md seeded at %s", agentcrd.HostSoulPath(cfg, agentName))
+			u.Successf("SOUL.md seeded at %s", agentcrd.HostSoulPath(cfg, agentName))
 		}
 		// Namespace must exist before the Agent CR can land; controller-
 		// side namespace creation is part of provisioning, which doesn't

@@ -88,9 +88,9 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 		return fmt.Errorf("seed host files: %w", err)
 	}
 	if soulWritten {
-		u.Successf("soul.md seeded at %s", agentcrd.HostSoulPath(cfg, opts.Name))
+		u.Successf("SOUL.md seeded at %s", agentcrd.HostSoulPath(cfg, opts.Name))
 	} else {
-		u.Dim(fmt.Sprintf("soul.md already exists at %s, leaving as-is", agentcrd.HostSoulPath(cfg, opts.Name)))
+		u.Dim(fmt.Sprintf("SOUL.md already exists at %s, leaving as-is", agentcrd.HostSoulPath(cfg, opts.Name)))
 	}
 	if len(skills) > 0 {
 		u.Successf("Skills written: %s", strings.Join(skills, ", "))

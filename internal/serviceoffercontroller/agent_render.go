@@ -21,6 +21,8 @@ const (
 	hermesServiceName  = "hermes"
 	hermesConfigMap    = "hermes-config"
 	hermesAPISecret    = "hermes-api-server"
+	hermesEnvSecret    = "hermes-env"
+	hermesProfileSeed  = "hermes-profile-seed"
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
 	defaultHermesImage = "nousresearch/hermes-agent:v2026.5.7"
@@ -49,8 +51,10 @@ func agentLabels(name string) map[string]string {
 // storageClass override — local-path-provisioner (configured by
 // local-path.yaml) maps it to <DataDir>/<namespace>/<pvc-name>/, the
 // same path agentcrd.HostHomePath writes to. So the host-side seed of
-// soul.md + skills lands inside the pod automatically without an init
-// container or ConfigMap dance. This is the single non-obvious
+// SOUL.md + skills lands inside the pod automatically. A small init container
+// also supports a future factory-created profile archive Secret, so profile
+// templates can be imported once without making the Agent CRD schema carry
+// profile bytes. This is the single non-obvious
 // invariant; if you change the namespace prefix on either side the
 // volume contents won't line up.
 func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*unstructured.Unstructured, error) {
@@ -212,6 +216,50 @@ func buildAgentDeployment(agent *monetizeapi.Agent) *unstructured.Unstructured {
 	return u
 }
 
+func buildAgentProfileInitContainer() map[string]any {
+	return map[string]any{
+		"name":            "profile-seed",
+		"image":           hermesImage(),
+		"imagePullPolicy": "IfNotPresent",
+		"command":         []any{"/bin/sh", "-ceu"},
+		"args": []any{`mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/obol-skills
+
+seed=/profile-seed/profile.tar.gz
+marker=/data/.hermes/.obol-profile-seed-imported
+if [ -f "$seed" ] && [ ! -f "$marker" ]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  if ! tar -tzf "$seed" | awk '(/^\/|(^|\/)\.\.(\/|$)/) { bad=1 } END { exit bad }'; then
+    echo "profile seed archive contains an unsafe path" >&2
+    exit 1
+  fi
+  tar -xzf "$seed" -C "$tmp"
+  roots="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  if [ "$roots" != "1" ]; then
+    echo "profile seed archive must contain exactly one top-level directory" >&2
+    exit 1
+  fi
+  root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  bad_member="$(find "$root" ! -type f ! -type d -print -quit)"
+  if [ -n "$bad_member" ]; then
+    echo "profile seed archive contains unsupported member: $bad_member" >&2
+    exit 1
+  fi
+  cp -R "$root"/. /data/.hermes/
+  touch "$marker"
+fi
+
+if [ -f /data/.hermes/soul.md ] && [ ! -f /data/.hermes/SOUL.md ]; then
+  cp /data/.hermes/soul.md /data/.hermes/SOUL.md
+fi
+`},
+		"volumeMounts": []any{
+			map[string]any{"name": "data", "mountPath": "/data"},
+			map[string]any{"name": "profile-seed", "mountPath": "/profile-seed", "readOnly": true},
+		},
+	}
+}
+
 func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 	containerEnv := []any{
 		map[string]any{"name": "HERMES_HOME", "value": "/data/.hermes"},
@@ -272,6 +320,9 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 			"runAsGroup": int64(hermesContainerGID),
 			"fsGroup":    int64(hermesContainerGID),
 		},
+		"initContainers": []any{
+			buildAgentProfileInitContainer(),
+		},
 		"containers": []any{
 			map[string]any{
 				"name":            hermesServiceName,
@@ -282,7 +333,15 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 				"ports": []any{
 					map[string]any{"name": "http", "containerPort": int64(hermesPort)},
 				},
-				"env":            containerEnv,
+				"env": containerEnv,
+				"envFrom": []any{
+					map[string]any{
+						"secretRef": map[string]any{
+							"name":     hermesEnvSecret,
+							"optional": true,
+						},
+					},
+				},
 				"readinessProbe": probe,
 				"livenessProbe":  probe,
 				"startupProbe":   startup,
@@ -302,6 +361,16 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 				"name": "data",
 				"persistentVolumeClaim": map[string]any{
 					"claimName": hermesDataPVC,
+				},
+			},
+			map[string]any{
+				"name": "profile-seed",
+				"secret": map[string]any{
+					"secretName": hermesProfileSeed,
+					"optional":   true,
+					"items": []any{
+						map[string]any{"key": "profile.tar.gz", "path": "profile.tar.gz"},
+					},
 				},
 			},
 			map[string]any{

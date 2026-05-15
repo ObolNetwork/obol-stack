@@ -60,7 +60,7 @@ func agentCommand(cfg *config.Config) *cli.Command {
 				ArgsUsage: "[name]",
 				Description: `With a positional name and CRD-path flags (--model, --skills,
 --objective, --create-wallet) this declares an Agent custom resource and
-seeds soul.md + the per-agent skills dir on the host.
+seeds SOUL.md + the per-agent skills dir on the host.
 
 Without a positional name, falls back to the legacy host-rendered
 Hermes/OpenClaw onboard flow used by the master agent.`,
@@ -91,7 +91,7 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 					},
 					&cli.StringFlag{
 						Name:  "objective",
-						Usage: "Operator objective text substituted into soul.md (CRD path)",
+						Usage: "Operator objective text substituted into SOUL.md (CRD path)",
 					},
 					&cli.BoolFlag{
 						Name:  "create-wallet",
@@ -346,7 +346,7 @@ Examples:
 				}
 			} else if objectiveChanged {
 				if _, err := agentcrd.WriteSoul(cfg, name, stringValueFromAny(spec["objective"]), true); err != nil {
-					return fmt.Errorf("sync host soul.md: %w", err)
+					return fmt.Errorf("sync host SOUL.md: %w", err)
 				}
 			}
 
@@ -913,7 +913,7 @@ func listCRDAgents(cfg *config.Config) ([]agentListItem, error) {
 }
 
 // deleteCRDAgent removes the Agent CR and its host-side data directory
-// (skills + soul.md). Used by `obol agent delete <name>` when the
+// (skills + SOUL.md). Used by `obol agent delete <name>` when the
 // argument matches a CRD-declared agent. Idempotent: missing cluster,
 // missing CR, and missing host dir are all treated as "already gone".
 //

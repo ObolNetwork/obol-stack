@@ -13,7 +13,7 @@ import (
 // the operator's objective text, which is interpolated at the
 // {{ .OperatorObjective }} placeholder.
 //
-// Lifecycle: written exactly once by the seeder when soul.md does not yet
+// Lifecycle: written exactly once by the seeder when SOUL.md does not yet
 // exist on the agent's data PVC. After that the agent owns the file and
 // can rewrite it freely.
 const SoulTemplate = `# You are an Obol Stack sub-agent

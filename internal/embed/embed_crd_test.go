@@ -648,6 +648,34 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("write ClusterRole should not grant Secret writes")
 	}
 
+	factoryRole := findDocByName(docs, "ClusterRole", "hermes-agent-factory-write")
+	if factoryRole == nil {
+		t.Fatal("no ClusterRole 'hermes-agent-factory-write' found")
+	}
+	factoryRules, ok := factoryRole["rules"].([]any)
+	if !ok || len(factoryRules) == 0 {
+		t.Fatal("factory ClusterRole has no rules")
+	}
+
+	if !hasVerbOnResource(factoryRules, "", "namespaces", "create") {
+		t.Error("factory ClusterRole missing 'create' on core/namespaces")
+	}
+	if !hasVerbOnResource(factoryRules, "", "secrets", "create") {
+		t.Error("factory ClusterRole missing 'create' on core/secrets")
+	}
+	if !hasVerbOnResource(factoryRules, "obol.org", "agents", "create") {
+		t.Error("factory ClusterRole missing 'create' on obol.org/agents")
+	}
+	if hasVerbOnResource(factoryRules, "", "namespaces", "delete") {
+		t.Error("factory ClusterRole should not grant namespace deletes")
+	}
+	if hasVerbOnResource(factoryRules, "", "secrets", "delete") {
+		t.Error("factory ClusterRole should not grant Secret deletes")
+	}
+	if hasVerbOnResource(factoryRules, "obol.org", "agents", "delete") {
+		t.Error("factory ClusterRole should not grant Agent deletes")
+	}
+
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
 	readCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-read-binding")
 	if readCRB == nil {
@@ -679,6 +707,20 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	}
 	if !bindingHasSubject(writeRB, "openclaw", "openclaw-obol-agent") {
 		t.Error("write binding missing openclaw-obol-agent/openclaw subject")
+	}
+
+	factoryRB := findDocByName(docs, "ClusterRoleBinding", "hermes-agent-factory-write-binding")
+	if factoryRB == nil {
+		t.Fatal("no ClusterRoleBinding 'hermes-agent-factory-write-binding' found")
+	}
+	if ref := nested(factoryRB, "roleRef", "name"); ref != "hermes-agent-factory-write" {
+		t.Errorf("factory binding roleRef.name = %v, want hermes-agent-factory-write", ref)
+	}
+	if !bindingHasSubject(factoryRB, "hermes", "hermes-obol-agent") {
+		t.Error("factory binding missing hermes-obol-agent/hermes subject")
+	}
+	if bindingHasSubject(factoryRB, "openclaw", "openclaw-obol-agent") {
+		t.Error("factory binding should not include openclaw-obol-agent/openclaw subject")
 	}
 }
 
@@ -926,14 +968,38 @@ func TestAdmissionPolicy_Parses(t *testing.T) {
 		t.Fatal("no ValidatingAdmissionPolicyBinding document found")
 	}
 
-	// Policy should have 2 validation rules
 	validations, ok := nested(policy, "spec", "validations").([]any)
 	if !ok {
 		t.Fatal("spec.validations missing or wrong type")
 	}
 
-	if len(validations) != 2 {
-		t.Errorf("got %d validation rules, want 2", len(validations))
+	wantMessages := []string{
+		"HTTPRoutes created by agent runtimes must reference traefik-gateway",
+		"ForwardAuth middlewares must target x402-verifier.x402.svc",
+		"Agent-created namespaces must be factory-owned agent-* namespaces",
+		"Agent-created Secrets must be hermes-env or hermes-profile-seed inside agent-* namespaces",
+		"Agent-created Agent CRs must be Hermes agents in their matching agent-* namespace",
+	}
+	if len(validations) != len(wantMessages) {
+		t.Errorf("got %d validation rules, want %d", len(validations), len(wantMessages))
+	}
+
+	gotMessages := make(map[string]bool, len(validations))
+	for _, validation := range validations {
+		vm, ok := validation.(map[string]any)
+		if !ok {
+			t.Fatalf("validation has type %T, want map[string]any", validation)
+		}
+		message, ok := vm["message"].(string)
+		if !ok {
+			t.Fatalf("validation message has type %T, want string", vm["message"])
+		}
+		gotMessages[message] = true
+	}
+	for _, message := range wantMessages {
+		if !gotMessages[message] {
+			t.Errorf("missing validation message %q", message)
+		}
 	}
 
 	// Binding should reference openclaw-resource-guard with Deny action
