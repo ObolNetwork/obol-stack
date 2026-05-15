@@ -264,24 +264,23 @@ external_cleanup() {
     [ -n "$PF_LITELLM" ] && cleanup_pid "$PF_LITELLM" 2>/dev/null
     [ -n "$PF_LITELLM_LOG" ] && rm -f "$PF_LITELLM_LOG" 2>/dev/null
 
-    # Leave the cluster up on success so the operator can poke around. Only
-    # tear it down if the flow already failed — a leaked k3d cluster between
-    # runs eats Docker network space (cleanup_k3d_obol_networks reclaims).
-    if [ "$ec" -ne 0 ] && type bob >/dev/null 2>&1; then
-        # Snapshot diagnostics BEFORE the cluster goes away — these are the
-        # only places that record why the PurchaseRequest never advanced.
-        echo "Capturing failure snapshot to $EXTERNAL_BUY_ARTIFACT_DIR"
-        external_snapshot_on_fail
-
-        if [ "${KEEP_CLUSTER_ON_FAIL:-0}" = "1" ]; then
+    # Cleanup gate: tear down only when every step passed. On FAIL, snapshot
+    # diagnostics and preserve the cluster — the only places that record why
+    # a PurchaseRequest never advanced are the controller logs, PR
+    # status.conditions[], and sidecar /status, all of which die with the
+    # cluster. Operator pays one manual `bob stack down` when done diagnosing.
+    if type bob >/dev/null 2>&1; then
+        if [ "$ec" -eq 0 ]; then
+            bob stack down >/dev/null 2>&1 || true
+        else
+            echo "Capturing failure snapshot to $EXTERNAL_BUY_ARTIFACT_DIR"
+            external_snapshot_on_fail
             echo ""
-            echo "KEEP_CLUSTER_ON_FAIL=1 → cluster preserved."
+            echo "FAIL → cluster preserved for diagnosis."
             echo "  Stack id:  $PINNED_STACK_ID"
             echo "  Artifacts: $EXTERNAL_BUY_ARTIFACT_DIR"
             echo "  Manual cleanup when done:"
             echo "    bob stack down"
-        else
-            bob stack down >/dev/null 2>&1 || true
         fi
     fi
     cleanup_k3d_obol_networks
