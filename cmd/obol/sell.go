@@ -39,6 +39,7 @@ import (
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v3"
+	"gopkg.in/yaml.v3"
 )
 
 func sellCommand(cfg *config.Config) *cli.Command {
@@ -58,6 +59,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellDeleteCommand(cfg),
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
+			sellIdentityCommand(cfg),
 			sellInfoCommand(cfg),
 		},
 	}
@@ -103,7 +105,7 @@ Examples:
 			payToFlag("USDC recipient address"),
 			&cli.StringFlag{
 				Name:  "price",
-				Usage: "Per-request price (alias for --per-request; default 0.001 when no price flag is set)",
+				Usage: "Per-request price (alias for --per-request)",
 			},
 			&cli.StringFlag{
 				Name:  "per-request",
@@ -183,6 +185,34 @@ Examples:
 			&cli.StringFlag{
 				Name:  "provenance-file",
 				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+			},
+			&cli.BoolFlag{
+				Name:  "no-register",
+				Usage: "Skip ERC-8004 registration (no /.well-known/agent-registration.json HTTPRoute is published)",
+			},
+			&cli.StringFlag{
+				Name:  "register-name",
+				Usage: "Agent name for ERC-8004 registration (defaults to the offer name)",
+			},
+			&cli.StringFlag{
+				Name:  "register-description",
+				Usage: "Agent description for ERC-8004 registration",
+			},
+			&cli.StringFlag{
+				Name:  "register-image",
+				Usage: "Agent image URL for ERC-8004 registration",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-skills",
+				Usage: "OASF skill tags for ERC-8004 registration (repeatable)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-domains",
+				Usage: "OASF domain tags for ERC-8004 registration (repeatable)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "register-metadata",
+				Usage: "Additional registration metadata as key=value pairs (repeatable, e.g. gpu=A100-80GB)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -306,24 +336,46 @@ Examples:
 				assetSymbol = "USDC"
 			}
 
+			// Resolve the registration block once, here, so we can persist it
+			// alongside the deployment descriptor. The resume path
+			// (`obol stack up` after a stack-down) rebuilds the ServiceOffer
+			// from the on-disk descriptor; without the registration block
+			// persisted, replays would lose the operator's --register-*
+			// customizations.
+			persistedRegistration, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
+				NoRegister:    cmd.Bool("no-register"),
+				Name:          cmd.String("register-name"),
+				Description:   cmd.String("register-description"),
+				Image:         cmd.String("register-image"),
+				Skills:        cmd.StringSlice("register-skills"),
+				Domains:       cmd.StringSlice("register-domains"),
+				MetadataPairs: cmd.StringSlice("register-metadata"),
+			})
+			if regErr != nil {
+				return regErr
+			}
+
 			d := &inference.Deployment{
-				Name:            name,
-				EnclaveTag:      cmd.String("enclave-tag"),
-				ListenAddr:      cmd.String("listen"),
-				UpstreamURL:     upstreamFlag,
-				WalletAddress:   wallet,
-				PricePerRequest: perRequest,
-				PricePerMTok:    priceTable.PerMTok,
-				AssetSymbol:     assetSymbol,
-				Chain:           chainName,
-				FacilitatorURL:  cmd.String("facilitator"),
-				VMMode:          cmd.Bool("vm"),
-				VMImage:         cmd.String("vm-image"),
-				VMCPUs:          cmd.Int("vm-cpus"),
-				VMMemoryMB:      cmd.Int("vm-memory"),
-				VMHostPort:      cmd.Int("vm-host-port"),
-				TEEType:         teeType,
-				ModelHash:       modelHash,
+				Name:             name,
+				EnclaveTag:       cmd.String("enclave-tag"),
+				ListenAddr:       cmd.String("listen"),
+				UpstreamURL:      upstreamFlag,
+				WalletAddress:    wallet,
+				PricePerRequest:  perRequest,
+				PricePerMTok:     priceTable.PerMTok,
+				AssetSymbol:      assetSymbol,
+				Chain:            chainName,
+				FacilitatorURL:   cmd.String("facilitator"),
+				VMMode:           cmd.Bool("vm"),
+				VMImage:          cmd.String("vm-image"),
+				VMCPUs:           cmd.Int("vm-cpus"),
+				VMMemoryMB:       cmd.Int("vm-memory"),
+				VMHostPort:       cmd.Int("vm-host-port"),
+				TEEType:          teeType,
+				ModelHash:        modelHash,
+				ModelName:        modelFlag,
+				ServiceNamespace: "llm",
+				Registration:     persistedRegistration,
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -384,7 +436,9 @@ Examples:
 					d.NoPaymentGate = false
 				} else {
 					// Create a ServiceOffer CR pointing at the host service.
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms)
+					// Reuse the persistedRegistration resolved above; both this
+					// in-process create AND the on-disk descriptor must agree.
+					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms, modelFlag, persistedRegistration)
 					if err != nil {
 						return err
 					}
@@ -408,11 +462,35 @@ Examples:
 						u.Blank()
 						u.Info("Ensuring tunnel is active for public access...")
 
-						if tunnelURL, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
+						tunnelURL := ""
+						if url, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
 							u.Warnf("Tunnel not started: %v", tErr)
 							u.Dim("  Start manually with: obol tunnel restart")
 						} else {
+							tunnelURL = url
 							u.Successf("Tunnel active: %s", tunnelURL)
+						}
+
+						// Auto-register the seller on ERC-8004, mirroring the
+						// `obol sell http` path. Without this step the offer
+						// stays in Registered=False AwaitingExternalRegistration
+						// forever, which makes Ready=False and excludes the
+						// offer from /api/services.json (the storefront feed
+						// only includes Ready=True offers).
+						if shouldAutoRegisterSell(soSpec, tunnelURL) {
+							reg, _ := soSpec["registration"].(map[string]any)
+							u.Blank()
+							u.Info("Registering seller agent on ERC-8004...")
+							if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
+								ChainCSV:      cmd.String("chain"),
+								Endpoint:      tunnelURL,
+								AgentName:     registrationNameForPrompt(name, reg),
+								AgentDesc:     registrationDescriptionForPrompt(name, reg),
+								ExpectedOwner: wallet,
+							}); err != nil {
+								u.Warnf("automatic sell registration failed: %v", err)
+								u.Dim("  Re-run later with: obol sell register " + name + " -n " + svcNs)
+							}
 						}
 					}
 				}
@@ -580,6 +658,9 @@ Examples:
 				if err := kubectlApply(cfg, manifest); err != nil {
 					return err
 				}
+				if persistErr := persistSellHTTPOffer(cfg, ns, name, manifest); persistErr != nil {
+					u.Warnf("could not persist offer for stack-up resume: %v", persistErr)
+				}
 				u.Successf("ServiceOffer %s/%s created from JSON", ns, name)
 				return nil
 			}
@@ -701,7 +782,7 @@ Examples:
 					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
-			reg, registerEnabled, err := buildSellHTTPRegistrationConfig(name, sellHTTPRegistrationInput{
+			reg, registerEnabled, err := buildSellRegistrationConfig(name, sellRegistrationInput{
 				NoRegister:    cmd.Bool("no-register"),
 				Register:      cmd.Bool("register"),
 				Name:          cmd.String("register-name"),
@@ -753,6 +834,9 @@ Examples:
 			if err != nil {
 				return err
 			}
+			if persistErr := persistSellHTTPOffer(cfg, ns, name, manifest); persistErr != nil {
+				u.Warnf("could not persist offer for stack-up resume: %v", persistErr)
+			}
 			action := "created"
 			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
 				action = "updated"
@@ -799,6 +883,103 @@ Examples:
 	}
 }
 
+// signerPayeeDelegationNote returns a human-readable note explaining the
+// ownership delegation when the agent's on-chain registration signer differs
+// from the offer's payment payTo wallet, and "" when they match (or either
+// is empty). Used by the auto-register flow to surface the split as an
+// informational message rather than blocking the registration outright —
+// ERC-8004 explicitly supports this separation via setAgentWallet, and x402
+// settlement uses the offer's payTo regardless of the registry's wallet.
+//
+// The previous behavior (returning fmt.Errorf("registration signer ... does
+// not match the payment wallet ...")) made it look like an ERC-8004 spec
+// constraint when it was purely an obol-CLI policy choice. See PR notes for
+// the full rationale.
+func signerPayeeDelegationNote(signer, payTo string) string {
+	s := strings.TrimSpace(signer)
+	p := strings.TrimSpace(payTo)
+	if s == "" || p == "" || strings.EqualFold(s, p) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Agent owner (registration signer) %s differs from offer payTo %s. "+
+			"ERC-8004 allows this via setAgentWallet; x402 settlement honors payTo regardless. "+
+			"Re-point payments later with: obol sell update <name> --pay-to <addr>",
+		s, p,
+	)
+}
+
+// buildSellUpdatePatch assembles the JSON-merge patch body for
+// `obol sell update`. Extracted from the Action so the patch shape — the
+// thing that actually hits the cluster — is testable without a live ServiceOffer.
+//
+// Returns the patch map and an error when nothing was provided (the Action
+// surfaces this as "nothing to update: pass at least one of ...").
+//
+// When --pay-to is set, the wallet must already have been validated by
+// x402verifier.ValidateWallet at the call site; this helper does no further
+// validation so it stays a pure data shape.
+func buildSellUpdatePatch(payTo, chain string, price schemas.PriceTable) (map[string]any, error) {
+	payment := map[string]any{}
+
+	if payTo = strings.TrimSpace(payTo); payTo != "" {
+		payment["payTo"] = payTo
+	}
+	if chain = strings.TrimSpace(chain); chain != "" {
+		payment["network"] = chain
+	}
+
+	if price.PerRequest != "" || price.PerMTok != "" || price.PerHour != "" {
+		// Null out the unused price keys explicitly so a switch from, e.g.,
+		// perRequest→perMTok doesn't leave the previous key stranded and
+		// fighting the new one through merge semantics.
+		p := map[string]any{
+			"perRequest": nil,
+			"perMTok":    nil,
+			"perHour":    nil,
+		}
+		switch {
+		case price.PerRequest != "":
+			p["perRequest"] = price.PerRequest
+		case price.PerMTok != "":
+			p["perMTok"] = price.PerMTok
+		case price.PerHour != "":
+			p["perHour"] = price.PerHour
+		}
+		payment["price"] = p
+	}
+
+	if len(payment) == 0 {
+		return nil, errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --pay-to / --chain")
+	}
+
+	return map[string]any{
+		"spec": map[string]any{
+			"payment": payment,
+		},
+	}, nil
+}
+
+// shouldAutoRegisterSell reports whether the post-create auto-register step
+// must run for a freshly-applied ServiceOffer spec. Both `obol sell http` and
+// `obol sell inference` need the same gate: registration must be enabled AND
+// a tunnel URL must be available to write into the on-chain registration
+// document. The decision is intentionally shared so the inference path
+// cannot silently regress to "create the offer, never register" (the bug
+// behind https://github.com/ObolNetwork/obol-stack/issues — Registered=False
+// AwaitingExternalRegistration hiding the offer from /api/services.json).
+func shouldAutoRegisterSell(spec map[string]any, tunnelURL string) bool {
+	if tunnelURL == "" {
+		return false
+	}
+	reg, ok := spec["registration"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := reg["enabled"].(bool)
+	return enabled
+}
+
 func registrationNameForPrompt(fallback string, reg map[string]any) string {
 	if reg == nil {
 		return fallback
@@ -827,7 +1008,7 @@ type autoRegisterOptions struct {
 	ExpectedOwner string
 }
 
-type sellHTTPRegistrationInput struct {
+type sellRegistrationInput struct {
 	NoRegister    bool
 	Register      bool
 	Name          string
@@ -852,7 +1033,6 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	if err != nil {
 		return err
 	}
-
 	if _, err := hermes.ResolveWalletAddress(cfg); err != nil {
 		return fmt.Errorf("no Hermes remote-signer wallet found: %w\n\n  Run 'obol agent init' first, or 'obol wallet import --private-key-file <file>' to seed a specific key", err)
 	}
@@ -874,8 +1054,19 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	}
 	signerAddr := addr.Hex()
 
-	if opts.ExpectedOwner != "" && !strings.EqualFold(strings.TrimSpace(opts.ExpectedOwner), strings.TrimSpace(signerAddr)) {
-		return fmt.Errorf("registration signer %s does not match the payment wallet %s.\nUse a matching signer, omit --wallet so the remote-signer wallet is used, or pass --no-register", signerAddr, opts.ExpectedOwner)
+	// ERC-8004 treats the agent OWNER (msg.sender at register time) and the
+	// agent WALLET (settable post-mint via setAgentWallet) as independent
+	// addresses. x402 settlement honors the offer's spec.payment.payTo
+	// directly — buyers pay that address regardless of what the registry's
+	// getAgentWallet returns. So a different signer and payTo is legitimate;
+	// it is the canonical pattern for "hot signer, cold/multisig payee".
+	//
+	// We surface the split as an informational note (not an error) so the
+	// operator can confirm the delegation was intentional, and so the obvious
+	// follow-up — `obol sell update <name> --pay-to <new>` for the payee — is
+	// discoverable.
+	if note := signerPayeeDelegationNote(signerAddr, opts.ExpectedOwner); note != "" {
+		u.Info(note)
 	}
 
 	agentURI := strings.TrimRight(opts.Endpoint, "/") + "/.well-known/agent-registration.json"
@@ -907,7 +1098,7 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 	return nil
 }
 
-func buildSellHTTPRegistrationConfig(serviceName string, in sellHTTPRegistrationInput) (map[string]any, bool, error) {
+func buildSellRegistrationConfig(serviceName string, in sellRegistrationInput) (map[string]any, bool, error) {
 	registerEnabled := !in.NoRegister
 	if !registerEnabled && (in.Register || in.Name != "" || in.Description != "" || in.Image != "" ||
 		len(in.Skills) > 0 || len(in.Domains) > 0 || len(in.MetadataPairs) > 0) {
@@ -2244,50 +2435,25 @@ Examples:
 				return fmt.Errorf("ServiceOffer %s/%s not found: %w", ns, name, err)
 			}
 
-			payment := map[string]any{}
-
-			if wallet := strings.TrimSpace(cmd.String("pay-to")); wallet != "" {
+			wallet := strings.TrimSpace(cmd.String("pay-to"))
+			if wallet != "" {
 				if err := x402verifier.ValidateWallet(wallet); err != nil {
 					return err
 				}
-				payment["payTo"] = wallet
 			}
 
-			if chain := strings.TrimSpace(cmd.String("chain")); chain != "" {
-				payment["network"] = chain
-			}
-
-			priceSet := cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != ""
-			if priceSet {
-				priceTable, err := resolvePriceTable(cmd, true)
+			var price schemas.PriceTable
+			if cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != "" {
+				resolved, err := resolvePriceTable(cmd, true)
 				if err != nil {
 					return err
 				}
-
-				price := map[string]any{
-					"perRequest": nil,
-					"perMTok":    nil,
-					"perHour":    nil,
-				}
-				switch {
-				case priceTable.PerRequest != "":
-					price["perRequest"] = priceTable.PerRequest
-				case priceTable.PerMTok != "":
-					price["perMTok"] = priceTable.PerMTok
-				case priceTable.PerHour != "":
-					price["perHour"] = priceTable.PerHour
-				}
-				payment["price"] = price
+				price = resolved
 			}
 
-			if len(payment) == 0 {
-				return errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --wallet / --chain")
-			}
-
-			patch := map[string]any{
-				"spec": map[string]any{
-					"payment": payment,
-				},
+			patch, err := buildSellUpdatePatch(wallet, cmd.String("chain"), price)
+			if err != nil {
+				return err
 			}
 			patchBytes, err := json.Marshal(patch)
 			if err != nil {
@@ -2342,7 +2508,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 
 			if !cmd.Bool("force") {
 				msg := fmt.Sprintf(
-					"Delete ServiceOffer %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove x402 enforcement for the service\n  - Deactivate the ERC-8004 registration (if registered)\n  - Let the serviceoffer-controller finalizer clean up published state",
+					"Delete ServiceOffer %s/%s? This will:\n  - Remove the associated Middleware and HTTPRoute\n  - Remove x402 enforcement for the service\n  - Let the serviceoffer-controller finalizer clean up offer-scoped state\n  - Leave the AgentIdentity record and on-chain NFT intact (the controller renders a tombstone if no active offers remain)",
 					ns,
 					name,
 				)
@@ -2354,40 +2520,26 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 
 			removePricingRoute(cfg, u, name)
 
-			soOut, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns,
-				"-o", "jsonpath={.status.agentId}")
-			if err == nil && strings.TrimSpace(soOut) != "" {
-				agentID := strings.TrimSpace(soOut)
-				u.Infof("Deactivating ERC-8004 registration (agent %s)...", agentID)
-
-				cmName := fmt.Sprintf("so-%s-registration", name)
-				rawJSON, readErr := kubectlOutput(cfg, "get", "configmap", cmName, "-n", ns,
-					"-o", `jsonpath={.data.agent-registration\.json}`)
-				if readErr != nil || strings.TrimSpace(rawJSON) == "" {
-					u.Printf("  No registration document found. Agent %s NFT persists on-chain.", agentID)
-				} else {
-					var regDoc map[string]interface{}
-					if jsonErr := json.Unmarshal([]byte(rawJSON), &regDoc); jsonErr != nil {
-						u.Warnf("corrupt registration JSON, skipping deactivation: %v", jsonErr)
-					} else {
-						regDoc["active"] = false
-						patchJSON, _ := json.Marshal(map[string]interface{}{
-							"data": map[string]string{
-								"agent-registration.json": mustMarshal(regDoc),
-							},
-						})
-						if patchErr := kubectlRun(cfg, "patch", "configmap", cmName, "-n", ns,
-							"-p", string(patchJSON), "--type=merge"); patchErr != nil {
-							u.Warnf("could not deactivate agent registration: %v", patchErr)
-						} else {
-							u.Successf("Registration deactivated (active=false). On-chain NFT persists.")
-						}
-					}
-				}
-			}
+			// Identity-level registration ownership lives in the AgentIdentity
+			// CR and is managed by the controller. The CLI no longer patches
+			// the registration ConfigMap here; deleting the ServiceOffer is
+			// enough; if this was the last active offer for the identity, the
+			// controller renders an active:false / x402Support:false tombstone
+			// document while keeping the agentId.
 
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
+			}
+
+			// Drop the on-disk sell-http manifest so the next `obol stack
+			// up` doesn't replay an offer the operator just deleted. The
+			// inference path doesn't need this hook — `obol sell delete`
+			// doesn't currently remove the inference.Store descriptor
+			// either, by design (the descriptor is what `obol sell
+			// inference list/status` reads). For HTTP we keep no such
+			// post-delete state, so removing the file is the right shape.
+			if removeErr := removeSellHTTPOffer(cfg, ns, name); removeErr != nil {
+				u.Warnf("could not remove persisted sell-http offer at %s/%s: %v", ns, name, removeErr)
 			}
 
 			// Clean up demo backend resources if this is a demo service.
@@ -2489,19 +2641,19 @@ func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
 		Usage: "Register a service on the ERC-8004 Agent Registry",
-		Description: `Registers an agent on the ERC-8004 Agent Registry on one or more chains.
+		Description: `Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
 and pays gas from the agent's wallet — make sure it has a small balance on
-each target chain (~$0.20–$0.50 of native gas typically suffices).
+the target chain (~$0.20–$0.50 of native gas typically suffices).
 
 Examples:
   obol sell register                                    # defaults to mainnet
   obol sell register --chain base                       # register on base
-  obol sell register --chain mainnet,base               # register on multiple chains`,
+  obol sell register --chain base-sepolia               # add a Base Sepolia registration`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "chain",
-				Usage: "Registration chain(s), comma-separated (mainnet, base, base-sepolia)",
+				Usage: "Registration chain (mainnet, base, base-sepolia)",
 				Value: "mainnet",
 			},
 			&cli.StringFlag{
@@ -2560,7 +2712,6 @@ Examples:
 			if err != nil {
 				return err
 			}
-
 			// Interactive confirmation of registration metadata.
 			agentName := cmd.String("name")
 			agentDesc := cmd.String("description")
@@ -2647,11 +2798,18 @@ func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	return successes
 }
 
-// registerDirectViaSigner performs a direct on-chain registration via the remote-signer.
+// registerDirectViaSigner performs an idempotent ERC-8004 registration via
+// the remote-signer. It reads the selected AgentIdentity first and branches:
+//   - identity.status.registrations has this chain -> verify signer ownership,
+//     then setAgentURI(uri) only when the on-chain tokenURI differs.
+//   - no registration exists for this chain -> recover by (owner, agentURI)
+//     on-chain; mint via register(agentURI) only if recovery returns no match.
+//
+// The AgentIdentity CR persists only durable ERC-8004 identity keys:
+// status.registrations[] entries keyed by chain.
 func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {
 	u.Printf("    Using direct on-chain registration via remote-signer...")
 
-	// Port-forward to remote-signer.
 	pf, err := startSignerPortForward(cfg, namespace)
 	if err != nil {
 		return fmt.Errorf("port-forward to remote-signer: %w", err)
@@ -2659,14 +2817,12 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	defer pf.Stop()
 
 	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
-
 	addr, err := signer.GetAddress(ctx)
 	if err != nil {
 		return err
 	}
 	u.Printf("    Wallet:   %s", addr.Hex())
 
-	// Connect to eRPC for this network.
 	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
 	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
 	if err != nil {
@@ -2674,9 +2830,68 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	}
 	defer client.Close()
 
-	// Create TransactOpts that delegates signing to the remote-signer.
 	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
 
+	identity, err := ensureAgentIdentity(cfg, monetizeapi.AgentIdentityDefaultNamespace, monetizeapi.AgentIdentityDefaultName, monetizeapi.AgentIdentitySpec{})
+	if err != nil {
+		return fmt.Errorf("load AgentIdentity: %w", err)
+	}
+	existingAgentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, net.Name)
+
+	// Idempotent path: this chain already has an on-chain registration.
+	if existingAgentID != "" {
+		agentID, ok := new(big.Int).SetString(existingAgentID, 10)
+		if !ok {
+			return fmt.Errorf("AgentIdentity %s/%s has malformed agentId %q for chain %s",
+				identity.Metadata.Namespace, identity.Metadata.Name, existingAgentID, net.Name)
+		}
+		owner, walletErr := client.AgentWallet(ctx, agentID)
+		if walletErr != nil {
+			return fmt.Errorf("verify agent %s on %s: %w", agentID, net.Name, walletErr)
+		}
+		if owner != addr {
+			return fmt.Errorf("signer %s does not control AgentIdentity agent %s (on-chain owner: %s)", addr.Hex(), agentID, owner.Hex())
+		}
+
+		u.Printf("    Agent ID: %s (existing)", agentID.String())
+		currentURI, err := client.TokenURI(ctx, agentID)
+		if err != nil {
+			return fmt.Errorf("read tokenURI(%s): %w", agentID, err)
+		}
+		if currentURI == agentURI {
+			u.Printf("    URI:      unchanged, skipping setAgentURI")
+		} else {
+			u.Printf("    Updating agentURI via setAgentURI...")
+			uriTx, err := client.SetAgentURIWithOpts(ctx, opts, agentID, agentURI)
+			if err != nil {
+				return fmt.Errorf("setAgentURI: %w", err)
+			}
+			u.Printf("    Tx:       %s", uriTx)
+		}
+		// Refresh x402 metadata to keep parity with first-mint behavior.
+		if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
+			u.Warnf("failed to set x402 metadata: %v", err)
+		}
+		return nil
+	}
+
+	// No recorded agentId: try owner+URI recovery from genesis before
+	// minting so reruns don't double-mint a registration that already
+	// exists on-chain.
+	if recoveredID, _, ok := recoverRegistrationByOwnerAndURI(ctx, client, addr, agentURI, 0); ok {
+		u.Printf("    Agent ID: %s (recovered via owner+URI)", recoveredID.String())
+		identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, recoveredID.String())
+		if err := applyAgentIdentity(cfg, identity); err != nil {
+			return fmt.Errorf("persist recovered AgentIdentity registration %s on %s: %w", recoveredID, net.Name, err)
+		}
+		_, _ = client.WaitForAgent(ctx, recoveredID, 30*time.Second)
+		if err := client.SetMetadataWithOpts(ctx, opts, recoveredID, "x402", []byte(`{"x402":true}`)); err != nil {
+			u.Warnf("failed to set x402 metadata: %v", err)
+		}
+		return nil
+	}
+
+	// Fresh mint.
 	startBlock := registrationRecoveryStartBlock(ctx, client, u)
 	agentID, txHash, err := registerWithRecovery(ctx, u, client, agentURI, addr, startBlock, func() (*big.Int, string, error) {
 		return client.RegisterWithOptsDetailed(ctx, opts, agentURI)
@@ -2691,18 +2906,17 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 		u.Printf("    Tx:       %s", txHash)
 	}
 
-	// The Register tx is mined on the WRITE upstream, but a follow-up
-	// setMetadata estimateGas goes through the READ upstream which can lag
-	// (we observed ERC721NonexistentToken reverts when a stale eRPC route was
-	// pinned to a parallel Anvil fork). Block until the reader sees the token.
 	if _, err := client.WaitForAgent(ctx, agentID, 30*time.Second); err != nil {
 		u.Warnf("agent not visible to reader after register: %v", err)
 	}
 
-	// Set x402 metadata.
-	x402Meta := []byte(`{"x402":true}`)
-	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", x402Meta); err != nil {
+	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
 		u.Warnf("failed to set x402 metadata: %v", err)
+	}
+
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, agentID.String())
+	if err := applyAgentIdentity(cfg, identity); err != nil {
+		return fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --chain %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
 	}
 	return nil
 }
@@ -3294,6 +3508,320 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 //
 // Kubernetes Endpoints require an IP address, not a hostname. We resolve the
 // host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
+// resumeSellOffers re-applies the cluster-side artifacts (Service +
+// Endpoints + ServiceOffer) for every locally-persisted `obol sell
+// inference` deployment after `obol stack up` brings a fresh cluster
+// online. Without this step the cluster has no record of operator-created
+// offers (CRs live in etcd, which is destroyed by `obol stack down`),
+// even though the host-side descriptors at
+// `<ConfigDir>/inference/<name>/` still exist.
+//
+// The foreground gateway is NOT restarted here — `obol sell inference`
+// is an interactive operator action and we don't want stack-up to launch
+// long-running processes. The operator re-runs `obol sell inference
+// <name>` after stack-up to bring the gateway back; this step ensures
+// the cluster side is already in place so the gateway hits a "service
+// healthy" reconcile instead of "create from scratch".
+//
+// Best-effort. Per-offer failures emit a warning and the loop continues,
+// so one broken descriptor cannot block stack-up.
+func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
+		// No cluster — nothing to reattach for either inference or http.
+		return nil
+	}
+
+	store := inference.NewStore(cfg.ConfigDir)
+	deployments, err := store.List()
+	if err != nil {
+		return fmt.Errorf("list inference deployments: %w", err)
+	}
+
+	if len(deployments) == 0 {
+		// No inference offers; fall through to http resume below.
+		if err := resumeSellHTTPOffers(cfg, u); err != nil {
+			u.Warnf("resume sell-http offers: %v", err)
+		}
+		return nil
+	}
+
+	u.Blank()
+	u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
+
+	var resumed int
+	for _, d := range deployments {
+		if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
+			u.Warnf("resume %s: %v", d.Name, err)
+			continue
+		}
+		resumed++
+		u.Successf("Resumed sell-inference offer %q", d.Name)
+	}
+
+	if resumed > 0 {
+		u.Dim("  Gateways spawned as detached background processes — check <state>/sell-inference/<name>/gateway.log for output.")
+	}
+
+	// Replay persisted `obol sell http` offers as well. The two stores are
+	// independent on disk (sell-http manifests live at
+	// <ConfigDir>/sell-http/, sell-inference descriptors at
+	// <ConfigDir>/inference/) but the operator wants one stack-up to
+	// bring every paid offer back regardless of type.
+	if err := resumeSellHTTPOffers(cfg, u); err != nil {
+		u.Warnf("resume sell-http offers: %v", err)
+	}
+
+	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
+	return nil
+}
+
+// resumeOneInferenceOffer re-creates the cluster-side artifacts that
+// `obol sell inference` would have produced for a single Deployment. Pure
+// in the sense that it only consumes the on-disk descriptor; it never
+// re-prompts the operator. Returns an error when the descriptor is
+// incomplete (no model name, no namespace, no listen port) so the resume
+// loop can surface a clear message per-offer.
+func resumeOneInferenceOffer(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
+	if d == nil || d.Name == "" {
+		return errors.New("nil or unnamed deployment descriptor")
+	}
+	if d.ModelName == "" {
+		return fmt.Errorf("deployment %q is missing model_name on disk — recreate the offer with `obol sell inference %s --model <id> ...`", d.Name, d.Name)
+	}
+	ns := d.ServiceNamespace
+	if ns == "" {
+		ns = "llm" // legacy descriptors written before service_namespace was persisted
+	}
+
+	port := "8402"
+	if idx := strings.LastIndex(d.ListenAddr, ":"); idx >= 0 && idx+1 < len(d.ListenAddr) {
+		port = d.ListenAddr[idx+1:]
+	}
+
+	if err := createHostService(cfg, d.Name, ns, port); err != nil {
+		return fmt.Errorf("create cluster Service/Endpoints: %w", err)
+	}
+
+	chainName := d.Chain
+	assetTerms, err := resolveAssetTermsFor(d.AssetSymbol, &chainName, true)
+	if err != nil {
+		return fmt.Errorf("resolve asset terms: %w", err)
+	}
+
+	pt := schemas.PriceTable{PerRequest: d.PricePerRequest, PerMTok: d.PricePerMTok}
+	soSpec, err := buildInferenceServiceOfferSpec(d, pt, ns, port, assetTerms, d.ModelName, d.Registration)
+	if err != nil {
+		return fmt.Errorf("rebuild ServiceOffer spec: %w", err)
+	}
+
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata": map[string]any{
+			"name":      d.Name,
+			"namespace": ns,
+		},
+		"spec": soSpec,
+	}
+	if err := kubectlApply(cfg, manifest); err != nil {
+		return fmt.Errorf("apply ServiceOffer: %w", err)
+	}
+
+	// Auto-start the foreground x402 gateway as a detached background
+	// subprocess so the offer reaches UpstreamHealthy=True (and therefore
+	// shows up in /api/services.json) without the operator running an
+	// extra `obol sell inference` command after every stack-up.
+	//
+	// This is the pragmatic shape of the resume feature today. The proper
+	// long-term path is C from the design doc: build the inference gateway
+	// as an in-cluster Deployment image, helmfile-managed, so stack-up
+	// brings it back the same way it brings back Traefik or LiteLLM. That
+	// removes the host-side subprocess + PID-file plumbing entirely and
+	// lets the controller observe the gateway as a normal Pod. Tracked as
+	// a follow-up because the gateway code (internal/inference/gateway.go)
+	// currently runs in-process with the CLI, not as a packaged image.
+	if err := startDetachedInferenceGateway(cfg, u, d); err != nil {
+		u.Warnf("could not auto-start host gateway for %q: %v", d.Name, err)
+		u.Dim("  Run `obol sell inference " + d.Name + "` manually in a terminal you can keep open.")
+	}
+	return nil
+}
+
+// startDetachedInferenceGateway forks `obol sell inference <name>` as a
+// detached background subprocess. The CLI rebuilds the full flag set from
+// the persisted Deployment, redirects stdout/stderr to a log file under
+// the workspace state dir, and stores the PID alongside so subsequent
+// stack-ups can detect a still-running gateway and skip the relaunch.
+//
+// Skipped silently when a healthy PID is already on disk. Returns an
+// error only when launch itself fails (e.g. missing obol binary, log
+// file unwritable). Callers should warn-and-continue on failure — a
+// missing gateway leaves UpstreamHealthy=False which the controller will
+// re-emit clearly, while a hard error here would block the rest of the
+// resume loop.
+func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
+	if d == nil || d.Name == "" {
+		return errors.New("nil or unnamed deployment")
+	}
+
+	stateDir := filepath.Join(cfg.StateDir, "sell-inference", d.Name)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	pidFile := filepath.Join(stateDir, "gateway.pid")
+	logFile := filepath.Join(stateDir, "gateway.log")
+
+	if pid, ok := readGatewayPID(pidFile); ok && processAlive(pid) {
+		u.Dim("  Gateway already running for " + d.Name + " (pid " + strconv.Itoa(pid) + ")")
+		return nil
+	}
+
+	obolBin := filepath.Join(cfg.BinDir, "obol")
+	if _, statErr := os.Stat(obolBin); statErr != nil {
+		// Fall back to whatever obol the parent process is running as.
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return fmt.Errorf("locate obol binary: %w", exeErr)
+		}
+		obolBin = exe
+	}
+
+	args := buildResumeGatewayArgs(d)
+
+	logF, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+
+	cmd := exec.Command(obolBin, args...)
+	cmd.Stdout = logF
+	cmd.Stderr = logF
+	cmd.SysProcAttr = detachedSysProcAttr()
+	cmd.Env = os.Environ()
+
+	if err := cmd.Start(); err != nil {
+		_ = logF.Close()
+		return fmt.Errorf("start gateway subprocess: %w", err)
+	}
+	// Snapshot the PID BEFORE Release — on Unix, os.Process.Release sets
+	// the Pid field to -1 as part of its handle teardown, so reading the
+	// field afterwards prints a misleading "-1" to the operator and pins
+	// a bogus -1 in the PID file. Persist + announce the captured value.
+	gatewayPID := cmd.Process.Pid
+	// We don't wait on the child, but releasing the handle ensures the
+	// parent process can exit cleanly without keeping a zombie reference.
+	if err := cmd.Process.Release(); err != nil {
+		u.Dim("  (could not release gateway process handle: " + err.Error() + ")")
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(gatewayPID)), 0o644); err != nil {
+		u.Warnf("gateway started (pid %d) but could not write %s: %v", gatewayPID, pidFile, err)
+	}
+	u.Successf("Gateway started in background (pid %d, log %s)", gatewayPID, logFile)
+	return nil
+}
+
+// buildResumeGatewayArgs reconstructs the `obol sell inference` flag set
+// that originally created the offer, from the persisted Deployment. The
+// order matches obol sell inference's flag list so a future surface
+// reduction of the CLI doesn't silently drop a piece of operator intent
+// (CI's source-level guard tests catch that case).
+//
+// Exposed for testing: callers can compare the reproduced flag set
+// against the original `obol sell inference` invocation that wrote the
+// descriptor.
+func buildResumeGatewayArgs(d *inference.Deployment) []string {
+	args := []string{"sell", "inference", d.Name}
+	if d.ModelName != "" {
+		args = append(args, "--model", d.ModelName)
+	}
+	if d.UpstreamURL != "" {
+		args = append(args, "--upstream", d.UpstreamURL)
+	}
+	if d.WalletAddress != "" {
+		args = append(args, "--pay-to", d.WalletAddress)
+	}
+	if d.ListenAddr != "" {
+		args = append(args, "--listen", d.ListenAddr)
+	}
+	if d.Chain != "" {
+		args = append(args, "--chain", d.Chain)
+	}
+	if d.AssetSymbol != "" {
+		args = append(args, "--token", d.AssetSymbol)
+	}
+	if d.PricePerMTok != "" {
+		args = append(args, "--per-mtok", d.PricePerMTok)
+	} else if d.PricePerRequest != "" {
+		args = append(args, "--price", d.PricePerRequest)
+	}
+	if d.FacilitatorURL != "" {
+		args = append(args, "--facilitator", d.FacilitatorURL)
+	}
+	// Registration block — rebuild --register-* flags from the persisted map.
+	if reg, ok := d.Registration["enabled"].(bool); ok && !reg {
+		args = append(args, "--no-register")
+	} else if d.Registration != nil {
+		if v, _ := d.Registration["name"].(string); v != "" {
+			args = append(args, "--register-name", v)
+		}
+		if v, _ := d.Registration["description"].(string); v != "" {
+			args = append(args, "--register-description", v)
+		}
+		if v, _ := d.Registration["image"].(string); v != "" {
+			args = append(args, "--register-image", v)
+		}
+		for _, s := range registrationStringSlice(d.Registration, "skills") {
+			args = append(args, "--register-skills", s)
+		}
+		for _, s := range registrationStringSlice(d.Registration, "domains") {
+			args = append(args, "--register-domains", s)
+		}
+	}
+	return args
+}
+
+func registrationStringSlice(reg map[string]any, key string) []string {
+	raw, ok := reg[key]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func readGatewayPID(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 doesn't deliver — just probes existence/permission on Unix.
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
 func createHostService(cfg *config.Config, name, ns, port string) error {
 	hostIP, err := resolveHostIP(cfg)
 	if err != nil {
@@ -3383,7 +3911,16 @@ func resolveHostIP(cfg *config.Config) (string, error) {
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
 // inference gateway routed through the cluster's x402 flow.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms) (map[string]any, error) {
+//
+// modelName is the upstream model identifier the operator passed via --model
+// (e.g. "aeon-ultimate"). It is written into spec.model.name so the
+// serviceoffer-controller's registration document carries the real model id
+// rather than the historical hardcoded "ollama" string.
+//
+// registration is the operator's ERC-8004 registration block as produced by
+// buildSellRegistrationConfig — pass nil (or an empty map) to skip
+// registration. When non-nil it is merged verbatim into spec.registration.
+func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms, modelName string, registration map[string]any) (map[string]any, error) {
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 1 || portNum > 65535 {
 		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
@@ -3416,13 +3953,177 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	}
 
 	if d.UpstreamURL != "" {
+		model := strings.TrimSpace(modelName)
+		if model == "" {
+			model = "ollama" // pre-fix fallback; the Action enforces --model
+		}
 		spec["model"] = map[string]any{
-			"name":    "ollama",
+			"name":    model,
 			"runtime": "ollama",
 		}
 	}
 
+	if len(registration) > 0 {
+		spec["registration"] = registration
+	}
+
 	return spec, nil
+}
+
+// sellHTTPStoreDir returns the on-disk root for persisted `obol sell http`
+// ServiceOffer manifests. Schema is one YAML file per offer at
+// <ConfigDir>/sell-http/<namespace>__<name>.yaml so two offers with the
+// same name in different namespaces never collide.
+//
+// Unlike `obol sell inference`, http offers don't have a host-side
+// foreground process to track — the upstream is an in-cluster Service.
+// The on-disk artifact is just the rendered ServiceOffer manifest; the
+// resume path kubectl-applies it to bring the offer back identically.
+//
+// Long-term we should fold this into a single sell-offer store (one
+// schema for both inference and http), so resume is one walk instead of
+// two. Keeping them separate for now because the inference store is
+// rich (host listen addr, asset symbol, registration block) while http
+// only needs the rendered manifest — collapsing them would force
+// inference-only fields onto every http descriptor.
+func sellHTTPStoreDir(cfg *config.Config) string {
+	return filepath.Join(cfg.ConfigDir, "sell-http")
+}
+
+func sellHTTPStorePath(cfg *config.Config, namespace, name string) string {
+	return filepath.Join(sellHTTPStoreDir(cfg), namespace+"__"+name+".yaml")
+}
+
+// persistSellHTTPOffer writes the rendered ServiceOffer manifest to disk
+// so `obol stack up` can replay it after a stack-down/up cycle wipes
+// etcd. Idempotent: subsequent calls overwrite atomically (write to a
+// `.tmp` sibling, rename into place) so a crash mid-write doesn't leave
+// a half-rendered file the resume path would choke on.
+//
+// Best-effort from the caller's perspective: a persistence failure
+// should warn but not abort the sell command, because the cluster-side
+// offer is already in place. Returning an error lets the caller pick
+// the surface.
+func persistSellHTTPOffer(cfg *config.Config, namespace, name string, manifest map[string]any) error {
+	if cfg == nil || namespace == "" || name == "" {
+		return errors.New("persistSellHTTPOffer: missing cfg / namespace / name")
+	}
+	if err := os.MkdirAll(sellHTTPStoreDir(cfg), 0o755); err != nil {
+		return fmt.Errorf("create store dir: %w", err)
+	}
+	data, err := yaml.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	final := sellHTTPStorePath(cfg, namespace, name)
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename %s → %s: %w", tmp, final, err)
+	}
+	return nil
+}
+
+// removeSellHTTPOffer deletes the on-disk manifest for a single offer
+// when `obol sell delete` succeeds. Without this, the resume path on
+// the next `obol stack up` would re-create an offer the operator
+// intentionally deleted. Best-effort — a missing file is a no-op.
+func removeSellHTTPOffer(cfg *config.Config, namespace, name string) error {
+	if cfg == nil || namespace == "" || name == "" {
+		return nil
+	}
+	path := sellHTTPStorePath(cfg, namespace, name)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// resumeSellHTTPOffers re-applies every persisted `obol sell http`
+// manifest after `obol stack up` rebuilds the cluster. Mirror of the
+// inference resume loop: walk the store dir, kubectl apply each file,
+// warn-and-continue on per-offer failures so one corrupt YAML can't
+// block the rest.
+//
+// Skipped silently when the store dir is missing (no offers ever
+// persisted) or when no kubeconfig is present (stack up hasn't reached
+// the cluster yet). Counts and announces what was reattached so the
+// operator sees the same "Resumed N offers" feedback they get for
+// inference.
+func resumeSellHTTPOffers(cfg *config.Config, u *ui.UI) error {
+	dir := sellHTTPStoreDir(cfg)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read store dir: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
+		return nil // no cluster yet
+	}
+
+	u.Blank()
+	var manifests []sellHTTPStoredOffer
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			u.Warnf("read %s: %v", path, err)
+			continue
+		}
+		var manifest map[string]any
+		if err := yaml.Unmarshal(data, &manifest); err != nil {
+			u.Warnf("parse %s: %v", path, err)
+			continue
+		}
+		ns, name := manifestNSName(manifest)
+		manifests = append(manifests, sellHTTPStoredOffer{Path: path, Manifest: manifest, Namespace: ns, Name: name})
+	}
+	if len(manifests) == 0 {
+		return nil
+	}
+
+	u.Infof("Resuming %d locally-persisted sell-http offer(s)...", len(manifests))
+	for _, m := range manifests {
+		if err := kubectlApply(cfg, m.Manifest); err != nil {
+			u.Warnf("resume http %s/%s: %v", m.Namespace, m.Name, err)
+			continue
+		}
+		u.Successf("Resumed sell-http offer %s/%s", m.Namespace, m.Name)
+	}
+	return nil
+}
+
+type sellHTTPStoredOffer struct {
+	Path      string
+	Manifest  map[string]any
+	Namespace string
+	Name      string
+}
+
+// manifestNSName pulls metadata.namespace + metadata.name out of an
+// unmarshaled ServiceOffer manifest. Returns empty strings when the
+// shape is malformed; the resume loop reports the error per-file.
+func manifestNSName(manifest map[string]any) (string, string) {
+	md, ok := manifest["metadata"].(map[string]any)
+	if !ok {
+		return "", ""
+	}
+	ns, _ := md["namespace"].(string)
+	name, _ := md["name"].(string)
+	return ns, name
 }
 
 // removePricingRoute is a no-op retained for compatibility.

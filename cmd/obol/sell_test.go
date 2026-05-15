@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
+	"gopkg.in/yaml.v3"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,8 +191,18 @@ func TestSellInference_Flags(t *testing.T) {
 		"listen", "upstream", "enclave-tag",
 		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
 		"tee", "model-hash",
+		// Registration parity with `obol sell http`. Their absence on the
+		// inference subcommand was the regression that left
+		// /.well-known/agent-registration.json unrouted (see
+		// TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault).
+		"no-register",
+		"register-name", "register-description", "register-image",
+		"register-skills", "register-domains", "register-metadata",
 	)
 
+	// --price intentionally has no default after #470 — the resolvePriceTable
+	// fallthrough requires an explicit price flag instead of letting "0.001"
+	// shadow --per-mtok / --per-request. Empty default is the pinned contract.
 	assertStringDefault(t, flags, "price", "")
 	assertStringDefault(t, flags, "chain", "base")
 	assertStringDefault(t, flags, "token", "USDC")
@@ -256,8 +272,8 @@ func TestSellHTTP_Flags(t *testing.T) {
 	assertIntDefault(t, flags, "max-timeout", 300)
 }
 
-func TestBuildSellHTTPRegistrationConfig_DefaultEnabled(t *testing.T) {
-	reg, enabled, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{})
+func TestBuildSellRegistrationConfig_DefaultEnabled(t *testing.T) {
+	reg, enabled, err := buildSellRegistrationConfig("demo", sellRegistrationInput{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,8 +288,8 @@ func TestBuildSellHTTPRegistrationConfig_DefaultEnabled(t *testing.T) {
 	}
 }
 
-func TestBuildSellHTTPRegistrationConfig_NoRegisterConflicts(t *testing.T) {
-	_, _, err := buildSellHTTPRegistrationConfig("demo", sellHTTPRegistrationInput{
+func TestBuildSellRegistrationConfig_NoRegisterConflicts(t *testing.T) {
+	_, _, err := buildSellRegistrationConfig("demo", sellRegistrationInput{
 		NoRegister: true,
 		Name:       "custom",
 	})
@@ -752,6 +768,950 @@ func TestDemoRPCNetwork(t *testing.T) {
 				t.Fatalf("demoRPCNetwork(%q) = %q, want %q", tt.paymentChain, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault pins the
+// fix for the missing-registration regression: `obol sell inference` used to
+// build a ServiceOffer with empty `spec.registration`, so the controller
+// emitted "Registration disabled" and never published the
+// /.well-known/agent-registration.json HTTPRoute. The default contract is
+// "registration enabled, name derived from offer name" — same as `sell http`.
+func TestBuildInferenceServiceOfferSpec_RegistrationEnabledByDefault(t *testing.T) {
+	d := &inference.Deployment{
+		Name:            "aeon",
+		UpstreamURL:     "http://127.0.0.1:8000",
+		WalletAddress:   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:           "base-sepolia",
+		PricePerRequest: "0.001",
+	}
+	reg, enabled, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	if !enabled {
+		t.Fatal("registration should default to enabled")
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	got, ok := spec["registration"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.registration missing or wrong type: %#v", spec["registration"])
+	}
+	if got["enabled"] != true {
+		t.Errorf("spec.registration.enabled = %v, want true", got["enabled"])
+	}
+	if got["name"] != "aeon" {
+		t.Errorf("spec.registration.name = %v, want %q", got["name"], "aeon")
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_NoRegisterOmitsRegistration confirms the
+// opt-out path: --no-register produces an empty registration map and the spec
+// builder must leave spec.registration unset (so the controller emits the
+// well-known route only when explicitly requested).
+func TestBuildInferenceServiceOfferSpec_NoRegisterOmitsRegistration(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	reg, enabled, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{NoRegister: true})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	if enabled {
+		t.Fatal("--no-register should disable registration")
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	if _, present := spec["registration"]; present {
+		t.Errorf("spec.registration should be absent when --no-register; got %#v", spec["registration"])
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_OperatorOverridesWin pins the fix for
+// the controller-side description-clobber regression in
+// internal/serviceoffercontroller/render.go: the operator's explicit
+// registration fields (name, description, image, skills, domains) must
+// survive into the published spec verbatim, not be silently replaced by
+// controller-side defaults. This test covers the *spec input*; the
+// controller-side guarantee is covered by the companion test in
+// serviceoffercontroller/render_test.go.
+func TestBuildInferenceServiceOfferSpec_OperatorOverridesWin(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	reg, _, err := buildSellRegistrationConfig("aeon", sellRegistrationInput{
+		Name:        "Qwen36 AEON Ultimate",
+		Description: "Uncensored Qwen3.6-27B abliteration on DGX Spark",
+		Image:       "https://example.com/aeon.png",
+		Skills:      []string{"llm/inference", "llm/uncensored"},
+		Domains:     []string{"inference.v1337.org"},
+	})
+	if err != nil {
+		t.Fatalf("buildSellRegistrationConfig: %v", err)
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", reg)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	r := spec["registration"].(map[string]any)
+	for k, want := range map[string]any{
+		"name":        "Qwen36 AEON Ultimate",
+		"description": "Uncensored Qwen3.6-27B abliteration on DGX Spark",
+		"image":       "https://example.com/aeon.png",
+	} {
+		if r[k] != want {
+			t.Errorf("spec.registration.%s = %#v, want %#v", k, r[k], want)
+		}
+	}
+	skills, _ := r["skills"].([]string)
+	if len(skills) != 2 || skills[0] != "llm/inference" {
+		t.Errorf("spec.registration.skills = %#v, want [llm/inference llm/uncensored]", r["skills"])
+	}
+	domains, _ := r["domains"].([]string)
+	if len(domains) != 1 || domains[0] != "inference.v1337.org" {
+		t.Errorf("spec.registration.domains = %#v, want [inference.v1337.org]", r["domains"])
+	}
+}
+
+// TestBuildInferenceServiceOfferSpec_ModelNameNotHardcoded pins the fix for
+// the "spec.model.name = ollama regardless of --model" regression. The model
+// id the operator passed must surface in spec.model.name so the controller's
+// per-model registration description (and any downstream tooling that keys
+// off model name) reads the truth, not the historical hardcoded literal.
+func TestBuildInferenceServiceOfferSpec_ModelNameNotHardcoded(t *testing.T) {
+	d := &inference.Deployment{
+		Name: "aeon", UpstreamURL: "http://127.0.0.1:8000",
+		WalletAddress: "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		Chain:         "base-sepolia", PricePerRequest: "0.001",
+	}
+	spec, err := buildInferenceServiceOfferSpec(d, schemas.PriceTable{PerRequest: "0.001"}, "llm", "8402", schemas.AssetTerms{}, "aeon-ultimate", nil)
+	if err != nil {
+		t.Fatalf("buildInferenceServiceOfferSpec: %v", err)
+	}
+	model, ok := spec["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.model missing or wrong type: %#v", spec["model"])
+	}
+	if model["name"] != "aeon-ultimate" {
+		t.Errorf("spec.model.name = %v, want %q (must reflect --model, not the legacy hardcoded \"ollama\")", model["name"], "aeon-ultimate")
+	}
+}
+
+// TestShouldAutoRegisterSell pins the decision logic shared by the http and
+// inference action handlers. The bug it guards: leaving a fresh inference
+// offer in `Registered=False AwaitingExternalRegistration` so that the
+// controller's services.json filter (which requires Ready=True, which in
+// turn requires Registered=True) silently excluded the offer from the
+// operator's own storefront. Both call sites must auto-register exactly
+// when the spec says enabled AND the tunnel is up — anything else is a
+// regression.
+func TestShouldAutoRegisterSell(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      map[string]any
+		tunnelURL string
+		want      bool
+	}{
+		{
+			name:      "registration enabled + tunnel up → register",
+			spec:      map[string]any{"registration": map[string]any{"enabled": true}},
+			tunnelURL: "https://inference.example.com",
+			want:      true,
+		},
+		{
+			name:      "registration explicitly disabled → skip",
+			spec:      map[string]any{"registration": map[string]any{"enabled": false}},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "no registration block (sell http --no-register / pre-#485 sell inference) → skip",
+			spec:      map[string]any{},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "registration enabled but tunnel down → skip (no endpoint to advertise)",
+			spec:      map[string]any{"registration": map[string]any{"enabled": true}},
+			tunnelURL: "",
+			want:      false,
+		},
+		{
+			name:      "registration block is not a map (defensive) → skip",
+			spec:      map[string]any{"registration": "garbage"},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+		{
+			name:      "registration.enabled is not a bool (defensive) → skip",
+			spec:      map[string]any{"registration": map[string]any{"enabled": "yes"}},
+			tunnelURL: "https://inference.example.com",
+			want:      false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldAutoRegisterSell(tc.spec, tc.tunnelURL)
+			if got != tc.want {
+				t.Errorf("shouldAutoRegisterSell = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSellInferenceAction_InvokesAutoRegister is a source-level guard
+// against the specific regression the user just hit on spark2: the
+// inference Action committed the ServiceOffer, ensured the tunnel, then
+// jumped straight to runInferenceGateway without ever calling
+// autoRegisterServiceOffer. Result: the offer stayed in
+// AwaitingExternalRegistration and never reached the storefront feed.
+// Without this guard, an innocent refactor of the post-create code path
+// could silently remove the call again — and the only downstream signal
+// would be "operator's storefront mysteriously empty", which is hard to
+// attribute.
+func TestSellInferenceAction_InvokesAutoRegister(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellInferenceCommand(")
+	if start < 0 {
+		t.Fatal("sellInferenceCommand not found in sell.go")
+	}
+	next := strings.Index(body[start+1:], "\nfunc ")
+	if next < 0 {
+		t.Fatal("could not delimit sellInferenceCommand body")
+	}
+	scope := body[start : start+1+next]
+	for _, needle := range []string{
+		"shouldAutoRegisterSell(",
+		"autoRegisterServiceOffer(",
+	} {
+		if !strings.Contains(scope, needle) {
+			t.Errorf("sellInferenceCommand body must contain %q — auto-register path missing, "+
+				"offers will stay in AwaitingExternalRegistration and be excluded from /api/services.json", needle)
+		}
+	}
+}
+
+// TestSignerPayeeDelegationNote pins the contract that obol now treats the
+// "registration signer != offer payTo" case as legitimate ERC-8004 ownership
+// delegation rather than an error. The helper returns "" when the two match
+// (or either is empty) and a single-line informational note otherwise.
+//
+// Regression context: autoRegisterServiceOffer used to fail with
+//
+//	registration signer 0xA... does not match the payment wallet 0xB...
+//
+// which read like an ERC-8004 spec constraint but was purely an obol-CLI
+// policy. ERC-8004 explicitly supports the split (msg.sender at register
+// time owns the agent; setAgentWallet re-points the wallet post-mint), and
+// x402 settlement honors the offer's payTo regardless of what the registry
+// reports.
+func TestSignerPayeeDelegationNote(t *testing.T) {
+	tests := []struct {
+		name        string
+		signer      string
+		payTo       string
+		wantNoteHas []string
+		wantEmpty   bool
+	}{
+		{
+			name:      "exact match → no note",
+			signer:    "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:     "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			wantEmpty: true,
+		},
+		{
+			name:      "case-insensitive match → no note",
+			signer:    "0xa5d4af96e3e740383a36c3123a54724dacb3df57",
+			payTo:     "0xA5D4AF96E3E740383A36C3123A54724DACB3DF57",
+			wantEmpty: true,
+		},
+		{
+			name:      "whitespace tolerance → no note",
+			signer:    "  0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57  ",
+			payTo:     "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			wantEmpty: true,
+		},
+		{
+			name:      "empty payTo → no note (caller didn't request the check)",
+			signer:    "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:     "",
+			wantEmpty: true,
+		},
+		{
+			name:      "empty signer → no note (impossible in practice; defensive)",
+			signer:    "",
+			payTo:     "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+			wantEmpty: true,
+		},
+		{
+			name:   "true mismatch → note names both addrs and suggests sell update",
+			signer: "0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+			payTo:  "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+			wantNoteHas: []string{
+				"0xA5d4aF96E3e740383A36c3123A54724dAcB3Df57",
+				"0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"obol sell update",
+				"--pay-to",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := signerPayeeDelegationNote(tc.signer, tc.payTo)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Errorf("note = %q, want empty", got)
+				}
+				return
+			}
+			for _, sub := range tc.wantNoteHas {
+				if !strings.Contains(got, sub) {
+					t.Errorf("note missing %q: %s", sub, got)
+				}
+			}
+		})
+	}
+}
+
+// TestAutoRegister_AllowsSignerPayeeMismatch is the source-level guard against
+// re-introducing the early-return error that used to reject ERC-8004
+// registrations whenever signer != payTo. The error wording was specific
+// ("registration signer ... does not match the payment wallet ..."); we grep
+// the function body for it. Anyone who reintroduces that check — even with a
+// different error message — must also delete this test, which is a deliberate
+// nudge to read the rationale comment first.
+func TestAutoRegister_AllowsSignerPayeeMismatch(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func autoRegisterServiceOffer(")
+	if start < 0 {
+		t.Fatal("autoRegisterServiceOffer not found in sell.go")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit autoRegisterServiceOffer body")
+	}
+	scope := body[start : start+1+end]
+	for _, banned := range []string{
+		`"registration signer %s does not match the payment wallet`,
+		`does not match the payment wallet`,
+	} {
+		if strings.Contains(scope, banned) {
+			t.Errorf("autoRegisterServiceOffer must NOT reject signer != payee — ERC-8004 allows "+
+				"the split via setAgentWallet and x402 settlement honors payTo directly. "+
+				"Banned snippet still present: %q", banned)
+		}
+	}
+	// Positive guard: the soft-notice path must still be present, otherwise
+	// the operator gets no signal that the addresses diverge.
+	if !strings.Contains(scope, "signerPayeeDelegationNote(") {
+		t.Error("autoRegisterServiceOffer must call signerPayeeDelegationNote(...) so operators see when signer ≠ payTo")
+	}
+}
+
+// TestBuildSellUpdatePatch_PayToOnly pins the `obol sell update <name> --pay-to 0x...`
+// shape. The user-facing promise is "change the payee in place" — the patch
+// must touch only spec.payment.payTo, not the rest of the offer.
+func TestBuildSellUpdatePatch_PayToOnly(t *testing.T) {
+	const newPayee = "0xB00B00000000000000000000000000000000B00B"
+	patch, err := buildSellUpdatePatch(newPayee, "", schemas.PriceTable{})
+	if err != nil {
+		t.Fatalf("buildSellUpdatePatch: %v", err)
+	}
+	spec, ok := patch["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("patch.spec missing or wrong type: %#v", patch)
+	}
+	payment, ok := spec["payment"].(map[string]any)
+	if !ok {
+		t.Fatalf("patch.spec.payment missing or wrong type: %#v", spec)
+	}
+	if payment["payTo"] != newPayee {
+		t.Errorf("patch.spec.payment.payTo = %v, want %q", payment["payTo"], newPayee)
+	}
+	if _, present := payment["network"]; present {
+		t.Errorf("--pay-to only patch should NOT touch payment.network; got %#v", payment["network"])
+	}
+	if _, present := payment["price"]; present {
+		t.Errorf("--pay-to only patch should NOT touch payment.price; got %#v", payment["price"])
+	}
+}
+
+// TestBuildSellUpdatePatch_PriceSwitchNullsOldKeys pins the switching contract:
+// changing the price model (e.g. perRequest → perMTok) must explicitly null
+// the unused keys so merge-patch semantics don't leave a stranded perRequest
+// fighting the new perMTok.
+func TestBuildSellUpdatePatch_PriceSwitchNullsOldKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		price  schemas.PriceTable
+		setKey string
+	}{
+		{"per-request set", schemas.PriceTable{PerRequest: "0.002"}, "perRequest"},
+		{"per-mtok set", schemas.PriceTable{PerMTok: "5.0"}, "perMTok"},
+		{"per-hour set", schemas.PriceTable{PerHour: "1.0"}, "perHour"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			patch, err := buildSellUpdatePatch("", "", tc.price)
+			if err != nil {
+				t.Fatalf("buildSellUpdatePatch: %v", err)
+			}
+			price := patch["spec"].(map[string]any)["payment"].(map[string]any)["price"].(map[string]any)
+			for _, key := range []string{"perRequest", "perMTok", "perHour"} {
+				v := price[key]
+				if key == tc.setKey {
+					if v == nil {
+						t.Errorf("price.%s = nil, want a value", key)
+					}
+				} else {
+					if v != nil {
+						t.Errorf("price.%s = %#v, want nil (so old key doesn't survive the merge)", key, v)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestBuildSellUpdatePatch_NoFieldsErrors pins the no-op-protection contract:
+// `obol sell update <name>` with no field flags must error rather than fire
+// a no-op kubectl patch. The error message names the flags so the operator
+// learns the surface from the failure.
+func TestBuildSellUpdatePatch_NoFieldsErrors(t *testing.T) {
+	_, err := buildSellUpdatePatch("", "", schemas.PriceTable{})
+	if err == nil {
+		t.Fatal("expected error when no update flags are set")
+	}
+	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--chain"} {
+		if !strings.Contains(err.Error(), sub) {
+			t.Errorf("error must name flag %q so the operator learns the surface; got: %v", sub, err)
+		}
+	}
+}
+
+// TestSellUpdate_PayToFlagSurface pins the user-facing `obol sell update
+// <name> --pay-to 0x...` flag wiring: the same payToFlag() shape used by
+// inference + http (so a buyer can muscle-memory `-w` / `--wallet`), plus
+// the namespace requirement (the resource is per-namespace, ambiguous
+// otherwise).
+func TestSellUpdate_PayToFlagSurface(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	update := findSubcommand(t, cmd, "update")
+	flags := flagMap(update)
+
+	requireFlags(t, flags,
+		"namespace", "pay-to", "wallet", "recipient", "w",
+		"chain", "price", "per-request", "per-mtok", "per-hour",
+	)
+	assertFlagRequired(t, flags, "namespace")
+	assertFlagHasAlias(t, flags, "pay-to", "wallet")
+	assertFlagHasAlias(t, flags, "pay-to", "recipient")
+	assertFlagHasAlias(t, flags, "pay-to", "w")
+}
+
+// TestResumeSellOffers_EmptyStoreNoOp pins the "nothing to resume" path:
+// stack-up against a workspace with no persisted sell-inference deployments
+// must return nil without erroring. The same path also has to handle the
+// no-cluster-yet case (no kubeconfig.yaml) gracefully — both are exercised
+// by an empty ConfigDir.
+func TestResumeSellOffers_EmptyStoreNoOp(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	if err := resumeSellOffers(context.Background(), cfg, u); err != nil {
+		t.Fatalf("empty resume must succeed, got: %v", err)
+	}
+}
+
+// TestResumeSellOffers_DescriptorPresentButNoCluster pins the
+// "descriptors-on-disk-but-cluster-not-up-yet" path. Real-world example:
+// `obol stack down`, then re-running `obol sell inference` somewhere that
+// happens to fail before reaching cluster apply — the descriptor lands on
+// disk, the cluster never comes back, and a subsequent `obol stack up`
+// against a missing kubeconfig must NOT panic or hard-error. It should be
+// a quiet skip until the cluster is available.
+func TestResumeSellOffers_DescriptorPresentButNoCluster(t *testing.T) {
+	cfg := newTestConfig(t)
+	store := inference.NewStore(cfg.ConfigDir)
+	if err := store.Create(&inference.Deployment{
+		Name:             "aeon",
+		ModelName:        "aeon-ultimate",
+		ServiceNamespace: "llm",
+		ListenAddr:       "0.0.0.0:8402",
+		WalletAddress:    "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+		PricePerRequest:  "0.023",
+		AssetSymbol:      "OBOL",
+		Chain:            "base-sepolia",
+	}, true); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// No kubeconfig.yaml in cfg.ConfigDir — resume must not attempt
+	// cluster operations.
+	u := ui.New(false)
+	if err := resumeSellOffers(context.Background(), cfg, u); err != nil {
+		t.Fatalf("resume with descriptor + no cluster must skip cleanly, got: %v", err)
+	}
+}
+
+// TestResumeOneInferenceOffer_RequiresModelName pins the per-offer error
+// for legacy descriptors that were written before ModelName became a
+// persisted field. The resume path cannot fabricate a model name out of
+// thin air, and silently writing a ServiceOffer with no spec.model.name
+// would surface as a controller "ModelReady=False" loop with no actionable
+// signal. Operators need a clear "recreate the offer" message instead.
+func TestResumeOneInferenceOffer_RequiresModelName(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	err := resumeOneInferenceOffer(cfg, u, &inference.Deployment{
+		Name:             "legacy",
+		ServiceNamespace: "llm",
+		ListenAddr:       ":8402",
+		// No ModelName.
+	})
+	if err == nil {
+		t.Fatal("expected error for legacy descriptor with no ModelName")
+	}
+	for _, sub := range []string{"model_name", "obol sell inference"} {
+		if !strings.Contains(err.Error(), sub) {
+			t.Errorf("error must name the missing field and the recovery command; missing %q: %v", sub, err)
+		}
+	}
+}
+
+// TestResumeOneInferenceOffer_NilDescriptor pins the defensive guard for
+// the never-supposed-to-happen case of a nil or empty descriptor reaching
+// the resume loop. A bug elsewhere that produces such an entry shouldn't
+// panic the entire resume pass; one descriptor failing should not block
+// the rest.
+func TestResumeOneInferenceOffer_NilDescriptor(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+	if err := resumeOneInferenceOffer(cfg, u, nil); err == nil {
+		t.Fatal("expected error for nil descriptor")
+	}
+	if err := resumeOneInferenceOffer(cfg, u, &inference.Deployment{}); err == nil {
+		t.Fatal("expected error for empty descriptor (no Name)")
+	}
+}
+
+// TestStackUpAction_CallsResumeSellOffers is a source-level guard against
+// silently regressing the stack-up → sell-resume wiring. The whole feature
+// hinges on the `stack up` action handler calling resumeSellOffers after
+// stack.Up succeeds; without that call, persisted sell-inference offers
+// stay on disk forever and never reach the freshly-recreated cluster.
+// A future refactor that splits the handler or moves the call must update
+// this test, which forces a moment of "why is this here" attention.
+func TestStackUpAction_CallsResumeSellOffers(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "resumeSellOffers(") {
+		t.Fatal("cmd/obol/main.go must call resumeSellOffers — without it persisted sell-inference offers never reach a freshly-stacked cluster")
+	}
+	// Belt-and-suspenders: assert the call lives after stack.Up so the
+	// kubeconfig + infrastructure are ready when resume runs.
+	upIdx := strings.Index(body, "stack.Up(cfg")
+	resumeIdx := strings.Index(body, "resumeSellOffers(")
+	if upIdx < 0 || resumeIdx < 0 {
+		t.Fatalf("expected both stack.Up and resumeSellOffers in main.go; upIdx=%d resumeIdx=%d", upIdx, resumeIdx)
+	}
+	if resumeIdx < upIdx {
+		t.Error("resumeSellOffers must be invoked AFTER stack.Up — running it before the cluster is up will see no kubeconfig and skip every offer")
+	}
+}
+
+// TestBuildResumeGatewayArgs pins the round-trip between an
+// inference.Deployment on disk and the `obol sell inference` invocation
+// the resume path uses to relaunch the host gateway. If a flag is dropped
+// here, an offer that came back from disk would lose part of the
+// operator's original intent — most painfully, registration metadata
+// that fell out of the relaunch would leave the gateway running with
+// stripped-down /.well-known/ content.
+func TestBuildResumeGatewayArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		d         *inference.Deployment
+		wantSubs  []string
+		wantNoSub []string
+	}{
+		{
+			name: "full descriptor (the spark2 aeon offer)",
+			d: &inference.Deployment{
+				Name:            "aeon",
+				ModelName:       "aeon-ultimate",
+				UpstreamURL:     "http://127.0.0.1:8000",
+				WalletAddress:   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				ListenAddr:      "0.0.0.0:8402",
+				Chain:           "base-sepolia",
+				AssetSymbol:     "OBOL",
+				PricePerMTok:    "23",
+				PricePerRequest: "0.023",
+				FacilitatorURL:  "https://x402.gcp.obol.tech",
+				Registration: map[string]any{
+					"enabled":     true,
+					"name":        "Qwen3.6-27B AEON Ultimate",
+					"description": "Uncensored Qwen3.6-27B abliteration",
+					"skills":      []any{"llm/inference", "llm/uncensored"},
+					"domains":     []any{"inference.v1337.org"},
+				},
+			},
+			wantSubs: []string{
+				"sell", "inference", "aeon",
+				"--model", "aeon-ultimate",
+				"--upstream", "http://127.0.0.1:8000",
+				"--pay-to", "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"--listen", "0.0.0.0:8402",
+				"--chain", "base-sepolia",
+				"--token", "OBOL",
+				"--per-mtok", "23",
+				"--facilitator", "https://x402.gcp.obol.tech",
+				"--register-name", "Qwen3.6-27B AEON Ultimate",
+				"--register-description", "Uncensored Qwen3.6-27B abliteration",
+				"--register-skills", "llm/inference",
+				"--register-skills", "llm/uncensored",
+				"--register-domains", "inference.v1337.org",
+			},
+			wantNoSub: []string{
+				"--price", // perMTok set, perRequest must not also be passed
+				"--no-register",
+			},
+		},
+		{
+			name: "no-register descriptor",
+			d: &inference.Deployment{
+				Name:         "no-reg",
+				ModelName:    "qwen3:0.6b",
+				ListenAddr:   ":8402",
+				Registration: map[string]any{"enabled": false},
+			},
+			wantSubs: []string{
+				"--no-register",
+			},
+			wantNoSub: []string{
+				"--register-name",
+				"--register-description",
+			},
+		},
+		{
+			name: "legacy descriptor (no registration map at all)",
+			d: &inference.Deployment{
+				Name:            "legacy",
+				ModelName:       "qwen3.5:9b",
+				ListenAddr:      ":8402",
+				PricePerRequest: "0.001",
+			},
+			wantSubs: []string{"--price", "0.001"},
+			wantNoSub: []string{
+				"--no-register",
+				"--register-name",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildResumeGatewayArgs(tc.d)
+			joined := strings.Join(got, " ")
+			for _, want := range tc.wantSubs {
+				found := false
+				for _, a := range got {
+					if a == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("buildResumeGatewayArgs missing %q in %v", want, got)
+				}
+			}
+			for _, banned := range tc.wantNoSub {
+				for _, a := range got {
+					if a == banned {
+						t.Errorf("buildResumeGatewayArgs unexpectedly contains %q in %v", banned, got)
+					}
+				}
+			}
+			// Order sanity: positional `<name>` comes before any flag.
+			nameIdx := -1
+			firstFlagIdx := -1
+			for i, a := range got {
+				if a == tc.d.Name && nameIdx < 0 {
+					nameIdx = i
+				}
+				if strings.HasPrefix(a, "--") && firstFlagIdx < 0 {
+					firstFlagIdx = i
+				}
+			}
+			if nameIdx < 0 || firstFlagIdx < 0 || nameIdx > firstFlagIdx {
+				t.Errorf("name positional must come before flags; got %v", joined)
+			}
+		})
+	}
+}
+
+// TestReadGatewayPID pins the on-disk PID file format. The file must be a
+// single decimal integer in ASCII (no JSON, no trailing newlines that
+// confuse trivial readers) so other tools — `tail -f .../gateway.log` and
+// `kill $(cat .../gateway.pid)` — work without parsing helpers.
+func TestReadGatewayPID(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		content string
+		wantPID int
+		wantOK  bool
+	}{
+		{"clean integer", "12345", 12345, true},
+		{"trailing newline tolerated", "12345\n", 12345, true},
+		{"surrounding whitespace tolerated", "  12345  \n", 12345, true},
+		{"zero rejected", "0", 0, false},
+		{"negative rejected", "-1", 0, false},
+		{"non-numeric rejected", "abc", 0, false},
+		{"empty rejected", "", 0, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".pid")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			pid, ok := readGatewayPID(path)
+			if pid != tc.wantPID || ok != tc.wantOK {
+				t.Errorf("readGatewayPID(%q) = (%d, %v); want (%d, %v)", tc.content, pid, ok, tc.wantPID, tc.wantOK)
+			}
+		})
+	}
+
+	t.Run("missing file → (0, false)", func(t *testing.T) {
+		pid, ok := readGatewayPID(filepath.Join(dir, "does-not-exist"))
+		if pid != 0 || ok {
+			t.Errorf("readGatewayPID(missing) = (%d, %v); want (0, false)", pid, ok)
+		}
+	})
+}
+
+// TestProcessAlive_SelfAndBogus pins the liveness probe used to decide
+// whether the previous gateway is still running. The current process is
+// trivially alive; a far-out-of-range PID is not. We don't test
+// "definitely-dead-but-recently-existed" cases because those depend on
+// the kernel's PID-reuse window and would be flaky.
+func TestProcessAlive_SelfAndBogus(t *testing.T) {
+	if !processAlive(os.Getpid()) {
+		t.Error("processAlive(self) must be true")
+	}
+	if processAlive(99_999_999) {
+		t.Error("processAlive(absurd pid) must be false")
+	}
+}
+
+// TestPersistSellHTTPOffer_RoundTrip pins the on-disk manifest contract.
+// Anything the persistence layer writes must come back identically from
+// the resume path (which reads it via yaml.Unmarshal + kubectl-apply).
+// The path layout — <ConfigDir>/sell-http/<namespace>__<name>.yaml — is
+// the second half of the contract: two offers with the same name in
+// different namespaces must never collide on disk.
+func TestPersistSellHTTPOffer_RoundTrip(t *testing.T) {
+	cfg := newTestConfig(t)
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata": map[string]any{
+			"name":      "my-api",
+			"namespace": "default",
+		},
+		"spec": map[string]any{
+			"type": "http",
+			"upstream": map[string]any{
+				"service": "my-svc", "namespace": "default", "port": int64(8080), "healthPath": "/health",
+			},
+			"payment": map[string]any{
+				"scheme":  "exact",
+				"network": "base-sepolia",
+				"payTo":   "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
+				"price":   map[string]any{"perRequest": "0.001"},
+			},
+		},
+	}
+	if err := persistSellHTTPOffer(cfg, "default", "my-api", manifest); err != nil {
+		t.Fatalf("persistSellHTTPOffer: %v", err)
+	}
+
+	expected := filepath.Join(cfg.ConfigDir, "sell-http", "default__my-api.yaml")
+	data, err := os.ReadFile(expected)
+	if err != nil {
+		t.Fatalf("expected manifest at %s: %v", expected, err)
+	}
+	if len(data) == 0 {
+		t.Fatal("manifest file is empty")
+	}
+	// Round-trip: parse, verify metadata.name + spec.payment.payTo survived.
+	var round map[string]any
+	if err := yaml.Unmarshal(data, &round); err != nil {
+		t.Fatalf("YAML unmarshal: %v\n%s", err, data)
+	}
+	ns, name := manifestNSName(round)
+	if ns != "default" || name != "my-api" {
+		t.Errorf("round-tripped metadata = %s/%s, want default/my-api", ns, name)
+	}
+	payTo := round["spec"].(map[string]any)["payment"].(map[string]any)["payTo"]
+	if payTo != "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47" {
+		t.Errorf("round-tripped payTo = %v, want operator-supplied", payTo)
+	}
+}
+
+// TestPersistSellHTTPOffer_NamespaceIsolation pins that two offers with
+// the same name in different namespaces produce distinct files. A
+// careless filename scheme would have the second `obol sell http`
+// silently overwrite the first.
+func TestPersistSellHTTPOffer_NamespaceIsolation(t *testing.T) {
+	cfg := newTestConfig(t)
+	stub := func(ns string) map[string]any {
+		return map[string]any{
+			"apiVersion": "obol.org/v1alpha1",
+			"kind":       "ServiceOffer",
+			"metadata":   map[string]any{"name": "shared", "namespace": ns},
+			"spec":       map[string]any{"type": "http"},
+		}
+	}
+	if err := persistSellHTTPOffer(cfg, "team-a", "shared", stub("team-a")); err != nil {
+		t.Fatalf("persist team-a: %v", err)
+	}
+	if err := persistSellHTTPOffer(cfg, "team-b", "shared", stub("team-b")); err != nil {
+		t.Fatalf("persist team-b: %v", err)
+	}
+	for _, ns := range []string{"team-a", "team-b"} {
+		path := filepath.Join(cfg.ConfigDir, "sell-http", ns+"__shared.yaml")
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected %s to exist: %v", path, err)
+		}
+	}
+}
+
+// TestRemoveSellHTTPOffer_DropsPersistedManifest pins the symmetric
+// teardown: `obol sell delete` must remove the on-disk manifest so the
+// next stack-up doesn't re-create an offer the operator intentionally
+// deleted. The function must also be a quiet no-op for missing files —
+// running it twice (or against an offer that was never persisted) must
+// not error.
+func TestRemoveSellHTTPOffer_DropsPersistedManifest(t *testing.T) {
+	cfg := newTestConfig(t)
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+		"metadata": map[string]any{"name": "doomed", "namespace": "llm"},
+	}
+	if err := persistSellHTTPOffer(cfg, "llm", "doomed", manifest); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	path := filepath.Join(cfg.ConfigDir, "sell-http", "llm__doomed.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("manifest must exist before remove: %v", err)
+	}
+	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+		t.Errorf("remove: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("manifest still exists after remove: %v", err)
+	}
+	// Idempotent: removing the missing file must not error.
+	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+		t.Errorf("second remove must be no-op, got: %v", err)
+	}
+	// Defensive: empty inputs are silent no-ops, not panics.
+	if err := removeSellHTTPOffer(cfg, "", "foo"); err != nil {
+		t.Errorf("empty namespace: %v", err)
+	}
+	if err := removeSellHTTPOffer(cfg, "llm", ""); err != nil {
+		t.Errorf("empty name: %v", err)
+	}
+}
+
+// TestResumeSellHTTPOffers_EmptyStoreNoOp pins the "no http offers yet"
+// path: stack-up against a workspace that's never persisted an http
+// offer returns nil without erroring. Same shape as the inference
+// equivalent — important because resumeSellOffers calls both even when
+// only one store has entries.
+func TestResumeSellHTTPOffers_EmptyStoreNoOp(t *testing.T) {
+	cfg := newTestConfig(t)
+	// Need a kubeconfig.yaml present, otherwise the function bails early
+	// (correctly — no cluster). For the "store empty but cluster up"
+	// case we want to verify it doesn't error.
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("seed kubeconfig: %v", err)
+	}
+	if err := resumeSellHTTPOffers(cfg, ui.New(false)); err != nil {
+		t.Errorf("empty-store resume must succeed: %v", err)
+	}
+}
+
+// TestSellDeleteAction_CallsRemoveSellHTTPOffer is a source-level guard
+// against the obvious post-delete leak: forget to call
+// removeSellHTTPOffer in the sell delete handler and the next
+// `obol stack up` resurrects the offer the operator just killed. The
+// only signal would be "deleted offers spookily come back" which is
+// hard to attribute, hence the test.
+func TestSellDeleteAction_CallsRemoveSellHTTPOffer(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellDeleteCommand(")
+	if start < 0 {
+		t.Fatal("sellDeleteCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellDeleteCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "removeSellHTTPOffer(") {
+		t.Fatal("sellDeleteCommand must call removeSellHTTPOffer — otherwise the on-disk manifest survives the kubectl delete and `obol stack up` resurrects the offer")
+	}
+}
+
+// TestResumeSellOffers_HTTPOnlyStore pins that http offers are still
+// resumed when the inference store is completely empty. The original
+// resumeSellOffers short-circuited on `len(deployments) == 0` before
+// reaching the http branch; this test catches a regression that
+// reintroduces that early return.
+func TestResumeSellOffers_HTTPOnlyStore(t *testing.T) {
+	cfg := newTestConfig(t)
+	// Seed a kubeconfig so resume gets past the no-cluster guard.
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("seed kubeconfig: %v", err)
+	}
+	// No inference offers. One http offer present. Function must walk
+	// the http branch without erroring on the missing inference store.
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+		"metadata": map[string]any{"name": "only-http", "namespace": "llm"},
+	}
+	if err := persistSellHTTPOffer(cfg, "llm", "only-http", manifest); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	// kubectl apply will fail against the fake kubeconfig — that's
+	// expected and reported as a warn, not an error. We just need
+	// resumeSellOffers itself to return nil.
+	if err := resumeSellOffers(context.Background(), cfg, ui.New(false)); err != nil {
+		t.Errorf("http-only store must not error from resumeSellOffers: %v", err)
 	}
 }
 

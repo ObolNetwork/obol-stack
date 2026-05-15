@@ -3,7 +3,6 @@ package buyer
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/big"
 	"strings"
 	"sync"
@@ -64,18 +63,14 @@ func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirements) bool {
 	}
 
 	if !strings.EqualFold(normalizeNetworkID(req.Network), s.network) {
-		log.Printf("x402-buyer: CanSign DENY network: req=%q (norm=%q) signer=%q",
-			req.Network, normalizeNetworkID(req.Network), s.network)
 		return false
 	}
 
 	if !strings.EqualFold(req.PayTo, s.payTo) {
-		log.Printf("x402-buyer: CanSign DENY payTo: req=%q signer=%q", req.PayTo, s.payTo)
 		return false
 	}
 
 	if !strings.EqualFold(req.Asset, s.asset) {
-		log.Printf("x402-buyer: CanSign DENY asset: req=%q signer=%q", req.Asset, s.asset)
 		return false
 	}
 
@@ -88,7 +83,6 @@ func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirements) bool {
 		}
 	}
 	if amount != "" && amount != s.price {
-		log.Printf("x402-buyer: CanSign DENY amount: req=%q signer=%q", amount, s.price)
 		return false
 	}
 
@@ -96,10 +90,6 @@ func (s *PreSignedSigner) CanSign(req *x402types.PaymentRequirements) bool {
 	remaining := len(s.auths)
 	s.mu.Unlock()
 
-	if remaining == 0 {
-		log.Printf("x402-buyer: CanSign DENY no auths remaining: net=%s payTo=%s asset=%s price=%s",
-			s.network, s.payTo, s.asset, s.price)
-	}
 	return remaining > 0
 }
 

@@ -92,13 +92,20 @@ flow-07 step 9 + flow-08 step 3 POST once to a freshly-deployed verifier and JSO
 
 - **Fix in repo**: `b46f5d9` — wrap both 402-body assertions in 12×5s retry loops that break the moment the response parses as JSON.
 
-### 9. `obol-infrastructure x402-rs` arm64 manifest contains amd64 binary
+### 9. `ObolNetwork/x402-rs` arm64 manifest contained amd64 binary (historical)
 
-`ObolNetwork/x402-rs` v1.4.9 prometheus-overlay's arm64 manifest variant ships a cross-built amd64 ELF (overlay Dockerfile pinned `--platform=$BUILDPLATFORM` on the builder stage).
+Earlier `1.4.9` of `ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay` shipped a cross-built amd64 ELF inside the arm64 manifest variant (overlay Dockerfile pinned `--platform=$BUILDPLATFORM` on the builder stage). Facilitator crashlooped on arm64 hosts with `exec format error`.
 
-- **Symptom**: facilitator container on arm64 hosts crashloops with `exec format error` or comparable runtime errors.
-- **Workaround in repo**: `X402_FACILITATOR_SKIP_PULL=true` keeps `flow-10` from re-pulling the broken registry image; build the facilitator locally on arm64 hosts. Knob landed in `flows/lib.sh`.
-- **Upstream fix**: prepared but not pushed — `fix/multiarch-overlay-arm64` (drops the redundant `--platform` pin from the builder stage).
+- **Fixed upstream**: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) dropped the platform pin. The publish workflow republished `1.4.9` on push to `main`; arm64 digest is now `sha256:b209345c5e05415df36444b307213c61f9ca08db9f8131d0ebfebefc244ba4ec`.
+- **`X402_FACILITATOR_SKIP_PULL` knob removed** from `flows/lib.sh` once the republished image was validated against the release-smoke. If you encounter `exec format error` on an arm64 host now, the registry image is wrong, not the host — pull-fresh (`docker pull ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9`) and check the manifest with `docker buildx imagetools inspect`.
+
+### 10. Cloudflare WAF blocks default `Python-urllib` User-Agent on external sellers
+
+When buying from external x402 sellers (sellers running outside our k3d cluster — e.g. `https://inference.v1337.org/...`), some sit behind Cloudflare's managed WAF, which **blocks the default `Python-urllib/X.Y` UA with HTTP 403 + Cloudflare error 1010** ("the owner of this website has banned your access based on your browser's signature"). Both the unpaid 402 probe and the paid `X-PAYMENT` request fail; buyers see misleading auth/signing errors instead of the real cause.
+
+- **Symptom**: `buy.py probe` against an external seller fails with 403 (often surfaced as a JSON-decode error or "no accepts" downstream); `buy.py buy` against the same endpoint also fails before signature verification. Curl with default browser UA against the same URL returns 402 cleanly.
+- **Fix in repo**: `c2dddc1` — added module-level `USER_AGENT = os.environ.get("OBOL_BUYER_USER_AGENT", "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)")` to `internal/embed/skills/buy-x402/scripts/buy.py`, applied in `_probe_endpoint` (kind=http), `_probe_endpoint` (kind=inference), and the paid `X-PAYMENT` request in `buy_paid_oneshot`. Tested four UAs against v1337 (`curl/*`, generic `Mozilla/*`, `Chrome/*`, custom `obol-buy-x402/*`) — all four returned 402 cleanly. The fix is "send anything that isn't `Python-urllib`", not "send a specific browser UA". Operator override: `OBOL_BUYER_USER_AGENT`.
+- **Follow-up (not yet confirmed)**: the same WAF block likely affects the Go-side controller probe at `internal/serviceoffercontroller/purchase.go:183`, since Go's `http.Client` defaults to `User-Agent: Go-http-client/1.1`. Verify against v1337 and apply the same UA override on the Go side if reproduced.
 
 ## Diagnostic Patterns
 

@@ -99,18 +99,20 @@ Traefik HTTPRoute filter that 503s `/metrics` on the public hostname
 (matches the existing `vmauth` "deny private endpoints publicly" idiom in
 that repo).
 
-### 7. Facilitator overlay arm64 ships an amd64 binary — fix prepared in `$CLAUDE_JOB_DIR/x402-rs-fix`
+### 7. Facilitator overlay arm64 ships an amd64 binary — **RESOLVED**
 
-`ObolNetwork/x402-rs` v1.4.9 prometheus-overlay's arm64 manifest variant
-contains an amd64 ELF (cross-build packaging bug). Local commit at
-`$CLAUDE_JOB_DIR/x402-rs-fix` on branch `fix/multiarch-overlay-arm64`
-fixes the overlay Dockerfile by dropping the redundant
-`--platform=$BUILDPLATFORM` pin from the builder stage. Awaits explicit
-authorization to push.
+Was: `ObolNetwork/x402-rs` v1.4.9 prometheus-overlay's arm64 manifest
+variant contained an amd64 ELF (cross-build packaging bug).
 
-Workaround in this branch: build the image locally on QA arm64 hosts and
-use `X402_FACILITATOR_SKIP_PULL=true` to keep `flow-10` from re-pulling
-the broken registry image. Knob landed in `flows/lib.sh` (`1030718`).
+Resolved: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) drops
+the redundant `--platform=$BUILDPLATFORM` pin from the prom-overlay
+builder stage. The publish workflow republished `1.4.9` on push to
+`main`; the arm64 manifest now ships an aarch64 ELF (digest
+`sha256:b209345c5e05415df36444b307213c61f9ca08db9f8131d0ebfebefc244ba4ec`).
+
+The `X402_FACILITATOR_SKIP_PULL` knob in `flows/lib.sh` has been
+removed in the post-#490 integration branch — `flow-10` now pulls the
+freshly-republished registry image directly.
 
 ### 8. Free-tier RPC fragility — fixes `80fbc7f` + `f90624e` + `5430afe` + `a5816d7`
 
@@ -151,6 +153,6 @@ parses as JSON.
 
 ## Out-of-scope follow-ups
 
-1. Push `ObolNetwork/x402-rs` PR `fix/multiarch-overlay-arm64` (local commit ready, needs explicit user authorization).
-2. Strip the four `debug(x402-verifier)` / `debug(x402-buyer)` / `debug(flow-11)` log statements once the new path is exercised in production for a release cycle. Marked "Remove once root cause identified" in their commit messages.
-3. Document the `OBOL_DEVELOPMENT=true` deployment story in `.claude/skills/obol-stack-dev/`: helmfile vs `EnsureVerifier` is a footgun for any future component the controller installs via `kubectl apply`.
+1. ~~Push `ObolNetwork/x402-rs` PR `fix/multiarch-overlay-arm64`~~ — **DONE.** PR #3 opened, merged as `668b7bb`, image republished, `X402_FACILITATOR_SKIP_PULL` knob removed in the post-#490 integration branch.
+2. ~~Strip the four `debug(...)` log statements~~ — **DONE.** Done in the post-#490 integration branch (verifier `HandleProxy` log was stripped earlier as the CodeQL log-injection fix `58dd89c`; the other three — `forwardauth.go` × 2 + `buyer/signer.go` × 5 — were stripped post-#490). The `flow-11` post-fail diag block was kept (it's general failure-time operator artifact, not a hunt-specific debug log) with a rephrased comment.
+3. Document the `OBOL_DEVELOPMENT=true` deployment story in `.agents/skills/obol-stack-dev/`: helmfile vs `EnsureVerifier` is a footgun for any future component the controller installs via `kubectl apply`. (Captured inline in `release-smoke-debugging.md` entry #1; consider promoting to a standalone reference if a new component repeats the pattern.)

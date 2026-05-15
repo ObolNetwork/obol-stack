@@ -102,6 +102,25 @@ type Deployment struct {
 	// config and passed to the registration document when selling.
 	Provenance *Provenance `json:"provenance,omitempty"`
 
+	// ModelName is the upstream model identifier the operator selected via
+	// `obol sell inference --model <name>` (e.g. "aeon-ultimate"). Persisted
+	// so `obol stack up` can rebuild the ServiceOffer's spec.model.name on
+	// resume without re-prompting the operator.
+	ModelName string `json:"model_name,omitempty"`
+
+	// ServiceNamespace is the Kubernetes namespace the cluster-routed Service
+	// + Endpoints + ServiceOffer live in (typically "llm" for inference
+	// deployments co-located with LiteLLM). Persisted so the resume path
+	// re-applies into the same namespace.
+	ServiceNamespace string `json:"service_namespace,omitempty"`
+
+	// Registration is the ERC-8004 registration block the operator passed at
+	// sell time (--register-*). Persisted as map[string]any (the same shape
+	// buildSellRegistrationConfig emits) so the resume path can rebuild the
+	// ServiceOffer's spec.registration verbatim. Empty when the offer was
+	// created with --no-register.
+	Registration map[string]any `json:"registration,omitempty"`
+
 	// CreatedAt is the RFC3339 timestamp of when this deployment was created.
 	CreatedAt string `json:"created_at"`
 

@@ -383,22 +383,17 @@ func TestAsUnstructured(t *testing.T) {
 	})
 }
 
-// --- buildTombstoneRegistrationDocument -------------------------------------
+// --- identity tombstone rendering -------------------------------------------
 
-func TestBuildTombstoneRegistrationDocument(t *testing.T) {
-	offer := &monetizeapi.ServiceOffer{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm"},
-		Spec: monetizeapi.ServiceOfferSpec{
-			Type:  "inference",
-			Model: monetizeapi.ServiceOfferModel{Name: "qwen3.5:9b"},
-			Registration: monetizeapi.ServiceOfferRegistration{
-				Name:        "Demo Agent",
-				Description: "Alive registration",
-			},
-		},
+func TestBuildIdentityRegistrationDocument_Tombstone(t *testing.T) {
+	identity := &monetizeapi.AgentIdentity{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "x402"},
 	}
 
-	doc := buildTombstoneRegistrationDocument(offer, "https://example.com", "")
+	doc := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+		Identity: identity,
+		BaseURL:  "https://example.com",
+	})
 
 	if doc.Active {
 		t.Error("tombstone document must have Active=false")

@@ -60,6 +60,17 @@ BUYER_NS = "llm"
 LITELLM_DEPLOY = "litellm"
 BUYER_PORT = 8402
 
+# Some sellers sit behind a Cloudflare WAF that blocks the default
+# `Python-urllib/<ver>` User-Agent with HTTP 403 + error code 1010. Send a
+# non-Python UA on every outbound HTTP we make against an external seller so
+# that the probe (`_probe_endpoint`) and the paid request both pass the WAF.
+# Override with `OBOL_BUYER_USER_AGENT` if a specific seller requires a
+# different shape (e.g. a browser UA).
+USER_AGENT = os.environ.get(
+    "OBOL_BUYER_USER_AGENT",
+    "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)",
+)
+
 # Canonical chain names match eRPC project aliases (see
 # internal/embed/infrastructure/values/erpc.yaml.gotmpl). Any other label
 # (CAIP-2, "ethereum", chain-id string) is normalized via _resolve_chain
@@ -1133,7 +1144,10 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
     """
     if kind == "http":
         url = endpoint_url.rstrip("/")
-        request = urllib.request.Request(url, method=(method or "GET").upper())
+        request = urllib.request.Request(
+            url, method=(method or "GET").upper(),
+            headers={"User-Agent": USER_AGENT},
+        )
     else:
         base = _normalize_endpoint(endpoint_url)
         url = f"{base}/v1/chat/completions"
@@ -1143,7 +1157,7 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
         }).encode()
         request = urllib.request.Request(
             url, data=body, method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         )
 
     try:
@@ -1691,7 +1705,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None):
     x_payment_header = base64.b64encode(json.dumps(envelope).encode()).decode()
 
     request_data = data.encode() if data else None
-    headers = {"X-PAYMENT": x_payment_header}
+    headers = {"X-PAYMENT": x_payment_header, "User-Agent": USER_AGENT}
     if request_data:
         headers.setdefault("Content-Type", "application/json")
 

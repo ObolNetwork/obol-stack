@@ -1413,10 +1413,10 @@ if inference_response=$(wait_for_paid_inference 24 5); then
     echo "$inference_response"
 else
     fail "Paid inference failed: $inference_response"
-    # Capture cluster-side diagnostics before teardown wipes them. The flow's
-    # cleanup tears down k3d clusters on exit; once that runs, kubectl logs
-    # against the verifier/buyer can no longer be retrieved.
-    diag_dir="${FLOW11_ARTIFACT_DIR:-${RELEASE_SMOKE_ARTIFACT_DIR:-$OBOL_ROOT/.tmp}}/flow11-step43-debug"
+    # Capture cluster-side diagnostics before teardown wipes them. Cleanup
+    # tears down k3d clusters on exit; once that runs, kubectl logs against
+    # the verifier/buyer can no longer be retrieved.
+    diag_dir="${FLOW11_ARTIFACT_DIR:-${RELEASE_SMOKE_ARTIFACT_DIR:-$OBOL_ROOT/.tmp}}/flow11-paid-fail-diag"
     mkdir -p "$diag_dir"
     echo "  [diag] capturing cluster state to $diag_dir" >&2
     alice kubectl logs -n x402 deploy/x402-verifier --tail=200 > "$diag_dir/alice-verifier.log" 2>&1 || true

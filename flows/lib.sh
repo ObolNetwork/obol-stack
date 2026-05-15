@@ -517,9 +517,46 @@ bootstrap_flow_workspace() {
     local dir="$1"
     local obol_bin="$2"
     local tool src
+    local workspace_bin="$OBOL_ROOT/.workspace/bin/obol"
+    local picked="$obol_bin"
+    local picked_mtime other_mtime delta abs_delta
+
+    # Pick the freshest of the caller-supplied binary and the workspace binary.
+    # During iteration on embedded skill content (e.g. buy-x402/scripts/buy.py)
+    # it is easy to rebuild one and forget the other; copying the stale one
+    # silently bakes pre-fix files into the cluster PVC. See pitfall in
+    # plans/inference-v1337-buy-report-20260514.md (v1337 attempt 5).
+    if [ -f "$obol_bin" ] && [ -f "$workspace_bin" ] && [ "$obol_bin" != "$workspace_bin" ]; then
+        picked_mtime=$(stat -c %Y "$obol_bin" 2>/dev/null || stat -f %m "$obol_bin" 2>/dev/null || echo 0)
+        other_mtime=$(stat -c %Y "$workspace_bin" 2>/dev/null || stat -f %m "$workspace_bin" 2>/dev/null || echo 0)
+        if [ "$other_mtime" -gt "$picked_mtime" ]; then
+            picked="$workspace_bin"
+            delta=$((picked_mtime - other_mtime))
+        else
+            delta=$((other_mtime - picked_mtime))
+        fi
+        abs_delta=${delta#-}
+        if [ "$abs_delta" -gt 300 ]; then
+            local fmt_a fmt_b picked_fmt
+            fmt_a=$(date -r "$obol_bin" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$picked_mtime" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "?")
+            fmt_b=$(date -r "$workspace_bin" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$other_mtime" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "?")
+            if [ "$picked" = "$workspace_bin" ]; then
+                picked_fmt="$workspace_bin (mtime $fmt_b)"
+            else
+                picked_fmt="$obol_bin (mtime $fmt_a)"
+            fi
+            echo "  WARN: obol binary mtimes differ by ${abs_delta}s — one of these was likely forgotten in a rebuild" >&2
+            echo "    $obol_bin       mtime $fmt_a" >&2
+            echo "    $workspace_bin  mtime $fmt_b" >&2
+            echo "    picked: $picked_fmt" >&2
+            echo "    Rebuild both with \`go build -o .build/obol ./cmd/obol && go build -o .workspace/bin/obol ./cmd/obol\` if you've been iterating on embedded skill content." >&2
+        fi
+    elif [ ! -f "$obol_bin" ] && [ -f "$workspace_bin" ]; then
+        picked="$workspace_bin"
+    fi
 
     reset_flow_workspace "$dir"
-    cp "$obol_bin" "$dir/bin/obol"
+    cp "$picked" "$dir/bin/obol"
     chmod +x "$dir/bin/obol"
     for tool in kubectl helm helmfile k3d k9s openclaw; do
         src=$(command -v "$tool" 2>/dev/null || printf '%s\n' "$OBOL_ROOT/.workspace/bin/$tool")
@@ -608,21 +645,6 @@ x402_facilitator_image() {
         echo "docker is required to fetch $image" >&2
         return 1
     }
-
-    # X402_FACILITATOR_SKIP_PULL=true uses an already-loaded local image without
-    # touching the registry. Required on arm64 QA hosts because upstream
-    # ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9 ships an
-    # amd64 binary inside the arm64 manifest variant (see ObolNetwork/x402-rs).
-    # Build locally with overlays/x402-facilitator-prometheus-overlay/Dockerfile
-    # and tag with the canonical name, then set this flag.
-    if [ "${X402_FACILITATOR_SKIP_PULL:-false}" = "true" ]; then
-        if ! docker image inspect "$image" >/dev/null 2>&1; then
-            echo "X402_FACILITATOR_SKIP_PULL=true but image not present locally: $image" >&2
-            return 1
-        fi
-        printf '%s\n' "$image"
-        return 0
-    fi
 
     if ! docker_pull_public_image "$image" "${X402_FACILITATOR_PULL_TIMEOUT:-180}"; then
         echo "x402 facilitator image not available: $image" >&2
