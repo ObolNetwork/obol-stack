@@ -152,7 +152,7 @@ release-smoke: OBOL_LLM_ENDPOINT must be set when RELEASE_SMOKE_INCLUDE_OBOL=tru
 
   Set, for example:
     export OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1
-    export OBOL_LLM_MODEL=qwen36-fast      # or whatever the endpoint serves
+    export OBOL_LLM_MODEL=qwen36-deep      # 27B-class default; or whatever the endpoint serves
 
   See .claude/skills/obol-stack-dev/references/qa-model-envs.md.
 EOF

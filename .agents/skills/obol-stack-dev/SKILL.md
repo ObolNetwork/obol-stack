@@ -47,7 +47,7 @@ OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
 
 **Payment assertion**: don't bypass the agent buy step with a direct script exec. If the agent times out, diagnose Hermes/LiteLLM/model routing — don't relax the assertion. Required evidence: `PurchaseRequest Ready=True` + paid HTTP 200 + on-chain `Transfer` + exact balance deltas.
 
-**QA LLM**: full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT` (OpenAI-compatible vLLM or llama.cpp on the QA host). Default `OBOL_LLM_MODEL=qwen36-fast`. Sequence: `obol model setup custom` → `obol model prefer` → one `obol model sync`. Local Ollama and cloud-fallback are **not** acceptable green substitutes for full-flow QA.
+**QA LLM**: full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT` (OpenAI-compatible vLLM or llama.cpp on the QA host). Default `OBOL_LLM_MODEL=qwen36-deep` (27B-class). The smaller `qwen36-fast` (~4B) was the previous default but flakes on the long single-shot agent-buy prompt at flow-13/14 step 46 — see the retry-wrapper rationale in `flows/lib-dual-stack.sh::agent_buy_with_retry`. Sequence: `obol model setup custom` → `obol model prefer` → one `obol model sync`. Local Ollama and cloud-fallback are **not** acceptable green substitutes for full-flow QA.
 
 **Public vs private routes**: `/services/*`, `/.well-known/agent-registration.json`, `/skill.md`, and `/` (storefront) are public via the tunnel. **NEVER** remove `hostnames: ["obol.stack"]` from frontend or eRPC HTTPRoutes — exposing them publicly is a critical security flaw.
 

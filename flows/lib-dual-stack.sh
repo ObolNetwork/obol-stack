@@ -371,12 +371,13 @@ _agent_buy_pr_exists() {
         -o name 2>/dev/null | grep -q .
 }
 
-# 1-retry wrapper for the agent buy prompt at flow-13/14 step 46. qwen36-fast
-# (4B-class) occasionally narrates a fabricated failure on the long single-shot
-# buy prompt instead of actually invoking the bash tool. When that happens, no
-# PurchaseRequest is created and step 47 fails with "PurchaseRequest CR not
-# ready" — even though buy.py was never invoked. See
-# plans/inference-v1337-followup-20260514.md.
+# 1-retry wrapper for the agent buy prompt at flow-13/14 step 46. The QA LLM
+# (qwen36-deep, 27B-class — see OBOL_LLM_MODEL default) occasionally narrates a
+# fabricated failure on the long single-shot buy prompt instead of actually
+# invoking the bash tool. When that happens, no PurchaseRequest is created and
+# step 47 fails with "PurchaseRequest CR not ready" — even though buy.py was
+# never invoked. The smaller qwen36-fast (~4B) flakes much more often; deep is
+# the new default for that reason. See plans/inference-v1337-followup-20260514.md.
 #
 # Strategy: poll for the PR for up to 60s after the first prompt; if absent,
 # print a LOUD warning flagging this as agent unreliability and re-send the
@@ -406,10 +407,12 @@ agent_buy_with_retry() {
         echo ""
         echo "  ╔════════════════════════════════════════════════════════════════════════╗"
         echo "  ║  WARN: agent did NOT create a PurchaseRequest after 60s.               ║"
-        echo "  ║  Documented qwen36-fast (4B) flake — agent narrates a fabricated       ║"
-        echo "  ║  failure instead of invoking buy.py. Re-prompting ONCE.                ║"
-        echo "  ║  If this fires regularly, switch to a more reliable LLM (qwen36-deep   ║"
-        echo "  ║  / qwen36-35b-heretic) or add a non-agent fallback path.               ║"
+        echo "  ║  Documented LLM flake on the long single-shot buy prompt — agent       ║"
+        echo "  ║  narrated a fabricated failure instead of invoking buy.py.             ║"
+        echo "  ║  Re-prompting ONCE.                                                    ║"
+        echo "  ║  If this fires regularly: confirm OBOL_LLM_MODEL=qwen36-deep (default) ║"
+        echo "  ║  not qwen36-fast (4B), or escalate to qwen36-35b-heretic, or add a     ║"
+        echo "  ║  non-agent fallback path.                                              ║"
         echo "  ║  Ref: plans/inference-v1337-followup-20260514.md                       ║"
         echo "  ╚════════════════════════════════════════════════════════════════════════╝"
         echo ""

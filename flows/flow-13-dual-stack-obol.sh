@@ -36,7 +36,7 @@
 #   FLOW13_BOB_HTTP_PORT,   _ALT, _HTTPS_PORT, _HTTPS_ALT_PORT
 #   FLOW13_ARTIFACT_DIR           where receipts + logs land
 #   OBOL_LLM_ENDPOINT             required vLLM/llama.cpp/OpenAI-compatible endpoint
-#   OBOL_LLM_MODEL                endpoint model name (default: qwen36-fast)
+#   OBOL_LLM_MODEL                endpoint model name (default: qwen36-deep, 27B-class)
 #
 source "$(dirname "$0")/lib.sh"
 DUAL_STACK_FLOW_PREFIX="FLOW13"
@@ -61,7 +61,7 @@ BOB_HTTP_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTP_ALT_PORT)"
 BOB_HTTPS_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_PORT)"
 BOB_HTTPS_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_ALT_PORT)"
 
-OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 export OBOL_LLM_MODEL
 
 ANVIL_PORT="${FLOW13_ANVIL_PORT:-$(pick_free_port)}"
@@ -923,9 +923,9 @@ buyer_status=$(buyer_sidecar_status)
 # Mirror flow-14's relaxed assertion. Two reasons to allow remaining>=5
 # rather than exact-5: (a) controller may merge into an existing auth
 # pool on rerun (remaining=10 etc.); (b) the agent prompt asks for
-# --count 5, but qwen36-fast occasionally hallucinates --count 1, which
-# is an LLM-stochasticity issue not a buy-flow correctness issue. We
-# only care that the buy step actually provisioned at least the
+# --count 5, but the LLM occasionally hallucinates a different count,
+# which is an LLM-stochasticity issue not a buy-flow correctness issue.
+# We only care that the buy step actually provisioned at least the
 # requested count.
 remaining_n=$(echo "$buyer_status" | grep -oE 'remaining=[0-9]+' | head -1 | cut -d= -f2)
 if [ -n "$remaining_n" ] && [ "$remaining_n" -ge 5 ] 2>/dev/null; then

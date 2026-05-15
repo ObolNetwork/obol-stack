@@ -569,7 +569,9 @@ bootstrap_flow_workspace() {
 # Activated when OBOL_LLM_ENDPOINT is set (for example,
 # http://127.0.0.1:8000/v1 on a QA machine). The endpoint must be
 # OpenAI-compatible, such as vLLM or llama.cpp.
-# OBOL_LLM_MODEL is the upstream model id (default qwen36-fast).
+# OBOL_LLM_MODEL is the upstream model id (default qwen36-deep, 27B-class).
+# qwen36-fast (4B) is faster but flakes on long single-shot agent prompts; see
+# the flow-13/14 step 46 retry-wrapper rationale in lib-dual-stack.sh.
 # OBOL_LLM_NAME is the LiteLLM short name registered for the endpoint (default
 # external-llm).
 #
@@ -588,7 +590,7 @@ route_llm_via_obol_cli() {
     local model name
 
     if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
-        model="${OBOL_LLM_MODEL:-qwen36-fast}"
+        model="${OBOL_LLM_MODEL:-qwen36-deep}"
         name="${OBOL_LLM_NAME:-external-llm}"
 
         local args=(model setup custom --no-sync --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")

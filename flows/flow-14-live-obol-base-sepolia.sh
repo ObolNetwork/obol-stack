@@ -43,7 +43,7 @@
 #   FLOW14_ARTIFACT_DIR                       where receipts + logs land
 #   FLOW14_BOB_GAS_MIN_WEI                    default: 100000000000000
 #   OBOL_LLM_ENDPOINT                         required vLLM/llama.cpp/OpenAI-compatible endpoint
-#   OBOL_LLM_MODEL                            endpoint model name (default: qwen36-fast)
+#   OBOL_LLM_MODEL                            endpoint model name (default: qwen36-deep, 27B-class)
 #
 # Usage:
 #   ./flows/flow-14-live-obol-base-sepolia.sh
@@ -74,7 +74,7 @@ BOB_HTTP_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTP_ALT_PORT)"
 BOB_HTTPS_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_PORT)"
 BOB_HTTPS_ALT_PORT="$(dual_stack_env_or_free_port BOB_HTTPS_ALT_PORT)"
 
-OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 export OBOL_LLM_MODEL
 
 # Live Base Sepolia RPC + public Obol facilitator. No host.k3d.internal pin.

@@ -5,7 +5,7 @@ source "$(dirname "$0")/lib.sh"
 
 if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
     run_step "Route LiteLLM through QA LLM endpoint" route_llm_via_obol_cli "$OBOL"
-    LITELLM_MODEL="${OBOL_LLM_MODEL:-qwen36-fast}"
+    LITELLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
 else
     LITELLM_MODEL="$FLOW_MODEL"
 

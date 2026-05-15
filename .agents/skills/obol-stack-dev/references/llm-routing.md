@@ -47,7 +47,7 @@ Canonical user flow for vLLM / sglang / mlx-lm / a remote GPU box. **No ConfigMa
 obol stack up
 
 # Drop auto-detected Ollama entries — they will out-rank the new custom entry.
-# Internal/model/rank.go parses ":9b" as 90 deci-billions; "qwen36-fast" (no
+# Internal/model/rank.go parses ":9b" as 90 deci-billions; "qwen36-deep" (no
 # ":Nb" tag) ranks 0. Without removing them, the agent stays on slow host Ollama.
 obol model remove qwen3.5:9b
 obol model remove qwen3.5:4b
@@ -55,7 +55,7 @@ obol model remove qwen3.5:4b
 obol model setup custom \
     --name spark1-vllm \
     --endpoint http://192.168.18.23:8000/v1 \
-    --model qwen36-fast
+    --model qwen36-deep
 # `setup custom` validates the endpoint, patches LiteLLM, and internally calls
 # syncAgentModels → hermes.Sync → rewrites the default agent's deployment files
 # with the new primary model. No manual restart needed.
