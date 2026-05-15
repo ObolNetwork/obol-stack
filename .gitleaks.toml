@@ -1,5 +1,17 @@
 title = "obol-stack gitleaks config"
 
+[[rules]]
+id = "http-basic-auth-in-log"
+description = "HTTP Basic Auth credential in log output or config"
+regex = '''Basic\s+[A-Za-z0-9+/=]{8,}'''
+tags = ["auth", "credential"]
+
+[[rules]]
+id = "authorization-header-value"
+description = "Authorization header key=value pair with credential"
+regex = '''Authorization\s*[=:]\s*(?:Basic|Bearer)\s+\S+'''
+tags = ["auth", "credential"]
+
 [allowlist]
 description = "Global allowlist"
 regexTarget = "line"
