@@ -231,10 +231,15 @@ Important caveats:
 ```bash
 obol stack up                                                  # cluster + base infra (auto-config picks up host Ollama if present)
 
-# Drop the auto-detected Ollama entries — without this they out-rank the new
-# custom entry because `:9b` parses to 90 deci-billions in internal/model/rank.go
-# while `qwen36-fast` (no `:Nb` tag) ranks 0, so the agent stays on the slow
-# host model. This is the easy footgun.
+# Hermes picks the first chat-capable entry in LiteLLM's model_list as its
+# default (configured order is the source of truth — see internal/model/rank.go,
+# which only demotes embedding-only entries past chat-capable ones). Auto-detect
+# prepends host Ollama models to the list, so they win the default unless you
+# either (a) remove them, or (b) move your preferred entry to the head with
+# `obol model prefer`. Option (b) is the user-facing override the flow scripts
+# rely on.
+
+# (a) Drop the auto-detected Ollama entries so only the new endpoint remains:
 obol model remove qwen3.5:9b
 obol model remove qwen3.5:4b
 
@@ -246,7 +251,11 @@ obol model setup custom \
 # syncAgentModels → hermes.Sync → rewrites the default agent's deployment files
 # with the new primary model. No manual restart needed.
 
-obol model list                                                # confirm the new entry is the only local model
+# (b) OR keep Ollama and force-promote the custom entry to the head:
+obol model prefer qwen36-fast
+obol model sync                                                # propagate to Hermes
+
+obol model list                                                # confirm head of model_list
 obol model status                                              # show provider state
 ```
 
