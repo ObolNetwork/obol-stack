@@ -347,6 +347,85 @@ except Exception as e:
 " 2>&1 || true
 }
 
+# Send the long single-shot buy prompt to Bob's agent. The prompt expands
+# against the caller's environment (BOB_AGENT_PORT, BOB_TOKEN,
+# BOB_AGENT_RUNTIME, BOB_OBOL_SKILLS_DIR, TUNNEL_URL, OBOL_LLM_MODEL).
+_agent_buy_send_prompt() {
+    curl -sf --max-time 300 \
+        -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
+        -H "Authorization: Bearer $BOB_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"$BOB_AGENT_RUNTIME-agent\",
+            \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
+            }],
+            \"max_tokens\": 4000,
+            \"stream\": false
+        }" 2>&1 || true
+}
+
+_agent_buy_pr_exists() {
+    bob kubectl get purchaserequests.obol.org -n "$BOB_AGENT_NS" alice-obol \
+        -o name 2>/dev/null | grep -q .
+}
+
+# 1-retry wrapper for the agent buy prompt at flow-13/14 step 46. qwen36-fast
+# (4B-class) occasionally narrates a fabricated failure on the long single-shot
+# buy prompt instead of actually invoking the bash tool. When that happens, no
+# PurchaseRequest is created and step 47 fails with "PurchaseRequest CR not
+# ready" — even though buy.py was never invoked. See
+# plans/inference-v1337-followup-20260514.md.
+#
+# Strategy: poll for the PR for up to 60s after the first prompt; if absent,
+# print a LOUD warning flagging this as agent unreliability and re-send the
+# prompt once. If still absent after the retry, step 47 fails as before.
+agent_buy_with_retry() {
+    local response content retried=0 i
+
+    response=$(_agent_buy_send_prompt)
+    content=$(extract_assistant_content "$response" 2>/dev/null || true)
+    echo "${content:0:500}"
+    if [ -z "$(printf '%s' "$content" | tr -d '[:space:]')" ]; then
+        echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
+    fi
+    if printf '%s' "$content" | agent_response_refused; then
+        fail "Agent refused to run buy.py: ${content:0:500}"
+        emit_metrics; exit 1
+    fi
+
+    # Wait up to 60s for the controller to reconcile the PR. Healthy runs see
+    # it within ~5s; the long ceiling absorbs cluster-cold-start jitter.
+    for i in $(seq 1 12); do
+        _agent_buy_pr_exists && break
+        sleep 5
+    done
+
+    if ! _agent_buy_pr_exists; then
+        echo ""
+        echo "  ╔════════════════════════════════════════════════════════════════════════╗"
+        echo "  ║  WARN: agent did NOT create a PurchaseRequest after 60s.               ║"
+        echo "  ║  Documented qwen36-fast (4B) flake — agent narrates a fabricated       ║"
+        echo "  ║  failure instead of invoking buy.py. Re-prompting ONCE.                ║"
+        echo "  ║  If this fires regularly, switch to a more reliable LLM (qwen36-deep   ║"
+        echo "  ║  / qwen36-35b-heretic) or add a non-agent fallback path.               ║"
+        echo "  ║  Ref: plans/inference-v1337-followup-20260514.md                       ║"
+        echo "  ╚════════════════════════════════════════════════════════════════════════╝"
+        echo ""
+        retried=1
+        response=$(_agent_buy_send_prompt)
+        content=$(extract_assistant_content "$response" 2>/dev/null || true)
+        echo "  RETRY response: ${content:0:500}"
+        if printf '%s' "$content" | agent_response_refused; then
+            fail "Agent refused to run buy.py on retry: ${content:0:500}"
+            emit_metrics; exit 1
+        fi
+    fi
+
+    pass "Agent buy prompt issued (retry=$retried; success will be confirmed by PurchaseRequest CR)"
+}
+
 extract_assistant_content() {
     DUAL_STACK_RESPONSE="$1" python3 - <<'PY'
 import json

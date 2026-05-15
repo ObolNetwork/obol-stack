@@ -899,31 +899,7 @@ pass "Agent discovery prompt issued (success will be confirmed by buy + Purchase
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob's agent: buy 5 OBOL Permit2 auths from Alice"
-buy_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
-        }],
-        \"max_tokens\": 4000,
-        \"stream\": false
-    }" 2>&1 || true)
-buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
-echo "${buy_content:0:500}"
-# Don't grep buy_content for natural-language confirmation; structural success
-# is the PurchaseRequest CR Ready=True poll below.
-if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
-    echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
-fi
-if printf '%s' "$buy_content" | agent_response_refused; then
-    fail "Agent refused to run buy.py: ${buy_content:0:500}"
-    emit_metrics; exit 1
-fi
-pass "Agent buy prompt issued (success will be confirmed by PurchaseRequest CR)"
+agent_buy_with_retry
 
 # ═════════════════════════════════════════════════════════════════
 # 36-39. PR Ready / LiteLLM rollout / sidecar auths / paid call
