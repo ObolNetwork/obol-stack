@@ -4,6 +4,7 @@
 # Gateway API HTTPRoutes, they conform to expected patterns:
 #   - HTTPRoutes must reference the shared traefik-gateway
 #   - ForwardAuth middlewares must target x402-verifier.x402.svc
+#   - Agent factory namespaces/secrets/Agent CRs stay inside the child-agent shape
 #
 # Uses Kubernetes ValidatingAdmissionPolicy (v1, GA in 1.30+).
 
@@ -25,14 +26,28 @@ spec:
         apiVersions: ["*"]
         resources: ["httproutes"]
         operations: ["CREATE", "UPDATE"]
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["namespaces", "secrets"]
+        operations: ["CREATE", "UPDATE"]
+      - apiGroups: ["obol.org"]
+        apiVersions: ["*"]
+        resources: ["agents"]
+        operations: ["CREATE", "UPDATE"]
   matchConditions:
     - name: only-agent-runtime-sa
       expression: 'request.userInfo.username.startsWith("system:serviceaccount:openclaw-") || request.userInfo.username.startsWith("system:serviceaccount:hermes-")'
   validations:
-    - expression: '!has(object.spec.parentRefs) || object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
+    - expression: 'object.kind != "HTTPRoute" || !has(object.spec.parentRefs) || object.spec.parentRefs.all(p, p.name == "traefik-gateway")'
       message: "HTTPRoutes created by agent runtimes must reference traefik-gateway"
-    - expression: '!has(object.spec.forwardAuth) || object.spec.forwardAuth.address.startsWith("http://x402-verifier.x402.svc")'
+    - expression: 'object.kind != "Middleware" || !has(object.spec.forwardAuth) || object.spec.forwardAuth.address.startsWith("http://x402-verifier.x402.svc")'
       message: "ForwardAuth middlewares must target x402-verifier.x402.svc"
+    - expression: 'object.kind != "Namespace" || (object.metadata.name.startsWith("agent-") && has(object.metadata.labels) && "obol.org/agent-namespace" in object.metadata.labels && object.metadata.labels["obol.org/agent-namespace"] == "true" && "app.kubernetes.io/managed-by" in object.metadata.labels && object.metadata.labels["app.kubernetes.io/managed-by"] == "agent-factory")'
+      message: "Agent-created namespaces must be factory-owned agent-* namespaces"
+    - expression: 'object.kind != "Secret" || (object.metadata.namespace.startsWith("agent-") && (object.metadata.name == "hermes-env" || object.metadata.name == "hermes-profile-seed"))'
+      message: "Agent-created Secrets must be hermes-env or hermes-profile-seed inside agent-* namespaces"
+    - expression: 'object.kind != "Agent" || (object.metadata.namespace == "agent-" + object.metadata.name && (!has(object.spec.runtime) || object.spec.runtime == "hermes"))'
+      message: "Agent-created Agent CRs must be Hermes agents in their matching agent-* namespace"
 
 ---
 #------------------------------------------------------------------------------

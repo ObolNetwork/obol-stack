@@ -21,7 +21,7 @@ import (
 const (
 	// agentConditionValidated reports whether spec passed admission-time
 	// shape checks (runtime supported, skill names well-formed, objective
-	// present when wallet is created so the soul.md seed is meaningful).
+	// present when wallet is created so the SOUL.md seed is meaningful).
 	agentConditionValidated = "Validated"
 
 	// agentConditionProvisioned reports whether the controller has
@@ -248,7 +248,7 @@ func validateAgentSpec(agent *monetizeapi.Agent) (reason, message string, ok boo
 		}
 	}
 
-	// Objective is optional at the CRD level (defaults to a neutral soul.md
+	// Objective is optional at the CRD level (defaults to a neutral SOUL.md
 	// when empty), so we don't reject on its absence here.
 	return "", "", true
 }

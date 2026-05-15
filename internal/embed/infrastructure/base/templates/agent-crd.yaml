@@ -71,7 +71,7 @@ spec:
                 objective:
                   type: string
                   maxLength: 4096
-                  description: "Operator-supplied objective text. Substituted into the soul.md template by the controller on first write. Agent owns soul.md after that."
+                  description: "Operator-supplied objective text. Substituted into the SOUL.md template by the seeder on first write. Agent owns SOUL.md after that."
                 wallet:
                   type: object
                   properties:

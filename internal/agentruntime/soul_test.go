@@ -32,7 +32,7 @@ func TestRenderSoul_TrimsObjectiveWhitespace(t *testing.T) {
 }
 
 func TestRenderSoul_EmptyObjectiveRendersTemplate(t *testing.T) {
-	// Empty objective should still produce a usable soul.md so callers can
+	// Empty objective should still produce a usable SOUL.md so callers can
 	// fall back to "you have no specific objective" agents in dev. CRD-level
 	// validation enforces non-empty in production.
 	out, err := RenderSoul("")

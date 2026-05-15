@@ -133,7 +133,7 @@ func TestSeedHostFiles_FreshAgent(t *testing.T) {
 	soul := HostSoulPath(cfg, "quant")
 	body, err := os.ReadFile(soul)
 	if err != nil {
-		t.Fatalf("read soul.md: %v", err)
+		t.Fatalf("read SOUL.md: %v", err)
 	}
 	if !strings.Contains(string(body), "You are a chain analyst") {
 		t.Error("rendered soul missing operator objective")
@@ -150,7 +150,7 @@ func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir}
 
-	// Pretend the agent has already self-edited its soul.md.
+	// Pretend the agent has already self-edited its SOUL.md.
 	if err := os.MkdirAll(filepath.Dir(HostSoulPath(cfg, "quant")), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {
 		t.Fatalf("SeedHostFiles: %v", err)
 	}
 	if wrote {
-		t.Error("expected soulWritten=false because soul.md already exists")
+		t.Error("expected soulWritten=false because SOUL.md already exists")
 	}
 
 	body, err := os.ReadFile(HostSoulPath(cfg, "quant"))
@@ -176,7 +176,40 @@ func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(body) != string(custom) {
-		t.Errorf("agent's soul.md was clobbered: got %q", string(body))
+		t.Errorf("agent's SOUL.md was clobbered: got %q", string(body))
+	}
+}
+
+func TestSeedHostFiles_MigratesLegacyLowercaseSoul(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{DataDir: dir}
+
+	if err := os.MkdirAll(filepath.Dir(HostLegacySoulPath(cfg, "quant")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte("# legacy lowercase identity")
+	if err := os.WriteFile(HostLegacySoulPath(cfg, "quant"), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wrote, err := SeedHostFiles(cfg, "quant",
+		[]string{"addresses"},
+		"This should not replace legacy identity",
+		SeedOptions{},
+	)
+	if err != nil {
+		t.Fatalf("SeedHostFiles: %v", err)
+	}
+	if !wrote {
+		t.Error("expected soulWritten=true when migrating legacy soul.md")
+	}
+
+	body, err := os.ReadFile(HostSoulPath(cfg, "quant"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != string(legacy) {
+		t.Errorf("legacy soul was not migrated verbatim: %q", string(body))
 	}
 }
 
@@ -306,7 +339,7 @@ func TestWriteSoul_ReplacesSymlinkWithoutTouchingTarget(t *testing.T) {
 	if info, err := os.Lstat(HostSoulPath(cfg, "quant")); err != nil {
 		t.Fatal(err)
 	} else if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("WriteSoul left soul.md as a symlink instead of atomically replacing it")
+		t.Fatal("WriteSoul left SOUL.md as a symlink instead of atomically replacing it")
 	}
 }
 

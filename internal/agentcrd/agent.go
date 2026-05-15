@@ -1,6 +1,6 @@
 // Package agentcrd contains host-side helpers for managing the obol.org/Agent
 // CRD: building a spec from CLI flags, seeding the per-agent skills dir +
-// soul.md on the host (which becomes the data PVC inside the cluster), and
+// SOUL.md on the host (which becomes the data PVC inside the cluster), and
 // thin wrappers around kubectl apply/get/delete. The in-cluster reconciler
 // in internal/serviceoffercontroller is the source of truth for the
 // resulting K8s primitives; this package is just the host-side seam.
@@ -33,7 +33,7 @@ func Namespace(name string) string {
 
 // HostHomePath is where the agent's .hermes data lives on the host. The
 // cluster mounts this into the Hermes pod via hostPath; writing
-// soul.md/skills here puts them inside the pod automatically.
+// SOUL.md/skills here puts them inside the pod automatically.
 func HostHomePath(cfg *config.Config, name string) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
 	return filepath.Join(cfg.DataDir, Namespace(name), desc.DataPVCName, desc.HomeDir)
@@ -45,14 +45,22 @@ func HostSkillsPath(cfg *config.Config, name string) string {
 	return filepath.Join(HostHomePath(cfg, name), "obol-skills")
 }
 
-// HostSoulPath is where the seeded soul.md lives.
+// HostSoulPath is where the seeded Hermes identity file lives. Hermes reads
+// uppercase SOUL.md from HERMES_HOME, so keep this path aligned with upstream
+// Hermes profile semantics.
 func HostSoulPath(cfg *config.Config, name string) string {
+	return filepath.Join(HostHomePath(cfg, name), "SOUL.md")
+}
+
+// HostLegacySoulPath is the pre-profile seed path used before Hermes profile
+// casing was aligned. It is read during migration only.
+func HostLegacySoulPath(cfg *config.Config, name string) string {
 	return filepath.Join(HostHomePath(cfg, name), "soul.md")
 }
 
 // SeedOptions controls how host-side seed data is written.
 type SeedOptions struct {
-	// OverwriteSoul forces a soul.md rewrite even if one already exists.
+	// OverwriteSoul forces a SOUL.md rewrite even if one already exists.
 	// Default false: agent-owned after first reconcile.
 	OverwriteSoul bool
 	// ExactSkills removes any previously seeded skill dirs not present in the
@@ -60,11 +68,11 @@ type SeedOptions struct {
 	ExactSkills bool
 }
 
-// SeedHostFiles writes the chosen skill subset and seeds soul.md on the host
-// data path. soul.md is only written when missing (or when OverwriteSoul is
+// SeedHostFiles writes the chosen skill subset and seeds SOUL.md on the host
+// data path. SOUL.md is only written when missing (or when OverwriteSoul is
 // true).
 //
-// Returns whether soul.md was written this call so callers can report the
+// Returns whether SOUL.md was written this call so callers can report the
 // difference between "fresh agent" and "existing agent, skills resynced".
 func SeedHostFiles(cfg *config.Config, name string, skills []string, objective string, opts SeedOptions) (soulWritten bool, err error) {
 	if opts.ExactSkills {
@@ -79,47 +87,103 @@ func SeedHostFiles(cfg *config.Config, name string, skills []string, objective s
 	return WriteSoul(cfg, name, objective, opts.OverwriteSoul)
 }
 
-// WriteSoul renders and writes soul.md for the named agent. When overwrite is
-// false, an existing soul.md is preserved and the return value is false.
+// WriteSoul renders and writes SOUL.md for the named agent. When overwrite is
+// false, an existing SOUL.md is preserved and the return value is false.
 func WriteSoul(cfg *config.Config, name, objective string, overwrite bool) (bool, error) {
 	soulPath := HostSoulPath(cfg, name)
 	if _, statErr := os.Lstat(soulPath); statErr == nil {
-		if !overwrite {
+		if !overwrite && pathHasExactBase(soulPath) {
 			return false, nil
 		}
 	} else if !os.IsNotExist(statErr) {
-		return false, fmt.Errorf("stat soul.md: %w", statErr)
+		return false, fmt.Errorf("stat SOUL.md: %w", statErr)
+	}
+
+	if !overwrite {
+		copied, err := copyLegacySoulIfPresent(cfg, name, soulPath)
+		if err != nil {
+			return false, err
+		}
+		if copied {
+			return true, nil
+		}
 	}
 
 	rendered, err := agentruntime.RenderSoul(objective)
 	if err != nil {
 		return false, fmt.Errorf("render soul: %w", err)
 	}
-	soulDir := filepath.Dir(soulPath)
+	if err := writeSoulFileAtomically(soulPath, []byte(rendered)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func pathHasExactBase(path string) bool {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return true
+	}
+	base := filepath.Base(path)
+	for _, entry := range entries {
+		if entry.Name() == base {
+			return true
+		}
+	}
+	return false
+}
+
+func copyLegacySoulIfPresent(cfg *config.Config, name, soulPath string) (bool, error) {
+	legacyPath := HostLegacySoulPath(cfg, name)
+	if legacyPath == soulPath {
+		return false, nil
+	}
+	info, err := os.Lstat(legacyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat legacy soul.md: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
+	}
+	body, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return false, fmt.Errorf("read legacy soul.md: %w", err)
+	}
+	if err := writeSoulFileAtomically(soulPath, body); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func writeSoulFileAtomically(path string, body []byte) error {
+	soulDir := filepath.Dir(path)
 	if err := os.MkdirAll(soulDir, 0o755); err != nil {
-		return false, fmt.Errorf("create home dir: %w", err)
+		return fmt.Errorf("create home dir: %w", err)
 	}
 	tmp, err := os.CreateTemp(soulDir, ".soul-*.tmp")
 	if err != nil {
-		return false, fmt.Errorf("create temp soul.md: %w", err)
+		return fmt.Errorf("create temp SOUL.md: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return false, fmt.Errorf("chmod temp soul.md: %w", err)
+		return fmt.Errorf("chmod temp SOUL.md: %w", err)
 	}
-	if _, err := tmp.WriteString(rendered); err != nil {
+	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
-		return false, fmt.Errorf("write temp soul.md: %w", err)
+		return fmt.Errorf("write temp SOUL.md: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("close temp soul.md: %w", err)
+		return fmt.Errorf("close temp SOUL.md: %w", err)
 	}
-	if err := os.Rename(tmpPath, soulPath); err != nil {
-		return false, fmt.Errorf("install soul.md: %w", err)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("install SOUL.md: %w", err)
 	}
-	return true, nil
+	return nil
 }
 
 func syncHostSkillsExact(dst string, names []string) error {
