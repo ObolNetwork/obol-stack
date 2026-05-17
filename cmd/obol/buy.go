@@ -23,7 +23,6 @@ const (
 	hermesPython    = "/opt/hermes/.venv/bin/python3"
 	hermesBuyPyPath = "/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
 	defaultBuyName  = "default-paid"
-	usdcDecimals    = 6
 )
 
 func buyCommand(cfg *config.Config) *cli.Command {
@@ -57,7 +56,9 @@ Examples:
 	obol buy inference my-buy --seller https://seller.example/services/x \
 	                     --model qwen3.5:9b --expected-agent-id 42 --budget 1
 	obol buy inference --seller https://seller.example/services/x \
-	                     --model qwen3.5:9b --no-verify-identity --budget 1`,
+	                     --model qwen3.5:9b --no-verify-identity --budget 1
+	obol buy inference --seller https://inference.v1337.org/services/aeon \
+	                     --model aeon --no-verify-identity --budget 0.023 --token OBOL`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "seller",
@@ -71,8 +72,13 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:     "budget",
-				Usage:    "Spending cap in USDC (e.g. \"10\" for 10 USDC). Converted to micro-units before passing to the agent; current host-side preflight supports USDC-priced sellers only.",
+				Usage:    "Spending cap in the payment token (e.g. \"10\" for 10 USDC, or \"0.023\" for 0.023 OBOL). Converted to base units before passing to the agent.",
 				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "token",
+				Usage: fmt.Sprintf("Payment token to use (default \"USDC\"). Supported: %s. Must match the seller's priced asset.", strings.Join(x402verifier.SupportedTokens(), ", ")),
+				Value: "USDC",
 			},
 			&cli.IntFlag{
 				Name:  "expected-agent-id",
@@ -121,7 +127,8 @@ Examples:
 				return errors.New("--seller is empty and no DefaultBuySellerURL is configured")
 			}
 
-			budgetMicro, err := usdcToMicroUnits(cmd.String("budget"))
+			token := strings.ToUpper(strings.TrimSpace(cmd.String("token")))
+			budgetBase, err := budgetToBaseUnits(cmd.String("budget"), token)
 			if err != nil {
 				return err
 			}
@@ -131,7 +138,11 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("pricing pre-flight: %w", err)
 			}
-			if err := buy.ValidateBudgetAgainstPricing(budgetMicro, pricing); err != nil {
+
+			if err := buy.ValidateTokenAgainstPricing(token, pricing); err != nil {
+				return err
+			}
+			if err := buy.ValidateBudgetAgainstPricing(budgetBase, pricing); err != nil {
 				return err
 			}
 
@@ -160,7 +171,7 @@ Examples:
 				Name:            name,
 				Seller:          seller,
 				Model:           cmd.String("model"),
-				BudgetMicro:     budgetMicro,
+				BudgetMicro:     budgetBase,
 				AutoRefill:      cmd.Bool("auto-refill"),
 				RefillThreshold: cmd.Int("refill-threshold"),
 				RefillCount:     cmd.Int("refill-count"),
@@ -211,14 +222,15 @@ func buildBuyPyArgv(opts buyPyOptions) []string {
 	return argv
 }
 
-// usdcToMicroUnits parses a human USDC amount (e.g. "10", "0.5") and returns
-// the equivalent in 6-decimal micro-units as a base-10 integer string. The
-// result is passed verbatim to buy.py's --budget flag.
+// budgetToBaseUnits parses a human-readable token amount (e.g. "10" for 10
+// USDC, "0.023" for 0.023 OBOL) and returns the equivalent in atomic base
+// units as a base-10 integer string. The token name is matched against the
+// x402 token registry to determine the correct decimal precision.
 //
 // Uses big.Rat so we don't lose precision on fractional amounts. Rejects
-// negatives and any value that isn't an integral number of micro-units
-// (e.g. "0.0000001" — finer than USDC's smallest denomination).
-func usdcToMicroUnits(amount string) (string, error) {
+// negatives and any value that isn't an integral number of base units (i.e.
+// finer than the token's smallest denomination).
+func budgetToBaseUnits(amount, token string) (string, error) {
 	s := strings.TrimSpace(amount)
 	if s == "" {
 		return "", errors.New("--budget is empty")
@@ -231,10 +243,25 @@ func usdcToMicroUnits(amount string) (string, error) {
 		return "", fmt.Errorf("--budget %q must be positive", amount)
 	}
 
-	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(usdcDecimals), nil))
-	micro := new(big.Rat).Mul(r, scale)
-	if !micro.IsInt() {
-		return "", fmt.Errorf("--budget %q has more precision than USDC supports (%d decimals)", amount, usdcDecimals)
+	tok := strings.ToUpper(strings.TrimSpace(token))
+	if tok == "" {
+		tok = "USDC"
 	}
-	return micro.Num().String(), nil
+
+	// Look up decimals from any chain the token is registered on — the decimal
+	// count is the same across all chains for a given token symbol.
+	chains := x402verifier.ChainsForToken(tok)
+	if len(chains) == 0 {
+		supported := strings.Join(x402verifier.SupportedTokens(), ", ")
+		return "", fmt.Errorf("--token %q is not a known payment token; supported tokens: %s", token, supported)
+	}
+	entry, _ := x402verifier.ResolveToken(tok, chains[0])
+	decimals := entry.Decimals
+
+	scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+	base := new(big.Rat).Mul(r, scale)
+	if !base.IsInt() {
+		return "", fmt.Errorf("--budget %q has more precision than %s supports (%d decimals)", amount, tok, decimals)
+	}
+	return base.Num().String(), nil
 }
