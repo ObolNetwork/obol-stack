@@ -68,6 +68,59 @@ func TestDecodeAgentJSON_RejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestPickAgentDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured []string
+		wantModel  string
+		wantErr    bool
+	}{
+		{
+			name:       "concrete paid entry at head wins",
+			configured: []string{"paid/aeon", "qwen36-deep", "paid/*"},
+			wantModel:  "paid/aeon",
+		},
+		{
+			name:       "wildcard skipped, falls through to unpaid",
+			configured: []string{"paid/*", "qwen36-deep"},
+			wantModel:  "qwen36-deep",
+		},
+		{
+			name:       "wildcard-only list is an error",
+			configured: []string{"paid/*"},
+			wantErr:    true,
+		},
+		{
+			name:       "concrete paid entry is the only entry",
+			configured: []string{"paid/aeon"},
+			wantModel:  "paid/aeon",
+		},
+		{
+			name:       "empty list is an error",
+			configured: []string{},
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := pickAgentDefault(tt.configured)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got model %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.wantModel {
+				t.Errorf("pickAgentDefault = %q, want %q", got, tt.wantModel)
+			}
+		})
+	}
+}
+
 func TestSellAgentCommand_FlagShape(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := sellCommand(cfg)
