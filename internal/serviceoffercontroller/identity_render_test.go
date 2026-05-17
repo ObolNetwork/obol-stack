@@ -191,3 +191,60 @@ func TestSeedIdentityFromOffers_NoAgentIDReturnsNil(t *testing.T) {
 		t.Errorf("seed = %+v, want nil when no offer has agentId", seed)
 	}
 }
+
+// TestBuildIdentityRegistrationDocument_DescriptionPrecedence pins the
+// operator > inference-default > generic-default ordering. Regression test
+// for the case where an explicit spec.registration.description on an
+// inference ServiceOffer was being overwritten by the auto-generated
+// "<model> inference via x402 micropayments" string.
+func TestBuildIdentityRegistrationDocument_DescriptionPrecedence(t *testing.T) {
+	id := defaultIdentity("1")
+
+	cases := []struct {
+		name    string
+		mutate  func(*monetizeapi.ServiceOffer)
+		wantDoc string
+	}{
+		{
+			name: "operator description wins on inference offer",
+			mutate: func(o *monetizeapi.ServiceOffer) {
+				o.Spec.Type = "inference"
+				o.Spec.Model.Name = "aeon-ultimate"
+				o.Spec.Registration.Description = "Uncensored Qwen3.6-27B abliteration on NVIDIA GB10"
+			},
+			wantDoc: "Uncensored Qwen3.6-27B abliteration on NVIDIA GB10",
+		},
+		{
+			name: "inference fallback fires when description empty",
+			mutate: func(o *monetizeapi.ServiceOffer) {
+				o.Spec.Type = "inference"
+				o.Spec.Model.Name = "aeon-ultimate"
+				o.Spec.Registration.Description = ""
+			},
+			wantDoc: "aeon-ultimate inference via x402 micropayments",
+		},
+		{
+			name: "generic fallback when no description and not inference",
+			mutate: func(o *monetizeapi.ServiceOffer) {
+				o.Spec.Type = "http"
+				o.Spec.Registration.Description = ""
+			},
+			wantDoc: "x402 payment-gated http service: svc-a",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			offer := readyOffer("svc-a")
+			tc.mutate(offer)
+			doc := BuildIdentityRegistrationDocument(IdentityRegistrationView{
+				Identity: id,
+				Offers:   []*monetizeapi.ServiceOffer{offer},
+				BaseURL:  "https://example.tunnel.test",
+			})
+			if doc.Description != tc.wantDoc {
+				t.Errorf("Description = %q, want %q", doc.Description, tc.wantDoc)
+			}
+		})
+	}
+}

@@ -80,12 +80,19 @@ func identityDocumentMetadata(identity *monetizeapi.AgentIdentity, offers []*mon
 	}
 	owner := selectRegistrationOwner(offers)
 	name := defaultString(owner.Spec.Registration.Name, owner.Name)
+	// Operator-supplied description wins. Only fall back to a controller-
+	// generated default when the offer left Spec.Registration.Description
+	// empty. The inference-typed default is more specific (names the model),
+	// so it preempts the generic default — but neither overrides an explicit
+	// operator value. Mirrors the same precedence in render.go's
+	// buildActiveRegistrationDocument.
 	description := owner.Spec.Registration.Description
 	if description == "" {
-		description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
-	}
-	if owner.IsInference() && owner.Spec.Model.Name != "" {
-		description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		if owner.IsInference() && owner.Spec.Model.Name != "" {
+			description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
+		} else {
+			description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
+		}
 	}
 	image := owner.Spec.Registration.Image
 	if image == "" {
