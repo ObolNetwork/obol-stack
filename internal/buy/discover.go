@@ -227,11 +227,14 @@ func VerifySellerEndpoint(reg *erc8004.AgentRegistration, sellerURL string) erro
 	return fmt.Errorf("seller endpoint mismatch: requested %s, registration advertises [%s]", want, strings.Join(advertised, ", "))
 }
 
-// ValidateBudgetAgainstPricing rejects budgets smaller than one request price.
-// buy.py currently rounds `budget // price` up to at least one auth; the host
-// CLI advertises --budget as a spending cap, so we fail early instead of
-// silently overspending the requested cap.
-func ValidateBudgetAgainstPricing(budgetMicro string, pricing *PricingResponse) error {
+// ValidateTokenAgainstPricing checks that the requested --token matches the
+// seller's priced asset. When there is a mismatch it returns a structured
+// error that names both the requested token and the seller's required asset,
+// and suggests the correct --token value when the asset address is known.
+//
+// Call this before ValidateBudgetAgainstPricing so the caller sees a clear
+// token-mismatch error instead of a confusing budget-validation failure.
+func ValidateTokenAgainstPricing(token string, pricing *PricingResponse) error {
 	payment, err := firstPaymentOption(pricing)
 	if err != nil {
 		return err
@@ -241,17 +244,67 @@ func ValidateBudgetAgainstPricing(budgetMicro string, pricing *PricingResponse) 
 	if err != nil {
 		return fmt.Errorf("resolve payment network %q: %w", payment.Network, err)
 	}
-	canonicalUSDC, ok := internalx402.ResolveToken("USDC", networkName)
+
+	tok := strings.ToUpper(strings.TrimSpace(token))
+	requested, ok := internalx402.ResolveToken(tok, networkName)
 	if !ok {
-		return fmt.Errorf("host-side --budget currently supports only USDC-priced sellers; no canonical USDC metadata is configured for %s", payment.Network)
-	}
-	if asset := strings.TrimSpace(payment.Asset); asset != "" && !strings.EqualFold(asset, canonicalUSDC.Address) {
-		return fmt.Errorf("host-side --budget currently supports only USDC-priced sellers; seller requires asset %s on %s", asset, payment.Network)
+		supported := strings.Join(internalx402.TokensOnChain(networkName), ", ")
+		return fmt.Errorf("--token %s is not available on network %s; tokens available on this network: %s", tok, payment.Network, supported)
 	}
 
-	budget, ok := new(big.Int).SetString(strings.TrimSpace(budgetMicro), 10)
+	sellerAsset := strings.TrimSpace(payment.Asset)
+	if sellerAsset != "" && !strings.EqualFold(sellerAsset, requested.Address) {
+		// Find which registered token matches the seller's asset address.
+		suggestion := ""
+		for _, sym := range internalx402.SupportedTokens() {
+			if sym == tok {
+				continue
+			}
+			if entry, ok2 := internalx402.ResolveToken(sym, networkName); ok2 {
+				if strings.EqualFold(entry.Address, sellerAsset) {
+					suggestion = "; retry with --token " + sym
+					break
+				}
+			}
+		}
+		return fmt.Errorf("--token %s selected, but seller requires asset %s (%s) on %s%s",
+			tok, sellerAsset, tokenSymbolForAsset(sellerAsset, networkName), payment.Network, suggestion)
+	}
+	return nil
+}
+
+// tokenSymbolForAsset returns the symbol of the registered token whose address
+// matches assetAddr on chainName, or a shortened address when no match is found.
+func tokenSymbolForAsset(assetAddr, chainName string) string {
+	for _, sym := range internalx402.SupportedTokens() {
+		if entry, ok := internalx402.ResolveToken(sym, chainName); ok {
+			if strings.EqualFold(entry.Address, assetAddr) {
+				return sym
+			}
+		}
+	}
+	if len(assetAddr) > 10 {
+		return assetAddr[:6] + "…" + assetAddr[len(assetAddr)-4:]
+	}
+	return assetAddr
+}
+
+// ValidateBudgetAgainstPricing rejects budgets smaller than one request price.
+// buy.py currently rounds `budget // price` up to at least one auth; the host
+// CLI advertises --budget as a spending cap, so we fail early instead of
+// silently overspending the requested cap.
+//
+// Call ValidateTokenAgainstPricing first; this function assumes the token has
+// already been validated against the seller's priced asset.
+func ValidateBudgetAgainstPricing(budgetBase string, pricing *PricingResponse) error {
+	payment, err := firstPaymentOption(pricing)
+	if err != nil {
+		return err
+	}
+
+	budget, ok := new(big.Int).SetString(strings.TrimSpace(budgetBase), 10)
 	if !ok || budget.Sign() <= 0 {
-		return fmt.Errorf("invalid budget micro-units %q", budgetMicro)
+		return fmt.Errorf("invalid budget base-units %q", budgetBase)
 	}
 
 	priceRaw := payment.requiredAmount()
