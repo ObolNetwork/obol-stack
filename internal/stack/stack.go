@@ -1369,14 +1369,13 @@ func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte 
 
 // reclaimLeakedDevK3dNetworks force-disconnects pull-through registry-mirror
 // containers from any orphaned `k3d-obol-stack-*` Docker networks and then
-// removes the network. Only runs when OBOL_DEVELOPMENT=true, because the
-// mirror containers (k3d-obol-{docker,ghcr,quay}-io.localhost) are only
-// created in development mode and they're the reason `k3d cluster delete`
-// can't free the network on a dev box.
+// removes the network. The mirror containers (k3d-obol-{docker,ghcr,quay}-
+// io.localhost) are created for all users by default (not just dev mode) and
+// are the reason `k3d cluster delete` can't free the network on its own.
 //
 // Each `k3d cluster create` reserves a /16 from Docker's predefined
 // 172.16.0.0/12 pool (~16 networks). Without reclaiming these on purge,
-// roughly sixteen dev cycles exhaust the pool and every subsequent
+// roughly sixteen stack cycles exhaust the pool and every subsequent
 // cluster create fails with "all predefined address pools have been
 // fully subnetted".
 //
@@ -1386,7 +1385,7 @@ func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte 
 // `obol stack up`, so disconnecting them here is non-destructive for the
 // cache.
 func reclaimLeakedDevK3dNetworks(u *ui.UI) {
-	if os.Getenv("OBOL_DEVELOPMENT") != "true" {
+	if os.Getenv(disableRegistryCacheEnvVar) == "true" || os.Getenv(disableRegistryCacheEnvVar) == "1" {
 		return
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

@@ -103,18 +103,28 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		return nil, err
 	}
 
-	// Ensure the dev registry caches are running on every Up, in BOTH the
-	// existing-cluster and fresh-create branches. `k3d cluster start` does
-	// not auto-restart standalone registry containers attached via
-	// `--registry-use` at create time — it only starts the cluster's own
-	// nodes. Without this call, every retry after a `cluster stop` (or after
-	// the failure-recovery Down() call in syncDefaults) falls back to direct
-	// upstream pulls and re-fetches every image, costing minutes per
+	// Ensure the pull-through registry caches are running on every Up, in
+	// BOTH the existing-cluster and fresh-create branches. `k3d cluster
+	// start` does not auto-restart standalone registry containers attached
+	// via `--registry-use` at create time — it only starts the cluster's
+	// own nodes. Without this call, every retry after a `cluster stop` (or
+	// after the failure-recovery Down() call in syncDefaults) falls back to
+	// direct upstream pulls and re-fetches every image, costing minutes per
 	// attempt.
-	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		setup, setupErr := ensureDevRegistries(cfg, u)
+	//
+	// Pull-through caches (docker.io, ghcr.io, quay.io) are ON by default
+	// for all users. The local push target (localhost:54103) is only started
+	// in OBOL_DEVELOPMENT=true mode — it is used by `just dev-frontend` for
+	// fast layered-diff reloads and is not needed by regular installs.
+	//
+	// Set OBOL_DISABLE_REGISTRY_CACHE=true to skip all cache containers
+	// (e.g. hosts behind a corporate proxy with their own caching, or
+	// environments with tight disk constraints).
+	devMode := os.Getenv("OBOL_DEVELOPMENT") == "true"
+	{
+		setup, setupErr := ensureRegistryCaches(cfg, u, devMode)
 		if setupErr != nil {
-			u.Warnf("Dev registry cache unavailable, falling back to direct upstream pulls: %v", setupErr)
+			u.Warnf("Registry cache unavailable, falling back to direct upstream pulls: %v", setupErr)
 		} else {
 			registrySetup = setup
 		}

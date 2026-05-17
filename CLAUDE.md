@@ -189,18 +189,27 @@ k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-
 
 **Local access**: On macOS, port 80 is privileged and may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`) for local browser and curl access. Port 8080 maps to the same Traefik load balancer as port 80.
 
-### Dev Registry Cache
+### Registry Cache
 
-When `OBOL_DEVELOPMENT=true`, `obol stack up` creates pull-through k3d registry caches and a local push target, and wires new clusters to use them:
+`obol stack up` creates pull-through k3d registry caches for all users by default and wires new clusters to use them. The second `obol stack up` on the same host pulls image layers from the local cache instead of the internet, cutting cold-start time from ~10 min to <2 min for large images like LiteLLM.
+
+#### Pull-through caches (default for all installs)
 
 - `docker.io` -> `k3d-obol-docker-io.localhost:54100` (pull-through)
 - `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101` (pull-through)
 - `quay.io` -> `k3d-obol-quay-io.localhost:54102` (pull-through)
+
+Cache containers are tiny and persist across `obol stack down / up` cycles — layers cached on first pull are reused on every subsequent cluster create. Cache data is stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
+
+**Opt-out**: use `--no-registry-cache` on `obol stack up` (or set `OBOL_DISABLE_REGISTRY_CACHE=true`) to skip all cache containers. Useful on hosts behind a corporate proxy with their own caching, or where disk space is constrained (~0–2 GB per cache container, only what has been pulled).
+
+#### Local push target (OBOL_DEVELOPMENT=true only)
+
 - `localhost:54103` -> `k3d-obol-local.localhost:54103` (local push target, no upstream proxy)
 
-The generated k3d registry config is written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data is stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
+The local push target lets `just dev-frontend` swap layered diffs into the cluster via `docker push localhost:54103/...` (and a deployment image of `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip. It is only started when `OBOL_DEVELOPMENT=true`.
 
-The local push target lets `just dev-frontend` swap layered diffs into the cluster via `docker push localhost:54103/...` (and a deployment image of `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip.
+The generated k3d registry config is written to `$OBOL_CONFIG_DIR/registries.yaml`.
 
 Important caveats:
 
