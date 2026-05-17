@@ -96,7 +96,7 @@ func TestVerifyAgentID(t *testing.T) {
 		{name: "match first", reg: multi, expected: 41},
 		{name: "match second", reg: multi, expected: 42},
 		{name: "mismatch", reg: multi, expected: 99, wantErrSubs: "expected 99"},
-		{name: "empty registrations", reg: &erc8004.AgentRegistration{}, expected: 42, wantErrSubs: "no on-chain registrations"},
+		{name: "empty registrations", reg: &erc8004.AgentRegistration{}, expected: 42, wantErrSubs: "no `registrations[]` field"},
 		{name: "expected zero", reg: multi, expected: 0, wantErrSubs: "expected agentId is 0"},
 		{name: "nil registration", reg: nil, expected: 42, wantErrSubs: "nil registration"},
 	}
@@ -145,6 +145,25 @@ func TestVerifyAgentIDForPricing(t *testing.T) {
 	pricing.Accepts[0].Network = "base"
 	if err := VerifyAgentIDForPricing(reg, 42, pricing); err == nil || !strings.Contains(err.Error(), erc8004.Base.CAIP10Registry()) {
 		t.Fatalf("VerifyAgentIDForPricing(mismatch) err = %v, want base registry mismatch", err)
+	}
+}
+
+func TestVerifyAgentIDForPricing_EmptyRegistrations(t *testing.T) {
+	// Seller returned a valid registration document but with no registrations[]
+	// (e.g. they never ran `obol sell register`, or are on an older stack version).
+	// The error must explain the situation and hint at --no-verify-identity.
+	reg := &erc8004.AgentRegistration{}
+	pricing := &PricingResponse{Accepts: []PaymentOption{{Network: "base-sepolia", Amount: "1000"}}}
+
+	err := VerifyAgentIDForPricing(reg, 42, pricing)
+	if err == nil {
+		t.Fatal("VerifyAgentIDForPricing(empty regs) = nil, want error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"no `registrations[]` field", "--no-verify-identity"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing expected substring %q", msg, want)
+		}
 	}
 }
 

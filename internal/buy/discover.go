@@ -276,7 +276,10 @@ func verifyAgentID(reg *erc8004.AgentRegistration, expected int64, expectedRegis
 		return errors.New("expected agentId is 0; default seller is not yet provisioned — pass --seller and --no-verify-identity to bypass, or set DefaultBuySellerAgentID")
 	}
 	if len(reg.Registrations) == 0 {
-		return errors.New("registration document has no on-chain registrations")
+		return errors.New("seller didn't publish on-chain identity: agent-registration.json has no `registrations[]` field.\n" +
+			"This usually means: (a) the seller didn't run `obol sell register` on-chain, or\n" +
+			"(b) the seller is on an older obol-stack version that pre-dates the AgentIdentity CRD.\n" +
+			"Re-run with --no-verify-identity to buy without identity verification, or contact the seller to publish their agentId.")
 	}
 	for _, r := range reg.Registrations {
 		if r.AgentID != expected {
