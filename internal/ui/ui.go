@@ -83,6 +83,15 @@ func NewWithAllOptions(verbose, quiet bool, output OutputMode) *UI {
 	return u
 }
 
+// NewForTest creates a UI instance that writes to the supplied writers.
+// Use bytes.Buffer for stdout/stderr to capture output in unit tests.
+func NewForTest(stdout, stderr io.Writer) *UI {
+	return &UI{
+		stdout: stdout,
+		stderr: stderr,
+	}
+}
+
 // IsVerbose returns whether verbose mode is enabled.
 func (u *UI) IsVerbose() bool { return u.verbose }
 

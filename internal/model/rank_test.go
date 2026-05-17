@@ -121,3 +121,37 @@ func TestRank_Empty(t *testing.T) {
 		t.Fatalf("Rank(nil): got %q,%v, want empty,nil", primary, fallbacks)
 	}
 }
+
+func TestIsChatCapableModelName(t *testing.T) {
+	cases := []struct {
+		name      string
+		modelName string
+		want      bool
+	}{
+		// Wildcards are never chat-capable on their own
+		{"paid wildcard", "paid/*", false},
+		{"anthropic wildcard", "anthropic/*", false},
+		{"openai wildcard", "openai/*", false},
+		{"bare star", "*", false},
+
+		// Embedding-only models are not chat-capable
+		{"embed in name", "nomic-embed-text", false},
+		{"text-embedding prefix", "text-embedding-3-large", false},
+		{"EMBED uppercase", "NOMIC-EMBED-TEXT", false},
+
+		// Concrete chat models are chat-capable
+		{"local ollama model", "qwen3.5:4b", true},
+		{"anthropic prefixed", "anthropic/claude-sonnet-4-6", true},
+		{"openai prefixed", "openai/gpt-4o", true},
+		{"concrete paid model", "paid/aeon", true},
+		{"custom vllm model", "custom/qa-vllm/qwen36-fast", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isChatCapableModelName(tc.modelName)
+			if got != tc.want {
+				t.Fatalf("isChatCapableModelName(%q) = %v, want %v", tc.modelName, got, tc.want)
+			}
+		})
+	}
+}
