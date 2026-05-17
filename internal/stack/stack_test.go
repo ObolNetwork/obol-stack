@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"bytes"
 	"net"
 	"os"
 	"path/filepath"
@@ -968,5 +969,66 @@ func TestBuildAndImportLocalImages_SkipsK3dImportWhenCacheIsValid(t *testing.T) 
 	}
 	if strings.Contains(log, "docker build -f") {
 		t.Fatalf("expected cache hit to skip docker build, log:\n%s", log)
+	}
+}
+
+// newCaptureUI returns a UI that writes stdout and stderr into the returned
+// buffers. Warn → stderr, Dim/Blank/Info → stdout.
+func newCaptureUI() (*ui.UI, *bytes.Buffer, *bytes.Buffer) {
+	var stdout, stderr bytes.Buffer
+	return ui.NewForTest(&stdout, &stderr), &stdout, &stderr
+}
+
+// TestWarnIfNoChatModel_EmittsWarnWhenNoModels verifies that the warn block
+// fires when chatModels is empty (all three detection branches found nothing).
+func TestWarnIfNoChatModel_EmitsWarnWhenNoModels(t *testing.T) {
+	u, stdout, stderr := newCaptureUI()
+	warnIfNoChatModel(nil, u)
+
+	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+		t.Fatalf("expected warn on stderr, got: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ollama pull") {
+		t.Fatalf("expected ollama pull hint on stdout, got: %q", stdout.String())
+	}
+}
+
+// TestWarnIfNoChatModel_SilentWhenModelsPresent verifies no warn is emitted
+// when at least one chat-capable model is already configured.
+func TestWarnIfNoChatModel_SilentWhenModelsPresent(t *testing.T) {
+	u, stdout, stderr := newCaptureUI()
+	warnIfNoChatModel([]string{"qwen3.5:4b"}, u)
+
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no output on stderr when models present, got: %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no output on stdout when models present, got: %q", stdout.String())
+	}
+}
+
+// TestWarnIfNoChatModel_SilentWhenConcretePaidModelPresent verifies that a
+// concrete paid/<model> entry (not just the wildcard) counts as chat-capable.
+func TestWarnIfNoChatModel_SilentWhenConcretePaidModelPresent(t *testing.T) {
+	u, _, stderr := newCaptureUI()
+	warnIfNoChatModel([]string{"paid/aeon"}, u)
+
+	if strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+		t.Fatalf("concrete paid/aeon should suppress warn, got: %q", stderr.String())
+	}
+}
+
+// TestWarnIfNoChatModel_EmitsWarnForWildcardOnly verifies that only the
+// "paid/*" wildcard in the model_list (no concrete entries) is not sufficient
+// to suppress the warning. ListChatCapableModels filters wildcards out, so
+// warnIfNoChatModel receives an empty slice in this scenario.
+func TestWarnIfNoChatModel_EmitsWarnForWildcardOnly(t *testing.T) {
+	// Simulate what ListChatCapableModels returns when the ConfigMap contains
+	// only "paid/*": isChatCapableModelName filters it out → empty slice.
+	u, _, stderr := newCaptureUI()
+	warnIfNoChatModel([]string{}, u)
+
+	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+		t.Fatalf("wildcard-only list should trigger warn, got: %q", stderr.String())
 	}
 }

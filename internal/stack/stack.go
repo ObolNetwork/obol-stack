@@ -656,6 +656,32 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 			u.Dim("  Run 'obol model setup' to configure manually.")
 		}
 	}
+
+	// --- Post-check: warn loudly when no chat-capable model is reachable ---
+	// All three detection branches (Ollama, local providers, cloud) may resolve
+	// nothing — e.g. Ollama not installed, no local vLLM, no API key in env.
+	// In that case Hermes boots with an empty model_list and 404s on every chat
+	// call, and the operator finds out only when they try to use the agent.
+	// Surface a clear, actionable message instead of a silent broken default.
+	if len(configured) == 0 {
+		chatModels, _ := model.ListChatCapableModels(cfg)
+		warnIfNoChatModel(chatModels, u)
+	}
+}
+
+// warnIfNoChatModel emits a loud, actionable prompt when chatModels is empty.
+// It is a pure function of its inputs so it can be unit-tested without a live
+// cluster or kubectl stub.
+func warnIfNoChatModel(chatModels []string, u *ui.UI) {
+	if len(chatModels) > 0 {
+		return
+	}
+	u.Blank()
+	u.Warn("No chat-capable LLM detected — Hermes will 404 on chat calls until one is configured.")
+	u.Dim("  Pick one:")
+	u.Dim("    ollama pull qwen3.5:4b                                         # local, ~3 GB")
+	u.Dim("    obol model setup custom --endpoint <url> --model <id>          # vLLM / llama.cpp / remote box")
+	u.Dim("    OPENAI_API_KEY=sk-… or ANTHROPIC_API_KEY=… then re-run stack up  # cloud")
 }
 
 // autoDetectLocalProviders scans well-known local inference ports
