@@ -427,9 +427,14 @@ func runAgentBackedDemo(
 
 // resolveDefaultAgentModel picks a model to pin onto a fresh Agent CR.
 // Walks the cluster's LiteLLM model_list (the same source `obol model
-// list` reads), drops the meta `paid/*` route, and returns the top
-// entry. The list is already in the operator's preferred order via
-// `obol model prefer`, so "first non-paid" is a meaningful default.
+// list` reads), drops the wildcard `paid/*` meta route, and returns the
+// top entry. The list is already in the operator's preferred order via
+// `obol model prefer`, so "first usable" is a meaningful default.
+//
+// Concrete entries like `paid/aeon` ARE valid: they route through the
+// x402-buyer sidecar to a purchased remote model. Only the literal
+// `paid/*` wildcard is skipped — that is a LiteLLM routing namespace
+// entry, not a model the agent can call by name.
 //
 // Returns an error if the cluster has no usable models — the caller
 // turns this into a clear "configure a model first" message rather than
@@ -439,10 +444,19 @@ func resolveDefaultAgentModel(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return pickAgentDefault(configured)
+}
+
+// pickAgentDefault is the pure filter-and-pick logic for resolveDefaultAgentModel,
+// extracted so it can be unit-tested without a live cluster.
+func pickAgentDefault(configured []string) (string, error) {
 	for _, name := range configured {
-		// Skip the paid/* meta route — it's a buyer-side namespace, not
-		// a model the agent can actually run inference on.
-		if strings.HasPrefix(name, "paid/") {
+		// Skip only the literal `paid/*` wildcard meta route — that entry is
+		// a LiteLLM routing namespace, not a concrete model the agent can call.
+		// Concrete purchased entries like `paid/aeon` are valid and should be
+		// returned when they're at the head of the rank (e.g. after
+		// `obol model prefer paid/aeon`).
+		if name == "paid/*" {
 			continue
 		}
 		return name, nil
