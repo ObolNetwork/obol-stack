@@ -412,6 +412,34 @@ type replayableX402Transport struct {
 	OnPaymentUnsettled PaymentCallback
 }
 
+// maxLogBodyBytes is the maximum number of bytes read from a response body for
+// structured log output. Truncation prevents huge bodies from flooding logs.
+const maxLogBodyBytes = 512
+
+// peekResponseBody reads up to maxLogBodyBytes from resp.Body for logging and
+// reassembles the full body (via a TeeReader drain) so the caller (ReverseProxy)
+// can still copy it to the client. The body is replaced in-place on resp.
+func peekResponseBody(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+
+	// Drain up to maxLogBodyBytes+1 bytes via a buffer, then prepend those
+	// bytes back using io.MultiReader so the rest of the body is still readable.
+	limitedBuf := new(bytes.Buffer)
+	_, _ = io.Copy(limitedBuf, io.LimitReader(resp.Body, maxLogBodyBytes+1))
+
+	preview := limitedBuf.Bytes()
+	// Reassemble: preview bytes + remainder of original body.
+	resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(preview), resp.Body))
+
+	s := string(preview)
+	if len(s) > maxLogBodyBytes {
+		s = s[:maxLogBodyBytes] + "…"
+	}
+	return s
+}
+
 func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Base == nil {
 		t.Base = http.DefaultTransport
@@ -426,9 +454,16 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	resp, err := t.Base.RoundTrip(firstReq)
 	if err != nil {
+		log.Printf("x402-buyer: outbound %s %s → transport error: %v", req.Method, req.URL, err)
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusPaymentRequired {
+		// Non-402 response on the probe request — pass through verbatim so the
+		// caller (LiteLLM) sees the real upstream status and body, not a
+		// remapped "Payment verification failed" generic error.
+		excerpt := peekResponseBody(resp)
+		log.Printf("x402-buyer: outbound %s %s → %d (no payment required) body=%q",
+			req.Method, req.URL, resp.StatusCode, excerpt)
 		return resp, nil
 	}
 
@@ -516,6 +551,8 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 
 	if err != nil {
 		releaseHeldPreSignedSpend(t.Signers, heldAuth)
+		log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → transport error after %s: %v",
+			req.Method, req.URL, duration.Round(time.Millisecond), err)
 		if t.OnPaymentFailure != nil {
 			t.OnPaymentFailure(PaymentEvent{
 				Type:      PaymentEventFailure,
@@ -530,9 +567,20 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 
 	if respRetry.StatusCode >= http.StatusBadRequest {
+		// Non-2xx after payment retry: release the held auth (not consumed) and
+		// pass the upstream status+body verbatim to the caller. This ensures the
+		// real upstream error (e.g. 403 Cloudflare WAF, 404, 500) reaches
+		// LiteLLM instead of being misclassified as "Payment verification failed".
+		excerpt := peekResponseBody(respRetry)
+		log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → %d after %s body=%q — passing through upstream error",
+			req.Method, req.URL, respRetry.StatusCode, duration.Round(time.Millisecond), excerpt)
 		releaseHeldPreSignedSpend(t.Signers, heldAuth)
 		return respRetry, nil
 	}
+
+	// 2xx — log the successful paid response.
+	log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → %d after %s",
+		req.Method, req.URL, respRetry.StatusCode, duration.Round(time.Millisecond))
 
 	if len(t.Signers) == 1 {
 		if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {
