@@ -440,6 +440,18 @@ func peekResponseBody(resp *http.Response) string {
 	return s
 }
 
+// sanitizeLogString strips control characters (including CR/LF) from values
+// that may originate from upstream HTTP requests or responses, preventing log
+// injection (CWE-117) when the strings are interpolated into log lines.
+func sanitizeLogString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, s)
+}
+
 func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Base == nil {
 		t.Base = http.DefaultTransport
@@ -454,7 +466,10 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	}
 	resp, err := t.Base.RoundTrip(firstReq)
 	if err != nil {
-		log.Printf("x402-buyer: outbound %s %s → transport error: %v", req.Method, req.URL, err)
+		log.Printf("x402-buyer: outbound %s %s → transport error: %s",
+			sanitizeLogString(req.Method),
+			sanitizeLogString(req.URL.String()),
+			sanitizeLogString(err.Error()))
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusPaymentRequired {
@@ -463,7 +478,9 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		// remapped "Payment verification failed" generic error.
 		excerpt := peekResponseBody(resp)
 		log.Printf("x402-buyer: outbound %s %s → %d (no payment required) body=%q",
-			req.Method, req.URL, resp.StatusCode, excerpt)
+			sanitizeLogString(req.Method),
+			sanitizeLogString(req.URL.String()),
+			resp.StatusCode, excerpt)
 		return resp, nil
 	}
 
@@ -551,8 +568,11 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 
 	if err != nil {
 		releaseHeldPreSignedSpend(t.Signers, heldAuth)
-		log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → transport error after %s: %v",
-			req.Method, req.URL, duration.Round(time.Millisecond), err)
+		log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → transport error after %s: %s",
+			sanitizeLogString(req.Method),
+			sanitizeLogString(req.URL.String()),
+			duration.Round(time.Millisecond),
+			sanitizeLogString(err.Error()))
 		if t.OnPaymentFailure != nil {
 			t.OnPaymentFailure(PaymentEvent{
 				Type:      PaymentEventFailure,
@@ -573,14 +593,18 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		// LiteLLM instead of being misclassified as "Payment verification failed".
 		excerpt := peekResponseBody(respRetry)
 		log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → %d after %s body=%q — passing through upstream error",
-			req.Method, req.URL, respRetry.StatusCode, duration.Round(time.Millisecond), excerpt)
+			sanitizeLogString(req.Method),
+			sanitizeLogString(req.URL.String()),
+			respRetry.StatusCode, duration.Round(time.Millisecond), excerpt)
 		releaseHeldPreSignedSpend(t.Signers, heldAuth)
 		return respRetry, nil
 	}
 
 	// 2xx — log the successful paid response.
 	log.Printf("x402-buyer: outbound %s %s (with X-PAYMENT) → %d after %s",
-		req.Method, req.URL, respRetry.StatusCode, duration.Round(time.Millisecond))
+		sanitizeLogString(req.Method),
+		sanitizeLogString(req.URL.String()),
+		respRetry.StatusCode, duration.Round(time.Millisecond))
 
 	if len(t.Signers) == 1 {
 		if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {

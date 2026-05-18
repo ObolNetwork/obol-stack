@@ -2162,3 +2162,71 @@ func TestUpstreamStatusPropagation(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeLogString(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "newline replaced",
+			input: "foo\nbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "carriage return replaced",
+			input: "foo\rbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "tab replaced",
+			input: "foo\tbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "null byte replaced",
+			input: "foo\x00bar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "escape replaced",
+			input: "foo\x1bbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "DEL replaced",
+			input: "foo\x7fbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "multiple control chars",
+			input: "\r\ninjected-log-entry\r\n",
+			want:  "__injected-log-entry__",
+		},
+		{
+			name:  "printable ASCII unchanged",
+			input: "GET /v1/chat/completions HTTP/1.1",
+			want:  "GET /v1/chat/completions HTTP/1.1",
+		},
+		{
+			name:  "UTF-8 letters unchanged",
+			input: "café résumé",
+			want:  "café résumé",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeLogString(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeLogString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
