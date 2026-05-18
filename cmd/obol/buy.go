@@ -72,7 +72,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:     "budget",
-				Usage:    "Spending cap in the payment token (e.g. \"10\" for 10 USDC, or \"0.023\" for 0.023 OBOL). Converted to base units before passing to the agent.",
+				Usage:    "Spending cap in the payment token (e.g. \"10\" for 10 USDC, or \"5\" for 5 OBOL). Converted to base units before passing to the agent.",
 				Required: true,
 			},
 			&cli.StringFlag{
