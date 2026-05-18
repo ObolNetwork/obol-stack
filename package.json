@@ -48,7 +48,7 @@
     "react-hook-form": "7.75.0",
     "react-toastify": "11.1.0",
     "shiki": "4.0.2",
-    "thread-stream": "4.0.0",
+    "thread-stream": "4.2.0",
     "value": "link:@sinclair/typebox/value",
     "viem": "2.48.11",
     "wagmi": "2.19.5"
