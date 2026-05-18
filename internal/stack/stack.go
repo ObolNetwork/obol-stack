@@ -677,11 +677,11 @@ func warnIfNoChatModel(chatModels []string, u *ui.UI) {
 		return
 	}
 	u.Blank()
-	u.Warn("No chat-capable LLM detected — Hermes will 404 on chat calls until one is configured.")
-	u.Dim("  Pick one:")
-	u.Dim("    ollama pull qwen3.5:4b                                         # local, ~3 GB")
-	u.Dim("    obol model setup custom --endpoint <url> --model <id>          # vLLM / llama.cpp / remote box")
-	u.Dim("    OPENAI_API_KEY=sk-… or ANTHROPIC_API_KEY=… then re-run stack up  # cloud")
+	u.Warn("No chat-capable model detected — Obol Agent will fail on chat calls until one is configured.")
+	u.Dim("  Pick an option to setup a model:")
+	u.Dim("    ollama pull qwen3.5:4b                                         # local, ~3 GB of RAM")
+	u.Dim("    obol model setup													# Choose a cloud LLM provider")
+	u.Dim("    obol model setup custom --endpoint <url> --model <id>          # Alternative vLLM / llama.cpp / remote box")
 }
 
 // autoDetectLocalProviders scans well-known local inference ports
