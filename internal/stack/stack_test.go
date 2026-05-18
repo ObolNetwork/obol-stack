@@ -1028,7 +1028,7 @@ func TestWarnIfNoChatModel_EmitsWarnForWildcardOnly(t *testing.T) {
 	u, _, stderr := newCaptureUI()
 	warnIfNoChatModel([]string{}, u)
 
-	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if !strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("wildcard-only list should trigger warn, got: %q", stderr.String())
 	}
 }
