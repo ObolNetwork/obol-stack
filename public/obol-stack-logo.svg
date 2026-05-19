@@ -1,24 +1,25 @@
 <svg viewBox="0 0 165 28" xmlns="http://www.w3.org/2000/svg" width="165" height="28">
   <!--
-    Obol Stack wordmark. Three layered parallelograms ("stack" mark) +
-    "Obol Stack" text in DM Sans. Single light fill (#d9eef3 = text-light
-    token from obol-ui). This SVG is the canonical source; the sibling
-    obol-stack-logo.png is a 3x raster of this file generated via
-    scripts/build-wordmark.html for consumers (e.g. the x402 verifier's
-    HTTP 402 HTML template, OG image generation) that need a bitmap.
+    Obol Stack wordmark. Three zigzagged identical parallelograms ("stack"
+    mark, geometry sourced from the brand SVG) + "Obol Stack" text in DM
+    Sans. Single light fill (#d9eef3 = text-light token from obol-ui). This
+    SVG is the canonical source; the sibling obol-stack-logo.png is a 3x
+    raster of this file generated via scripts/build-wordmark.html for
+    consumers (e.g. the x402 verifier's HTTP 402 HTML template, OG image
+    generation) that need a bitmap.
   -->
-  <g fill="#d9eef3">
-    <path d="M0 5 L36 5 L40 11 L4 11 Z" />
-    <path d="M6 13 L36 13 L40 19 L10 19 Z" />
-    <path d="M12 21 L36 21 L40 27 L16 27 Z" />
+  <g fill="#d9eef3" transform="translate(1, 0) scale(0.1657)">
+    <path d="M 189.751 48.141 L 36.393 48.141 L 82.61 0 L 233.868 0 Z" />
+    <path d="M 225.333 109.208 L 71.975 109.208 L 118.192 61.067 L 269.45 61.067 Z" />
+    <path d="M 152.746 168.855 L -0.613 168.855 L 45.605 120.714 L 196.862 120.714 Z" />
   </g>
   <text
-    x="52"
+    x="56"
     y="22"
     font-family="DM Sans, system-ui, -apple-system, sans-serif"
     font-weight="400"
     font-size="20"
     letter-spacing="-0.5"
     fill="#d9eef3"
-  >Obol<tspan font-weight="700" dx="2">Stack</tspan></text>
+  >Obol<tspan font-weight="700"> Stack</tspan></text>
 </svg>
