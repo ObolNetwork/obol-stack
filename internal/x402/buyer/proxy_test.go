@@ -2124,3 +2124,236 @@ func TestProxy_UserAgentOnPaidRequest(t *testing.T) {
 		t.Errorf("paid User-Agent = %q, want %q", capturedPaidUA, wantUA)
 	}
 }
+
+// TestUpstreamStatusPropagation exercises the pass-through behaviour added in
+// fix(x402-buyer): propagate upstream status/body and log every request.
+//
+// Evidence: during a live demo against inference.v1337.org the upstream
+// returned HTTP 403 + body "error code: 1010" (Cloudflare WAF) but LiteLLM
+// surfaced it as "ServiceUnavailableError: Payment verification failed" — a
+// misleading remapping that cost ~30 min of fruitless debugging. The sidecar
+// must forward non-402 non-2xx responses verbatim so the real error is visible.
+func TestUpstreamStatusPropagation(t *testing.T) {
+	// paymentRequiredBody is the 402 body the upstream emits on the probe request.
+	paymentRequiredBody := `{
+		"x402Version": 1,
+		"accepts": [{
+			"scheme": "exact",
+			"network": "base-sepolia",
+			"maxAmountRequired": "1000",
+			"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+			"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+		}]
+	}`
+
+	type upstreamBehaviour int
+	const (
+		// directStatus: upstream returns the given status immediately (no 402 handshake).
+		directStatus upstreamBehaviour = iota
+		// afterPayment: upstream first returns 402, then returns the given status when X-PAYMENT is present.
+		afterPayment
+	)
+
+	tests := []struct {
+		name         string
+		behaviour    upstreamBehaviour
+		upstreamCode int
+		upstreamBody string
+		wantCode     int
+		wantBodySub  string
+	}{
+		{
+			name:         "200 direct — forwarded as 200",
+			behaviour:    directStatus,
+			upstreamCode: http.StatusOK,
+			upstreamBody: `{"choices":[{"message":{"content":"ok"}}]}`,
+			wantCode:     http.StatusOK,
+			wantBodySub:  "ok",
+		},
+		{
+			name:         "403 direct (no payment) — forwarded as 403 with real body",
+			behaviour:    directStatus,
+			upstreamCode: http.StatusForbidden,
+			upstreamBody: "error code: 1010",
+			wantCode:     http.StatusForbidden,
+			wantBodySub:  "error code: 1010",
+		},
+		{
+			name:         "404 direct — forwarded as 404",
+			behaviour:    directStatus,
+			upstreamCode: http.StatusNotFound,
+			upstreamBody: "not found",
+			wantCode:     http.StatusNotFound,
+			wantBodySub:  "not found",
+		},
+		{
+			name:         "503 direct — forwarded as 503, NOT remapped",
+			behaviour:    directStatus,
+			upstreamCode: http.StatusServiceUnavailable,
+			upstreamBody: "upstream overloaded",
+			wantCode:     http.StatusServiceUnavailable,
+			wantBodySub:  "upstream overloaded",
+		},
+		{
+			name:         "200 after 402 payment — forwarded as 200",
+			behaviour:    afterPayment,
+			upstreamCode: http.StatusOK,
+			upstreamBody: `{"choices":[{"message":{"content":"paid ok"}}]}`,
+			wantCode:     http.StatusOK,
+			wantBodySub:  "paid ok",
+		},
+		{
+			name:         "403 after 402 payment (WAF block) — forwarded as 403 with real body",
+			behaviour:    afterPayment,
+			upstreamCode: http.StatusForbidden,
+			upstreamBody: "error code: 1010",
+			wantCode:     http.StatusForbidden,
+			wantBodySub:  "error code: 1010",
+		},
+		{
+			name:         "500 after 402 payment — forwarded as 500, NOT remapped",
+			behaviour:    afterPayment,
+			upstreamCode: http.StatusInternalServerError,
+			upstreamBody: "internal server error",
+			wantCode:     http.StatusInternalServerError,
+			wantBodySub:  "internal server error",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch tt.behaviour {
+				case directStatus:
+					w.WriteHeader(tt.upstreamCode)
+					fmt.Fprint(w, tt.upstreamBody)
+				case afterPayment:
+					if r.Header.Get("X-Payment") == "" {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusPaymentRequired)
+						fmt.Fprint(w, paymentRequiredBody)
+						return
+					}
+					if tt.upstreamCode == http.StatusOK {
+						w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString([]byte(
+							`{"success":true,"transaction":"0xtest","network":"base-sepolia","payer":"0xpayer"}`,
+						)))
+					}
+					w.WriteHeader(tt.upstreamCode)
+					fmt.Fprint(w, tt.upstreamBody)
+				}
+			}))
+			defer upstream.Close()
+
+			cfg := &Config{
+				Upstreams: map[string]UpstreamConfig{
+					"seller": {
+						URL:     upstream.URL,
+						Network: "base-sepolia",
+						PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+						Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+						Price:   "1000",
+					},
+				},
+			}
+			auths := AuthsFile{"seller": {makeAuth("0xsig-prop")}}
+
+			proxy, err := NewProxy(cfg, auths, nil)
+			if err != nil {
+				t.Fatalf("NewProxy: %v", err)
+			}
+
+			srv := httptest.NewServer(proxy)
+			defer srv.Close()
+
+			resp, err := http.Post(
+				srv.URL+"/upstream/seller/v1/chat/completions",
+				"application/json",
+				strings.NewReader(`{"model":"seller","messages":[{"role":"user","content":"hi"}]}`),
+			)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+
+			if resp.StatusCode != tt.wantCode {
+				t.Errorf("status = %d, want %d (body: %s)", resp.StatusCode, tt.wantCode, string(body))
+			}
+
+			if tt.wantBodySub != "" && !strings.Contains(string(body), tt.wantBodySub) {
+				t.Errorf("body %q does not contain %q", string(body), tt.wantBodySub)
+			}
+		})
+	}
+}
+
+func TestSanitizeLogString(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "newline replaced",
+			input: "foo\nbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "carriage return replaced",
+			input: "foo\rbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "tab replaced",
+			input: "foo\tbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "null byte replaced",
+			input: "foo\x00bar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "escape replaced",
+			input: "foo\x1bbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "DEL replaced",
+			input: "foo\x7fbar",
+			want:  "foo_bar",
+		},
+		{
+			name:  "multiple control chars",
+			input: "\r\ninjected-log-entry\r\n",
+			want:  "__injected-log-entry__",
+		},
+		{
+			name:  "printable ASCII unchanged",
+			input: "GET /v1/chat/completions HTTP/1.1",
+			want:  "GET /v1/chat/completions HTTP/1.1",
+		},
+		{
+			name:  "UTF-8 letters unchanged",
+			input: "café résumé",
+			want:  "café résumé",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeLogString(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeLogString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
