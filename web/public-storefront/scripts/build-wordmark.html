@@ -17,30 +17,28 @@
   <body>
     <div class="lockup">
       <!--
-        Obol Stack wordmark, reconstructed by hand from the existing 138×24
-        PNG. Three layered parallelograms (the "stack" mark) right-aligned,
-        stepping inward from top to bottom, plus DM Sans "Obol Stack" text.
-        Single light fill (#d9eef3 — same as text-light token) per design
-        review: it's one cohesive lockup, not mark-then-text two-tone.
+        Obol Stack wordmark. Three identical parallelograms (path data lifted
+        from the brand source in obol-stack-front-end/public/tmp.xml) scaled
+        from the source 269×169 viewBox down to ~45×28, then offset 1px right
+        so the bottom bar's negative-x is visible. Single light fill —
+        neumorphic filter chain in the source is intentionally omitted (this
+        is a wordmark, not a hero icon).
       -->
       <svg viewBox="0 0 165 28" xmlns="http://www.w3.org/2000/svg" width="165" height="28">
-        <g fill="#d9eef3">
-          <!-- Top bar (widest) -->
-          <path d="M0 5 L36 5 L40 11 L4 11 Z" />
-          <!-- Middle bar -->
-          <path d="M6 13 L36 13 L40 19 L10 19 Z" />
-          <!-- Bottom bar (smallest, but still right-aligned) -->
-          <path d="M12 21 L36 21 L40 27 L16 27 Z" />
+        <g fill="#d9eef3" transform="translate(1, 0) scale(0.1657)">
+          <path d="M 189.751 48.141 L 36.393 48.141 L 82.61 0 L 233.868 0 Z" />
+          <path d="M 225.333 109.208 L 71.975 109.208 L 118.192 61.067 L 269.45 61.067 Z" />
+          <path d="M 152.746 168.855 L -0.613 168.855 L 45.605 120.714 L 196.862 120.714 Z" />
         </g>
         <text
-          x="52"
+          x="56"
           y="22"
           font-family="DM Sans, system-ui, -apple-system, sans-serif"
           font-weight="400"
           font-size="20"
           letter-spacing="-0.5"
           fill="#d9eef3"
-        >Obol<tspan font-weight="700" dx="2">Stack</tspan></text>
+        >Obol<tspan font-weight="700"> Stack</tspan></text>
       </svg>
     </div>
   </body>
