@@ -9,12 +9,25 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
+
+// userAgent is sent on every outbound HTTP request the sidecar makes to an
+// upstream seller. Cloudflare WAF blocks the Go stdlib default UA
+// ("Go-http-client/1.1") with HTTP 403 + error code 1010 — the same class of
+// block that was fixed in buy.py (c2dddc1). Override with OBOL_BUYER_USER_AGENT
+// for sellers that require a different shape (e.g. a browser UA).
+var userAgent = func() string {
+	if ua := os.Getenv("OBOL_BUYER_USER_AGENT"); ua != "" {
+		return ua
+	}
+	return "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)"
+}()
 
 // Proxy is an OpenAI-compatible reverse proxy that routes requests to upstream
 // x402-gated endpoints, attaching pre-signed payment headers automatically.
@@ -424,6 +437,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 	if err != nil {
 		return nil, err
 	}
+	firstReq.Header.Set("User-Agent", userAgent)
 	resp, err := t.Base.RoundTrip(firstReq)
 	if err != nil {
 		return nil, err
@@ -509,6 +523,7 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		releaseHeldPreSignedSpend(t.Signers, heldAuth)
 		return nil, cloneErr
 	}
+	retryReq.Header.Set("User-Agent", userAgent)
 	retryReq.Header.Set("X-PAYMENT", paymentHeader)
 
 	respRetry, err := t.Base.RoundTrip(retryReq)

@@ -1997,3 +1997,130 @@ func TestProxy_OpenAIMuxSymmetry_BothV1AndBarePathsRouteIdentically(t *testing.T
 		t.Fatalf("/v1/chat/completions: got %d, want 200", v1Resp.StatusCode)
 	}
 }
+
+// TestProxy_UserAgentOnProbeRequest asserts that the initial (unpaid) request
+// to an upstream carries the obol-buy-x402 User-Agent. Sellers behind
+// Cloudflare WAF block the Go stdlib default UA ("Go-http-client/1.1") with
+// HTTP 403 + error code 1010; this was the root cause of the v1337 demo
+// failure fixed alongside buy.py in c2dddc1.
+func TestProxy_UserAgentOnProbeRequest(t *testing.T) {
+	var capturedUA string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"ok","choices":[{"message":{"content":"hi"}}]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"free": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0xpayto",
+				Asset:   "0xasset",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"free": {makeAuth("0xsig1")}}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/free/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"free","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+
+	const wantUA = "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)"
+	if capturedUA != wantUA {
+		t.Errorf("probe User-Agent = %q, want %q", capturedUA, wantUA)
+	}
+}
+
+// TestProxy_UserAgentOnPaidRequest asserts that the paid retry request
+// (the one carrying X-PAYMENT) also carries the obol-buy-x402 User-Agent.
+// Both the probe and the paid request must pass Cloudflare WAF bot-filtering.
+func TestProxy_UserAgentOnPaidRequest(t *testing.T) {
+	var capturedProbeUA, capturedPaidUA string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			capturedProbeUA = r.Header.Get("User-Agent")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		capturedPaidUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(
+			[]byte(`{"success":true,"transaction":"0xtx","network":"base-sepolia","payer":"0xpayer"}`),
+		))
+		fmt.Fprint(w, `{"id":"paid","choices":[{"message":{"content":"paid"}}]}`)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {makeAuth("0xuasig")}}
+
+	proxy, err := NewProxy(cfg, auths, nil)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"paid","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	const wantUA = "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)"
+	if capturedProbeUA != wantUA {
+		t.Errorf("probe User-Agent = %q, want %q", capturedProbeUA, wantUA)
+	}
+	if capturedPaidUA != wantUA {
+		t.Errorf("paid User-Agent = %q, want %q", capturedPaidUA, wantUA)
+	}
+}
