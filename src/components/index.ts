@@ -42,6 +42,8 @@ export { NetworksSection } from './organisms/NetworksSection/NetworksSection';
 export { LocalNodeStatus } from './organisms/LocalNodeStatus/LocalNodeStatus';
 export { NodeOverview } from './organisms/NodeOverview';
 export { OpenClawList } from './organisms/OpenClawList';
+export { TopNav, TOP_NAV_ITEMS } from './organisms/TopNav';
+export type { TopNavId, TopNavItem, TopNavProps } from './organisms/TopNav';
 
 // Pages
 export { DashboardPage } from './pages/DashboardPage';
