@@ -301,6 +301,47 @@ func TestBuildActiveRegistrationDocument_KeepsOperatorDescription(t *testing.T) 
 	}
 }
 
+func TestBuildActiveRegistrationDocument_PublishesAgentOfferMetadata(t *testing.T) {
+	owner := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "agent-demo-quant"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Path: "/services/demo-quant",
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled:     true,
+				Name:        "demo-quant",
+				Description: "Agent-backed chain analyst",
+				Skills:      []string{"ethereum-networks", "addresses"},
+				Metadata: map[string]string{
+					"runtime":     "hermes",
+					"model":       "qwen3.5:9b",
+					"pricingUnit": "agent-turn",
+					"x402Price":   "10",
+					"x402Asset":   "OBOL",
+					"x402Network": "ethereum",
+				},
+			},
+		},
+	}
+
+	doc := buildActiveRegistrationDocument(owner, []*monetizeapi.ServiceOffer{owner}, "https://seller.example", "42")
+	for k, want := range map[string]string{
+		"runtime":     "hermes",
+		"model":       "qwen3.5:9b",
+		"pricingUnit": "agent-turn",
+		"x402Price":   "10",
+		"x402Asset":   "OBOL",
+		"x402Network": "ethereum",
+	} {
+		if got := doc.Metadata[k]; got != want {
+			t.Errorf("metadata[%s] = %q, want %q (full=%v)", k, got, want, doc.Metadata)
+		}
+	}
+	if len(doc.Registrations) != 1 || doc.Registrations[0].AgentID != 42 {
+		t.Errorf("registrations = %+v, want agentId 42", doc.Registrations)
+	}
+}
+
 // TestBuildActiveRegistrationDocument_FallsBackToModelDescriptionForInference
 // pins the *other* side of the description contract: when the operator does
 // not supply a description, inference offers should still get the
@@ -618,6 +659,62 @@ func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
 	assertServiceCatalogSchema(t, jsonStr)
 	if jsonStr != "[]" {
 		t.Errorf("expected empty array, got %q", jsonStr)
+	}
+}
+
+func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "agent-demo-quant"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "ethereum",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Asset: monetizeapi.ServiceOfferAsset{
+					Address:        "0x2222222222222222222222222222222222222222",
+					Symbol:         "OBOL",
+					Decimals:       18,
+					TransferMethod: "permit2",
+					EIP712Name:     "OBOL",
+					EIP712Version:  "1",
+				},
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Description: "Agent-backed chain analyst",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			AgentResolution: &monetizeapi.ServiceOfferAgentResolution{
+				Model:   "qwen3.5:9b",
+				Runtime: "hermes",
+			},
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://seller.example")
+	assertServiceCatalogSchema(t, jsonStr)
+
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d: %s", len(services), jsonStr)
+	}
+	svc := services[0]
+	if svc.Type != "agent" {
+		t.Errorf("type = %q, want agent", svc.Type)
+	}
+	if svc.Model != "qwen3.5:9b" {
+		t.Errorf("model = %q, want qwen3.5:9b", svc.Model)
+	}
+	if svc.Price != "10 OBOL/request" {
+		t.Errorf("price = %q, want 10 OBOL/request", svc.Price)
+	}
+	if svc.Endpoint != "https://seller.example/services/demo-quant" {
+		t.Errorf("endpoint = %q", svc.Endpoint)
 	}
 }
 

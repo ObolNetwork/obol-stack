@@ -40,6 +40,12 @@ func TestDecodeAgentJSON_FullDocument(t *testing.T) {
 	if got.WalletAddress != "0xabcdef0123456789abcdef0123456789abcdef01" {
 		t.Errorf("walletAddress = %q", got.WalletAddress)
 	}
+	if got.Runtime != "hermes" {
+		t.Errorf("runtime = %q", got.Runtime)
+	}
+	if got.Model != "qwen3.5:9b" {
+		t.Errorf("model = %q", got.Model)
+	}
 	if len(got.Skills) != 2 || got.Skills[0] != "addresses" {
 		t.Errorf("skills = %v", got.Skills)
 	}
@@ -59,6 +65,24 @@ func TestDecodeAgentJSON_StatusFieldsAreOptional(t *testing.T) {
 	}
 	if got.Objective != "" {
 		t.Errorf("expected empty objective, got %q", got.Objective)
+	}
+	if got.Runtime != "hermes" {
+		t.Errorf("runtime default = %q, want hermes", got.Runtime)
+	}
+}
+
+func TestDecodeAgentJSON_ModelFallsBackToStatusPinnedModel(t *testing.T) {
+	raw := `{
+  "metadata": {"name": "quant", "namespace": "agent-quant"},
+  "spec": {"skills": ["addresses"]},
+  "status": {"pinnedModel": "paid/aeon"}
+}`
+	got, err := decodeAgentJSON(raw)
+	if err != nil {
+		t.Fatalf("decodeAgentJSON: %v", err)
+	}
+	if got.Model != "paid/aeon" {
+		t.Errorf("model = %q, want paid/aeon", got.Model)
 	}
 }
 
@@ -118,6 +142,40 @@ func TestPickAgentDefault(t *testing.T) {
 				t.Errorf("pickAgentDefault = %q, want %q", got, tt.wantModel)
 			}
 		})
+	}
+}
+
+func TestAgentOfferRegistrationMetadata_AdvertisesRuntimeModelAndPrice(t *testing.T) {
+	got := agentOfferRegistrationMetadata(&agentRefForSale{
+		Runtime: "hermes",
+		Model:   "qwen3.5:9b",
+	}, "10", "OBOL", "ethereum")
+
+	want := map[string]string{
+		"runtime":     "hermes",
+		"model":       "qwen3.5:9b",
+		"pricingUnit": "agent-turn",
+		"x402Price":   "10",
+		"x402Asset":   "OBOL",
+		"x402Network": "ethereum",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("metadata[%s] = %q, want %q (full=%v)", k, got[k], v, got)
+		}
+	}
+}
+
+func TestAgentOfferRegistrationMetadata_DefaultsRuntimeHermes(t *testing.T) {
+	got := agentOfferRegistrationMetadata(nil, "0.001", "usdc", "base-sepolia")
+	if got["runtime"] != "hermes" {
+		t.Errorf("runtime = %q, want hermes", got["runtime"])
+	}
+	if got["x402Asset"] != "USDC" {
+		t.Errorf("x402Asset = %q, want USDC", got["x402Asset"])
+	}
+	if _, ok := got["model"]; ok {
+		t.Errorf("model should be omitted when unknown: %v", got)
 	}
 }
 

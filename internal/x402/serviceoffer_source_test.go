@@ -115,6 +115,58 @@ func TestRoutesFromStore_IgnoresUnpublishedOffers(t *testing.T) {
 	}
 }
 
+func TestRouteRuleFromOffer_AgentResolutionAdvertisesRuntimeModelSkills(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "agent-demo-quant"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Agent: monetizeapi.ServiceOfferAgent{
+				Ref: monetizeapi.ServiceOfferAgentRef{Name: "demo-quant", Namespace: "agent-demo-quant"},
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "ethereum",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Asset: monetizeapi.ServiceOfferAsset{
+					Symbol:   "OBOL",
+					Decimals: 18,
+				},
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			AgentResolution: &monetizeapi.ServiceOfferAgentResolution{
+				Model:    "qwen3.5:9b",
+				Runtime:  "hermes",
+				Skills:   []string{"ethereum-networks", "addresses"},
+				Endpoint: "http://hermes.agent-demo-quant.svc.cluster.local:8642",
+			},
+		},
+	}
+
+	route, err := routeRuleFromOffer(offer, "")
+	if err != nil {
+		t.Fatalf("routeRuleFromOffer: %v", err)
+	}
+	if route.Price != "10" {
+		t.Errorf("Price = %q, want 10", route.Price)
+	}
+	if route.AgentModel != "qwen3.5:9b" {
+		t.Errorf("AgentModel = %q, want qwen3.5:9b", route.AgentModel)
+	}
+	if route.AgentRuntime != "hermes" {
+		t.Errorf("AgentRuntime = %q, want hermes", route.AgentRuntime)
+	}
+	if len(route.AgentSkills) != 2 || route.AgentSkills[0] != "ethereum-networks" {
+		t.Errorf("AgentSkills = %v", route.AgentSkills)
+	}
+	if route.UpstreamURL != "http://hermes.agent-demo-quant.svc.cluster.local:8642" {
+		t.Errorf("UpstreamURL = %q", route.UpstreamURL)
+	}
+	if route.Pattern != "/services/demo-quant/*" {
+		t.Errorf("Pattern = %q, want /services/demo-quant/*", route.Pattern)
+	}
+}
+
 func mustOfferObject(t *testing.T, offer monetizeapi.ServiceOffer) *unstructured.Unstructured {
 	t.Helper()
 	offer.TypeMeta = metav1.TypeMeta{
