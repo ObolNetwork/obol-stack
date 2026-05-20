@@ -92,7 +92,7 @@ func sellInferenceCommand(cfg *config.Config) *cli.Command {
 		Usage:     "Sell local model inference with x402 payments",
 		ArgsUsage: "<name>",
 		Description: `Starts an x402-gated reverse proxy in front of a local Ollama instance.
-Buyers pay per-request in USDC to access inference endpoints.
+Buyers pay per-request in the selected x402 token to access inference endpoints.
 
 Examples:
   obol sell inference my-qwen --model qwen3.5:4b --pay-to 0x... --price 0.001
@@ -102,7 +102,7 @@ Examples:
 				Name:  "model",
 				Usage: "Model name to serve (e.g. qwen3.5:4b)",
 			},
-			payToFlag("USDC recipient address"),
+			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
 				Name:  "price",
 				Usage: "Per-request price (alias for --per-request)",
@@ -113,7 +113,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "per-mtok",
-				Usage: "Per-million-tokens price in USDC (charged as an approximation at 1000 tok/request)",
+				Usage: "Per-million-tokens price in the selected payment token (charged as an approximation at 1000 tok/request)",
 			},
 			&cli.StringFlag{
 				Name:  "chain",
@@ -240,7 +240,7 @@ Examples:
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
 					var inputErr error
-					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					wallet, inputErr = u.Input("Wallet address (payment recipient)", "")
 					if inputErr != nil || wallet == "" {
 						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 					}
@@ -518,7 +518,7 @@ Examples:
   obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --chain base
   obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --chain base --no-register`,
 		Flags: []cli.Flag{
-			payToFlag("USDC recipient address"),
+			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Payment chain (base, base-sepolia, ethereum)",
@@ -531,19 +531,19 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "price",
-				Usage: "Per-request price in USDC (e.g. 0.001)",
+				Usage: "Per-request price in the selected payment token (e.g. 0.001 USDC or 1 OBOL)",
 			},
 			&cli.StringFlag{
 				Name:  "per-request",
-				Usage: "Per-request price in USDC (alias for --price)",
+				Usage: "Per-request price in the selected payment token (alias for --price)",
 			},
 			&cli.StringFlag{
 				Name:  "per-mtok",
-				Usage: "Per-million-tokens price in USDC (charged as an approximation at 1000 tok/request)",
+				Usage: "Per-million-tokens price in the selected payment token (charged as an approximation at 1000 tok/request)",
 			},
 			&cli.StringFlag{
 				Name:  "per-hour",
-				Usage: "Per-compute-hour price in USDC",
+				Usage: "Per-compute-hour price in the selected payment token",
 			},
 			&cli.StringFlag{
 				Name:    "namespace",
@@ -689,7 +689,7 @@ Examples:
 					u.Infof("Using wallet from remote-signer: %s", wallet)
 				} else if u.IsTTY() {
 					var inputErr error
-					wallet, inputErr = u.Input("Wallet address (USDC recipient)", "")
+					wallet, inputErr = u.Input("Wallet address (payment recipient)", "")
 					if inputErr != nil || wallet == "" {
 						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
 					}
@@ -2397,26 +2397,26 @@ Examples:
 				Usage:    "Namespace of the ServiceOffer",
 				Required: true,
 			},
-			payToFlag("New USDC recipient address"),
+			payToFlag("New payment recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "New payment chain (base, base-sepolia, ethereum)",
 			},
 			&cli.StringFlag{
 				Name:  "price",
-				Usage: "New per-request price in USDC (alias for --per-request)",
+				Usage: "New per-request price in the selected payment token (alias for --per-request)",
 			},
 			&cli.StringFlag{
 				Name:  "per-request",
-				Usage: "New per-request price in USDC",
+				Usage: "New per-request price in the selected payment token",
 			},
 			&cli.StringFlag{
 				Name:  "per-mtok",
-				Usage: "New per-million-tokens price in USDC",
+				Usage: "New per-million-tokens price in the selected payment token",
 			},
 			&cli.StringFlag{
 				Name:  "per-hour",
-				Usage: "New per-compute-hour price in USDC",
+				Usage: "New per-compute-hour price in the selected payment token",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -2576,7 +2576,7 @@ func sellPricingCommand(cfg *config.Config) *cli.Command {
 		Description: `Sets the recipient address and chain for x402 payment collection.
 Reloads the payment verifier when configuration is changed.`,
 		Flags: []cli.Flag{
-			payToFlag("USDC recipient address"),
+			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
 				Usage: "Payment chain (base, base-sepolia, ethereum)",
