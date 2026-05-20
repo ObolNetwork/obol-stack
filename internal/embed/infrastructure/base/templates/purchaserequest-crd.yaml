@@ -106,7 +106,7 @@ spec:
                       type: string
                     price:
                       type: string
-                      description: "Micro-USDC per request"
+                      description: "Atomic token units per request"
                     asset:
                       type: string
                       description: "ERC-20 contract address"
