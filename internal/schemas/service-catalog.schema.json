@@ -94,7 +94,8 @@
           "enum": [
             "inference",
             "fine-tuning",
-            "http"
+            "http",
+            "agent"
           ]
         },
         "model": {

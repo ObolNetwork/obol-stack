@@ -12,6 +12,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -209,11 +210,16 @@ Examples:
 				for i, s := range agent.Skills {
 					skills[i] = s
 				}
+				symbol := assetTerms.Symbol
+				if symbol == "" {
+					symbol = strings.ToUpper(tokenName)
+				}
 				spec["registration"] = map[string]any{
 					"enabled":     true,
 					"name":        regName,
 					"description": regDesc,
 					"skills":      skills,
+					"metadata":    agentOfferRegistrationMetadata(agent, price, symbol, chain),
 				}
 			}
 
@@ -347,6 +353,10 @@ func runAgentBackedDemo(
 	// 2. Build and apply the agent-typed ServiceOffer.
 	register := cmd.Bool("register")
 	offerNs := agentcrd.Namespace(agentName)
+	agentForMetadata, _ := getAgentRefForSale(cfg, agentName)
+	if agentForMetadata == nil {
+		agentForMetadata = &agentRefForSale{Name: agentName, Namespace: offerNs, Runtime: monetizeapi.AgentRuntimeHermes}
+	}
 
 	payment := map[string]any{
 		"scheme":            "exact",
@@ -379,6 +389,7 @@ func runAgentBackedDemo(
 			"name":        name,
 			"description": spec.Description,
 			"skills":      skillsAny,
+			"metadata":    agentOfferRegistrationMetadata(agentForMetadata, price, symbol, chain),
 		}
 	}
 
@@ -473,6 +484,8 @@ type agentRefForSale struct {
 	Name          string
 	Namespace     string
 	WalletAddress string
+	Runtime       string
+	Model         string
 	Objective     string
 	Skills        []string
 }
@@ -530,21 +543,58 @@ func decodeAgentJSON(raw string) (*agentRefForSale, error) {
 			Namespace string `json:"namespace"`
 		} `json:"metadata"`
 		Spec struct {
+			Runtime   string   `json:"runtime"`
+			Model     string   `json:"model"`
 			Skills    []string `json:"skills"`
 			Objective string   `json:"objective"`
 		} `json:"spec"`
 		Status struct {
 			WalletAddress string `json:"walletAddress"`
+			PinnedModel   string `json:"pinnedModel"`
 		} `json:"status"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return nil, err
 	}
+	model := strings.TrimSpace(doc.Spec.Model)
+	if model == "" {
+		model = strings.TrimSpace(doc.Status.PinnedModel)
+	}
+	runtime := strings.TrimSpace(doc.Spec.Runtime)
+	if runtime == "" {
+		runtime = monetizeapi.AgentRuntimeHermes
+	}
 	return &agentRefForSale{
 		Name:          doc.Metadata.Name,
 		Namespace:     doc.Metadata.Namespace,
 		WalletAddress: doc.Status.WalletAddress,
+		Runtime:       runtime,
+		Model:         model,
 		Objective:     doc.Spec.Objective,
 		Skills:        append([]string(nil), doc.Spec.Skills...),
 	}, nil
+}
+
+func agentOfferRegistrationMetadata(agent *agentRefForSale, price, symbol, chain string) map[string]string {
+	metadata := map[string]string{
+		"pricingUnit": "agent-turn",
+	}
+	if price = strings.TrimSpace(price); price != "" {
+		metadata["x402Price"] = price
+	}
+	if symbol = strings.TrimSpace(symbol); symbol != "" {
+		metadata["x402Asset"] = strings.ToUpper(symbol)
+	}
+	if chain = strings.TrimSpace(chain); chain != "" {
+		metadata["x402Network"] = chain
+	}
+	runtime := monetizeapi.AgentRuntimeHermes
+	if agent != nil && strings.TrimSpace(agent.Runtime) != "" {
+		runtime = strings.TrimSpace(agent.Runtime)
+	}
+	metadata["runtime"] = runtime
+	if agent != nil && strings.TrimSpace(agent.Model) != "" {
+		metadata["model"] = strings.TrimSpace(agent.Model)
+	}
+	return metadata
 }
