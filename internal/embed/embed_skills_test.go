@@ -307,6 +307,7 @@ else:
 
 args = SimpleNamespace(
     name="medical",
+    model="antangelmed",
     network="base-sepolia",
     pay_to="0x1111111111111111111111111111111111111111",
     max_timeout=300,
@@ -325,6 +326,16 @@ if registration.get("enabled") is not True:
     raise SystemExit("registration metadata did not enable registration")
 if registration.get("skills") != ["privacy-filter"]:
     raise SystemExit(f"registration skills did not inherit agent skills: {registration!r}")
+expected_metadata = {
+    "runtime": "hermes",
+    "model": args.model,
+    "pricingUnit": "agent-turn",
+    "x402Price": "0.05",
+    "x402Asset": "USDC",
+    "x402Network": "base-sepolia",
+}
+if registration.get("metadata") != expected_metadata:
+    raise SystemExit(f"registration metadata mismatch: {registration!r}")
 `
 
 	cmd := exec.Command("python3", "-c", script, factoryPy)
