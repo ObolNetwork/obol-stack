@@ -188,11 +188,16 @@ obol sell http my-qwen \
 
 When `--token OBOL` is used without `--chain`, the chain defaults to `ethereum`.
 
-That stores both values in the pricing config:
+For the USDC examples above, the pricing config stores both values:
 
 - source model: `perMTok = 1.25 USDC / 1M tokens`
 - enforced phase-1 charge: `price = 0.00125 USDC / request`
 - approximation input: `approxTokensPerRequest = 1000`
+
+For OBOL release smokes, verify the generated payment config carries the selected
+token metadata end to end instead of silently falling back to USDC wording or
+USDC's ERC-3009 domain. The 402 requirement should expose the OBOL token address,
+atomic OBOL amount, and Permit2/EIP-712 metadata needed by the buyer sidecar.
 
 The stack now treats on-chain registration as part of the default selling flow:
 
@@ -284,7 +289,10 @@ A **402 Payment Required** response confirms the x402 gate is working. The respo
 }
 ```
 
-The `amount` is in USDC micro-units (6 decimals): `1000` = 0.001 USDC.
+For this USDC example, `amount` is in USDC micro-units (6 decimals):
+`1000` = 0.001 USDC. For an OBOL/Permit2 route, `asset` should be the OBOL
+token address, `amount` should be atomic OBOL units, and `extra` should carry
+the token/Permit2 metadata the buyer uses for signing.
 
 ### 1.7 Monitoring
 
@@ -356,11 +364,12 @@ The SDK handles the full x402 flow:
 
 1. Sends the request
 2. Receives 402 with payment requirements
-3. Signs an EIP-712 `TransferWithAuthorization` message (ERC-3009)
+3. Signs the token-specific EIP-712 payment payload: ERC-3009 for USDC or
+   Permit2 for OBOL routes
 4. Retries with the `X-PAYMENT` header (base64-encoded x402 envelope)
 5. The seller-owned x402 gateway verifies the payment with the facilitator
 6. The seller gateway forwards the request to the protected upstream
-7. After upstream success, the seller gateway settles USDC on-chain
+7. After upstream success, the seller gateway settles the selected token on-chain
 8. Returns the inference response
 
 **Manual flow with curl** -- for debugging or custom integrations:
@@ -373,8 +382,9 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
 
 # Step 2: Sign the EIP-712 payment (requires SDK or custom code)
 # The 402 body contains: payTo, amount, asset, network, extra.name, extra.version
-# Sign a TransferWithAuthorization (ERC-3009) message with:
-#   Domain: {name: "USDC", version: "2", chainId: 84532, verifyingContract: <USDC address>}
+# USDC routes sign TransferWithAuthorization (ERC-3009) against the USDC domain.
+# OBOL routes sign the configured Permit2 payload against the OBOL/token metadata
+# published in the payment requirement.
 
 # Step 3: Retry with payment header
 curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
@@ -386,7 +396,8 @@ curl -s -X POST "$TUNNEL_URL/services/my-qwen/v1/chat/completions" \
 
 ### 2.4 Verify Payment Settlement
 
-After a successful paid request, verify the USDC transfer on-chain using Foundry's `cast`:
+After a successful paid request, verify the selected token transfer on-chain using
+Foundry's `cast`. For the default USDC example:
 
 ```bash
 USDC=0x036CbD53842c5426634e7929541eC2318f3dCF7e
