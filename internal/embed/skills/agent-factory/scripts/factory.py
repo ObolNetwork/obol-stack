@@ -335,7 +335,17 @@ def serviceoffer_resource(args, parent_ns):
         "path": args.path or f"/services/{args.name}",
     }
     if args.register or args.register_name or args.register_description or args.register_skills:
-        reg = {"enabled": True}
+        reg = {
+            "enabled": True,
+            "metadata": {
+                "runtime": "hermes",
+                "model": args.model,
+                "pricingUnit": "agent-turn",
+                "x402Price": args.price,
+                "x402Asset": "USDC",
+                "x402Network": args.network,
+            },
+        }
         if args.register_name:
             reg["name"] = args.register_name
         if args.register_description:
