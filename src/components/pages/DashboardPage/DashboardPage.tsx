@@ -1,5 +1,5 @@
 import { DashboardTemplate } from '../../templates/DashboardTemplate';
-import { DashboardHeader } from '../../organisms/DashboardHeader';
+import { NavigatedDashboardHeader } from '../../organisms/DashboardHeader';
 import { DashboardContent } from '../../organisms/DashboardContent';
 import { FooterBar } from '../../organisms/FooterBar';
 import { LoadingState } from '../../molecules/LoadingState';
@@ -12,7 +12,7 @@ export function DashboardPage() {
   if (loading && !data) {
     return (
       <DashboardTemplate
-        header={<DashboardHeader />}
+        header={<NavigatedDashboardHeader />}
         content={<LoadingState message="Loading dashboard data..." />}
         footer={<FooterBar />}
       />
@@ -21,7 +21,7 @@ export function DashboardPage() {
 
   return (
     <DashboardTemplate
-      header={<DashboardHeader />}
+      header={<NavigatedDashboardHeader />}
       content={<DashboardContent data={data} error={error} onRetry={refetch} />}
       footer={<FooterBar />}
     />

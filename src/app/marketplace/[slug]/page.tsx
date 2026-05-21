@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 import { MarketplaceDetail } from '@/components/marketplace/MarketplaceDetail';
-import { Providers } from '@/app/providers';
 
 export default function MarketplaceServiceRoute() {
   const params = useParams<{ slug: string | string[] }>();
@@ -18,15 +17,11 @@ export default function MarketplaceServiceRoute() {
 
   // Next encodes `/` in slugs, so a "ns/name" pair arrives as "ns%2Fname".
   // useParams decodes once, so we get "ns/name" back as a single string here.
+  // Providers are installed once at the marketplace layout level.
   const raw = params?.slug;
   const slug = Array.isArray(raw) ? raw.join('/') : (raw ?? '');
 
   return (
-    <Providers>
-      <MarketplaceDetail
-        slug={slug}
-        onBack={() => router.push('/marketplace')}
-      />
-    </Providers>
+    <MarketplaceDetail slug={slug} onBack={() => router.push('/marketplace')} />
   );
 }
