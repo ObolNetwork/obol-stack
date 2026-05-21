@@ -13,8 +13,8 @@ export interface MarketplaceGridProps {
 
 const Grid = styled(Box, {
   display: 'grid',
-  gap: '$md',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+  gap: '$sm',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
 });
 
 export function MarketplaceGrid({

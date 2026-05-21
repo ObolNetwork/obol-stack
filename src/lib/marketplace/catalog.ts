@@ -128,6 +128,7 @@ function mapEntry(entry: RawCatalogEntry): ServiceListItem | null {
     asset,
     network,
     endpoint: (entry.endpoint ?? '').trim(),
+    payTo: (entry.payTo ?? '').trim(),
     status: deriveStatus(entry),
     isDemo: entry.isDemo === true,
     description: (entry.description ?? '').trim(),

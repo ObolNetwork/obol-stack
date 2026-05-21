@@ -62,10 +62,13 @@ export interface ServiceListItem {
   asset: MarketplaceAsset;
   network: MarketplaceNetwork;
   endpoint: string;
+  /** Seller wallet (`spec.payment.payTo`). Drives the identicon + address row. */
+  payTo: string;
   status: MarketplaceStatus;
   isDemo: boolean;
   description: string;
-  /** Deterministic seed (hash of slug) for Cards-view gradient banners. */
+  /** Deterministic seed (hash of slug) — historically gradient banners,
+   *  now also the identicon fallback when payTo is missing. */
   bannerSeed: string;
 }
 

@@ -24,35 +24,36 @@ import { MarketplaceTable } from './MarketplaceTable';
 import { BuyDrawer } from './BuyDrawer';
 
 const Layout = styled(Box, {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(240px, 280px) 1fr',
-  gap: '$lg',
+  display: 'flex',
+  gap: '$md',
   padding: '$lg',
-  maxWidth: 1440,
+  maxWidth: 1280,
   margin: '0 auto',
 
   '@media (max-width: 960px)': {
-    gridTemplateColumns: '1fr',
+    flexDirection: 'column',
   },
 });
 
-const Header = styled(Flex, {
-  gridColumn: '1 / -1',
-  alignItems: 'center',
-  justifyContent: 'space-between',
+const RightCol = styled(Box, {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
   gap: '$md',
 });
 
 const TitleBlock = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$xxs',
+  gap: '$xxxs',
 });
 
 const Title = styled(Text, {
   fontSize: '$6',
   fontWeight: '$semibold',
   color: '$light',
+  letterSpacing: '-0.01em',
 });
 
 const Subtitle = styled(Text, {
@@ -60,11 +61,19 @@ const Subtitle = styled(Text, {
   color: '$body',
 });
 
-const Toolbar = styled(Flex, {
-  gridColumn: '1 / -1',
+const ResultsBar = styled(Flex, {
   alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '$md',
+  gap: '$xs',
+});
+
+const ResultsCount = styled(Text, {
+  color: '$body',
+  fontSize: '$3',
+});
+
+const ResultsCountStrong = styled('span', {
+  color: '$light',
+  fontWeight: '$semibold',
 });
 
 const Results = styled(Box, {
@@ -131,30 +140,29 @@ export function MarketplacePage({
 
   return (
     <Layout>
-      <Header>
+      <MarketplaceFacets
+        filters={filters}
+        facets={data?.facets ?? { type: [], network: [], asset: [] }}
+        onChange={setFilters}
+      />
+
+      <RightCol>
         <TitleBlock>
           <Title>Marketplace</Title>
           <Subtitle>
             Discover x402-gated services published by Obol Stack operators.
           </Subtitle>
         </TitleBlock>
-      </Header>
 
-      <Box>
-        <MarketplaceFacets
-          filters={filters}
-          facets={data?.facets ?? { type: [], network: [], asset: [] }}
-          onChange={setFilters}
-        />
-      </Box>
-
-      <Box>
-        <Toolbar css={{ marginBottom: '$md' }}>
-          <Subtitle>
-            {data ? `${data.total} service${data.total === 1 ? '' : 's'}` : '—'}
-          </Subtitle>
+        <ResultsBar>
+          <ResultsCount>
+            <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}
+            service{data?.total === 1 ? '' : 's'}
+          </ResultsCount>
+          <Box css={{ flex: 1 }} />
           <ViewToggle value={view} onChange={setView} />
-        </Toolbar>
+        </ResultsBar>
+
         <Results>
           {isLoading ? (
             <LoadingState message="Loading services…" />
@@ -211,7 +219,7 @@ export function MarketplacePage({
             </PaginationRow>
           ) : null}
         </Results>
-      </Box>
+      </RightCol>
       <BuyDrawer
         item={buyTarget}
         open={buyTarget !== null}

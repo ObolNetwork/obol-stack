@@ -2,7 +2,12 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
+import { Badge } from '@/components/atoms/Badge';
+import { CopyButton } from '@/components/atoms/CopyButton';
 import type { ServiceListItem } from '@/lib/marketplace/types';
+import type { ServiceOfferType } from '@/types/sell';
+
+import { Identicon, shortAddress } from './Identicon';
 
 export interface MarketplaceCardProps {
   item: ServiceListItem;
@@ -13,125 +18,188 @@ export interface MarketplaceCardProps {
 const Card = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
+  gap: '$xs',
+  padding: '$sm $md',
   borderRadius: '$2',
   border: '1px solid $stroke',
-  background: '$bg02',
-  overflow: 'hidden',
-  transition: 'border-color 0.2s ease, transform 0.2s ease',
+  background: '$bg03',
+  minHeight: 240,
+  transition: 'border-color 200ms ease, transform 200ms ease',
 
   '&:hover': {
-    borderColor: '$body',
+    borderColor: '$bg05',
   },
 });
 
-const Banner = styled(Box, {
-  height: 96,
-  position: 'relative',
+const TopRow = styled(Flex, {
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
 });
 
-const TypeChip = styled(Text, {
-  position: 'absolute',
-  top: '$xs',
-  left: '$xs',
-  padding: '2px 8px',
-  borderRadius: '$pill',
-  background: 'rgba(9, 16, 17, 0.6)',
-  color: '$light',
-  fontSize: '$0',
-  fontWeight: '$semibold',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
-});
-
-const StatusDot = styled(Box, {
-  position: 'absolute',
-  top: '$xs',
-  right: '$xs',
-  display: 'inline-flex',
+const TitleBlock = styled(Flex, {
   alignItems: 'center',
-  gap: '$xxs',
-  padding: '2px 8px',
-  borderRadius: '$pill',
-  background: 'rgba(9, 16, 17, 0.6)',
-  color: '$light',
-  fontSize: '$0',
+  gap: 10,
+  minWidth: 0,
 });
 
-const Body = styled(Box, {
+const TitleStack = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$xs',
-  padding: '$sm $md $md',
+  minWidth: 0,
+});
+
+const TitleRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxs',
+  minWidth: 0,
 });
 
 const Title = styled(Text, {
-  fontSize: '$3',
+  fontSize: '$4',
   fontWeight: '$semibold',
   color: '$light',
+  fontFamily: 'monospace',
+  letterSpacing: '-0.005em',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+const SubRow = styled(Flex, {
+  alignItems: 'center',
+  gap: 6,
+  marginTop: 3,
+  fontSize: '$1',
+  color: '$body',
+  minWidth: 0,
 });
 
 const Sub = styled(Text, {
   fontSize: '$1',
   color: '$body',
-  fontFamily: 'monospace',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 });
 
-const Desc = styled(Text, {
+const Mono = styled(Text, {
+  fontFamily: 'monospace',
   fontSize: '$1',
   color: '$body',
+});
+
+const Dot = styled(Text, {
+  color: '$muted',
+  fontSize: '$1',
+});
+
+const StatusPillBox = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxxs',
+  flexShrink: 0,
+  padding: '$xxxs $xxs',
+  borderRadius: '$pill',
+  fontSize: '$0',
+  fontWeight: '$semibold',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+  border: '1px solid transparent',
+
+  variants: {
+    tone: {
+      live: {
+        background: 'rgba(47, 228, 171, 0.14)',
+        borderColor: 'rgba(47, 228, 171, 0.35)',
+        color: '$obolGreen',
+      },
+      pending: {
+        background: 'rgba(250, 186, 90, 0.14)',
+        borderColor: 'rgba(250, 186, 90, 0.38)',
+        color: '$obolGold',
+      },
+      degraded: {
+        background: 'rgba(221, 96, 60, 0.14)',
+        borderColor: 'rgba(221, 96, 60, 0.40)',
+        color: '$test',
+      },
+    },
+  },
+});
+
+const Dotty = styled('span', {
+  width: 6,
+  height: 6,
+  borderRadius: 999,
+  background: 'currentColor',
+});
+
+const Description = styled(Text, {
+  margin: 0,
+  fontSize: '$2',
+  color: '$body',
+  lineHeight: 1.5,
   display: '-webkit-box',
   WebkitLineClamp: 2,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
-  minHeight: 32,
+  flex: 1,
 });
 
-const SkillRow = styled(Flex, {
+const TagRow = styled(Flex, {
   flexWrap: 'wrap',
-  gap: '$xxs',
+  gap: 6,
 });
 
-const SkillPill = styled(Text, {
-  padding: '2px 6px',
-  borderRadius: '$pill',
-  background: '$bg03',
-  border: '1px solid $stroke',
+const Tag = styled(Text, {
+  padding: '3px 8px',
+  fontSize: '$1',
   color: '$body',
-  fontSize: '$0',
+  background: '$bg02',
+  border: '1px solid $stroke',
+  borderRadius: '$1',
+  fontFamily: 'monospace',
 });
 
-const FooterRow = styled(Flex, {
-  alignItems: 'center',
-  justifyContent: 'space-between',
+const Footer = styled(Flex, {
+  alignItems: 'flex-end',
   gap: '$xs',
-  marginTop: '$xs',
+  paddingTop: '$xs',
+  borderTop: '1px solid $stroke',
 });
 
-const Price = styled(Flex, {
+const PriceBlock = styled(Box, {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
   flexDirection: 'column',
-  gap: 0,
 });
 
 const PriceMain = styled(Text, {
-  fontSize: '$3',
-  fontWeight: '$semibold',
+  fontFamily: 'monospace',
   color: '$light',
+  fontSize: '$5',
+  fontWeight: '$medium',
+  letterSpacing: '-0.01em',
 });
 
-const PriceUnit = styled(Text, {
-  fontSize: '$0',
+const PriceTokenUnit = styled(Text, {
+  fontSize: '$1',
   color: '$body',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  fontWeight: '$regular',
+  marginLeft: '$xxxs',
 });
 
-const Actions = styled(Flex, {
-  gap: '$xs',
+const PriceSub = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  marginTop: 2,
+  fontFamily: 'monospace',
 });
 
 const PrimaryBtn = styled('button', {
-  height: 32,
-  padding: '0 $sm',
+  height: 30,
+  padding: '0 $xs',
   borderRadius: '$2',
   border: 'none',
   background: '$obolGreen',
@@ -139,50 +207,68 @@ const PrimaryBtn = styled('button', {
   fontSize: '$1',
   fontWeight: '$semibold',
   cursor: 'pointer',
-  transition: 'background 0.15s ease',
-
-  '&:hover': {
-    background: '$obolGreenHover',
-  },
+  transition: 'background 120ms',
+  '&:hover': { background: '$obolGreenHover' },
 });
 
 const GhostBtn = styled('button', {
-  height: 32,
-  padding: '0 $sm',
+  height: 30,
+  padding: '0 $xs',
   borderRadius: '$2',
   border: '1px solid $stroke',
   background: 'transparent',
   color: '$light',
   fontSize: '$1',
   cursor: 'pointer',
-  transition: 'border-color 0.15s ease',
-
-  '&:hover': {
-    borderColor: '$body',
-  },
+  transition: 'border-color 120ms',
+  '&:hover': { borderColor: '$body' },
 });
 
-function gradientFor(seed: string): string {
-  // Take two hex pairs from the seed for hue rotation. Deterministic, no
-  // randomness; same slug always renders the same gradient.
-  const h1 = Number.parseInt(seed.slice(0, 2), 16) * (360 / 256);
-  const h2 = Number.parseInt(seed.slice(2, 4), 16) * (360 / 256);
-  return `linear-gradient(135deg, hsl(${h1.toFixed(0)}, 60%, 22%), hsl(${h2.toFixed(0)}, 60%, 14%))`;
+const BADGE_VARIANT: Record<ServiceOfferType, 'purple' | 'code' | 'neutral'> = {
+  agent: 'purple',
+  inference: 'purple',
+  http: 'code',
+  'fine-tuning': 'neutral',
+};
+
+const BADGE_LABEL: Record<ServiceOfferType, string> = {
+  agent: 'Agent',
+  inference: 'Inference',
+  http: 'HTTP',
+  'fine-tuning': 'Fine-tune',
+};
+
+const PRICE_UNIT_LABEL: Record<ServiceListItem['priceUnit'], string> = {
+  request: '/ req',
+  'agent-turn': '/ turn',
+  mtok: '/ Mtok',
+  hour: '/ hr',
+  epoch: '/ epoch',
+};
+
+function statusTone(
+  status: ServiceListItem['status']
+): 'live' | 'pending' | 'degraded' {
+  switch (status) {
+    case 'live':
+      return 'live';
+    case 'pending-registration':
+      return 'pending';
+    case 'degraded':
+    default:
+      return 'degraded';
+  }
 }
 
 function statusLabel(status: ServiceListItem['status']): string {
   switch (status) {
     case 'live':
-      return '● live';
+      return 'Live';
     case 'pending-registration':
-      return '◐ pending';
+      return 'Pending';
     case 'degraded':
-      return '◯ degraded';
+      return 'Degraded';
   }
-}
-
-function networkLabel(item: ServiceListItem): string {
-  return item.network.alias || item.network.caip2;
 }
 
 export function MarketplaceCard({
@@ -190,46 +276,71 @@ export function MarketplaceCard({
   onDetails,
   onBuy,
 }: MarketplaceCardProps) {
-  const typeLabel = item.type === 'fine-tuning' ? 'fine-tune' : item.type;
+  const seed = item.payTo || item.bannerSeed || item.slug;
+  const provider = item.namespace;
+  const tone = statusTone(item.status);
+
   return (
     <Card>
-      <Banner css={{ background: gradientFor(item.bannerSeed) }}>
-        <TypeChip>{typeLabel}</TypeChip>
-        <StatusDot>{statusLabel(item.status)}</StatusDot>
-      </Banner>
-      <Body>
-        <Title>{item.name}</Title>
-        <Sub>{item.modelOrRuntime || '—'}</Sub>
-        {item.description ? <Desc>{item.description}</Desc> : <Desc>—</Desc>}
-        {item.skills.length > 0 ? (
-          <SkillRow>
-            {item.skills.slice(0, 3).map(s => (
-              <SkillPill key={s}>{s}</SkillPill>
-            ))}
-            {item.skills.length > 3 ? (
-              <SkillPill>+{item.skills.length - 3}</SkillPill>
-            ) : null}
-          </SkillRow>
-        ) : null}
-        <FooterRow>
-          <Price>
-            <PriceMain>
-              {item.price || '—'} {item.asset.symbol}
-            </PriceMain>
-            <PriceUnit>
-              per {item.priceUnit} · {networkLabel(item)}
-            </PriceUnit>
-          </Price>
-          <Actions>
-            <GhostBtn type="button" onClick={() => onDetails?.(item)}>
-              Details →
-            </GhostBtn>
-            <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-              Buy
-            </PrimaryBtn>
-          </Actions>
-        </FooterRow>
-      </Body>
+      <TopRow>
+        <TitleBlock>
+          <Identicon seed={seed} size={38} rounded={8} />
+          <TitleStack>
+            <TitleRow>
+              <Title title={item.name}>{item.name}</Title>
+              <Badge variant={BADGE_VARIANT[item.type]}>
+                {BADGE_LABEL[item.type]}
+              </Badge>
+            </TitleRow>
+            <SubRow>
+              <Sub>{provider}</Sub>
+              {item.payTo ? (
+                <>
+                  <Dot>·</Dot>
+                  <Mono>{shortAddress(item.payTo)}</Mono>
+                  <CopyButton text={item.payTo} title="Copy wallet" />
+                </>
+              ) : null}
+            </SubRow>
+          </TitleStack>
+        </TitleBlock>
+        <StatusPillBox tone={tone}>
+          <Dotty />
+          {statusLabel(item.status)}
+        </StatusPillBox>
+      </TopRow>
+
+      <Description>{item.description || '—'}</Description>
+
+      {item.skills.length > 0 ? (
+        <TagRow>
+          {item.skills.slice(0, 4).map(skill => (
+            <Tag key={skill}>{skill}</Tag>
+          ))}
+          {item.skills.length > 4 ? <Tag>+{item.skills.length - 4}</Tag> : null}
+        </TagRow>
+      ) : null}
+
+      <Footer>
+        <PriceBlock>
+          <Text>
+            <PriceMain>{item.price || '—'}</PriceMain>
+            <PriceTokenUnit>
+              {item.asset.symbol} {PRICE_UNIT_LABEL[item.priceUnit]}
+            </PriceTokenUnit>
+          </Text>
+          <PriceSub>
+            {item.network.alias || item.network.caip2}
+            {item.modelOrRuntime ? ` · ${item.modelOrRuntime}` : ''}
+          </PriceSub>
+        </PriceBlock>
+        <GhostBtn type="button" onClick={() => onDetails?.(item)}>
+          Details →
+        </GhostBtn>
+        <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
+          Buy
+        </PrimaryBtn>
+      </Footer>
     </Card>
   );
 }

@@ -1,10 +1,9 @@
 'use client';
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { useId, type ChangeEvent } from 'react';
+import { type ChangeEvent } from 'react';
+import { CheckIcon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 
-import { SearchInput } from '@/components/atoms/SearchInput';
-import { FilterChip } from '@/components/atoms/FilterChip';
 import type {
   MarketplaceFacets as Facets,
   MarketplaceFilters,
@@ -20,20 +19,47 @@ export interface MarketplaceFacetsProps {
 const Panel = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$md',
-  padding: '$md',
+  gap: '$lg',
+  width: 224,
+  flexShrink: 0,
+});
+
+const SearchWrap = styled(Box, {
+  position: 'relative',
+});
+
+const SearchIconBox = styled(Flex, {
+  position: 'absolute',
+  left: 12,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  color: '$body',
+  pointerEvents: 'none',
+});
+
+const SearchInput = styled('input', {
+  width: '100%',
+  height: 36,
+  paddingLeft: 34,
+  paddingRight: '$sm',
   borderRadius: '$2',
   border: '1px solid $stroke',
-  background: '$bg02',
+  background: '$bg03',
+  color: '$light',
+  fontSize: '$2',
+  fontFamily: '$fonts$body',
+
+  '&::placeholder': { color: '$body' },
+  '&:focus': { outline: 'none', borderColor: '$obolGreen' },
 });
 
 const Group = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
-  gap: '$xs',
+  gap: 6,
 });
 
-const GroupTitle = styled(Text, {
+const FieldLabel = styled(Text, {
   fontSize: '$1',
   fontWeight: '$semibold',
   textTransform: 'uppercase',
@@ -41,9 +67,78 @@ const GroupTitle = styled(Text, {
   color: '$body',
 });
 
-const ChipRow = styled(Flex, {
-  flexWrap: 'wrap',
-  gap: '$xxs',
+const Items = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+});
+
+const FacetItem = styled('button', {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '$xs',
+  padding: '7px 10px',
+  borderRadius: '$2',
+  border: '1px solid $stroke',
+  background: 'transparent',
+  cursor: 'pointer',
+  textAlign: 'left',
+  color: '$body',
+  fontSize: '$2',
+  fontFamily: '$fonts$body',
+  transition: 'background 120ms, border-color 120ms, color 120ms',
+
+  '&:hover': {
+    color: '$light',
+    borderColor: '$bg05',
+  },
+
+  variants: {
+    active: {
+      true: {
+        background: '$obolMidGreen',
+        borderColor: '$obolGreen',
+        color: '$obolGreen',
+        '&:hover': { color: '$obolGreen' },
+      },
+    },
+  },
+});
+
+const CheckBox = styled(Flex, {
+  width: 12,
+  height: 12,
+  borderRadius: 3,
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '1px solid',
+  borderColor: '$stroke',
+  color: '#062018',
+  flexShrink: 0,
+
+  variants: {
+    active: {
+      true: {
+        background: '$obolGreen',
+        borderColor: '$obolGreen',
+      },
+    },
+  },
+});
+
+const ItemLabel = styled(Text, {
+  flex: 1,
+  fontSize: '$2',
+  color: 'inherit',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+const Count = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  fontFamily: 'monospace',
 });
 
 const PriceRow = styled(Flex, {
@@ -61,13 +156,9 @@ const PriceInput = styled('input', {
   background: '$bg03',
   color: '$light',
   fontSize: '$1',
-  fontFamily: '$fonts$body',
+  fontFamily: 'monospace',
 
-  '&:focus': {
-    outline: 'none',
-    borderColor: '$obolGreen',
-  },
-
+  '&:focus': { outline: 'none', borderColor: '$obolGreen' },
   '&::-webkit-outer-spin-button, &::-webkit-inner-spin-button': {
     appearance: 'none',
     margin: 0,
@@ -111,35 +202,39 @@ export function MarketplaceFacets({
   facets,
   onChange,
 }: MarketplaceFacetsProps) {
-  const minId = useId();
-  const maxId = useId();
-
   const patch = (next: Partial<MarketplaceFilters>) =>
     onChange({ ...filters, ...next, page: 1 });
 
   return (
     <Panel>
-      <Group>
-        <GroupTitle>Search</GroupTitle>
+      <SearchWrap>
+        <SearchIconBox>
+          <MagnifyingGlassIcon width={14} height={14} />
+        </SearchIconBox>
         <SearchInput
-          placeholder="Name, model, skill…"
+          placeholder="Search services…"
           value={filters.q ?? ''}
-          onChange={e => patch({ q: e.target.value || undefined })}
+          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+            patch({ q: e.target.value || undefined })
+          }
         />
-      </Group>
+      </SearchWrap>
 
       <Group>
-        <GroupTitle>Type</GroupTitle>
-        <ChipRow>
+        <FieldLabel>Type</FieldLabel>
+        <Items>
           {facets.type.length === 0 ? (
-            <Dash>No services indexed yet.</Dash>
+            <Text css={{ fontSize: '$1', color: '$muted' }}>
+              No services indexed.
+            </Text>
           ) : (
             facets.type.map(bucket => {
               const value = bucket.value as ServiceOfferType;
               const active = filters.type?.includes(value) ?? false;
               return (
-                <FilterChip
+                <FacetItem
                   key={value}
+                  type="button"
                   active={active}
                   onClick={() =>
                     patch({
@@ -147,59 +242,72 @@ export function MarketplaceFacets({
                     })
                   }
                 >
-                  {TYPE_LABEL[value] ?? value} · {bucket.count}
-                </FilterChip>
+                  <CheckBox active={active}>
+                    {active ? <CheckIcon width={10} height={10} /> : null}
+                  </CheckBox>
+                  <ItemLabel>{TYPE_LABEL[value] ?? value}</ItemLabel>
+                  <Count>{bucket.count}</Count>
+                </FacetItem>
               );
             })
           )}
-        </ChipRow>
+        </Items>
       </Group>
 
       <Group>
-        <GroupTitle>Network</GroupTitle>
-        <ChipRow>
+        <FieldLabel>Network</FieldLabel>
+        <Items>
           {facets.network.map(bucket => {
             const active = filters.network?.includes(bucket.value) ?? false;
             return (
-              <FilterChip
+              <FacetItem
                 key={bucket.value}
+                type="button"
                 active={active}
                 onClick={() =>
                   patch({ network: toggle(filters.network, bucket.value) })
                 }
               >
-                {networkLabel(bucket.value)} · {bucket.count}
-              </FilterChip>
+                <CheckBox active={active}>
+                  {active ? <CheckIcon width={10} height={10} /> : null}
+                </CheckBox>
+                <ItemLabel>{networkLabel(bucket.value)}</ItemLabel>
+                <Count>{bucket.count}</Count>
+              </FacetItem>
             );
           })}
-        </ChipRow>
+        </Items>
       </Group>
 
       <Group>
-        <GroupTitle>Asset</GroupTitle>
-        <ChipRow>
+        <FieldLabel>Token</FieldLabel>
+        <Items>
           {facets.asset.map(bucket => {
             const active = filters.asset?.includes(bucket.value) ?? false;
             return (
-              <FilterChip
+              <FacetItem
                 key={bucket.value}
+                type="button"
                 active={active}
                 onClick={() =>
                   patch({ asset: toggle(filters.asset, bucket.value) })
                 }
               >
-                {bucket.value} · {bucket.count}
-              </FilterChip>
+                <CheckBox active={active}>
+                  {active ? <CheckIcon width={10} height={10} /> : null}
+                </CheckBox>
+                <ItemLabel>{bucket.value}</ItemLabel>
+                <Count>{bucket.count}</Count>
+              </FacetItem>
             );
           })}
-        </ChipRow>
+        </Items>
       </Group>
 
       <Group>
-        <GroupTitle>Price</GroupTitle>
+        <FieldLabel>Price range</FieldLabel>
         <PriceRow>
           <PriceInput
-            id={minId}
             inputMode="decimal"
             placeholder="min"
             value={filters.minPrice ?? ''}
@@ -209,7 +317,6 @@ export function MarketplaceFacets({
           />
           <Dash>–</Dash>
           <PriceInput
-            id={maxId}
             inputMode="decimal"
             placeholder="max"
             value={filters.maxPrice ?? ''}
