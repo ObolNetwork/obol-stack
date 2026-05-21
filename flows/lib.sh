@@ -572,12 +572,10 @@ bootstrap_flow_workspace() {
 # OBOL_LLM_MODEL is the upstream model id (default qwen36-deep, 27B-class).
 # qwen36-fast (4B) is faster but flakes on long single-shot agent prompts; see
 # the flow-13/14 step 46 retry-wrapper rationale in lib-dual-stack.sh.
-# OBOL_LLM_NAME is the LiteLLM short name registered for the endpoint (default
-# external-llm).
 #
 # Sequence (all model edits use --no-sync so we trigger only one Hermes
 # helmfile rollout at the end):
-#   1. obol model setup custom --name … --endpoint … --model … --no-sync
+#   1. obol model setup custom --endpoint … --model … --no-sync
 #      (validates the endpoint, patches LiteLLM, hot-adds the model.)
 #   2. obol model prefer <model> --no-sync
 #      (configured LiteLLM order is the primary-model contract.)
@@ -587,13 +585,12 @@ bootstrap_flow_workspace() {
 # Each peer (alice/bob) routes independently — caller passes the runner.
 route_llm_via_obol_cli() {
     local runner=$1
-    local model name
+    local model
 
     if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
         model="${OBOL_LLM_MODEL:-qwen36-deep}"
-        name="${OBOL_LLM_NAME:-external-llm}"
 
-        local args=(model setup custom --no-sync --name "$name" --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
+        local args=(model setup custom --no-sync --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
         if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
             args+=(--api-key "$OBOL_LLM_API_KEY")
         fi
