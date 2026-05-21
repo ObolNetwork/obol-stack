@@ -1,29 +1,23 @@
 /**
- * Server-side source for the "Public ERC-8004" registry view.
+ * Server-side source for the "Public ERC-8004" registry view of the
+ * marketplace.
  *
- * Reads the `Registered(uint256 indexed agentId, string agentURI,
- * address indexed owner)` event log from the canonical Identity Registry
- * contracts on each supported chain via eRPC, then fetches each agent's
- * metadata URI to surface model / runtime / pricing data.
+ * Delegates to the existing 8004scan-backed RegistryClient — the same
+ * indexer the AgentRegistry organism on the home dashboard uses — so the
+ * two surfaces share one fetch path. This module's job is the mapping
+ * from `Agent8004` (8004scan's shape) onto the marketplace's
+ * ServiceListItem so the same card UI handles both data sources.
  *
- * Identity Registry addresses (from obol-stack `internal/erc8004/abi.go`):
- *   Base Sepolia    0x8004A818BFB912233c491871b3d84c89A494BD9e
- *   Ethereum + Base 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432  (CREATE2)
- *
- * Map output is a ServiceListItem so the listing reuses the same UI
- * components as the obol catalog — the registry switch is purely a
- * data-source toggle, not a UI fork.
+ * Why an indexer instead of direct `eth_getLogs`: 8004scan already
+ * aggregates registrations across chains, exposes search + pagination,
+ * and resolves agent metadata, so a marketplace browse is one HTTP call
+ * instead of N chain scans + N metadata fetches.
  */
 
 import { createHash } from 'node:crypto';
-import {
-  createPublicClient,
-  http,
-  parseAbiItem,
-  type Address,
-  type Log,
-} from 'viem';
-import { mainnet, base, baseSepolia } from 'viem/chains';
+
+import { RegistryClient } from '../services/registry.ts';
+import type { Agent8004 } from '@/types/registry';
 
 import type {
   MarketplaceAsset,
@@ -34,82 +28,24 @@ import type {
 } from './types';
 import type { ServiceOfferType } from '@/types/sell';
 
-const ERPC_BASE =
-  process.env.MARKETPLACE_ERPC_BASE || 'http://erpc.erpc.svc.cluster.local/rpc';
-
-interface ChainConfig {
+interface ChainAlias {
   alias: string;
-  chainId: number;
-  registry: Address;
   caip2: string;
-  viemChain: typeof mainnet | typeof base | typeof baseSepolia;
-  /** Block to start scanning from. Earliest unless the registry was deployed late. */
-  fromBlock: bigint;
 }
 
-const CHAINS: ChainConfig[] = [
-  {
-    alias: 'mainnet',
-    chainId: 1,
-    registry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
-    caip2: 'eip155:1',
-    viemChain: mainnet,
-    fromBlock: 0n,
-  },
-  {
-    alias: 'base',
-    chainId: 8453,
-    registry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
-    caip2: 'eip155:8453',
-    viemChain: base,
-    fromBlock: 0n,
-  },
-  {
-    alias: 'base-sepolia',
-    chainId: 84532,
-    registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
-    caip2: 'eip155:84532',
-    viemChain: baseSepolia,
-    fromBlock: 0n,
-  },
-];
+// CHAIN_IDS mirrors the obol-stack ERC-8004 network config + 8004scan
+// chain support. Anything not in this map renders as "eip155:<id>".
+const CHAIN_IDS: Record<number, ChainAlias> = {
+  1: { alias: 'ethereum', caip2: 'eip155:1' },
+  8453: { alias: 'base', caip2: 'eip155:8453' },
+  84532: { alias: 'base-sepolia', caip2: 'eip155:84532' },
+};
 
-const REGISTERED_EVENT = parseAbiItem(
-  'event Registered(uint256 indexed agentId, string agentURI, address indexed owner)'
-);
-
-const METADATA_FETCH_TIMEOUT_MS = 5_000;
-const METADATA_FETCH_CONCURRENCY = 10;
-
-/**
- * The well-known metadata document the controller publishes. Loose-typed
- * because external operators might publish slightly different shapes; we
- * tolerate missing fields.
- */
-interface RegistrationDoc {
-  name?: string;
-  description?: string;
-  endpoint?: string;
-  registration?: {
-    metadata?: {
-      model?: string;
-      runtime?: string;
-      pricingUnit?: string;
-      x402Price?: string;
-      x402Asset?: string;
-      x402Network?: string;
-    };
-    skills?: string[];
-  };
-  services?: Array<{ name?: string; endpoint?: string }>;
-}
-
-interface RegisteredAgent {
-  chain: ChainConfig;
-  agentId: bigint;
-  agentURI: string;
-  owner: Address;
-}
+// Server-side fan-out: we ask 8004scan for the same window of entries
+// on each supported chain. 100 entries per chain is enough for v1 and
+// keeps the request count low.
+const REGISTRY_FANOUT_CHAINS = [1, 8453, 84532] as const;
+const REGISTRY_PAGE_SIZE = 100;
 
 export interface Erc8004Snapshot {
   items: ServiceListItem[];
@@ -117,166 +53,112 @@ export interface Erc8004Snapshot {
 }
 
 /**
- * Fetch + map the full ERC-8004 registry across all configured chains.
- * Hits each chain's Identity Registry, decodes every `Registered` event,
- * fetches each metadata URI in parallel (bounded concurrency + timeout),
- * and returns one ServiceListItem per agent.
+ * Fetch all ERC-8004 registrations 8004scan knows about across the
+ * configured chains, mapped onto ServiceListItem.
+ *
+ * Per-chain failures are caught individually so one chain being down
+ * doesn't sink the whole list — same behaviour as the previous chain-
+ * scan implementation, just at the indexer-fetch level.
  */
 export async function fetchErc8004Registry(): Promise<Erc8004Snapshot> {
-  // Each chain queried independently — one chain being slow or offline
-  // shouldn't sink the whole list. Failures become empty arrays.
+  const client = new RegistryClient();
   const perChain = await Promise.all(
-    CHAINS.map(c => safeReadAgents(c).catch(() => [] as RegisteredAgent[]))
+    REGISTRY_FANOUT_CHAINS.map(chainId =>
+      client
+        .listAgents(REGISTRY_PAGE_SIZE, 1, undefined, undefined, chainId)
+        .then(r => r.agents)
+        .catch(() => [] as Agent8004[])
+    )
   );
-  const agents = perChain.flat();
-
-  // Bounded-concurrency metadata fetch. We use a small worker pool so a
-  // few slow well-known servers can't head-of-line block the whole list.
-  const items = await mapWithLimit(
-    agents,
-    METADATA_FETCH_CONCURRENCY,
-    async agent => mapAgentToItem(agent)
-  );
-
+  const items = perChain.flat().map(mapAgent8004ToItem);
   return {
-    items: items.filter((it): it is ServiceListItem => it !== null),
+    items,
     fetchedAt: new Date().toISOString(),
   };
 }
 
-async function safeReadAgents(chain: ChainConfig): Promise<RegisteredAgent[]> {
-  const client = createPublicClient({
-    chain: chain.viemChain,
-    transport: http(`${ERPC_BASE}/${chain.alias}`),
-  });
-  // viem's getLogs handles topic encoding from the parsed event ABI.
-  const logs = await client.getLogs({
-    address: chain.registry,
-    event: REGISTERED_EVENT,
-    fromBlock: chain.fromBlock,
-    toBlock: 'latest',
-  });
-  return logs.map(log => decodeRegistered(log, chain));
-}
-
-function decodeRegistered(
-  log: Log<bigint, number, false, typeof REGISTERED_EVENT>,
-  chain: ChainConfig
-): RegisteredAgent {
-  // viem decodes indexed + non-indexed args into log.args for typed events.
-  const args = (log as unknown as { args: Record<string, unknown> }).args;
-  return {
-    chain,
-    agentId: args.agentId as bigint,
-    agentURI: String(args.agentURI ?? ''),
-    owner: (args.owner ??
-      '0x0000000000000000000000000000000000000000') as Address,
-  };
-}
-
-async function mapAgentToItem(
-  agent: RegisteredAgent
-): Promise<ServiceListItem | null> {
-  if (!agent.agentURI) return null;
-  const doc = await fetchMetadata(agent.agentURI);
-  return buildServiceListItem(agent, doc);
-}
-
-async function fetchMetadata(uri: string): Promise<RegistrationDoc | null> {
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), METADATA_FETCH_TIMEOUT_MS);
-    const res = await fetch(uri, {
-      headers: { accept: 'application/json' },
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    return (await res.json()) as RegistrationDoc;
-  } catch {
-    // Network failure / abort / bad JSON — fall back to a stub entry so
-    // the agent is still discoverable but flagged as "metadata unreachable".
-    return null;
-  }
-}
-
 /**
- * Build a ServiceListItem for one on-chain agent. When the metadata
- * document is available, fields are populated from it; otherwise we
- * still surface a row with what we know from the event log + chain.
+ * Pure mapping helper — given one Agent8004 entry from 8004scan,
+ * returns the ServiceListItem the marketplace cards/table render.
+ *
+ * Exported for unit tests so the mapping can be exercised without
+ * hitting the network.
  */
-function buildServiceListItem(
-  agent: RegisteredAgent,
-  doc: RegistrationDoc | null
-): ServiceListItem {
-  const metadata = doc?.registration?.metadata ?? {};
-  const slug = `erc8004/${agent.chain.chainId}/${agent.agentId.toString()}`;
-  const name = (doc?.name || `agent-${agent.agentId.toString()}`).trim();
-  const namespace = `erc8004:${agent.chain.alias}`;
+export function mapAgent8004ToItem(agent: Agent8004): ServiceListItem {
+  const slug = `erc8004/${agent.chain_id}/${agent.token_id}`;
+  const network = mapNetwork(agent.chain_id);
+  const skills = dedupe([...(agent.categories ?? []), ...(agent.tags ?? [])]);
 
-  const type: ServiceOfferType =
-    metadata.runtime || metadata.model ? 'agent' : 'http';
-
-  const modelOrRuntime = (() => {
-    const runtime = (metadata.runtime || '').trim();
-    const model = (metadata.model || '').trim();
-    if (runtime && model) return `${runtime} · ${model}`;
-    return model || runtime || '—';
-  })();
-
-  const skills = dedupe(doc?.registration?.skills ?? []);
-
+  // 8004scan doesn't expose x402 pricing/asset directly on the agent
+  // payload, so we surface a placeholder. A reviewer who needs price
+  // can probe the agent's endpoint with the buy-x402 sidecar.
   const asset: MarketplaceAsset = {
-    symbol: (metadata.x402Asset || 'USDC').toUpperCase(),
+    symbol: 'USDC',
     address: '',
     decimals: 6,
   };
 
-  const network: MarketplaceNetwork = {
-    caip2: agent.chain.caip2,
-    chainId: agent.chain.chainId,
-    alias: metadata.x402Network || agent.chain.alias,
-  };
+  const status: MarketplaceStatus =
+    agent.health_status === 'degraded' ? 'degraded' : 'live';
 
-  const status: MarketplaceStatus = doc ? 'live' : 'pending-registration';
-
-  const priceUnit = normalizePriceUnit(metadata.pricingUnit);
+  const type: ServiceOfferType = deriveType(agent);
 
   return {
     slug,
-    name,
-    namespace,
+    name: agent.name?.trim() || `agent-${agent.token_id}`,
+    namespace: `erc8004:${network.alias}`,
     type,
-    modelOrRuntime,
+    modelOrRuntime: deriveModelOrRuntime(agent),
     skills,
-    price: (metadata.x402Price ?? '').trim(),
-    priceUnit,
+    price: '',
+    priceUnit: 'agent-turn' satisfies MarketplacePriceUnit,
     priceAtomicUnits: '',
     asset,
     network,
-    endpoint: (doc?.endpoint || doc?.services?.[0]?.endpoint || '').trim(),
-    payTo: agent.owner,
+    endpoint: deriveEndpoint(agent),
+    payTo: agent.owner_address ?? '',
     status,
-    isDemo: false,
-    description: (
-      doc?.description ||
-      `On-chain ERC-8004 agent #${agent.agentId.toString()} on ${agent.chain.alias}.`
-    ).trim(),
+    isDemo: agent.is_testnet === true,
+    description:
+      agent.description?.trim() ||
+      `On-chain ERC-8004 agent #${agent.token_id} on ${network.alias}.`,
     bannerSeed: bannerSeed(slug),
   };
 }
 
-function normalizePriceUnit(value: string | undefined): MarketplacePriceUnit {
-  switch (value) {
-    case 'agent-turn':
-    case 'mtok':
-    case 'hour':
-    case 'epoch':
-    case 'request':
-      return value;
-    default:
-      return 'agent-turn';
+function mapNetwork(chainId: number): MarketplaceNetwork {
+  const known = CHAIN_IDS[chainId];
+  return {
+    caip2: known?.caip2 ?? `eip155:${chainId}`,
+    chainId,
+    alias: known?.alias ?? `eip155:${chainId}`,
+  };
+}
+
+function deriveType(agent: Agent8004): ServiceOfferType {
+  // Agent registrations declare protocols (e.g. MCP) and services. If
+  // there's a "model" in the services map we'd flag inference, but
+  // 8004scan's shape doesn't separate that — call everything "agent"
+  // by default and let `http` apply when no services are listed.
+  const hasServices =
+    !!agent.services && Object.keys(agent.services).length > 0;
+  return hasServices ? 'agent' : 'http';
+}
+
+function deriveModelOrRuntime(agent: Agent8004): string {
+  if (agent.supported_protocols?.length) {
+    return agent.supported_protocols.join(', ');
   }
+  return '—';
+}
+
+function deriveEndpoint(agent: Agent8004): string {
+  if (!agent.services) return '';
+  for (const entry of Object.values(agent.services)) {
+    const endpoint = entry?.endpoint?.trim();
+    if (endpoint) return endpoint;
+  }
+  return '';
 }
 
 function dedupe(values: readonly string[]): string[] {
@@ -293,65 +175,4 @@ function dedupe(values: readonly string[]): string[] {
 
 function bannerSeed(slug: string): string {
   return createHash('sha256').update(slug).digest('hex').slice(0, 12);
-}
-
-/**
- * Run `fn` over `items` with a fixed worker pool. Returns results in the
- * same order as input. Used so a few slow metadata fetches don't
- * head-of-line block the rest of the list.
- */
-async function mapWithLimit<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      while (true) {
-        const i = nextIndex++;
-        if (i >= items.length) return;
-        results[i] = await fn(items[i], i);
-      }
-    }
-  );
-  await Promise.all(workers);
-  return results;
-}
-
-/**
- * Pure mapping helper exported for unit tests — given a decoded event
- * and a (possibly-missing) metadata document, returns the
- * ServiceListItem we'd surface. No network I/O.
- */
-export function mapAgentEventToItem(
-  args: {
-    chainId: number;
-    chainAlias: string;
-    chainCaip2: string;
-    agentId: bigint;
-    agentURI: string;
-    owner: Address;
-  },
-  doc: RegistrationDoc | null
-): ServiceListItem {
-  const chain: ChainConfig = {
-    alias: args.chainAlias,
-    chainId: args.chainId,
-    registry: '0x0000000000000000000000000000000000000000',
-    caip2: args.chainCaip2,
-    viemChain: mainnet,
-    fromBlock: 0n,
-  };
-  return buildServiceListItem(
-    {
-      chain,
-      agentId: args.agentId,
-      agentURI: args.agentURI,
-      owner: args.owner,
-    },
-    doc
-  );
 }
