@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { applyPipeline, fetchCatalog, parseFilters } from '@/lib/marketplace';
+import {
+  STACK_UNREACHABLE,
+  isStackUnreachable,
+} from '@/lib/marketplace/errors';
 
 export const runtime = 'nodejs';
 // 30s server cache window. ISR not used because filters live in the query
@@ -33,6 +37,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(response);
   } catch (error) {
     console.error('[Marketplace] list failed:', error);
+    if (isStackUnreachable(error)) {
+      return NextResponse.json(
+        { error: 'Obol Stack unreachable', code: STACK_UNREACHABLE },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { error: 'Failed to load marketplace catalog' },
       { status: 502 }

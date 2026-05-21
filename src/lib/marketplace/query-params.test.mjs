@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { filtersToSearchParams } from './useMarketplaceCatalog.ts';
+import { filtersToSearchParams } from './query-params.ts';
 
 describe('filtersToSearchParams', () => {
   it('omits empty fields', () => {

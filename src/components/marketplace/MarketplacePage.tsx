@@ -6,9 +6,11 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { LoadingState } from '@/components/molecules/LoadingState';
 import { ErrorState } from '@/components/molecules/ErrorState';
+import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
 import { EmptyMessage } from '@/components/atoms/EmptyMessage';
 import { Pagination } from '@/components/atoms/Pagination';
 import { useMarketplaceCatalog } from '@/hooks/useMarketplaceCatalog';
+import { isStackUnreachable } from '@/lib/marketplace/errors';
 import type {
   MarketplaceFilters,
   MarketplaceView,
@@ -112,7 +114,8 @@ export function MarketplacePage({
     }));
   }, [view]);
 
-  const { data, isLoading, isError, error } = useMarketplaceCatalog(filters);
+  const { data, isLoading, isError, error, refetch } =
+    useMarketplaceCatalog(filters);
 
   const totalPages = useMemo(() => {
     if (!data) return 1;
@@ -155,6 +158,11 @@ export function MarketplacePage({
         <Results>
           {isLoading ? (
             <LoadingState message="Loading services…" />
+          ) : isError && isStackUnreachable(error) ? (
+            <StackUnreachableState
+              detail={error.message}
+              onRetry={() => refetch()}
+            />
           ) : isError ? (
             <ErrorState message={error?.message ?? 'Failed to load catalog'} />
           ) : !data || data.items.length === 0 ? (

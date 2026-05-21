@@ -6,7 +6,9 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { LoadingState } from '@/components/molecules/LoadingState';
 import { ErrorState } from '@/components/molecules/ErrorState';
+import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
 import { useServiceDetail } from '@/hooks/useServiceDetail';
+import { isStackUnreachable } from '@/lib/marketplace/errors';
 
 import { BuyDrawer } from './BuyDrawer';
 
@@ -223,12 +225,27 @@ function statusLabel(status: string): string {
 
 export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { data, isLoading, isError, error } = useServiceDetail(slug);
+  const { data, isLoading, isError, error, refetch } = useServiceDetail(slug);
 
   if (isLoading) {
     return (
       <Layout>
         <LoadingState message="Loading service…" />
+      </Layout>
+    );
+  }
+  if (isError && isStackUnreachable(error)) {
+    return (
+      <Layout>
+        <StackUnreachableState
+          detail={error.message}
+          onRetry={() => refetch()}
+        />
+        {onBack ? (
+          <GhostBtn type="button" onClick={onBack}>
+            ← Back to marketplace
+          </GhostBtn>
+        ) : null}
       </Layout>
     );
   }

@@ -6,42 +6,45 @@ import type {
   MarketplaceFilters,
   ServiceListResponse,
 } from '@/lib/marketplace/types';
+import {
+  STACK_UNREACHABLE,
+  StackUnreachableError,
+} from '@/lib/marketplace/errors';
+import { filtersToSearchParams } from '@/lib/marketplace/query-params';
+
+export { filtersToSearchParams };
 
 const REFRESH_MS = 30_000;
-
-/**
- * Serializes MarketplaceFilters into the same query string the API route
- * accepts. Kept in one place so the cache key (the resulting URL) is stable
- * across the page and any nested components that re-query with the same
- * filters.
- */
-export function filtersToSearchParams(
-  filters: MarketplaceFilters
-): URLSearchParams {
-  const p = new URLSearchParams();
-  if (filters.type?.length) p.set('type', filters.type.join(','));
-  if (filters.network?.length) p.set('network', filters.network.join(','));
-  if (filters.asset?.length) p.set('asset', filters.asset.join(','));
-  if (filters.minPrice) p.set('minPrice', filters.minPrice);
-  if (filters.maxPrice) p.set('maxPrice', filters.maxPrice);
-  if (filters.q) p.set('q', filters.q);
-  if (filters.sort) p.set('sort', filters.sort);
-  if (filters.page) p.set('page', String(filters.page));
-  if (filters.pageSize) p.set('pageSize', String(filters.pageSize));
-  return p;
-}
 
 export function useMarketplaceCatalog(filters: MarketplaceFilters) {
   const qs = filtersToSearchParams(filters).toString();
   return useQuery<ServiceListResponse, Error>({
     queryKey: ['marketplace', 'services', qs],
     queryFn: async () => {
-      const res = await fetch(
-        `/api/marketplace/services${qs ? `?${qs}` : ''}`,
-        { headers: { accept: 'application/json' } }
-      );
+      let res: Response;
+      try {
+        res = await fetch(`/api/marketplace/services${qs ? `?${qs}` : ''}`, {
+          headers: { accept: 'application/json' },
+        });
+      } catch (cause) {
+        throw new StackUnreachableError('Obol Stack unreachable', 0, {
+          cause,
+        });
+      }
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        let body: { error?: string; code?: string } = {};
+        try {
+          body = (await res.json()) as { error?: string; code?: string };
+        } catch {
+          // ignore body-parse errors; fall through to status-based check
+        }
+        if (body.code === STACK_UNREACHABLE || res.status >= 500) {
+          throw new StackUnreachableError(
+            body.error ?? `Obol Stack unreachable (HTTP ${res.status})`,
+            res.status
+          );
+        }
+        throw new Error(body.error ?? `HTTP ${res.status}`);
       }
       return (await res.json()) as ServiceListResponse;
     },

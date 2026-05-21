@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { fetchCatalog } from '@/lib/marketplace';
+import {
+  STACK_UNREACHABLE,
+  isStackUnreachable,
+} from '@/lib/marketplace/errors';
 import { SellClient } from '@/lib/services/sell';
 import type { ServiceDetail } from '@/lib/marketplace/types';
 
@@ -49,6 +53,12 @@ export async function GET(
     return NextResponse.json(detail);
   } catch (error) {
     console.error('[Marketplace] detail failed:', error);
+    if (isStackUnreachable(error)) {
+      return NextResponse.json(
+        { error: 'Obol Stack unreachable', code: STACK_UNREACHABLE },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { error: 'Failed to load service detail' },
       { status: 502 }

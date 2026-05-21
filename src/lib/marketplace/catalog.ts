@@ -16,6 +16,7 @@ import type {
   MarketplaceStatus,
   ServiceListItem,
 } from './types';
+import { classifyFetchFailure } from './errors.ts';
 import type { ServiceOfferType } from '@/types/sell';
 
 const CATALOG_SERVICE =
@@ -64,14 +65,24 @@ export interface CatalogSnapshot {
 export async function fetchCatalog(
   url: string = CATALOG_SERVICE
 ): Promise<CatalogSnapshot> {
-  const res = await fetch(url, {
-    headers: { accept: 'application/json' },
-    // Next.js fetch cache: 30s ISR window. Each route handler caps it lower
-    // if needed via its own revalidate export.
-    next: { revalidate: 30 },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { accept: 'application/json' },
+      // Next.js fetch cache: 30s ISR window. Each route handler caps it
+      // lower if needed via its own revalidate export.
+      next: { revalidate: 30 },
+    });
+  } catch (e) {
+    // Network failure (DNS, ECONNREFUSED, abort). Classify as unreachable
+    // so the API route can flip a typed error to the UI.
+    throw classifyFetchFailure(e, 0);
+  }
   if (!res.ok) {
-    throw new Error(`catalog fetch ${url} → HTTP ${res.status}`);
+    throw classifyFetchFailure(
+      new Error(`catalog fetch ${url} → HTTP ${res.status}`),
+      res.status
+    );
   }
   const body = (await res.json()) as unknown;
   return {
