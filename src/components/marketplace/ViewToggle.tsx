@@ -4,7 +4,10 @@ import { Flex, styled } from '@obolnetwork/obol-ui';
 
 import type { MarketplaceView } from '@/lib/marketplace/types';
 
-const STORAGE_KEY = 'obol.marketplace.view';
+// Versioned key (vercel-react-best-practices: client-localstorage-schema).
+// Bumping the suffix migrates the data format cleanly without colliding with
+// older clients still writing the unversioned key.
+const STORAGE_KEY = 'obol.marketplace.view:v1';
 
 export interface ViewToggleProps {
   value: MarketplaceView;

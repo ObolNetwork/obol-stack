@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { LoadingState } from '@/components/molecules/LoadingState';
@@ -21,14 +22,25 @@ import { ViewToggle, readStoredView } from './ViewToggle';
 import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
-import { BuyDrawer } from './BuyDrawer';
 
+import type { BuyDrawerProps } from './BuyDrawer';
+
+// BuyDrawer pulls in the buy-command builders + CopyButton + dialog
+// machinery; only relevant after the user clicks Buy. Lazy-load it so
+// it doesn't ship in the initial /marketplace route bundle.
+// (vercel-react-best-practices: bundle-dynamic-imports)
+const BuyDrawer = dynamic<BuyDrawerProps>(
+  () => import('./BuyDrawer.tsx').then(m => m.BuyDrawer),
+  { ssr: false }
+);
+
+// The outer shell (background, page padding, header chrome, footer) is
+// supplied by <DashboardTemplate> in src/app/marketplace/layout.tsx. The
+// Layout here only owns the facets-rail + content split.
 const Layout = styled(Box, {
   display: 'flex',
   gap: '$md',
-  padding: '$lg',
-  maxWidth: 1280,
-  margin: '0 auto',
+  width: '100%',
 
   '@media (max-width: 960px)': {
     flexDirection: 'column',

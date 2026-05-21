@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { CopyButton } from '@/components/atoms/CopyButton';
@@ -10,20 +11,28 @@ import { StackUnreachableState } from '@/components/molecules/StackUnreachableSt
 import { useServiceDetail } from '@/hooks/useServiceDetail';
 import { isStackUnreachable } from '@/lib/marketplace/errors';
 
-import { BuyDrawer } from './BuyDrawer';
+import type { BuyDrawerProps } from './BuyDrawer';
+
+// Lazy-load BuyDrawer — only rendered once the user clicks "Buy access".
+// (vercel-react-best-practices: bundle-dynamic-imports)
+const BuyDrawer = dynamic<BuyDrawerProps>(
+  () => import('./BuyDrawer.tsx').then(m => m.BuyDrawer),
+  { ssr: false }
+);
 
 export interface MarketplaceDetailProps {
   slug: string;
   onBack?: () => void;
 }
 
+// Outer shell (padding/background/header) lives in
+// src/app/marketplace/layout.tsx via <DashboardTemplate>. Layout here is
+// just the column rhythm for the detail sections.
 const Layout = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$lg',
-  padding: '$lg',
-  maxWidth: 1180,
-  margin: '0 auto',
+  width: '100%',
 });
 
 const Banner = styled(Box, {

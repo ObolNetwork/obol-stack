@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { Badge } from '@/components/atoms/Badge';
@@ -15,6 +16,10 @@ export interface MarketplaceCardProps {
   onBuy?: (item: ServiceListItem) => void;
 }
 
+// content-visibility: auto lets the browser skip layout + paint for
+// off-screen cards (vercel-react-best-practices: rendering-content-
+// visibility). contain-intrinsic-size reserves a placeholder of ~240px
+// so the scrollbar geometry stays stable.
 const Card = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
@@ -24,6 +29,8 @@ const Card = styled(Box, {
   border: '1px solid $stroke',
   background: '$bg03',
   minHeight: 240,
+  contentVisibility: 'auto',
+  containIntrinsicSize: '0 240px',
   transition: 'border-color 200ms ease, transform 200ms ease',
 
   '&:hover': {
@@ -271,11 +278,14 @@ function statusLabel(status: ServiceListItem['status']): string {
   }
 }
 
-export function MarketplaceCard({
-  item,
-  onDetails,
-  onBuy,
-}: MarketplaceCardProps) {
+// memo: when filters change the parent re-renders, but each card's
+// `item` is reference-stable (same query response objects) so memo
+// short-circuits the work for unaffected rows. The default shallow
+// comparator on `item / onDetails / onBuy` is sufficient because the
+// page hoists onDetails/onBuy out via useState (stable refs) and items
+// come from react-query's cached array (also stable).
+// (vercel-react-best-practices: rerender-memo)
+function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
   const seed = item.payTo || item.bannerSeed || item.slug;
   const provider = item.namespace;
   const tone = statusTone(item.status);
@@ -344,3 +354,5 @@ export function MarketplaceCard({
     </Card>
   );
 }
+
+export const MarketplaceCard = memo(MarketplaceCardImpl);
