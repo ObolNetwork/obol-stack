@@ -26,38 +26,42 @@ export function useDashboardData(
   const [unreachable, setUnreachable] = useState(false);
 
   const fetchData = async () => {
+    setError(null);
+    setUnreachable(false);
+
+    // Single-path, no-throw control flow so we never produce an unhandled
+    // promise rejection or a console.error — both pop Next's dev overlay
+    // even when the failure is "expected" (no cluster running).
+    let response: Response;
     try {
-      setError(null);
-      setUnreachable(false);
-      const response = await fetch('/api/dashboard');
+      response = await fetch('/api/dashboard');
+    } catch {
+      // Network-level failure: TypeError "failed to fetch", AbortError,
+      // DOMException. The stack isn't answering at all.
+      setUnreachable(true);
+      setError('Obol Stack unreachable');
+      setLoading(false);
+      return;
+    }
 
-      if (!response.ok) {
-        if (response.status >= 500) {
-          setUnreachable(true);
-          throw new Error(`Obol Stack unreachable (HTTP ${response.status})`);
-        }
-        throw new Error(`Failed to fetch dashboard data: ${response.status}`);
+    if (!response.ok) {
+      if (response.status >= 500) {
+        setUnreachable(true);
+        setError(`Obol Stack unreachable (HTTP ${response.status})`);
+      } else {
+        setError(`Failed to fetch dashboard data: ${response.status}`);
       }
+      setLoading(false);
+      return;
+    }
 
+    try {
       const dashboardData = await response.json();
       setData(dashboardData);
-    } catch (err) {
-      // Network-level failures (TypeError "failed to fetch", AbortError)
-      // also mean the stack isn't answering — surface them uniformly.
-      const isNetworkFailure =
-        err instanceof TypeError ||
-        (err instanceof Error && err.name === 'AbortError');
-      if (isNetworkFailure) setUnreachable(true);
-      const errorMessage = isNetworkFailure
-        ? 'Obol Stack unreachable'
-        : err instanceof Error
-          ? err.message
-          : 'Unknown error occurred';
-      setError(errorMessage);
-      console.error('Dashboard data fetch error:', err);
-    } finally {
-      setLoading(false);
+    } catch {
+      setError('Bad dashboard response (invalid JSON)');
     }
+    setLoading(false);
   };
 
   const refetch = () => {

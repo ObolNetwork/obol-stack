@@ -1,3 +1,5 @@
+import { Box, styled } from '@obolnetwork/obol-ui';
+
 import { DashboardTemplate } from '../../templates/DashboardTemplate';
 import { NavigatedDashboardHeader } from '../../organisms/DashboardHeader';
 import { DashboardContent } from '../../organisms/DashboardContent';
@@ -5,6 +7,15 @@ import { FooterBar } from '../../organisms/FooterBar';
 import { LoadingState } from '../../molecules/LoadingState';
 import { StackUnreachableState } from '../../molecules/StackUnreachableState';
 import { useDashboardData } from '../../../hooks/useDashboardData';
+
+// Match DashboardContent's MainSection: centered 800px column with the
+// same top spacing the rest of the dashboard uses, so the unreachable
+// card lines up with every other primary panel.
+const CenteredSlot = styled(Box, {
+  maxWidth: 800,
+  width: '100%',
+  margin: '$lg auto 0',
+});
 
 export function DashboardPage() {
   const { data, loading, error, unreachable, refetch } =
@@ -30,10 +41,12 @@ export function DashboardPage() {
       <DashboardTemplate
         header={<NavigatedDashboardHeader />}
         content={
-          <StackUnreachableState
-            detail={error ?? undefined}
-            onRetry={refetch}
-          />
+          <CenteredSlot>
+            <StackUnreachableState
+              detail={error ?? undefined}
+              onRetry={refetch}
+            />
+          </CenteredSlot>
         }
         footer={<FooterBar />}
       />
