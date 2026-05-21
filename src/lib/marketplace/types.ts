@@ -20,6 +20,17 @@ export type MarketplacePriceUnit =
 
 export type MarketplaceStatus = 'live' | 'pending-registration' | 'degraded';
 
+/**
+ * Which catalog backs the marketplace listing.
+ *
+ * - `obol`: the in-cluster Obol Stack ServiceOffer catalog at
+ *   /api/services.json (controller-published).
+ * - `erc8004`: the on-chain ERC-8004 Identity Registry, queried directly
+ *   from the chain via eRPC. Surfaces every registered agent across the
+ *   configured networks, regardless of whether the local cluster hosts it.
+ */
+export type MarketplaceRegistry = 'obol' | 'erc8004';
+
 export type MarketplaceView = 'list' | 'cards';
 
 export type MarketplaceSort = 'price_asc' | 'price_desc' | 'name' | 'recent';
@@ -73,6 +84,12 @@ export interface ServiceListItem {
 }
 
 export interface MarketplaceFilters {
+  /**
+   * Catalog backend. Defaults to `obol` if omitted. Switching to `erc8004`
+   * causes the server to enumerate agents directly from the Identity
+   * Registry contracts on mainnet / base / base-sepolia.
+   */
+  registry?: MarketplaceRegistry;
   type?: ServiceOfferType[];
   /** CAIP-2 values, e.g. ["eip155:1", "eip155:84532"]. */
   network?: string[];

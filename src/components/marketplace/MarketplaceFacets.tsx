@@ -7,6 +7,7 @@ import { CheckIcon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 import type {
   MarketplaceFacets as Facets,
   MarketplaceFilters,
+  MarketplaceRegistry,
 } from '@/lib/marketplace/types';
 import type { ServiceOfferType } from '@/types/sell';
 
@@ -170,6 +171,52 @@ const Dash = styled(Text, {
   fontSize: '$1',
 });
 
+// Registry tab group — mirrors the design canvas Services.html.
+// Sits at the top of the facets panel and flips the data source between
+// the in-cluster Obol catalog and the on-chain ERC-8004 registry.
+const TabRow = styled(Box, {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  padding: 3,
+  gap: 2,
+  background: '$bg03',
+  border: '1px solid $stroke',
+  borderRadius: '$2',
+});
+
+const TabButton = styled('button', {
+  padding: '6px 8px',
+  borderRadius: '$1',
+  border: 0,
+  cursor: 'pointer',
+  fontFamily: '$fonts$body',
+  fontSize: '$2',
+  fontWeight: '$medium',
+  color: '$body',
+  background: 'transparent',
+  textAlign: 'center',
+  whiteSpace: 'nowrap',
+  transition: 'background 120ms, color 120ms',
+
+  variants: {
+    active: {
+      true: {
+        background: '$obolMidGreen',
+        color: '$obolGreen',
+        fontWeight: '$semibold',
+      },
+    },
+  },
+});
+
+const REGISTRY_TABS: ReadonlyArray<{
+  value: MarketplaceRegistry;
+  label: string;
+}> = [
+  { value: 'obol', label: 'ObolStack' },
+  { value: 'erc8004', label: 'Public ERC-8004' },
+];
+
 const TYPE_LABEL: Record<ServiceOfferType, string> = {
   inference: 'Inference',
   agent: 'Agent',
@@ -205,8 +252,31 @@ export function MarketplaceFacets({
   const patch = (next: Partial<MarketplaceFilters>) =>
     onChange({ ...filters, ...next, page: 1 });
 
+  const activeRegistry: MarketplaceRegistry = filters.registry ?? 'obol';
+
   return (
     <Panel>
+      <Group>
+        <FieldLabel>Registry</FieldLabel>
+        <TabRow role="tablist" aria-label="Registry">
+          {REGISTRY_TABS.map(tab => {
+            const active = activeRegistry === tab.value;
+            return (
+              <TabButton
+                key={tab.value}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                active={active}
+                onClick={() => patch({ registry: tab.value })}
+              >
+                {tab.label}
+              </TabButton>
+            );
+          })}
+        </TabRow>
+      </Group>
+
       <SearchWrap>
         <SearchIconBox>
           <MagnifyingGlassIcon width={14} height={14} />

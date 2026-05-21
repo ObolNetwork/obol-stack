@@ -8,6 +8,7 @@
 import { computeFacets, filterItems, paginate, sortItems } from './filter';
 import type {
   MarketplaceFilters,
+  MarketplaceRegistry,
   MarketplaceSort,
   ServiceListItem,
   ServiceListResponse,
@@ -28,6 +29,11 @@ const ALLOWED_SORTS: readonly MarketplaceSort[] = [
   'recent',
 ] as const;
 
+const ALLOWED_REGISTRIES: readonly MarketplaceRegistry[] = [
+  'obol',
+  'erc8004',
+] as const;
+
 export function parseFilters(
   params: URLSearchParams | Record<string, string | string[] | undefined>
 ): MarketplaceFilters {
@@ -35,6 +41,7 @@ export function parseFilters(
   const one = (key: string): string | undefined => readSingle(params, key);
 
   return {
+    registry: pickEnum(one('registry'), ALLOWED_REGISTRIES) ?? 'obol',
     type: pickEnums(get('type'), ALLOWED_TYPES),
     network: get('network').filter(Boolean),
     asset: get('asset').filter(Boolean),
