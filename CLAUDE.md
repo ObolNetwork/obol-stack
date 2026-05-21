@@ -244,7 +244,6 @@ obol model remove qwen3.5:9b
 obol model remove qwen3.5:4b
 
 obol model setup custom \
-    --name spark1-vllm \
     --endpoint http://192.168.18.23:8000/v1 \
     --model qwen36-deep
 # `setup custom` validates the endpoint, patches LiteLLM, and internally calls
@@ -259,7 +258,7 @@ obol model list                                                # confirm head of
 obol model status                                              # show provider state
 ```
 
-The flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this exact sequence behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_NAME` / `OBOL_LLM_API_KEY` env vars, so smoke tests can target a GPU host without burning host CPU on local Ollama.
+The flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this exact sequence behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY` env vars, so smoke tests can target a GPU host without burning host CPU on local Ollama.
 
 **Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
 

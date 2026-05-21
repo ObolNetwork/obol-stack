@@ -804,13 +804,11 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // because the agent then strips it and calls LiteLLM with a key that doesn't
 // match.
 //
-// The `name` arg is informational only. It is surfaced via
-// `obol model status` / `list` for human reference but does NOT participate
-// in the LiteLLM route key. Two custom endpoints that publish the same
-// `modelName` will overwrite each other in the LiteLLM ConfigMap; that is
-// the natural "repoint my model" behavior an operator running
-// `obol model setup custom` wants when they re-run the command.
-func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, apiKey string) error {
+// Two custom endpoints that publish the same `modelName` will overwrite
+// each other in the LiteLLM ConfigMap; that is the natural "repoint my
+// model" behavior an operator running `obol model setup custom` wants when
+// they re-run the command.
+func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -840,14 +838,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 
 	entry := buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey)
 
-	// Patch ConfigMap for persistence. The display label is logged so an
-	// operator can correlate the call with their `--name` arg, but it isn't
-	// part of the route key.
-	if name != "" {
-		u.Infof("Adding custom endpoint %q (model: %s) to LiteLLM config", name, modelName)
-	} else {
-		u.Infof("Adding custom endpoint (model: %s) to LiteLLM config", modelName)
-	}
+	u.Infof("Adding custom endpoint (model: %s) to LiteLLM config", modelName)
 
 	if err := patchLiteLLMConfig(kubectlBinary, kubeconfigPath, []ModelEntry{entry}); err != nil {
 		return fmt.Errorf("failed to update LiteLLM config: %w", err)
@@ -856,10 +847,10 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, name, endpoint, modelName, 
 	// Hot-add via API (no restart needed).
 	if err := hotAddModels(cfg, u, []ModelEntry{entry}); err != nil {
 		u.Warnf("Hot-add failed, falling back to restart: %v", err)
-		return RestartLiteLLM(cfg, u, name)
+		return RestartLiteLLM(cfg, u, modelName)
 	}
 
-	u.Successf("Custom endpoint %q added (model: %s)", name, modelName)
+	u.Successf("Custom endpoint added (model: %s)", modelName)
 
 	return nil
 }

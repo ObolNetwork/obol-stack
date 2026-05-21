@@ -143,7 +143,7 @@ Two steps: first bridge the endpoint into LiteLLM, then sell LiteLLM.
 
 ```bash
 # Step A: Add the external endpoint to LiteLLM
-obol model setup custom --name <name> \
+obol model setup custom \
   --endpoint <full_url_with_v1> \
   --model "<model_name_at_endpoint>"
 

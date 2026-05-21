@@ -264,7 +264,6 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		Name:  "custom",
 		Usage: "Add a custom OpenAI-compatible endpoint (validates before adding)",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Usage: "Short label for the endpoint (informational only — LiteLLM keys the route by --model, not --name)", Required: true},
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
 			&cli.StringFlag{Name: "model", Usage: "Model identifier at the endpoint — this is also the LiteLLM model_name the agent will call", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
@@ -272,12 +271,11 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
-			name := cmd.String("name")
 			endpoint := cmd.String("endpoint")
 			modelName := cmd.String("model")
 			apiKey := cmd.String("api-key")
 
-			if err := model.AddCustomEndpoint(cfg, u, name, endpoint, modelName, apiKey); err != nil {
+			if err := model.AddCustomEndpoint(cfg, u, endpoint, modelName, apiKey); err != nil {
 				return err
 			}
 
