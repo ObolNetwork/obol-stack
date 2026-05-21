@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { LoadingState } from '@/components/molecules/LoadingState';
@@ -18,6 +19,7 @@ import { ViewToggle, readStoredView } from './ViewToggle';
 import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
+import { BuyDrawer } from './BuyDrawer';
 
 const Layout = styled(Box, {
   display: 'grid',
@@ -89,8 +91,10 @@ export interface MarketplacePageProps {
 export function MarketplacePage({
   initialView = 'cards',
 }: MarketplacePageProps) {
+  const router = useRouter();
   const [view, setView] = useState<MarketplaceView>(initialView);
   const [filters, setFilters] = useState<MarketplaceFilters>(DEFAULT_FILTERS);
+  const [buyTarget, setBuyTarget] = useState<ServiceListItem | null>(null);
 
   // Hydration safety: localStorage is only available client-side. Read once
   // on mount; the initial render uses initialView to avoid SSR mismatch.
@@ -116,12 +120,10 @@ export function MarketplacePage({
   }, [data, filters.pageSize]);
 
   const onDetails = (item: ServiceListItem) => {
-    // PR-C wires this to /marketplace/[slug]. For now we just log so the
-    // wire-up is observable.
-    console.info('[marketplace] details', item.slug);
+    router.push(`/marketplace/${encodeURIComponent(item.slug)}`);
   };
   const onBuy = (item: ServiceListItem) => {
-    console.info('[marketplace] buy', item.slug);
+    setBuyTarget(item);
   };
 
   return (
@@ -202,6 +204,11 @@ export function MarketplacePage({
           ) : null}
         </Results>
       </Box>
+      <BuyDrawer
+        item={buyTarget}
+        open={buyTarget !== null}
+        onClose={() => setBuyTarget(null)}
+      />
     </Layout>
   );
 }
