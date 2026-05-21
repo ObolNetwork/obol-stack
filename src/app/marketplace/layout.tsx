@@ -1,23 +1,19 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { Box, styled } from '@obolnetwork/obol-ui';
 
+import { DashboardTemplate } from '@/components/templates/DashboardTemplate';
 import { NavigatedDashboardHeader } from '@/components/organisms/DashboardHeader';
+import { FooterBar } from '@/components/organisms/FooterBar';
 import { Providers } from '../providers';
 
-const Shell = styled(Box, {
-  minHeight: '100vh',
-  background: '#091011',
-  display: 'flex',
-  flexDirection: 'column',
-});
-
-const Main = styled(Box, {
-  flex: 1,
-  minHeight: 0,
-});
-
+/**
+ * Shared shell for /marketplace and /marketplace/[slug]. Uses the same
+ * <DashboardTemplate> the home page uses so the header chrome, page
+ * padding ($4xl sides / $xl top), $bg01 background, and footer are
+ * identical across routes — fixes the "header is different on the
+ * marketplace page" regression.
+ */
 export default function MarketplaceLayout({
   children,
 }: {
@@ -25,10 +21,11 @@ export default function MarketplaceLayout({
 }) {
   return (
     <Providers>
-      <Shell>
-        <NavigatedDashboardHeader />
-        <Main>{children}</Main>
-      </Shell>
+      <DashboardTemplate
+        header={<NavigatedDashboardHeader />}
+        content={children}
+        footer={<FooterBar />}
+      />
     </Providers>
   );
 }
