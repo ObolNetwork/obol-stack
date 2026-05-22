@@ -2,10 +2,13 @@
 
 import { memo } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { ArrowRightIcon, ExternalLinkIcon } from '@radix-ui/react-icons';
 
 import { Badge } from '@/components/atoms/Badge';
+import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import type { ServiceListItem } from '@/lib/marketplace/types';
+import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
 
 import { Identicon, shortAddress } from './Identicon';
@@ -16,37 +19,43 @@ export interface MarketplaceCardProps {
   onBuy?: (item: ServiceListItem) => void;
 }
 
-// content-visibility: auto lets the browser skip layout + paint for
-// off-screen cards (vercel-react-best-practices: rendering-content-
-// visibility). contain-intrinsic-size reserves a placeholder of ~240px
-// so the scrollbar geometry stays stable.
-const Card = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xs',
-  padding: '$sm $md',
+// Card view follows the Services.html grid card: content/action area on the
+// left, price + chain rail on the right. The view is still named "cards" in
+// the product; this is only the card component shape.
+const Card = styled('article', {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 188px',
   borderRadius: '$2',
   border: '1px solid $stroke',
   background: '$bg03',
-  minHeight: 240,
+  minHeight: 248,
+  overflow: 'hidden',
   contentVisibility: 'auto',
-  containIntrinsicSize: '0 240px',
-  transition: 'border-color 200ms ease, transform 200ms ease',
+  containIntrinsicSize: '0 248px',
+  transition: 'border-color 200ms ease',
 
   '&:hover': {
     borderColor: '$bg05',
   },
+
+  '@media (max-width: 620px)': {
+    gridTemplateColumns: '1fr',
+  },
 });
 
-const TopRow = styled(Flex, {
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: 12,
+const Content = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xs',
+  minWidth: 0,
+  padding: '$sm $md',
 });
 
-const TitleBlock = styled(Flex, {
-  alignItems: 'center',
-  gap: 10,
+const TopRow = styled('div', {
+  display: 'grid',
+  gridTemplateColumns: '38px minmax(0, 1fr) auto',
+  alignItems: 'start',
+  columnGap: 12,
   minWidth: 0,
 });
 
@@ -56,27 +65,29 @@ const TitleStack = styled(Box, {
   minWidth: 0,
 });
 
-const TitleRow = styled(Flex, {
+const TitleRow = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   gap: '$xxs',
   minWidth: 0,
 });
 
 const Title = styled(Text, {
-  fontSize: '$4',
+  fontSize: '$5',
   fontWeight: '$semibold',
   color: '$light',
   fontFamily: 'monospace',
-  letterSpacing: '-0.005em',
+  letterSpacing: 0,
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
 });
 
-const SubRow = styled(Flex, {
+const SubRow = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   gap: 6,
-  marginTop: 3,
+  marginTop: 4,
   fontSize: '$1',
   color: '$body',
   minWidth: 0,
@@ -101,33 +112,33 @@ const Dot = styled(Text, {
   fontSize: '$1',
 });
 
-const StatusPillBox = styled(Flex, {
+const StatusPillBox = styled('div', {
+  display: 'inline-flex',
   alignItems: 'center',
-  gap: '$xxxs',
+  gap: '$xxs',
   flexShrink: 0,
-  padding: '$xxxs $xxs',
+  width: 'fit-content',
+  padding: '4px 12px 4px 8px',
   borderRadius: '$pill',
-  fontSize: '$0',
-  fontWeight: '$semibold',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  fontSize: '$1',
+  fontWeight: '$medium',
   border: '1px solid transparent',
 
   variants: {
     tone: {
       live: {
-        background: 'rgba(47, 228, 171, 0.14)',
-        borderColor: 'rgba(47, 228, 171, 0.35)',
+        background: 'rgba(47, 228, 171, 0.13)',
+        borderColor: 'rgba(47, 228, 171, 0.22)',
         color: '$obolGreen',
       },
       pending: {
-        background: 'rgba(250, 186, 90, 0.14)',
-        borderColor: 'rgba(250, 186, 90, 0.38)',
+        background: 'rgba(250, 186, 90, 0.13)',
+        borderColor: 'rgba(250, 186, 90, 0.24)',
         color: '$obolGold',
       },
       degraded: {
-        background: 'rgba(221, 96, 60, 0.14)',
-        borderColor: 'rgba(221, 96, 60, 0.40)',
+        background: 'rgba(221, 96, 60, 0.13)',
+        borderColor: 'rgba(221, 96, 60, 0.24)',
         color: '$test',
       },
     },
@@ -135,22 +146,21 @@ const StatusPillBox = styled(Flex, {
 });
 
 const Dotty = styled('span', {
-  width: 6,
-  height: 6,
+  width: 8,
+  height: 8,
   borderRadius: 999,
   background: 'currentColor',
 });
 
 const Description = styled(Text, {
   margin: 0,
-  fontSize: '$2',
+  fontSize: '$3',
   color: '$body',
-  lineHeight: 1.5,
+  lineHeight: 1.55,
   display: '-webkit-box',
   WebkitLineClamp: 2,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
-  flex: 1,
 });
 
 const TagRow = styled(Flex, {
@@ -168,67 +178,116 @@ const Tag = styled(Text, {
   fontFamily: 'monospace',
 });
 
-const Footer = styled(Flex, {
-  alignItems: 'flex-end',
+const ActionRow = styled(Flex, {
+  alignItems: 'center',
   gap: '$xs',
-  paddingTop: '$xs',
-  borderTop: '1px solid $stroke',
-});
-
-const PriceBlock = styled(Box, {
-  flex: 1,
-  minWidth: 0,
-  display: 'flex',
-  flexDirection: 'column',
-});
-
-const PriceMain = styled(Text, {
-  fontFamily: 'monospace',
-  color: '$light',
-  fontSize: '$5',
-  fontWeight: '$medium',
-  letterSpacing: '-0.01em',
-});
-
-const PriceTokenUnit = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
-  fontWeight: '$regular',
-  marginLeft: '$xxxs',
-});
-
-const PriceSub = styled(Text, {
-  fontSize: '$1',
-  color: '$muted',
-  marginTop: 2,
-  fontFamily: 'monospace',
+  marginTop: 'auto',
 });
 
 const PrimaryBtn = styled('button', {
   height: 30,
   padding: '0 $xs',
-  borderRadius: '$2',
+  borderRadius: '$pill',
   border: 'none',
   background: '$obolGreen',
   color: '$obolDarkDark',
   fontSize: '$1',
   fontWeight: '$semibold',
   cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
   transition: 'background 120ms',
   '&:hover': { background: '$obolGreenHover' },
 });
 
-const GhostBtn = styled('button', {
+const SecondaryBtn = styled('button', {
   height: 30,
   padding: '0 $xs',
-  borderRadius: '$2',
+  borderRadius: '$pill',
   border: '1px solid $stroke',
-  background: 'transparent',
+  background: '$bg03',
   color: '$light',
   fontSize: '$1',
   cursor: 'pointer',
-  transition: 'border-color 120ms',
-  '&:hover': { borderColor: '$body' },
+  transition: 'background 120ms, border-color 120ms',
+  '&:hover': { background: '$bg04', borderColor: '$bg05' },
+});
+
+const SkillLink = styled('a', {
+  border: 0,
+  background: 'transparent',
+  color: '$body',
+  fontSize: '$2',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  '&:hover': { color: '$light' },
+});
+
+const Rail = styled('aside', {
+  background:
+    'linear-gradient(180deg, rgba(47,228,171,0.05), rgba(47,228,171,0))',
+  borderLeft: '1px solid $stroke',
+  padding: '$sm $md',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xs',
+
+  '@media (max-width: 620px)': {
+    borderLeft: 0,
+    borderTop: '1px solid $stroke',
+  },
+});
+
+const FieldLabel = styled(Text, {
+  fontSize: '$1',
+  color: '$body',
+  fontWeight: '$medium',
+  textTransform: 'uppercase',
+  letterSpacing: '0.03em',
+});
+
+const PriceBig = styled(Text, {
+  fontFamily: 'monospace',
+  color: '$light',
+  fontSize: '$7',
+  fontWeight: '$semibold',
+  letterSpacing: 0,
+});
+
+const PriceToken = styled(Text, {
+  fontSize: '$2',
+  color: '$body',
+  marginLeft: 6,
+});
+
+const PriceUnit = styled(Text, {
+  fontFamily: 'monospace',
+  fontSize: '$1',
+  color: '$muted',
+  marginTop: 2,
+});
+
+const ChainBadge = styled(Flex, {
+  alignItems: 'center',
+  gap: 6,
+  width: 'fit-content',
+  padding: '3px 8px 3px 5px',
+  borderRadius: '$3',
+  background: '$bg02',
+  border: '1px solid $stroke',
+  color: '$light',
+  fontSize: '$1',
+});
+
+const RailBottom = styled(Box, {
+  marginTop: 'auto',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
 });
 
 const BADGE_VARIANT: Record<ServiceOfferType, 'purple' | 'code' | 'neutral'> = {
@@ -246,11 +305,11 @@ const BADGE_LABEL: Record<ServiceOfferType, string> = {
 };
 
 const PRICE_UNIT_LABEL: Record<ServiceListItem['priceUnit'], string> = {
-  request: '/ req',
-  'agent-turn': '/ turn',
-  mtok: '/ Mtok',
-  hour: '/ hr',
-  epoch: '/ epoch',
+  request: 'per request',
+  'agent-turn': 'per turn',
+  mtok: 'per Mtok',
+  hour: 'per hour',
+  epoch: 'per epoch',
 };
 
 function statusTone(
@@ -278,22 +337,70 @@ function statusLabel(status: ServiceListItem['status']): string {
   }
 }
 
-// memo: when filters change the parent re-renders, but each card's
-// `item` is reference-stable (same query response objects) so memo
-// short-circuits the work for unaffected rows. The default shallow
-// comparator on `item / onDetails / onBuy` is sufficient because the
-// page hoists onDetails/onBuy out via useState (stable refs) and items
-// come from react-query's cached array (also stable).
-// (vercel-react-best-practices: rerender-memo)
+function chainName(item: ServiceListItem): ChainName | undefined {
+  switch (item.network.caip2) {
+    case 'eip155:1':
+      return 'mainnet';
+    case 'eip155:11155111':
+      return 'sepolia';
+    case 'eip155:8453':
+      return 'base';
+    case 'eip155:84532':
+      return 'base-sepolia';
+    default:
+      return undefined;
+  }
+}
+
+function chainLabel(item: ServiceListItem): string {
+  switch (item.network.caip2) {
+    case 'eip155:1':
+      return 'Ethereum';
+    case 'eip155:11155111':
+      return 'Sepolia';
+    case 'eip155:8453':
+      return 'Base';
+    case 'eip155:84532':
+      return 'Base Sepolia';
+    default:
+      return item.network.alias || item.network.caip2;
+  }
+}
+
+function skillMdUrl(endpoint: string): string | undefined {
+  try {
+    const u = new URL(endpoint);
+    u.pathname = '/skill.md';
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function registryBadge(item: ServiceListItem) {
+  if (item.namespace.startsWith('erc8004:')) {
+    return <Badge variant="green">ERC-8004</Badge>;
+  }
+  if (item.status === 'pending-registration') {
+    return <Badge variant="yellow">ERC-8004 pending</Badge>;
+  }
+  return null;
+}
+
 function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
   const seed = item.payTo || item.bannerSeed || item.slug;
   const provider = item.namespace;
   const tone = statusTone(item.status);
+  const chain = chainName(item);
+  const skillUrl = skillMdUrl(item.endpoint);
+  const visibleTags = item.skills.slice(0, 4);
 
   return (
     <Card>
-      <TopRow>
-        <TitleBlock>
+      <Content>
+        <TopRow>
           <Identicon seed={seed} size={38} rounded={8} />
           <TitleStack>
             <TitleRow>
@@ -313,44 +420,70 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
               ) : null}
             </SubRow>
           </TitleStack>
-        </TitleBlock>
-        <StatusPillBox tone={tone}>
-          <Dotty />
-          {statusLabel(item.status)}
-        </StatusPillBox>
-      </TopRow>
+          <StatusPillBox tone={tone}>
+            <Dotty />
+            {statusLabel(item.status)}
+          </StatusPillBox>
+        </TopRow>
 
-      <Description>{item.description || '—'}</Description>
+        <Description>
+          {item.description || 'x402 payment-gated service'}
+        </Description>
 
-      {item.skills.length > 0 ? (
-        <TagRow>
-          {item.skills.slice(0, 4).map(skill => (
-            <Tag key={skill}>{skill}</Tag>
-          ))}
-          {item.skills.length > 4 ? <Tag>+{item.skills.length - 4}</Tag> : null}
-        </TagRow>
-      ) : null}
+        {visibleTags.length > 0 || registryBadge(item) ? (
+          <TagRow>
+            {visibleTags.map(skill => (
+              <Tag key={skill}>{skill}</Tag>
+            ))}
+            {item.skills.length > visibleTags.length ? (
+              <Tag>+{item.skills.length - visibleTags.length}</Tag>
+            ) : null}
+            {registryBadge(item)}
+          </TagRow>
+        ) : null}
 
-      <Footer>
-        <PriceBlock>
-          <Text>
-            <PriceMain>{item.price || '—'}</PriceMain>
-            <PriceTokenUnit>
-              {item.asset.symbol} {PRICE_UNIT_LABEL[item.priceUnit]}
-            </PriceTokenUnit>
-          </Text>
-          <PriceSub>
-            {item.network.alias || item.network.caip2}
-            {item.modelOrRuntime ? ` · ${item.modelOrRuntime}` : ''}
-          </PriceSub>
-        </PriceBlock>
-        <GhostBtn type="button" onClick={() => onDetails?.(item)}>
-          Details →
-        </GhostBtn>
-        <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-          Buy
-        </PrimaryBtn>
-      </Footer>
+        <ActionRow>
+          <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
+            Buy <ArrowRightIcon width={13} height={13} />
+          </PrimaryBtn>
+          <SecondaryBtn type="button" onClick={() => onDetails?.(item)}>
+            Probe
+          </SecondaryBtn>
+          <Box css={{ flex: 1 }} />
+          {skillUrl ? (
+            <SkillLink href={skillUrl} target="_blank" rel="noreferrer">
+              skill.md <ExternalLinkIcon width={12} height={12} />
+            </SkillLink>
+          ) : null}
+        </ActionRow>
+      </Content>
+
+      <Rail>
+        <Box>
+          <FieldLabel>Price</FieldLabel>
+          <Box css={{ marginTop: 6 }}>
+            <PriceBig>{item.price || '-'}</PriceBig>
+            {item.price ? <PriceToken>{item.asset.symbol}</PriceToken> : null}
+            <PriceUnit>{PRICE_UNIT_LABEL[item.priceUnit]}</PriceUnit>
+          </Box>
+        </Box>
+
+        <Box>
+          <ChainBadge>
+            {chain ? <ChainIcon chain={chain} size={14} /> : null}
+            {chainLabel(item)}
+          </ChainBadge>
+        </Box>
+
+        {item.modelOrRuntime ? (
+          <RailBottom>
+            <FieldLabel>Model / runtime</FieldLabel>
+            <Mono css={{ color: '$light', fontSize: '$2' }}>
+              {item.modelOrRuntime}
+            </Mono>
+          </RailBottom>
+        ) : null}
+      </Rail>
     </Card>
   );
 }

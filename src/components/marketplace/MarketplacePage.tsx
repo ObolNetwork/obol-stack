@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/molecules/ErrorState';
 import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
 import { EmptyMessage } from '@/components/atoms/EmptyMessage';
 import { Pagination } from '@/components/atoms/Pagination';
+import { CopyButton } from '@/components/atoms/CopyButton';
 import { useMarketplaceCatalog } from '@/hooks/useMarketplaceCatalog';
 import { isStackUnreachable } from '@/lib/marketplace/errors';
 import type {
@@ -101,6 +102,52 @@ const PaginationRow = styled(Flex, {
   paddingTop: '$md',
 });
 
+const EmptyPanel = styled(Box, {
+  borderRadius: '$2',
+  border: '1px solid $stroke',
+  background: '$bg03',
+  padding: '$lg',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$sm',
+  alignItems: 'flex-start',
+});
+
+const EmptyTitle = styled(Text, {
+  color: '$light',
+  fontSize: '$5',
+  fontWeight: '$semibold',
+});
+
+const EmptyBody = styled(Text, {
+  color: '$body',
+  fontSize: '$2',
+  lineHeight: 1.5,
+  maxWidth: 560,
+});
+
+const CommandRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxs',
+  padding: '$xs',
+  borderRadius: '$2',
+  border: '1px solid $stroke',
+  background: '$bg02',
+  maxWidth: '100%',
+});
+
+const CommandText = styled(Text, {
+  color: '$light',
+  fontFamily: 'monospace',
+  fontSize: '$2',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});
+
+const LAUNCH_DEMO_COMMAND =
+  'obol sell demo quant --pay-to $(obol agent wallet address obol-agent)';
+
 const DEFAULT_FILTERS: MarketplaceFilters = {
   sort: 'recent',
   page: 1,
@@ -142,6 +189,21 @@ export function MarketplacePage({
     if (!data) return 1;
     return Math.max(1, Math.ceil(data.total / (filters.pageSize ?? 24)));
   }, [data, filters.pageSize]);
+
+  const hasActiveFilters = useMemo(() => {
+    return (
+      Boolean(filters.registry !== undefined && filters.registry !== 'obol') ||
+      Boolean(
+        filters.source?.length ||
+        filters.type?.length ||
+        filters.network?.length ||
+        filters.asset?.length ||
+        filters.minPrice ||
+        filters.maxPrice ||
+        filters.q
+      )
+    );
+  }, [filters]);
 
   const onDetails = (item: ServiceListItem) => {
     router.push(`/marketplace/${encodeURIComponent(item.slug)}`);
@@ -187,11 +249,25 @@ export function MarketplacePage({
             />
           ) : isError ? (
             <ErrorState message={error?.message ?? 'Failed to load catalog'} />
-          ) : !data || data.items.length === 0 ? (
+          ) : !data || (data.items.length === 0 && hasActiveFilters) ? (
             <EmptyMessage>
               No services match your filters. Try clearing the search or
               widening the price range.
             </EmptyMessage>
+          ) : data.items.length === 0 ? (
+            <EmptyPanel>
+              <EmptyTitle>No services listed yet</EmptyTitle>
+              <EmptyBody>
+                Launch the demo quant agent to create the first x402-gated
+                ServiceOffer, or publish your own endpoint with obol sell.
+              </EmptyBody>
+              <CommandRow>
+                <CommandText title={LAUNCH_DEMO_COMMAND}>
+                  {LAUNCH_DEMO_COMMAND}
+                </CommandText>
+                <CopyButton text={LAUNCH_DEMO_COMMAND} title="Copy command" />
+              </CommandRow>
+            </EmptyPanel>
           ) : view === 'list' ? (
             <MarketplaceTable
               items={data.items}

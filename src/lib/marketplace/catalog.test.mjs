@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { mapCatalog } from './catalog.ts';
+import { fetchCatalog, mapCatalog } from './catalog.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +43,7 @@ describe('mapCatalog', () => {
     assert.deepEqual(demo.skills.sort(), ['addresses', 'ethereum-networks']);
     assert.equal(demo.status, 'pending-registration');
     assert.equal(demo.priceUnit, 'agent-turn');
+    assert.equal(demo.price, '10');
     assert.equal(demo.asset.symbol, 'OBOL');
     assert.equal(demo.asset.decimals, 18);
     assert.equal(demo.network.caip2, 'eip155:1');
@@ -58,6 +59,48 @@ describe('mapCatalog', () => {
     assert.equal(rs.modelOrRuntime, 'qwen2.5-coder');
     assert.equal(rs.status, 'live');
     assert.equal(rs.priceUnit, 'request');
+  });
+
+  it('prefers numeric priceRaw over display price and normalizes backend price units', () => {
+    const [item] = mapCatalog([
+      {
+        name: 'live-price',
+        namespace: 'llm',
+        type: 'inference',
+        model: 'qwen3.5:9b',
+        endpoint: 'https://example.com/services/live-price',
+        price: '10 OBOL/request',
+        priceRaw: '10',
+        priceUnit: 'perRequest',
+        asset: { symbol: 'OBOL', decimals: 18 },
+      },
+    ]);
+    assert.equal(item.price, '10');
+    assert.equal(item.priceUnit, 'request');
+
+    const [mtok] = mapCatalog([
+      {
+        name: 'mtok',
+        namespace: 'llm',
+        type: 'inference',
+        priceRaw: '0.5',
+        priceUnit: 'perMTok',
+      },
+    ]);
+    assert.equal(mtok.priceUnit, 'mtok');
+  });
+
+  it('normalizes display-only prices when priceRaw is absent', () => {
+    const [item] = mapCatalog([
+      {
+        name: 'display-only',
+        namespace: 'llm',
+        price: '10 OBOL/request',
+        priceUnit: 'perRequest',
+      },
+    ]);
+    assert.equal(item.price, '10');
+    assert.equal(item.priceUnit, 'request');
   });
 
   it('derives slug and a stable bannerSeed', async () => {
@@ -95,5 +138,42 @@ describe('mapCatalog', () => {
     const out = mapCatalog(raw);
     const ollama = out.find(it => it.name === 'ollama-gated');
     assert.equal(ollama.isDemo, true);
+  });
+});
+
+describe('fetchCatalog', () => {
+  it('returns an empty catalog when the default obol-skill-md service is absent', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        const cause = Object.assign(new Error('getaddrinfo ENOTFOUND'), {
+          code: 'ENOTFOUND',
+          hostname: 'obol-skill-md.x402.svc.cluster.local',
+        });
+        throw new TypeError('fetch failed', { cause });
+      };
+
+      const out = await fetchCatalog();
+      assert.deepEqual(out.items, []);
+      assert.match(out.fetchedAt, /^\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('still treats custom catalog URL failures as unreachable', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => {
+        throw new TypeError('fetch failed');
+      };
+
+      await assert.rejects(
+        () => fetchCatalog('http://custom.invalid/api/services.json'),
+        /Obol Stack unreachable/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

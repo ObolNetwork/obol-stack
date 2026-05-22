@@ -74,11 +74,14 @@ export async function fetchCatalog(
       next: { revalidate: 30 },
     });
   } catch (e) {
+    if (isDefaultCatalogMissing(url, e)) return emptyCatalog();
     // Network failure (DNS, ECONNREFUSED, abort). Classify as unreachable
     // so the API route can flip a typed error to the UI.
     throw classifyFetchFailure(e, 0);
   }
   if (!res.ok) {
+    if (res.status === 404 && isDefaultCatalogService(url))
+      return emptyCatalog();
     throw classifyFetchFailure(
       new Error(`catalog fetch ${url} → HTTP ${res.status}`),
       res.status
@@ -89,6 +92,53 @@ export async function fetchCatalog(
     items: mapCatalog(body),
     fetchedAt: new Date().toISOString(),
   };
+}
+
+function emptyCatalog(): CatalogSnapshot {
+  return {
+    items: [],
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function isDefaultCatalogService(url: string): boolean {
+  return url === CATALOG_SERVICE && url.includes('obol-skill-md.x402.');
+}
+
+function isDefaultCatalogMissing(url: string, error: unknown): boolean {
+  if (!isDefaultCatalogService(url)) return false;
+  const text = errorText(error).toLowerCase();
+  return (
+    text.includes('obol-skill-md') ||
+    text.includes('enotfound') ||
+    text.includes('name_not_resolved')
+  );
+}
+
+function errorText(error: unknown): string {
+  const seen = new Set<unknown>();
+  const parts: string[] = [];
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = current.cause;
+      continue;
+    }
+    if (typeof current === 'object') {
+      const e = current as Record<string, unknown>;
+      for (const key of ['message', 'code', 'hostname', 'host']) {
+        const value = e[key];
+        if (typeof value === 'string') parts.push(value);
+      }
+      current = e.cause;
+      continue;
+    }
+    parts.push(String(current));
+    break;
+  }
+  return parts.join(' ');
 }
 
 /**
@@ -122,7 +172,7 @@ function mapEntry(entry: RawCatalogEntry): ServiceListItem | null {
       ...(entry.skills ?? []),
       ...(entry.agentSkills ?? []),
     ]),
-    price: (entry.price ?? entry.priceRaw ?? '').trim(),
+    price: normalizePriceDisplay(entry.priceRaw ?? entry.price),
     priceUnit: normalizePriceUnit(entry.priceUnit),
     priceAtomicUnits: (entry.priceAtomicUnits ?? '').trim(),
     asset,
@@ -151,14 +201,28 @@ function normalizeType(value: string | undefined): ServiceOfferType {
 function normalizePriceUnit(value: string | undefined): MarketplacePriceUnit {
   switch (value) {
     case 'agent-turn':
+      return 'agent-turn';
     case 'mtok':
+    case 'perMTok':
+    case 'perMtok':
+      return 'mtok';
     case 'hour':
+    case 'perHour':
+      return 'hour';
     case 'epoch':
-      return value;
+      return 'epoch';
     case 'request':
+    case 'perRequest':
     default:
       return 'request';
   }
+}
+
+function normalizePriceDisplay(value: string | undefined): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return '';
+  const numericPrefix = /^(\d+(?:\.\d+)?)/.exec(trimmed);
+  return numericPrefix?.[1] ?? trimmed;
 }
 
 function deriveModelOrRuntime(
