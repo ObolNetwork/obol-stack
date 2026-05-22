@@ -4,11 +4,14 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { type ChangeEvent } from 'react';
 import { CheckIcon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 
+import { ChainIcon } from '@/components/atoms/ChainIcon';
 import type {
   MarketplaceFacets as Facets,
   MarketplaceFilters,
   MarketplaceRegistry,
+  MarketplaceSource,
 } from '@/lib/marketplace/types';
+import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
 
 export interface MarketplaceFacetsProps {
@@ -17,17 +20,18 @@ export interface MarketplaceFacetsProps {
   onChange: (next: MarketplaceFilters) => void;
 }
 
+// 224px rail per Services.html canvas, sections separated by $lg, padded
+// on the right so the column doesn't kiss the result grid.
 const Panel = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$lg',
   width: 224,
   flexShrink: 0,
+  paddingRight: '$md',
 });
 
-const SearchWrap = styled(Box, {
-  position: 'relative',
-});
+const SearchWrap = styled(Box, { position: 'relative' });
 
 const SearchIconBox = styled(Flex, {
   position: 'absolute',
@@ -77,7 +81,7 @@ const Items = styled(Box, {
 const FacetItem = styled('button', {
   display: 'flex',
   alignItems: 'center',
-  gap: '$xs',
+  gap: 8,
   padding: '7px 10px',
   borderRadius: '$2',
   border: '1px solid $stroke',
@@ -89,10 +93,7 @@ const FacetItem = styled('button', {
   fontFamily: '$fonts$body',
   transition: 'background 120ms, border-color 120ms, color 120ms',
 
-  '&:hover': {
-    color: '$light',
-    borderColor: '$bg05',
-  },
+  '&:hover': { color: '$light', borderColor: '$bg05' },
 
   variants: {
     active: {
@@ -119,10 +120,7 @@ const CheckBox = styled(Flex, {
 
   variants: {
     active: {
-      true: {
-        background: '$obolGreen',
-        borderColor: '$obolGreen',
-      },
+      true: { background: '$obolGreen', borderColor: '$obolGreen' },
     },
   },
 });
@@ -142,38 +140,49 @@ const Count = styled(Text, {
   fontFamily: 'monospace',
 });
 
-const PriceRow = styled(Flex, {
-  gap: '$xs',
-  alignItems: 'center',
-});
-
-const PriceInput = styled('input', {
-  flex: 1,
-  minWidth: 0,
-  height: 28,
-  padding: '0 $xs',
-  borderRadius: '$1',
-  border: '1px solid $stroke',
+// Visual price-range slider — decorative, matches the canvas 1:1.
+// Functional drag handles are a follow-up; for now this shows the
+// current min/max as percentage thumbs on a track that always spans
+// $0 → maximum-seen-price, with the labels reflecting filter state.
+const SliderTrack = styled(Box, {
+  position: 'relative',
+  height: 6,
   background: '$bg03',
-  color: '$light',
-  fontSize: '$1',
-  fontFamily: 'monospace',
-
-  '&:focus': { outline: 'none', borderColor: '$obolGreen' },
-  '&::-webkit-outer-spin-button, &::-webkit-inner-spin-button': {
-    appearance: 'none',
-    margin: 0,
-  },
+  borderRadius: 999,
+  marginTop: 6,
+  border: '1px solid $stroke',
 });
 
-const Dash = styled(Text, {
+const SliderFill = styled(Box, {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  background: '$obolGreen',
+  borderRadius: 999,
+  opacity: 0.5,
+});
+
+const SliderThumb = styled(Box, {
+  position: 'absolute',
+  top: -5,
+  width: 14,
+  height: 14,
+  borderRadius: 999,
+  background: '$obolGreen',
+  transform: 'translateX(-50%)',
+  border: '2px solid $bg02',
+});
+
+const SliderLabels = styled(Flex, {
+  justifyContent: 'space-between',
+  fontSize: '$1',
   color: '$body',
-  fontSize: '$1',
+  fontFamily: 'monospace',
+  marginTop: 4,
 });
 
-// Registry tab group — mirrors the design canvas Services.html.
-// Sits at the top of the facets panel and flips the data source between
-// the in-cluster Obol catalog and the on-chain ERC-8004 registry.
+// Registry tabs — same two-button "tablist" group the canvas uses,
+// rendered at the bottom of the rail.
 const TabRow = styled(Box, {
   display: 'grid',
   gridTemplateColumns: '1fr 1fr',
@@ -224,24 +233,30 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   'fine-tuning': 'Fine-tune',
 };
 
+const SOURCE_LABEL: Record<MarketplaceSource, string> = {
+  local: 'Local cluster',
+  remote: 'Remote agents',
+};
+
+const CAIP2_TO_CHAIN_NAME: Record<string, ChainName> = {
+  'eip155:1': 'mainnet',
+  'eip155:11155111': 'sepolia',
+  'eip155:8453': 'base',
+  'eip155:84532': 'base-sepolia',
+};
+
+const NETWORK_LABEL: Record<string, string> = {
+  'eip155:1': 'Ethereum',
+  'eip155:11155111': 'Sepolia',
+  'eip155:8453': 'Base',
+  'eip155:84532': 'Base Sepolia',
+};
+
 function toggle<T>(arr: T[] | undefined, value: T): T[] {
   const set = new Set(arr ?? []);
   if (set.has(value)) set.delete(value);
   else set.add(value);
   return Array.from(set);
-}
-
-function networkLabel(caip2: string): string {
-  switch (caip2) {
-    case 'eip155:1':
-      return 'Ethereum';
-    case 'eip155:8453':
-      return 'Base';
-    case 'eip155:84532':
-      return 'Base Sepolia';
-    default:
-      return caip2;
-  }
 }
 
 export function MarketplaceFacets({
@@ -254,29 +269,20 @@ export function MarketplaceFacets({
 
   const activeRegistry: MarketplaceRegistry = filters.registry ?? 'obol';
 
-  return (
-    <Panel>
-      <Group>
-        <FieldLabel>Registry</FieldLabel>
-        <TabRow role="tablist" aria-label="Registry">
-          {REGISTRY_TABS.map(tab => {
-            const active = activeRegistry === tab.value;
-            return (
-              <TabButton
-                key={tab.value}
-                role="tab"
-                type="button"
-                aria-selected={active}
-                active={active}
-                onClick={() => patch({ registry: tab.value })}
-              >
-                {tab.label}
-              </TabButton>
-            );
-          })}
-        </TabRow>
-      </Group>
+  // "All" is implicit when the type filter has no selections — show it
+  // as a first row alongside the bucketed facets, per the design.
+  const typeAllActive = !filters.type?.length;
+  const sourceAllActive = !filters.source?.length;
 
+  // Visual slider geometry. minPrice/maxPrice live in filters as
+  // decimal strings; map onto a 0–1 fraction for the thumb positions.
+  // If no bound is set, default to the canvas's 8%/68% placeholder so
+  // the slider looks alive even with empty filters.
+  const minFrac = priceFraction(filters.minPrice, 0.08);
+  const maxFrac = priceFraction(filters.maxPrice, 0.68);
+
+  return (
+    <Panel as="aside">
       <SearchWrap>
         <SearchIconBox>
           <MagnifyingGlassIcon width={14} height={14} />
@@ -293,42 +299,48 @@ export function MarketplaceFacets({
       <Group>
         <FieldLabel>Type</FieldLabel>
         <Items>
-          {facets.type.length === 0 ? (
-            <Text css={{ fontSize: '$1', color: '$muted' }}>
-              No services indexed.
-            </Text>
-          ) : (
-            facets.type.map(bucket => {
-              const value = bucket.value as ServiceOfferType;
-              const active = filters.type?.includes(value) ?? false;
-              return (
-                <FacetItem
-                  key={value}
-                  type="button"
-                  active={active}
-                  onClick={() =>
-                    patch({
-                      type: toggle(filters.type, value) as ServiceOfferType[],
-                    })
-                  }
-                >
-                  <CheckBox active={active}>
-                    {active ? <CheckIcon width={10} height={10} /> : null}
-                  </CheckBox>
-                  <ItemLabel>{TYPE_LABEL[value] ?? value}</ItemLabel>
-                  <Count>{bucket.count}</Count>
-                </FacetItem>
-              );
-            })
-          )}
+          <FacetItem
+            type="button"
+            active={typeAllActive}
+            onClick={() => patch({ type: undefined })}
+          >
+            <CheckBox active={typeAllActive}>
+              {typeAllActive ? <CheckIcon width={10} height={10} /> : null}
+            </CheckBox>
+            <ItemLabel>All</ItemLabel>
+            <Count>{facets.type.reduce((n, b) => n + b.count, 0)}</Count>
+          </FacetItem>
+          {facets.type.map(bucket => {
+            const value = bucket.value as ServiceOfferType;
+            const active = filters.type?.includes(value) ?? false;
+            return (
+              <FacetItem
+                key={value}
+                type="button"
+                active={active}
+                onClick={() =>
+                  patch({
+                    type: toggle(filters.type, value) as ServiceOfferType[],
+                  })
+                }
+              >
+                <CheckBox active={active}>
+                  {active ? <CheckIcon width={10} height={10} /> : null}
+                </CheckBox>
+                <ItemLabel>{TYPE_LABEL[value] ?? value}</ItemLabel>
+                <Count>{bucket.count}</Count>
+              </FacetItem>
+            );
+          })}
         </Items>
       </Group>
 
       <Group>
-        <FieldLabel>Network</FieldLabel>
+        <FieldLabel>Chain</FieldLabel>
         <Items>
           {facets.network.map(bucket => {
             const active = filters.network?.includes(bucket.value) ?? false;
+            const chainName = CAIP2_TO_CHAIN_NAME[bucket.value];
             return (
               <FacetItem
                 key={bucket.value}
@@ -341,7 +353,10 @@ export function MarketplaceFacets({
                 <CheckBox active={active}>
                   {active ? <CheckIcon width={10} height={10} /> : null}
                 </CheckBox>
-                <ItemLabel>{networkLabel(bucket.value)}</ItemLabel>
+                {chainName ? <ChainIcon chain={chainName} size={14} /> : null}
+                <ItemLabel>
+                  {NETWORK_LABEL[bucket.value] ?? bucket.value}
+                </ItemLabel>
                 <Count>{bucket.count}</Count>
               </FacetItem>
             );
@@ -375,27 +390,102 @@ export function MarketplaceFacets({
       </Group>
 
       <Group>
-        <FieldLabel>Price range</FieldLabel>
-        <PriceRow>
-          <PriceInput
-            inputMode="decimal"
-            placeholder="min"
-            value={filters.minPrice ?? ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              patch({ minPrice: e.target.value || undefined })
-            }
+        <FieldLabel>Source</FieldLabel>
+        <Items>
+          <FacetItem
+            type="button"
+            active={sourceAllActive}
+            onClick={() => patch({ source: undefined })}
+          >
+            <CheckBox active={sourceAllActive}>
+              {sourceAllActive ? <CheckIcon width={10} height={10} /> : null}
+            </CheckBox>
+            <ItemLabel>All</ItemLabel>
+            <Count>{facets.source.reduce((n, b) => n + b.count, 0)}</Count>
+          </FacetItem>
+          {(['local', 'remote'] as const).map(value => {
+            const bucket = facets.source.find(b => b.value === value);
+            const active = filters.source?.includes(value) ?? false;
+            return (
+              <FacetItem
+                key={value}
+                type="button"
+                active={active}
+                onClick={() =>
+                  patch({
+                    source: toggle(
+                      filters.source,
+                      value
+                    ) as MarketplaceSource[],
+                  })
+                }
+              >
+                <CheckBox active={active}>
+                  {active ? <CheckIcon width={10} height={10} /> : null}
+                </CheckBox>
+                <ItemLabel>{SOURCE_LABEL[value]}</ItemLabel>
+                <Count>{bucket?.count ?? 0}</Count>
+              </FacetItem>
+            );
+          })}
+        </Items>
+      </Group>
+
+      <Group>
+        <FieldLabel>Price range ({primaryToken(facets)})</FieldLabel>
+        <SliderTrack>
+          <SliderFill
+            css={{
+              left: `${(minFrac * 100).toFixed(0)}%`,
+              right: `${((1 - maxFrac) * 100).toFixed(0)}%`,
+            }}
           />
-          <Dash>–</Dash>
-          <PriceInput
-            inputMode="decimal"
-            placeholder="max"
-            value={filters.maxPrice ?? ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              patch({ maxPrice: e.target.value || undefined })
-            }
-          />
-        </PriceRow>
+          <SliderThumb css={{ left: `${(minFrac * 100).toFixed(0)}%` }} />
+          <SliderThumb css={{ left: `${(maxFrac * 100).toFixed(0)}%` }} />
+        </SliderTrack>
+        <SliderLabels>
+          <span>{filters.minPrice ? filters.minPrice : '$0.0001'}</span>
+          <span>{filters.maxPrice ? filters.maxPrice : '$2.50'}</span>
+        </SliderLabels>
+      </Group>
+
+      <Group>
+        <FieldLabel>Registry</FieldLabel>
+        <TabRow role="tablist" aria-label="Registry">
+          {REGISTRY_TABS.map(tab => {
+            const active = activeRegistry === tab.value;
+            return (
+              <TabButton
+                key={tab.value}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                active={active}
+                onClick={() => patch({ registry: tab.value })}
+              >
+                {tab.label}
+              </TabButton>
+            );
+          })}
+        </TabRow>
       </Group>
     </Panel>
   );
+}
+
+function priceFraction(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  // Clamp to the same logarithmic range the slider visualizes
+  // ($0.0001 .. $2.50). Anything outside snaps to the edge.
+  const min = -4; // log10(0.0001)
+  const max = Math.log10(2.5);
+  const v = Math.log10(n);
+  return Math.min(1, Math.max(0, (v - min) / (max - min)));
+}
+
+function primaryToken(facets: Facets): string {
+  const top = facets.asset[0];
+  return top?.value ?? 'USDC';
 }

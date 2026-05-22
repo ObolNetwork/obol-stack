@@ -17,6 +17,7 @@ export function filtersToSearchParams(
   if (filters.registry && filters.registry !== 'obol') {
     p.set('registry', filters.registry);
   }
+  if (filters.source?.length) p.set('source', filters.source.join(','));
   if (filters.type?.length) p.set('type', filters.type.join(','));
   if (filters.network?.length) p.set('network', filters.network.join(','));
   if (filters.asset?.length) p.set('asset', filters.asset.join(','));

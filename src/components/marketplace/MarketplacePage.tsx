@@ -154,7 +154,9 @@ export function MarketplacePage({
     <Layout>
       <MarketplaceFacets
         filters={filters}
-        facets={data?.facets ?? { type: [], network: [], asset: [] }}
+        facets={
+          data?.facets ?? { type: [], network: [], asset: [], source: [] }
+        }
         onChange={setFilters}
       />
 

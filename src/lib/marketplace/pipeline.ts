@@ -10,6 +10,7 @@ import type {
   MarketplaceFilters,
   MarketplaceRegistry,
   MarketplaceSort,
+  MarketplaceSource,
   ServiceListItem,
   ServiceListResponse,
 } from './types';
@@ -34,6 +35,11 @@ const ALLOWED_REGISTRIES: readonly MarketplaceRegistry[] = [
   'erc8004',
 ] as const;
 
+const ALLOWED_SOURCES: readonly MarketplaceSource[] = [
+  'local',
+  'remote',
+] as const;
+
 export function parseFilters(
   params: URLSearchParams | Record<string, string | string[] | undefined>
 ): MarketplaceFilters {
@@ -42,6 +48,7 @@ export function parseFilters(
 
   return {
     registry: pickEnum(one('registry'), ALLOWED_REGISTRIES) ?? 'obol',
+    source: pickEnums(get('source'), ALLOWED_SOURCES),
     type: pickEnums(get('type'), ALLOWED_TYPES),
     network: get('network').filter(Boolean),
     asset: get('asset').filter(Boolean),

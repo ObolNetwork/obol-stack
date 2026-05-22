@@ -12,8 +12,18 @@ import type {
   MarketplaceFacets,
   MarketplaceFilters,
   MarketplaceSort,
+  MarketplaceSource,
   ServiceListItem,
 } from './types';
+
+/**
+ * Source classification: anything coming from an external indexer
+ * (8004scan) is "remote"; cluster-published offers are "local".
+ * Keyed off the namespace prefix the catalog/mapper sets.
+ */
+function itemSource(item: ServiceListItem): MarketplaceSource {
+  return item.namespace.startsWith('erc8004:') ? 'remote' : 'local';
+}
 
 const DEFAULT_PAGE_SIZE = 24;
 const MAX_PAGE_SIZE = 200;
@@ -25,12 +35,14 @@ export function filterItems(
   const typeSet = toSet(filters.type);
   const networkSet = toSet(filters.network);
   const assetSet = toSet(filters.asset?.map(a => a.toUpperCase()));
+  const sourceSet = toSet(filters.source);
   const min = parseDecimal(filters.minPrice);
   const max = parseDecimal(filters.maxPrice);
   const q = filters.q?.trim().toLowerCase();
 
   return items.filter(it => {
     if (typeSet && !typeSet.has(it.type)) return false;
+    if (sourceSet && !sourceSet.has(itemSource(it))) return false;
     if (networkSet && !networkSet.has(it.network.caip2)) return false;
     if (assetSet && !assetSet.has(it.asset.symbol.toUpperCase())) return false;
     if (min !== undefined || max !== undefined) {
@@ -117,6 +129,7 @@ export function computeFacets(
     type: bucketize(items, it => it.type),
     network: bucketize(items, it => it.network.caip2),
     asset: bucketize(items, it => it.asset.symbol.toUpperCase()),
+    source: bucketize(items, itemSource),
   };
 }
 

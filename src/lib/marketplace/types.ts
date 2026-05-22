@@ -83,6 +83,8 @@ export interface ServiceListItem {
   bannerSeed: string;
 }
 
+export type MarketplaceSource = 'local' | 'remote';
+
 export interface MarketplaceFilters {
   /**
    * Catalog backend. Defaults to `obol` if omitted. Switching to `erc8004`
@@ -90,6 +92,12 @@ export interface MarketplaceFilters {
    * Registry contracts on mainnet / base / base-sepolia.
    */
   registry?: MarketplaceRegistry;
+  /**
+   * Filter by origin within the current registry. `local` is anything
+   * published by this cluster (namespace not prefixed with `erc8004:`),
+   * `remote` is anything indexed from another stack.
+   */
+  source?: MarketplaceSource[];
   type?: ServiceOfferType[];
   /** CAIP-2 values, e.g. ["eip155:1", "eip155:84532"]. */
   network?: string[];
@@ -114,6 +122,7 @@ export interface MarketplaceFacets {
   type: FacetBucket[];
   network: FacetBucket[];
   asset: FacetBucket[];
+  source: FacetBucket[];
 }
 
 export interface ServiceListResponse {
